@@ -188,7 +188,6 @@ Os agentes têm acesso a ferramentas limitadas pelo seu `allowed_tools` no arqui
 |------|-----------|
 | `delegate_to_subagent` | Delegar tarefa a um subagente com contexto isolado |
 | `wait_for_subagent` | Aguardar resultados de subagentes |
-| `list_subagents` | Listar subagentes ativos e concluídos |
 | `interrupt_subagents` | Cancelar subagentes em execução |
 
 ### Ferramentas de Execução
@@ -197,7 +196,6 @@ Os agentes têm acesso a ferramentas limitadas pelo seu `allowed_tools` no arqui
 |------|-----------|
 | `execute_command` | Executar comandos shell (saída em XML estruturado com `<command_result>`) |
 | `skill` | Carregar e executar uma skill (também permite ler recursos via `skill/recurso`) |
-| `list_skills` | Listar skills disponíveis |
 
 ### Ferramentas de Tarefas
 
@@ -815,7 +813,7 @@ src/
       search.py                # grep
       exec.py                  # execute_command
       subagent.py              # delegate_to_subagent etc.
-      skill.py                 # skill, list_skills
+      skill.py                 # skill
       rag.py                   # rag_search, rag_index
       ast.py                   # get_file_skeleton etc.
       mcp_resource.py          # read_mcp_resource

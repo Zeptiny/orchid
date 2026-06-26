@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, patch
 from orchid.config import Config
 from orchid.domain.message import Message, MessageRole, MessageType, Usage
 from orchid.domain.skill import Skill
-from orchid.domain.tool import Tool
+from orchid.domain.tool import Tool, ToolParameter
 from orchid.llm import client as llm_client
 from orchid.tools import skill as skill_tools
-from orchid.tools.skill import build_list_skills_tool, build_skill_tool
+from orchid.tools.skill import build_skill_tool
 
 
 def _skill(name: str) -> Skill:
@@ -113,16 +113,17 @@ class StreamResponseSkillToolFilterTest(unittest.IsolatedAsyncioTestCase):
                 patch("orchid.llm.client.litellm.acompletion", new=acompletion_mock):
 
             skill_tool_entry = {"tool": build_skill_tool(), "executor": AsyncMock()}
+            read_tool_entry = {"tool": Tool(name="read", description="read files", parameters=ToolParameter(properties={}, required=[])), "executor": AsyncMock()}
             tool_registry_stub = {
                 "skill": skill_tool_entry,
-                "list_skills": {"tool": build_list_skills_tool(), "executor": AsyncMock()},
+                "read": read_tool_entry,
             }
 
             with patch("orchid.llm.client.get_tool_registry", return_value=tool_registry_stub):
                 gen = llm_client.stream_response(
                     messages=[],
                     model=None,
-                    allowed_tools=allowed_tools if allowed_tools is not None else ["skill", "list_skills"],
+                    allowed_tools=allowed_tools if allowed_tools is not None else ["skill", "read"],
                     system_prompt="",
                     allowed_skills=allowed_skills,
                 )
@@ -171,12 +172,12 @@ class StreamResponseSkillToolFilterTest(unittest.IsolatedAsyncioTestCase):
     async def test_skill_absent_from_allowed_tools_no_override(self):
         captured = await self._drive(
             allowed_skills=["work"],
-            allowed_tools=["list_skills"],
+            allowed_tools=["read"],
         )
         tools = captured["tools"]
         names = [t["function"]["name"] for t in tools]
         self.assertNotIn("skill", names)
-        self.assertIn("list_skills", names)
+        self.assertIn("read", names)
 
 
 if __name__ == "__main__":

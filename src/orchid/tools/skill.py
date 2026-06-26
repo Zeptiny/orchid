@@ -241,37 +241,3 @@ async def _execute_resource_read(
         content=content,
     )
 
-
-def build_list_skills_tool(allowed_skills: list[str] | None = None) -> Tool:
-    return Tool(
-        name="list_skills",
-        description="List all available skills with their descriptions. Use to discover what skills are available before loading one.",
-        parameters=ToolParameter(properties={}, required=[]),
-        action_label="Listing skills...",
-    )
-
-
-async def execute_list_skills() -> ExecutorResult:
-    registry = get_skill_registry()
-    allowed_skills = get_current_allowed_skills()
-
-    filtered = filter_skills(allowed_skills, registry) if allowed_skills is not None else registry
-
-    if not filtered:
-        return ExecutorResult(display="No skills available", content="<skills />")
-
-    e = escape
-    parts = []
-    for name, skill in filtered.items():
-        ref_count = len(skill.references)
-        script_count = len(skill.scripts)
-        asset_count = len(skill.assets)
-        resource_hint = f'<resources references="{ref_count}" scripts="{script_count}" assets="{asset_count}" />'
-        parts.append(f'<skill name="{e(name)}">\n{e(skill.description)}\n{resource_hint}\n</skill>')
-
-    content = "<skills>\n" + "\n".join(parts) + "\n</skills>"
-
-    return ExecutorResult(
-        display=f"{len(filtered)} skill(s) available",
-        content=content,
-    )

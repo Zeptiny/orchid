@@ -32,19 +32,15 @@ from orchid.tools.rag import (
 )
 from orchid.tools.search import execute_grep_tool, grep_tool
 from orchid.tools.skill import (
-    build_list_skills_tool,
     build_skill_tool,
-    execute_list_skills,
     execute_skill,
 )
 from orchid.tools.subagent import (
     build_delegate_tool,
     execute_delegate_to_subagent,
     execute_interrupt_subagents,
-    execute_list_subagents,
     execute_wait_for_subagent,
     interrupt_subagents,
-    list_subagents,
     wait_for_subagent,
 )
 from orchid.tools.todo import (
@@ -83,10 +79,8 @@ def get_tool_registry() -> dict[str, dict]:
         "web_fetch": {"tool": web_fetch_tool, "executor": execute_web_fetch},
         "delegate_to_subagent": {"tool": build_delegate_tool(), "executor": execute_delegate_to_subagent},
         "wait_for_subagent": {"tool": wait_for_subagent, "executor": execute_wait_for_subagent},
-        "list_subagents": {"tool": list_subagents, "executor": execute_list_subagents},
         "interrupt_subagents": {"tool": interrupt_subagents, "executor": execute_interrupt_subagents},
         "skill": {"tool": build_skill_tool(), "executor": execute_skill},
-        "list_skills": {"tool": build_list_skills_tool(), "executor": execute_list_skills},
         "read_mcp_resource": {"tool": read_mcp_resource_tool, "executor": execute_read_mcp_resource},
         "get_file_skeleton": {"tool": get_file_skeleton_tool, "executor": execute_get_file_skeleton},
         "get_function": {"tool": get_function_tool, "executor": execute_get_function},
