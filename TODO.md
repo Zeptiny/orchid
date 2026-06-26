@@ -83,10 +83,6 @@
 
 ### Considerações
 - Tornar a ferramenta read utilizável com diretórios?
-- Remover a ferramenta list_subagents?
-  - Já é includo no system prompt dinâmico o resultado dela
-- Remover a ferramenta list_skills?
-  - Já é includo no system prompt dinâmico o resultado dela
 
 ### Algumas regras básicas
 - Apenas imports absolutos

@@ -143,33 +143,6 @@ async def execute_wait_for_subagent(subagent_ids: list[str]) -> ExecutorResult:
     )
 
 
-list_subagents = Tool(
-    name="list_subagents",
-    description="List all active and completed subagents with their current state, task description, and elapsed time. Use to check progress of running subagents or review what was dispatched.",
-    parameters=ToolParameter(properties={}, required=[]),
-    action_label="Checking subagents...",
-)
-
-
-async def execute_list_subagents() -> ExecutorResult:
-    states = get_subagent_manager().get_states()
-
-    if not states:
-        return ExecutorResult(display="No subagents", content="<subagents />")
-
-    parts = []
-    for s in states:
-        e = escape
-        attrs = format_subagent_attrs(s["id"], s["name"], s["type"], s["state"], s["elapsed"])
-        task_block = f"<task>\n{e(s['task'])}\n</task>" if s.get("task") else ""
-        parts.append(f'<subagent {attrs}>\n{task_block}\n</subagent>')
-
-    return ExecutorResult(
-        display=f"{len(states)} subagent(s)",
-        content="<subagents>\n" + "\n".join(parts) + "\n</subagents>",
-    )
-
-
 interrupt_subagents = Tool(
     name="interrupt_subagents",
     description="Interrupt one or more running subagents. Use when you need to stop subagents that are no longer needed or are taking too long. Returns which subagents were cancelled.",

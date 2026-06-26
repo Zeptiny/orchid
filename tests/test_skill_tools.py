@@ -4,11 +4,10 @@ import asyncio
 
 import pytest
 
-from orchid.domain.skill import Skill, SkillResource
+from orchid.domain.skill import Skill
 from orchid.tools import skill as skill_tools
 from orchid.tools.skill import (
     _execute_resource_read,
-    execute_list_skills,
     execute_skill,
     resolve_skill_dependencies,
     set_current_allowed_skills,
@@ -219,31 +218,4 @@ class TestResourceReadPathTraversal:
         (tmp_path / "scripts" / "run.sh").write_text("echo via-execute")
         result = asyncio.run(execute_skill(f"{skill.name}/scripts/run.sh"))
         assert "echo via-execute" in result.content
-
-
-class TestExecuteListSkills:
-    def test_empty_registry_returns_empty_skills_tag(self, tmp_path, monkeypatch):
-        _patch_registry(monkeypatch, {}, allowed=None)
-        result = asyncio.run(execute_list_skills())
-        assert result.content == "<skills />"
-
-    def test_populated_registry_emits_skill_elements(self, tmp_path, monkeypatch):
-        skill = _build_skill(tmp_path, name="alpha", description="alpha desc")
-        _patch_registry(monkeypatch, {skill.name: skill}, allowed=None)
-        result = asyncio.run(execute_list_skills())
-        assert result.content.startswith("<skills>")
-        assert "<skill name=\"alpha\">" in result.content
-        assert "alpha desc" in result.content
-
-    def test_list_skills_includes_count_attributes(self, tmp_path, monkeypatch):
-        skill = _build_skill(tmp_path, name="beta", description="beta desc")
-        skill.references = [SkillResource(path="references/a.md", description="")]
-        skill.scripts = [SkillResource(path="scripts/x.sh", description=""),
-                         SkillResource(path="scripts/y.sh", description="")]
-        skill.assets = []
-        _patch_registry(monkeypatch, {skill.name: skill}, allowed=None)
-        result = asyncio.run(execute_list_skills())
-        assert 'references="1"' in result.content
-        assert 'scripts="2"' in result.content
-        assert 'assets="0"' in result.content
 

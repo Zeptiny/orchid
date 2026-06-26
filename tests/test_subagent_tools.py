@@ -9,7 +9,6 @@ from orchid.domain.agent import Agent, AgentTypes, ModelTier
 from orchid.tools.subagent import (
     execute_delegate_to_subagent,
     execute_interrupt_subagents,
-    execute_list_subagents,
     execute_wait_for_subagent,
 )
 
@@ -149,54 +148,6 @@ class WaitForSubagentTests(unittest.TestCase):
         with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
             result = asyncio.run(execute_wait_for_subagent(["a", "b"]))
         self.assertIn("No subagents found", result.content)
-
-
-class ListSubagentsTests(unittest.TestCase):
-    def test_empty_states_returns_empty_xml(self):
-        mock_manager = MagicMock()
-        mock_manager.get_states = MagicMock(return_value=[])
-        with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
-            result = asyncio.run(execute_list_subagents())
-        self.assertEqual(result.content, "<subagents />")
-
-    def test_populated_states_returns_subagent_elements(self):
-        mock_manager = MagicMock()
-        mock_manager.get_states = MagicMock(
-            return_value=[
-                {
-                    "id": "s1",
-                    "name": "sub1",
-                    "type": "subagent",
-                    "task": "",
-                    "state": "completed",
-                    "elapsed": 1.0,
-                }
-            ]
-        )
-        with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
-            result = asyncio.run(execute_list_subagents())
-        self.assertIn("<subagents>", result.content)
-        self.assertIn("<subagent", result.content)
-        self.assertIn("s1", result.content)
-
-    def test_subagent_with_task_includes_task_block(self):
-        mock_manager = MagicMock()
-        mock_manager.get_states = MagicMock(
-            return_value=[
-                {
-                    "id": "s1",
-                    "name": "sub1",
-                    "type": "subagent",
-                    "task": "explore the module",
-                    "state": "running",
-                    "elapsed": 2.0,
-                }
-            ]
-        )
-        with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
-            result = asyncio.run(execute_list_subagents())
-        self.assertIn("<task>", result.content)
-        self.assertIn("explore the module", result.content)
 
 
 class InterruptSubagentsTests(unittest.TestCase):
