@@ -1,0 +1,7 @@
+__pycache__/
+.venv/
+*.egg-info/
+.stupidex/rag/
+.stupidex/ast/
+build/
+.stupidex/rag/

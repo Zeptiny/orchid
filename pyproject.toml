@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stupidex"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "textual",
+    "litellm",
+    "httpx",
+    "html2text",
+    "aiofiles",
+    "numpy",
+    "fastembed",
+    "mcp>=1.0",
+    "tree-sitter",
+    "tree-sitter-language-pack",
+]
+
+[project.scripts]
+stupidex = "stupidex.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-timeout>=2.0",
+    "ruff",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM"]
+ignore = ["E501", "SIM105"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+timeout = 120

@@ -1,0 +1,226 @@
+Screen {
+    layout: vertical;
+}
+
+#header {
+    dock: top;
+    height: 3;
+    padding: 1;
+}
+
+#output {
+    height: 1fr;
+    padding: 1;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+TabPane > ScrollableContainer {
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+#tabs {
+    height: 1fr;
+}
+
+#tabs > ContentSwitcher {
+    height: 1fr;
+}
+
+TabPane {
+    height: 1fr;
+}
+
+TabbedContent Tabs {
+    display: none;
+}
+
+#footer {
+    dock: bottom;
+    height: 1;
+    margin-left: 1;
+    margin-right: 31;
+}
+
+#spinner {
+    width: 3;
+    display: none;
+    margin-right: 1;
+}
+
+#model {
+    color: gray;
+    width: auto;
+    overflow: hidden;
+}
+
+#interrupt-hint {
+    width: auto;
+    min-width: 0;
+    margin-left: 1;
+}
+
+UserMessageWidget {
+    background: #333333;
+    margin: 0 1 0 0;
+    padding: 1;
+    border-left: thick $primary;
+}
+
+UserMessageWidget > MarkdownParagraph {
+    margin: 0;
+}
+
+AssistantMessageWidget {
+    margin: 0 1;
+    padding: 1;
+}
+
+ThinkingMessageWidget {
+    height: auto;
+    margin: 1 0 0 0;
+    padding: 0;
+}
+
+/* Collapse widgets: override Textual defaults to match Rich.Panel style */
+Collapsible.thinking-collapse {
+    background: transparent;
+    height: auto;
+    margin: 0;
+    padding-top: 0;
+    padding-right: 0;
+    padding-bottom: 0;
+    padding-left: 0;
+    border-top: none;
+}
+
+Collapsible.thinking-collapse.-collapsed {
+    height: 1;
+    margin: 0;
+    padding-top: 0;
+    padding-right: 0;
+    padding-bottom: 0;
+    padding-left: 0;
+    border-top: none;
+}
+
+Collapsible.thinking-collapse.-collapsed > Contents {
+    display: none;
+    height: 0;
+    margin: 0;
+    padding: 0;
+}
+
+Collapsible.thinking-collapse > CollapsibleTitle {
+    color: orange;
+    width: 1fr;
+}
+
+Collapsible.thinking-collapse > Contents {
+    height: auto;
+    padding: 0 2;
+}
+
+.thinking-content {
+    text-style: dim;
+}
+
+Collapsible.tool-result-collapse {
+    background: transparent;
+    height: auto;
+    margin: 0;
+    padding-top: 0;
+    padding-right: 0;
+    padding-bottom: 0;
+    padding-left: 0;
+    border: none;
+}
+
+ToolResultMessageWidget.after-thinking {
+    margin-top: 1;
+}
+
+Collapsible.tool-result-collapse > Contents {
+    height: auto;
+    margin: 0 1;
+    padding: 0 2;
+}
+
+Collapsible.tool-result-collapse.-collapsed {
+    padding-top: 0;
+    padding-right: 0;
+    padding-bottom: 0;
+    padding-left: 0;
+    border: none;
+}
+
+Collapsible.tool-result-collapse > CollapsibleTitle {
+    color: skyblue;
+    text-style: dim;
+    width: 1fr;
+}
+
+#input {
+    width: 1fr;
+    border: none;
+    padding: 1 1;
+    margin-left: 1;
+    margin-right: 1;
+}
+
+#input:focus {
+    border-left: thick $primary;
+}
+
+#command-picker {
+    height: auto;
+    max-height: 10;
+    background: $surface;
+    border: tall $primary;
+    margin: 0 1;
+}
+
+#command-picker > .option-list--option-highlighted {
+    background: $accent-darken-1;
+}
+
+OptionPicker {
+    align: center middle;
+}
+
+#picker-container {
+    width: 70;
+    max-height: 80%;
+    background: $surface;
+    border: tall $primary;
+    padding: 1;
+}
+
+#picker-header {
+    color: $text-muted;
+    text-style: bold;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-bottom: solid $primary;
+    width: 100%;
+}
+
+#picker-search {
+    margin-bottom: 1;
+}
+
+#picker-list {
+    height: 1fr;
+}
+
+.temp-tool-message {
+    padding: 0 1;
+    color: $text-muted;
+    text-style: italic;
+}
+
+Button.settings-add-btn {
+    content-align: center middle;
+    text-align: center;
+}
