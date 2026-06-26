@@ -25,7 +25,7 @@
 - Deve permitir o usuário sempre enviar uma resposta em texto livre
 - Deve permitir fazer múltiplas questões numa chamada
   - Ex: 2 questões de múltiplas escolha com 4 respostas, mais um com duas, etc.
-- Sendo analizado: Permitir que os subagentes façam uso dessa ferramenta apra perguntar ao agente principal
+- Sendo analizado: Permitir que os subagentes façam uso dessa ferramenta para perguntar ao agente principal
   - O agente principal deve ser capaz de saber imediatamente quando uma pergunta é feita (Atualizando o status + sair do wait_for_subagent se qualquer um tiver questão)
   - Deve ser capaz de não responder quando soube da pergunta (Para pesquisas ou mandar para o usuário)
 
@@ -58,7 +58,6 @@
 - Multiline todo items
 - MCP Servers não tem o mesmo espaçamento da esquerda como Subagentes e todo
 
-
 ### Comandos
 - Comandos que precisam de input
   - Ex: Perssione y para instalar
@@ -66,8 +65,8 @@
 - Visualizar comandos executando em tempo real
 
 ### Bugs
-- Rolagem automática para baixo após o fim de uma mensagem do agente
-  - A conversa também não está indo automaticamente para baixo enquanto faz o streaming
+- Conversa não rolando automaticamente para baixo
+  - Deve permitir o usuário dar scroll para cima ainda
 - Algo pode estar bloqueando/não paralelo - quando múltiplos subagentes são instanciados, a CPU usa apenas um núcleo
 - O tempo de indexação RAG e AST na barra lateral não é atualizado regularmente, ficando obsoleto
 - Contexto não está sendo atualizado constantemente
@@ -79,10 +78,8 @@
 - Adicionar um MCP tem como colocar comandos e URL ao mesmo tempo
   - Deixar apenas um visivel, selecionado por botão
   - Não tem como colocar auth token
-
-### Performance
-- TUI parece meio "Choppy"?
-  - Ex: travanado levemente no scroll
+- Remover o provedor e agentes nos tiers default
+  - Onboarding
 
 ### Considerações
 - Tornar a ferramenta read utilizável com diretórios?
@@ -95,5 +92,3 @@
 - Apenas imports absolutos
 - Estrutura orientada a domínio
 - Seguir a lintagem do ruff (por favor)
-
----
