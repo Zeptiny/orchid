@@ -1,8 +1,8 @@
 """Tests for AST symbol store."""
 
 
-from stupidex.ast.store import ASTStore
-from stupidex.ast.symbols import Symbol
+from orchid.ast.store import ASTStore
+from orchid.ast.symbols import Symbol
 
 
 def _make_symbol(
@@ -68,7 +68,7 @@ def test_init_db_creates_directory(tmp_path):
     """init_db should create the ast directory."""
     store = ASTStore(str(tmp_path))
     store.init_db()
-    assert (tmp_path / ".stupidex" / "ast").exists()
+    assert (tmp_path / ".orchid" / "ast").exists()
 
 
 def test_upsert_file_stores_symbols_and_hash(tmp_path):

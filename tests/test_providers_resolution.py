@@ -16,9 +16,9 @@ from unittest.mock import MagicMock, patch
 import httpx
 import litellm
 
-from stupidex.config import Config
-from stupidex.llm import providers as providers_mod
-from stupidex.llm.providers import (
+from orchid.config import Config
+from orchid.llm import providers as providers_mod
+from orchid.llm.providers import (
     ProviderResolutionError,
     discover_provider_models,
     reset_cache,
@@ -444,9 +444,9 @@ class TestDiscoverProviderModels(ProviderResolutionTestCase):
         self.assertEqual(client.get.call_count, 2)
 
     def test_env_disable_flag_short_circuits_to_empty(self):
-        """STUPIDEX_DISABLE_MODEL_DISCOVERY=true short-circuits discovery, no HTTP call."""
+        """ORCHID_DISABLE_MODEL_DISCOVERY=true short-circuits discovery, no HTTP call."""
         client = self._fake_client(self._fake_response(["gpt-4o"]))
-        with self._patch_providers(), self._patch_httpx(client), patch.dict(os.environ, {"STUPIDEX_DISABLE_MODEL_DISCOVERY": "true"}):
+        with self._patch_providers(), self._patch_httpx(client), patch.dict(os.environ, {"ORCHID_DISABLE_MODEL_DISCOVERY": "true"}):
             result = discover_provider_models("openai-prod")
         self.assertEqual(result, [])
         client.get.assert_not_called()

@@ -3,7 +3,7 @@
 import pytest
 import tree_sitter
 
-from stupidex.ast.parser import (
+from orchid.ast.parser import (
     QueryResult,
     _compiled_queries,
     _grammars,
@@ -289,7 +289,7 @@ def test_all_query_files_compile():
         # Verify query compiles against the grammar
         query = _compiled_queries.get((lang, query_text))
         if query is None:
-            from stupidex.ast.parser import _compile_query
+            from orchid.ast.parser import _compile_query
 
             query = _compile_query(lang, query_text)
         assert isinstance(query, tree_sitter.Query)

@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import litellm
 
-from stupidex.config import Config
-from stupidex.domain.message import (
+from orchid.config import Config
+from orchid.domain.message import (
     Message,
     MessageRole,
     MessageType,
@@ -17,16 +17,16 @@ from stupidex.domain.message import (
     Usage,
     record_streamed_message,
 )
-from stupidex.domain.tool import (
+from orchid.domain.tool import (
     ExecutorResult,
     Tool,
     ToolParameter,
     ToolParameterProperties,
 )
-from stupidex.llm import client as llm_client
-from stupidex.llm.client import classify_error
-from stupidex.llm.providers import ProviderResolutionError
-from stupidex.widgets import message_widget
+from orchid.llm import client as llm_client
+from orchid.llm.client import classify_error
+from orchid.llm.providers import ProviderResolutionError
+from orchid.widgets import message_widget
 
 
 def chunk(*, reasoning: str = "", content: str = "", tool_calls=None, usage=None):
@@ -1232,9 +1232,9 @@ class StreamWidgetTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(getattr(span.style, "color", None) is not None for span in rendered.spans))
 
     async def test_output_pane_hides_horizontal_overflow(self):
-        from stupidex.app import Stupidex
+        from orchid.app import Orchid
 
-        app = Stupidex()
+        app = Orchid()
         async with app.run_test():
             output = app.query_one("#output")
 
@@ -1242,7 +1242,7 @@ class StreamWidgetTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(output.styles.overflow_y, "auto")
 
     async def test_streamed_tool_result_group_has_spacing_after_thinking(self):
-        from stupidex.app import Stupidex
+        from orchid.app import Orchid
 
         tool_results = [
             Message(
@@ -1253,7 +1253,7 @@ class StreamWidgetTest(unittest.IsolatedAsyncioTestCase):
             )
             for i in range(3)
         ]
-        app = Stupidex()
+        app = Orchid()
         async with app.run_test(size=(100, 30)) as pilot:
             output = app.query_one("#output")
             state = message_widget.StreamWidgetState()
@@ -1325,9 +1325,9 @@ class StreamWidgetTest(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_streamed_tool_result_after_assistant_text_does_not_get_thinking_spacing(self):
-        from stupidex.app import Stupidex
+        from orchid.app import Orchid
 
-        app = Stupidex()
+        app = Orchid()
         async with app.run_test(size=(100, 30)) as pilot:
             output = app.query_one("#output")
             state = message_widget.StreamWidgetState()
@@ -1737,12 +1737,12 @@ class StreamResponseProviderResolutionTest(unittest.IsolatedAsyncioTestCase):
                 env_patches.append(patch.dict(os.environ, {k: v}, clear=False))
 
         acompletion_mock = AsyncMock(side_effect=fake_acompletion)
-        with patch("stupidex.llm.client.get_config", return_value=cfg), \
-                patch("stupidex.llm.providers.get_config", return_value=cfg), \
-                patch("stupidex.llm.client.build_dynamic_system_prompt",
+        with patch("orchid.llm.client.get_config", return_value=cfg), \
+                patch("orchid.llm.providers.get_config", return_value=cfg), \
+                patch("orchid.llm.client.build_dynamic_system_prompt",
                       new=AsyncMock(return_value=dummy_dynamic)), \
-                patch("stupidex.llm.client.get_tool_registry", return_value={}), \
-                patch("stupidex.llm.client.litellm.acompletion", new=acompletion_mock):
+                patch("orchid.llm.client.get_tool_registry", return_value={}), \
+                patch("orchid.llm.client.litellm.acompletion", new=acompletion_mock):
             stack = contextlib.ExitStack()
             for p in env_patches:
                 stack.enter_context(p)
@@ -1796,14 +1796,14 @@ class StreamResponseProviderResolutionTest(unittest.IsolatedAsyncioTestCase):
             "default": {
                 "base_url": "https://example.test/v1",
                 "litellm_provider": "openai",
-                "api_key_env": "STUPIDEX_TEST_OPENAI_KEY",
+                "api_key_env": "ORCHID_TEST_OPENAI_KEY",
                 "models": {"mimo-v2.5": {}},
             }
         }
         captured = await self._drive_stream_response(
             model="default/mimo-v2.5",
             providers=providers,
-            env={"STUPIDEX_TEST_OPENAI_KEY": "env-key-456"},
+            env={"ORCHID_TEST_OPENAI_KEY": "env-key-456"},
         )
 
         self.assertEqual(captured["api_key"], "env-key-456")
@@ -1866,13 +1866,13 @@ class StreamResponseProviderResolutionTest(unittest.IsolatedAsyncioTestCase):
 
         acompletion_mock = AsyncMock()
 
-        with patch("stupidex.llm.client.get_config", return_value=cfg), \
-                patch("stupidex.llm.providers.get_config", return_value=cfg), \
-                patch("stupidex.llm.client.build_dynamic_system_prompt",
+        with patch("orchid.llm.client.get_config", return_value=cfg), \
+                patch("orchid.llm.providers.get_config", return_value=cfg), \
+                patch("orchid.llm.client.build_dynamic_system_prompt",
                       new=AsyncMock(return_value=Message(
                           MessageRole.SYSTEM, "<dynamic/>", MessageType.TEXT))), \
-                patch("stupidex.llm.client.get_tool_registry", return_value={}), \
-                patch("stupidex.llm.client.litellm.acompletion", new=acompletion_mock):
+                patch("orchid.llm.client.get_tool_registry", return_value={}), \
+                patch("orchid.llm.client.litellm.acompletion", new=acompletion_mock):
             gen = llm_client.stream_response(
                 messages=[],
                 model="typo-alias/mimo-v2.5",
@@ -1908,13 +1908,13 @@ class StreamIdleTimeoutTest(unittest.IsolatedAsyncioTestCase):
         acompletion_mock = AsyncMock(side_effect=fake_acompletion)
         dummy_dynamic = Message(MessageRole.SYSTEM, "<dynamic/>", MessageType.TEXT)
         patches = [
-            patch("stupidex.llm.client.get_config", return_value=cfg),
-            patch("stupidex.llm.providers.get_config", return_value=cfg),
-            patch("stupidex.llm.client.build_dynamic_system_prompt",
+            patch("orchid.llm.client.get_config", return_value=cfg),
+            patch("orchid.llm.providers.get_config", return_value=cfg),
+            patch("orchid.llm.client.build_dynamic_system_prompt",
                   new=AsyncMock(return_value=dummy_dynamic)),
-            patch("stupidex.llm.client.get_tool_registry", return_value={}),
-            patch("stupidex.llm.client.litellm.acompletion", new=acompletion_mock),
-            patch("stupidex.llm.client._backoff_sleep", new=AsyncMock()),
+            patch("orchid.llm.client.get_tool_registry", return_value={}),
+            patch("orchid.llm.client.litellm.acompletion", new=acompletion_mock),
+            patch("orchid.llm.client._backoff_sleep", new=AsyncMock()),
         ]
         stack = contextlib.ExitStack()
         for p in patches:
@@ -2022,13 +2022,13 @@ class StreamRetryRollbackTest(unittest.IsolatedAsyncioTestCase):
         acompletion_mock = AsyncMock(side_effect=fake_acompletion)
         dummy_dynamic = Message(MessageRole.SYSTEM, "<dynamic/>", MessageType.TEXT)
         patches = [
-            patch("stupidex.llm.client.get_config", return_value=cfg),
-            patch("stupidex.llm.providers.get_config", return_value=cfg),
-            patch("stupidex.llm.client.build_dynamic_system_prompt",
+            patch("orchid.llm.client.get_config", return_value=cfg),
+            patch("orchid.llm.providers.get_config", return_value=cfg),
+            patch("orchid.llm.client.build_dynamic_system_prompt",
                   new=AsyncMock(return_value=dummy_dynamic)),
-            patch("stupidex.llm.client.get_tool_registry", return_value={}),
-            patch("stupidex.llm.client.litellm.acompletion", new=acompletion_mock),
-            patch("stupidex.llm.client._backoff_sleep", new=AsyncMock()),
+            patch("orchid.llm.client.get_tool_registry", return_value={}),
+            patch("orchid.llm.client.litellm.acompletion", new=acompletion_mock),
+            patch("orchid.llm.client._backoff_sleep", new=AsyncMock()),
         ]
         stack = contextlib.ExitStack()
         for p in patches:
@@ -2265,7 +2265,7 @@ class MidStreamFallbackErrorTest(unittest.IsolatedAsyncioTestCase):
     """litellm raises ``MidStreamFallbackError`` when its internal chunk parser
     hits an ``IndexError`` (notably on a trailing usage-only chunk whose
     ``choices`` array is empty — ``is_chunk_non_empty`` accesses ``choices[0]``
-    with no length guard).  Because stupidex calls ``litellm.acompletion``
+    with no length guard).  Because orchid calls ``litellm.acompletion``
     directly (no Router), the fallback signal can never be consumed; without
     mitigation it surfaces to the user as a spurious "Service Unavailable"
     after partial content has already been delivered.  These tests pin the
@@ -2478,7 +2478,7 @@ class MidStreamFallbackErrorTest(unittest.IsolatedAsyncioTestCase):
         """Sanity: ``is_pre_first_chunk=True`` errors must propagate regardless
         of whether content was delivered earlier in a *previous* attempt. The
         predicate keys off ``is_pre_first_chunk`` (the litellm-supplied flag),
-        not on stupidex's local delivery state — so a true pre-first-chunk
+        not on orchid's local delivery state — so a true pre-first-chunk
         error (the stream died before any content reached us) is never
         suppressed.
         """
@@ -2723,7 +2723,7 @@ class PostCommitContentSyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(assistant_msgs[-1]["content"], "AB")
 
     async def test_exactly_one_assistant_text_persisted_when_content_follows_tool_calls(self):
-        from stupidex.domain.message import StreamHistoryState, record_streamed_message
+        from orchid.domain.message import StreamHistoryState, record_streamed_message
 
         async def response():
             yield chunk(content="A")
@@ -2961,12 +2961,12 @@ class StreamCancelPropagationTest(unittest.IsolatedAsyncioTestCase):
         acompletion_mock = AsyncMock(side_effect=fake_acompletion)
         dummy_dynamic = Message(MessageRole.SYSTEM, "<dynamic/>", MessageType.TEXT)
         patches = [
-            patch("stupidex.llm.client.get_config", return_value=cfg),
-            patch("stupidex.llm.providers.get_config", return_value=cfg),
-            patch("stupidex.llm.client.build_dynamic_system_prompt",
+            patch("orchid.llm.client.get_config", return_value=cfg),
+            patch("orchid.llm.providers.get_config", return_value=cfg),
+            patch("orchid.llm.client.build_dynamic_system_prompt",
                   new=AsyncMock(return_value=dummy_dynamic)),
-            patch("stupidex.llm.client.get_tool_registry", return_value={}),
-            patch("stupidex.llm.client.litellm.acompletion", new=acompletion_mock),
+            patch("orchid.llm.client.get_tool_registry", return_value={}),
+            patch("orchid.llm.client.litellm.acompletion", new=acompletion_mock),
         ]
         stack = contextlib.ExitStack()
         for p in patches:
@@ -3084,12 +3084,12 @@ class TestStreamResponseMultiTurn(unittest.IsolatedAsyncioTestCase):
         original_execute_tool = llm_client._execute_tool
         llm_client._execute_tool = fake_execute_tool
         patches = [
-            patch("stupidex.llm.client.get_config", return_value=cfg),
-            patch("stupidex.llm.providers.get_config", return_value=cfg),
-            patch("stupidex.llm.client.build_dynamic_system_prompt",
+            patch("orchid.llm.client.get_config", return_value=cfg),
+            patch("orchid.llm.providers.get_config", return_value=cfg),
+            patch("orchid.llm.client.build_dynamic_system_prompt",
                   new=AsyncMock(return_value=dummy_dynamic)),
-            patch("stupidex.llm.client.get_tool_registry", return_value={}),
-            patch("stupidex.llm.client.litellm.acompletion", new=acompletion_mock),
+            patch("orchid.llm.client.get_tool_registry", return_value={}),
+            patch("orchid.llm.client.litellm.acompletion", new=acompletion_mock),
         ]
         try:
             with contextlib.ExitStack() as stack:

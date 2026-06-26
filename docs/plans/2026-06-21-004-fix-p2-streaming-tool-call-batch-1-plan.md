@@ -65,13 +65,13 @@ None of these block the happy path today; all three are reachable by documented 
 
 ### Relevant Code and Patterns
 
-- `src/stupidex/domain/chain.py:71-110` — `_reconcile_orphan_tool_results` drives orphan pruning at replay.
-- `src/stupidex/domain/message.py:38` — `tool_calls: list[dict[str, Any]] | None` field.
-- `src/stupidex/domain/message.py:40-77` — `to_dict` / `to_storage_dict` are the wire serialization surface.
-- `src/stupidex/llm/client.py:624` — `while tc_delta.index >= len(tool_calls):` is the None-index crash point.
-- `src/stupidex/llm/client.py:573-588` — `maybe_enqueue` enqueues the live `tool_calls[prev_idx]` reference onto `ready_q`.
-- `src/stupidex/llm/client.py:328-381` — `_execute_tool` reads `tc["function"]["name"]` / `tc["function"]["arguments"]` from the enqueued reference.
-- `src/stupidex/llm/client.py:622-634` — delta loop mutates `tc["function"]["arguments"]` in place via `+=`.
+- `src/orchid/domain/chain.py:71-110` — `_reconcile_orphan_tool_results` drives orphan pruning at replay.
+- `src/orchid/domain/message.py:38` — `tool_calls: list[dict[str, Any]] | None` field.
+- `src/orchid/domain/message.py:40-77` — `to_dict` / `to_storage_dict` are the wire serialization surface.
+- `src/orchid/llm/client.py:624` — `while tc_delta.index >= len(tool_calls):` is the None-index crash point.
+- `src/orchid/llm/client.py:573-588` — `maybe_enqueue` enqueues the live `tool_calls[prev_idx]` reference onto `ready_q`.
+- `src/orchid/llm/client.py:328-381` — `_execute_tool` reads `tc["function"]["name"]` / `tc["function"]["arguments"]` from the enqueued reference.
+- `src/orchid/llm/client.py:622-634` — delta loop mutates `tc["function"]["arguments"]` in place via `+=`.
 
 ### Institutional Learnings
 
@@ -117,7 +117,7 @@ None of these block the happy path today; all three are reachable by documented 
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/domain/chain.py`
+- Modify: `src/orchid/domain/chain.py`
 - Test: `tests/test_chain.py` (or matching existing test file for `chain.py`; if none exists, create `tests/test_chain_reconcile.py`)
 
 **Approach:**
@@ -147,7 +147,7 @@ None of these block the happy path today; all three are reachable by documented 
 **Dependencies:** None (independent of U1)
 
 **Files:**
-- Modify: `src/stupidex/llm/client.py`
+- Modify: `src/orchid/llm/client.py`
 - Test: `tests/test_stream_task.py` (or matching existing test file)
 
 **Approach:**
@@ -175,7 +175,7 @@ None of these block the happy path today; all three are reachable by documented 
 **Dependencies:** None (independent of U1, U2)
 
 **Files:**
-- Modify: `src/stupidex/llm/client.py`
+- Modify: `src/orchid/llm/client.py`
 - Test: `tests/test_stream_task.py` (or matching existing test file)
 
 **Approach:**
@@ -204,9 +204,9 @@ None of these block the happy path today; all three are reachable by documented 
 **Dependencies:** U1, U2, U3 (so the bug fixes land as dict-shaped first; this unit then rewrites the settled call sites).
 
 **Files:**
-- Modify: `src/stupidex/domain/message.py`
-- Modify: `src/stupidex/domain/chain.py`
-- Modify: `src/stupidex/llm/client.py`
+- Modify: `src/orchid/domain/message.py`
+- Modify: `src/orchid/domain/chain.py`
+- Modify: `src/orchid/llm/client.py`
 - Test: `tests/test_message_tool_call_roundtrip.py` (or extend existing message tests)
 
 **Approach:**
@@ -262,8 +262,8 @@ class ToolCall:
 ```
 
 **Patterns to follow:**
-- `src/stupidex/domain/message.py:80-123` — defensive `from_storage_dict` with `.get()`, validation, and warning metadata.
-- `src/stupidex/domain/usage.py` (adjacent `Usage` dataclass pattern).
+- `src/orchid/domain/message.py:80-123` — defensive `from_storage_dict` with `.get()`, validation, and warning metadata.
+- `src/orchid/domain/usage.py` (adjacent `Usage` dataclass pattern).
 
 **Test scenarios:**
 - Happy path: round-trip a `Message(role=ASSISTANT, tool_calls=[ToolCall(id="A", function=ToolCallFunction(name="sum", arguments='{"a":1}'))])` through `to_storage_dict` → `from_storage_dict` → equal dataclass instance (no behavior change vs today's dict round-trip).
@@ -316,6 +316,6 @@ class ToolCall:
 ## Sources & References
 
 - Origin: `todo-pendings-fixes.md` lines 62-90 (P2 batch list, domain + agents sections)
-- Source verification: `src/stupidex/domain/chain.py:71-110`, `src/stupidex/domain/message.py:38-123, 133-192`, `src/stupidex/llm/client.py:209-320, 450-708`
+- Source verification: `src/orchid/domain/chain.py:71-110`, `src/orchid/domain/message.py:38-123, 133-192`, `src/orchid/llm/client.py:209-320, 450-708`
 - Related completed fixes: `todo-completed-fixes.md` P2-9 (defensive `Message.from_storage_dict`), P2-31 (`_reconcile_orphan_tool_results` applied to subagent messages)
 - Related plans: `docs/plans/2026-06-21-002-fix-p2-persistence-replay-batch-b-plan.md`, `docs/plans/2026-06-21-003-fix-p2-concrete-bugs-batch-c-plan.md`

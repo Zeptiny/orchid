@@ -5,10 +5,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from stupidex.domain.message import Message, MessageRole, MessageType
-from stupidex.domain.session import get_current_session_id, set_current_session_id
-from stupidex.llm import client as llm_client
-from stupidex.llm.client import (
+from orchid.domain.message import Message, MessageRole, MessageType
+from orchid.domain.session import get_current_session_id, set_current_session_id
+from orchid.llm import client as llm_client
+from orchid.llm.client import (
     _TOOL_OUTPUT_INLINE_THRESHOLD,
     _maybe_offload_tool_output,
     cleanup_tool_output_cache,
@@ -151,7 +151,7 @@ class ToolOutputCacheCleanupTest(unittest.TestCase):
                 _maybe_offload_tool_output("edit", content, "call-1")
                 cache_dir = llm_client._tool_output_cache_dir("test-session-perm")
                 self.assertTrue(cache_dir.exists())
-                with patch("stupidex.llm.client.shutil.rmtree", side_effect=OSError("denied")):
+                with patch("orchid.llm.client.shutil.rmtree", side_effect=OSError("denied")):
                     cleanup_tool_output_cache("test-session-perm")
                 self.assertTrue(cache_dir.exists())
             set_current_session_id(None)

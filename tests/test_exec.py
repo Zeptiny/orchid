@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from stupidex.tools.exec import MAX_OUTPUT_BYTES, execute_command
+from orchid.tools.exec import MAX_OUTPUT_BYTES, execute_command
 
 
 @pytest.mark.asyncio
@@ -50,10 +50,10 @@ async def test_truncation_mocked():
 
     with (
         patch(
-            "stupidex.tools.exec.asyncio.create_subprocess_shell",
+            "orchid.tools.exec.asyncio.create_subprocess_shell",
             new=AsyncMock(return_value=process),
         ),
-        patch("stupidex.tools.exec.os.killpg", side_effect=OSError),
+        patch("orchid.tools.exec.os.killpg", side_effect=OSError),
     ):
         result = await execute_command("yes", description="yes", timeout=5)
 
@@ -84,7 +84,7 @@ async def test_nonzero_exit_after_truncation(mocked_process_factory):
     big = b"y" * (MAX_OUTPUT_BYTES + 4096)
     process = mocked_process_factory(stdout_data=big, returncode=3)
     with patch(
-        "stupidex.tools.exec.asyncio.create_subprocess_shell",
+        "orchid.tools.exec.asyncio.create_subprocess_shell",
         new=AsyncMock(return_value=process),
     ):
         result = await execute_command("sh -c 'big; exit 3'", description="big", timeout=5)
@@ -111,10 +111,10 @@ async def test_binary_urandom_does_not_oom():
 
     with (
         patch(
-            "stupidex.tools.exec.asyncio.create_subprocess_shell",
+            "orchid.tools.exec.asyncio.create_subprocess_shell",
             new=AsyncMock(return_value=process),
         ),
-        patch("stupidex.tools.exec.os.killpg", side_effect=OSError),
+        patch("orchid.tools.exec.os.killpg", side_effect=OSError),
     ):
         result = await execute_command("cat /dev/urandom", description="urandom", timeout=5)
 

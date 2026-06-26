@@ -60,15 +60,15 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 
 ### Relevant Code and Patterns
 
-- `src/stupidex/llm/client.py` — stream loop, `_execute_tool`, `_history_to_api_messages`, `stream_response`; signatures at `:210, :324, :451, :740`. ContextVar assignment at `:747-748` (P2-111).
-- `src/stupidex/llm/providers.py` — model-qualification helper duplication at `:144` (P2-97); `resolve_embedding_ref` at `:161`.
-- `src/stupidex/tools/ast.py` — `_format_edit_result` at `:108-138` (hardcodes `replace_all="false"` at `:123`); `_trigger_post_write_callbacks` at `:231-240` (returns `list[str]` of failures).
-- `src/stupidex/tools/file_manipulation.py` — `_format_edit_result_content` at `:112-143` (parametrized `replace_all: bool` at `:117`); inline post-write callback loops at `:205-209` (edit) and `:371-375` (write); plain-string error returns at `:44-50, :64-66, :69-72, :80-81, :282-286, :341-344, :383-384`; `_xml_attr` / `_cdata_text` imported at `:12`.
-- `src/stupidex/tools/__init__.py` — registry pattern at `:62-100`; three builders at `:84, :88-89`.
-- `src/stupidex/screens/settings.py` — `●` marker sites at `:1104, :1182, :1200, :1218` (P2-201); `_render_mcp_list` at `:941-949` vs `_render_keyed_list` at `:1231-1246` (P2-202); 4 bare `except Exception:` sites at `:25, :220, :270, :1331` (P2-203 — deferred), `Config(**asdict(...))` ×4 at `:765-766, :1284-1285` (P2-204); `_items_cache` field at `:767`, writers at `:949, :1237`, readers at `:872-880, :882-890` (P2-205). Note: `●` marker also appears at `:1328, :1334, :1336` for dirty-tab indicators — **different semantics, must not be folded into P2-201 fix**.
-- `src/stupidex/screens/picker.py` — `OptionPicker.__init__` and `_build_options` at `:24` (P2-201 home for `current=` param).
-- `src/stupidex/tools/skill.py:9-13` — `_current_allowed_skills: ContextVar[list[str] | None]`; `set_current_allowed_skills` currently returns `None`.
-- `src/stupidex/domain/tool.py` — `Tool` dataclass (referenced for U8 pattern only).
+- `src/orchid/llm/client.py` — stream loop, `_execute_tool`, `_history_to_api_messages`, `stream_response`; signatures at `:210, :324, :451, :740`. ContextVar assignment at `:747-748` (P2-111).
+- `src/orchid/llm/providers.py` — model-qualification helper duplication at `:144` (P2-97); `resolve_embedding_ref` at `:161`.
+- `src/orchid/tools/ast.py` — `_format_edit_result` at `:108-138` (hardcodes `replace_all="false"` at `:123`); `_trigger_post_write_callbacks` at `:231-240` (returns `list[str]` of failures).
+- `src/orchid/tools/file_manipulation.py` — `_format_edit_result_content` at `:112-143` (parametrized `replace_all: bool` at `:117`); inline post-write callback loops at `:205-209` (edit) and `:371-375` (write); plain-string error returns at `:44-50, :64-66, :69-72, :80-81, :282-286, :341-344, :383-384`; `_xml_attr` / `_cdata_text` imported at `:12`.
+- `src/orchid/tools/__init__.py` — registry pattern at `:62-100`; three builders at `:84, :88-89`.
+- `src/orchid/screens/settings.py` — `●` marker sites at `:1104, :1182, :1200, :1218` (P2-201); `_render_mcp_list` at `:941-949` vs `_render_keyed_list` at `:1231-1246` (P2-202); 4 bare `except Exception:` sites at `:25, :220, :270, :1331` (P2-203 — deferred), `Config(**asdict(...))` ×4 at `:765-766, :1284-1285` (P2-204); `_items_cache` field at `:767`, writers at `:949, :1237`, readers at `:872-880, :882-890` (P2-205). Note: `●` marker also appears at `:1328, :1334, :1336` for dirty-tab indicators — **different semantics, must not be folded into P2-201 fix**.
+- `src/orchid/screens/picker.py` — `OptionPicker.__init__` and `_build_options` at `:24` (P2-201 home for `current=` param).
+- `src/orchid/tools/skill.py:9-13` — `_current_allowed_skills: ContextVar[list[str] | None]`; `set_current_allowed_skills` currently returns `None`.
+- `src/orchid/domain/tool.py` — `Tool` dataclass (referenced for U8 pattern only).
 - `tests/test_streaming_messages.py` — ~10 harness sites construct `tool_calls_started = asyncio.Event()` (deferred P2-100 only).
 - `tests/test_file_manipulation.py:25-29, 51, :97-101, :135` — XML str assertions + post-write-callback test.
 - `tests/test_settings_screen.py:1187-1210` — four `_items_cache = [...]` setters directly (U11 must update these).
@@ -102,7 +102,7 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 
 ### Resolved During Planning
 
-- **Should `_format_edit_result` and `_format_edit_result_content` be unified under a new module or kept in `_xml_utils.py`?** Resolved: move into `src/stupidex/tools/_xml_utils.py` (the existing home of `_xml_attr` / `_cdata_text`); both ast.py and file_manipulation.py already import from there.
+- **Should `_format_edit_result` and `_format_edit_result_content` be unified under a new module or kept in `_xml_utils.py`?** Resolved: move into `src/orchid/tools/_xml_utils.py` (the existing home of `_xml_attr` / `_cdata_text`); both ast.py and file_manipulation.py already import from there.
 - **Should `set_current_allowed_skills` return the token directly or via a new `reset_current_allowed_skills` helper?** Resolved: have `set_current_allowed_skills` return its token (the standard pattern — `contextvars.ContextVar.set` already returns one); caller does `try/finally reset_current_allowed_skills(token)`. Add a small `reset_current_allowed_skills(token: Token)` for symmetry with the existing setter.
 - **Should the `_items_cache` rename also update the field to a `dict[str, list]`, or thread by prefix at each method call?** Resolved: dict-keyed by prefix. The existing `action_prefix` parameter on `_render_keyed_list` already establishes the protocol; we're making the cache match.
 - **Should P2-66 fix the ast.py escape pattern too?** Resolved: no — that's a false positive (`_xml_attr` for attrs, `escape` for text is correct).
@@ -125,8 +125,8 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 **Dependencies:** None — first unit; no runtime change to anything downstream.
 
 **Files:**
-- Create: `src/stupidex/llm/types.py`
-- Modify: `src/stupidex/llm/client.py` (annotate `_history_to_api_messages`, `_execute_tool`, `_stream_task`, `stream_response`)
+- Create: `src/orchid/llm/types.py`
+- Modify: `src/orchid/llm/client.py` (annotate `_history_to_api_messages`, `_execute_tool`, `_stream_task`, `stream_response`)
 - Test: `tests/test_llm_types.py` (optional — for shape contracts)
 
 **Approach:**
@@ -145,7 +145,7 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 
 **Verification:**
 - All existing tests pass unchanged (1057+).
-- `python -m mypy src/stupidex/llm/client.py` (if mypy is configured) surfaces no new errors.
+- `python -m mypy src/orchid/llm/client.py` (if mypy is configured) surfaces no new errors.
 
 ---
 
@@ -158,11 +158,11 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 **Dependencies:** None.
 
 **Files:**
-- Modify: `src/stupidex/llm/providers.py` (define `qualify_model(provider: str | None, model_id: str) -> str`)
-- Modify: `src/stupidex/llm/client.py:774` (call helper)
-- Modify: `src/stupidex/llm/providers.py:144` (call helper)
-- Modify: `src/stupidex/rag/embedder.py:58` (call helper)
-- Modify: `src/stupidex/tools/web_fetch.py:248` (call helper — currently always-qualified path, may simplify)
+- Modify: `src/orchid/llm/providers.py` (define `qualify_model(provider: str | None, model_id: str) -> str`)
+- Modify: `src/orchid/llm/client.py:774` (call helper)
+- Modify: `src/orchid/llm/providers.py:144` (call helper)
+- Modify: `src/orchid/rag/embedder.py:58` (call helper)
+- Modify: `src/orchid/tools/web_fetch.py:248` (call helper — currently always-qualified path, may simplify)
 - Test: `tests/test_providers_resolution.py` (add coverage for `qualify_model` behavior)
 
 **Approach:**
@@ -193,8 +193,8 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 **Dependencies:** None.
 
 **Files:**
-- Modify: `src/stupidex/screens/picker.py` (add optional `current: str | None = None` to `OptionPicker.__init__`; prefix with `● ` when `item.id == current` else `  ` in `_build_options` at `:24`).
-- Modify: `src/stupidex/screens/settings.py` (delete post-hoc loop mutations at `:1102-1105, :1179-1183`; collapse inline conditionals at `:1200, :1218`; pass `current=` to `OptionPicker` calls).
+- Modify: `src/orchid/screens/picker.py` (add optional `current: str | None = None` to `OptionPicker.__init__`; prefix with `● ` when `item.id == current` else `  ` in `_build_options` at `:24`).
+- Modify: `src/orchid/screens/settings.py` (delete post-hoc loop mutations at `:1102-1105, :1179-1183`; collapse inline conditionals at `:1200, :1218`; pass `current=` to `OptionPicker` calls).
 - Test: `tests/test_picker.py` (optional — guard test for the new `current=` behavior)
 
 **Approach:**
@@ -212,7 +212,7 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 
 **Verification:**
 - All existing `tests/test_picker.py` and `tests/test_settings_screen.py` tests pass unchanged (the new param defaults to `None` and produces no prefix when not set).
-- `grep -n '●' src/stupidex/screens/settings.py` shows the `●` glyph only in `_update_tab_labels` (dirty-tab indicators) and `OptionPicker._build_options`.
+- `grep -n '●' src/orchid/screens/settings.py` shows the `●` glyph only in `_update_tab_labels` (dirty-tab indicators) and `OptionPicker._build_options`.
 
 ---
 
@@ -225,8 +225,8 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 **Dependencies:** None.
 
 **Files:**
-- Modify: `src/stupidex/screens/settings.py` (delete `_render_mcp_list` at `:941-949`; build MCP items inline in `_render_mcp_servers` at `:932` then call `self._render_keyed_list(container, items, "mcp")`).
-- Modify: `src/stupidex/screens/settings.py` (delete `.mcp-list-item` CSS rule at `:663-669` — identical to `.settings-list-item` at `:643`).
+- Modify: `src/orchid/screens/settings.py` (delete `_render_mcp_list` at `:941-949`; build MCP items inline in `_render_mcp_servers` at `:932` then call `self._render_keyed_list(container, items, "mcp")`).
+- Modify: `src/orchid/screens/settings.py` (delete `.mcp-list-item` CSS rule at `:663-669` — identical to `.settings-list-item` at `:643`).
 - Test: `tests/test_settings_screen.py` (no existing test touches `_render_mcp_list` — keep `_render_keyed_list` tests unchanged at `:437-442`).
 
 **Approach:**
@@ -241,8 +241,8 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 - Integration: `_items_caches["mcp"]` (after U11) holds the rendered items in the same shape as the deleted `_items_cache` would have.
 
 **Verification:**
-- `grep -n '_render_mcp_list' src/stupidex/screens/settings.py` returns no matches.
-- `grep -n 'mcp-list-item' src/stupidex/` returns no matches.
+- `grep -n '_render_mcp_list' src/orchid/screens/settings.py` returns no matches.
+- `grep -n 'mcp-list-item' src/orchid/` returns no matches.
 
 ---
 
@@ -255,7 +255,7 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 **Dependencies:** None.
 
 **Files:**
-- Modify: `src/stupidex/screens/settings.py` (add `_clone_config` static helper; replace 4 occurrences at `:765-766, :1284-1285`).
+- Modify: `src/orchid/screens/settings.py` (add `_clone_config` static helper; replace 4 occurrences at `:765-766, :1284-1285`).
 - Test: `tests/test_settings_screen.py` (no test asserts on the clone mechanism).
 
 **Approach:**
@@ -270,7 +270,7 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 - Optionally: characterization test that `_clone_config(cfg) != cfg is cfg` (different identity) and `asdict(_clone_config(cfg)) == asdict(cfg)` (same content).
 
 **Verification:**
-- `grep -n 'Config(\*\*asdict' src/stupidex/screens/settings.py` returns zero matches (all four replaced).
+- `grep -n 'Config(\*\*asdict' src/orchid/screens/settings.py` returns zero matches (all four replaced).
 - All existing tests in `tests/test_settings_screen.py` pass unchanged.
 
 ---
@@ -284,9 +284,9 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 **Dependencies:** None — independent of U7 (U7 changes post-write callback plumbing, not formatter).
 
 **Files:**
-- Modify: `src/stupidex/tools/_xml_utils.py` (add `format_edit_result(path, message, replace, replace_all, content_match=False, ...) -> str` — port `_format_edit_result_content` from `file_manipulation.py:112-143`).
-- Modify: `src/stupidex/tools/file_manipulation.py:112-143` (delete `_format_edit_result_content`; import from `_xml_utils`).
-- Modify: `src/stupidex/tools/ast.py:108-138` (delete `_format_edit_result`; import shared `format_edit_result`; update call sites at `:682, :709, :768, :791, :822, :845, :859, :873` to pass `replace_all=False`).
+- Modify: `src/orchid/tools/_xml_utils.py` (add `format_edit_result(path, message, replace, replace_all, content_match=False, ...) -> str` — port `_format_edit_result_content` from `file_manipulation.py:112-143`).
+- Modify: `src/orchid/tools/file_manipulation.py:112-143` (delete `_format_edit_result_content`; import from `_xml_utils`).
+- Modify: `src/orchid/tools/ast.py:108-138` (delete `_format_edit_result`; import shared `format_edit_result`; update call sites at `:682, :709, :768, :791, :822, :845, :859, :873` to pass `replace_all=False`).
 - Test: `tests/test_file_manipulation.py` (existing XML str assertions at `:25-29, :51, :67` — verify they still pass; the consolidated formatter must emit byte-identical output for the same inputs).
 
 **Approach:**
@@ -303,7 +303,7 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 - Edge case — `replace_all` arg omission: should be a required kwarg on the new shared helper (no silent default) to force callers to be explicit.
 
 **Verification:**
-- `grep -n '_format_edit_result' src/stupidex/tools/` returns no matches (both helpers deleted; only `format_edit_result` in `_xml_utils.py`).
+- `grep -n '_format_edit_result' src/orchid/tools/` returns no matches (both helpers deleted; only `format_edit_result` in `_xml_utils.py`).
 - All existing tests in `tests/test_file_manipulation.py`, `tests/test_ast_tools.py`, `tests/test_streaming_messages.py:1062`, `tests/test_tool_output_offload.py:41,111,116` pass.
 
 ---
@@ -317,9 +317,9 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 **Dependencies:** None — independent of U6.
 
 **Files:**
-- Modify: `src/stupidex/tools/file_manipulation.py:205-209` (replace inline `for cb in post_write_callbacks: try/except` with `cb_failures = await _trigger_post_write_callbacks(file_path)`; thread failures into `_format_edit_result_content(..., message="; ".join(cb_failures) if cb_failures else None)`).
-- Modify: `src/stupidex/tools/file_manipulation.py:371-375` (same pattern in `execute_write_tool`; append warning line to returned content if failures).
-- Modify: `src/stupidex/tools/file_manipulation.py` (add `from stupidex.tools.ast import _trigger_post_write_callbacks`).
+- Modify: `src/orchid/tools/file_manipulation.py:205-209` (replace inline `for cb in post_write_callbacks: try/except` with `cb_failures = await _trigger_post_write_callbacks(file_path)`; thread failures into `_format_edit_result_content(..., message="; ".join(cb_failures) if cb_failures else None)`).
+- Modify: `src/orchid/tools/file_manipulation.py:371-375` (same pattern in `execute_write_tool`; append warning line to returned content if failures).
+- Modify: `src/orchid/tools/file_manipulation.py` (add `from orchid.tools.ast import _trigger_post_write_callbacks`).
 - Test: `tests/test_file_manipulation.py` (existing `test_write_tool_fires_post_write_callbacks:135` continues to pass; add new `test_edit_tool_surfaces_post_write_callback_failure` and `test_write_tool_surfaces_post_write_callback_failure` using `AsyncMock(side_effect=RuntimeError)`).
 
 **Approach:**
@@ -337,7 +337,7 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 - Edge case — empty `post_write_callbacks` list: no failures, behavior unchanged.
 
 **Verification:**
-- `grep -n 'for cb in post_write_callbacks' src/stupidex/tools/file_manipulation.py` returns no matches.
+- `grep -n 'for cb in post_write_callbacks' src/orchid/tools/file_manipulation.py` returns no matches.
 - New tests `test_edit_tool_surfaces_post_write_callback_failure` and `test_write_tool_surfaces_post_write_callback_failure` pass.
 
 ---
@@ -351,7 +351,7 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 **Dependencies:** None.
 
 **Files:**
-- Modify: `src/stupidex/tools/__init__.py:84, :88-89` (cache the three `build_*()` results — use either module-level singletons initialized lazily or cache them inside `get_tool_registry()` keyed off a sentinel that `reset_tool_registry()` can invalidate).
+- Modify: `src/orchid/tools/__init__.py:84, :88-89` (cache the three `build_*()` results — use either module-level singletons initialized lazily or cache them inside `get_tool_registry()` keyed off a sentinel that `reset_tool_registry()` can invalidate).
 - Test: `tests/test_tool.py` (optional — new test asserting `get_tool_registry()` returns equivalent `Tool` objects across calls after `reset_tool_registry()`).
 
 **Approach:**
@@ -381,10 +381,10 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 **Dependencies:** None — independent of U6 (different helpers).
 
 **Files:**
-- Modify: `src/stupidex/tools/file_manipulation.py:44-50, :64-66, :69-72, :80-81` (`execute_read_tool` error returns).
-- Modify: `src/stupidex/tools/file_manipulation.py:282-286` (`execute_read_directory_tool` error).
-- Modify: `src/stupidex/tools/file_manipulation.py:341-344` (`execute_glob_tool` error).
-- Modify: `src/stupidex/tools/file_manipulation.py:383-384` (`execute_write_tool` error).
+- Modify: `src/orchid/tools/file_manipulation.py:44-50, :64-66, :69-72, :80-81` (`execute_read_tool` error returns).
+- Modify: `src/orchid/tools/file_manipulation.py:282-286` (`execute_read_directory_tool` error).
+- Modify: `src/orchid/tools/file_manipulation.py:341-344` (`execute_glob_tool` error).
+- Modify: `src/orchid/tools/file_manipulation.py:383-384` (`execute_write_tool` error).
 - Test: `tests/test_file_manipulation.py:97-101` (`test_edit_tool_generic_exception_returned_as_error_result` — asserts `"disk on fire" in result.content`, survives XML wrapping).
 
 **Approach:**
@@ -403,7 +403,7 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 - Edge case — file_path with special XML chars (`<`, `>`, `&`, `"`): properly escaped in both attribute and text positions.
 
 **Verification:**
-- `grep -n 'Error reading file' src/stupidex/tools/file_manipulation.py` returns no matches (all wrapped in `<file_error>`).
+- `grep -n 'Error reading file' src/orchid/tools/file_manipulation.py` returns no matches (all wrapped in `<file_error>`).
 
 ---
 
@@ -416,8 +416,8 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 **Dependencies:** None.
 
 **Files:**
-- Modify: `src/stupidex/tools/skill.py:9-13` (`set_current_allowed_skills` returns the `ContextVar` token; add `reset_current_allowed_skills(token: Token[list[str] | None]) -> None`).
-- Modify: `src/stupidex/llm/client.py:747-748` (`stream_response` captures the token, then `try/finally reset_current_allowed_skills(token)` around the generator body).
+- Modify: `src/orchid/tools/skill.py:9-13` (`set_current_allowed_skills` returns the `ContextVar` token; add `reset_current_allowed_skills(token: Token[list[str] | None]) -> None`).
+- Modify: `src/orchid/llm/client.py:747-748` (`stream_response` captures the token, then `try/finally reset_current_allowed_skills(token)` around the generator body).
 - Test: `tests/test_skill_tools.py:115` (existing call to `set_current_allowed_skills` without restoration — may gain value from asserting restoration; minor adjustment if API surface changes).
 - Test: `tests/test_streaming_messages.py` (verify no test relies on cross-invocation leakage — drive `stream_response` twice in the same task and assert skill filtering is independent per call).
 
@@ -435,7 +435,7 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 - Edge case — two `stream_response` invocations in the same task with different `allowed_skills`: second invocation's skill filter does not see the first's `allowed_skills` (after U10).
 
 **Verification:**
-- `grep -n 'set_current_allowed_skills' src/stupidex/llm/client.py` returns one call inside `stream_response`, paired with `reset_current_allowed_skills(token)` in a `finally` block.
+- `grep -n 'set_current_allowed_skills' src/orchid/llm/client.py` returns one call inside `stream_response`, paired with `reset_current_allowed_skills(token)` in a `finally` block.
 - New tests pass.
 
 ---
@@ -449,10 +449,10 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 **Dependencies:** U4 (deletes `_render_mcp_list` so the only MCP writer left is `_render_keyed_list` with action_prefix `"mcp"`). Can ship without U4 by adapting `_render_mcp_list` to write to `_items_caches["mcp"]` — but cleaner after U4.
 
 **Files:**
-- Modify: `src/stupidex/screens/settings.py:767` (change `_items_cache: list[...]` field to `_items_caches: dict[str, list[tuple[str, str]]] = {}`).
-- Modify: `src/stupidex/screens/settings.py:949` (`_render_mcp_list` writer — or, post-U4, the `_render_keyed_list` call from `_render_mcp_servers`).
-- Modify: `src/stupidex/screens/settings.py:1237` (`_render_keyed_list` writer — store under `self._items_caches[action_prefix] = items`).
-- Modify: `src/stupidex/screens/settings.py:872-880, :882-890` (`on_button_pressed` readers — derive prefix from button id and look up `self._items_caches[prefix]`; fail safely if missing).
+- Modify: `src/orchid/screens/settings.py:767` (change `_items_cache: list[...]` field to `_items_caches: dict[str, list[tuple[str, str]]] = {}`).
+- Modify: `src/orchid/screens/settings.py:949` (`_render_mcp_list` writer — or, post-U4, the `_render_keyed_list` call from `_render_mcp_servers`).
+- Modify: `src/orchid/screens/settings.py:1237` (`_render_keyed_list` writer — store under `self._items_caches[action_prefix] = items`).
+- Modify: `src/orchid/screens/settings.py:872-880, :882-890` (`on_button_pressed` readers — derive prefix from button id and look up `self._items_caches[prefix]`; fail safely if missing).
 - Test: `tests/test_settings_screen.py:1187-1210` (four `_items_cache = [...]` setters updated to `_items_caches["prov"] = [...]` / `_items_caches["mcp"] = [...]`).
 
 **Approach:**
@@ -473,7 +473,7 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 
 **Verification:**
 - Updated `test_settings_screen.py:1187-1210` pass.
-- `grep -n '_items_cache[^s]' src/stupidex/screens/settings.py` returns no matches (the bare-list field is gone; only `_items_caches` dict remains).
+- `grep -n '_items_cache[^s]' src/orchid/screens/settings.py` returns no matches (the bare-list field is gone; only `_items_caches` dict remains).
 
 ---
 
@@ -494,7 +494,7 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 |------|------------|
 | U7 import cycle (`file_manipulation.py -> ast.py`) | Verify `ast.py` doesn't import from `file_manipulation.py`. If it does, move `_trigger_post_write_callbacks` into a shared module (e.g., `tools/_post_write.py`). |
 | U3 OptionPicker `●` glyph couples label pre-padding (line 1093 + strip at 1104) | Removing both sites at once eliminates the coupling. Verify all 4 picker openings produce identical labels before/after. |
-| U4 deletes the `.mcp-list-item` CSS rule — verify no other widget uses it | `grep -n 'mcp-list-item' src/stupidex/` should return matches only in `settings.py:949` (writer) and `:663` (CSS rule). Delete both together. |
+| U4 deletes the `.mcp-list-item` CSS rule — verify no other widget uses it | `grep -n 'mcp-list-item' src/orchid/` should return matches only in `settings.py:949` (writer) and `:663` (CSS rule). Delete both together. |
 | U6 test churn — 3 test files assert exact `<edit_result ...>` XML strings | Consolidated formatter must emit byte-identical output for the same inputs. Run all 3 test files (`test_file_manipulation.py`, `test_ast_tools.py`, `test_streaming_messages.py:1062`) in one pass; if any assertion changes shape, investigate before continuing. |
 | U11 test churn — 4 test sites at `test_settings_screen.py:1187-1210` set `_items_cache` directly | Mechanical update to `_items_caches["prov"] = [...]` / `_items_caches["mcp"] = [...]`. Pair each test update with a re-run. |
 | U8 cache invalidation timing — `allowed_skills` argument changes might not invalidate cache | Cache key includes current `allowed_skills`; verify with a test that changes the argument and asserts builders re-run. |
@@ -519,5 +519,5 @@ The Batch 8 issues were flagged in the P2 code-review enumeration as localized m
 - **Origin enumeration:** `todo-pendings-fixes.md` (Batch 8 cluster: lines 110-129, 144-154, 232-243)
 - **Verification context:** Three `explore` subagent dispatches (tools/, llm/, screens/) on 2026-06-21
 - **Prior decisions:** `docs/plans/2026-06-21-004-fix-p2-streaming-tool-call-batch-1-plan.md` (P2-19 WONTFIX rule on dict pass-through design)
-- Related code: `src/stupidex/llm/client.py`, `src/stupidex/llm/providers.py`, `src/stupidex/tools/ast.py`, `src/stupidex/tools/file_manipulation.py`, `src/stupidex/tools/__init__.py`, `src/stupidex/tools/skill.py`, `src/stupidex/screens/settings.py`, `src/stupidex/screens/picker.py`
+- Related code: `src/orchid/llm/client.py`, `src/orchid/llm/providers.py`, `src/orchid/tools/ast.py`, `src/orchid/tools/file_manipulation.py`, `src/orchid/tools/__init__.py`, `src/orchid/tools/skill.py`, `src/orchid/screens/settings.py`, `src/orchid/screens/picker.py`
 - Related PRs/issues: P2-62, P2-63, P2-65, P2-97, P2-101 (rolled into Deferred), P2-106, P2-107, P2-111, P2-201, P2-202, P2-204, P2-205 in `todo-pendings-fixes.md`

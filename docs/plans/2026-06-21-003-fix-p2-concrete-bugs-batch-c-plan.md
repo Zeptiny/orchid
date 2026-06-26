@@ -71,17 +71,17 @@ The 2 screen-rename bugs (P2-188, P2-189) were already fixed by P1-53 — verifi
 
 ### Relevant Code and Patterns
 
-- `src/stupidex/agents/manager.py:70-78` — `format_subagent_attrs` (uses `escape` without `"`)
-- `src/stupidex/domain/message.py:117-170` — `record_streamed_message` (SYSTEM+TEXT falls through to TEXT branch)
-- `src/stupidex/rag/embedder.py:42-63, 104, 128-130` — `embed` + `embed_single` (no empty-response guard)
-- `src/stupidex/rag/store.py:351-417` — `upsert_file` vector rebuild (iterates ALL chunk_ids)
-- `src/stupidex/rag/store.py:473-554` — `upsert_file_batch` (correct pattern: queries only file's chunk_ids)
-- `src/stupidex/rag/chunker.py:88-91` — end_line calculation (off-by-one at newline boundary)
-- `src/stupidex/rag/indexer.py:87-97` — `update_file` (early return on embedding failure skips hash persist)
-- `src/stupidex/rag/indexer.py:156-163` — empty-discovery index wipe
-- `src/stupidex/llm/dynamic_system_prompt.py:13-28` — `_TREE_CACHE` (keys on time only)
-- `src/stupidex/llm/dynamic_system_prompt.py:30-36` — directory tree / cwd interpolated raw
-- `src/stupidex/screens/settings.py:852-867, 978-993` — rename flow (already fixed by P1-53)
+- `src/orchid/agents/manager.py:70-78` — `format_subagent_attrs` (uses `escape` without `"`)
+- `src/orchid/domain/message.py:117-170` — `record_streamed_message` (SYSTEM+TEXT falls through to TEXT branch)
+- `src/orchid/rag/embedder.py:42-63, 104, 128-130` — `embed` + `embed_single` (no empty-response guard)
+- `src/orchid/rag/store.py:351-417` — `upsert_file` vector rebuild (iterates ALL chunk_ids)
+- `src/orchid/rag/store.py:473-554` — `upsert_file_batch` (correct pattern: queries only file's chunk_ids)
+- `src/orchid/rag/chunker.py:88-91` — end_line calculation (off-by-one at newline boundary)
+- `src/orchid/rag/indexer.py:87-97` — `update_file` (early return on embedding failure skips hash persist)
+- `src/orchid/rag/indexer.py:156-163` — empty-discovery index wipe
+- `src/orchid/llm/dynamic_system_prompt.py:13-28` — `_TREE_CACHE` (keys on time only)
+- `src/orchid/llm/dynamic_system_prompt.py:30-36` — directory tree / cwd interpolated raw
+- `src/orchid/screens/settings.py:852-867, 978-993` — rename flow (already fixed by P1-53)
 - `tests/test_message.py:325-399` — Batch A characterization tests pinning SYSTEM-role bug
 - `tests/test_rag_embedder.py:312-350` — Batch A characterization tests pinning empty-response + embed_single bugs
 - `tests/test_subagent_manager.py:793-818` — Batch A characterization tests pinning `"`-escaping bug
@@ -136,7 +136,7 @@ The 2 screen-rename bugs (P2-188, P2-189) were already fixed by P1-53 — verifi
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/agents/manager.py`
+- Modify: `src/orchid/agents/manager.py`
 - Test: `tests/test_subagent_manager.py`
 
 **Approach:**
@@ -168,7 +168,7 @@ The 2 screen-rename bugs (P2-188, P2-189) were already fixed by P1-53 — verifi
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/domain/message.py`
+- Modify: `src/orchid/domain/message.py`
 - Test: `tests/test_message.py`
 
 **Approach:**
@@ -202,7 +202,7 @@ The 2 screen-rename bugs (P2-188, P2-189) were already fixed by P1-53 — verifi
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/rag/embedder.py`
+- Modify: `src/orchid/rag/embedder.py`
 - Test: `tests/test_rag_embedder.py`
 
 **Approach:**
@@ -238,7 +238,7 @@ The 2 screen-rename bugs (P2-188, P2-189) were already fixed by P1-53 — verifi
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/rag/store.py`
+- Modify: `src/orchid/rag/store.py`
 - Test: `tests/test_rag_store.py`
 
 **Approach:**
@@ -272,7 +272,7 @@ The 2 screen-rename bugs (P2-188, P2-189) were already fixed by P1-53 — verifi
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/rag/chunker.py`
+- Modify: `src/orchid/rag/chunker.py`
 - Test: `tests/test_rag_chunker.py`
 
 **Approach:**
@@ -308,7 +308,7 @@ The 2 screen-rename bugs (P2-188, P2-189) were already fixed by P1-53 — verifi
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/rag/indexer.py` (only if bug confirmed)
+- Modify: `src/orchid/rag/indexer.py` (only if bug confirmed)
 - Test: `tests/test_rag_indexer.py`
 
 **Approach:**
@@ -340,7 +340,7 @@ The 2 screen-rename bugs (P2-188, P2-189) were already fixed by P1-53 — verifi
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/rag/indexer.py`
+- Modify: `src/orchid/rag/indexer.py`
 - Test: `tests/test_rag_indexer.py`
 
 **Approach:**
@@ -377,7 +377,7 @@ The 2 screen-rename bugs (P2-188, P2-189) were already fixed by P1-53 — verifi
 **Dependencies:** U1 (U1 changes `format_subagent_attrs` which is called in this file — coordinate via sequential execution or the agent handles both)
 
 **Files:**
-- Modify: `src/stupidex/llm/dynamic_system_prompt.py`
+- Modify: `src/orchid/llm/dynamic_system_prompt.py`
 - Test: `tests/test_dynamic_system_prompt.py`
 
 **Approach:**
@@ -470,5 +470,5 @@ The 2 screen-rename bugs (P2-188, P2-189) were already fixed by P1-53 — verifi
 - **Origin document:** `todo-pendings-fixes.md` (P2-49, P2-89, P2-91, P2-141, P2-143, P2-144, P2-145, P2-166, P2-187, P2-188, P2-189)
 - **Batch A plan:** `docs/plans/2026-06-21-001-test-p2-testing-gaps-batch-a-plan.md` (3 bugs pinned)
 - **Batch B plan:** `docs/plans/2026-06-21-002-fix-p2-persistence-replay-batch-b-plan.md` (persistence/replay robustness)
-- Related code: `src/stupidex/agents/manager.py`, `src/stupidex/domain/message.py`, `src/stupidex/rag/embedder.py`, `src/stupidex/rag/store.py`, `src/stupidex/rag/chunker.py`, `src/stupidex/rag/indexer.py`, `src/stupidex/llm/dynamic_system_prompt.py`, `src/stupidex/screens/settings.py`
+- Related code: `src/orchid/agents/manager.py`, `src/orchid/domain/message.py`, `src/orchid/rag/embedder.py`, `src/orchid/rag/store.py`, `src/orchid/rag/chunker.py`, `src/orchid/rag/indexer.py`, `src/orchid/llm/dynamic_system_prompt.py`, `src/orchid/screens/settings.py`
 - Prior art: P1-53 (already fixed screen rename flow — `docs/plans/2026-06-20-002-fix-p1-testing-gaps-plan.md`)

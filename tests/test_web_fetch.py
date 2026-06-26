@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from stupidex.agents import _load_agents_from_dir
-from stupidex.domain.agent import Agent, AgentTypes, ModelTier
-from stupidex.domain.session import get_current_session_id, set_current_session_id
-from stupidex.domain.tool import ExecutorResult
-from stupidex.storage import delete_session
-from stupidex.tools.web_fetch import FETCH_TIMEOUT_SECONDS, USER_AGENT, _fetch_response, execute_web_fetch
+from orchid.agents import _load_agents_from_dir
+from orchid.domain.agent import Agent, AgentTypes, ModelTier
+from orchid.domain.session import get_current_session_id, set_current_session_id
+from orchid.domain.tool import ExecutorResult
+from orchid.storage import delete_session
+from orchid.tools.web_fetch import FETCH_TIMEOUT_SECONDS, USER_AGENT, _fetch_response, execute_web_fetch
 
 
 def _response(
@@ -45,7 +45,7 @@ async def test_fetch_response_uses_expected_http_options(monkeypatch):
             captured["url"] = url
             return _response(url=url, text="ok")
 
-    monkeypatch.setattr("stupidex.tools.web_fetch.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("orchid.tools.web_fetch.httpx.AsyncClient", FakeAsyncClient)
 
     response = await _fetch_response("https://example.com")
 
@@ -63,8 +63,8 @@ async def test_web_fetch_raw_html_converts_to_markdown(monkeypatch):
         content_type="text/html; charset=utf-8",
     )
     fetch = AsyncMock(return_value=response)
-    monkeypatch.setattr("stupidex.tools.web_fetch._fetch_response", fetch)
-    monkeypatch.setattr("stupidex.tools.web_fetch._html_to_markdown", lambda html: "# Hello")
+    monkeypatch.setattr("orchid.tools.web_fetch._fetch_response", fetch)
+    monkeypatch.setattr("orchid.tools.web_fetch._html_to_markdown", lambda html: "# Hello")
 
     result = await execute_web_fetch("https://example.com/page", "return the page", mode="raw")
 
@@ -78,7 +78,7 @@ async def test_web_fetch_raw_html_converts_to_markdown(monkeypatch):
 @pytest.mark.asyncio
 async def test_web_fetch_raw_non_html_passes_through(monkeypatch):
     monkeypatch.setattr(
-        "stupidex.tools.web_fetch._fetch_response",
+        "orchid.tools.web_fetch._fetch_response",
         AsyncMock(return_value=_response(text='{"ok": true}', content_type="application/json")),
     )
 
@@ -92,9 +92,9 @@ async def test_web_fetch_raw_non_html_passes_through(monkeypatch):
 @pytest.mark.asyncio
 async def test_web_fetch_raw_large_content_writes_session_cache(tmp_path, monkeypatch):
     set_current_session_id("session-1")
-    monkeypatch.setattr("stupidex.tools.web_fetch.HOME_CONFIG_DIR", tmp_path / ".stupidex")
+    monkeypatch.setattr("orchid.tools.web_fetch.HOME_CONFIG_DIR", tmp_path / ".orchid")
     monkeypatch.setattr(
-        "stupidex.tools.web_fetch._fetch_response",
+        "orchid.tools.web_fetch._fetch_response",
         AsyncMock(return_value=_response(url="https://docs.python.org/3/library/http.html", text="x" * 10001, content_type="text/plain")),
     )
 
@@ -105,7 +105,7 @@ async def test_web_fetch_raw_large_content_writes_session_cache(tmp_path, monkey
 
     assert "<warning>" in result.content
     assert 'file="' in result.content
-    cache_file = tmp_path / ".stupidex" / "cache" / "web-fetch" / "session-1" / "docs.python.org_3_library_http.html.md"
+    cache_file = tmp_path / ".orchid" / "cache" / "web-fetch" / "session-1" / "docs.python.org_3_library_http.html.md"
     assert cache_file.read_text() == "x" * 10001
     assert cache_file.stat().st_mode & 0o777 == 0o600
 
@@ -114,7 +114,7 @@ async def test_web_fetch_raw_large_content_writes_session_cache(tmp_path, monkey
 async def test_web_fetch_raw_large_content_requires_active_session(monkeypatch):
     set_current_session_id(None)
     monkeypatch.setattr(
-        "stupidex.tools.web_fetch._fetch_response",
+        "orchid.tools.web_fetch._fetch_response",
         AsyncMock(return_value=_response(text="x" * 10001, content_type="text/plain")),
     )
 
@@ -129,7 +129,7 @@ async def test_web_fetch_summarize_calls_litellm_with_resolved_provider(monkeypa
     agent = Agent(
         name="web-fetch",
         type=AgentTypes.INTERNAL,
-        tier=ModelTier.TOLO,
+        tier=ModelTier.SEED,
         description="Fetch summary",
         system_prompt="answer from content only",
         allowed_tools=[],
@@ -140,16 +140,16 @@ async def test_web_fetch_summarize_calls_litellm_with_resolved_provider(monkeypa
         )
     )
     monkeypatch.setattr(
-        "stupidex.tools.web_fetch._fetch_response",
+        "orchid.tools.web_fetch._fetch_response",
         AsyncMock(return_value=_response(text='{"answer": 42}', content_type="application/json")),
     )
-    monkeypatch.setattr("stupidex.tools.web_fetch.get_agent_registry", lambda: {"web-fetch": agent})
-    monkeypatch.setattr("stupidex.tools.web_fetch.get_model_for_tier", lambda tier: "default/mimo-v2.5")
+    monkeypatch.setattr("orchid.tools.web_fetch.get_agent_registry", lambda: {"web-fetch": agent})
+    monkeypatch.setattr("orchid.tools.web_fetch.get_model_for_tier", lambda tier: "default/mimo-v2.5")
     monkeypatch.setattr(
-        "stupidex.tools.web_fetch.resolve_model_ref",
+        "orchid.tools.web_fetch.resolve_model_ref",
         lambda model_ref: ("openai", "gpt-4o-mini", "https://llm.example/v1", "secret-key"),
     )
-    monkeypatch.setattr("stupidex.tools.web_fetch.litellm.acompletion", completion)
+    monkeypatch.setattr("orchid.tools.web_fetch.litellm.acompletion", completion)
 
     result = await execute_web_fetch("https://example.com/data.json", "What is the answer?")
 
@@ -169,7 +169,7 @@ async def test_web_fetch_summarize_calls_litellm_with_resolved_provider(monkeypa
 @pytest.mark.asyncio
 async def test_web_fetch_validation_errors_do_not_fetch(monkeypatch):
     fetch = AsyncMock()
-    monkeypatch.setattr("stupidex.tools.web_fetch._fetch_response", fetch)
+    monkeypatch.setattr("orchid.tools.web_fetch._fetch_response", fetch)
 
     empty_url = await execute_web_fetch("", "query")
     invalid_mode = await execute_web_fetch("https://example.com", "query", mode="full")
@@ -190,7 +190,7 @@ async def test_web_fetch_http_errors_are_graceful(monkeypatch):
     request = httpx.Request("GET", "https://example.com/private")
     response = httpx.Response(403, request=request)
     monkeypatch.setattr(
-        "stupidex.tools.web_fetch._fetch_response",
+        "orchid.tools.web_fetch._fetch_response",
         AsyncMock(side_effect=httpx.HTTPStatusError("Forbidden", request=request, response=response)),
     )
 
@@ -204,14 +204,14 @@ async def test_web_fetch_http_errors_are_graceful(monkeypatch):
 @pytest.mark.asyncio
 async def test_web_fetch_timeout_and_connection_errors_are_graceful(monkeypatch):
     monkeypatch.setattr(
-        "stupidex.tools.web_fetch._fetch_response",
+        "orchid.tools.web_fetch._fetch_response",
         AsyncMock(side_effect=httpx.TimeoutException("timed out")),
     )
     timeout_result = await execute_web_fetch("https://example.com/slow", "query")
     assert timeout_result.display == "Fetch timed out"
 
     monkeypatch.setattr(
-        "stupidex.tools.web_fetch._fetch_response",
+        "orchid.tools.web_fetch._fetch_response",
         AsyncMock(side_effect=httpx.ConnectError("connection refused")),
     )
     connection_result = await execute_web_fetch("https://example.com/down", "query")
@@ -219,19 +219,19 @@ async def test_web_fetch_timeout_and_connection_errors_are_graceful(monkeypatch)
 
 
 def test_web_fetch_agent_loads_with_empty_allowed_tools():
-    defaults_dir = Path("src/stupidex/agents/defaults")
+    defaults_dir = Path("src/orchid/agents/defaults")
 
     agents = _load_agents_from_dir(defaults_dir)
 
     assert "web-fetch" in agents
     assert agents["web-fetch"].type == AgentTypes.INTERNAL
-    assert agents["web-fetch"].tier == ModelTier.TOLO
+    assert agents["web-fetch"].tier == ModelTier.SEED
     assert agents["web-fetch"].allowed_tools == []
     assert "web_fetch" in agents["general"].allowed_tools
 
 
 def test_web_researcher_no_longer_says_fetching_is_unavailable():
-    agents = _load_agents_from_dir(Path("src/stupidex/agents/defaults"))
+    agents = _load_agents_from_dir(Path("src/orchid/agents/defaults"))
 
     researcher = agents["web-researcher"]
     assert "Web fetching is not available" not in researcher.description
@@ -251,15 +251,15 @@ def test_current_session_id_context_var():
 
 def test_delete_session_removes_web_fetch_cache(tmp_path, monkeypatch):
     sessions_dir = tmp_path / "sessions"
-    home_dir = tmp_path / ".stupidex"
+    home_dir = tmp_path / ".orchid"
     session_id = "session-1"
     sessions_dir.mkdir()
     (sessions_dir / f"{session_id}.json").write_text('{"id": "session-1"}')
     cache_dir = home_dir / "cache" / "web-fetch" / session_id
     cache_dir.mkdir(parents=True)
     (cache_dir / "page.md").write_text("cached")
-    monkeypatch.setattr("stupidex.storage.SESSIONS_DIR", sessions_dir)
-    monkeypatch.setattr("stupidex.storage.HOME_CONFIG_DIR", home_dir)
+    monkeypatch.setattr("orchid.storage.SESSIONS_DIR", sessions_dir)
+    monkeypatch.setattr("orchid.storage.HOME_CONFIG_DIR", home_dir)
 
     assert delete_session(session_id) is True
     assert not (sessions_dir / f"{session_id}.json").exists()
@@ -268,11 +268,11 @@ def test_delete_session_removes_web_fetch_cache(tmp_path, monkeypatch):
 
 def test_delete_session_without_cache_is_graceful(tmp_path, monkeypatch):
     sessions_dir = tmp_path / "sessions"
-    home_dir = tmp_path / ".stupidex"
+    home_dir = tmp_path / ".orchid"
     session_id = "session-2"
     sessions_dir.mkdir()
     (sessions_dir / f"{session_id}.json").write_text('{"id": "session-2"}')
-    monkeypatch.setattr("stupidex.storage.SESSIONS_DIR", sessions_dir)
-    monkeypatch.setattr("stupidex.storage.HOME_CONFIG_DIR", home_dir)
+    monkeypatch.setattr("orchid.storage.SESSIONS_DIR", sessions_dir)
+    monkeypatch.setattr("orchid.storage.HOME_CONFIG_DIR", home_dir)
 
     assert delete_session(session_id) is True

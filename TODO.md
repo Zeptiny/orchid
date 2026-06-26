@@ -33,7 +33,7 @@
 - Ferramentas teriam um novo atributo, sendo permissão, além de vários níveis de permissões:
   - Sempre perguntar
   - Permitir tudo / yolo
-  - Decida por mim (Agente tolo decide dependendo da chamada)
+  - Decida por mim (Agente seed decide dependendo da chamada)
     - Claude Code tem esse sistema, ele pode ser analisado para melhorar o plano
 - Resolver caminhos fornecidos nas ferramentas para evitar modificar/ler arquivos fora do diretório de trabalho
   - Mas isso ainda poderia ser evitado via comandos. Com sistema de permissão e o usuário aprovando todos os comandos, a responsabilidade fica com o usuário

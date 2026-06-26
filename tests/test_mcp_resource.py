@@ -2,8 +2,8 @@
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from stupidex.domain.tool import ExecutorResult
-from stupidex.tools.mcp_resource import execute_read_mcp_resource
+from orchid.domain.tool import ExecutorResult
+from orchid.tools.mcp_resource import execute_read_mcp_resource
 
 
 class TestExecuteReadMCPResource(unittest.IsolatedAsyncioTestCase):
@@ -14,7 +14,7 @@ class TestExecuteReadMCPResource(unittest.IsolatedAsyncioTestCase):
             return_value=ExecutorResult(display="file contents", content="file contents")
         )
 
-        with patch("stupidex.mcp.get_mcp_manager", return_value=mock_manager):
+        with patch("orchid.mcp.get_mcp_manager", return_value=mock_manager):
             result = await execute_read_mcp_resource("file:///tmp/test.txt")
 
         self.assertIsInstance(result, ExecutorResult)
@@ -23,7 +23,7 @@ class TestExecuteReadMCPResource(unittest.IsolatedAsyncioTestCase):
         mock_manager.read_resource.assert_awaited_once_with("my-server", "file:///tmp/test.txt")
 
     async def test_manager_not_initialized(self):
-        with patch("stupidex.mcp.get_mcp_manager", return_value=None):
+        with patch("orchid.mcp.get_mcp_manager", return_value=None):
             result = await execute_read_mcp_resource("file:///tmp/test.txt")
 
         self.assertIsInstance(result, ExecutorResult)
@@ -34,7 +34,7 @@ class TestExecuteReadMCPResource(unittest.IsolatedAsyncioTestCase):
         mock_manager = MagicMock()
         mock_manager.get_resource_server.return_value = None
 
-        with patch("stupidex.mcp.get_mcp_manager", return_value=mock_manager):
+        with patch("orchid.mcp.get_mcp_manager", return_value=mock_manager):
             result = await execute_read_mcp_resource("file:///unknown.txt")
 
         self.assertIsInstance(result, ExecutorResult)
@@ -47,7 +47,7 @@ class TestExecuteReadMCPResource(unittest.IsolatedAsyncioTestCase):
         mock_manager.get_resource_server.return_value = "my-server"
         mock_manager.read_resource = AsyncMock(side_effect=RuntimeError("connection refused"))
 
-        with patch("stupidex.mcp.get_mcp_manager", return_value=mock_manager), self.assertRaises(RuntimeError):
+        with patch("orchid.mcp.get_mcp_manager", return_value=mock_manager), self.assertRaises(RuntimeError):
             await execute_read_mcp_resource("file:///tmp/test.txt")
 
 

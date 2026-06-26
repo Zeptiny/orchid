@@ -2,7 +2,7 @@
 
 import unittest
 
-from stupidex.domain.agent import Agent, AgentTypes, ModelTier
+from orchid.domain.agent import Agent, AgentTypes, ModelTier
 
 
 class TestAgentTypesFromStrErrors(unittest.TestCase):
@@ -33,14 +33,14 @@ class TestModelTierFromStrErrors(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             ModelTier.from_str("bogus")
         msg = str(ctx.exception)
-        self.assertIn("tolo", msg)
-        self.assertIn("tainha", msg)
-        self.assertIn("papudo", msg)
-        self.assertIn("papaca", msg)
+        self.assertIn("seed", msg)
+        self.assertIn("sprout", msg)
+        self.assertIn("bloom", msg)
+        self.assertIn("crown", msg)
 
     def test_valid_inputs_case_insensitive(self):
-        self.assertEqual(ModelTier.from_str("TOLO"), ModelTier.TOLO)
-        self.assertEqual(ModelTier.from_str("Papudo"), ModelTier.PAPUDO)
+        self.assertEqual(ModelTier.from_str("SEED"), ModelTier.SEED)
+        self.assertEqual(ModelTier.from_str("Papudo"), ModelTier.BLOOM)
 
 
 class TestAgentDictRoundTrip(unittest.TestCase):
@@ -48,7 +48,7 @@ class TestAgentDictRoundTrip(unittest.TestCase):
         defaults = dict(
             name="Explorer",
             type=AgentTypes.SUBAGENT,
-            tier=ModelTier.PAPUDO,
+            tier=ModelTier.BLOOM,
             description="explores things",
             system_prompt="be helpful",
             allowed_tools=["read", "grep"],
@@ -72,7 +72,7 @@ class TestAgentDictRoundTrip(unittest.TestCase):
         agent = self._agent(type=AgentTypes.INTERNAL)
         d = agent.to_dict()
         self.assertEqual(d["type"], "internal")
-        self.assertEqual(d["tier"], "papudo")
+        self.assertEqual(d["tier"], "bloom")
 
     def test_round_trip_preserves_allowed_tools_and_allowed_skills_empty(self):
         agent = self._agent(allowed_tools=[], allowed_skills=[])
@@ -88,7 +88,7 @@ class TestAgentDictRoundTrip(unittest.TestCase):
             "system_prompt": "p",
         }
         restored = Agent.from_dict(d)
-        self.assertEqual(restored.tier, ModelTier.PAPUDO)
+        self.assertEqual(restored.tier, ModelTier.BLOOM)
         self.assertEqual(restored.allowed_tools, [])
         self.assertEqual(restored.allowed_skills, [])
 

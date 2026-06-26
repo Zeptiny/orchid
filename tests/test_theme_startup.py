@@ -1,7 +1,7 @@
 import unittest
 
-from stupidex.app import Stupidex
-from stupidex.config import Config, ConfigManager
+from orchid.app import Orchid
+from orchid.config import Config, ConfigManager
 
 
 class ThemeStartupTest(unittest.TestCase):
@@ -11,7 +11,7 @@ class ThemeStartupTest(unittest.TestCase):
     def test_default_theme_config_resolves_to_registered_theme_name(self):
         ConfigManager._instance = Config(theme="default")
 
-        app = Stupidex()
+        app = Orchid()
 
         self.assertEqual(app.theme, "textual-dark")
 

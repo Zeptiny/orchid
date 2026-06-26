@@ -23,12 +23,12 @@ The agent has no native web fetching. When it needs web content, it shells out t
 
 - R1. Tool interface: `web_fetch(url: str, query: str, mode: str = "summarize")` — both `url` and `query` are required.
 - R2. **Summarize mode**: fetch URL → convert HTML to markdown → one-shot LLM call (Tolo tier) with page content + query → return LLM answer with metadata (URL, title, content type).
-- R3. **Raw mode**: fetch URL → convert HTML to markdown → return directly if under threshold → if over threshold, write to `~/.stupidex/cache/web-fetch/<session-id>/<slug>.md` and return file path + warning.
+- R3. **Raw mode**: fetch URL → convert HTML to markdown → return directly if under threshold → if over threshold, write to `~/.orchid/cache/web-fetch/<session-id>/<slug>.md` and return file path + warning.
 - R4. Non-HTML content types (JSON, plain text, XML) pass through without markdown conversion.
 - R5. HTTP behavior: follow redirects, set `User-Agent` header, 30s default timeout, graceful error messages for 403/timeout/connection errors.
-- R6. Summarization prompt lives in `agents/defaults/web-fetch/AGENT.md` with `type: internal`, `tier: tolo`. Users override via `~/.stupidex/agents/web-fetch/AGENT.md`.
+- R6. Summarization prompt lives in `agents/defaults/web-fetch/AGENT.md` with `type: internal`, `tier: seed`. Users override via `~/.orchid/agents/web-fetch/AGENT.md`.
 - R7. LLM call is a one-shot `litellm.acompletion` (not a full agent loop), using the resolved model for the Tolo tier.
-- R8. Cache lifecycle: session-scoped at `~/.stupidex/cache/web-fetch/<session-id>/`. Session delete cleans up the cache directory.
+- R8. Cache lifecycle: session-scoped at `~/.orchid/cache/web-fetch/<session-id>/`. Session delete cleans up the cache directory.
 - R9. New dependency: `html2text` for HTML→markdown conversion (more battle-tested than `markdownify`, pure Python, lighter).
 
 ---
@@ -61,7 +61,7 @@ Two patterns exist in the codebase:
 1. **Full agent loop**: `stream_response()` in `llm/client.py` — streaming, tool calls, message history. Too heavy for a one-shot extraction.
 2. **Direct `litellm.acompletion`**: used in `app.py:460` for session auto-naming. Simple, single call.
 
-The tool uses pattern 2: build the system prompt from the agent's `AGENT.md`, construct a single user message with the page content + query, call `litellm.acompletion`, extract the response text. Model resolution via `get_model_for_tier("tolo")` → `resolve_model_ref()`.
+The tool uses pattern 2: build the system prompt from the agent's `AGENT.md`, construct a single user message with the page content + query, call `litellm.acompletion`, extract the response text. Model resolution via `get_model_for_tier("seed")` → `resolve_model_ref()`.
 
 ### Raw mode threshold
 
@@ -77,20 +77,20 @@ Derive from the URL path: strip protocol, replace `/` and non-alphanumeric chars
 
 ### Relevant Code and Patterns
 
-- `src/stupidex/domain/tool.py` — `Tool`, `ToolParameter`, `ToolParameterProperties`, `ExecutorResult` dataclasses. Every tool follows this pattern.
-- `src/stupidex/tools/__init__.py:64-95` — `get_tool_registry()`. New tool entry goes here: `"web_fetch": {"tool": web_fetch_tool, "executor": execute_web_fetch}`.
-- `src/stupidex/tools/rag.py` — closest analog: a tool that does async work, returns structured `ExecutorResult`. Follow the same error-handling pattern (return error results, don't raise).
-- `src/stupidex/llm/providers.py:86-116` — `resolve_model_ref(alias_model)` returns `(litellm_provider, model_id, base_url, api_key)`.
-- `src/stupidex/config.py:462-464` — `get_model_for_tier(tier)` returns `cfg.tier_models.get(tier, cfg.default_model)`.
-- `src/stupidex/agents/__init__.py:13-77` — `_load_agents_from_dir()` loads agents from `AGENT.md` with frontmatter parsing. The `web-fetch` agent needs no special registration — it's loaded like all other agents.
-- `src/stupidex/agents/defaults/explorer/AGENT.md` — pattern for Tolo-tier subagent `AGENT.md`.
-- `src/stupidex/agents/defaults/general/AGENT.md` — pattern for `type: internal` agent.
-- `src/stupidex/domain/todo.py:159-171` — `ContextVar` pattern for session-scoped state. Template for `_current_session_id`.
-- `src/stupidex/app.py:104` and `src/stupidex/commands/session_commands.py:172,202,225` — where `set_todo_store()` is called. The `set_current_session_id()` calls go alongside these.
-- `src/stupidex/storage.py:71-81` — `delete_session()`. Needs extension to also `shutil.rmtree` the session's cache directory.
-- `src/stupidex/config.py:17` — `HOME_CONFIG_DIR = Path.home() / ".stupidex"`. Cache directory is `HOME_CONFIG_DIR / "cache" / "web-fetch" / session_id`.
-- `src/stupidex/llm/client.py:98-156` — `_execute_tool()` pattern for calling tool executors with timeout. `web_fetch` should NOT be in `_TOOLS_WITHOUT_TIMEOUT` since HTTP fetches can hang.
-- `src/stupidex/agents/defaults/web-researcher/AGENT.md` — its description mentions "Web fetching is not available" — should be updated after this tool lands.
+- `src/orchid/domain/tool.py` — `Tool`, `ToolParameter`, `ToolParameterProperties`, `ExecutorResult` dataclasses. Every tool follows this pattern.
+- `src/orchid/tools/__init__.py:64-95` — `get_tool_registry()`. New tool entry goes here: `"web_fetch": {"tool": web_fetch_tool, "executor": execute_web_fetch}`.
+- `src/orchid/tools/rag.py` — closest analog: a tool that does async work, returns structured `ExecutorResult`. Follow the same error-handling pattern (return error results, don't raise).
+- `src/orchid/llm/providers.py:86-116` — `resolve_model_ref(alias_model)` returns `(litellm_provider, model_id, base_url, api_key)`.
+- `src/orchid/config.py:462-464` — `get_model_for_tier(tier)` returns `cfg.tier_models.get(tier, cfg.default_model)`.
+- `src/orchid/agents/__init__.py:13-77` — `_load_agents_from_dir()` loads agents from `AGENT.md` with frontmatter parsing. The `web-fetch` agent needs no special registration — it's loaded like all other agents.
+- `src/orchid/agents/defaults/explorer/AGENT.md` — pattern for Tolo-tier subagent `AGENT.md`.
+- `src/orchid/agents/defaults/general/AGENT.md` — pattern for `type: internal` agent.
+- `src/orchid/domain/todo.py:159-171` — `ContextVar` pattern for session-scoped state. Template for `_current_session_id`.
+- `src/orchid/app.py:104` and `src/orchid/commands/session_commands.py:172,202,225` — where `set_todo_store()` is called. The `set_current_session_id()` calls go alongside these.
+- `src/orchid/storage.py:71-81` — `delete_session()`. Needs extension to also `shutil.rmtree` the session's cache directory.
+- `src/orchid/config.py:17` — `HOME_CONFIG_DIR = Path.home() / ".orchid"`. Cache directory is `HOME_CONFIG_DIR / "cache" / "web-fetch" / session_id`.
+- `src/orchid/llm/client.py:98-156` — `_execute_tool()` pattern for calling tool executors with timeout. `web_fetch` should NOT be in `_TOOLS_WITHOUT_TIMEOUT` since HTTP fetches can hang.
+- `src/orchid/agents/defaults/web-researcher/AGENT.md` — its description mentions "Web fetching is not available" — should be updated after this tool lands.
 
 ### Test Patterns
 
@@ -124,8 +124,8 @@ Derive from the URL path: strip protocol, replace `/` and non-alphanumeric chars
 **Dependencies:** None
 
 **Files:**
-- `src/stupidex/agents/defaults/web-fetch/AGENT.md` — create
-- `src/stupidex/agents/__init__.py` — fix `_load_agents_from_dir()` to accept empty `allowed_tools`
+- `src/orchid/agents/defaults/web-fetch/AGENT.md` — create
+- `src/orchid/agents/__init__.py` — fix `_load_agents_from_dir()` to accept empty `allowed_tools`
 
 **Approach:**
 
@@ -136,7 +136,7 @@ Create `AGENT.md` with frontmatter:
 ---
 name: web-fetch
 type: internal
-tier: tolo
+tier: seed
 description: Summarizes web page content based on a query. Used by the web_fetch tool in summarize mode.
 allowed_tools: []
 ---
@@ -150,7 +150,7 @@ The body contains the system prompt: instructions for the Tolo LLM to extract th
 
 **Test scenarios:**
 - Verify the agent loads in the registry via `get_agent_registry()` with `name="web-fetch"`
-- Verify it has `type=AgentTypes.INTERNAL` and `tier=ModelTier.TOLO`
+- Verify it has `type=AgentTypes.INTERNAL` and `tier=ModelTier.SEED`
 - Verify agents with `allowed_tools: []` are no longer skipped by the loader
 
 ---
@@ -162,9 +162,9 @@ The body contains the system prompt: instructions for the Tolo LLM to extract th
 **Dependencies:** None
 
 **Files:**
-- `src/stupidex/domain/session.py` — add `_current_session_id` ContextVar, `get_current_session_id()`, `set_current_session_id()`
-- `src/stupidex/app.py` — call `set_current_session_id(session.id)` where `set_todo_store()` is called
-- `src/stupidex/commands/session_commands.py` — same, alongside existing `set_todo_store()` calls
+- `src/orchid/domain/session.py` — add `_current_session_id` ContextVar, `get_current_session_id()`, `set_current_session_id()`
+- `src/orchid/app.py` — call `set_current_session_id(session.id)` where `set_todo_store()` is called
+- `src/orchid/commands/session_commands.py` — same, alongside existing `set_todo_store()` calls
 
 **Approach:** Follow the exact `ContextVar` pattern from `domain/todo.py:159-171`:
 ```python
@@ -202,8 +202,8 @@ The plan follows option 1 (caller-site) to match existing conventions. Document 
 **Dependencies:** U1, U2, U3
 
 **Files:**
-- `src/stupidex/tools/web_fetch.py` — create (tool definition + executor)
-- `src/stupidex/tools/__init__.py` — add import + registry entry
+- `src/orchid/tools/web_fetch.py` — create (tool definition + executor)
+- `src/orchid/tools/__init__.py` — add import + registry entry
 
 **Approach:**
 
@@ -229,7 +229,7 @@ web_fetch_tool = Tool(
 1. Validate inputs (url non-empty, mode valid). Reject non-http/https URL schemes. Sanitize the filename slug to prevent path traversal (strip `..` sequences, use `pathlib.Path.name` on each segment).
 2. Fetch URL via `httpx.AsyncClient` with:
    - `follow_redirects=True`
-   - `headers={"User-Agent": "Stupidex/1.0 web-fetch"}`
+   - `headers={"User-Agent": "Orchid/1.0 web-fetch"}`
    - `timeout=30`
    - Catch `httpx.TimeoutException`, `httpx.HTTPStatusError` (403 etc.), `httpx.ConnectError` — return graceful `ExecutorResult` with error in XML.
 3. Determine content type from response headers. If HTML (`text/html`), convert to markdown via `html2text.HTML2Text().handle(response.text)`. Otherwise pass through as-is.
@@ -239,13 +239,13 @@ web_fetch_tool = Tool(
    - If >= threshold: derive filename slug from URL, write to cache dir (`HOME_CONFIG_DIR / "cache" / "web-fetch" / session_id / f"{slug}.md"`), return `<web_fetch_raw>` with `file=` attribute and warning.
 6. If `mode == "summarize"`:
    - Look up the `web-fetch` agent from `get_agent_registry()`.
-   - Resolve model: `get_model_for_tier("tolo")` → `resolve_model_ref()`, which returns `(litellm_provider, model_id, base_url, api_key)`.
+   - Resolve model: `get_model_for_tier("seed")` → `resolve_model_ref()`, which returns `(litellm_provider, model_id, base_url, api_key)`.
    - Call `litellm.acompletion(model=litellm_provider + "/" + model_id, messages=[...], base_url=base_url, api_key=api_key, timeout=60)` with system prompt from agent + user message containing page content + query. Pass all 4 values from `resolve_model_ref()` — without `base_url` and `api_key`, the call fails for non-default providers (same pattern as `app.py:460-464`).
    - Return `<web_fetch_summarize>` XML with the LLM answer + metadata.
 
 **Registry entry in `tools/__init__.py`:**
 ```python
-from stupidex.tools.web_fetch import execute_web_fetch, web_fetch_tool
+from orchid.tools.web_fetch import execute_web_fetch, web_fetch_tool
 # in get_tool_registry():
 "web_fetch": {"tool": web_fetch_tool, "executor": execute_web_fetch},
 ```
@@ -274,12 +274,12 @@ from stupidex.tools.web_fetch import execute_web_fetch, web_fetch_tool
 **Dependencies:** U4
 
 **Files:**
-- `src/stupidex/storage.py` — extend `delete_session()`
+- `src/orchid/storage.py` — extend `delete_session()`
 
 **Approach:** After unlinking the session JSON file, add:
 ```python
 import shutil
-cache_dir = Path.home() / ".stupidex" / "cache" / "web-fetch" / session_id
+cache_dir = Path.home() / ".orchid" / "cache" / "web-fetch" / session_id
 if cache_dir.exists():
     shutil.rmtree(cache_dir, ignore_errors=True)
 ```
@@ -300,7 +300,7 @@ This is safe: `ignore_errors=True` handles race conditions and permission issues
 **Dependencies:** U4
 
 **Files:**
-- `src/stupidex/agents/defaults/web-researcher/AGENT.md` — update
+- `src/orchid/agents/defaults/web-researcher/AGENT.md` — update
 
 **Approach:** Remove "Web fetching is not available in this environment" from the description and prompt. Add a note that the agent can now use the `web_fetch` tool (or that the caller should use `web_fetch` directly). The web-researcher is a subagent that gets spawned by the main agent — it should know the tool exists in its ecosystem even if it doesn't have direct access (the caller can fetch first, then pass content to the web-researcher).
 

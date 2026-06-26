@@ -11,13 +11,13 @@ sites cannot forget to rebind.
 import unittest
 from unittest.mock import patch
 
-from stupidex.domain.session import (
+from orchid.domain.session import (
     Session,
     SessionManager,
     get_current_session_id,
     set_current_session_id,
 )
-from stupidex.domain.todo import TodoStore, get_todo_store, set_todo_store
+from orchid.domain.todo import TodoStore, get_todo_store, set_todo_store
 
 
 def _reset_contextvars():
@@ -32,7 +32,7 @@ class TestSessionManagerContextVarBinding(unittest.TestCase):
     def setUp(self) -> None:
         _reset_contextvars()
         # SessionManager.__init__ patches config; mock default_model read.
-        patcher = patch("stupidex.domain.session.get_config")
+        patcher = patch("orchid.domain.session.get_config")
         self.mock_get_config = patcher.start()
         self.addCleanup(patcher.stop)
         self.mock_get_config.return_value.default_model = "test-model"
@@ -92,7 +92,7 @@ class TestSessionManagerContextVarBinding(unittest.TestCase):
         self.assertIs(get_todo_store(), sentinel)
 
         # Mock load_session to return the serialized form.
-        with patch("stupidex.storage.load_session", return_value=storage_dict):
+        with patch("orchid.storage.load_session", return_value=storage_dict):
             loaded = sm.load(original.id)
 
         self.assertIsNotNone(loaded)
@@ -109,7 +109,7 @@ class TestSessionManagerContextVarBinding(unittest.TestCase):
         sentinel_store = TodoStore()
         set_todo_store(sentinel_store)
         sentinel_session_id = "sentinel-session-id"
-        from stupidex.domain.session import set_current_session_id
+        from orchid.domain.session import set_current_session_id
 
         set_current_session_id(sentinel_session_id)
 
@@ -118,7 +118,7 @@ class TestSessionManagerContextVarBinding(unittest.TestCase):
         # which propagates up through the bare Session constructor call.
         # (Unknown enum values no longer raise — they fall back per U3 / P2-9.)
         with patch(
-            "stupidex.storage.load_session",
+            "orchid.storage.load_session",
             return_value={"name": "bad", "chains": []},
         ):
             result = sm.load("x")
@@ -137,7 +137,7 @@ class TestSessionManagerContextVarBinding(unittest.TestCase):
         sentinel = TodoStore()
         set_todo_store(sentinel)
 
-        with patch("stupidex.storage.load_session", return_value=None):
+        with patch("orchid.storage.load_session", return_value=None):
             result = sm.load("nonexistent-id")
 
         self.assertIsNone(result)

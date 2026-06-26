@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from stupidex.rag.chunker import Chunk
-from stupidex.rag.embedder import Embedder
-from stupidex.rag.indexer import (
+from orchid.rag.chunker import Chunk
+from orchid.rag.embedder import Embedder
+from orchid.rag.indexer import (
     _discover_files,
     _read_and_hash,
     _should_include,
@@ -14,7 +14,7 @@ from stupidex.rag.indexer import (
     index_project,
     update_file,
 )
-from stupidex.rag.store import RAGStore
+from orchid.rag.store import RAGStore
 
 
 class FakeEmbedder(Embedder):
@@ -207,8 +207,8 @@ async def test_index_skips_binary_and_large_files(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_index_skips_stupidex_dir(tmp_path):
-    rag_dir = tmp_path / ".stupidex" / "rag"
+async def test_index_skips_orchid_dir(tmp_path):
+    rag_dir = tmp_path / ".orchid" / "rag"
     rag_dir.mkdir(parents=True)
     (rag_dir / "old.py").write_text("stale")
     (tmp_path / "real.py").write_text("fresh")
@@ -355,7 +355,7 @@ class TestUpdateFile:
         assert old_hash
 
         monkeypatch.setattr(
-            "stupidex.rag.indexer.Embedder", lambda model=None: FakeEmbedder()
+            "orchid.rag.indexer.Embedder", lambda model=None: FakeEmbedder()
         )
 
         f.write_text("def new():\n    return 42\n")
@@ -382,7 +382,7 @@ class TestUpdateFile:
         before_hashes = store.get_file_hashes()
 
         monkeypatch.setattr(
-            "stupidex.rag.indexer.Embedder", lambda model=None: FakeEmbedder()
+            "orchid.rag.indexer.Embedder", lambda model=None: FakeEmbedder()
         )
         await update_file(
             "/nonexistent_root/outside.py", project_path=str(tmp_path)
@@ -473,7 +473,7 @@ class TestUpdateFile:
                 raise RuntimeError("boom")
 
         monkeypatch.setattr(
-            "stupidex.rag.indexer.Embedder",
+            "orchid.rag.indexer.Embedder",
             lambda model=None: FailingEmbedder(model="x"),
         )
 
@@ -578,7 +578,7 @@ async def test_save_vectors_called_once_for_three_files(tmp_path, monkeypatch):
         s._save_vectors = counting_save
         return s
 
-    monkeypatch.setattr("stupidex.rag.indexer.RAGStore", make_store)
+    monkeypatch.setattr("orchid.rag.indexer.RAGStore", make_store)
 
     r = await index_project(project_path=str(tmp_path), embedder=embedder)
 
@@ -620,7 +620,7 @@ async def test_save_vectors_called_once_incremental_changed_and_deleted(
         s._save_vectors = counting_save
         return s
 
-    monkeypatch.setattr("stupidex.rag.indexer.RAGStore", make_store)
+    monkeypatch.setattr("orchid.rag.indexer.RAGStore", make_store)
 
     r = await index_project(project_path=str(tmp_path), embedder=embedder)
 
@@ -677,10 +677,10 @@ async def test_index_no_test_embedding_probe_burns_api_call(tmp_path):
 
 def test_read_and_hash_skips_file_exceeding_max_size(tmp_path, monkeypatch):
     """P2-168: _read_and_hash returns (None, None) for files exceeding max_file_size."""
-    from stupidex.config import Config, RAGConfig
+    from orchid.config import Config, RAGConfig
 
     cfg = Config(rag=RAGConfig(max_file_size=4))
-    monkeypatch.setattr("stupidex.rag.indexer.get_config", lambda: cfg)
+    monkeypatch.setattr("orchid.rag.indexer.get_config", lambda: cfg)
 
     f = tmp_path / "big.py"
     f.write_text("x" * 100)  # 100 bytes > 4-byte limit
@@ -693,10 +693,10 @@ def test_read_and_hash_skips_file_exceeding_max_size(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_index_skips_file_exceeding_max_size(tmp_path, monkeypatch):
     """P2-168 integration: index_project skips oversized files."""
-    from stupidex.config import Config, RAGConfig
+    from orchid.config import Config, RAGConfig
 
     cfg = Config(rag=RAGConfig(max_file_size=10))
-    monkeypatch.setattr("stupidex.rag.indexer.get_config", lambda: cfg)
+    monkeypatch.setattr("orchid.rag.indexer.get_config", lambda: cfg)
 
     (tmp_path / "big.py").write_text("x" * 100)  # exceeds 10-byte limit
     (tmp_path / "small.py").write_text("y = 1")  # 7 bytes, fits
@@ -714,7 +714,7 @@ async def test_index_skips_file_exceeding_max_size(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_index_project_reentrancy_guard_returns_empty(tmp_path, monkeypatch):
     """P2-169: a second concurrent index_project call returns an empty IndexResult."""
-    from stupidex.rag import indexer as indexer_mod
+    from orchid.rag import indexer as indexer_mod
 
     monkeypatch.setattr(indexer_mod, "_indexing", True)
 
@@ -764,7 +764,7 @@ async def test_update_file_embedding_failure_then_index_project_reindexes(
             raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "stupidex.rag.indexer.Embedder", lambda model=None: FailingEmbedder(model="x")
+        "orchid.rag.indexer.Embedder", lambda model=None: FailingEmbedder(model="x")
     )
 
     # update_file will read content, compute new file_hash, then fail at embed
@@ -777,7 +777,7 @@ async def test_update_file_embedding_failure_then_index_project_reindexes(
     # Now index_project runs again with a working embedder. Because old_hash !=
     # hash(modified content), the file IS re-indexed (it is not frozen out).
     monkeypatch.setattr(
-        "stupidex.rag.indexer.Embedder", lambda model=None: FakeEmbedder()
+        "orchid.rag.indexer.Embedder", lambda model=None: FakeEmbedder()
     )
     r = await index_project(project_path=str(tmp_path), embedder=FakeEmbedder())
     assert r.files_indexed == 1
@@ -889,7 +889,7 @@ async def test_update_file_uses_batch_api_single_vectors_flush(tmp_path, monkeyp
     await index_project(project_path=str(tmp_path), embedder=embedder)
 
     monkeypatch.setattr(
-        "stupidex.rag.indexer.Embedder", lambda model=None: FakeEmbedder()
+        "orchid.rag.indexer.Embedder", lambda model=None: FakeEmbedder()
     )
 
     save_calls: list[int] = []
@@ -906,7 +906,7 @@ async def test_update_file_uses_batch_api_single_vectors_flush(tmp_path, monkeyp
         s._save_vectors = counting_save
         return s
 
-    import stupidex.rag.indexer as indexer_mod
+    import orchid.rag.indexer as indexer_mod
     monkeypatch.setattr(indexer_mod, "RAGStore", make_store)
 
     f.write_text("def new():\n    return 42\n")
@@ -951,7 +951,7 @@ async def test_index_project_batch_hash_update_single_transaction(tmp_path, monk
         s.update_file_hashes_batch = counting_batch
         return s
 
-    import stupidex.rag.indexer as indexer_mod
+    import orchid.rag.indexer as indexer_mod
     monkeypatch.setattr(indexer_mod, "RAGStore", make_store)
 
     r = await index_project(project_path=str(tmp_path), embedder=embedder)
@@ -972,8 +972,8 @@ async def test_index_project_batch_hash_update_single_transaction(tmp_path, monk
 
 def test_get_status_returns_store_status():
     """P2-154: get_status returns a StoreStatus directly (IndexStatus removed)."""
-    from stupidex.rag.indexer import get_status
-    from stupidex.rag.store import StoreStatus
+    from orchid.rag.indexer import get_status
+    from orchid.rag.store import StoreStatus
 
     s = StoreStatus(
         total_chunks=42,

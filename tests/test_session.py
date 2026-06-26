@@ -3,13 +3,13 @@
 import unittest
 from unittest.mock import patch
 
-from stupidex.agents.manager import SubagentRecord, SubagentState
-from stupidex.app import _format_session_model_label, _session_usage_totals
-from stupidex.domain.agent import Agent, AgentTypes, ModelTier
-from stupidex.domain.chain import Chain
-from stupidex.domain.message import Message, MessageRole, MessageType, Usage
-from stupidex.domain.session import Session, SessionManager
-from stupidex.domain.todo import TodoStatus, TodoTask
+from orchid.agents.manager import SubagentRecord, SubagentState
+from orchid.app import _format_session_model_label, _session_usage_totals
+from orchid.domain.agent import Agent, AgentTypes, ModelTier
+from orchid.domain.chain import Chain
+from orchid.domain.message import Message, MessageRole, MessageType, Usage
+from orchid.domain.session import Session, SessionManager
+from orchid.domain.todo import TodoStatus, TodoTask
 
 
 class TestSessionStorageRoundTrip(unittest.TestCase):
@@ -17,7 +17,7 @@ class TestSessionStorageRoundTrip(unittest.TestCase):
         agent = Agent(
             name="Subagent",
             type=AgentTypes.SUBAGENT,
-            tier=ModelTier.PAPUDO,
+            tier=ModelTier.BLOOM,
             description="d",
             system_prompt="p",
         )
@@ -63,7 +63,7 @@ class TestSessionStorageRoundTrip(unittest.TestCase):
         session.subagent_manager._subagents[rec.id] = rec
 
         with patch(
-            "stupidex.agents.get_agent_registry",
+            "orchid.agents.get_agent_registry",
             return_value={"Subagent": rec.agent},
         ):
             restored = Session.from_storage_dict(session.to_storage_dict())
@@ -96,7 +96,7 @@ class TestSessionStorageRoundTrip(unittest.TestCase):
         agent = Agent(
             name="Subagent",
             type=AgentTypes.SUBAGENT,
-            tier=ModelTier.PAPUDO,
+            tier=ModelTier.BLOOM,
             description="d",
             system_prompt="p",
         )
@@ -124,7 +124,7 @@ class TestSessionStorageRoundTrip(unittest.TestCase):
             "todo_store": {},
         }
         with patch(
-            "stupidex.agents.get_agent_registry",
+            "orchid.agents.get_agent_registry",
             return_value={"Subagent": agent},
         ):
             session = Session.from_storage_dict(data)
@@ -166,7 +166,7 @@ class TestSessionManagerDelete(unittest.TestCase):
             mgr.active = session
         return mgr
 
-    @patch("stupidex.storage.delete_session")
+    @patch("orchid.storage.delete_session")
     def test_delete_happy_path_active_session(self, mock_delete):
         mgr = self._manager_with_session("sess-1")
         self.assertTrue(mgr.delete("sess-1"))
@@ -174,7 +174,7 @@ class TestSessionManagerDelete(unittest.TestCase):
         self.assertNotIn("sess-1", mgr.sessions)
         self.assertIsNone(mgr.active)
 
-    @patch("stupidex.storage.delete_session")
+    @patch("orchid.storage.delete_session")
     def test_delete_active_is_different_session(self, mock_delete):
         mgr = self._manager_with_session("sess-1", make_active=False)
         other = Session(name="other", id="sess-other", model="m")
@@ -185,17 +185,17 @@ class TestSessionManagerDelete(unittest.TestCase):
         self.assertNotIn("sess-1", mgr.sessions)
         self.assertIs(mgr.active, other)
 
-    @patch("stupidex.storage.delete_session")
+    @patch("orchid.storage.delete_session")
     def test_delete_unknown_session_no_disk_touch(self, mock_delete):
         mgr = SessionManager()
         self.assertFalse(mgr.delete("missing"))
         mock_delete.assert_not_called()
 
-    @patch("stupidex.storage.delete_session")
+    @patch("orchid.storage.delete_session")
     def test_delete_disk_failure_preserves_in_memory_state(self, mock_delete):
         mgr = self._manager_with_session("sess-1")
         mock_delete.side_effect = OSError("disk full")
-        with self.assertLogs("stupidex.domain.session", level="WARNING") as cm:
+        with self.assertLogs("orchid.domain.session", level="WARNING") as cm:
             self.assertFalse(mgr.delete("sess-1"))
         self.assertIn("sess-1", mgr.sessions)
         self.assertIsNotNone(mgr.active)
@@ -203,7 +203,7 @@ class TestSessionManagerDelete(unittest.TestCase):
         self.assertEqual(mgr.active.id, "sess-1")
         self.assertTrue(any("sess-1" in line for line in cm.output))
 
-    @patch("stupidex.storage.delete_session")
+    @patch("orchid.storage.delete_session")
     def test_cancel_all_called_before_disk_delete(self, mock_delete):
         call_order: list[str] = []
 
@@ -254,7 +254,7 @@ class TestSessionFromStorageDictChainGuard(unittest.TestCase):
     def test_corrupt_middle_chain_status_skipped(self):
         corrupt = self._chain_data(status="bogus")
         data = self._session_data([self._chain_data(), corrupt, self._chain_data()])
-        with self.assertLogs("stupidex.domain.session", level="WARNING") as cm:
+        with self.assertLogs("orchid.domain.session", level="WARNING") as cm:
             session = Session.from_storage_dict(data)
         self.assertEqual(len(session.chains), 2)
         self.assertTrue(any("index 1" in line for line in cm.output))
@@ -262,7 +262,7 @@ class TestSessionFromStorageDictChainGuard(unittest.TestCase):
     def test_corrupt_first_chain_messages_field_skipped(self):
         corrupt = {"model": "m", "messages": "not-a-list", "start_time": 1.0, "status": "completed"}
         data = self._session_data([corrupt, self._chain_data(), self._chain_data()])
-        with self.assertLogs("stupidex.domain.session", level="WARNING"):
+        with self.assertLogs("orchid.domain.session", level="WARNING"):
             session = Session.from_storage_dict(data)
         self.assertEqual(len(session.chains), 2)
 
@@ -275,7 +275,7 @@ class TestSessionFromStorageDictChainGuard(unittest.TestCase):
         agent = Agent(
             name="Subagent",
             type=AgentTypes.SUBAGENT,
-            tier=ModelTier.PAPUDO,
+            tier=ModelTier.BLOOM,
             description="d",
             system_prompt="p",
         )
@@ -292,8 +292,8 @@ class TestSessionFromStorageDictChainGuard(unittest.TestCase):
         data = self._session_data([self._chain_data(status="bogus")])
         data["subagent_chains"] = [good_record.to_storage_dict()]
         with (
-            patch("stupidex.agents.get_agent_registry", return_value={"Subagent": agent}),
-            self.assertLogs("stupidex.domain.session", level="WARNING"),
+            patch("orchid.agents.get_agent_registry", return_value={"Subagent": agent}),
+            self.assertLogs("orchid.domain.session", level="WARNING"),
         ):
             session = Session.from_storage_dict(data)
         self.assertEqual(session.chains, [])
@@ -437,7 +437,7 @@ class TestSessionUsageTotals(unittest.TestCase):
         agent = Agent(
             name="Subagent",
             type=AgentTypes.SUBAGENT,
-            tier=ModelTier.PAPUDO,
+            tier=ModelTier.BLOOM,
             description="d",
             system_prompt="p",
         )
@@ -505,7 +505,7 @@ class TestSessionUsageTotals(unittest.TestCase):
         agent = Agent(
             name="Subagent",
             type=AgentTypes.SUBAGENT,
-            tier=ModelTier.PAPUDO,
+            tier=ModelTier.BLOOM,
             description="d",
             system_prompt="p",
         )

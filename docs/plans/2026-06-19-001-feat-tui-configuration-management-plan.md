@@ -67,7 +67,7 @@ Modal works on a copy of config. On Save: validate → if invalid, show inline e
 
 **Goal:** Restructure `Config` to use `RAGConfig` nested dataclass with backward compat.
 
-**Files:** `src/stupidex/config.py`, `tests/test_ast_config.py`
+**Files:** `src/orchid/config.py`, `tests/test_ast_config.py`
 
 **Approach:**
 1. Define `RAGConfig` dataclass with current flat field defaults
@@ -86,7 +86,7 @@ Modal works on a copy of config. On Save: validate → if invalid, show inline e
 
 **Goal:** Replace silent `log.warning()` with return-as-errors. Exit(1) at startup if invalid.
 
-**Files:** `src/stupidex/config.py`, `src/stupidex/main.py`, `tests/test_ast_config.py`
+**Files:** `src/orchid/config.py`, `src/orchid/main.py`, `tests/test_ast_config.py`
 
 **Approach:**
 1. Write `validate_config(cfg: Config) -> list[str]` checking each field
@@ -106,7 +106,7 @@ Modal works on a copy of config. On Save: validate → if invalid, show inline e
 
 **Goal:** Create `SettingsScreen` full-screen modal, `/settings` command, keybinding.
 
-**Files:** `src/stupidex/app_config.py`, `src/stupidex/commands.py`, `src/stupidex/main.py`, `tests/test_session_commands.py`
+**Files:** `src/orchid/app_config.py`, `src/orchid/commands.py`, `src/orchid/main.py`, `tests/test_session_commands.py`
 
 **Approach:**
 1. `SettingsScreen(ModalScreen[Config])` following `OptionPicker` pattern
@@ -127,7 +127,7 @@ Modal works on a copy of config. On Save: validate → if invalid, show inline e
 
 **Goal:** Tab for listing, adding, editing, removing providers.
 
-**Files:** `src/stupidex/app_config.py`
+**Files:** `src/orchid/app_config.py`
 
 **Approach:**
 1. List of configured providers as rows (name + model + status)
@@ -145,7 +145,7 @@ Modal works on a copy of config. On Save: validate → if invalid, show inline e
 
 **Goal:** Tab for listing, adding, editing, removing MCP servers.
 
-**Files:** `src/stupidex/app_config.py`
+**Files:** `src/orchid/app_config.py`
 
 **Approach:**
 1. List of MCP servers with name, command, status
@@ -162,10 +162,10 @@ Modal works on a copy of config. On Save: validate → if invalid, show inline e
 
 **Goal:** Tab for mapping each tier to a model.
 
-**Files:** `src/stupidex/app_config.py`
+**Files:** `src/orchid/app_config.py`
 
 **Approach:**
-1. Each tier (tolo, tainha, papudo, papaca) as a row with text input for model name
+1. Each tier (seed, sprout, bloom, crown) as a row with text input for model name
 2. Optionally, a picker listing available models
 
 **Test scenarios:**
@@ -177,7 +177,7 @@ Modal works on a copy of config. On Save: validate → if invalid, show inline e
 
 **Goal:** Tab for editing RAG settings.
 
-**Files:** `src/stupidex/app_config.py`
+**Files:** `src/orchid/app_config.py`
 
 **Approach:**
 1. Form with labeled integer inputs for chunk_size, chunk_overlap, top_k, max_file_size
@@ -193,7 +193,7 @@ Modal works on a copy of config. On Save: validate → if invalid, show inline e
 
 **Goal:** Tab for editing defaults (default_model, theme, personality).
 
-**Files:** `src/stupidex/app_config.py`
+**Files:** `src/orchid/app_config.py`
 
 **Approach:**
 1. Fields: default_model (text/picker), theme (select), personality (select)
@@ -208,7 +208,7 @@ Modal works on a copy of config. On Save: validate → if invalid, show inline e
 
 **Goal:** On Save, validate, write to disk, reload session config.
 
-**Files:** `src/stupidex/config.py`, `src/stupidex/session.py`, `src/stupidex/app_config.py`
+**Files:** `src/orchid/config.py`, `src/orchid/session.py`, `src/orchid/app_config.py`
 
 **Approach:**
 1. `ConfigManager.save(config)` serializes JSON to active config file path
@@ -224,7 +224,7 @@ Modal works on a copy of config. On Save: validate → if invalid, show inline e
 
 **Goal:** Wire startup gate, command registration, session integration.
 
-**Files:** `src/stupidex/main.py`, `src/stupidex/commands.py`, `src/stupidex/session.py`, `tests/test_ast_config.py`
+**Files:** `src/orchid/main.py`, `src/orchid/commands.py`, `src/orchid/session.py`, `tests/test_ast_config.py`
 
 **Approach:**
 1. `main.py`: after `ConfigManager.load()` → if errors, print to stderr and exit(1)

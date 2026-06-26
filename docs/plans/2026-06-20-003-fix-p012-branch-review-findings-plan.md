@@ -50,24 +50,24 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 
 ### Relevant Code and Patterns
 
-- `src/stupidex/llm/client.py:647-744` — `stream_response` outer/inner retry loop; `api_messages` shared by reference across `_stream_task` and `_executor_task`
-- `src/stupidex/llm/client.py:449-505` — `commit_assistant_with_tool_calls` closure; in-place `tool_calls[:] = [...]` filter at L476; append to `api_messages` at L486/L497
-- `src/stupidex/llm/client.py:619-644` — `_executor_task`; tool result appended to `api_messages` at L638-642
-- `src/stupidex/llm/client.py:689-697` — `litellm.acompletion` call site (OUTSIDE the try block at L712)
-- `src/stupidex/llm/client.py:111-171` — `_maybe_offload_tool_output` (synchronous `os.open`/`os.write`)
-- `src/stupidex/llm/client.py:174-285` — `_history_to_api_messages` rebuilds from `Message.to_dict()` — emits `msg.content` untrimmed
-- `src/stupidex/llm/client.py:107-108` — `_tool_output_cache_dir` (no eviction anywhere)
-- `src/stupidex/rag/indexer.py:199-252` — per-file loop calling `store.upsert_file` (regression from single-flush)
-- `src/stupidex/rag/store.py:338-404` — `upsert_file`: full `_load_vectors` + `_save_vectors` per call
-- `src/stupidex/rag/store.py:145-171` — `_save_vectors`: full atomic rewrite via mkstemp + os.replace
-- `src/stupidex/rag/store.py:173-187` — `_load_vectors`: `np.load().tolist()` (O(N·d) copy)
-- `src/stupidex/mcp/__init__.py:92-112` — startup timeout path: clears `_sessions` at L111, does NOT clear `_tools`
-- `src/stupidex/mcp/__init__.py:217-223` — shadow warning falls through to unconditional overwrite
-- `src/stupidex/widgets/subagent_ui.py:35,81` — `_mount_locks` dict, never cleaned up
-- `src/stupidex/screens/settings.py:855-862` — rename rejection: writes edited `result` under `original_alias`, skips `_refresh_tab`/`_mark_dirty`
-- `src/stupidex/config.py:241-244` — `llm_stream_idle_timeout` inline validation (sibling MCP fields use `_check_positive_float`)
-- `src/stupidex/tools/file_manipulation.py` uses `atomic_write` pattern from `tools/ast.py:222-251`
-- `src/stupidex/llm/client.py:168-232` in `web_fetch.py` — canonical large-output offload pattern using `run_in_executor`
+- `src/orchid/llm/client.py:647-744` — `stream_response` outer/inner retry loop; `api_messages` shared by reference across `_stream_task` and `_executor_task`
+- `src/orchid/llm/client.py:449-505` — `commit_assistant_with_tool_calls` closure; in-place `tool_calls[:] = [...]` filter at L476; append to `api_messages` at L486/L497
+- `src/orchid/llm/client.py:619-644` — `_executor_task`; tool result appended to `api_messages` at L638-642
+- `src/orchid/llm/client.py:689-697` — `litellm.acompletion` call site (OUTSIDE the try block at L712)
+- `src/orchid/llm/client.py:111-171` — `_maybe_offload_tool_output` (synchronous `os.open`/`os.write`)
+- `src/orchid/llm/client.py:174-285` — `_history_to_api_messages` rebuilds from `Message.to_dict()` — emits `msg.content` untrimmed
+- `src/orchid/llm/client.py:107-108` — `_tool_output_cache_dir` (no eviction anywhere)
+- `src/orchid/rag/indexer.py:199-252` — per-file loop calling `store.upsert_file` (regression from single-flush)
+- `src/orchid/rag/store.py:338-404` — `upsert_file`: full `_load_vectors` + `_save_vectors` per call
+- `src/orchid/rag/store.py:145-171` — `_save_vectors`: full atomic rewrite via mkstemp + os.replace
+- `src/orchid/rag/store.py:173-187` — `_load_vectors`: `np.load().tolist()` (O(N·d) copy)
+- `src/orchid/mcp/__init__.py:92-112` — startup timeout path: clears `_sessions` at L111, does NOT clear `_tools`
+- `src/orchid/mcp/__init__.py:217-223` — shadow warning falls through to unconditional overwrite
+- `src/orchid/widgets/subagent_ui.py:35,81` — `_mount_locks` dict, never cleaned up
+- `src/orchid/screens/settings.py:855-862` — rename rejection: writes edited `result` under `original_alias`, skips `_refresh_tab`/`_mark_dirty`
+- `src/orchid/config.py:241-244` — `llm_stream_idle_timeout` inline validation (sibling MCP fields use `_check_positive_float`)
+- `src/orchid/tools/file_manipulation.py` uses `atomic_write` pattern from `tools/ast.py:222-251`
+- `src/orchid/llm/client.py:168-232` in `web_fetch.py` — canonical large-output offload pattern using `run_in_executor`
 
 ### Institutional Learnings
 
@@ -106,7 +106,7 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/llm/client.py`
+- Modify: `src/orchid/llm/client.py`
 - Test: `tests/test_streaming_messages.py`
 
 **Approach:**
@@ -138,7 +138,7 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 **Dependencies:** U1 (shares the retry loop)
 
 **Files:**
-- Modify: `src/stupidex/llm/client.py`
+- Modify: `src/orchid/llm/client.py`
 - Test: `tests/test_streaming_messages.py`
 
 **Approach:**
@@ -168,7 +168,7 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 **Dependencies:** None (independent of U1/U2)
 
 **Files:**
-- Modify: `src/stupidex/llm/client.py`
+- Modify: `src/orchid/llm/client.py`
 - Test: `tests/test_streaming_messages.py`
 
 **Approach:**
@@ -200,8 +200,8 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 **Dependencies:** None (independent)
 
 **Files:**
-- Modify: `src/stupidex/llm/client.py`
-- Modify: `src/stupidex/domain/message.py` (if needed for `metadata` field)
+- Modify: `src/orchid/llm/client.py`
+- Modify: `src/orchid/domain/message.py` (if needed for `metadata` field)
 - Test: `tests/test_tool_output_offload.py`
 - Test: `tests/test_streaming_messages.py`
 
@@ -234,8 +234,8 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/rag/store.py`
-- Modify: `src/stupidex/rag/indexer.py`
+- Modify: `src/orchid/rag/store.py`
+- Modify: `src/orchid/rag/indexer.py`
 - Test: `tests/test_rag_indexer.py`
 - Test: `tests/test_rag_store.py`
 
@@ -270,7 +270,7 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/mcp/__init__.py`
+- Modify: `src/orchid/mcp/__init__.py`
 - Test: `tests/test_mcp_startup_timeout.py`
 
 **Approach:**
@@ -298,7 +298,7 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/screens/settings.py`
+- Modify: `src/orchid/screens/settings.py`
 - Test: `tests/test_settings_screen.py`
 
 **Approach:**
@@ -328,7 +328,7 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/config.py`
+- Modify: `src/orchid/config.py`
 
 **Approach:**
 - Replace the inline validation at L241-244 with `_check_positive_float(cfg, "llm_stream_idle_timeout", errors)`.
@@ -351,7 +351,7 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 
 **Files:**
 - Create: `tests/test_subagent_ui.py`
-- Modify: `src/stupidex/widgets/subagent_ui.py`
+- Modify: `src/orchid/widgets/subagent_ui.py`
 
 **Approach:**
 - Create `tests/test_subagent_ui.py` with tests that:
@@ -381,8 +381,8 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 **Dependencies:** U4 (the cache write path must exist and be async before adding eviction)
 
 **Files:**
-- Modify: `src/stupidex/domain/session.py`
-- Modify: `src/stupidex/llm/client.py` (export cache dir helper)
+- Modify: `src/orchid/domain/session.py`
+- Modify: `src/orchid/llm/client.py` (export cache dir helper)
 - Test: `tests/test_session_manager_contextvar.py` or `tests/test_tool_output_offload.py`
 
 **Approach:**
@@ -409,7 +409,7 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/llm/client.py`
+- Modify: `src/orchid/llm/client.py`
 
 **Approach:**
 - In `_maybe_offload_tool_output`, use `html.escape(str(cache_path))` when constructing the pointer envelope (L166-171).
@@ -497,7 +497,7 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 | U1 `delivered_any` gate makes some previously-retried scenarios terminal | Safer than duplicating output. The user sees an error and can retry the turn manually. Default `llm_stream_idle_timeout=300s` means this only fires on genuinely stalled providers. |
 | U5 batch vector state adds complexity to `store.py` | The single-file `upsert_file` API is preserved for the hot-path; only the bulk indexer uses the batch API. Tests verify correctness. |
 | U2 litellm exception imports may be incomplete (`APIError` base class may not cover all transient types) | Use defensive `isinstance` checks + `_is_transient_error` helper that can be extended. litellm exceptions are already imported at L55-71. |
-| U4 offload-recovery path depends on P0-3 (workspace path confinement) not breaking `read` of cache files outside the workspace | P0-3 is deferred to README TODO. When it ships, it must either allowlist `HOME_CONFIG_DIR/cache/` or write cache under `.stupidex/cache/` in cwd. Documented in the branch review's residual risks. |
+| U4 offload-recovery path depends on P0-3 (workspace path confinement) not breaking `read` of cache files outside the workspace | P0-3 is deferred to README TODO. When it ships, it must either allowlist `HOME_CONFIG_DIR/cache/` or write cache under `.orchid/cache/` in cwd. Documented in the branch review's residual risks. |
 | U1 snapshot truncation doesn't deep-copy nested dicts — `assistant_api_msg` is shared by reference | Prior-turn messages in `api_messages` are never mutated by the current attempt (only appended to). The truncated entries (this attempt's appends) are discarded entirely, so no shared-reference issue. |
 
 ---
@@ -521,7 +521,7 @@ The branch `fix/a_lot_of_things` closed 53 P1 findings and added 172 tests, but 
 ## Sources & References
 
 - **Origin document:** `docs/code-review-reports/2026-06-20-branch-review.md`
-- Related code: `src/stupidex/llm/client.py`, `src/stupidex/rag/store.py`, `src/stupidex/rag/indexer.py`, `src/stupidex/mcp/__init__.py`, `src/stupidex/screens/settings.py`, `src/stupidex/widgets/subagent_ui.py`, `src/stupidex/config.py`
+- Related code: `src/orchid/llm/client.py`, `src/orchid/rag/store.py`, `src/orchid/rag/indexer.py`, `src/orchid/mcp/__init__.py`, `src/orchid/screens/settings.py`, `src/orchid/widgets/subagent_ui.py`, `src/orchid/config.py`
 - Prior plans: `docs/plans/2026-06-20-001-fix-p1-code-review-findings-plan.md`, `docs/plans/2026-06-20-002-fix-p1-testing-gaps-plan.md`
 - Institutional learning: `docs/solutions/runtime-errors/mcp-runner-cancellederror-skips-aclose.md`
 - Findings tracker: `2026-06-20-full-sweep-all-findings.md`

@@ -16,7 +16,7 @@ The branch closes 53 P1 findings and adds 172 tests, but the multi-agent review 
 
 #### P0-A — SubagentUIManager mount-lock race fix has zero test coverage
 **Reviewers:** testing (conf 75)
-**File:** `src/stupidex/widgets/subagent_ui.py:91`
+**File:** `src/orchid/widgets/subagent_ui.py:91`
 **Class:** `manual` / downstream-resolver
 **Pre-existing:** No (introduced by this branch's P1-3 fix)
 
@@ -30,7 +30,7 @@ The P1-3 fix adds `_mount_locks` and wraps `mount_streamed_message` in `async wi
 
 #### P1-A — Stream-idle retry replays mutated `api_messages` and duplicates already-delivered content
 **Reviewers:** correctness (conf 75), reliability REL-3 (conf 50), adversarial #1 (conf 75) — cross-reviewer agreement promotes to anchor 100
-**Files:** `src/stupidex/llm/client.py:734`, `:803`, `:476`, `:495`
+**Files:** `src/orchid/llm/client.py:734`, `:803`, `:476`, `:495`
 **Class:** `manual` / downstream-resolver
 **Requires verification:** Yes
 
@@ -46,7 +46,7 @@ The stream-idle timeout retry path (P0-5/P1-9) does not roll back partial state 
 
 #### P1-B — `litellm.acompletion()` call has no timeout; retry only catches `_StreamIdleTimeoutError`
 **Reviewers:** reliability REL-1 (conf 75), REL-2 (conf 80)
-**Files:** `src/stupidex/llm/client.py:735`, `:812`
+**Files:** `src/orchid/llm/client.py:735`, `:812`
 **Class:** `manual` / downstream-resolver
 
 Two related gaps in the P0-5/P1-9/P1-11 retry machinery:
@@ -61,7 +61,7 @@ Two related gaps in the P0-5/P1-9/P1-11 retry machinery:
 
 #### P1-C — RAG incremental index now does full `vectors.npy` load+save per changed file (O(K × corpus) regression)
 **Reviewers:** performance PERF-1 (conf 75)
-**File:** `src/stupidex/rag/indexer.py:242` (loop), `src/stupidex/rag/store.py:338-404` (`upsert_file`)
+**File:** `src/orchid/rag/indexer.py:242` (loop), `src/orchid/rag/store.py:338-404` (`upsert_file`)
 **Class:** `manual` / downstream-resolver
 **Requires verification:** Yes
 
@@ -75,7 +75,7 @@ For K changed + D deleted files this is (K+D) full-vector load+save rounds — e
 
 #### P1-D — `commit_assistant_with_tool_calls` in-place `tool_calls` filter shifts list indices, breaking `maybe_enqueue(prev_index)` and re-injecting empty-id/name placeholders
 **Reviewers:** correctness C2 (conf 75)
-**File:** `src/stupidex/llm/client.py:476`
+**File:** `src/orchid/llm/client.py:476`
 **Class:** `manual` / review-fixer
 **Requires verification:** Yes
 
@@ -89,7 +89,7 @@ Related (correctness C3, conf 50): when the filter *empties* `tool_calls`, the `
 
 #### P1-E — Tool-output offload only protects the *current* turn; full content is replayed into the LLM context on every subsequent turn — defeating P1-4
 **Reviewers:** agent-native Finding 1, adversarial #3 (conf 75)
-**Files:** `src/stupidex/llm/client.py:632-642`, `:174-285`, `src/stupidex/domain/message.py:40-55`, `src/stupidex/llm/client.py:99-103`
+**Files:** `src/orchid/llm/client.py:632-642`, `:174-285`, `src/orchid/domain/message.py:40-55`, `src/orchid/llm/client.py:99-103`
 **Class:** `manual` / downstream-resolver
 
 In `_executor_task`, the full-content `result_msg` is yielded to `msg_q` (→ `record_streamed_message` persists full `content` to history at `app.py:324` / `manager.py:275`) *before* `_maybe_offload_tool_output` writes the cache file and appends only the trimmed pointer to the ephemeral `api_messages`. So within a single multi-tool `stream_response` call the LLM sees pointers — good. But `stream_response` is re-invoked per user turn (`app.py:317`), and `_history_to_api_messages` rebuilds the request from persisted `Message.to_dict()` (`message.py:50` emits `content: self.content`, untrimmed) for every prior `TOOL_RESULT`. Net effect: a 5 MB `execute_command` / `replace_symbol` output that was "offloaded" re-enters the provider's context window in full on the next turn. P1-4 is therefore only a within-turn band-aid.
@@ -102,7 +102,7 @@ Compounding bypass (adversarial #3): the offload pointer tells the LLM "Use read
 
 #### P1-F — `_maybe_offload_tool_output` performs blocking file I/O synchronously on the event loop
 **Reviewers:** kieran-python KP-1 (conf 75)
-**File:** `src/stupidex/llm/client.py:111-170`
+**File:** `src/orchid/llm/client.py:111-170`
 **Class:** `manual` / downstream-resolver
 
 The offload function does `os.open` / `os.fdopen` / `os.write` / `os.chmod` / `Path.mkdir` (parents=True) synchronously on the event loop, on the hot streaming path inside `_executor_task`. For a slow disk or NFS mount this blocks the entire stream loop (and every other tool execution in flight) for the duration of the write. The `web_fetch` offload pattern (the canonical reference for P1-4) correctly uses `loop.run_in_executor`.
@@ -124,7 +124,7 @@ The offload function does `os.open` / `os.fdopen` / `os.write` / `os.chmod` / `P
 
 #### P1-H — `llm_stream_idle_timeout` validation inlined instead of using the new `_check_positive_float` helper
 **Reviewers:** project-standards PS-1 (conf 75), maintainability M2 (conf 75), kieran-python KP-2 (conf 75) — cross-reviewer agreement promotes to anchor 100
-**File:** `src/stupidex/config.py:241-244`
+**File:** `src/orchid/config.py:241-244`
 **Class:** `safe_auto` / review-fixer
 
 `config.py:241-244` inlines byte-for-byte identical logic to the `_check_positive_float` helper that was added in this same diff. Sibling MCP float fields (`mcp_startup_timeout`/`mcp_per_server_timeout` at `:247-248`) correctly use the helper.
@@ -137,7 +137,7 @@ The offload function does `os.open` / `os.fdopen` / `os.write` / `os.chmod` / `P
 
 #### P2-A — MCP startup-timeout path orphans `_tools` entries whose `_sessions` were cleared → LLM continues calling dead tools
 **Reviewers:** adversarial #4 (conf 75), reliability REL-4 (conf 75), REL-5 (conf 75)
-**File:** `src/stupidex/mcp/__init__.py:81-101`, `:200`
+**File:** `src/orchid/mcp/__init__.py:81-101`, `:200`
 **Class:** `manual` / downstream-resolver
 
 If `cfg.mcp_startup_timeout` fires after some servers connected + registered tools but before others finish, the except branch clears `self._sessions` (and `_run`'s finally closes `_exit_stack`, tearing down every transport including successful ones) — but `self._tools` is NOT cleared. Tools registered by previously-connected servers stay in the registry and remain advertised to the LLM. The LLM emits a tool_call for an orphan entry → `make_mcp_executor` closure calls `call_tool(server_name, ...)` → `self._sessions.get(server_name)` is `None` → `ExecutorResult('MCP server ... is not connected.')`. The LLM sees tools declared available; receives soft-failure for each.
@@ -150,7 +150,7 @@ Additional teardown-race concern (REL-4/REL-5): `_sessions.clear()` drops refere
 
 #### P2-B — Renamed provider/MCP key silently keeps OTHER edit-form field changes despite "rename cancelled" notice
 **Reviewers:** adversarial #2 (conf 75)
-**File:** `src/stupidex/screens/settings.py:852-858`, `:973-979`
+**File:** `src/orchid/screens/settings.py:852-858`, `:973-979`
 **Class:** `manual` / downstream-resolver
 
 The P1-53 rename-rejection fix writes the edited `result` dict back under `original_alias` before notifying "rename cancelled". If the user edited other fields (base_url, models, command) alongside the alias change, those modifications are silently persisted under the original key. Users read "rename cancelled" and infer nothing changed. The rejection test asserts `screen._config.providers["old"]["models"] == {}` (the edited value) but doesn't assert the *pre-edit* fields are unchanged — so the silent-persistence goes uncaught.
@@ -161,7 +161,7 @@ The P1-53 rename-rejection fix writes the edited `result` dict back under `origi
 
 #### P2-C — Tool-output offload cache directory has no eviction — unbounded disk growth
 **Reviewers:** correctness P3, performance PERF-2 (conf 50), reliability REL-6 (conf 75), kieran-python KP-4 (residual), agent-native observation 7
-**File:** `src/stupidex/llm/client.py:107-171`
+**File:** `src/orchid/llm/client.py:107-171`
 **Class:** `manual` / human
 
 `_tool_output_cache_dir(session_id)` returns `HOME_CONFIG_DIR/cache/tool-output/<session_id>/`. Each large tool output (>10KB) becomes a permanent cache file. No cleanup hook on session delete, app shutdown, or size threshold. Slow-burn: disk fills silently, eventually breaking writes (the `OSError` truncate path then degrades agent quality with no warning).
@@ -172,7 +172,7 @@ The P1-53 rename-rejection fix writes the edited `result` dict back under `origi
 
 #### P2-D — `_mount_locks` dict in `SubagentUIManager` grows unbounded
 **Reviewers:** reliability REL-RR-3, kieran-python KP-4 (conf 50)
-**File:** `src/stupidex/widgets/subagent_ui.py:31`
+**File:** `src/orchid/widgets/subagent_ui.py:31`
 **Class:** `manual` / downstream-resolver
 
 `self._mount_locks: dict[str, asyncio.Lock]` keyed by `subagent_id`, created on first `on_message`. No cleanup on cancel/complete/prune. `_subagents` is also unbounded (P2-33). Memory leak over long sessions.
@@ -183,7 +183,7 @@ The P1-53 rename-rejection fix writes the edited `result` dict back under `origi
 
 #### P2-E — Tool-output pointer interpolates an unescaped filesystem path into XML-like framing
 **Reviewers:** kieran-python KP-5 (conf 50)
-**File:** `src/stupidex/llm/client.py:166-170`
+**File:** `src/orchid/llm/client.py:166-170`
 **Class:** `safe_auto` / review-fixer
 
 The pointer text embeds `cache_path` directly inside `<tool_output_offloaded>...</tool_output_offloaded>` framing. If `cache_path` ever contains `<`, `&`, or `>` (possible on some filesystems), the framing is malformed. The LLM may misparse the path.
@@ -194,40 +194,40 @@ The pointer text embeds `cache_path` directly inside `<tool_output_offloaded>...
 
 ### P3 — Low-impact / minor
 
-- **`_cancel_record` double-fires `on_state_change(INTERRUPTED)`** — correctness P3, conf 75. `_cancel_record` fires it, then `_run`'s finally fires it again. Likely idempotent in practice. `src/stupidex/agents/manager.py:182`.
-- **`from_storage_dict` end_time fallback yields `elapsed=0.0`** for records persisted with `end_time=None`. correctness P3, conf 50. `src/stupidex/agents/manager.py:161`.
-- **MCP shadow warning fires but later server still overwrites earlier binding** — correctness P3, conf 50. Warning only, no prevention. `src/stupidex/mcp/__init__.py:211`.
-- **`execute_grep` `finally: task.cancel()` cannot cancel in-flight `run_in_executor` futures** — correctness P3, conf 50. Bounded by Semaphore(32) + `_PER_FILE_TIMEOUT`. `src/stupidex/tools/search.py:243`.
-- **`_read_bounded` over-trim when `rem > len(stdout_buf)`** — correctness P3, conf 75, `safe_auto`. `del stdout_buf[len(stdout_buf)-rem:]` removes last k elements (or all if k ≥ len). `src/stupidex/tools/exec.py:529`. Fix: `rem = min(rem, len(stdout_buf))`.
-- **`TodoStore.create` `RuntimeError` after 8 retries may propagate uncaught** — correctness P3, conf 50. Verify the `todo_create` tool handler wraps it as `ExecutorResult`. `src/stupidex/domain/todo.py:91`.
-- **`resolve_skill_dependencies` inner dedup now redundant with `_resolved` memoization** — correctness P3, conf 50. `src/stupidex/tools/skill.py:61`.
-- **Provider/MCP rename-rejected early-returns without `_refresh_tab()`/`_mark_dirty()`** — correctness P3, conf 75, `safe_auto`. `src/stupidex/screens/settings.py:856`, `:981`. Fix: call them before the early return.
-- **`os.open` / `os.fdopen` pairing can leak an fd if `fdopen` raises between allocation and `with`-block entry** — kieran-python KP-3, conf 50, `safe_auto`. `src/stupidex/llm/client.py:148-150`.
-- **`_idle_timed_stream` calls `_safe_aclose` twice on the timeout path** — kieran-python KP-7, conf 50. `src/stupidex/llm/client.py:416-437`.
-- **Skill resource traversal guard TOCTOU** between resolved-skill-dir check and resolved-subdir check — adversarial #7, conf 50. Microsecond window; requires FS attacker inside skill install dir. `src/stupidex/tools/skill.py:181-195`.
-- **`commit_assistant_with_tool_calls` in-place filter mutates list concurrently iterated by executor task** — adversarial #8, conf 50. Correct today because dict identity survives the filter (undocumented invariant). `src/stupidex/llm/client.py:498-532`.
+- **`_cancel_record` double-fires `on_state_change(INTERRUPTED)`** — correctness P3, conf 75. `_cancel_record` fires it, then `_run`'s finally fires it again. Likely idempotent in practice. `src/orchid/agents/manager.py:182`.
+- **`from_storage_dict` end_time fallback yields `elapsed=0.0`** for records persisted with `end_time=None`. correctness P3, conf 50. `src/orchid/agents/manager.py:161`.
+- **MCP shadow warning fires but later server still overwrites earlier binding** — correctness P3, conf 50. Warning only, no prevention. `src/orchid/mcp/__init__.py:211`.
+- **`execute_grep` `finally: task.cancel()` cannot cancel in-flight `run_in_executor` futures** — correctness P3, conf 50. Bounded by Semaphore(32) + `_PER_FILE_TIMEOUT`. `src/orchid/tools/search.py:243`.
+- **`_read_bounded` over-trim when `rem > len(stdout_buf)`** — correctness P3, conf 75, `safe_auto`. `del stdout_buf[len(stdout_buf)-rem:]` removes last k elements (or all if k ≥ len). `src/orchid/tools/exec.py:529`. Fix: `rem = min(rem, len(stdout_buf))`.
+- **`TodoStore.create` `RuntimeError` after 8 retries may propagate uncaught** — correctness P3, conf 50. Verify the `todo_create` tool handler wraps it as `ExecutorResult`. `src/orchid/domain/todo.py:91`.
+- **`resolve_skill_dependencies` inner dedup now redundant with `_resolved` memoization** — correctness P3, conf 50. `src/orchid/tools/skill.py:61`.
+- **Provider/MCP rename-rejected early-returns without `_refresh_tab()`/`_mark_dirty()`** — correctness P3, conf 75, `safe_auto`. `src/orchid/screens/settings.py:856`, `:981`. Fix: call them before the early return.
+- **`os.open` / `os.fdopen` pairing can leak an fd if `fdopen` raises between allocation and `with`-block entry** — kieran-python KP-3, conf 50, `safe_auto`. `src/orchid/llm/client.py:148-150`.
+- **`_idle_timed_stream` calls `_safe_aclose` twice on the timeout path** — kieran-python KP-7, conf 50. `src/orchid/llm/client.py:416-437`.
+- **Skill resource traversal guard TOCTOU** between resolved-skill-dir check and resolved-subdir check — adversarial #7, conf 50. Microsecond window; requires FS attacker inside skill install dir. `src/orchid/tools/skill.py:181-195`.
+- **`commit_assistant_with_tool_calls` in-place filter mutates list concurrently iterated by executor task** — adversarial #8, conf 50. Correct today because dict identity survives the filter (undocumented invariant). `src/orchid/llm/client.py:498-532`.
 
 ## Testing Gaps
 
 - **Stream-idle retry path untested with partial delivery** — no test simulates "3 chunks, then stalls > idle_timeout, then retries" and asserts no duplicate messages. `tests/test_streaming_messages.py`.
 - **`commit_assistant_with_tool_calls` all-malformed filter (empty `tool_calls`) untested** — whether subsequent tool_call deltas become orphaned tool results. `tests/test_streaming_messages.py`.
 - **MCP per-server timeout transport-enter hang (`fail_enter=True`) fixture defined but never driven** — `tests/test_mcp_startup_timeout.py:6857`.
-- **`_read_bounded` overflow-trim stderr-only sub-branch untested** — `src/stupidex/tools/exec.py:4932`.
+- **`_read_bounded` overflow-trim stderr-only sub-branch untested** — `src/orchid/tools/exec.py:4932`.
 - **Streaming tests mutate module-global `llm_client._execute_tool` outside `patch` context** — brittle under `pytest-timeout`. `tests/test_streaming_messages.py:8923` (7 sites). Use `with patch.object(...)`.
 - **`test_max_results_does_not_leak_tasks` tolerates `+1` slack** — admits exactly the leak the fix prevents. `tests/test_search.py:7969`. Tighten to `<= tasks_before`.
-- **`_maybe_offload_tool_output` `except OSError` cache-write failure branch untested** — `src/stupidex/llm/client.py:4878`.
-- **No test for `TodoStore.create` exhausting 8 retries** — verify it propagates as `ExecutorResult`, not an unhandled exception. `src/stupidex/domain/todo.py:91`.
-- **`_check_positive_float` branches and float ENV cast not exercised** — `src/stupidex/config.py:177-178,345-351`.
+- **`_maybe_offload_tool_output` `except OSError` cache-write failure branch untested** — `src/orchid/llm/client.py:4878`.
+- **No test for `TodoStore.create` exhausting 8 retries** — verify it propagates as `ExecutorResult`, not an unhandled exception. `src/orchid/domain/todo.py:91`.
+- **`_check_positive_float` branches and float ENV cast not exercised** — `src/orchid/config.py:177-178,345-351`.
 - **Rename-rejected test doesn't assert pre-edit fields unchanged** — see P2-B. `tests/test_settings_screen.py`.
 
 ## Residual Risks (advisory)
 
-- **Offload recovery depends on no workspace path confinement (P0-3 deferred).** The pointer tells the LLM to `read` the cache file at `~/.stupidex/cache/...` — outside the workspace. The moment P0-3 path confinement lands, the agent will be silently unable to read its own offloaded outputs. Consider writing cache under `.stupidex/cache/` in cwd, or adding an allowlist exemption, before P0-3 ships. (`src/stupidex/llm/client.py:140-171`, `src/stupidex/tools/file_manipulation.py:38`)
-- **`session_id` used as path component without uuid validation.** Not exploitable across a trust boundary (requires prior write access to per-user sessions dir), but the new offload sink and pre-existing `delete_session` rmtree both inherit it. Defense-in-depth: validate uuid format at `load_session` boundary. (`src/stupidex/llm/client.py:107-108`)
-- **`llm_stream_retries` config has no upper bound.** `STUPIDEX_LLM_STREAM_RETRIES=30` → max backoff `0.2*2^29s`. Add `min(retries, 10)`. (`src/stupidex/llm/client.py:707`)
-- **Overall agent-turn wall-clock still unbounded (P1-12 deferred).** Idle timeout bounds per-chunk latency but a provider emitting one chunk every ~290s for hours won't trip it. (`src/stupidex/llm/client.py`)
-- **`wait_for_subagent` still unbounded and timeout-exempt.** A subagent wedged in a `_TOOLS_WITHOUT_TIMEOUT` tool hangs the parent indefinitely. Add a configurable timeout defaulting to `llm_stream_idle_timeout`. (`src/stupidex/llm/client.py:37-44`)
-- **MCP start_all implies parallel but is sequential.** Worst case N × per_server_timeout (bounded by startup_timeout overall). Not a regression. (`src/stupidex/mcp/__init__.py:121`)
+- **Offload recovery depends on no workspace path confinement (P0-3 deferred).** The pointer tells the LLM to `read` the cache file at `~/.orchid/cache/...` — outside the workspace. The moment P0-3 path confinement lands, the agent will be silently unable to read its own offloaded outputs. Consider writing cache under `.orchid/cache/` in cwd, or adding an allowlist exemption, before P0-3 ships. (`src/orchid/llm/client.py:140-171`, `src/orchid/tools/file_manipulation.py:38`)
+- **`session_id` used as path component without uuid validation.** Not exploitable across a trust boundary (requires prior write access to per-user sessions dir), but the new offload sink and pre-existing `delete_session` rmtree both inherit it. Defense-in-depth: validate uuid format at `load_session` boundary. (`src/orchid/llm/client.py:107-108`)
+- **`llm_stream_retries` config has no upper bound.** `ORCHID_LLM_STREAM_RETRIES=30` → max backoff `0.2*2^29s`. Add `min(retries, 10)`. (`src/orchid/llm/client.py:707`)
+- **Overall agent-turn wall-clock still unbounded (P1-12 deferred).** Idle timeout bounds per-chunk latency but a provider emitting one chunk every ~290s for hours won't trip it. (`src/orchid/llm/client.py`)
+- **`wait_for_subagent` still unbounded and timeout-exempt.** A subagent wedged in a `_TOOLS_WITHOUT_TIMEOUT` tool hangs the parent indefinitely. Add a configurable timeout defaulting to `llm_stream_idle_timeout`. (`src/orchid/llm/client.py:37-44`)
+- **MCP start_all implies parallel but is sequential.** Worst case N × per_server_timeout (bounded by startup_timeout overall). Not a regression. (`src/orchid/mcp/__init__.py:121`)
 - **`docs/solutions/` is essentially empty.** This branch's 15+ distinct topics (atomic writes, bounded exec, streaming dedup, PENDING→INTERRUPTED migration, ContextVar centralization, etc.) are strong candidates for `/ce-compound` after the work lands.
 
 ## What's Working Well

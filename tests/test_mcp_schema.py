@@ -3,8 +3,8 @@ import inspect
 import unittest
 from unittest.mock import AsyncMock
 
-from stupidex.domain.tool import ExecutorResult
-from stupidex.mcp.schema import convert_mcp_tool, make_mcp_executor
+from orchid.domain.tool import ExecutorResult
+from orchid.mcp.schema import convert_mcp_tool, make_mcp_executor
 
 
 class _FakeMCPTool:

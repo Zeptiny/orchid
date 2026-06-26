@@ -1,6 +1,6 @@
 """Tests for RAG chunker (U9)."""
 
-from stupidex.rag.chunker import chunk_file
+from orchid.rag.chunker import chunk_file
 
 
 def test_chunker_single_line():

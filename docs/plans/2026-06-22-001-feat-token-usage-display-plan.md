@@ -97,7 +97,7 @@ The `Chain` becomes the single abstraction for "a unit of agentic LLM work with 
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/domain/message.py` (`Usage` dataclass, `to_storage_dict`, `from_storage_dict`)
+- Modify: `src/orchid/domain/message.py` (`Usage` dataclass, `to_storage_dict`, `from_storage_dict`)
 - Test: `tests/test_message.py` (`TestUsageDeserializationForwardCompat`)
 
 **Approach:**
@@ -129,7 +129,7 @@ The `Chain` becomes the single abstraction for "a unit of agentic LLM work with 
 **Dependencies:** U1
 
 **Files:**
-- Modify: `src/stupidex/llm/client.py` (`_stream_task`, the `if hasattr(chunk, "usage")...` block)
+- Modify: `src/orchid/llm/client.py` (`_stream_task`, the `if hasattr(chunk, "usage")...` block)
 - Test: `tests/test_streaming_messages.py` (the `chunk(...)` helper and a usage-carries-cached assertion)
 
 **Approach:**
@@ -160,8 +160,8 @@ The `Chain` becomes the single abstraction for "a unit of agentic LLM work with 
 **Dependencies:** U1, U2
 
 **Files:**
-- Modify: `src/stupidex/domain/chain.py` (add `format_tokens` staticmethod next to `format_elapsed`)
-- Modify: `src/stupidex/widgets/message_widget.py` (`ChainFooterWidget._build_text`)
+- Modify: `src/orchid/domain/chain.py` (add `format_tokens` staticmethod next to `format_elapsed`)
+- Modify: `src/orchid/widgets/message_widget.py` (`ChainFooterWidget._build_text`)
 - Test: `tests/test_chain.py` (or a new focused footer test)
 
 **Approach:**
@@ -192,7 +192,7 @@ The `Chain` becomes the single abstraction for "a unit of agentic LLM work with 
 **Dependencies:** U1, U2
 
 **Files:**
-- Modify: `src/stupidex/app.py` (`rerender_footer`, the `#model` update near `model_label = self.model or "No Model"`)
+- Modify: `src/orchid/app.py` (`rerender_footer`, the `#model` update near `model_label = self.model or "No Model"`)
 - Test: `tests/test_session.py` (or a new footer-rendering test)
 
 **Approach:**
@@ -223,9 +223,9 @@ The `Chain` becomes the single abstraction for "a unit of agentic LLM work with 
 **Dependencies:** None strictly (independent refactor), but lands cleanly before U6/U7 which depend on it.
 
 **Files:**
-- Modify: `src/stupidex/agents/manager.py` (`SubagentRecord` dataclass, `spawn`, `from_storage_dict`, `to_storage_dict`, `_run` closure)
-- Modify: `src/stupidex/tools/subagent.py` (record `parent_chain_index` at spawn)
-- Modify: `src/stupidex/app.py` (`_start_chain` sets a `_current_chain_index` ContextVar; threading the index into spawn)
+- Modify: `src/orchid/agents/manager.py` (`SubagentRecord` dataclass, `spawn`, `from_storage_dict`, `to_storage_dict`, `_run` closure)
+- Modify: `src/orchid/tools/subagent.py` (record `parent_chain_index` at spawn)
+- Modify: `src/orchid/app.py` (`_start_chain` sets a `_current_chain_index` ContextVar; threading the index into spawn)
 - Test: `tests/test_subagent_manager.py`
 
 **Approach:**
@@ -260,8 +260,8 @@ The `Chain` becomes the single abstraction for "a unit of agentic LLM work with 
 **Dependencies:** U5, U3, U4
 
 **Files:**
-- Modify: `src/stupidex/widgets/subagent_ui.py` (mount a `ChainFooterWidget(record.chain)` in each subagent `TabPane`; tick/freeze it)
-- Modify: `src/stupidex/app.py` (`rerender_footer` — also sum `session.subagent_manager.all_records()` usages into the session total)
+- Modify: `src/orchid/widgets/subagent_ui.py` (mount a `ChainFooterWidget(record.chain)` in each subagent `TabPane`; tick/freeze it)
+- Modify: `src/orchid/app.py` (`rerender_footer` — also sum `session.subagent_manager.all_records()` usages into the session total)
 - Test: `tests/test_subagent_ui.py`, `tests/test_session.py`
 
 **Approach:**
@@ -294,8 +294,8 @@ The `Chain` becomes the single abstraction for "a unit of agentic LLM work with 
 **Dependencies:** U5, U3, U6
 
 **Files:**
-- Modify: `src/stupidex/widgets/message_widget.py` (`ChainFooterWidget._build_text`, or pass the attributed subtotal into the widget)
-- Modify: `src/stupidex/app.py` (compute attributed subtotals; propagate to `ChainContainer`/footer)
+- Modify: `src/orchid/widgets/message_widget.py` (`ChainFooterWidget._build_text`, or pass the attributed subtotal into the widget)
+- Modify: `src/orchid/app.py` (compute attributed subtotals; propagate to `ChainContainer`/footer)
 - Test: `tests/test_chain.py` or `tests/test_subagent_manager.py`
 
 **Approach:**
@@ -345,13 +345,13 @@ The `Chain` becomes the single abstraction for "a unit of agentic LLM work with 
 
 ## Sources & Research
 
-- `src/stupidex/domain/message.py` — `Usage` dataclass, `to_storage_dict`/`from_storage_dict` forward-compat pattern.
-- `src/stupidex/llm/client.py` (`_stream_task`) — current three-field usage extraction (`prompt_tokens`/`completion_tokens`/`total_tokens`); `stream_options={"include_usage": True}` already set.
-- `src/stupidex/widgets/message_widget.py` — `ChainFooterWidget` (`model · elapsed`), `ChainContainer`.
-- `src/stupidex/widgets/sidebar.py` — `update_tokens`/`_usage_by_view` (per-view, last-usage; deliberately unchanged).
-- `src/stupidex/widgets/subagent_ui.py` — `on_message` feeds per-subagent usage to the sidebar; `_manage_timer` 1s refresh.
-- `src/stupidex/agents/manager.py` — `SubagentRecord` shape, `spawn`/`_run`, `from_storage_dict` orphan-reconcile duplication, `_current_manager` ContextVar pattern.
-- `src/stupidex/tools/subagent.py` — `execute_delegate_to_subagent` resolves model via `get_model_for_tier` and passes it to `spawn` (currently discarded after `stream_response`).
-- `src/stupidex/app.py` — `rerender_footer` (last-usage lookup), `_start_chain` (chain append + `ChainContainer` mount), `_tick_footer`.
-- `src/stupidex/domain/chain.py` — `Chain.from_storage_dict` orphan reconciliation (the de-duplication target); `format_elapsed` (formatter template).
+- `src/orchid/domain/message.py` — `Usage` dataclass, `to_storage_dict`/`from_storage_dict` forward-compat pattern.
+- `src/orchid/llm/client.py` (`_stream_task`) — current three-field usage extraction (`prompt_tokens`/`completion_tokens`/`total_tokens`); `stream_options={"include_usage": True}` already set.
+- `src/orchid/widgets/message_widget.py` — `ChainFooterWidget` (`model · elapsed`), `ChainContainer`.
+- `src/orchid/widgets/sidebar.py` — `update_tokens`/`_usage_by_view` (per-view, last-usage; deliberately unchanged).
+- `src/orchid/widgets/subagent_ui.py` — `on_message` feeds per-subagent usage to the sidebar; `_manage_timer` 1s refresh.
+- `src/orchid/agents/manager.py` — `SubagentRecord` shape, `spawn`/`_run`, `from_storage_dict` orphan-reconcile duplication, `_current_manager` ContextVar pattern.
+- `src/orchid/tools/subagent.py` — `execute_delegate_to_subagent` resolves model via `get_model_for_tier` and passes it to `spawn` (currently discarded after `stream_response`).
+- `src/orchid/app.py` — `rerender_footer` (last-usage lookup), `_start_chain` (chain append + `ChainContainer` mount), `_tick_footer`.
+- `src/orchid/domain/chain.py` — `Chain.from_storage_dict` orphan reconciliation (the de-duplication target); `format_elapsed` (formatter template).
 - Tests: `tests/test_message.py` (`TestUsageDeserializationForwardCompat`), `tests/test_streaming_messages.py` (`chunk`/`Usage` helpers), `tests/test_subagent_manager.py` (`SubagentRecord` constructions + persistence round-trip), `tests/test_chain.py`.

@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from stupidex.tools.file_manipulation import (
+from orchid.tools.file_manipulation import (
     execute_edit_tool,
     execute_glob_tool,
     execute_read_directory_tool,
@@ -90,7 +90,7 @@ async def test_edit_tool_generic_exception_returned_as_error_result(tmp_path, mo
     def _boom(*args, **kwargs):
         raise RuntimeError("disk on fire")
 
-    monkeypatch.setattr("stupidex.tools.file_manipulation.atomic_write", _boom)
+    monkeypatch.setattr("orchid.tools.file_manipulation.atomic_write", _boom)
 
     result = await execute_edit_tool("boom.txt", "content", "other")
 
@@ -135,7 +135,7 @@ async def test_edit_tool_preserves_file_mode_bits(tmp_path, monkeypatch):
 async def test_write_tool_fires_post_write_callbacks(tmp_path, monkeypatch):
     from unittest.mock import AsyncMock
 
-    from stupidex.tools.ast import post_write_callbacks
+    from orchid.tools.ast import post_write_callbacks
 
     monkeypatch.chdir(tmp_path)
     cb = AsyncMock()
@@ -180,7 +180,7 @@ class TestExecuteReadTool:
         target = tmp_path / "many.txt"
         target.write_text("\n".join(f"line{i}" for i in range(1, 11)) + "\n")
         mock_cfg = MagicMock(read_line_limit=3)
-        with patch("stupidex.tools.file_manipulation.get_config", return_value=mock_cfg):
+        with patch("orchid.tools.file_manipulation.get_config", return_value=mock_cfg):
             result = await execute_read_tool(str(target), offset=1, limit=None)
         assert result.content.count(" | ") == 3
         assert "1 | line1" in result.content
@@ -280,7 +280,7 @@ class TestExecuteReadDirectoryTool:
         (sub / "deep.py").write_text("x")
         (tmp_path / "top.py").write_text("x")
         mock_cfg = MagicMock(directory_tree_depth=1, ignored_dirs=[])
-        with patch("stupidex.tools.file_manipulation.get_config", return_value=mock_cfg):
+        with patch("orchid.tools.file_manipulation.get_config", return_value=mock_cfg):
             result = await execute_read_directory_tool(str(tmp_path), max_depth=None)
         assert "top.py" in result.content
         assert "sub/" in result.content

@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from stupidex.ast.store import ASTStore
-from stupidex.ast.symbols import Symbol
-from stupidex.domain.tool import ExecutorResult
-from stupidex.tools.ast import (
+from orchid.ast.store import ASTStore
+from orchid.ast.symbols import Symbol
+from orchid.domain.tool import ExecutorResult
+from orchid.tools.ast import (
     _fnv1a,
     _get_function_sent_hashes,
     execute_find_symbol_references,
@@ -30,7 +30,7 @@ from stupidex.tools.ast import (
 @pytest.fixture(autouse=True)
 def _reset_ast_state():
     """Reset module-level state between tests."""
-    import stupidex.ast.indexer as indexer_mod
+    import orchid.ast.indexer as indexer_mod
 
     _get_function_sent_hashes.clear()
     post_write_callbacks.clear()
@@ -325,7 +325,7 @@ async def test_find_symbol_references_happy(tmp_path, monkeypatch):
             Symbol("process", "reference", "", 1, 0, 1, 7, 8, 15),
         ],
     })
-    import stupidex.ast.indexer as indexer_mod
+    import orchid.ast.indexer as indexer_mod
     indexer_mod._session_initialized = True
 
     result = await execute_find_symbol_references("process")
@@ -347,7 +347,7 @@ async def test_find_symbol_references_type_filter_definition(tmp_path, monkeypat
             Symbol("foo", "reference", "", 0, 0, 0, 3, 0, 3),
         ],
     })
-    import stupidex.ast.indexer as indexer_mod
+    import orchid.ast.indexer as indexer_mod
     indexer_mod._session_initialized = True
 
     result = await execute_find_symbol_references("foo", type_filter="definition")
@@ -389,7 +389,7 @@ async def test_find_symbol_references_line_numbers_are_1_indexed(py_project):
             Symbol("foo", "definition", "function", 3, 0, 4, 4, 9, 31),
         ],
     })
-    import stupidex.ast.indexer as indexer_mod
+    import orchid.ast.indexer as indexer_mod
     indexer_mod._session_initialized = True
 
     result = await execute_find_symbol_references("foo")
@@ -406,7 +406,7 @@ async def test_find_symbol_references_line_numbers_match_skeleton(py_project):
             Symbol("bar", "definition", "function", 6, 0, 7, 4, 38, 59),
         ],
     })
-    import stupidex.ast.indexer as indexer_mod
+    import orchid.ast.indexer as indexer_mod
     indexer_mod._session_initialized = True
 
     refs_result = await execute_find_symbol_references("bar")
@@ -671,7 +671,7 @@ async def test_rename_post_write_callbacks_triggered(tmp_path, monkeypatch):
 
 
 def test_all_ast_tools_in_registry():
-    from stupidex.tools import get_tool_registry
+    from orchid.tools import get_tool_registry
 
     registry = get_tool_registry()
     assert "get_file_skeleton" in registry
@@ -687,7 +687,7 @@ def test_all_ast_tools_in_registry():
 
 
 def test_ast_tools_in_timeout_exemption():
-    from stupidex.llm.client import _TOOLS_WITHOUT_TIMEOUT
+    from orchid.llm.client import _TOOLS_WITHOUT_TIMEOUT
 
     assert "get_file_skeleton" in _TOOLS_WITHOUT_TIMEOUT
     assert "get_function" in _TOOLS_WITHOUT_TIMEOUT
@@ -722,8 +722,8 @@ async def test_second_find_refs_no_rescan(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "mod.py").write_text("def helper():\n    pass\nhelper()\n")
 
-    import stupidex.ast.indexer as indexer_mod
-    from stupidex.ast.indexer import index_project
+    import orchid.ast.indexer as indexer_mod
+    from orchid.ast.indexer import index_project
 
     await index_project(project_path=str(tmp_path))
     indexer_mod._session_initialized = True

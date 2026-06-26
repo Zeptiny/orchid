@@ -51,13 +51,13 @@ The 2026-06-20 full code-review sweep surfaced 53 P1 findings. Five were closed 
 
 ### Relevant Code and Patterns
 
-- `src/stupidex/tools/ast.py:222-251` — existing `_atomic_write` (temp + fsync + os.replace); the canonical pattern P1-14 reuses
-- `src/stupidex/tools/web_fetch.py:168-232` — existing large-output cache pattern: write to `HOME_CONFIG_DIR / "cache" / "web-fetch" / <session> / <slug>.md`, return truncated `ExecutorResult` with file path + warning to LLM. `RAW_CONTENT_THRESHOLD = 10_000` (line 25)
-- `src/stupidex/llm/client.py:470-492` — `_executor_task`, the single point where tool results are appended to `api_messages` (P1-4 fix point)
-- `src/stupidex/llm/client.py:534-595` — outer `while True` agent re-submission loop; the streaming loop closure logic at 408-465 (P1-6/7/8 cluster)
-- `src/stupidex/agents/manager.py:150-282` — `from_storage_dict`, `cancel_*`, and `spawn`/`_run`/`on_spawn` (P1-1/2/3 cluster)
-- `src/stupidex/mcp/schema.py:25` and `src/stupidex/mcp/__init__.py:204-255` — registry + call_tool + read_resource (P1-19/20/21)
-- `src/stupidex/config.py` — `_ENV_MAP` and `_validate_config` patterns from P0-5/P0-6 (no new fields needed for this plan)
+- `src/orchid/tools/ast.py:222-251` — existing `_atomic_write` (temp + fsync + os.replace); the canonical pattern P1-14 reuses
+- `src/orchid/tools/web_fetch.py:168-232` — existing large-output cache pattern: write to `HOME_CONFIG_DIR / "cache" / "web-fetch" / <session> / <slug>.md`, return truncated `ExecutorResult` with file path + warning to LLM. `RAW_CONTENT_THRESHOLD = 10_000` (line 25)
+- `src/orchid/llm/client.py:470-492` — `_executor_task`, the single point where tool results are appended to `api_messages` (P1-4 fix point)
+- `src/orchid/llm/client.py:534-595` — outer `while True` agent re-submission loop; the streaming loop closure logic at 408-465 (P1-6/7/8 cluster)
+- `src/orchid/agents/manager.py:150-282` — `from_storage_dict`, `cancel_*`, and `spawn`/`_run`/`on_spawn` (P1-1/2/3 cluster)
+- `src/orchid/mcp/schema.py:25` and `src/orchid/mcp/__init__.py:204-255` — registry + call_tool + read_resource (P1-19/20/21)
+- `src/orchid/config.py` — `_ENV_MAP` and `_validate_config` patterns from P0-5/P0-6 (no new fields needed for this plan)
 
 ### Institutional Learnings
 
@@ -108,12 +108,12 @@ All 14 findings were verified as CONFIRMED by subagent dispatch on 2026-06-20. D
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/tools/ast.py` (lines 678-680 area, the `execute_find_symbol_references` formatter)
+- Modify: `src/orchid/tools/ast.py` (lines 678-680 area, the `execute_find_symbol_references` formatter)
 - Test: `tests/test_ast_tools.py` (extend with line-number consistency test)
 
 **Approach:**
 - Add `+ 1` to `s["start_line"]` and `s["end_line"]` in the XML attribute formatting at the display boundary
-- Do NOT change `src/stupidex/ast/parser.py` or the SQLite store — `rename_symbol` relies on 0-indexed storage for array indexing at `ast.py:985`
+- Do NOT change `src/orchid/ast/parser.py` or the SQLite store — `rename_symbol` relies on 0-indexed storage for array indexing at `ast.py:985`
 - Leave `start_column`/`end_column` unchanged (not reported by other tools; column convention is out of scope)
 
 **Patterns to follow:**
@@ -139,7 +139,7 @@ All 14 findings were verified as CONFIRMED by subagent dispatch on 2026-06-20. D
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/tools/skill.py` (lines 31-62, `resolve_skill_dependencies`)
+- Modify: `src/orchid/tools/skill.py` (lines 31-62, `resolve_skill_dependencies`)
 - Test: `tests/test_skill_tools.py` (extend with diamond-dependency test)
 
 **Approach:**
@@ -188,12 +188,12 @@ resolve(name, registry, allowed, _stack=None, _resolved=None):
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/tools/file_manipulation.py` (lines 206-207 edit write; lines 384-385 write tool)
-- Modify: `src/stupidex/tools/ast.py` (export `atomic_write` as alias for `_atomic_write`, or make importable)
+- Modify: `src/orchid/tools/file_manipulation.py` (lines 206-207 edit write; lines 384-385 write tool)
+- Modify: `src/orchid/tools/ast.py` (export `atomic_write` as alias for `_atomic_write`, or make importable)
 - Test: `tests/test_file_manipulation.py` (extend with atomic-write tests)
 
 **Approach:**
-- Export `_atomic_write` from `ast.py` as `atomic_write` (or import the private name directly — `file_manipulation.py` already imports from `stupidex.tools.ast`)
+- Export `_atomic_write` from `ast.py` as `atomic_write` (or import the private name directly — `file_manipulation.py` already imports from `orchid.tools.ast`)
 - In `execute_write_tool` (line 384): replace `aiofiles.open(path, "w") + f.write(content)` with `loop.run_in_executor(None, atomic_write, str(path), content)` — preserves async semantics matching the existing pattern at lines 289/334
 - In `execute_edit_tool` (lines 206-207): same replacement for the write half
 - Keep `aiofiles.open` for reads (line 44, line 166) — only the write path changes
@@ -201,7 +201,7 @@ resolve(name, registry, allowed, _stack=None, _resolved=None):
 - `atomic_write` already preserves file mode bits and fsyncs the directory — strict improvement over current direct-write
 
 **Patterns to follow:**
-- `src/stupidex/tools/ast.py:222-251` (`_atomic_write` — temp + fsync + os.replace + chmod)
+- `src/orchid/tools/ast.py:222-251` (`_atomic_write` — temp + fsync + os.replace + chmod)
 
 **Test scenarios:**
 - Happy path: `execute_write_tool` writes content; file exists with correct content and original mode bits preserved
@@ -224,7 +224,7 @@ resolve(name, registry, allowed, _stack=None, _resolved=None):
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/tools/exec.py` (lines 70-83, replace `communicate()`)
+- Modify: `src/orchid/tools/exec.py` (lines 70-83, replace `communicate()`)
 - Test: `tests/test_exec.py` (new file, or extend if exists)
 
 **Approach:**
@@ -263,7 +263,7 @@ resolve(name, registry, allowed, _stack=None, _resolved=None):
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/tools/search.py` (lines 64-65 regex compile; lines 89-91 glob translation; lines 111-126 search loop)
+- Modify: `src/orchid/tools/search.py` (lines 64-65 regex compile; lines 89-91 glob translation; lines 111-126 search loop)
 - Test: `tests/test_search.py` (new file or extend if exists)
 
 **Approach:**
@@ -298,7 +298,7 @@ resolve(name, registry, allowed, _stack=None, _resolved=None):
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/mcp/__init__.py` (lines 238 call_tool content join; lines 249-255 read_resource blob handling)
+- Modify: `src/orchid/mcp/__init__.py` (lines 238 call_tool content join; lines 249-255 read_resource blob handling)
 - Test: `tests/test_mcp_call_tool.py` (new) or extend `tests/test_mcp_startup_timeout.py`
 
 **Approach:**
@@ -329,8 +329,8 @@ resolve(name, registry, allowed, _stack=None, _resolved=None):
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/mcp/schema.py` (line 25, `convert_mcp_tool` registry name)
-- Modify: `src/stupidex/mcp/__init__.py` (line 204, shadow warning before assignment)
+- Modify: `src/orchid/mcp/schema.py` (line 25, `convert_mcp_tool` registry name)
+- Modify: `src/orchid/mcp/__init__.py` (line 204, shadow warning before assignment)
 - Test: `tests/test_mcp_registry.py` (new)
 
 **Approach:**
@@ -361,7 +361,7 @@ resolve(name, registry, allowed, _stack=None, _resolved=None):
 **Dependencies:** U4 (exec bounded output) — partial overlap; both bound tool output. U4 bounds exec specifically; U8 bounds all tools generically at the api_messages append point.
 
 **Files:**
-- Modify: `src/stupidex/llm/client.py` (lines 470-492 `_executor_task`, the api_messages append point; add helper near line 22-24)
+- Modify: `src/orchid/llm/client.py` (lines 470-492 `_executor_task`, the api_messages append point; add helper near line 22-24)
 - Test: `tests/test_tool_output_offload.py` (new)
 
 **Approach:**
@@ -369,7 +369,7 @@ resolve(name, registry, allowed, _stack=None, _resolved=None):
 - Define skip-set: `_TOOLS_WITHOUT_OUTPUT_OFFLOAD = {"read", "grep", "glob", "directory_tree", "web_fetch"}` — these already self-limit or have offset/limit knobs; offloading them would create circular "use read tool to read this" instructions
 - Add helper `_maybe_offload_tool_output(tool_name: str, content: str, tool_call_id: str) -> str`:
   - If `len(content) <= threshold` OR tool in skip-set → return `content` unchanged
-  - Else, require `get_current_session_id()` (import from `stupidex.domain.session`, matching `web_fetch.py:17`). If no session, hard-truncate to threshold with a `<warning>` (no file path)
+  - Else, require `get_current_session_id()` (import from `orchid.domain.session`, matching `web_fetch.py:17`). If no session, hard-truncate to threshold with a `<warning>` (no file path)
   - Else, write to cache file under `HOME_CONFIG_DIR / "cache" / "tool-output" / <session_id> / <tool_name>_<tool_call_id_slug>.txt` (reuse `web_fetch.py`'s `_write_cache_file` pattern: `os.open` with `O_WRONLY|O_CREAT|O_TRUNC`, mode `0o600`, dir `0o700`)
   - Return substituted string: `<{tool_name}_result length={N} file="{path}"><warning>Output exceeded {threshold} characters and was written to {path}. Use read (with offset/limit) or grep to inspect.</warning></{tool_name}_result>`
 - Wire in `_executor_task` between `_execute_tool` returning `result_msg` (line 483) and `api_messages.append(...)` (lines 486-490): replace `result_msg.content` with `trimmed = _maybe_offload_tool_output(tc["function"]["name"], result_msg.content, tc["id"])` and append `trimmed` to api_messages
@@ -394,8 +394,8 @@ _executor_task:
 ```
 
 **Patterns to follow:**
-- `src/stupidex/tools/web_fetch.py:168-232` (`_write_cache_file`, `_raw_result` threshold + offload pattern)
-- `src/stupidex/config.py`'s `HOME_CONFIG_DIR` for cache directory root
+- `src/orchid/tools/web_fetch.py:168-232` (`_write_cache_file`, `_raw_result` threshold + offload pattern)
+- `src/orchid/config.py`'s `HOME_CONFIG_DIR` for cache directory root
 
 **Test scenarios:**
 - Happy path small: tool returning 5KB content → api_messages gets full content, no cache file written
@@ -419,8 +419,8 @@ _executor_task:
 **Dependencies:** None (can proceed in parallel with other units, but the three sub-fixes must land together)
 
 **Files:**
-- Modify: `src/stupidex/agents/manager.py` (lines 150-152 `from_storage_dict` migration; lines 173-199 `cancel_one`/`cancel_running`/`cancel_all`; lines 279-282 `spawn` scheduling; lines 233-262 `_run` message handling)
-- Modify: `src/stupidex/widgets/subagent_ui.py` (lines 75-86 `on_message` shared `StreamWidgetState`; add per-subagent lock)
+- Modify: `src/orchid/agents/manager.py` (lines 150-152 `from_storage_dict` migration; lines 173-199 `cancel_one`/`cancel_running`/`cancel_all`; lines 279-282 `spawn` scheduling; lines 233-262 `_run` message handling)
+- Modify: `src/orchid/widgets/subagent_ui.py` (lines 75-86 `on_message` shared `StreamWidgetState`; add per-subagent lock)
 - Test: `tests/test_subagent_manager.py` (extend)
 - Test: `tests/test_subagent_ui_race.py` (new, for mount race)
 
@@ -496,7 +496,7 @@ def cancel_one(self, subagent_id):
 **Dependencies:** None (independent of other units, but the three sub-fixes must land together to avoid introducing regressions)
 
 **Files:**
-- Modify: `src/stupidex/llm/client.py` (lines 377-386 `commit_assistant_with_tool_calls`; lines 408-465 streaming delta handling; lines 441-446 and 457-462 enqueue points)
+- Modify: `src/orchid/llm/client.py` (lines 377-386 `commit_assistant_with_tool_calls`; lines 408-465 streaming delta handling; lines 441-446 and 457-462 enqueue points)
 - Test: `tests/test_streaming_messages.py` (extend)
 
 **Approach:**
@@ -577,7 +577,7 @@ if prev_index is not None and prev_index != tc_delta.index:
 
 - No config changes (no new fields in `config.py`)
 - No migration needed — existing sessions restore with INTERRUPTED state for PENDING records (U9 P1-1)
-- Cache files from U8 (tool output offload) accumulate under `~/.stupidex/cache/tool-output/<session_id>/` — matches web_fetch's existing cache behavior; cleanup is out of scope
+- Cache files from U8 (tool output offload) accumulate under `~/.orchid/cache/tool-output/<session_id>/` — matches web_fetch's existing cache behavior; cleanup is out of scope
 - The `tests/test_subagent_manager.py` (19 tests from P0-8) and `tests/test_streaming_messages.py` (existing) must continue to pass — they serve as regression guards for U9 and U10 respectively
 
 ---
@@ -586,5 +586,5 @@ if prev_index is not None and prev_index != tc_delta.index:
 
 - **Origin document:** `2026-06-20-full-sweep-all-findings.md` (project root) — P1 section
 - **Verification plans:** `docs/plans/2026-06-20-p0-verification-and-fix-plan.md` (P0 precedent for methodology)
-- Related code: `src/stupidex/tools/ast.py:222-251` (`_atomic_write`), `src/stupidex/tools/web_fetch.py:168-232` (offload pattern), `src/stupidex/llm/client.py:470-492` (`_executor_task`), `src/stupidex/agents/manager.py:150-282` (lifecycle)
+- Related code: `src/orchid/tools/ast.py:222-251` (`_atomic_write`), `src/orchid/tools/web_fetch.py:168-232` (offload pattern), `src/orchid/llm/client.py:470-492` (`_executor_task`), `src/orchid/agents/manager.py:150-282` (lifecycle)
 - Verification subagent reports: dispatched 2026-06-20, all findings CONFIRMED (P1-21 partial false-positive)

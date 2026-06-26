@@ -1,7 +1,7 @@
 # Code Review Sweep Plan — Full Application
 
 **Mode:** `report-only` (no checkout mutation, safe for full-codebase sweep)
-**Scope:** 7 top-level Python packages under `src/stupidex/`
+**Scope:** 7 top-level Python packages under `src/orchid/`
 **Run date:** 2026-06-20
 **Reviewer reduction:** `ce-learnings-researcher` dropped (no `docs/solutions/` present, would return empty on every run)
 
@@ -197,7 +197,7 @@ Reviewer count: 5 always-on (learnings-researcher dropped) + per-module conditio
 ### P0 — Must fix before merge
 | # | Title | File:line | Reviewer(s) | Confidence | Class | Owner | Why it matters | Suggested fix |
 |---|-------|-----------|-------------|------------|-------|-------|-----------------|---------------|
-| 1 | ... | src/stupidex/tools/exec.py:42 | security, correctness | 100 | gated_auto | downstream-resolver | <why> | <fix> |
+| 1 | ... | src/orchid/tools/exec.py:42 | security, correctness | 100 | gated_auto | downstream-resolver | <why> | <fix> |
 
 ### P1 — Should fix
 <same table format>

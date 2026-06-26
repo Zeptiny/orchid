@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-20
 **Mode:** report-only (no checkout mutation, no auto-fixes)
-**Scope:** 7 top-level Python packages under `src/stupidex/` — `domain/`, `agents/`, `tools/`, `llm/`, `mcp/`, `rag/`, `screens/`
+**Scope:** 7 top-level Python packages under `src/orchid/` — `domain/`, `agents/`, `tools/`, `llm/`, `mcp/`, `rag/`, `screens/`
 **Dispatches:** 55 subagents across 7 modules (5 always-on per module after dropping `ce-learnings-researcher`, plus per-module conditionals)
 **Reviewer reduction:** `ce-learnings-researcher` dropped — repo has no `docs/solutions/` content to consult
 
@@ -95,14 +95,14 @@
 
 #### Maintainability / dead code
 
-- **`Agent.to_dict` and `Agent.from_dict` have zero callers** (`domain/agent.py:86, 75`) — delete them. `from_dict` silently drops unknown fields and hardcodes `tier='papudo'`; deleting prevents future misuse.
+- **`Agent.to_dict` and `Agent.from_dict` have zero callers** (`domain/agent.py:86, 75`) — delete them. `from_dict` silently drops unknown fields and hardcodes `tier='bloom'`; deleting prevents future misuse.
 - **`Skill.to_dict` and `SkillResource.to_dict` have zero callers and are lossy** (`domain/skill.py:41`) — `references`/`scripts`/`assets` emit as integer counts, not data.
 - **Dead assignment** `record.async_task = None  # set below` (`agents/manager.py:279`).
 - **`rag.py` builds `progress_info` list but never includes it in the result XML** (`tools/rag.py:180`) — wired to nothing.
 - **Duplicated XML helper functions across `ast.py` and `file_manipulation.py`** — `_xml_attr`, `_cdata_text`, `_count_diff_changes`, `_format_edit_result` are byte-for-byte copies that have already diverged (`replace_all` hardcoded in the ast version).
 - **`stream_response` is a God function** (`llm/client.py:402`) — 80+ lines mixing 7+ responsibilities (system prompt assembly, tool filtering, MCP merge, streaming loop, executor dispatch, api_messages mutation, cancellation). Split naturally along existing seams.
 - **Duplicated except branch: CancelledError subsumed by BaseException** (`llm/client.py:467`) — byte-identical bodies, dedup fear blocks maintainers.
-- **Domain layer imports from agents layer — circular dependency** (`domain/session.py:8`). `agents/__init__.py` then defers `from stupidex.domain.message import Message` inside methods. The domain package cannot be imported standalone.
+- **Domain layer imports from agents layer — circular dependency** (`domain/session.py:8`). `agents/__init__.py` then defers `from orchid.domain.message import Message` inside methods. The domain package cannot be imported standalone.
 - **`SessionManager.switch`/`delete`/`load` shadow builtin `id`** (`domain/session.py:89`) — rename to `session_id` to match the rest of the file.
 - **`_mark_dirty` accepts `field` and `_from_tab` it never uses** (`screens/settings.py:1304`) — every call site lies about scoped work.
 - **`_collect_modified_config` is a one-line pass-through** to `self._config` (`screens/settings.py:1231`).
@@ -196,7 +196,7 @@ The recent fix commits (`406e032`, `da0ff86`, `ff4434e`, `df34ea4`) claim to har
 
 ## Residual Risks (advisory)
 
-1. **Config trust boundary**: anyone who can write `.stupidex/config.json` controls `mcp_servers` (arbitrary `command`/`args`/`env` for stdio spawn). Project-local `.stupidex.json` deep-merged with user config silently expands the trust boundary. No workspace-trust gate exists.
+1. **Config trust boundary**: anyone who can write `.orchid/config.json` controls `mcp_servers` (arbitrary `command`/`args`/`env` for stdio spawn). Project-local `.orchid.json` deep-merged with user config silently expands the trust boundary. No workspace-trust gate exists.
 
 2. **litellm is treated as a black box** for stream/connection lifecycle. Provider divergence (tool_call delta shape, empty `index`, separate id/name deltas) is unvalidated. No per-provider integration tests asserting delta-shape assumptions.
 

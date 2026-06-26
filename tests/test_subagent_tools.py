@@ -5,8 +5,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from stupidex.domain.agent import Agent, AgentTypes, ModelTier
-from stupidex.tools.subagent import (
+from orchid.domain.agent import Agent, AgentTypes, ModelTier
+from orchid.tools.subagent import (
     execute_delegate_to_subagent,
     execute_interrupt_subagents,
     execute_list_subagents,
@@ -14,7 +14,7 @@ from stupidex.tools.subagent import (
 )
 
 
-def make_agent(tier: ModelTier = ModelTier.PAPUDO) -> Agent:
+def make_agent(tier: ModelTier = ModelTier.BLOOM) -> Agent:
     return Agent(
         name="Subagent",
         type=AgentTypes.SUBAGENT,
@@ -50,13 +50,13 @@ def make_record(
 
 def patch_registry():
     return patch(
-        "stupidex.tools.subagent.get_agent_registry",
+        "orchid.tools.subagent.get_agent_registry",
         return_value={"Subagent": make_agent()},
     )
 
 
 def patch_model():
-    return patch("stupidex.tools.subagent.get_model_for_tier", return_value="model-x")
+    return patch("orchid.tools.subagent.get_model_for_tier", return_value="model-x")
 
 
 class DelegateToSubagentTests(unittest.TestCase):
@@ -80,22 +80,22 @@ class DelegateToSubagentTests(unittest.TestCase):
         mock_manager = MagicMock()
         mock_manager.spawn = AsyncMock(return_value=SimpleNamespace(id="abc123"))
         with patch_registry(), patch_model(), \
-                patch("stupidex.tools.subagent.get_subagent_manager", return_value=mock_manager):
+                patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
             result = asyncio.run(
                 execute_delegate_to_subagent(name="n", task="t", type="Subagent")
             )
         mock_manager.spawn.assert_called_once()
         called_kwargs = mock_manager.spawn.call_args
         self.assertEqual(called_kwargs.args[3], "model-x")
-        self.assertIn("papudo", result.content)
+        self.assertIn("bloom", result.content)
 
     def test_happy_path_returns_subagent_xml(self):
         mock_manager = MagicMock()
         mock_manager.spawn = AsyncMock(return_value=SimpleNamespace(id="abc123"))
         with patch_registry(), patch_model(), \
-                patch("stupidex.tools.subagent.get_subagent_manager", return_value=mock_manager):
+                patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
             result = asyncio.run(
-                execute_delegate_to_subagent(name="n", task="t", type="Subagent", tier="papudo")
+                execute_delegate_to_subagent(name="n", task="t", type="Subagent", tier="bloom")
             )
         self.assertIn("<subagent", result.content)
         self.assertIn("abc123", result.content)
@@ -107,8 +107,8 @@ class DelegateToSubagentTests(unittest.TestCase):
         mock_manager = MagicMock()
         mock_manager.spawn = AsyncMock(return_value=SimpleNamespace(id="abc123"))
         with patch_registry(), patch_model(), \
-                patch("stupidex.tools.subagent.get_subagent_manager", return_value=mock_manager), \
-                patch("stupidex.tools.subagent.get_current_chain_index", return_value=2):
+                patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager), \
+                patch("orchid.tools.subagent.get_current_chain_index", return_value=2):
             asyncio.run(
                 execute_delegate_to_subagent(name="n", task="t", type="Subagent")
             )
@@ -127,7 +127,7 @@ class WaitForSubagentTests(unittest.TestCase):
         mock_manager.wait = AsyncMock(
             return_value={"id1": make_record(sid="id1", result="done output")}
         )
-        with patch("stupidex.tools.subagent.get_subagent_manager", return_value=mock_manager):
+        with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
             result = asyncio.run(execute_wait_for_subagent(["id1"]))
         self.assertIn("<subagents>", result.content)
         self.assertIn("<result>", result.content)
@@ -138,7 +138,7 @@ class WaitForSubagentTests(unittest.TestCase):
         mock_manager.wait = AsyncMock(
             return_value={"id1": make_record(sid="id1")}
         )
-        with patch("stupidex.tools.subagent.get_subagent_manager", return_value=mock_manager):
+        with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
             result = asyncio.run(execute_wait_for_subagent(["id1", "ghost"]))
         self.assertIn("<not_found>", result.content)
         self.assertIn("ghost", result.content)
@@ -146,7 +146,7 @@ class WaitForSubagentTests(unittest.TestCase):
     def test_all_missing_returns_no_subagents_message(self):
         mock_manager = MagicMock()
         mock_manager.wait = AsyncMock(return_value={})
-        with patch("stupidex.tools.subagent.get_subagent_manager", return_value=mock_manager):
+        with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
             result = asyncio.run(execute_wait_for_subagent(["a", "b"]))
         self.assertIn("No subagents found", result.content)
 
@@ -155,7 +155,7 @@ class ListSubagentsTests(unittest.TestCase):
     def test_empty_states_returns_empty_xml(self):
         mock_manager = MagicMock()
         mock_manager.get_states = MagicMock(return_value=[])
-        with patch("stupidex.tools.subagent.get_subagent_manager", return_value=mock_manager):
+        with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
             result = asyncio.run(execute_list_subagents())
         self.assertEqual(result.content, "<subagents />")
 
@@ -173,7 +173,7 @@ class ListSubagentsTests(unittest.TestCase):
                 }
             ]
         )
-        with patch("stupidex.tools.subagent.get_subagent_manager", return_value=mock_manager):
+        with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
             result = asyncio.run(execute_list_subagents())
         self.assertIn("<subagents>", result.content)
         self.assertIn("<subagent", result.content)
@@ -193,7 +193,7 @@ class ListSubagentsTests(unittest.TestCase):
                 }
             ]
         )
-        with patch("stupidex.tools.subagent.get_subagent_manager", return_value=mock_manager):
+        with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
             result = asyncio.run(execute_list_subagents())
         self.assertIn("<task>", result.content)
         self.assertIn("explore the module", result.content)
@@ -204,7 +204,7 @@ class InterruptSubagentsTests(unittest.TestCase):
         mock_manager = MagicMock()
         mock_manager.cancel_running = MagicMock(return_value=["id1", "id2"])
         mock_manager.flush_state_callbacks = AsyncMock()
-        with patch("stupidex.tools.subagent.get_subagent_manager", return_value=mock_manager):
+        with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
             result = asyncio.run(execute_interrupt_subagents([]))
         mock_manager.cancel_running.assert_called_once()
         self.assertIn("id1", result.content)
@@ -214,7 +214,7 @@ class InterruptSubagentsTests(unittest.TestCase):
         mock_manager = MagicMock()
         mock_manager.cancel_running = MagicMock(return_value=[])
         mock_manager.flush_state_callbacks = AsyncMock()
-        with patch("stupidex.tools.subagent.get_subagent_manager", return_value=mock_manager):
+        with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
             result = asyncio.run(execute_interrupt_subagents([]))
         self.assertIn("No running subagents found", result.content)
 
@@ -234,7 +234,7 @@ class InterruptSubagentsTests(unittest.TestCase):
         mock_manager.cancel_one = MagicMock(return_value=True)
         mock_manager.flush_state_callbacks = AsyncMock()
 
-        with patch("stupidex.tools.subagent.get_subagent_manager", return_value=mock_manager):
+        with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
             result = asyncio.run(
                 execute_interrupt_subagents(["run1", "done1", "ghost1"])
             )
@@ -248,7 +248,7 @@ class InterruptSubagentsTests(unittest.TestCase):
         mock_manager = MagicMock()
         mock_manager.get_record = MagicMock(return_value=None)
         mock_manager.flush_state_callbacks = AsyncMock()
-        with patch("stupidex.tools.subagent.get_subagent_manager", return_value=mock_manager):
+        with patch("orchid.tools.subagent.get_subagent_manager", return_value=mock_manager):
             result = asyncio.run(
                 execute_interrupt_subagents(["a", "b"])
             )

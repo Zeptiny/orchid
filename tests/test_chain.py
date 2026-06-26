@@ -2,8 +2,8 @@
 
 import unittest
 
-from stupidex.domain.chain import Chain, ChainStatus, _reconcile_orphan_tool_results
-from stupidex.domain.message import Message, MessageRole, MessageType, Usage
+from orchid.domain.chain import Chain, ChainStatus, _reconcile_orphan_tool_results
+from orchid.domain.message import Message, MessageRole, MessageType, Usage
 
 
 def _assistant_with_tool_calls(tc_id: str | None) -> Message:
@@ -311,7 +311,7 @@ class TestChainFooterWidgetTokenDisplay(unittest.TestCase):
     def _footer_text(self, chain: Chain) -> str:
         # Import lazily so a textual import failure in the test environment
         # only affects these cases, not the rest of the test module.
-        from stupidex.widgets.message_widget import ChainFooterWidget
+        from orchid.widgets.message_widget import ChainFooterWidget
 
         widget = ChainFooterWidget(chain)
         return widget._build_text()
@@ -378,7 +378,7 @@ class TestChainFooterDelegatedSubtotal(unittest.TestCase):
         chain: Chain,
         subagent_subtotal=None,
     ) -> str:
-        from stupidex.widgets.message_widget import ChainFooterWidget
+        from orchid.widgets.message_widget import ChainFooterWidget
 
         widget = ChainFooterWidget(chain, subagent_subtotal=subagent_subtotal)
         return widget._build_text()
@@ -481,15 +481,15 @@ class TestChainFooterDelegatedSubtotal(unittest.TestCase):
     def test_provider_on_app_helper_matches_session(self):
         """The app-level _chain_subagent_subtotals helper sums attributed
         subagent records' final-usage messages correctly."""
-        from stupidex.agents.manager import SubagentRecord, SubagentState
-        from stupidex.app import _chain_subagent_subtotals
-        from stupidex.domain.agent import Agent, AgentTypes, ModelTier
-        from stupidex.domain.session import Session
+        from orchid.agents.manager import SubagentRecord, SubagentState
+        from orchid.app import _chain_subagent_subtotals
+        from orchid.domain.agent import Agent, AgentTypes, ModelTier
+        from orchid.domain.session import Session
 
         agent = Agent(
             name="Subagent",
             type=AgentTypes.SUBAGENT,
-            tier=ModelTier.PAPUDO,
+            tier=ModelTier.BLOOM,
             description="d",
             system_prompt="p",
         )

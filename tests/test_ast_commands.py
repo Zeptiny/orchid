@@ -16,10 +16,10 @@ import inspect
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from stupidex.commands.session_commands import COMMANDS, execute_command
+from orchid.commands.session_commands import COMMANDS, execute_command
 
-_INDEX_PROJECT = "stupidex.ast.indexer.index_project"
-_IS_INDEXING = "stupidex.ast.indexer.is_indexing"
+_INDEX_PROJECT = "orchid.ast.indexer.index_project"
+_IS_INDEXING = "orchid.ast.indexer.is_indexing"
 
 
 class TestIndexAstCommandInCommands(unittest.TestCase):

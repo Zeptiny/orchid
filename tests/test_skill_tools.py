@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-from stupidex.domain.skill import Skill, SkillResource
-from stupidex.tools import skill as skill_tools
-from stupidex.tools.skill import (
+from orchid.domain.skill import Skill, SkillResource
+from orchid.tools import skill as skill_tools
+from orchid.tools.skill import (
     _execute_resource_read,
     execute_list_skills,
     execute_skill,

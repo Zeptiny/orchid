@@ -5,15 +5,15 @@ import time
 import unittest
 from unittest.mock import patch
 
-from stupidex.agents.manager import (
+from orchid.agents.manager import (
     SubagentManager,
     SubagentRecord,
     SubagentState,
     format_subagent_attrs,
 )
-from stupidex.domain.agent import Agent, AgentTypes, ModelTier
-from stupidex.domain.chain import Chain
-from stupidex.domain.message import Message, MessageRole, MessageType
+from orchid.domain.agent import Agent, AgentTypes, ModelTier
+from orchid.domain.chain import Chain
+from orchid.domain.message import Message, MessageRole, MessageType
 
 
 class _DoneTaskStub:
@@ -37,7 +37,7 @@ def make_agent() -> Agent:
     return Agent(
         name="Subagent",
         type=AgentTypes.SUBAGENT,
-        tier=ModelTier.PAPUDO,
+        tier=ModelTier.BLOOM,
         description="test agent",
         system_prompt="",
         allowed_tools=["read"],
@@ -90,17 +90,17 @@ def stream_dispatch(*gen_fns):
 
 
 def patch_registry(agent: Agent | None = None):
-    """Patch stupidex.agents.get_agent_registry to return {name: agent}."""
+    """Patch orchid.agents.get_agent_registry to return {name: agent}."""
     agent = agent if agent is not None else make_agent()
     return patch(
-        "stupidex.agents.get_agent_registry",
+        "orchid.agents.get_agent_registry",
         return_value={agent.name: agent},
     )
 
 
 def patch_stream(factory):
-    """Patch stupidex.llm.client.stream_response with `factory`."""
-    return patch("stupidex.llm.client.stream_response", side_effect=factory)
+    """Patch orchid.llm.client.stream_response with `factory`."""
+    return patch("orchid.llm.client.stream_response", side_effect=factory)
 
 
 async def drain(n: int = 8) -> None:
@@ -399,7 +399,7 @@ class SubagentManagerTests(unittest.IsolatedAsyncioTestCase):
             "end_time": None,
             "messages": [],
         }
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
             record = SubagentRecord.from_storage_dict(data)
         self.assertEqual(record.state, SubagentState.INTERRUPTED)
         self.assertEqual(record.id, "abc123")
@@ -418,7 +418,7 @@ class SubagentManagerTests(unittest.IsolatedAsyncioTestCase):
             "end_time": None,
             "messages": [],
         }
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
             record = SubagentRecord.from_storage_dict(data)
         self.assertEqual(record.state, SubagentState.INTERRUPTED)
         self.assertIsNone(record.async_task)
@@ -573,7 +573,7 @@ class SubagentManagerTests(unittest.IsolatedAsyncioTestCase):
             messages_mounted=2,
         )
         d = record.to_storage_dict()
-        with patch("stupidex.agents.get_agent_registry", return_value={agent.name: agent}):
+        with patch("orchid.agents.get_agent_registry", return_value={agent.name: agent}):
             restored = SubagentRecord.from_storage_dict(d)
 
         self.assertEqual(restored.id, record.id)
@@ -607,7 +607,7 @@ class SubagentManagerTests(unittest.IsolatedAsyncioTestCase):
             "messages": [],
         }
         empty_registry = {}
-        with patch("stupidex.agents.get_agent_registry", return_value=empty_registry):
+        with patch("orchid.agents.get_agent_registry", return_value=empty_registry):
             record = SubagentRecord.from_storage_dict(data)
         self.assertEqual(record.agent.name, "Ghost")
         self.assertEqual(record.agent.type, AgentTypes.from_str("subagent"))
@@ -847,7 +847,7 @@ class TestElapsedSeconds(unittest.TestCase):
 
     def test_running_record_uses_now_minus_start(self):
         rec = self._record(start_time=100.0, end_time=None)
-        with patch("stupidex.agents.manager.time.time", return_value=130.7):
+        with patch("orchid.agents.manager.time.time", return_value=130.7):
             self.assertEqual(rec.elapsed_seconds, 30.7)
 
     def test_restored_record_with_neither_returns_none(self):
@@ -931,21 +931,21 @@ def _storage_record(**overrides) -> dict:
 class TestRestoreAgentHelper(unittest.TestCase):
     def test_registry_hit_returns_registered_agent(self):
         agent = make_agent()
-        with patch("stupidex.agents.get_agent_registry", return_value={agent.name: agent}):
+        with patch("orchid.agents.get_agent_registry", return_value={agent.name: agent}):
             record = SubagentRecord.from_storage_dict(_storage_record(agent_name="Subagent"))
         self.assertIs(record.agent, agent)
 
     def test_registry_miss_valid_type_constructs_fallback(self):
-        with patch("stupidex.agents.get_agent_registry", return_value={}):
+        with patch("orchid.agents.get_agent_registry", return_value={}):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(agent_name="Ghost", agent_type="Subagent")
             )
         self.assertEqual(record.agent.name, "Ghost")
         self.assertEqual(record.agent.type, AgentTypes.SUBAGENT)
-        self.assertEqual(record.agent.tier, ModelTier.PAPUDO)
+        self.assertEqual(record.agent.tier, ModelTier.BLOOM)
 
     def test_registry_miss_invalid_type_falls_back_to_subagent(self):
-        with patch("stupidex.agents.get_agent_registry", return_value={}):
+        with patch("orchid.agents.get_agent_registry", return_value={}):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(agent_name="Ghost", agent_type="garbage")
             )
@@ -956,7 +956,7 @@ class TestRestoreAgentHelper(unittest.TestCase):
         def boom():
             raise RuntimeError("registry not initialized")
 
-        with patch("stupidex.agents.get_agent_registry", side_effect=boom):
+        with patch("orchid.agents.get_agent_registry", side_effect=boom):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(agent_name="Ghost", agent_type="garbage")
             )
@@ -964,7 +964,7 @@ class TestRestoreAgentHelper(unittest.TestCase):
         self.assertEqual(record.agent.type, AgentTypes.SUBAGENT)
 
     def test_empty_agent_name_constructs_agent_with_empty_name(self):
-        with patch("stupidex.agents.get_agent_registry", return_value={}):
+        with patch("orchid.agents.get_agent_registry", return_value={}):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(agent_name="", agent_type="subagent")
             )
@@ -973,7 +973,7 @@ class TestRestoreAgentHelper(unittest.TestCase):
 
 class TestRestoredInterruptedNormalization(unittest.TestCase):
     def test_completed_record_elapsed_uses_end_minus_start(self):
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(
                     state="completed", start_time=100.0, end_time=200.0
@@ -982,7 +982,7 @@ class TestRestoredInterruptedNormalization(unittest.TestCase):
         self.assertEqual(record.elapsed_seconds, 100.0)
 
     def test_interrupted_with_both_times_uses_end_minus_start(self):
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(
                     state="interrupted", start_time=100.0, end_time=200.0
@@ -992,7 +992,7 @@ class TestRestoredInterruptedNormalization(unittest.TestCase):
 
     def test_running_migrated_to_interrupted_sets_end_time_now(self):
         before = time.time()
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(state="running", start_time=100.0, end_time=None)
             )
@@ -1006,7 +1006,7 @@ class TestRestoredInterruptedNormalization(unittest.TestCase):
         )
 
     def test_pending_never_started_reports_zero_elapsed(self):
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(state="pending", start_time=0.0, end_time=None)
             )
@@ -1016,7 +1016,7 @@ class TestRestoredInterruptedNormalization(unittest.TestCase):
         self.assertEqual(record.elapsed_seconds, 0.0)
 
     def test_running_with_zero_start_time_reports_zero_elapsed(self):
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(state="running", start_time=0.0, end_time=None)
             )
@@ -1025,19 +1025,19 @@ class TestRestoredInterruptedNormalization(unittest.TestCase):
         self.assertEqual(record.elapsed_seconds, 0.0)
 
     def test_pending_string_state_migrates_to_interrupted(self):
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(state="pending", start_time=100.0, end_time=200.0)
             )
         self.assertEqual(record.state, SubagentState.INTERRUPTED)
 
     def test_completed_with_none_end_time_keeps_live_running_semantics(self):
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(state="completed", start_time=100.0, end_time=None)
             )
         self.assertIsNone(record.end_time)
-        with patch("stupidex.agents.manager.time.time", return_value=200.0):
+        with patch("orchid.agents.manager.time.time", return_value=200.0):
             self.assertEqual(record.elapsed_seconds, 100.0)
 
 
@@ -1063,7 +1063,7 @@ class TestSubagentMessageReconciliation(unittest.TestCase):
             self._assistant_with_tool_calls(),
             self._tool_result(),
         ]
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(messages=[m.to_storage_dict() for m in msgs])
             )
@@ -1075,7 +1075,7 @@ class TestSubagentMessageReconciliation(unittest.TestCase):
             self._assistant_with_tool_calls(tool_call_id="valid"),
             self._tool_result(tool_call_id="valid"),
         ]
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(messages=[m.to_storage_dict() for m in msgs])
             )
@@ -1092,7 +1092,7 @@ class TestSubagentMessageReconciliation(unittest.TestCase):
             self._tool_result(tool_call_id="valid1"),
             self._tool_result(tool_call_id="orphan3"),
         ]
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
             record = SubagentRecord.from_storage_dict(
                 _storage_record(messages=[m.to_storage_dict() for m in msgs])
             )
@@ -1104,7 +1104,7 @@ class TestSubagentMessageReconciliation(unittest.TestCase):
         self.assertEqual(len(record.messages), 2)
 
     def test_empty_messages_list_is_noop(self):
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}):
             record = SubagentRecord.from_storage_dict(_storage_record(messages=[]))
         self.assertEqual(record.messages, [])
 
@@ -1162,7 +1162,7 @@ class TestSubagentRecordComposition(unittest.IsolatedAsyncioTestCase):
         self.assertIn("chain", d)
         self.assertEqual(d["model"], "gpt-4o")
         self.assertEqual(d["parent_chain_index"], 2)
-        with patch("stupidex.agents.get_agent_registry", return_value={agent.name: agent}):
+        with patch("orchid.agents.get_agent_registry", return_value={agent.name: agent}):
             restored = SubagentRecord.from_storage_dict(d)
         self.assertEqual(restored.model, "gpt-4o")
         self.assertEqual(restored.parent_chain_index, 2)
@@ -1175,7 +1175,7 @@ class TestSubagentRecordComposition(unittest.IsolatedAsyncioTestCase):
     def test_orphan_reconcile_runs_once_via_chain_from_storage_dict(self):
         """R9: SubagentRecord.from_storage_dict must NOT call the orphan
         reconciler directly; it is delegated to Chain.from_storage_dict."""
-        from stupidex.agents import manager as manager_mod
+        from orchid.agents import manager as manager_mod
 
         msgs = [
             Message(
@@ -1190,7 +1190,7 @@ class TestSubagentRecordComposition(unittest.IsolatedAsyncioTestCase):
                 type=MessageType.TEXT,
             ),
         ]
-        with patch("stupidex.agents.get_agent_registry", return_value={"Subagent": make_agent()}), \
+        with patch("orchid.agents.get_agent_registry", return_value={"Subagent": make_agent()}), \
                 patch.object(manager_mod.Chain, "from_storage_dict", wraps=manager_mod.Chain.from_storage_dict) as chain_spy:
             record = SubagentRecord.from_storage_dict(
                 _storage_record(messages=[m.to_storage_dict() for m in msgs])
@@ -1204,7 +1204,7 @@ class TestSubagentRecordComposition(unittest.IsolatedAsyncioTestCase):
     async def test_parent_linkage_at_spawn_records_current_chain_index(self):
         """R10: spawn within a turn whose chain index is i sets
         record.parent_chain_index == i via the ContextVar."""
-        from stupidex.agents import manager as manager_mod
+        from orchid.agents import manager as manager_mod
 
         with patch_registry(), patch_stream(stream_yielding([Message(MessageRole.ASSISTANT, "done", MessageType.TEXT)])):
             manager = SubagentManager()

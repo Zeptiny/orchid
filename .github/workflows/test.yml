@@ -20,6 +20,6 @@ jobs:
       - run: pip install -e ".[dev]" 2>/dev/null || pip install -e .
       - run: pip install pytest pytest-asyncio pytest-timeout
       - name: Smoke test (app imports & instantiates)
-        run: python -c "from stupidex.app import Stupidex; app = Stupidex(); print('OK')"
+        run: python -c "from orchid.app import Orchid; app = Orchid(); print('OK')"
       - name: Run tests
         run: python -m pytest tests/ -v

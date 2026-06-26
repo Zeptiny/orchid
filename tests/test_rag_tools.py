@@ -3,11 +3,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from stupidex.domain.tool import ExecutorResult
-from stupidex.rag.chunker import Chunk
-from stupidex.rag.embedder import Embedder, EmbeddingError
-from stupidex.rag.store import RAGStore
-from stupidex.tools.rag import (
+from orchid.domain.tool import ExecutorResult
+from orchid.rag.chunker import Chunk
+from orchid.rag.embedder import Embedder, EmbeddingError
+from orchid.rag.store import RAGStore
+from orchid.tools.rag import (
     execute_rag_index,
     execute_rag_search,
 )
@@ -72,7 +72,7 @@ async def test_rag_search_with_results(tmp_path, monkeypatch):
     embeddings = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
     store.upsert(chunks, embeddings)
 
-    with patch("stupidex.tools.rag.Embedder") as mock_embedder:
+    with patch("orchid.tools.rag.Embedder") as mock_embedder:
         fake = FakeEmbedder(dim=4)
         mock_embedder.return_value = fake
         fake.embed_single = AsyncMock(return_value=[1.0, 0.0, 0.0, 0.0])
@@ -99,7 +99,7 @@ async def test_rag_search_with_file_pattern(tmp_path, monkeypatch):
     embeddings = [[1.0, 0.0], [0.0, 1.0]]
     store.upsert(chunks, embeddings)
 
-    with patch("stupidex.tools.rag.Embedder") as mock_embedder:
+    with patch("orchid.tools.rag.Embedder") as mock_embedder:
         fake = FakeEmbedder(dim=2)
         mock_embedder.return_value = fake
         fake.embed_single = AsyncMock(return_value=[1.0, 0.0])
@@ -118,7 +118,7 @@ async def test_rag_search_embedding_error(monkeypatch, tmp_path):
     chunks = [Chunk(file_path="a.py", content="x=1", start_line=1, end_line=1)]
     store.upsert(chunks, [[0.5, 0.5]])
 
-    with patch("stupidex.tools.rag.Embedder") as mock_embedder:
+    with patch("orchid.tools.rag.Embedder") as mock_embedder:
         fake = FakeEmbedder()
         mock_embedder.return_value = fake
         fake.embed_single = AsyncMock(side_effect=EmbeddingError("API down"))
@@ -137,7 +137,7 @@ async def test_rag_search_generic_embedding_exception_embeds_message(tmp_path, m
     chunks = [Chunk(file_path="a.py", content="x=1", start_line=1, end_line=1)]
     store.upsert(chunks, [[0.5, 0.5]])
 
-    with patch("stupidex.tools.rag.Embedder") as mock_embedder:
+    with patch("orchid.tools.rag.Embedder") as mock_embedder:
         fake = FakeEmbedder()
         mock_embedder.return_value = fake
         fake.embed_single = AsyncMock(side_effect=RuntimeError("embedder blew up"))
@@ -158,7 +158,7 @@ async def test_rag_search_value_error_from_store_returns_error(tmp_path, monkeyp
     chunks = [Chunk(file_path="a.py", content="x=1", start_line=1, end_line=1)]
     store.upsert(chunks, [[0.5, 0.5, 0.5]])
 
-    with patch("stupidex.tools.rag.Embedder") as mock_embedder:
+    with patch("orchid.tools.rag.Embedder") as mock_embedder:
         fake = FakeEmbedder()
         mock_embedder.return_value = fake
         fake.embed_single = AsyncMock(return_value=[1.0, 0.0])
@@ -231,7 +231,7 @@ async def test_rag_index_run(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "main.py").write_text("def hello(): pass")
 
-    with patch("stupidex.tools.rag.Embedder") as mock_embedder:
+    with patch("orchid.tools.rag.Embedder") as mock_embedder:
         fake = FakeEmbedder()
         mock_embedder.return_value = fake
 
@@ -247,7 +247,7 @@ async def test_rag_index_run(tmp_path, monkeypatch):
 async def test_rag_index_run_empty_project(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    with patch("stupidex.tools.rag.Embedder") as mock_embedder:
+    with patch("orchid.tools.rag.Embedder") as mock_embedder:
         fake = FakeEmbedder()
         mock_embedder.return_value = fake
 
@@ -269,7 +269,7 @@ async def test_rag_index_run_empty_project(tmp_path, monkeypatch):
 
 
 def test_rag_tools_in_registry():
-    from stupidex.tools import get_tool_registry
+    from orchid.tools import get_tool_registry
     registry = get_tool_registry()
     assert "rag_search" in registry
     assert "rag_index" in registry

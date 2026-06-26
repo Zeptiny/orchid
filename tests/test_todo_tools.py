@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from stupidex.domain.todo import TodoStatus, TodoStore, set_todo_store
-from stupidex.domain.tool import ExecutorResult
-from stupidex.tools.todo import (
+from orchid.domain.todo import TodoStatus, TodoStore, set_todo_store
+from orchid.domain.tool import ExecutorResult
+from orchid.tools.todo import (
     execute_todo_create,
     execute_todo_delete,
     execute_todo_list,
@@ -24,7 +24,7 @@ def fresh_store():
 @pytest.fixture
 def notify_mock(monkeypatch):
     mock = AsyncMock()
-    monkeypatch.setattr("stupidex.tools.todo.notify_todo_changed", mock)
+    monkeypatch.setattr("orchid.tools.todo.notify_todo_changed", mock)
     return mock
 
 

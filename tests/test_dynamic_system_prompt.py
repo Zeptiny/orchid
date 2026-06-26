@@ -3,8 +3,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from stupidex.domain.todo import TodoStatus, TodoTask
-from stupidex.llm import dynamic_system_prompt as dsp
+from orchid.domain.todo import TodoStatus, TodoTask
+from orchid.llm import dynamic_system_prompt as dsp
 
 
 @pytest.fixture(autouse=True)
@@ -22,10 +22,10 @@ def _patch_deps(states=None, todos=None, tree="TREE"):
     store = MagicMock()
     store.list.return_value = todos if todos is not None else []
     return {
-        "get_config": patch("stupidex.llm.dynamic_system_prompt.get_config", return_value=cfg),
-        "directory_tree": patch("stupidex.llm.dynamic_system_prompt.directory_tree", return_value=tree),
-        "get_subagent_manager": patch("stupidex.llm.dynamic_system_prompt.get_subagent_manager", return_value=sub_mgr),
-        "get_todo_store": patch("stupidex.llm.dynamic_system_prompt.get_todo_store", return_value=store),
+        "get_config": patch("orchid.llm.dynamic_system_prompt.get_config", return_value=cfg),
+        "directory_tree": patch("orchid.llm.dynamic_system_prompt.directory_tree", return_value=tree),
+        "get_subagent_manager": patch("orchid.llm.dynamic_system_prompt.get_subagent_manager", return_value=sub_mgr),
+        "get_todo_store": patch("orchid.llm.dynamic_system_prompt.get_todo_store", return_value=store),
     }
 
 
@@ -119,7 +119,7 @@ async def test_ttl_cache_miss_after_expiry_calls_directory_tree_again():
         patches["directory_tree"] as dt_patch,
         patches["get_subagent_manager"],
         patches["get_todo_store"],
-        patch("stupidex.llm.dynamic_system_prompt._TREE_TTL", 0.01),
+        patch("orchid.llm.dynamic_system_prompt._TREE_TTL", 0.01),
     ):
         await dsp.build_dynamic_system_prompt()
         await asyncio.sleep(0.05)
@@ -167,7 +167,7 @@ async def test_cache_miss_after_chdir_within_ttl_regenerates_tree():
         patches["directory_tree"] as dt_patch,
         patches["get_subagent_manager"],
         patches["get_todo_store"],
-        patch("stupidex.llm.dynamic_system_prompt.os.getcwd", side_effect=["/a", "/b"]),
+        patch("orchid.llm.dynamic_system_prompt.os.getcwd", side_effect=["/a", "/b"]),
     ):
         await dsp.build_dynamic_system_prompt()
         await dsp.build_dynamic_system_prompt()
@@ -182,7 +182,7 @@ async def test_cwd_with_lt_escaped():
         patches["directory_tree"],
         patches["get_subagent_manager"],
         patches["get_todo_store"],
-        patch("stupidex.llm.dynamic_system_prompt.os.getcwd", return_value="/tmp/a<b>c"),
+        patch("orchid.llm.dynamic_system_prompt.os.getcwd", return_value="/tmp/a<b>c"),
     ):
         msg = await dsp.build_dynamic_system_prompt()
     c = msg.content

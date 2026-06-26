@@ -7,13 +7,13 @@ topic: multi-providers
 
 ## Summary
 
-Replace stupidex's single-provider config with a `providers` dict where users define one or more providers (url, api key, models). Models are referenced as `provider_alias/model`. Per-model metadata (`max_input_tokens`, `max_output_tokens`, `supports_vision`, `mode`) uses litellm's own field names verbatim and is sourced from the litellm registry by default with user overrides winning; capability badges (vision, text) shown in the picker are derived from `supports_vision` and `mode`. v1 surfaces the data in the model picker so future behavioral consumption can build on a captured dataset.
+Replace orchid's single-provider config with a `providers` dict where users define one or more providers (url, api key, models). Models are referenced as `provider_alias/model`. Per-model metadata (`max_input_tokens`, `max_output_tokens`, `supports_vision`, `mode`) uses litellm's own field names verbatim and is sourced from the litellm registry by default with user overrides winning; capability badges (vision, text) shown in the picker are derived from `supports_vision` and `mode`. v1 surfaces the data in the model picker so future behavioral consumption can build on a captured dataset.
 
 ---
 
 ## Problem Frame
 
-Stupidex is currently locked to one provider through four top-level `Config` fields: `base_url`, `provider_api_type`, `default_model`, and `tier_models`. A user who wants to talk to a second endpoint — a different OpenAI account, a local Llama server, an Anthropic model, a corporate proxy — has no path other than editing config and swapping env vars by hand before each launch.
+Orchid is currently locked to one provider through four top-level `Config` fields: `base_url`, `provider_api_type`, `default_model`, and `tier_models`. A user who wants to talk to a second endpoint — a different OpenAI account, a local Llama server, an Anthropic model, a corporate proxy — has no path other than editing config and swapping env vars by hand before each launch.
 
 Beyond routing, the app has no knowledge of model characteristics. `stream_response` sends text-only messages and never truncates context, and the model picker shows bare IDs with no signal about context window, output cap, or modality. As the app grows toward multi-model and multi-provider use, this absence becomes the bottleneck: capability-aware behavior (history truncation, vision-call gating, tier filtering) can't be built until the data exists.
 
@@ -21,7 +21,7 @@ Beyond routing, the app has no knowledge of model characteristics. `stream_respo
 
 ## Actors
 
-- A1. **End user**: Configures providers in config files (url, api key either inline or as env-var reference, per-model metadata overrides), launches stupidex, expects models from all configured providers to appear in the picker with their capabilities shown.
+- A1. **End user**: Configures providers in config files (url, api key either inline or as env-var reference, per-model metadata overrides), launches orchid, expects models from all configured providers to appear in the picker with their capabilities shown.
 - A2. **Agent (general/subagent)**: Receives tool calls and streams responses via litellm; unaware of provider routing, just uses the resolved `(litellm_provider, model, base_url, api_key)` tuple.
 - A3. **litellm registry**: External source of default per-model metadata (`max_input_tokens`, `max_output_tokens`, `supports_vision`, `mode`) consulted at startup for known models.
 
@@ -30,7 +30,7 @@ Beyond routing, the app has no knowledge of model characteristics. `stream_respo
 ## Key Flows
 
 - F1. **App startup — provider discovery and metadata hydration**
-  - **Trigger:** User launches `stupidex`
+  - **Trigger:** User launches `orchid`
   - **Actors:** A1, A3
   - **Steps:** Load config → read `providers` section → for each provider, validate (alias, url, api key form, models) → for each configured model, resolve metadata: user override (field-level merge) → litellm registry (queried with the resolved litellm provider string) → empty/text-only fallback → store resolved provider/model objects → log summary of discovered providers and models
   - **Outcome:** All configured providers and their models are known to the app, each model carrying its final resolved metadata, ready for picker display and call-site resolution.
@@ -51,7 +51,7 @@ Beyond routing, the app has no knowledge of model characteristics. `stream_respo
   - **Covered by:** R1, R4, R10
 
 - F4. **First-run with no user config**
-  - **Trigger:** Fresh install launches `stupidex` for the first time
+  - **Trigger:** Fresh install launches `orchid` for the first time
   - **Actors:** A1
   - **Steps:** `ensure_home_config` writes the shipping default config → default config contains a single `"default"` provider entry (url, api-key form, and one model) that reproduces today's out-of-box behavior → app loads with that provider as the sole source of models
   - **Outcome:** A new user can launch the app and get a working model without editing config; existing users who never touched config land in the same working state.
@@ -62,7 +62,7 @@ Beyond routing, the app has no knowledge of model characteristics. `stream_respo
 ## Requirements
 
 **Provider configuration**
-- R1. Users define one or more providers under a `providers` key in `~/.stupidex/config.json` and `.stupidex.json`. Each provider entry has an alias (used as the routing prefix in `alias/model` references), a base URL, an API key (in one of two supported forms), an optional litellm provider name, and its own models dict.
+- R1. Users define one or more providers under a `providers` key in `~/.orchid/config.json` and `.orchid.json`. Each provider entry has an alias (used as the routing prefix in `alias/model` references), a base URL, an API key (in one of two supported forms), an optional litellm provider name, and its own models dict.
 - R2. The top-level `base_url`, `provider_api_type`, `default_model`, and `tier_models` config fields are removed. `providers` is the sole source of provider and model configuration. `default_model` and `tier_models` values, where they still appear in config or agent definitions, become `alias/model` strings.
 - R3. Provider aliases must not contain `/` so the `alias/model` reference syntax stays unambiguous. Validation rejects invalid aliases with a logged warning and skips that provider.
 - R4. Each provider's API key is configured in one of two forms, selectable per provider: a literal value written directly in the config file, OR a reference to an environment variable by name. Both forms coexist — a user may use an env-var reference for one provider and an inline literal for another.
@@ -79,18 +79,18 @@ Beyond routing, the app has no knowledge of model characteristics. `stream_respo
 
 **Defaults and compatibility**
 - R11. The shipping default config (written on first run by the existing `ensure_home_config` path) contains a single `"default"` provider entry that reproduces today's out-of-box endpoint, provider type, and starter model. A fresh install launches and runs without any user config edits.
-- R12. Project-level config (`.stupidex.json`) merges with home config. Project `providers` entries with the same alias as home entries override the home entry; project entries with new aliases are added. Merge semantics follow the existing per-key deep-merge pattern already used for `mcp_servers`.
+- R12. Project-level config (`.orchid.json`) merges with home config. Project `providers` entries with the same alias as home entries override the home entry; project entries with new aliases are added. Merge semantics follow the existing per-key deep-merge pattern already used for `mcp_servers`.
 
 ---
 
 ## Acceptance Examples
 
-- AE1. **Covers R1, R4.** Given a provider `work-openai` configured with `api_key_env: "OPENAI_KEY"` and a provider `local-llama` configured with `api_key: "sk-local-dev"`, when stupidex launches, then both providers are loaded: the first resolves its key from the `OPENAI_KEY` environment variable, the second uses the inline literal directly.
+- AE1. **Covers R1, R4.** Given a provider `work-openai` configured with `api_key_env: "OPENAI_KEY"` and a provider `local-llama` configured with `api_key: "sk-local-dev"`, when orchid launches, then both providers are loaded: the first resolves its key from the `OPENAI_KEY` environment variable, the second uses the inline literal directly.
 - AE2. **Covers R6.** Given a provider with a model `gpt-4o` whose config entry is `{ "max_input_tokens": 32768 }` (override only) and no other metadata fields, when metadata is resolved at startup, then the final model object has `max_input_tokens` `32768` (from user override), and `max_output_tokens`, `supports_vision`, and `mode` inherited from the litellm registry entry for `gpt-4o`.
 - AE3. **Covers R6.** Given a provider with a model `local-llama-70b` that the litellm registry does not know, when metadata is resolved at startup, then the final model object has whatever fields the user supplied in config plus the empty fallback (`supports_vision` = `False`, `mode` = `"chat"` — i.e., a text-only model) for anything the user omitted.
-- AE4. **Covers R3.** Given a provider alias `my/proxy` (contains `/`), when stupidex launches, then a warning is logged and that provider is skipped; all other providers load normally.
+- AE4. **Covers R3.** Given a provider alias `my/proxy` (contains `/`), when orchid launches, then a warning is logged and that provider is skipped; all other providers load normally.
 - AE5. **Covers R7, R9.** Given two configured providers `work-openai` (models: `gpt-4o`, `gpt-4o-mini`) and `anthropic-prod` (model: `claude-3-opus`), when the user opens the picker, then the list shows `work-openai/gpt-4o`, `work-openai/gpt-4o-mini`, and `anthropic-prod/claude-3-opus`, each entry showing its `max_input_tokens`, `max_output_tokens`, and capability badges.
-- AE6. **Covers R11.** Given a fresh install with no `~/.stupidex/config.json`, when the user launches stupidex for the first time, then `ensure_home_config` writes a default config containing a `providers` section with a `default` provider, and the app launches with a working model available without any further edits.
+- AE6. **Covers R11.** Given a fresh install with no `~/.orchid/config.json`, when the user launches orchid for the first time, then `ensure_home_config` writes a default config containing a `providers` section with a `default` provider, and the app launches with a working model available without any further edits.
 
 ---
 
@@ -122,7 +122,7 @@ Beyond routing, the app has no knowledge of model characteristics. `stream_respo
 - **Replace, don't extend, the top-level provider fields:** Removing `base_url`, `provider_api_type`, `default_model`, and `tier_models` entirely eliminates dual sources of truth. The cost (existing configs break, including the shipping default) is paid once by seeding a `default` provider in the first-run config.
 - **Hybrid metadata source with field-level merge:** Users get accurate data for litellm-known models without typing anything, and can override any single field where litellm is wrong, missing, or where a proxy truncates differently from the upstream model. Field-level merge (not all-or-nothing) keeps the override cost low.
 - **API key form is per-provider, both forms coexist:** Env-var references match litellm's convention and keep real secrets off disk; inline literals support local-LLM dev keys and rapid iteration. The form is chosen per provider, so a user can mix.
-- **litellm registry consulted with the resolved provider string, not the alias:** litellm lookups differ by provider (e.g., `gpt-4o` under `openai` vs. `azure` — the alias is a stupidex-level routing concern, not a litellm-level one).
+- **litellm registry consulted with the resolved provider string, not the alias:** litellm lookups differ by provider (e.g., `gpt-4o` under `openai` vs. `azure` — the alias is a orchid-level routing concern, not a litellm-level one).
 - **Startup-only metadata refresh:** Matches the existing config-load-once behavior. Avoids runtime registry calls in the streaming hot path.
 - **Model discovery via config, not endpoint `/models`:** The current single-endpoint `/models` call is dropped; the picker reflects configured models, not discovered ones. Users add models to config explicitly. Keeps the picker deterministic and avoids partial-failure states from a flaky endpoint.
 - **Project + home config merge follows existing `mcp_servers` pattern:** Deep-merge per-provider entries with project-overrides-home semantics. No new merge pattern introduced.
@@ -149,5 +149,5 @@ Beyond routing, the app has no knowledge of model characteristics. `stream_respo
 
 - Affects R4, R6. [Technical] Exact field names for the API key forms in config (e.g., `api_key` for literal vs. `api_key_env` for env-var reference, or a single `api_key` field with a sigil convention like `$OPENAI_KEY`) — pin down during planning once config dataclass shape is being designed.
 - Affects R6. [Needs research] Confirm `litellm.get_model_info` is the right API (not `model_cost` dict or `get_supported_openai_params`) and verify the exact return shape — field names `max_input_tokens`, `max_output_tokens`, `supports_vision`, and `mode` and their types. Field names in config overrides must match litellm's verbatim per R5, so the exact source field names matter.
-- Affects R10. [Technical] Whether the current `list_models` endpoint-discovery function in `src/stupidex/llm/models.py` is removed entirely or repurposed (e.g., as an optional "discover models for this provider and add them to config" flow). Out of scope per scope boundaries, but the function's disposition needs deciding.
+- Affects R10. [Technical] Whether the current `list_models` endpoint-discovery function in `src/orchid/llm/models.py` is removed entirely or repurposed (e.g., as an optional "discover models for this provider and add them to config" flow). Out of scope per scope boundaries, but the function's disposition needs deciding.
 - Affects R12. [Technical] How provider-level merge handles nested `models` dicts — does a project-level provider entry deep-merge its `models` into the home-level entry's `models`, or replace the whole `models` dict? Follows the same question that would apply to nested MCP server config if servers had sub-dicts.

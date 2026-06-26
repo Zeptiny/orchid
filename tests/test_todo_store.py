@@ -4,8 +4,8 @@ import time
 
 import pytest
 
-from stupidex.domain import todo as todo_mod
-from stupidex.domain.todo import (
+from orchid.domain import todo as todo_mod
+from orchid.domain.todo import (
     TERMINAL_STATUSES,
     TodoStatus,
     TodoStore,

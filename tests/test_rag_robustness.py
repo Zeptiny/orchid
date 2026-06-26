@@ -4,10 +4,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from stupidex.rag.chunker import Chunk
-from stupidex.rag.embedder import Embedder, EmbeddingError
-from stupidex.rag.indexer import index_project
-from stupidex.rag.store import RAGStore
+from orchid.rag.chunker import Chunk
+from orchid.rag.embedder import Embedder, EmbeddingError
+from orchid.rag.indexer import index_project
+from orchid.rag.store import RAGStore
 
 
 class FakeEmbedder(Embedder):
@@ -45,7 +45,7 @@ def test_corrupted_vectors_npy_auto_rebuild(tmp_path):
     store.upsert(chunks, [[0.5, 0.5]])
 
     # Corrupt the vectors file
-    npy_file = tmp_path / ".stupidex" / "rag" / "vectors.npy"
+    npy_file = tmp_path / ".orchid" / "rag" / "vectors.npy"
     npy_file.write_bytes(b"corrupted data here")
 
     # Search should handle corruption gracefully
@@ -64,7 +64,7 @@ def test_corrupted_index_db_init_rebuild(tmp_path):
     store.init_db()
 
     # Write corrupted data to db
-    db_file = tmp_path / ".stupidex" / "rag" / "index.db"
+    db_file = tmp_path / ".orchid" / "rag" / "index.db"
     db_file.write_bytes(b"corrupted sqlite data")
 
     # init_db should rebuild without error
@@ -81,7 +81,7 @@ def test_corrupted_index_db_get_conn_rebuild(tmp_path):
     store.init_db()
 
     # Write corrupted data to db
-    db_file = tmp_path / ".stupidex" / "rag" / "index.db"
+    db_file = tmp_path / ".orchid" / "rag" / "index.db"
     db_file.write_bytes(b"corrupted sqlite data")
 
     # get_conn should handle corruption and rebuild
@@ -107,7 +107,7 @@ async def test_embedder_failure_after_retries():
     fake_ref = ("openai", "text-embedding-3-small", "https://example.com", "sk-test")
     error = EmbeddingError("Simulated API failure")
     with (
-        patch("stupidex.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
+        patch("orchid.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
         patch("litellm.aembedding", new_callable=AsyncMock, side_effect=error),
     ):
         with pytest.raises(EmbeddingError) as exc_info:
@@ -137,7 +137,7 @@ async def test_embedder_success_with_retries():
 
     fake_ref = ("openai", "text-embedding-3-small", "https://example.com", "sk-test")
     with (
-        patch("stupidex.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
+        patch("orchid.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
         patch("litellm.aembedding", side_effect=fail_then_succeed),
     ):
         result = await embedder.embed(["test text"])
@@ -175,7 +175,7 @@ async def test_indexer_handles_corrupted_db(tmp_path):
     (tmp_path / "main.py").write_text("def hello(): pass")
 
     # Create corrupted DB
-    rag_dir = tmp_path / ".stupidex" / "rag"
+    rag_dir = tmp_path / ".orchid" / "rag"
     rag_dir.mkdir(parents=True)
     db_file = rag_dir / "index.db"
     db_file.write_bytes(b"corrupted")
@@ -202,7 +202,7 @@ async def test_indexer_handles_missing_vectors(tmp_path):
     await index_project(project_path=str(tmp_path), embedder=embedder)
 
     # Delete vectors but keep DB
-    vectors_file = tmp_path / ".stupidex" / "rag" / "vectors.npy"
+    vectors_file = tmp_path / ".orchid" / "rag" / "vectors.npy"
     if vectors_file.exists():
         vectors_file.unlink()
 
@@ -224,8 +224,8 @@ def test_resolve_ref_fastembed_pseudo_provider():
 
 def test_resolve_ref_provider_alias_routes_to_litellm():
     """`alias/model` resolves through the providers dict to a litellm 4-tuple."""
-    from stupidex.config import Config
-    from stupidex.llm import providers as providers_mod
+    from orchid.config import Config
+    from orchid.llm import providers as providers_mod
 
     providers = {
         "work-openai": {
@@ -248,8 +248,8 @@ def test_resolve_ref_provider_alias_routes_to_litellm():
 
 def test_resolve_ref_explicit_model_id_preserved():
     """The model id portion of `alias/<model_id>` is preserved verbatim."""
-    from stupidex.config import Config
-    from stupidex.llm import providers as providers_mod
+    from orchid.config import Config
+    from orchid.llm import providers as providers_mod
 
     providers = {
         "work-openai": {

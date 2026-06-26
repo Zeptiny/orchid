@@ -23,10 +23,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 
-from stupidex.config import Config
-from stupidex.llm import providers as providers_mod
-from stupidex.llm.providers import ProviderResolutionError, reset_cache
-from stupidex.rag.embedder import BATCH_SIZE, MAX_RETRIES, Embedder, EmbeddingError
+from orchid.config import Config
+from orchid.llm import providers as providers_mod
+from orchid.llm.providers import ProviderResolutionError, reset_cache
+from orchid.rag.embedder import BATCH_SIZE, MAX_RETRIES, Embedder, EmbeddingError
 
 
 def _cfg(providers: dict) -> Config:
@@ -122,7 +122,7 @@ class TestEmbedRouting(EmbedderTestCase):
         response.data = [{"embedding": [0.1, 0.2, 0.3]}]
         e = Embedder("work-openai/text-embedding-3-small")
         with (
-            patch("stupidex.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
+            patch("orchid.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
             patch("litellm.aembedding", new_callable=AsyncMock, return_value=response) as mock_ae,
         ):
             result = asyncio.run(e.embed(["hello"]))
@@ -141,7 +141,7 @@ class TestEmbedRouting(EmbedderTestCase):
         response.data = [{"embedding": [0.1]}]
         e = Embedder("work-openai/text-embedding-3-small")
         with (
-            patch("stupidex.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
+            patch("orchid.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
             patch("litellm.aembedding", new_callable=AsyncMock, return_value=response) as mock_ae,
         ):
             asyncio.run(e.embed(["hi"]))
@@ -154,7 +154,7 @@ class TestEmbedRouting(EmbedderTestCase):
         response.data = [{"embedding": [0.1]}]
         e = Embedder("work-openai/text-embedding-3-small")
         with (
-            patch("stupidex.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
+            patch("orchid.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
             patch("litellm.aembedding", new_callable=AsyncMock, return_value=response) as mock_ae,
         ):
             asyncio.run(e.embed(["hi"]))
@@ -167,7 +167,7 @@ class TestEmbedRouting(EmbedderTestCase):
         response.data = [{"embedding": [0.1]}]
         e = Embedder("work-openai/text-embedding-3-small")
         with (
-            patch("stupidex.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
+            patch("orchid.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
             patch("litellm.aembedding", new_callable=AsyncMock, return_value=response) as mock_ae,
         ):
             asyncio.run(e.embed(["hi"]))
@@ -211,7 +211,7 @@ class TestEmbedErrors(EmbedderTestCase):
         fake_ref = ("openai", "text-embedding-3-small", "https://example.com", "sk-x")
         e = Embedder("work-openai/text-embedding-3-small")
         with (
-            patch("stupidex.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
+            patch("orchid.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
             patch("litellm.aembedding", new_callable=AsyncMock, side_effect=RuntimeError("boom")),
             patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
             self.assertRaises(EmbeddingError) as ctx,
@@ -232,7 +232,7 @@ class TestEmbedLitellmErrorPaths(EmbedderTestCase):
         Embedder raises a clean EmbeddingError pointing to the package name."""
         e = Embedder("work-openai/text-embedding-3-small")
         with (
-            patch("stupidex.rag.embedder.resolve_embedding_ref", return_value=self._FAKE_REF),
+            patch("orchid.rag.embedder.resolve_embedding_ref", return_value=self._FAKE_REF),
             patch.dict(sys.modules, {"litellm": None}),
             self.assertRaises(EmbeddingError) as ctx,
         ):
@@ -246,7 +246,7 @@ class TestEmbedLitellmErrorPaths(EmbedderTestCase):
         response.data = []
         e = Embedder("work-openai/text-embedding-3-small")
         with (
-            patch("stupidex.rag.embedder.resolve_embedding_ref", return_value=self._FAKE_REF),
+            patch("orchid.rag.embedder.resolve_embedding_ref", return_value=self._FAKE_REF),
             patch("litellm.aembedding", new_callable=AsyncMock, return_value=response) as mock_ae,
             patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
             self.assertRaises(EmbeddingError) as ctx,
@@ -265,7 +265,7 @@ class TestEmbedLitellmErrorPaths(EmbedderTestCase):
         response.data = []
         e = Embedder("work-openai/text-embedding-3-small")
         with (
-            patch("stupidex.rag.embedder.resolve_embedding_ref", return_value=self._FAKE_REF),
+            patch("orchid.rag.embedder.resolve_embedding_ref", return_value=self._FAKE_REF),
             patch("litellm.aembedding", new_callable=AsyncMock, return_value=response),
             self.assertRaises(EmbeddingError),
         ):
@@ -278,7 +278,7 @@ class TestEmbedLitellmErrorPaths(EmbedderTestCase):
         response.data = [{}]  # no "embedding" key
         e = Embedder("work-openai/text-embedding-3-small")
         with (
-            patch("stupidex.rag.embedder.resolve_embedding_ref", return_value=self._FAKE_REF),
+            patch("orchid.rag.embedder.resolve_embedding_ref", return_value=self._FAKE_REF),
             patch("litellm.aembedding", new_callable=AsyncMock, return_value=response),
             patch("asyncio.sleep", new_callable=AsyncMock),
             self.assertRaises(EmbeddingError) as ctx,
@@ -433,7 +433,7 @@ class TestLitellmImportHoist(EmbedderTestCase):
 
         # Make `from litellm import aembedding` raise ImportError.
         with (
-            patch("stupidex.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
+            patch("orchid.rag.embedder.resolve_embedding_ref", return_value=fake_ref),
             patch.dict(sys.modules, {"litellm": None}),
             patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
             self.assertRaises(EmbeddingError) as ctx,

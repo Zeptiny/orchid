@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 from textual.widgets import Input
 
-from stupidex.screens.picker import OptionPicker, PickerItem
+from orchid.screens.picker import OptionPicker, PickerItem
 
 
 def _make_picker(items=None, header=None) -> OptionPicker:

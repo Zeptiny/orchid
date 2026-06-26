@@ -140,7 +140,7 @@ class TestMCPStartupTimeout(unittest.IsolatedAsyncioTestCase):
         marked ``"failed"`` and the healthy one still connects.
         ``start_all`` returns within ``per_server + slack``.
         """
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         behaviors = {"hung": "hung-initialize", "healthy": "healthy"}
         servers = {
@@ -149,12 +149,12 @@ class TestMCPStartupTimeout(unittest.IsolatedAsyncioTestCase):
         }
         manager = MCPManager()
         handler = _RecordingHandler()
-        logger = logging.getLogger("stupidex.mcp")
+        logger = logging.getLogger("orchid.mcp")
         logger.addHandler(handler)
         try:
             with (
-                patch("stupidex.mcp.stdio_client", fake_stdio_client),
-                patch("stupidex.mcp.ClientSession", _scripted_factory(behaviors)),
+                patch("orchid.mcp.stdio_client", fake_stdio_client),
+                patch("orchid.mcp.ClientSession", _scripted_factory(behaviors)),
             ):
                 t0 = time.monotonic()
                 await manager.start_all(
@@ -187,18 +187,18 @@ class TestMCPStartupTimeout(unittest.IsolatedAsyncioTestCase):
         servers are marked ``"unavailable"``, and sessions are cleared so
         later ``call_tool`` calls report cleanly.
         """
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         behaviors = {f"hung-{i}": "hung-initialize" for i in range(3)}
         servers = {f"srv-{i}": {"command": f"hung-{i}", "args": []} for i in range(3)}
         manager = MCPManager()
         handler = _RecordingHandler()
-        logger = logging.getLogger("stupidex.mcp")
+        logger = logging.getLogger("orchid.mcp")
         logger.addHandler(handler)
         try:
             with (
-                patch("stupidex.mcp.stdio_client", fake_stdio_client),
-                patch("stupidex.mcp.ClientSession", _scripted_factory(behaviors)),
+                patch("orchid.mcp.stdio_client", fake_stdio_client),
+                patch("orchid.mcp.ClientSession", _scripted_factory(behaviors)),
             ):
                 t0 = time.monotonic()
                 # ``start_all`` must NOT raise on overall timeout (skip-and-continue).
@@ -247,7 +247,7 @@ class TestMCPStartupTimeout(unittest.IsolatedAsyncioTestCase):
         fired on a remaining hung server, then verifies the timeout path wipes
         both maps and that a subsequent ``call_tool`` reports cleanly.
         """
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         behaviors = {f"hung-{i}": "hung-initialize" for i in range(2)}
         servers = {f"srv-{i}": {"command": f"hung-{i}", "args": []} for i in range(2)}
@@ -257,12 +257,12 @@ class TestMCPStartupTimeout(unittest.IsolatedAsyncioTestCase):
         manager._tools["mcp::srv-0::dead_tool"] = {"tool": object(), "executor": None}
         manager._sessions["srv-0"] = None  # type: ignore[assignment]
         handler = _RecordingHandler()
-        logger = logging.getLogger("stupidex.mcp")
+        logger = logging.getLogger("orchid.mcp")
         logger.addHandler(handler)
         try:
             with (
-                patch("stupidex.mcp.stdio_client", fake_stdio_client),
-                patch("stupidex.mcp.ClientSession", _scripted_factory(behaviors)),
+                patch("orchid.mcp.stdio_client", fake_stdio_client),
+                patch("orchid.mcp.ClientSession", _scripted_factory(behaviors)),
             ):
                 # ``start_all`` must NOT raise on overall timeout (skip-and-continue).
                 await manager.start_all(

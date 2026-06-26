@@ -7,8 +7,8 @@ from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import patch
 
-import stupidex.config as cfg_mod
-from stupidex.config import (
+import orchid.config as cfg_mod
+from orchid.config import (
     Config,
     ConfigManager,
     _deep_merge_provider_dict,
@@ -18,8 +18,8 @@ from stupidex.config import (
 )
 
 _RESERVED_ENV_KEYS = (
-    "STUPIDEX_DEFAULT_MODEL",
-    "STUPIDEX_RAG_EMBEDDING_MODEL",
+    "ORCHID_DEFAULT_MODEL",
+    "ORCHID_RAG_EMBEDDING_MODEL",
 )
 
 
@@ -125,17 +125,17 @@ class TestProvidersConfigMerge(unittest.TestCase):
 class TestProvidersConfigEnvOverride(unittest.TestCase):
 
     def test_rag_embedding_model_env_override(self):
-        prior = os.environ.get("STUPIDEX_RAG_EMBEDDING_MODEL")
-        os.environ["STUPIDEX_RAG_EMBEDDING_MODEL"] = "work-openai/text-embedding-3-large"
+        prior = os.environ.get("ORCHID_RAG_EMBEDDING_MODEL")
+        os.environ["ORCHID_RAG_EMBEDDING_MODEL"] = "work-openai/text-embedding-3-large"
         try:
             cfg = Config()
             merged = _merge_from_env(cfg)
             self.assertEqual(merged.rag.embedding_model, "work-openai/text-embedding-3-large")
         finally:
             if prior is None:
-                os.environ.pop("STUPIDEX_RAG_EMBEDDING_MODEL", None)
+                os.environ.pop("ORCHID_RAG_EMBEDDING_MODEL", None)
             else:
-                os.environ["STUPIDEX_RAG_EMBEDDING_MODEL"] = prior
+                os.environ["ORCHID_RAG_EMBEDDING_MODEL"] = prior
 
 
 class TestProvidersConfigDefaults(unittest.TestCase):
@@ -143,7 +143,7 @@ class TestProvidersConfigDefaults(unittest.TestCase):
     def test_default_model_and_tier_models_emit_alias_model_strings(self):
         cfg = Config()
         self.assertEqual(cfg.default_model, "default/mimo-v2.5")
-        for tier in ("tolo", "tainha", "papudo", "papaca"):
+        for tier in ("seed", "sprout", "bloom", "crown"):
             self.assertEqual(cfg.tier_models[tier], "default/mimo-v2.5", f"tier {tier}")
 
     def test_default_providers_entry_has_url_and_model(self):
@@ -168,11 +168,11 @@ class TestProvidersConfigDefaults(unittest.TestCase):
                 patch.object(cfg_mod, "HOME_AGENTS_DIR", home_agents),
                 patch.object(cfg_mod, "HOME_SKILLS_DIR", home_skills),
                 patch.object(cfg_mod, "PROJECT_CONFIG_NAME", "nonexistent-project-config.json"),
-                patch("stupidex.agents.seed_agents_dir"),
-                patch("stupidex.agents.load_agents"),
-                patch("stupidex.skills.seed_skills_dir"),
-                patch("stupidex.skills.load_skills"),
-                patch("stupidex.personality.load_personalities"),
+                patch("orchid.agents.seed_agents_dir"),
+                patch("orchid.agents.load_agents"),
+                patch("orchid.skills.seed_skills_dir"),
+                patch("orchid.skills.load_skills"),
+                patch("orchid.personality.load_personalities"),
             ):
                 ConfigManager.reset()
                 ConfigManager.ensure_home_config()
@@ -190,25 +190,25 @@ class TestProvidersConfigDefaults(unittest.TestCase):
                 ConfigManager.reset()
                 cfg = ConfigManager.load()
                 self.assertEqual(cfg.default_model, "default/mimo-v2.5")
-                self.assertEqual(get_model_for_tier("tolo"), "default/mimo-v2.5")
+                self.assertEqual(get_model_for_tier("seed"), "default/mimo-v2.5")
                 self.assertIn("default", cfg.providers)
                 self.assertEqual(
                     cfg.providers["default"]["litellm_provider"], "openai"
                 )
 
     def test_custom_tier_model_resolution_returns_string(self):
-        cfg = Config(tier_models={"tolo": "work-openai/gpt-4o-mini"})
-        self.assertEqual(cfg.tier_models["tolo"], "work-openai/gpt-4o-mini")
+        cfg = Config(tier_models={"seed": "work-openai/gpt-4o-mini"})
+        self.assertEqual(cfg.tier_models["seed"], "work-openai/gpt-4o-mini")
         original_instance = ConfigManager._instance
         try:
             ConfigManager._instance = cfg
-            self.assertEqual(get_model_for_tier("tolo"), "work-openai/gpt-4o-mini")
+            self.assertEqual(get_model_for_tier("seed"), "work-openai/gpt-4o-mini")
         finally:
             ConfigManager._instance = original_instance
 
     def test_tier_model_with_unknown_alias_validates_cleanly(self):
-        cfg = Config(tier_models={"tolo": "missing-alias/gpt-4o"})
-        self.assertEqual(cfg.tier_models["tolo"], "missing-alias/gpt-4o")
+        cfg = Config(tier_models={"seed": "missing-alias/gpt-4o"})
+        self.assertEqual(cfg.tier_models["seed"], "missing-alias/gpt-4o")
         errors = validate_config(cfg)
         self.assertEqual(errors, [])
 

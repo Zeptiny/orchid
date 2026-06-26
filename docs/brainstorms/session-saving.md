@@ -22,7 +22,7 @@ Sessions are entirely in-memory. Every app restart creates a fresh session and d
 
 ### R1 — Persistent Session Storage
 
-Sessions are saved as individual JSON files in `~/.stupidex/sessions/`, named by session UUID.
+Sessions are saved as individual JSON files in `~/.orchid/sessions/`, named by session UUID.
 
 Each file contains the full session state: name, id, model, created/updated timestamps, all chains with all messages, and the todo store.
 
@@ -38,7 +38,7 @@ Additionally, a `/save` command triggers an explicit save (same path, but synchr
 
 After the first complete exchange (user message + assistant reply), the session gets an auto-generated name. This happens silently — no user prompt, no interruption. The name is a short phrase (3-6 words) that summarizes the topic.
 
-The naming call should be non-blocking (fire-and-forget or background task). It uses the **`tolo` tier model** (fastest/cheapest) regardless of the session's current model. The tier-to-model mapping already exists in `config.py:tier_models` and is resolved via `get_model_for_tier("tolo")`.
+The naming call should be non-blocking (fire-and-forget or background task). It uses the **`seed` tier model** (fastest/cheapest) regardless of the session's current model. The tier-to-model mapping already exists in `config.py:tier_models` and is resolved via `get_model_for_tier("seed")`.
 
 The user can rename the session at any time via a `/sessions rename <name>` command.
 
@@ -89,7 +89,7 @@ From the `/sessions` browser, the user can open a saved session in read-only mod
 One JSON file per session:
 
 ```shell
-~/.stupidex/sessions/
+~/.orchid/sessions/
   <uuid-1>.json
   <uuid-2>.json
   <uuid-3>.json
@@ -110,7 +110,7 @@ For v1, a simple full-save-on-each-exchange is acceptable — session files will
 
 ### Auto-Naming Strategy
 
-**Decision: Dedicated `tolo` tier model for auto-naming.** The fastest/cheapest model is used regardless of the session's current model. This keeps naming quick and cheap. The tier-to-model mapping is already in `config.py:tier_models` and resolved via `get_model_for_tier("tolo")`.
+**Decision: Dedicated `seed` tier model for auto-naming.** The fastest/cheapest model is used regardless of the session's current model. This keeps naming quick and cheap. The tier-to-model mapping is already in `config.py:tier_models` and resolved via `get_model_for_tier("seed")`.
 
 The naming call runs in a background task after the first complete exchange. It does not block the UI or delay the assistant's response.
 
@@ -131,7 +131,7 @@ This means `SessionManager` needs `load_session(session_id)` and `save_session(s
 
 ## Open Questions — Resolved
 
-1. **Naming model** → Use the **`tolo` tier** (fastest/cheapest) via `get_model_for_tier("tolo")`. No need to reuse the session's model.
+1. **Naming model** → Use the **`seed` tier** (fastest/cheapest) via `get_model_for_tier("seed")`. No need to reuse the session's model.
 
 2. **Cross-session search indexing** → **Build an in-memory inverted index on startup.** Scan all session files once at boot, build a keyword → `(session_id, message_index)` mapping. Queries are then fast lookups. Startup cost is proportional to total session count — acceptable for v1.
 
@@ -155,7 +155,7 @@ This means `SessionManager` needs `load_session(session_id)` and `save_session(s
 - [ ] `SessionManager.save_session()` and `load_session()`
 - [ ] Auto-save on message exchange (background, non-blocking)
 - [ ] `/save` command (synchronous, with feedback)
-- [ ] Auto-naming after first exchange (background LLM call, `tolo` tier)
+- [ ] Auto-naming after first exchange (background LLM call, `seed` tier)
 - [ ] `/sessions` command — list, load, delete, rename (modeled after `/model`)
 - [ ] `search_sessions` tool for the AI agent
 - [ ] In-memory keyword index for cross-session search (built on startup)

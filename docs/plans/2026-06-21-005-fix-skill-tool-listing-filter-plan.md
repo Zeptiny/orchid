@@ -15,7 +15,7 @@ The `skill` tool's static schema advertises the full global skill registry in it
 
 ## Problem Frame
 
-When `stream_response` builds `filtered_tools` in `src/stupidex/llm/client.py:757-769`, it pulls each `Tool` object from the process-wide `_TOOL_REGISTRY` cache (`src/stupidex/tools/__init__.py:62-69`). The `skill` entry was registered once via `build_skill_tool()` with no arguments (`tools/__init__.py:88`), so its `name` parameter description contains the `Available skills:` listing computed from the full registry at that moment (`tools/skill.py:96-99,115`).
+When `stream_response` builds `filtered_tools` in `src/orchid/llm/client.py:757-769`, it pulls each `Tool` object from the process-wide `_TOOL_REGISTRY` cache (`src/orchid/tools/__init__.py:62-69`). The `skill` entry was registered once via `build_skill_tool()` with no arguments (`tools/__init__.py:88`), so its `name` parameter description contains the `Available skills:` listing computed from the full registry at that moment (`tools/skill.py:96-99,115`).
 
 `stream_response` already accepts `allowed_skills` and stashes it in a `ContextVar` (`llm/client.py:745-748`) so `execute_skill` and `execute_list_skills` can filter at execution time (`tools/skill.py:127-133, 256-260`). But the **tool schema** that the LLM sees in the `tools` array of each request (`client.py:769`) is built from the unfiltered global `Tool` object, so the description still enumerates every skill in the registry.
 
@@ -48,12 +48,12 @@ When `stream_response` builds `filtered_tools` in `src/stupidex/llm/client.py:75
 
 ### Relevant Code and Patterns
 
-- `src/stupidex/tools/skill.py:93-122` — `build_skill_tool(allowed_skills)` already accepts an optional filter and produces a `Tool` with a filtered `Available skills:` block. The fix reuses this; no new function needed.
-- `src/stupidex/tools/skill.py:20-28` — `filter_skills(allowed, registry)` performs fnmatch glob filtering; reused by both the builder and the executors.
-- `src/stupidex/llm/client.py:740-769` — `stream_response` is the single place the tool schema is assembled per call; the only call site that has `allowed_skills` in scope. Already imports `set_current_allowed_skills` from `tools.skill`.
-- `src/stupidex/tools/__init__.py:65-97` — `get_tool_registry()` returns the cached global dict; `reset_tool_registry()` exists for cache invalidation after agent/skill changes.
-- `src/stupidex/domain/agent.py:65-96` — `Agent.allowed_skills` is `list[str]` glob patterns, threaded through `app.py:323` and `agents/manager.py:321` into `stream_response`.
-- `src/stupidex/agents/defaults/general/AGENT.md:34-35` — `general` has `allowed_skills: ['*']`; the only shipped agent that lists `skill` in `allowed_tools`. All reviewer/implementer agents either have `allowed_skills: []` or do not expose the `skill` tool — the bug is latent but real for any future agent configured with both.
+- `src/orchid/tools/skill.py:93-122` — `build_skill_tool(allowed_skills)` already accepts an optional filter and produces a `Tool` with a filtered `Available skills:` block. The fix reuses this; no new function needed.
+- `src/orchid/tools/skill.py:20-28` — `filter_skills(allowed, registry)` performs fnmatch glob filtering; reused by both the builder and the executors.
+- `src/orchid/llm/client.py:740-769` — `stream_response` is the single place the tool schema is assembled per call; the only call site that has `allowed_skills` in scope. Already imports `set_current_allowed_skills` from `tools.skill`.
+- `src/orchid/tools/__init__.py:65-97` — `get_tool_registry()` returns the cached global dict; `reset_tool_registry()` exists for cache invalidation after agent/skill changes.
+- `src/orchid/domain/agent.py:65-96` — `Agent.allowed_skills` is `list[str]` glob patterns, threaded through `app.py:323` and `agents/manager.py:321` into `stream_response`.
+- `src/orchid/agents/defaults/general/AGENT.md:34-35` — `general` has `allowed_skills: ['*']`; the only shipped agent that lists `skill` in `allowed_tools`. All reviewer/implementer agents either have `allowed_skills: []` or do not expose the `skill` tool — the bug is latent but real for any future agent configured with both.
 
 ### Institutional Learnings
 
@@ -98,12 +98,12 @@ When `stream_response` builds `filtered_tools` in `src/stupidex/llm/client.py:75
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/llm/client.py`
+- Modify: `src/orchid/llm/client.py`
 - Test: `tests/test_streaming_messages.py` (or a new `tests/test_skill_tool_filtering.py` — see Approach)
 
 **Approach:**
 - Inside `stream_response`, after `filtered_tools` is built (`client.py:759-767`) and before `tools_list = [entry["tool"].to_dict() ...]` (`client.py:769`), if `"skill"` is in `filtered_tools` and `allowed_skills is not None`, replace the `"tool"` slot with `build_skill_tool(allowed_skills)`.
-- Import `build_skill_tool` lazily alongside the existing `from stupidex.tools.skill import set_current_allowed_skills` import (`client.py:747`) to avoid module-load cycles.
+- Import `build_skill_tool` lazily alongside the existing `from orchid.tools.skill import set_current_allowed_skills` import (`client.py:747`) to avoid module-load cycles.
 - Do not touch the executor slot; do not touch `list_skills`.
 - The new `Tool` object is rebuilt per `stream_response` call. This is cheap — `build_skill_tool` does one dict comprehension over the skill registry, which is small and already loaded.
 
@@ -140,7 +140,7 @@ When `stream_response` builds `filtered_tools` in `src/stupidex/llm/client.py:75
 - Reference: `tests/test_skill_tools.py` (for the `_patch_registry` / `_build_skill` fixture pattern)
 
 **Approach:**
-- Build a small fake registry (`_registry(_skill('work'), _skill('plan'), _skill('debug'))`) and monkeypatch `stupidex.tools.skill.get_skill_registry` the same way `tests/test_skill_tools.py` does.
+- Build a small fake registry (`_registry(_skill('work'), _skill('plan'), _skill('debug'))`) and monkeypatch `orchid.tools.skill.get_skill_registry` the same way `tests/test_skill_tools.py` does.
 - Call `build_skill_tool(['work', 'plan'])` directly and assert the returned `Tool`'s `parameters.properties['name'].description` lists `work` and `plan` but not `debug`. This pins the contract that `build_skill_tool` already honors the filter (today) and protects against future regressions.
 - Then add a higher-level test that exercises `stream_response`'s override: mock the LLM call so that the captured `tools` array passed to litellm contains a `skill` function whose `parameters.properties.name.description` matches the filtered set. The cleanest seam is to extract the tool-list assembly into a small helper (e.g. `_build_tools_for_request(allowed_tools, allowed_skills)`) that `stream_response` calls and the test calls directly, avoiding the need to mock the network.
 
@@ -200,6 +200,6 @@ When `stream_response` builds `filtered_tools` in `src/stupidex/llm/client.py:75
 
 ## Sources & References
 
-- Related code: `src/stupidex/tools/skill.py:93-122` (`build_skill_tool`), `src/stupidex/llm/client.py:740-769` (`stream_response` tool-schema assembly), `src/stupidex/tools/__init__.py:62-97` (global registry cache), `src/stupidex/domain/agent.py:65-96` (`Agent.allowed_skills`)
+- Related code: `src/orchid/tools/skill.py:93-122` (`build_skill_tool`), `src/orchid/llm/client.py:740-769` (`stream_response` tool-schema assembly), `src/orchid/tools/__init__.py:62-97` (global registry cache), `src/orchid/domain/agent.py:65-96` (`Agent.allowed_skills`)
 - Existing tests: `tests/test_skill_tools.py` (executor-side filtering + resource path traversal)
 - Origin finding: prior turn's analysis of `tools/skill.py` showing the static tool description is registered globally unfiltered while only the executor enforces `allowed_skills`.

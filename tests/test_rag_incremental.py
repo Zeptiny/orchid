@@ -7,9 +7,9 @@ import hashlib as _hl
 
 import pytest
 
-from stupidex.rag.embedder import Embedder
-from stupidex.rag.indexer import index_project
-from stupidex.rag.store import RAGStore
+from orchid.rag.embedder import Embedder
+from orchid.rag.indexer import index_project
+from orchid.rag.store import RAGStore
 
 
 class FakeEmbedder(Embedder):
@@ -185,7 +185,7 @@ async def test_upsert_file_preserves_vector_chunk_invariant(tmp_path):
     store.init_db()
 
     embedder = FakeEmbedder()
-    from stupidex.rag.chunker import chunk_file
+    from orchid.rag.chunker import chunk_file
 
     for rel, content in [
         ("a.py", "x = 1\ny = 2\n"),

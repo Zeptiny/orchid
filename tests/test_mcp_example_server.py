@@ -5,7 +5,7 @@ import unittest
 from mcp.types import TextContent
 from pydantic import AnyUrl
 
-from stupidex.mcp.example_server import call_tool, list_resources, list_tools, read_resource
+from orchid.mcp.example_server import call_tool, list_resources, list_tools, read_resource
 
 
 class TestExampleServerCallTool(unittest.IsolatedAsyncioTestCase):
@@ -44,13 +44,13 @@ class TestExampleServerResources(unittest.IsolatedAsyncioTestCase):
         resources = await list_resources()
 
         self.assertEqual(len(resources), 1)
-        self.assertEqual(str(resources[0].uri), "example://stupidex")
+        self.assertEqual(str(resources[0].uri), "example://orchid")
 
     async def test_read_known_resource_returns_app_info(self):
-        contents = await read_resource(AnyUrl("example://stupidex"))
+        contents = await read_resource(AnyUrl("example://orchid"))
 
         self.assertEqual(len(contents), 1)
-        self.assertIn("stupidex", contents[0].content)
+        self.assertIn("orchid", contents[0].content)
 
     async def test_read_unknown_resource_raises_value_error(self):
         with self.assertRaises(ValueError):

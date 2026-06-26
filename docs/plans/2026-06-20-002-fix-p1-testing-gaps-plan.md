@@ -57,10 +57,10 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 - `chain.py` has NO direct test file; `_reconcile_orphan_tool_results` is a module-level function with 12 branches
 
 **LLM layer patterns:**
-- `litellm.acompletion` is `AsyncMock(side_effect=fake_acompletion)` patched at `stupidex.llm.client.litellm.acompletion`; `fake_acompletion` is an async generator
+- `litellm.acompletion` is `AsyncMock(side_effect=fake_acompletion)` patched at `orchid.llm.client.litellm.acompletion`; `fake_acompletion` is an async generator
 - `_execute_tool` is monkeypatched by direct attribute assignment (`llm_client._execute_tool = fake`) in try/finally — tests need to call the REAL `_execute_tool` instead
 - `build_dynamic_system_prompt` is always `AsyncMock`-replaced in stream_response tests — direct tests need to call the real function with mocked `directory_tree`, `get_subagent_manager`, `get_todo_store`
-- Config injection: `Config(providers=...)` + `patch("stupidex.llm.client.get_config", return_value=cfg)` + `patch("stupidex.llm.providers.get_config", return_value=cfg)`
+- Config injection: `Config(providers=...)` + `patch("orchid.llm.client.get_config", return_value=cfg)` + `patch("orchid.llm.providers.get_config", return_value=cfg)`
 
 **Agents layer patterns:**
 - `tests/test_subagent_manager.py` uses `asyncio.run()` directly (no pytest-asyncio), real `SubagentManager` instances
@@ -122,7 +122,7 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Create: `tests/test_skill_domain.py`
-- Reference: `src/stupidex/domain/skill.py`
+- Reference: `src/orchid/domain/skill.py`
 
 **Approach:**
 - Pure sync `unittest.TestCase` — no async, no mocks needed (validation is a pure function on dataclass fields)
@@ -165,7 +165,7 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Create: `tests/test_chain.py`
-- Reference: `src/stupidex/domain/chain.py`
+- Reference: `src/orchid/domain/chain.py`
 
 **Approach:**
 - Pure sync `unittest.TestCase` — `_reconcile_orphan_tool_results` is a module-level function taking `list[Message]` and mutating in place
@@ -202,7 +202,7 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Modify: `tests/test_message.py` (existing, 114 lines)
-- Reference: `src/stupidex/domain/message.py`
+- Reference: `src/orchid/domain/message.py`
 
 **Approach:**
 - Add a new `TestMessageToDict` test class to the existing `test_message.py`
@@ -236,7 +236,7 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Modify: `tests/test_streaming_messages.py` (existing, 1604 lines)
-- Reference: `src/stupidex/llm/client.py`
+- Reference: `src/orchid/llm/client.py`
 
 **Approach:**
 - Add two new test classes to the existing file: `TestValidateToolArgs` and `TestExecuteToolErrorPaths`
@@ -279,7 +279,7 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Modify: `tests/test_streaming_messages.py` (existing)
-- Reference: `src/stupidex/llm/client.py`
+- Reference: `src/orchid/llm/client.py`
 
 **Approach:**
 - Add `TestStreamResponseMultiTurn` class
@@ -309,12 +309,12 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Create: `tests/test_dynamic_system_prompt.py`
-- Reference: `src/stupidex/llm/dynamic_system_prompt.py`
+- Reference: `src/orchid/llm/dynamic_system_prompt.py`
 
 **Approach:**
 - Use `pytest.mark.asyncio` (matches RAG test pattern for async)
 - Mock `get_config()` to return a config with `directory_tree_depth=2`
-- Mock `directory_tree` with `patch("stupidex.llm.dynamic_system_prompt.directory_tree", ...)` — return a fixed string
+- Mock `directory_tree` with `patch("orchid.llm.dynamic_system_prompt.directory_tree", ...)` — return a fixed string
 - Mock `get_subagent_manager()` to return a manager with `get_states()` returning crafted subagent dicts
 - Mock `get_todo_store()` to return a store with `list()` returning crafted `TodoTask` objects
 - TTL cache: call twice within 5s, assert `directory_tree` called only once; wait >5s (or patch `_TREE_TTL=0.01`), assert called twice
@@ -348,7 +348,7 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Modify: `tests/test_subagent_manager.py` (existing, 644 lines)
-- Reference: `src/stupidex/agents/manager.py`
+- Reference: `src/orchid/agents/manager.py`
 
 **Approach:**
 - Add tests to existing `TestSubagentManager` or a new `TestWaitEdgeCases` class
@@ -383,10 +383,10 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Modify: `tests/test_mcp_lifecycle.py` (existing, 201 lines)
-- Reference: `src/stupidex/mcp/__init__.py`
+- Reference: `src/orchid/mcp/__init__.py`
 
 **Approach:**
-- SSE test: `patch("stupidex.mcp.sse_client", new=AsyncMock(...))` returning `(read_stream, write_stream)` async context manager; config with `"url": "http://localhost:8080/sse"`; assert `sse_client` called with `url=`, assert session registered, tools loaded
+- SSE test: `patch("orchid.mcp.sse_client", new=AsyncMock(...))` returning `(read_stream, write_stream)` async context manager; config with `"url": "http://localhost:8080/sse"`; assert `sse_client` called with `url=`, assert session registered, tools loaded
 - `_start_error` re-raise: mock `_run` to set `self._start_error = RuntimeError("catastrophic")` before `_ready.set()` → `start_all` re-raises `RuntimeError`
 - Per-server failure recovery: already partially tested by `test_mcp_startup_timeout.py` (per-server timeout → continue), but the `except BaseException` capture (L129) → `_start_error` → re-raise in `start_all` (L113-116) is NOT tested — needs a test that forces `exit_stack.__aenter__` to raise, asserting `start_all` re-raises
 
@@ -417,7 +417,7 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Modify: `tests/test_skill_tools.py` (existing, 89 lines)
-- Reference: `src/stupidex/tools/skill.py`
+- Reference: `src/orchid/tools/skill.py`
 
 **Approach:**
 - Use `tmp_path` to create real skill directories with `scripts/`, `references/`, `assets/` subdirs and real files
@@ -456,7 +456,7 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Create: `tests/test_subagent_tools.py`
-- Reference: `src/stupidex/tools/subagent.py`, `src/stupidex/agents/manager.py`
+- Reference: `src/orchid/tools/subagent.py`, `src/orchid/agents/manager.py`
 
 **Approach:**
 - Mock `get_subagent_manager()` to return a mock `SubagentManager` with controlled `spawn()`, `wait()`, `get_states()`, `cancel_one()`, `cancel_running()`, `cancel_all()` return values
@@ -501,7 +501,7 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Create: `tests/test_todo_tools.py`
-- Reference: `src/stupidex/tools/todo.py`, `src/stupidex/domain/todo.py`
+- Reference: `src/orchid/tools/todo.py`, `src/orchid/domain/todo.py`
 
 **Approach:**
 - Mock `get_todo_store()` to return a real `TodoStore` (the domain is well-tested; use real store for integration) or a mock with controlled `create/update/list/delete` returns
@@ -545,7 +545,7 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Modify: `tests/test_file_manipulation.py` (existing, 99 lines)
-- Reference: `src/stupidex/tools/file_manipulation.py`
+- Reference: `src/orchid/tools/file_manipulation.py`
 
 **Approach:**
 - Use `tmp_path` with real files and directories
@@ -589,7 +589,7 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Modify: `tests/test_rag_indexer.py` (existing)
-- Reference: `src/stupidex/rag/indexer.py`
+- Reference: `src/orchid/rag/indexer.py`
 
 **Approach:**
 - Use `FakeEmbedder` (existing pattern in `test_rag_indexer.py`) and `tmp_path` with real files
@@ -626,7 +626,7 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Modify: `tests/test_rag_store.py` (existing)
-- Reference: `src/stupidex/rag/store.py`
+- Reference: `src/orchid/rag/store.py`
 
 **Approach:**
 - Use real SQLite + real numpy `.npy` on `tmp_path` (existing pattern)
@@ -658,7 +658,7 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 
 **Files:**
 - Modify: `tests/test_settings_screen.py` (existing, 846 lines)
-- Reference: `src/stupidex/screens/settings.py`
+- Reference: `src/orchid/screens/settings.py`
 
 **Approach:**
 - Follow existing pattern: direct instantiation (`SettingsScreen(Config())`), `MagicMock` for `_refresh_tab`, assert on `screen._config.providers` / `screen._config.mcp_servers`
@@ -714,5 +714,5 @@ The 2026-06-20 full-codebase code review sweep produced 53 P1 findings, of which
 - **Origin document:** `2026-06-20-full-sweep-all-findings.md` (project root) — P1 testing-gap section, lines 82-112
 - **Prior P1 fix plan:** `docs/plans/2026-06-20-001-fix-p1-code-review-findings-plan.md`
 - **P0 verification plan:** `docs/plans/2026-06-20-p0-verification-and-fix-plan.md`
-- Related code: `src/stupidex/domain/{skill,chain,message}.py`, `src/stupidex/llm/{client,dynamic_system_prompt}.py`, `src/stupidex/agents/manager.py`, `src/stupidex/mcp/__init__.py`, `src/stupidex/tools/{skill,subagent,todo,file_manipulation}.py`, `src/stupidex/rag/{indexer,store}.py`, `src/stupidex/screens/settings.py`
+- Related code: `src/orchid/domain/{skill,chain,message}.py`, `src/orchid/llm/{client,dynamic_system_prompt}.py`, `src/orchid/agents/manager.py`, `src/orchid/mcp/__init__.py`, `src/orchid/tools/{skill,subagent,todo,file_manipulation}.py`, `src/orchid/rag/{indexer,store}.py`, `src/orchid/screens/settings.py`
 - Related tests: `tests/test_{message,streaming_messages,subagent_manager,mcp_lifecycle,skill_tools,file_manipulation,rag_indexer,rag_store,settings_screen}.py`

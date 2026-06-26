@@ -49,7 +49,7 @@ These gaps matter because:
 - Existing test files are the pattern source — each subagent reads the sibling test file(s) before writing
 - Test framework: `pytest` + `pytest-asyncio` (`asyncio_mode=auto`), `pytest-timeout` (120s). `ruff` for lint.
 - Screens tests use plain `unittest.TestCase` + `unittest.mock` (no Textual Pilot harness) — verified in `tests/test_settings_screen.py:1-30`
-- Source paths in `todo-pendings-fixes.md` omit the `src/stupidex/` prefix; subagents translate to `src/stupidex/<module>/<file>.py`
+- Source paths in `todo-pendings-fixes.md` omit the `src/orchid/` prefix; subagents translate to `src/orchid/<module>/<file>.py`
 
 ### Institutional Learnings
 
@@ -293,7 +293,7 @@ Round 2 (sequential, orchestrator):
 | Screens tests need Textual Pilot harness (async) | Verified: existing `test_settings_screen.py` uses plain `unittest` + mocks. No Pilot needed. |
 | Subagent invents tests that pass without exercising the branch | Prompt requires reading the source branch first and asserting on branch-specific behavior (not just "no exception"). |
 | Some findings overlap (e.g., P2-104 + P3-55 both cover `_history_to_api_messages`) | Grouped in the same unit (U4) so one agent writes complementary, non-duplicated tests. |
-| New test files need `__init__.py` or import path fixes | `tests/__init__.py` already exists; new test files just need `from stupidex.<module>...` imports. |
+| New test files need `__init__.py` or import path fixes | `tests/__init__.py` already exists; new test files just need `from orchid.<module>...` imports. |
 
 ---
 

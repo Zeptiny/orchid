@@ -2,8 +2,8 @@
 
 import unittest
 
-from stupidex.domain.chain import Chain
-from stupidex.domain.message import (
+from orchid.domain.chain import Chain
+from orchid.domain.message import (
     Message,
     MessageRole,
     MessageType,

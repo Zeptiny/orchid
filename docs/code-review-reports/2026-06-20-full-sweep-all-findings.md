@@ -362,8 +362,8 @@
 | P2-217 | llm | llm/client.py:415 + dynamic_system_prompt.py:30 | Dynamic system prompt omits RAG/AST index status and delegatable subagent types — Context Starvation | agent-native (multi-module) | 75 | manual | Y |
 | P2-218 | tools+agents | tools/subagent.py:22 + agents/manager.py:201 | 'Subagents cannot create subagents' claim is enforced only by convention, not code | agent-native (multi-module), adversarial | 75 | manual | Y |
 | P2-219 | tools+llm | tools/__init__.py:91 | No AST re-index tool — agent cannot force-rescan the symbol index | agent-native (multi-module) | 80 | manual | Y |
-| P2-220 | screens+config | src/stupidex/config.py:388 | Agent-written config changes (via write/edit on config.json) are invisible to running session — ConfigManager singleton not invalidated | agent-native (multi-module) | 75 | manual | Y |
-| P2-221 | screens | screens/settings.py:1258 + /src/stupidex/config.py | Settings validation/persist/live-apply logic is private to SettingsScreen._do_save, not a reusable primitive | agent-native (multi-module), maintainability | 75/85 | manual | Y |
+| P2-220 | screens+config | src/orchid/config.py:388 | Agent-written config changes (via write/edit on config.json) are invisible to running session — ConfigManager singleton not invalidated | agent-native (multi-module) | 75 | manual | Y |
+| P2-221 | screens | screens/settings.py:1258 + /src/orchid/config.py | Settings validation/persist/live-apply logic is private to SettingsScreen._do_save, not a reusable primitive | agent-native (multi-module), maintainability | 75/85 | manual | Y |
 | P2-222 | tools | tools/rag.py:43 | rag_index conflates three disjoint primitives behind an action enum (Decision Input) | agent-native (rag) | 72 | manual | Y |
 | P2-223 | rag | rag/store.py:209 | No per-agent or per-scope filtering on RAG chunks — shared workspace is correct but undocumented to the agent | agent-native (rag) | 50 | advisory | Y |
 | P2-224 | agents | agents/manager.py:263 | record.result is None if subagent ends with a tool call and no trailing TEXT — wait_for_subagent returns ambiguous empty block | agent-native (agents) | 60 | manual | Y |
@@ -394,7 +394,7 @@
 | P3-18 | domain | domain/message.py:44 (alt) | Message.to_dict collapses falsy content to None for ALL roles, not just assistant tool-call-only turns | maintainability | 50 | manual | Y |
 | P3-19 | domain | domain/todo.py:174 | Process-global mutable _todo_refresh_callback is inconsistent with the ContextVar pattern used elsewhere | maintainability, adversarial | 50 | manual | Y |
 | P3-20 | domain | domain/session.py:89 | SessionManager.switch/delete/load shadow built-in id | kieran-python | 75 | manual | Y |
-| P3-21 | domain | domain/session.py:102 | Three lazy from stupidex.storage import calls scattered in SessionManager methods | kieran-python | 50 | manual | Y |
+| P3-21 | domain | domain/session.py:102 | Three lazy from orchid.storage import calls scattered in SessionManager methods | kieran-python | 50 | manual | Y |
 | P3-22 | domain | domain/session.py:137 | session.py list_saved return type unparameterized | kieran-python | 75 | manual | Y |
 | P3-23 | domain | domain/chain.py:91 | _reconcile_orphan_tool_results compares string against msg.role.value rather than the enum | kieran-python | 75 | manual | Y |
 | P3-24 | domain | domain/agent.py:87 | Agent.from_dict uses hard-keyed [] lookups for required fields without a clear contract | kieran-python | 50 | manual | Y |
@@ -524,7 +524,7 @@ These are concerns surfaced by reviewers that don't fit the finding schema (no c
 - Persistence layer invariants enforced only for parent chain via `_reconcile_orphan_tool_results`; subagent-record path was omitted, so on-disk representation can drift from the consistency model future features assume.
 - `_fire_and_forget` for state/spawn callbacks means the manager cannot deterministically guarantee UI/state propagation: callbacks may be silently dropped on event-loop shutdown.
 - `record.async_task` is observable after `spawn()` await, but state may already be RUNNING/COMPLETED by then. Callers checking state synchronously must tolerate async mutation.
-- `from_storage_dict` constructs `Agent(tier=PAPUDO)` even when original was higher tier. Restored subagents silently downgrade.
+- `from_storage_dict` constructs `Agent(tier=BLOOM)` even when original was higher tier. Restored subagents silently downgrade.
 
 ### tools/
 

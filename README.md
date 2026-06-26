@@ -1,21 +1,12 @@
-# Stupidex
-
-## Integrantes da Equipe
-
-| Nome | Matricula |
-|------|----|
-| Artur Ricieri Trentini Benedetti | 205125 |
-| Grégori Yago Kempf | 204034 |
-| João Vitor Giacomolli | 203721 |
-| Rodrigo Rigo | 204123 |
-
----
+# Orchid
 
 ## Sobre o Projeto
 
-**Stupidex** é um agente de terminal com arquitetura multiagente, focado em engenharia de software assistida por IA. Ele opera diretamente no terminal do desenvolvedor como um copiloto capaz de explorar código, implementar funcionalidades, revisar alterações, executar comandos, gerenciar tarefas e documentar aprendizado - tudo por meio de uma interface TUI (Textual User Interface).
+**Orchid** é um agente de terminal com arquitetura multiagente, focado em engenharia de software assistida por IA. Ele opera diretamente no terminal do desenvolvedor como um copiloto capaz de explorar código, implementar funcionalidades, revisar alterações, executar comandos, gerenciar tarefas e documentar aprendizado - tudo por meio de uma interface TUI (Textual User Interface).
 
 ![Example Image](example_image.png)
+
+> **Baseado em:** Este projeto é baseado no [Stupidex](https://github.com/Zeptiny/stupidex), um agente de terminal multiagente para engenharia de software assistida por IA, originalmente desenvolvido como projeto acadêmico.
 
 ---
 
@@ -51,7 +42,7 @@ Tudo isso com:
 
 ## Arquitetura Multiagente
 
-O Stupidex implementa uma arquitetura **hierárquica de agentes**, onde um agente principal orquestra subagentes especializados. O fluxo segue um pipeline encadeado:
+O Orchid implementa uma arquitetura **hierárquica de agentes**, onde um agente principal orquestra subagentes especializados. O fluxo segue um pipeline encadeado:
 
 ```
 estratégia → ideação → brainstorm → plano → trabalho → revisão → commit/PR → documentação
@@ -59,7 +50,7 @@ estratégia → ideação → brainstorm → plano → trabalho → revisão →
 
 ### Funcionamento
 
-1. **Agente Principal** (`general`, tier `papudo`) - recebe a requisição do usuário, decide o fluxo e delega tarefas
+1. **Agente Principal** (`general`, tier `bloom`) - recebe a requisição do usuário, decide o fluxo e delega tarefas
 2. **Subagentes Especializados** - executam tarefas específicas com ferramentas e skills limitadas ao seu escopo
 3. **Skills** - workflows reutilizáveis que guiam o agente através de tarefas complexas (ex: `code-review` dispara 6 revisores em paralelo)
 4. **Revisão** - agentes de revisão paralelos analisam o código produzido antes do commit
@@ -78,56 +69,56 @@ Usuário → General Agent → Plan → Implementer → Code Review (paralelo) �
 
 | Agente | Tier | Função |
 |--------|------|--------|
-| **general** | `papudo` | Agente principal. Recebe comandos do usuário, orquestra subagentes, decide próximos passos |
-| **explorer** | `tolo` | Exploração _read-only_ do código: leitura de arquivos, busca por padrões, entendimento da estrutura |
-| **implementer** | `papudo` | Escreve e edita código. Executa planos de implementação |
-| **reviewer** | `papaca` | Revisão geral de código: bugs, estilo, melhorias |
-| **web-fetch** | `tolo` | Agente interno que resume conteúdo de páginas web (usado pela tool `web_fetch`) |
+| **general** | `bloom` | Agente principal. Recebe comandos do usuário, orquestra subagentes, decide próximos passos |
+| **explorer** | `seed` | Exploração _read-only_ do código: leitura de arquivos, busca por padrões, entendimento da estrutura |
+| **implementer** | `bloom` | Escreve e edita código. Executa planos de implementação |
+| **reviewer** | `crown` | Revisão geral de código: bugs, estilo, melhorias |
+| **web-fetch** | `seed` | Agente interno que resume conteúdo de páginas web (usado pela tool `web_fetch`) |
 
 ### Revisores Especializados (usados pela skill `code-review`)
 
 | Agente | Tier | Função |
 |--------|------|--------|
-| **correctness-reviewer** | `papaca` | Erros lógicos, edge cases, bugs de estado |
-| **security-reviewer** | `papaca` | Vulnerabilidades, injeção, validação de entrada, autenticação |
-| **performance-reviewer** | `papaca` | Gargalos, N+1 queries, uso de memória, escalabilidade |
-| **maintainability-reviewer** | `papudo` | Abstrações prematuras, dead code, acoplamento, nomenclatura |
-| **testing-reviewer** | `papudo` | Cobertura de testes, asserts fracos, testes frágeis |
-| **adversarial-reviewer** | `papaca` | Cenários de falha para quebrar a implementação |
-| **reliability-reviewer** | `papaca` | Tratamento de erros, retries, circuit breakers, timeouts |
-| **api-contract-reviewer** | `papudo` | Rotas de API, tipos request/response, serialização |
-| **data-integrity-guardian** | `papaca` | Migrações, modelos de dados, segurança de dados persistentes |
-| **code-simplicity-reviewer** | `papudo` | Violações de YAGNI, oportunidades de simplificação |
+| **correctness-reviewer** | `crown` | Erros lógicos, edge cases, bugs de estado |
+| **security-reviewer** | `crown` | Vulnerabilidades, injeção, validação de entrada, autenticação |
+| **performance-reviewer** | `crown` | Gargalos, N+1 queries, uso de memória, escalabilidade |
+| **maintainability-reviewer** | `bloom` | Abstrações prematuras, dead code, acoplamento, nomenclatura |
+| **testing-reviewer** | `bloom` | Cobertura de testes, asserts fracos, testes frágeis |
+| **adversarial-reviewer** | `crown` | Cenários de falha para quebrar a implementação |
+| **reliability-reviewer** | `crown` | Tratamento de erros, retries, circuit breakers, timeouts |
+| **api-contract-reviewer** | `bloom` | Rotas de API, tipos request/response, serialização |
+| **data-integrity-guardian** | `crown` | Migrações, modelos de dados, segurança de dados persistentes |
+| **code-simplicity-reviewer** | `bloom` | Violações de YAGNI, oportunidades de simplificação |
 
 ### Agentes de Pesquisa e Análise
 
 | Agente | Tier | Função |
 |--------|------|--------|
-| **learnings-researcher** | `tainha` | Busca em `docs/solutions/` por aprendizado anterior |
-| **web-researcher** | `tainha` | Pesquisa no código via RAG e análise semântica |
-| **architecture-strategist** | `papaca` | Análise de conformidade com padrões e integridade do design |
-| **agent-native-reviewer** | `papaca` | Verifica paridade agente-usuário (toda ação do usuário = tool do agente) |
-| **spec-flow-analyzer** | `papudo` | Análise de fluxos de usuário e identificação de lacunas |
+| **learnings-researcher** | `sprout` | Busca em `docs/solutions/` por aprendizado anterior |
+| **web-researcher** | `sprout` | Pesquisa no código via RAG e análise semântica |
+| **architecture-strategist** | `crown` | Análise de conformidade com padrões e integridade do design |
+| **agent-native-reviewer** | `crown` | Verifica paridade agente-usuário (toda ação do usuário = tool do agente) |
+| **spec-flow-analyzer** | `bloom` | Análise de fluxos de usuário e identificação de lacunas |
 
 ### Agentes de Revisão de Documentos (usados pela skill `doc-review`)
 
 | Agente | Tier | Função |
 |--------|------|--------|
-| **adversarial-document-reviewer** | `papaca` | Desafia premissas e pressupostos não declarados |
-| **coherence-reviewer** | `papudo` | Consistência interna do documento |
-| **feasibility-reviewer** | `papudo` | Viabilidade das abordagens propostas |
-| **product-lens-reviewer** | `papaca` | Revisão sob perspectiva de produto |
-| **scope-guardian-reviewer** | `papudo` | Alinhamento de escopo, complexidade injustificada |
-| **pr-comment-resolver** | `papudo` | Avalia e resolve threads de revisão de PR |
+| **adversarial-document-reviewer** | `crown` | Desafia premissas e pressupostos não declarados |
+| **coherence-reviewer** | `bloom` | Consistência interna do documento |
+| **feasibility-reviewer** | `bloom` | Viabilidade das abordagens propostas |
+| **product-lens-reviewer** | `crown` | Revisão sob perspectiva de produto |
+| **scope-guardian-reviewer** | `bloom` | Alinhamento de escopo, complexidade injustificada |
+| **pr-comment-resolver** | `bloom` | Avalia e resolve threads de revisão de PR |
 
 ### System Tiers (níveis de inteligência/velocidade)
 
 | Tier | Inteligência | Velocidade | Uso |
 |------|--------------|------------|-----|
-| **tolo** | Baixa | Muito rápida | Tarefas mecânicas: listar arquivos, ler, buscar |
-| **tainha** | Média | Rápida | Exploração, grep, sumarização |
-| **papudo** | Alta | Normal | Implementação, refatoração, múltiplos arquivos |
-| **papaca** | Muito alta | Lenta | Arquitetura, debugging complexo, code review |
+| **seed** | Baixa | Muito rápida | Tarefas mecânicas: listar arquivos, ler, buscar |
+| **sprout** | Média | Rápida | Exploração, grep, sumarização |
+| **bloom** | Alta | Normal | Implementação, refatoração, múltiplos arquivos |
+| **crown** | Muito alta | Lenta | Arquitetura, debugging complexo, code review |
 
 Cada tier pode ser mapeada para modelos diferentes no `config.json` do usuário, permitindo otimizar custo e latência.
 
@@ -135,7 +126,7 @@ Cada tier pode ser mapeada para modelos diferentes no `config.json` do usuário,
 
 ## Personalidades
 
-O Stupidex possui um sistema de **personalidades** que alteram o tom, o estilo e o comportamento do agente principal. As personalidades são definidas em arquivos Markdown no diretório `personality/defaults/` e podem ser estendidas ou substituídas pelo usuário em `~/.config/stupidex/personalities/`.
+O Orchid possui um sistema de **personalidades** que alteram o tom, o estilo e o comportamento do agente principal. As personalidades são definidas em arquivos Markdown no diretório `personality/defaults/` e podem ser estendidas ou substituídas pelo usuário em `~/.config/orchid/personalities/`.
 
 A personalidade ativa é definida no `config.json` (campo `personality`) e é anexada ao final do *system prompt* do agente.
 
@@ -160,7 +151,7 @@ No `config.json`, defina o campo `personality` com o nome da personalidade desej
 }
 ```
 
-Para criar uma personalidade personalizada, adicione um arquivo `.md` em `~/.config/stupidex/personalities/` com o conteúdo desejado. O nome do arquivo (sem extensão) será o nome da personalidade.
+Para criar uma personalidade personalizada, adicione um arquivo `.md` em `~/.config/orchid/personalities/` com o conteúdo desejado. O nome do arquivo (sem extensão) será o nome da personalidade.
 
 ---
 
@@ -234,15 +225,15 @@ Os agentes têm acesso a ferramentas limitadas pelo seu `allowed_tools` no arqui
 
 ## MCP (Model Context Protocol)
 
-O **Model Context Protocol (MCP)** é um protocolo aberto que permite que agentes de IA se conectem a servidores externos de ferramentas e recursos. No Stupidex, o MCP é utilizado como **ponte entre os agentes e serviços externos**, expandindo as capacidades do sistema sem modificar o código-fonte dos agentes.
+O **Model Context Protocol (MCP)** é um protocolo aberto que permite que agentes de IA se conectem a servidores externos de ferramentas e recursos. No Orchid, o MCP é utilizado como **ponte entre os agentes e serviços externos**, expandindo as capacidades do sistema sem modificar o código-fonte dos agentes.
 
-### Como o MCP é usado no Stupidex
+### Como o MCP é usado no Orchid
 
 1. **Gerenciamento de sessões MCP** - `MCPManager` gerencia o ciclo de vida completo: inicia servidores na inicialização do app, mantém sessões ativas e faz shutdown ao sair
 2. **Dois tipos de transporte**:
    - **stdio** - servidor executado como subprocesso, comunicação via stdin/stdout
    - **HTTP/SSE** - servidor remoto, comunicação via Server-Sent Events
-3. **Registro dinâmico de ferramentas** - ferramentas expostas por servidores MCP são automaticamente registradas no sistema de tools do Stupidex com prefixo `mcp_<server>_<tool>`
+3. **Registro dinâmico de ferramentas** - ferramentas expostas por servidores MCP são automaticamente registradas no sistema de tools do Orchid com prefixo `mcp_<server>_<tool>`
 4. **Leitura de recursos** - a tool `read_mcp_resource` permite que agentes leiam recursos expostos por servidores MCP (arquivos, schemas, etc.)
 
 ### Servidores Padrão
@@ -250,7 +241,7 @@ O **Model Context Protocol (MCP)** é um protocolo aberto que permite que agente
 | Servidor | Descrição |
 |----------|-----------|
 | **context7** | Documentação atualizada e versionada de bibliotecas/frameworks via `@upstash/context7-mcp` |
-| **example** | Servidor de exemplo mínimo bundled (tool `echo` + resource `example://stupidex`) |
+| **example** | Servidor de exemplo mínimo bundled (tool `echo` + resource `example://orchid`) |
 
 ### Configuração
 
@@ -277,7 +268,7 @@ Servidores HTTP/SSE usam `url` no lugar de `command`/`args`.
 
 ### Estratégia
 
-O Stupidex implementa um pipeline RAG completo para busca semântica no código do projeto. A estratégia segue o fluxo:
+O Orchid implementa um pipeline RAG completo para busca semântica no código do projeto. A estratégia segue o fluxo:
 
 ```
 Projeto → Scanner → Chunker → Embedder → Vector Store → Query
@@ -318,7 +309,7 @@ A base de conhecimento do RAG é **o próprio código-fonte do projeto do usuár
 
 **Extensões ignoradas:** `.pyc`, `.pyo`, `.pyd`, `.so`, `.dll`, `.exe`
 
-**Diretórios ignorados (default):** `.git`, `.svn`, `.hg`, `node_modules`, `__pycache__`, `venv`, `.venv`, `env`, `dist`, `build`, `target`, `.idea`, `.vscode`, `.vs`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`, `.nox`, `.eggs`, `*.egg-info`, `.stupidex`, `.next`, `.cache`
+**Diretórios ignorados (default):** `.git`, `.svn`, `.hg`, `node_modules`, `__pycache__`, `venv`, `.venv`, `env`, `dist`, `build`, `target`, `.idea`, `.vscode`, `.vs`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`, `.nox`, `.eggs`, `*.egg-info`, `.orchid`, `.next`, `.cache`
 
 ---
 
@@ -344,11 +335,11 @@ O armazenamento vetorial é **caseiro (custom)**, usando:
 
 | Componente | Tecnologia |
 |------------|-----------|
-| **Vetores** | `numpy` - arquivo `.npy` no disco (.stupidex/rag/vectors.npy) |
-| **Metadados** | `SQLite` - chunks, arquivos, status da indexação (.stupidex/rag/index.db) |
+| **Vetores** | `numpy` - arquivo `.npy` no disco (.orchid/rag/vectors.npy) |
+| **Metadados** | `SQLite` - chunks, arquivos, status da indexação (.orchid/rag/index.db) |
 | **Busca** | Similaridade de cosseno (produto escalar normalizado) - KNN simples em memória |
 
-**Localização do índice:** `.stupidex/rag/` dentro do diretório do projeto.
+**Localização do índice:** `.orchid/rag/` dentro do diretório do projeto.
 
 Essa abordagem foi escolhida por:
 - Zero dependências externas (sem ChromaDB, FAISS, Weaviate, Pinecone)
@@ -361,7 +352,7 @@ Essa abordagem foi escolhida por:
 
 ### Provedor Padrão (primeira execução)
 
-Na primeira execução, o Stupidex configura automaticamente um provedor que se conecta ao **OpenCode.ai** (API compatível com OpenAI), isso foi feito pois por padrão estavamos usando ele para testes e melhorias sem necessitar rodar um modelo local, com o modelo escolhido padrão sendo o MiMo V2.5:
+Na primeira execução, o Orchid configura automaticamente um provedor que se conecta ao **OpenCode.ai** (API compatível com OpenAI), isso foi feito pois por padrão estavamos usando ele para testes e melhorias sem necessitar rodar um modelo local, com o modelo escolhido padrão sendo o MiMo V2.5:
 
 ```json
 {
@@ -401,10 +392,10 @@ Para execução local, por exemplo, fazendo o uso do Ollama para esse modelo a c
   },
   "default_model": "ollama/qwen3.6:35b-a3b",
   "tier_models": {
-    "tolo": "ollama/qwen3.6:35b-a3b",
-    "tainha": "ollama/qwen3.6:35b-a3b",
-    "papudo": "ollama/qwen3.6:35b-a3b",
-    "papaca": "ollama/qwen3.6:35b-a3b"
+    "seed": "ollama/qwen3.6:35b-a3b",
+    "sprout": "ollama/qwen3.6:35b-a3b",
+    "bloom": "ollama/qwen3.6:35b-a3b",
+    "crown": "ollama/qwen3.6:35b-a3b"
   }
 }
 ```
@@ -452,7 +443,7 @@ unsloth studio -H 0.0.0.0 -p 8888
 4. Carregue o modelo e ative o toggle de thinking se necessário
 
 
-O Stupidex usa o **litellm** como camada de abstração, que se comunica com APIs compatíveis com OpenAI. Qualquer modelo servido via Ollama, Unsloth Studio ou LM Studio pode ser usado sem código adicional.
+O Orchid usa o **litellm** como camada de abstração, que se comunica com APIs compatíveis com OpenAI. Qualquer modelo servido via Ollama, Unsloth Studio ou LM Studio pode ser usado sem código adicional.
 
 ---
 
@@ -495,8 +486,8 @@ O Stupidex usa o **litellm** como camada de abstração, que se comunica com API
 ### 1. Clone o Repositório
 
 ```bash
-git clone https://github.com/Zeptiny/stupidex.git
-cd stupidex
+git clone https://github.com/Zeptiny/orchid.git
+cd orchid
 ```
 
 ### 2. Crie e Ative um Ambiente Virtual
@@ -513,12 +504,12 @@ source .venv/bin/activate   # Linux/Mac
 pip install -e .
 ```
 
-Isso instala todas as dependências e cria o comando `stupidex`.
+Isso instala todas as dependências e cria o comando `orchid`.
 
 ### 4. Configure os Provedores LLM
 
-Execute `stupidex` uma vez para criar os arquivos de configuração e transferir os agentes, personalidades e skills.
-Depois edite `~/.stupidex/config.json` para configurar os seus provedores (ou use o comando `/settings` na interface TUI).
+Execute `orchid` uma vez para criar os arquivos de configuração e transferir os agentes, personalidades e skills.
+Depois edite `~/.orchid/config.json` para configurar os seus provedores (ou use o comando `/settings` na interface TUI).
 
 **Exemplo com Ollama (local):**
 ```json
@@ -534,10 +525,10 @@ Depois edite `~/.stupidex/config.json` para configurar os seus provedores (ou us
   },
   "default_model": "ollama/qwen3.6:35b-a3b",
   "tier_models": {
-    "tolo": "ollama/qwen3.6:35b-a3b",
-    "tainha": "ollama/qwen3.6:35b-a3b",
-    "papudo": "ollama/qwen3.6:35b-a3b",
-    "papaca": "ollama/qwen3.6:35b-a3b"
+    "seed": "ollama/qwen3.6:35b-a3b",
+    "sprout": "ollama/qwen3.6:35b-a3b",
+    "bloom": "ollama/qwen3.6:35b-a3b",
+    "crown": "ollama/qwen3.6:35b-a3b"
   }
 }
 ```
@@ -559,10 +550,10 @@ Depois edite `~/.stupidex/config.json` para configurar os seus provedores (ou us
   },
   "default_model": "openai/gpt-5.5",
   "tier_models": {
-    "tolo": "openai/gpt-5.4-nano",
-    "tainha": "openai/gpt-5.4-mini",
-    "papudo": "openai/gpt-5.4",
-    "papaca": "openai/gpt-5.5"
+    "seed": "openai/gpt-5.4-nano",
+    "sprout": "openai/gpt-5.4-mini",
+    "bloom": "openai/gpt-5.4",
+    "crown": "openai/gpt-5.5"
   }
 }
 ```
@@ -580,16 +571,16 @@ ollama pull qwen3.6:35b-a3b
 ollama serve
 ```
 
-### 6. Execute o Stupidex
+### 6. Execute o Orchid
 
 ```bash
-stupidex
+orchid
 ```
 
 Ou definindo a chave da API como variável de ambiente:
 
 ```bash
-OPENAI_API_KEY="sua-chave-aqui" stupidex
+OPENAI_API_KEY="sua-chave-aqui" orchid
 ```
 
 ### Linting
@@ -605,7 +596,7 @@ ruff check src/ --fix    # Auto-corrigir
 
 ### Estrutura do Config
 
-O arquivo `~/.stupidex/config.json` suporta os seguintes campos (todos opcionais — valores padrão são usados quando ausentes):
+O arquivo `~/.orchid/config.json` suporta os seguintes campos (todos opcionais — valores padrão são usados quando ausentes):
 
 | Campo | Tipo | Padrão | Descrição |
 |-------|------|--------|-----------|
@@ -641,31 +632,31 @@ O campo `rag` é um objeto com os seguintes campos:
 
 ### Configuração por Projeto
 
-Além do `~/.stupidex/config.json` global, é possível criar um arquivo `.stupidex.json` na raiz do projeto. Este arquivo é **mesclado** (deep merge) com a configuração global, permitindo overrides por projeto (ex: provedor diferente, configurações de RAG específicas, etc.).
+Além do `~/.orchid/config.json` global, é possível criar um arquivo `.orchid.json` na raiz do projeto. Este arquivo é **mesclado** (deep merge) com a configuração global, permitindo overrides por projeto (ex: provedor diferente, configurações de RAG específicas, etc.).
 
 ### Variáveis de Ambiente
 
-Todas as opções de configuração podem ser sobrescritas via variáveis de ambiente com prefixo `STUPIDEX_`:
+Todas as opções de configuração podem ser sobrescritas via variáveis de ambiente com prefixo `ORCHID_`:
 
 | Variável de Ambiente | Campo do Config |
 |---------------------|-----------------|
-| `STUPIDEX_DEFAULT_MODEL` | `default_model` |
-| `STUPIDEX_THEME` | `theme` |
-| `STUPIDEX_PERSONALITY` | `personality` |
-| `STUPIDEX_COMMAND_TIMEOUT` | `command_timeout` |
-| `STUPIDEX_READ_LINE_LIMIT` | `read_line_limit` |
-| `STUPIDEX_GREP_MAX_RESULTS` | `grep_max_results` |
-| `STUPIDEX_DIRECTORY_TREE_DEPTH` | `directory_tree_depth` |
-| `STUPIDEX_AST_MAX_FILE_SIZE` | `ast_max_file_size` |
-| `STUPIDEX_LLM_STREAM_IDLE_TIMEOUT` | `llm_stream_idle_timeout` |
-| `STUPIDEX_LLM_STREAM_RETRIES` | `llm_stream_retries` |
-| `STUPIDEX_MCP_STARTUP_TIMEOUT` | `mcp_startup_timeout` |
-| `STUPIDEX_MCP_PER_SERVER_TIMEOUT` | `mcp_per_server_timeout` |
-| `STUPIDEX_RAG_EMBEDDING_MODEL` | `rag.embedding_model` |
-| `STUPIDEX_RAG_CHUNK_SIZE` | `rag.chunk_size` |
-| `STUPIDEX_RAG_CHUNK_OVERLAP` | `rag.chunk_overlap` |
-| `STUPIDEX_RAG_TOP_K` | `rag.top_k` |
-| `STUPIDEX_RAG_MAX_FILE_SIZE` | `rag.max_file_size` |
+| `ORCHID_DEFAULT_MODEL` | `default_model` |
+| `ORCHID_THEME` | `theme` |
+| `ORCHID_PERSONALITY` | `personality` |
+| `ORCHID_COMMAND_TIMEOUT` | `command_timeout` |
+| `ORCHID_READ_LINE_LIMIT` | `read_line_limit` |
+| `ORCHID_GREP_MAX_RESULTS` | `grep_max_results` |
+| `ORCHID_DIRECTORY_TREE_DEPTH` | `directory_tree_depth` |
+| `ORCHID_AST_MAX_FILE_SIZE` | `ast_max_file_size` |
+| `ORCHID_LLM_STREAM_IDLE_TIMEOUT` | `llm_stream_idle_timeout` |
+| `ORCHID_LLM_STREAM_RETRIES` | `llm_stream_retries` |
+| `ORCHID_MCP_STARTUP_TIMEOUT` | `mcp_startup_timeout` |
+| `ORCHID_MCP_PER_SERVER_TIMEOUT` | `mcp_per_server_timeout` |
+| `ORCHID_RAG_EMBEDDING_MODEL` | `rag.embedding_model` |
+| `ORCHID_RAG_CHUNK_SIZE` | `rag.chunk_size` |
+| `ORCHID_RAG_CHUNK_OVERLAP` | `rag.chunk_overlap` |
+| `ORCHID_RAG_TOP_K` | `rag.top_k` |
+| `ORCHID_RAG_MAX_FILE_SIZE` | `rag.max_file_size` |
 
 ### Tela de Configurações (`/settings`)
 
@@ -684,7 +675,7 @@ O comando `/settings` abre uma tela interativa com 5 abas para editar a configur
 ### Iniciar Sessão
 
 ```bash
-stupidex
+orchid
 ```
 
 Isso abre a interface TUI com:
@@ -723,7 +714,7 @@ Isso abre a interface TUI com:
 
 ### Exemplo de Uso: Indexar Projeto e Buscar Código
 
-1. Abra o Stupidex: `stupidex`
+1. Abra o Orchid: `orchid`
 2. Pressione `Ctrl+P`, digite `/index-rag` e pressione Enter
 3. Aguarde a indexação (o sidebar mostra o progresso)
 4. Na conversa, pergunte algo como:
@@ -750,7 +741,7 @@ O agente ajuda no brainstorm, planeja, implementa e pode revisar o código.
 
 ### Exibição de Uso de Tokens
 
-O Stupidex exibe o consumo de tokens em tempo real durante a sessão:
+O Orchid exibe o consumo de tokens em tempo real durante a sessão:
 
 - **Rodapé da sessão** — total de tokens usados na sessão atual, exibido ao lado do modelo ativo
 - **Rodapé de chains** — subtotal de tokens por chain de ações do agente
@@ -778,7 +769,7 @@ Troque com `/theme` (Ctrl+P → `/theme`):
 ```
 pyproject.toml
 src/
-  stupidex/
+  orchid/
     main.py                    # Entry point
     app.py                     # Textual App class, UI lifecycle
     config.py                  # Gerenciamento de configuração
@@ -856,7 +847,7 @@ tests/                         # Testes
 
 ## Gerenciamento de Conhecimento
 
-O Stupidex inclui um sistema de **compounding de conhecimento** para evitar que problemas resolvidos sejam redescobertos:
+O Orchid inclui um sistema de **compounding de conhecimento** para evitar que problemas resolvidos sejam redescobertos:
 
 - **`docs/solutions/`** - Aprendizados estruturados com YAML frontmatter, organizados por categoria:
   - `developer-experience/` - Setup, CI, ferramentas

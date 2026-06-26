@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from stupidex.tools.search import execute_grep_tool
+from orchid.tools.search import execute_grep_tool
 
 
 @pytest.fixture

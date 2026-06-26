@@ -8,10 +8,10 @@ The sidebar subagent section flickers every ~1 second — sometimes showing dupl
 
 | Caller | File:Line | Trigger |
 |--------|-----------|---------|
-| `on_spawn` | `src/stupidex/widgets/subagent_ui.py:50` | `_fire_and_forget` from manager |
-| `on_state_change` | `src/stupidex/widgets/subagent_ui.py:98` | `_fire_and_forget` from manager |
-| `_tick_timer` | `src/stupidex/widgets/subagent_ui.py:150` | 1-second interval timer |
-| session switch | `src/stupidex/app.py:553` | User switches session |
+| `on_spawn` | `src/orchid/widgets/subagent_ui.py:50` | `_fire_and_forget` from manager |
+| `on_state_change` | `src/orchid/widgets/subagent_ui.py:98` | `_fire_and_forget` from manager |
+| `_tick_timer` | `src/orchid/widgets/subagent_ui.py:150` | 1-second interval timer |
+| session switch | `src/orchid/app.py:553` | User switches session |
 
 ### The non-atomic rebuild
 
@@ -51,8 +51,8 @@ A plain lock would serialize all callers — if `on_state_change` holds the lock
 **Goal:** Serialize concurrent sidebar refresh requests and collapse redundant ones.
 
 **Files:**
-- `src/stupidex/widgets/subagent_ui.py` (modify)
-- `src/stupidex/widgets/sidebar.py` (no change needed)
+- `src/orchid/widgets/subagent_ui.py` (modify)
+- `src/orchid/widgets/sidebar.py` (no change needed)
 
 **Approach:**
 

@@ -1,7 +1,7 @@
 """Tests for MCP server config validation in Config (U7)."""
 import unittest
 
-from stupidex.config import Config, validate_config
+from orchid.config import Config, validate_config
 
 
 class TestMCPConfigValidation(unittest.TestCase):

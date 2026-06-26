@@ -3,8 +3,8 @@
 import unittest
 from unittest.mock import patch
 
-from stupidex.domain.message import MessageRole, MessageType
-from stupidex.llm import static_system_prompt as ssp
+from orchid.domain.message import MessageRole, MessageType
+from orchid.llm import static_system_prompt as ssp
 
 
 class GetOsInfoTest(unittest.TestCase):

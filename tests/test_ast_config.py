@@ -1,11 +1,11 @@
 import os
 from unittest import mock
 
-from stupidex.config import AST_INDEX_DB, PROJECT_AST_DIR, Config, ConfigManager, RAGConfig, get_config, validate_config
+from orchid.config import AST_INDEX_DB, PROJECT_AST_DIR, Config, ConfigManager, RAGConfig, get_config, validate_config
 
 
 def test_ast_path_constants():
-    assert PROJECT_AST_DIR == ".stupidex/ast"
+    assert PROJECT_AST_DIR == ".orchid/ast"
     assert AST_INDEX_DB == "symbols.db"
 
 
@@ -17,7 +17,7 @@ def test_default_ast_max_file_size():
 
 def test_config_loads_default_ast_max_file_size():
     ConfigManager.reset()
-    with mock.patch("stupidex.config._load_json", return_value={}):
+    with mock.patch("orchid.config._load_json", return_value={}):
         cfg = get_config()
     assert cfg.ast_max_file_size == 1_048_576
 
@@ -25,8 +25,8 @@ def test_config_loads_default_ast_max_file_size():
 def test_env_override_ast_max_file_size():
     ConfigManager.reset()
     with (
-        mock.patch.dict(os.environ, {"STUPIDEX_AST_MAX_FILE_SIZE": "256000"}),
-        mock.patch("stupidex.config._load_json", return_value={}),
+        mock.patch.dict(os.environ, {"ORCHID_AST_MAX_FILE_SIZE": "256000"}),
+        mock.patch("orchid.config._load_json", return_value={}),
     ):
         cfg = get_config()
     assert cfg.ast_max_file_size == 256000

@@ -60,15 +60,15 @@ Separately, `SubagentManager.cancel_all` / `cancel_running` / `cancel_one` fire 
 
 ### Relevant Code and Patterns
 
-- `src/stupidex/domain/session.py:54-71` — `Session.from_storage_dict` (current site, has try/except around subagent restore but not chains)
-- `src/stupidex/domain/session.py:109-119` — `SessionManager.delete` (mutates before disk delete)
-- `src/stupidex/domain/message.py:79-107` — `Message.from_storage_dict` (bare enum constructors)
-- `src/stupidex/agents/manager.py:130-173` — `SubagentRecord.from_storage_dict` (timing fallback, duplicated Agent construction)
-- `src/stupidex/agents/manager.py:182-219` — `_cancel_record` / `cancel_one` / `cancel_all` / `cancel_running`
-- `src/stupidex/domain/chain.py:57-68` — `Chain.from_storage_dict` (already invokes `_reconcile_orphan_tool_results`)
-- `src/stupidex/domain/chain.py:71-110` — `_reconcile_orphan_tool_results` (module-level function, mutates list in place)
-- `src/stupidex/app.py:189-199` — ESC handler, calls sync `cancel_running()`
-- `src/stupidex/tools/subagent.py:187-224` — async tool executor, calls `cancel_running` and `cancel_one`
+- `src/orchid/domain/session.py:54-71` — `Session.from_storage_dict` (current site, has try/except around subagent restore but not chains)
+- `src/orchid/domain/session.py:109-119` — `SessionManager.delete` (mutates before disk delete)
+- `src/orchid/domain/message.py:79-107` — `Message.from_storage_dict` (bare enum constructors)
+- `src/orchid/agents/manager.py:130-173` — `SubagentRecord.from_storage_dict` (timing fallback, duplicated Agent construction)
+- `src/orchid/agents/manager.py:182-219` — `_cancel_record` / `cancel_one` / `cancel_all` / `cancel_running`
+- `src/orchid/domain/chain.py:57-68` — `Chain.from_storage_dict` (already invokes `_reconcile_orphan_tool_results`)
+- `src/orchid/domain/chain.py:71-110` — `_reconcile_orphan_tool_results` (module-level function, mutates list in place)
+- `src/orchid/app.py:189-199` — ESC handler, calls sync `cancel_running()`
+- `src/orchid/tools/subagent.py:187-224` — async tool executor, calls `cancel_running` and `cancel_one`
 
 ### Institutional Learnings
 
@@ -122,17 +122,17 @@ Separately, `SubagentManager.cancel_all` / `cancel_running` / `cancel_one` fire 
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/domain/session.py`
+- Modify: `src/orchid/domain/session.py`
 - Test: `tests/test_session.py`
 
 **Approach:**
-- Reorder `delete()`: call `from stupidex.storage import delete_session; delete_session(id)` FIRST, then mutate in-memory state only on success.
+- Reorder `delete()`: call `from orchid.storage import delete_session; delete_session(id)` FIRST, then mutate in-memory state only on success.
 - On `delete_session` exception (OSError, etc.): log warning, return `False`, leave `self.sessions[id]` and `self.active` intact.
 - Preserve existing `session.subagent_manager.cancel_all()` invocation BEFORE disk delete (subagent tasks must be cancelled regardless of disk outcome — losing in-memory state to a stuck task is worse than the disk-failure case). `cancel_all()` is fire-and-forget and acceptable here per Key Technical Decisions.
 - Move `del self.sessions[id]` and `self.active = None` to AFTER successful disk delete.
 
 **Patterns to follow:**
-- Existing `delete_session` from `stupidex.storage` (already imported lazily at line 116)
+- Existing `delete_session` from `orchid.storage` (already imported lazily at line 116)
 
 **Test scenarios:**
 - **Happy path**: session exists in `sessions` dict and on disk; `delete()` returns `True`; session removed from dict and disk; `active` cleared if it was the deleted session.
@@ -156,7 +156,7 @@ Separately, `SubagentManager.cancel_all` / `cancel_running` / `cancel_one` fire 
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/domain/session.py`
+- Modify: `src/orchid/domain/session.py`
 - Test: `tests/test_session.py`
 
 **Approach:**
@@ -189,7 +189,7 @@ Separately, `SubagentManager.cancel_all` / `cancel_running` / `cancel_one` fire 
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/domain/message.py`
+- Modify: `src/orchid/domain/message.py`
 - Test: `tests/test_message.py`
 
 **Approach:**
@@ -225,13 +225,13 @@ Separately, `SubagentManager.cancel_all` / `cancel_running` / `cancel_one` fire 
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/agents/manager.py`
+- Modify: `src/orchid/agents/manager.py`
 - Test: `tests/test_subagent_manager.py`
 
 **Approach:**
 - Define a module-level helper `_restore_agent(name: str, type_str: str) -> Agent` (or inline as a local function inside `from_storage_dict`) that:
   1. Tries `get_agent_registry().get(name)` — returns if found.
-  2. Otherwise constructs `Agent(name=name, type=AgentTypes.from_str(type_str), tier=ModelTier.PAPUDO, description="Restored from storage", system_prompt="")`.
+  2. Otherwise constructs `Agent(name=name, type=AgentTypes.from_str(type_str), tier=ModelTier.BLOOM, description="Restored from storage", system_prompt="")`.
   3. If `AgentTypes.from_str` raises `ValueError`: falls back to `AgentTypes.SUBAGENT` (matches subagent intent) and logs warning.
 - Replace the existing try/except block (lines 136-156) with a single call to this helper.
 - Removes P2-26's "duplication" finding because there is now one construction site.
@@ -263,7 +263,7 @@ Separately, `SubagentManager.cancel_all` / `cancel_running` / `cancel_one` fire 
 **Dependencies:** U4 (same `from_storage_dict` site; both modify adjacent code)
 
 **Files:**
-- Modify: `src/stupidex/agents/manager.py`
+- Modify: `src/orchid/agents/manager.py`
 - Test: `tests/test_subagent_manager.py`
 
 **Approach:**
@@ -303,11 +303,11 @@ Separately, `SubagentManager.cancel_all` / `cancel_running` / `cancel_one` fire 
 **Dependencies:** None
 
 **Files:**
-- Modify: `src/stupidex/agents/manager.py`
+- Modify: `src/orchid/agents/manager.py`
 - Test: `tests/test_subagent_manager.py`
 
 **Approach:**
-- Import `_reconcile_orphan_tool_results` from `stupidex.domain.chain` at top of `manager.py` (no cycle: `chain.py` imports `Message` from `message.py`, not `manager.py`).
+- Import `_reconcile_orphan_tool_results` from `orchid.domain.chain` at top of `manager.py` (no cycle: `chain.py` imports `Message` from `message.py`, not `manager.py`).
 - In `SubagentRecord.from_storage_dict`, after `messages=[Message.from_storage_dict(m) for m in data.get("messages", [])]`, call `_reconcile_orphan_tool_results(messages)`.
 - The function mutates the list in place; no return value change needed.
 - Matches the parent-chain pattern at `chain.py:60`.
@@ -337,9 +337,9 @@ Separately, `SubagentManager.cancel_all` / `cancel_running` / `cancel_one` fire 
 **Dependencies:** U4, U5 (same file; coordinate around `from_storage_dict` and `_cancel_record`)
 
 **Files:**
-- Modify: `src/stupidex/agents/manager.py`
-- Modify: `src/stupidex/app.py`
-- Modify: `src/stupidex/tools/subagent.py`
+- Modify: `src/orchid/agents/manager.py`
+- Modify: `src/orchid/app.py`
+- Modify: `src/orchid/tools/subagent.py`
 - Test: `tests/test_subagent_manager.py`
 
 **Approach:**
@@ -400,7 +400,7 @@ Separately, `SubagentManager.cancel_all` / `cancel_running` / `cancel_one` fire 
 
 ## Documentation / Operational Notes
 
-- After Batch B lands, persistence-replay failure mode changes from "abort whole session" to "skip corrupt element + warn". Operators reviewing logs should look for `WARNING` lines from `stupidex.domain.session`, `stupidex.domain.message`, `stupidex.agents.manager` to detect data drift.
+- After Batch B lands, persistence-replay failure mode changes from "abort whole session" to "skip corrupt element + warn". Operators reviewing logs should look for `WARNING` lines from `orchid.domain.session`, `orchid.domain.message`, `orchid.agents.manager` to detect data drift.
 - `flush_state_callbacks()` is a new public-ish API on `SubagentManager`. Document in any future API doc.
 - P2-36 verified as duplicate of P1-1; mark in `todo-pendings-fixes.md` with `**[FIXED — duplicate of P1-1, characterized in Batch B 2026-06-21]**`.
 
@@ -409,6 +409,6 @@ Separately, `SubagentManager.cancel_all` / `cancel_running` / `cancel_one` fire 
 ## Sources & References
 
 - **Origin document:** `todo-pendings-fixes.md` (P2-1, P2-8, P2-9, P2-23, P2-24, P2-26, P2-31, P2-34, P2-36)
-- Related code: `src/stupidex/domain/session.py`, `src/stupidex/domain/message.py`, `src/stupidex/domain/chain.py`, `src/stupidex/agents/manager.py`, `src/stupidex/app.py`, `src/stupidex/tools/subagent.py`
+- Related code: `src/orchid/domain/session.py`, `src/orchid/domain/message.py`, `src/orchid/domain/chain.py`, `src/orchid/agents/manager.py`, `src/orchid/app.py`, `src/orchid/tools/subagent.py`
 - Prior art: P1-27 (`Usage.from_storage_dict` tolerance — same pattern, applied to Message), commit `406e032` (orphan reconciliation for parent chains only — U6 closes the subagent gap)
 - Preceding plan: `docs/plans/2026-06-21-001-test-p2-testing-gaps-batch-a-plan.md` (Batch A — characterized 3 bugs pinned for Batch C; noted but not addressed in this plan)

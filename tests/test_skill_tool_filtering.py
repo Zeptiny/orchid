@@ -9,13 +9,13 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from stupidex.config import Config
-from stupidex.domain.message import Message, MessageRole, MessageType, Usage
-from stupidex.domain.skill import Skill
-from stupidex.domain.tool import Tool
-from stupidex.llm import client as llm_client
-from stupidex.tools import skill as skill_tools
-from stupidex.tools.skill import build_list_skills_tool, build_skill_tool
+from orchid.config import Config
+from orchid.domain.message import Message, MessageRole, MessageType, Usage
+from orchid.domain.skill import Skill
+from orchid.domain.tool import Tool
+from orchid.llm import client as llm_client
+from orchid.tools import skill as skill_tools
+from orchid.tools.skill import build_list_skills_tool, build_skill_tool
 
 
 def _skill(name: str) -> Skill:
@@ -106,11 +106,11 @@ class StreamResponseSkillToolFilterTest(unittest.IsolatedAsyncioTestCase):
         acompletion_mock = AsyncMock(side_effect=fake_acompletion)
         dummy_dynamic = Message(MessageRole.SYSTEM, "<dynamic/>", MessageType.TEXT)
 
-        with patch("stupidex.llm.client.get_config", return_value=cfg), \
-                patch("stupidex.llm.client.build_dynamic_system_prompt",
+        with patch("orchid.llm.client.get_config", return_value=cfg), \
+                patch("orchid.llm.client.build_dynamic_system_prompt",
                       new=AsyncMock(return_value=dummy_dynamic)), \
-                patch("stupidex.tools.skill.get_skill_registry", return_value=reg), \
-                patch("stupidex.llm.client.litellm.acompletion", new=acompletion_mock):
+                patch("orchid.tools.skill.get_skill_registry", return_value=reg), \
+                patch("orchid.llm.client.litellm.acompletion", new=acompletion_mock):
 
             skill_tool_entry = {"tool": build_skill_tool(), "executor": AsyncMock()}
             tool_registry_stub = {
@@ -118,7 +118,7 @@ class StreamResponseSkillToolFilterTest(unittest.IsolatedAsyncioTestCase):
                 "list_skills": {"tool": build_list_skills_tool(), "executor": AsyncMock()},
             }
 
-            with patch("stupidex.llm.client.get_tool_registry", return_value=tool_registry_stub):
+            with patch("orchid.llm.client.get_tool_registry", return_value=tool_registry_stub):
                 gen = llm_client.stream_response(
                     messages=[],
                     model=None,

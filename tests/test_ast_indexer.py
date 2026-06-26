@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-import stupidex.ast.indexer as indexer_mod
-from stupidex.ast.indexer import (
+import orchid.ast.indexer as indexer_mod
+from orchid.ast.indexer import (
     AST_INCLUDE_EXTS,
     _discover_files,
     _extract_symbols,
@@ -14,7 +14,7 @@ from stupidex.ast.indexer import (
     index_project,
     update_file,
 )
-from stupidex.ast.store import ASTStore
+from orchid.ast.store import ASTStore
 
 
 @pytest.fixture(autouse=True)
@@ -86,11 +86,11 @@ def test_discover_files_skips_git_and_node_modules(tmp_path):
     assert "pkg.js" not in names
 
 
-def test_discover_files_skips_stupidex_dir(tmp_path):
+def test_discover_files_skips_orchid_dir(tmp_path):
     (tmp_path / "real.py").write_text("x = 1")
-    stupidex = tmp_path / ".stupidex"
-    stupidex.mkdir()
-    (stupidex / "old.py").write_text("stale")
+    orchid = tmp_path / ".orchid"
+    orchid.mkdir()
+    (orchid / "old.py").write_text("stale")
 
     files = _discover_files(tmp_path, [])
     names = [f.name for f in files]
@@ -167,7 +167,7 @@ def test_read_and_hash_large_file(tmp_path, monkeypatch):
         ast_max_file_size = 10
 
     monkeypatch.setattr(
-        "stupidex.ast.indexer.get_config", lambda: SmallConfig()
+        "orchid.ast.indexer.get_config", lambda: SmallConfig()
     )
     content, h = _read_and_hash(f)
     assert content is None
@@ -360,11 +360,11 @@ async def test_index_project_skips_git_dir(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_index_project_skips_stupidex_dir(tmp_path):
+async def test_index_project_skips_orchid_dir(tmp_path):
     (tmp_path / "real.py").write_text("x = 1")
-    stupidex = tmp_path / ".stupidex"
-    stupidex.mkdir()
-    (stupidex / "old.py").write_text("stale")
+    orchid = tmp_path / ".orchid"
+    orchid.mkdir()
+    (orchid / "old.py").write_text("stale")
 
     result = await index_project(project_path=str(tmp_path))
 
@@ -404,7 +404,7 @@ async def test_index_project_skips_large_files(tmp_path, monkeypatch):
         ignored_dirs: list[str] = []
 
     monkeypatch.setattr(
-        "stupidex.ast.indexer.get_config", lambda: SmallConfig()
+        "orchid.ast.indexer.get_config", lambda: SmallConfig()
     )
 
     result = await index_project(project_path=str(tmp_path))

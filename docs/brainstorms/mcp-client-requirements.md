@@ -7,19 +7,19 @@ topic: mcp-client
 
 ## Summary
 
-Add a full MCP (Model Context Protocol) client to stupidex using the official `mcp` Python SDK. Users configure MCP servers in their config files; on app launch, stupidex connects to each server, discovers its tools and resources, and exposes them to agents through the existing unified tool registry. Agents use MCP tools via normal `allowed_tools` glob patterns, and MCP resources via a dedicated `read_mcp_resource` tool.
+Add a full MCP (Model Context Protocol) client to orchid using the official `mcp` Python SDK. Users configure MCP servers in their config files; on app launch, orchid connects to each server, discovers its tools and resources, and exposes them to agents through the existing unified tool registry. Agents use MCP tools via normal `allowed_tools` glob patterns, and MCP resources via a dedicated `read_mcp_resource` tool.
 
 ---
 
 ## Problem Frame
 
-Stupidex is a coding CLI with 19 built-in tools, but it cannot connect to external tool ecosystems. Users who want to interact with GitHub, Linear, databases, or other services have no extension point — every integration must be hardcoded. MCP is the emerging standard for LLM-tool interop, supported by Claude Code, Cursor, and other coding tools. Without MCP support, stupidex is locked out of this ecosystem. The academic project also requires at least 1 MCP tool and 1 MCP resource implemented.
+Orchid is a coding CLI with 19 built-in tools, but it cannot connect to external tool ecosystems. Users who want to interact with GitHub, Linear, databases, or other services have no extension point — every integration must be hardcoded. MCP is the emerging standard for LLM-tool interop, supported by Claude Code, Cursor, and other coding tools. Without MCP support, orchid is locked out of this ecosystem. The academic project also requires at least 1 MCP tool and 1 MCP resource implemented.
 
 ---
 
 ## Actors
 
-- A1. **End user**: Configures MCP servers in config files, launches stupidex, expects tools to "just work" in agent conversations
+- A1. **End user**: Configures MCP servers in config files, launches orchid, expects tools to "just work" in agent conversations
 - A2. **Agent (general/subagent)**: Calls MCP tools and reads MCP resources through the same interface as native tools
 - A3. **MCP Server**: External process (stdio) or remote service (HTTP/SSE) that provides tools and resources
 
@@ -28,7 +28,7 @@ Stupidex is a coding CLI with 19 built-in tools, but it cannot connect to extern
 ## Key Flows
 
 - F1. **App startup — MCP server initialization**
- - **Trigger:** User launches `stupidex`
+ - **Trigger:** User launches `orchid`
  - **Actors:** A1, A3
  - **Steps:** Load config → read `mcp_servers` section → for each server, start process (stdio) or connect (HTTP/SSE) → call `list_tools()` and `list_resources()` → build URI-to-server map → store MCP tool definitions for merge-at-access → log summary
  - **Outcome:** All configured MCP servers are running, their tools appear in the tool registry alongside native tools
@@ -60,12 +60,12 @@ Stupidex is a coding CLI with 19 built-in tools, but it cannot connect to extern
 ## Requirements
 
 **Server configuration**
-- R1. Users configure MCP servers under an `mcp_servers` key in `~/.stupidex/config.json` and `.stupidex.json`. Each entry has a name, command+args (stdio) or url (HTTP/SSE), and optional env vars. The `mcp_servers` key must be added to the `Config` dataclass so the existing merge loop picks it up.
-- R2. Project-level config (`mcp_servers` in `.stupidex.json`) merges with home config, with project entries overriding same-name home entries.
+- R1. Users configure MCP servers under an `mcp_servers` key in `~/.orchid/config.json` and `.orchid.json`. Each entry has a name, command+args (stdio) or url (HTTP/SSE), and optional env vars. The `mcp_servers` key must be added to the `Config` dataclass so the existing merge loop picks it up.
+- R2. Project-level config (`mcp_servers` in `.orchid.json`) merges with home config, with project entries overriding same-name home entries.
 
 **Server lifecycle**
 - R3. On app launch, all configured MCP servers are started. stdio servers run as subprocesses; HTTP/SSE servers are connected to.
-- R4. On app exit (normal or interrupt), all MCP server subprocesses are terminated gracefully. Override `App.on_exit()` in Stupidex to close all MCP sessions, and register an `atexit` handler as fallback. Shutdown sequence: SIGTERM → wait 5 seconds → SIGKILL if still alive.
+- R4. On app exit (normal or interrupt), all MCP server subprocesses are terminated gracefully. Override `App.on_exit()` in Orchid to close all MCP sessions, and register an `atexit` handler as fallback. Shutdown sequence: SIGTERM → wait 5 seconds → SIGKILL if still alive.
 
 **Tool integration**
 - R5. Each MCP tool is registered in `_TOOL_REGISTRY` with the naming pattern `mcp_<server_name>_<tool_name>`. Server names must match `[a-z0-9-]+` (no underscores) to prevent ambiguity. A reverse-lookup map (tool name → server session) is maintained for routing. The `Tool` domain object is constructed from the MCP tool schema (name, description, JSON Schema parameters). MCP tools are merged into the registry at access time in `stream_response` (not at static registry build time) since MCP initialization is async.
@@ -87,10 +87,10 @@ Stupidex is a coding CLI with 19 built-in tools, but it cannot connect to extern
 
 ## Acceptance Examples
 
-- AE1. **Covers R1, R3, R5.** Given config has `mcp_servers: { filesystem: { command: "mcp-server-filesystem", args: ["/home/user"] } }`, when stupidex launches, then `mcp_filesystem_read_file`, `mcp_filesystem_write_file`, etc. appear in the tool registry.
+- AE1. **Covers R1, R3, R5.** Given config has `mcp_servers: { filesystem: { command: "mcp-server-filesystem", args: ["/home/user"] } }`, when orchid launches, then `mcp_filesystem_read_file`, `mcp_filesystem_write_file`, etc. appear in the tool registry.
 - AE2. **Covers R6.** Given an agent's `allowed_tools` includes `["mcp_filesystem_*"]`, when the LLM calls `mcp_filesystem_read_file`, then the call succeeds. If `allowed_tools` does not include the pattern, the tool is not available to that agent.
 - AE3. **Covers R8.** Given an MCP server exposes a resource at `file:///home/user/project/README.md`, when the agent calls `read_mcp_resource(uri="file:///home/user/project/README.md")`, then the file content is returned.
-- AE4. **Covers R9.** Given config has a server with an invalid command, when stupidex launches, then a warning is logged and the app starts normally with remaining tools.
+- AE4. **Covers R9.** Given config has a server with an invalid command, when orchid launches, then a warning is logged and the app starts normally with remaining tools.
 - AE5. **Covers R10.** Given an MCP tool call fails because the server is unresponsive, when the agent calls the tool, then an error message is returned as the tool result and the app continues running.
 
 ---
@@ -109,7 +109,7 @@ Stupidex is a coding CLI with 19 built-in tools, but it cannot connect to extern
 - MCP "Prompts" feature (server-defined prompt templates) — not needed for v1
 - MCP "Sampling" feature (server-initiated LLM calls) — complex, out of scope
 - Dynamic server hot-reloading without app restart
-- Exposing stupidex's own tools as an MCP server (client only)
+- Exposing orchid's own tools as an MCP server (client only)
 - MCP authentication/OAuth flows for remote servers
 
 ---
@@ -126,8 +126,8 @@ Stupidex is a coding CLI with 19 built-in tools, but it cannot connect to extern
 ## Dependencies / Assumptions
 
 - `mcp` Python SDK must be added to `pyproject.toml` dependencies (minimum version supporting `stdio_client`, `session.call_tool`, `session.read_resource`, and HTTP/SSE transport)
-- MCP servers configured by the user must be installed on the system (stupidex does not auto-install them)
-- The `mcp` SDK's async API is compatible with stupidex's asyncio event loop (expected — both use asyncio)
+- MCP servers configured by the user must be installed on the system (orchid does not auto-install them)
+- The `mcp` SDK's async API is compatible with orchid's asyncio event loop (expected — both use asyncio)
 
 ---
 
@@ -137,4 +137,4 @@ Stupidex is a coding CLI with 19 built-in tools, but it cannot connect to extern
 
 - Affects R5. [Needs research] Exact mapping from MCP tool JSON Schema to `ToolParameter` / `ToolParameterProperties` — verify the `mcp` SDK returns schemas in a format compatible with the existing domain model.
 - Affects R8. [Needs research] How MCP resource content is returned (text vs binary) and how to handle binary resources in `ExecutorResult`.
-- Affects R3. [Technical] Whether `mcp` SDK's `stdio_client` context manager can be managed as a long-lived session within stupidex's app lifecycle, or if a wrapper is needed.
+- Affects R3. [Technical] Whether `mcp` SDK's `stdio_client` context manager can be managed as a long-lived session within orchid's app lifecycle, or if a wrapper is needed.

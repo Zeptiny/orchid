@@ -102,7 +102,7 @@ class TestMCPLifecycle(unittest.IsolatedAsyncioTestCase):
         ``shutdown``'s ``except`` (logging a warning), so we assert the warning
         is absent — both the raised error and its swallowed form are failures.
         """
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         manager = MCPManager()
         servers = {
@@ -111,13 +111,13 @@ class TestMCPLifecycle(unittest.IsolatedAsyncioTestCase):
         }
 
         handler = _RecordingHandler()
-        logger = logging.getLogger("stupidex.mcp")
+        logger = logging.getLogger("orchid.mcp")
         logger.addHandler(handler)
         shutdown_error: BaseException | None = None
         try:
             with (
-                patch("stupidex.mcp.stdio_client", fake_stdio_client),
-                patch("stupidex.mcp.ClientSession", FakeClientSession),
+                patch("orchid.mcp.stdio_client", fake_stdio_client),
+                patch("orchid.mcp.ClientSession", FakeClientSession),
             ):
                 await manager.start_all(servers)
 
@@ -157,14 +157,14 @@ class TestMCPLifecycle(unittest.IsolatedAsyncioTestCase):
         set) and its ``finally`` closes the stack immediately (``_stop``
         already set).
         """
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         manager = MCPManager()
         servers = {"srv1": {"command": "fake", "args": []}}
 
         with (
-            patch("stupidex.mcp.stdio_client", fake_stdio_client),
-            patch("stupidex.mcp.ClientSession", FakeClientSession),
+            patch("orchid.mcp.stdio_client", fake_stdio_client),
+            patch("orchid.mcp.ClientSession", FakeClientSession),
         ):
             await manager.start_all(servers)
             self.assertEqual(
@@ -184,14 +184,14 @@ class TestMCPLifecycle(unittest.IsolatedAsyncioTestCase):
     async def test_start_all_rejects_concurrent_start(self):
         """A second ``start_all`` while a runner is active must raise, rather
         than overwrite ``_runner`` and corrupt the in-flight run's state."""
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         manager = MCPManager()
         servers = {"srv1": {"command": "fake", "args": []}}
 
         with (
-            patch("stupidex.mcp.stdio_client", fake_stdio_client),
-            patch("stupidex.mcp.ClientSession", FakeClientSession),
+            patch("orchid.mcp.stdio_client", fake_stdio_client),
+            patch("orchid.mcp.ClientSession", FakeClientSession),
         ):
             await manager.start_all(servers)
             try:
@@ -274,16 +274,16 @@ class TestSSETransport(unittest.IsolatedAsyncioTestCase):
     async def test_sse_branch_calls_sse_client_not_stdio(self):
         from unittest.mock import MagicMock
 
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         manager = MCPManager()
         servers = {"sse-srv": {"url": "http://localhost:8080/sse"}}
         recording_sse = _make_recording_sse_client()
         stdio_mock = MagicMock()
         with (
-            patch("stupidex.mcp.sse_client", recording_sse),
-            patch("stupidex.mcp.stdio_client", stdio_mock),
-            patch("stupidex.mcp.ClientSession", FakeClientSession),
+            patch("orchid.mcp.sse_client", recording_sse),
+            patch("orchid.mcp.stdio_client", stdio_mock),
+            patch("orchid.mcp.ClientSession", FakeClientSession),
         ):
             await manager.start_all(servers)
 
@@ -301,7 +301,7 @@ class TestSSETransport(unittest.IsolatedAsyncioTestCase):
             await manager.shutdown()
 
     async def test_sse_server_initialize_failure_marks_failed(self):
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         manager = MCPManager()
         servers = {
@@ -315,9 +315,9 @@ class TestSSETransport(unittest.IsolatedAsyncioTestCase):
             return _ScriptedSession(behavior="healthy")
 
         with (
-            patch("stupidex.mcp.sse_client", fake_sse_client),
-            patch("stupidex.mcp.stdio_client", stdio_client_with_command),
-            patch("stupidex.mcp.ClientSession", session_factory),
+            patch("orchid.mcp.sse_client", fake_sse_client),
+            patch("orchid.mcp.stdio_client", stdio_client_with_command),
+            patch("orchid.mcp.ClientSession", session_factory),
         ):
             await manager.start_all(servers)
 
@@ -332,7 +332,7 @@ class TestSSETransport(unittest.IsolatedAsyncioTestCase):
 
 class TestStartAllErrorPropagation(unittest.IsolatedAsyncioTestCase):
     async def test_start_error_re_raised_by_start_all(self):
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         manager = MCPManager()
         servers = {"srv1": {"command": "fake", "args": []}}
@@ -348,7 +348,7 @@ class TestStartAllErrorPropagation(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(manager._runner)
 
     async def test_per_server_failure_does_not_propagate(self):
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         manager = MCPManager()
         servers = {
@@ -362,8 +362,8 @@ class TestStartAllErrorPropagation(unittest.IsolatedAsyncioTestCase):
             return _ScriptedSession(behavior="healthy")
 
         with (
-            patch("stupidex.mcp.stdio_client", stdio_client_with_command),
-            patch("stupidex.mcp.ClientSession", session_factory),
+            patch("orchid.mcp.stdio_client", stdio_client_with_command),
+            patch("orchid.mcp.ClientSession", session_factory),
         ):
             await manager.start_all(servers)
 
@@ -378,7 +378,7 @@ class TestStartAllErrorPropagation(unittest.IsolatedAsyncioTestCase):
     async def test_empty_servers_completes_immediately(self):
         import time
 
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         manager = MCPManager()
         t0 = time.monotonic()
@@ -389,14 +389,14 @@ class TestStartAllErrorPropagation(unittest.IsolatedAsyncioTestCase):
         await manager.shutdown()
 
     async def test_config_load_failure_uses_defaults(self):
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         manager = MCPManager()
         servers = {"srv1": {"command": "fake", "args": []}}
         with (
-            patch("stupidex.mcp.stdio_client", fake_stdio_client),
-            patch("stupidex.mcp.ClientSession", FakeClientSession),
-            patch("stupidex.config.get_config", side_effect=RuntimeError("config boom")),
+            patch("orchid.mcp.stdio_client", fake_stdio_client),
+            patch("orchid.mcp.ClientSession", FakeClientSession),
+            patch("orchid.config.get_config", side_effect=RuntimeError("config boom")),
         ):
             await manager.start_all(servers)
             self.assertEqual(manager._per_server_timeout, 10.0)
@@ -410,7 +410,7 @@ class TestStartAllErrorPropagation(unittest.IsolatedAsyncioTestCase):
 
 class TestAwaitRunnerTimeoutBranch(unittest.IsolatedAsyncioTestCase):
     async def test_runner_that_does_not_stop_within_timeout_is_cancelled(self):
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         manager = MCPManager()
         state = {"cancelled": False}
@@ -429,7 +429,7 @@ class TestAwaitRunnerTimeoutBranch(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(state["cancelled"])
 
     async def test_runner_that_stops_cleanly_returns_without_cancel(self):
-        from stupidex.mcp import MCPManager
+        from orchid.mcp import MCPManager
 
         manager = MCPManager()
         cancelled = {"value": False}

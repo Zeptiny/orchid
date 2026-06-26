@@ -34,13 +34,13 @@ web_fetch(
 1. Fetch URL via `httpx`
 2. Convert HTML → markdown
 3. If content < threshold → return markdown directly
-4. If content >= threshold → write to `~/.stupidex/cache/web-fetch/<session-id>/<slug>.md`, return file path + warning ("Content was X chars — saved to file, use `read` or `grep` to search it")
+4. If content >= threshold → write to `~/.orchid/cache/web-fetch/<session-id>/<slug>.md`, return file path + warning ("Content was X chars — saved to file, use `read` or `grep` to search it")
 5. Return: URL, page title, content type, content or file path
 
 ### LLM integration
 
-- The summarization prompt lives in `agents/defaults/web-fetch/AGENT.md` — `type: internal`, `tier: tolo`
-- Users can customize by placing their own version in `~/.stupidex/agents/web-fetch/AGENT.md`
+- The summarization prompt lives in `agents/defaults/web-fetch/AGENT.md` — `type: internal`, `tier: seed`
+- Users can customize by placing their own version in `~/.orchid/agents/web-fetch/AGENT.md`
 - The tool makes a one-shot `litellm.acompletion` call, not a full agent loop
 - Full page content is sent to the LLM (no chunking or truncation)
 
@@ -53,7 +53,7 @@ web_fetch(
 
 ### Cache lifecycle (session-scoped)
 
-- Cache directory: `~/.stupidex/cache/web-fetch/<session-id>/`
+- Cache directory: `~/.orchid/cache/web-fetch/<session-id>/`
 - Session save: no action needed, files are already on disk
 - Session delete: `delete_session()` in `storage.py` also deletes the session's cache directory
 - App restart: cache files persist, accessible if the session is resumed
@@ -75,8 +75,8 @@ web_fetch(
 
 ## References
 
-- Tool system: `src/stupidex/tools/`
-- Agent system: `src/stupidex/agents/` — agents defined via `AGENT.md` with frontmatter (`type: internal`, `tier: tolo`)
+- Tool system: `src/orchid/tools/`
+- Agent system: `src/orchid/agents/` — agents defined via `AGENT.md` with frontmatter (`type: internal`, `tier: seed`)
 - Existing Tolo agents: `agents/defaults/reviewer/`, `agents/defaults/explore-codebase/`
-- Session storage: `src/stupidex/session/storage.py` — `save_session()`, `load_session()`, `delete_session()`
-- Home config dir: `~/.stupidex/` (`HOME_CONFIG_DIR`)
+- Session storage: `src/orchid/session/storage.py` — `save_session()`, `load_session()`, `delete_session()`
+- Home config dir: `~/.orchid/` (`HOME_CONFIG_DIR`)

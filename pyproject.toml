@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "stupidex"
+name = "orchid"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
-stupidex = "stupidex.main:main"
+orchid = "orchid.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

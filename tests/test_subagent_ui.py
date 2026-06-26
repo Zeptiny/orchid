@@ -4,12 +4,12 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from stupidex.agents.manager import SubagentRecord, SubagentState
-from stupidex.domain.agent import Agent, AgentTypes, ModelTier
-from stupidex.domain.chain import Chain, ChainStatus
-from stupidex.domain.message import Message, MessageRole, MessageType, Usage
-from stupidex.widgets.message_widget import ChainFooterWidget
-from stupidex.widgets.subagent_ui import SubagentUIManager
+from orchid.agents.manager import SubagentRecord, SubagentState
+from orchid.domain.agent import Agent, AgentTypes, ModelTier
+from orchid.domain.chain import Chain, ChainStatus
+from orchid.domain.message import Message, MessageRole, MessageType, Usage
+from orchid.widgets.message_widget import ChainFooterWidget
+from orchid.widgets.subagent_ui import SubagentUIManager
 
 
 class _ConcurrencyTracker:
@@ -64,7 +64,7 @@ class TestMountLockConcurrency(unittest.IsolatedAsyncioTestCase):
         tracker = _ConcurrencyTracker()
         msg = _text_message()
 
-        with patch("stupidex.widgets.subagent_ui.mount_streamed_message", tracker):
+        with patch("orchid.widgets.subagent_ui.mount_streamed_message", tracker):
             t1 = asyncio.create_task(mgr.on_message("sa1", msg))
             await tracker.entered.wait()
 
@@ -90,7 +90,7 @@ class TestMountLockConcurrency(unittest.IsolatedAsyncioTestCase):
         tracker = _ConcurrencyTracker()
         msg = _text_message()
 
-        with patch("stupidex.widgets.subagent_ui.mount_streamed_message", tracker):
+        with patch("orchid.widgets.subagent_ui.mount_streamed_message", tracker):
             t1 = asyncio.create_task(mgr.on_message("sa1", msg))
             await tracker.entered.wait()
 
@@ -169,7 +169,7 @@ class TestLockEviction(unittest.IsolatedAsyncioTestCase):
         tracker.gate.set()
         msg = _text_message()
 
-        with patch("stupidex.widgets.subagent_ui.mount_streamed_message", tracker):
+        with patch("orchid.widgets.subagent_ui.mount_streamed_message", tracker):
             await mgr.on_message("sa1", msg)
 
         self.assertIn("sa1", mgr._mount_locks)
@@ -200,7 +200,7 @@ class TestSubagentFooter(unittest.IsolatedAsyncioTestCase):
         return Agent(
             name="Subagent",
             type=AgentTypes.SUBAGENT,
-            tier=ModelTier.PAPUDO,
+            tier=ModelTier.BLOOM,
             description="d",
             system_prompt="p",
         )
@@ -234,9 +234,9 @@ class TestSubagentFooter(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_on_spawn_mounts_footer_showing_model_and_tokens(self) -> None:
-        from stupidex.app import Stupidex
+        from orchid.app import Orchid
 
-        app = Stupidex()
+        app = Orchid()
         async with app.run_test():
             record = self._record_with_usage()
             await app._subagent_ui.on_spawn(record)
@@ -253,10 +253,10 @@ class TestSubagentFooter(unittest.IsolatedAsyncioTestCase):
             self.assertIn("↓200", text)
 
     async def test_sync_tabs_freezes_footer_for_restored_completed(self) -> None:
-        from stupidex.agents.manager import SubagentManager
-        from stupidex.app import Stupidex
+        from orchid.agents.manager import SubagentManager
+        from orchid.app import Orchid
 
-        app = Stupidex()
+        app = Orchid()
         async with app.run_test():
             record = self._record_with_usage()
             record.state = SubagentState.COMPLETED
@@ -280,9 +280,9 @@ class TestSubagentFooter(unittest.IsolatedAsyncioTestCase):
             self.assertIn("↓200", text)
 
     async def test_tick_timer_ticks_running_footer(self) -> None:
-        from stupidex.app import Stupidex
+        from orchid.app import Orchid
 
-        app = Stupidex()
+        app = Orchid()
         async with app.run_test():
             record = self._record_with_usage()
             # Inject into the active session's subagent_manager, which is
@@ -314,9 +314,9 @@ class TestSubagentFooter(unittest.IsolatedAsyncioTestCase):
         # must render both the chain's own usage AND the (sub: ...) segment
         # attributed via parent_chain_index (U7 end-to-end, not just the unit
         # _build_text path).
-        from stupidex.app import Stupidex
+        from orchid.app import Orchid
 
-        app = Stupidex()
+        app = Orchid()
         async with app.run_test():
             session = app.sessions.create()
             # A chain whose own final assistant message carries usage.

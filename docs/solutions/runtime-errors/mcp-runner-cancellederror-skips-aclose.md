@@ -2,7 +2,7 @@
 title: "CancelledError in MCP runner's finally block skips exit_stack.aclose(), causing dangling async generators"
 date: 2026-06-19
 category: runtime-errors
-module: MCP (stupidex.mcp)
+module: MCP (orchid.mcp)
 problem_type: runtime_error
 component: development_workflow
 severity: medium

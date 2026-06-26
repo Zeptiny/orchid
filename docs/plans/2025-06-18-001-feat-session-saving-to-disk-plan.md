@@ -11,7 +11,7 @@ Sessions are entirely in-memory. Every app restart creates a fresh session and d
 **In scope (v1):**
 - Serialization for `Session`, `Chain`, `SubagentRecord`, `TodoStore`
 - Auto-save after every message exchange (background, non-blocking)
-- Auto-naming after first exchange (background LLM call, `tolo` tier)
+- Auto-naming after first exchange (background LLM call, `seed` tier)
 - `/sessions` command — list, load, delete, rename
 
 **Out of scope:**
@@ -26,11 +26,11 @@ Sessions are entirely in-memory. Every app restart creates a fresh session and d
 
 ## Key Decisions
 
-1. **Storage format:** One JSON file per session in `~/.stupidex/sessions/<uuid>.json`. Simple, inspectable, no external dependencies. Matches the existing `ConfigManager` save pattern (atomic write with tmp + rename).
+1. **Storage format:** One JSON file per session in `~/.orchid/sessions/<uuid>.json`. Simple, inspectable, no external dependencies. Matches the existing `ConfigManager` save pattern (atomic write with tmp + rename).
 
 2. **Serialization strategy:** Add `to_storage_dict()` / `from_storage_dict()` to `Message` — separate from the existing `to_dict()` which is API-only (strips `type`, `display`, `metadata`, `usage`). `Session`, `Chain`, `SubagentRecord`, `TodoStore` get `to_dict()` / `from_dict()` methods.
 
-3. **Auto-naming model:** Uses `tolo` tier via `get_model_for_tier("tolo")`. Simple `litellm.acompletion()` call (no tools, no streaming). Silent — failures are logged but not shown to the user.
+3. **Auto-naming model:** Uses `seed` tier via `get_model_for_tier("seed")`. Simple `litellm.acompletion()` call (no tools, no streaming). Silent — failures are logged but not shown to the user.
 
 4. **Subagent persistence:** `SubagentRecord` serializes `id`, `agent` (via `Agent.to_dict()`), `state`, `label`, `task`, `result`, `error`, `start_time`, `end_time`, `messages`. Excludes non-serializable fields (`async_task`, callbacks, UI state). Stored as a separate `subagent_chains` dict on the session JSON. On load, completed subagents are restored; running ones become abandoned.
 
@@ -45,11 +45,11 @@ Sessions are entirely in-memory. Every app restart creates a fresh session and d
 **Requirements:** R1, R4
 
 **Files:**
-- `src/stupidex/domain/message.py` — add `to_storage_dict()`, `from_storage_dict()`
-- `src/stupidex/domain/chain.py` — add `to_dict()`, `from_dict()`
-- `src/stupidex/domain/session.py` — add `to_dict()`, `from_dict()`, add `created_at` / `updated_at` fields
-- `src/stupidex/domain/todo.py` — add `TodoTask.from_dict()`, `TodoStore.to_dict()`, `TodoStore.from_dict()`
-- `src/stupidex/agents/manager.py` — add `SubagentRecord.to_dict()`, `SubagentManager.to_dict()`, `SubagentManager.from_dict()`
+- `src/orchid/domain/message.py` — add `to_storage_dict()`, `from_storage_dict()`
+- `src/orchid/domain/chain.py` — add `to_dict()`, `from_dict()`
+- `src/orchid/domain/session.py` — add `to_dict()`, `from_dict()`, add `created_at` / `updated_at` fields
+- `src/orchid/domain/todo.py` — add `TodoTask.from_dict()`, `TodoStore.to_dict()`, `TodoStore.from_dict()`
+- `src/orchid/agents/manager.py` — add `SubagentRecord.to_dict()`, `SubagentManager.to_dict()`, `SubagentManager.from_dict()`
 - `tests/test_session_serialization.py` — round-trip tests
 
 **Approach:**
@@ -67,8 +67,8 @@ Add `created_at: float` and `updated_at: float` fields to `Session`. Initialize 
 `SubagentManager.to_dict()` returns a dict of `{subagent_id: record.to_dict()}` for all completed/interrupted/failed records (skips running ones). `SubagentManager.from_dict()` rebuilds completed records.
 
 **Patterns to follow:**
-- `Agent.to_dict()` / `Agent.from_dict()` in `src/stupidex/domain/agent.py` — same pattern
-- `TodoTask.to_dict()` in `src/stupidex/domain/todo.py` — same pattern
+- `Agent.to_dict()` / `Agent.from_dict()` in `src/orchid/domain/agent.py` — same pattern
+- `TodoTask.to_dict()` in `src/orchid/domain/todo.py` — same pattern
 
 **Test scenarios:**
 - Round-trip `Message` through `to_storage_dict()` / `from_storage_dict()` — all field combinations (text, thinking, tool_call, tool_result, error, with/without usage, with/without metadata)
@@ -92,19 +92,19 @@ Add `created_at: float` and `updated_at: float` fields to `Session`. Initialize 
 **Dependencies:** U1
 
 **Files:**
-- `src/stupidex/storage.py` — new file, `SessionStorage` class
+- `src/orchid/storage.py` — new file, `SessionStorage` class
 - `tests/test_session_storage.py` — file I/O tests with temp directories
 
 **Approach:**
 
 `SessionStorage` class with class methods (singleton pattern like `ConfigManager`):
 
-- `save(session: Session)` — serialize via `session.to_dict()`, atomic write to `~/.stupidex/sessions/<session.id>.json` (tmp file + `os.replace()`, same pattern as `ConfigManager.save()`)
+- `save(session: Session)` — serialize via `session.to_dict()`, atomic write to `~/.orchid/sessions/<session.id>.json` (tmp file + `os.replace()`, same pattern as `ConfigManager.save()`)
 - `load(session_id: str) -> Session` — read JSON, deserialize via `Session.from_dict()`
 - `list_all() -> list[SessionSummary]` — scan directory, return lightweight summaries (id, name, updated_at, message_count) without loading full sessions
 - `delete(session_id: str) -> bool` — remove JSON file
 - `rename(session_id: str, new_name: str) -> bool` — load, update name, save
-- `ensure_sessions_dir()` — create `~/.stupidex/sessions/` if missing
+- `ensure_sessions_dir()` — create `~/.orchid/sessions/` if missing
 
 `SessionSummary` is a lightweight dataclass: `id`, `name`, `updated_at`, `message_count`. Used by `list_all()` to avoid loading full sessions into memory.
 
@@ -114,8 +114,8 @@ write to tmp file → flush → fsync → os.replace to final path → fsync dir
 ```
 
 **Patterns to follow:**
-- `ConfigManager.save()` in `src/stupidex/config.py:258-280` — atomic write pattern
-- `HOME_CONFIG_DIR` in `src/stupidex/config.py:12` — path constant pattern
+- `ConfigManager.save()` in `src/orchid/config.py:258-280` — atomic write pattern
+- `HOME_CONFIG_DIR` in `src/orchid/config.py:12` — path constant pattern
 
 Add `HOME_SESSIONS_DIR = HOME_CONFIG_DIR / "sessions"` to `config.py`.
 
@@ -143,7 +143,7 @@ Add `HOME_SESSIONS_DIR = HOME_CONFIG_DIR / "sessions"` to `config.py`.
 **Dependencies:** U2
 
 **Files:**
-- `src/stupidex/domain/session.py` — add `save_session()`, `load_session()` to `SessionManager`
+- `src/orchid/domain/session.py` — add `save_session()`, `load_session()` to `SessionManager`
 
 **Approach:**
 
@@ -174,11 +174,11 @@ The `load_session()` method reconstructs the full session object including `Suba
 **Dependencies:** U3
 
 **Files:**
-- `src/stupidex/app.py` — add auto-save call after `streaming_finished()`
+- `src/orchid/app.py` — add auto-save call after `streaming_finished()`
 
 **Approach:**
 
-In `Stupidex.streaming_finished()` (line 393), after the chain is frozen and footer is rerendered, fire a background save:
+In `Orchid.streaming_finished()` (line 393), after the chain is frozen and footer is rerendered, fire a background save:
 
 ```python
 async def streaming_finished(self) -> None:
@@ -207,21 +207,21 @@ Also add auto-save in:
 - Concurrent auto-saves don't corrupt the file
 - Auto-save failure is logged but not shown to the user
 
-**Verification:** Manual test — send a message, verify `~/.stupidex/sessions/<uuid>.json` exists.
+**Verification:** Manual test — send a message, verify `~/.orchid/sessions/<uuid>.json` exists.
 
 ---
 
 ### U5. Auto-Naming
 
-**Goal:** After the first complete exchange, silently generate a short session name using the `tolo` tier model.
+**Goal:** After the first complete exchange, silently generate a short session name using the `seed` tier model.
 
 **Requirements:** R3
 
 **Dependencies:** U3
 
 **Files:**
-- `src/stupidex/domain/session.py` — add `auto_name()` method or separate service
-- `src/stupidex/app.py` — trigger auto-naming after first exchange
+- `src/orchid/domain/session.py` — add `auto_name()` method or separate service
+- `src/orchid/app.py` — trigger auto-naming after first exchange
 
 **Approach:**
 
@@ -238,11 +238,11 @@ async def _auto_name_session(self) -> None:
         return  # Need at least one exchange
 
     try:
-        from stupidex.config import get_model_for_tier, get_config
+        from orchid.config import get_model_for_tier, get_config
         import litellm
 
         cfg = get_config()
-        model = get_model_for_tier("tolo")
+        model = get_model_for_tier("seed")
 
         # Build a simple prompt with the first exchange
         context = []
@@ -295,13 +295,13 @@ Call `_auto_name_session()` at the end of `streaming_finished()`, after auto-sav
 **Dependencies:** U3
 
 **Files:**
-- `src/stupidex/commands/session_commands.py` — add `/sessions`, `/sessions delete`, `/sessions rename` commands
-- `src/stupidex/screens/session_picker.py` — new file, `SessionPicker` screen
-- `src/stupidex/app.py` — add `load_session()` method for UI refresh after load
+- `src/orchid/commands/session_commands.py` — add `/sessions`, `/sessions delete`, `/sessions rename` commands
+- `src/orchid/screens/session_picker.py` — new file, `SessionPicker` screen
+- `src/orchid/app.py` — add `load_session()` method for UI refresh after load
 
 **Approach:**
 
-**SessionPicker screen** — extends the `OptionPicker` pattern from `src/stupidex/screens/picker.py`. Shows session name, date, and message count in each option label. Supports a `mode` parameter: `"load"` (default), `"delete"`.
+**SessionPicker screen** — extends the `OptionPicker` pattern from `src/orchid/screens/picker.py`. Shows session name, date, and message count in each option label. Supports a `mode` parameter: `"load"` (default), `"delete"`.
 
 For load mode:
 - Select → dismiss with session ID
@@ -328,7 +328,7 @@ For delete mode:
 **Patterns to follow:**
 - `/model` command in `session_commands.py:55-67` — picker pattern
 - `/switch` command in `session_commands.py:31-41` — session switching pattern
-- `OptionPicker` in `src/stupidex/screens/picker.py` — screen structure
+- `OptionPicker` in `src/orchid/screens/picker.py` — screen structure
 
 **Test scenarios:**
 - `/sessions` with no saved sessions — shows empty picker or "No saved sessions" notification

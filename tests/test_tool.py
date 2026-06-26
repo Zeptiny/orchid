@@ -2,7 +2,7 @@
 
 import unittest
 
-from stupidex.domain.tool import Tool, ToolParameter, ToolParameterProperties
+from orchid.domain.tool import Tool, ToolParameter, ToolParameterProperties
 
 
 def _tool(**overrides) -> Tool:

@@ -7,15 +7,15 @@ import unittest
 import numpy as np
 import pytest
 
-from stupidex.rag.chunker import Chunk
-from stupidex.rag.store import RAGStore
+from orchid.rag.chunker import Chunk
+from orchid.rag.store import RAGStore
 
 
 def test_store_init_creates_directory(tmp_path):
     """Store init_db should create the rag directory."""
     store = RAGStore(str(tmp_path))
     store.init_db()
-    assert (tmp_path / ".stupidex" / "rag").exists()
+    assert (tmp_path / ".orchid" / "rag").exists()
 
 
 def test_store_init_creates_tables(tmp_path):
@@ -163,8 +163,8 @@ def test_store_clear_removes_everything(tmp_path):
 
     store.clear()
 
-    assert not (tmp_path / ".stupidex" / "rag" / "index.db").exists()
-    assert not (tmp_path / ".stupidex" / "rag" / "vectors.npy").exists()
+    assert not (tmp_path / ".orchid" / "rag" / "index.db").exists()
+    assert not (tmp_path / ".orchid" / "rag" / "vectors.npy").exists()
 
 
 class TestUpsertFileVectorRebuild(unittest.TestCase):

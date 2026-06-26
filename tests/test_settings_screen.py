@@ -8,15 +8,15 @@ from unittest.mock import MagicMock, PropertyMock, patch
 import pytest
 from textual.widgets import Button, Input, Select
 
-from stupidex.config import (
+from orchid.config import (
     Config,
     ConfigManager,
     RAGConfig,
     _convert_from_dict,
     validate_config,
 )
-from stupidex.screens.picker import OptionPicker, PickerItem
-from stupidex.screens.settings import NewMCPServerForm, NewProviderForm, SettingsScreen
+from orchid.screens.picker import OptionPicker, PickerItem
+from orchid.screens.settings import NewMCPServerForm, NewProviderForm, SettingsScreen
 
 # ── _convert_from_dict ───────────────────────────────────────────────────────
 
@@ -118,9 +118,9 @@ class TestValidateConfigTierModels:
         assert any("tier_models" in e for e in errors)
 
     def test_tier_models_empty_value_is_error(self):
-        cfg = Config(tier_models={"tolo": ""})
+        cfg = Config(tier_models={"seed": ""})
         errors = validate_config(cfg)
-        assert any("tier_models.tolo" in e for e in errors)
+        assert any("tier_models.seed" in e for e in errors)
 
 
 # ── validate_config (mcp_servers edge cases) ─────────────────────────────────
@@ -189,17 +189,17 @@ class TestSettingsScreenCollectModifiedConfig:
         whatever is already there."""
         base = Config()
         base.tier_models = {
-            "tolo": "provider-a/model-x",
-            "tainha": "provider-a/model-y",
-            "papudo": "provider-b/model-z",
-            "papaca": "provider-b/model-w",
+            "seed": "provider-a/model-x",
+            "sprout": "provider-a/model-y",
+            "bloom": "provider-b/model-z",
+            "crown": "provider-b/model-w",
         }
         screen = SettingsScreen(base)
         cfg = screen._collect_modified_config()
-        assert cfg.tier_models["tolo"] == "provider-a/model-x"
-        assert cfg.tier_models["tainha"] == "provider-a/model-y"
-        assert cfg.tier_models["papudo"] == "provider-b/model-z"
-        assert cfg.tier_models["papaca"] == "provider-b/model-w"
+        assert cfg.tier_models["seed"] == "provider-a/model-x"
+        assert cfg.tier_models["sprout"] == "provider-a/model-y"
+        assert cfg.tier_models["bloom"] == "provider-b/model-z"
+        assert cfg.tier_models["crown"] == "provider-b/model-w"
 
     def test_rag_fields_updated_via_on_input_changed(self):
         """RAG numeric fields are updated live via on_input_changed."""
@@ -260,8 +260,8 @@ class TestSettingsScreenDoSave:
 
         with (
             patch.object(screen, "_collect_modified_config", return_value=cfg),
-            patch("stupidex.screens.settings.validate_config", return_value=[]),
-            patch("stupidex.config.ConfigManager") as cfg_mgr_cls,
+            patch("orchid.screens.settings.validate_config", return_value=[]),
+            patch("orchid.config.ConfigManager") as cfg_mgr_cls,
             patch.object(type(screen), "app", new_callable=PropertyMock, return_value=app_mock),
         ):
             screen._do_save(close=True)
@@ -277,8 +277,8 @@ class TestSettingsScreenDoSave:
 
         with (
             patch.object(screen, "_collect_modified_config", return_value=cfg),
-            patch("stupidex.screens.settings.validate_config", return_value=[]),
-            patch("stupidex.config.ConfigManager"),
+            patch("orchid.screens.settings.validate_config", return_value=[]),
+            patch("orchid.config.ConfigManager"),
             patch.object(type(screen), "app", new_callable=PropertyMock, return_value=app_mock),
         ):
             screen._do_save(close=False)
@@ -294,8 +294,8 @@ class TestSettingsScreenDoSave:
 
         with (
             patch.object(screen, "_collect_modified_config", return_value=changed),
-            patch("stupidex.screens.settings.validate_config", return_value=[]),
-            patch("stupidex.config.ConfigManager"),
+            patch("orchid.screens.settings.validate_config", return_value=[]),
+            patch("orchid.config.ConfigManager"),
             patch.object(type(screen), "app", new_callable=PropertyMock, return_value=app_mock),
         ):
             screen._do_save(close=False)
@@ -312,7 +312,7 @@ class TestSettingsScreenDoSave:
 
         with (
             patch.object(screen, "_collect_modified_config", return_value=cfg),
-            patch("stupidex.screens.settings.validate_config", return_value=["bad field"]),
+            patch("orchid.screens.settings.validate_config", return_value=["bad field"]),
         ):
             screen._do_save(close=True)
 
@@ -371,7 +371,7 @@ class TestSettingsScreenDirtyTracking:
         cfg = Config()
         cfg.providers = {"p": {"models": {"m": {}}}}
         screen = SettingsScreen(cfg)
-        screen._config.tier_models["tolo"] = "p/m"
+        screen._config.tier_models["seed"] = "p/m"
         screen._mark_dirty("tier_models")
         assert "Tier Models" in screen._dirty_tab_names()
 
@@ -405,7 +405,7 @@ class TestSettingsScreenDirtyTracking:
 
 class TestConfirmScreen:
     def test_yes_button_dismisses_true(self):
-        from stupidex.screens.settings import ConfirmScreen
+        from orchid.screens.settings import ConfirmScreen
 
         screen = ConfirmScreen("title", "msg")
         screen.dismiss = MagicMock()
@@ -415,7 +415,7 @@ class TestConfirmScreen:
         screen.dismiss.assert_called_once_with("discard")
 
     def test_no_button_dismisses_false(self):
-        from stupidex.screens.settings import ConfirmScreen
+        from orchid.screens.settings import ConfirmScreen
 
         screen = ConfirmScreen("title", "msg")
         screen.dismiss = MagicMock()
@@ -425,7 +425,7 @@ class TestConfirmScreen:
         screen.dismiss.assert_called_once_with(None)
 
     def test_escape_dismisses_false(self):
-        from stupidex.screens.settings import ConfirmScreen
+        from orchid.screens.settings import ConfirmScreen
 
         screen = ConfirmScreen("title", "msg")
         screen.dismiss = MagicMock()
@@ -728,10 +728,10 @@ class TestConfigManagerSettingsFlow:
         """Verify that validate_config accepts a config modified via on_input_changed."""
         orig = Config()
         orig.tier_models = {
-            "tolo": "custom/tolo-model",
-            "tainha": "custom/tainha-model",
-            "papudo": "custom/papudo-model",
-            "papaca": "custom/papaca-model",
+            "seed": "custom/seed-model",
+            "sprout": "custom/sprout-model",
+            "bloom": "custom/bloom-model",
+            "crown": "custom/crown-model",
         }
         orig.default_model = "custom/default-model"
         orig.theme = "dracula"
@@ -761,7 +761,7 @@ class TestConfigManagerSettingsFlow:
         assert errors == [], f"Validation failed: {errors}"
 
         # Verify key changes took effect
-        assert modified.tier_models["tolo"] == "custom/tolo-model"
+        assert modified.tier_models["seed"] == "custom/seed-model"
         assert modified.rag.chunk_size == 3000
         assert modified.default_model == "custom/default-model"
         assert modified.theme == "dracula"
@@ -774,16 +774,16 @@ class TestConfigManagerSettingsFlow:
             home_path = tmpdir / "config.json"
 
             with (
-                patch("stupidex.config.HOME_CONFIG_DIR", tmpdir),
-                patch("stupidex.config.HOME_CONFIG_PATH", home_path),
-                patch("stupidex.config.HOME_AGENTS_DIR", tmpdir / "agents"),
-                patch("stupidex.config.HOME_SKILLS_DIR", tmpdir / "skills"),
-                patch("stupidex.config.PROJECT_CONFIG_NAME", "nonexistent-project-config.json"),
-                patch("stupidex.agents.seed_agents_dir"),
-                patch("stupidex.agents.load_agents"),
-                patch("stupidex.skills.seed_skills_dir"),
-                patch("stupidex.skills.load_skills"),
-                patch("stupidex.personality.load_personalities"),
+                patch("orchid.config.HOME_CONFIG_DIR", tmpdir),
+                patch("orchid.config.HOME_CONFIG_PATH", home_path),
+                patch("orchid.config.HOME_AGENTS_DIR", tmpdir / "agents"),
+                patch("orchid.config.HOME_SKILLS_DIR", tmpdir / "skills"),
+                patch("orchid.config.PROJECT_CONFIG_NAME", "nonexistent-project-config.json"),
+                patch("orchid.agents.seed_agents_dir"),
+                patch("orchid.agents.load_agents"),
+                patch("orchid.skills.seed_skills_dir"),
+                patch("orchid.skills.load_skills"),
+                patch("orchid.personality.load_personalities"),
             ):
                 ConfigManager.reset()
                 ConfigManager.ensure_home_config()
@@ -810,7 +810,7 @@ class TestConfigManagerSettingsFlow:
 
 class TestMainStartupGate:
     def test_gate_exits_on_errors(self):
-        from stupidex import main
+        from orchid import main
 
         with (
             patch.object(main.ConfigManager, "load"),
@@ -829,13 +829,13 @@ class TestMainStartupGate:
         assert mock_sys.stderr.write.called or mock_sys.stderr.writelines.called
 
     def test_gate_starts_app_on_no_errors(self):
-        from stupidex import main
+        from orchid import main
 
         with (
             patch.object(main.ConfigManager, "load"),
             patch.object(main.ConfigManager, "errors", return_value=[]),
             patch.object(main.ConfigManager, "ensure_home_config"),
-            patch.object(main, "Stupidex") as mock_app_cls,
+            patch.object(main, "Orchid") as mock_app_cls,
         ):
             mock_app = MagicMock()
             # MagicMock attributes are truthy by default; ``restart_requested``
@@ -1113,7 +1113,7 @@ class TestNewProviderFormStateSync(unittest.TestCase):
 
 class TestConfirmScreenSaveClose(unittest.TestCase):
     def test_save_button_dismisses_save_close(self):
-        from stupidex.screens.settings import ConfirmScreen
+        from orchid.screens.settings import ConfirmScreen
 
         screen = ConfirmScreen("title", "msg")
         screen.dismiss = MagicMock()
@@ -1215,8 +1215,8 @@ class TestSettingsScreenButtonRouting(unittest.TestCase):
     def test_tier_change_routes_to_open_tier_model_picker(self):
         screen = self._make_screen()
         screen._open_tier_model_picker = MagicMock()
-        screen.on_button_pressed(Button.Pressed(button=MagicMock(id="tier-change-tolo")))
-        screen._open_tier_model_picker.assert_called_once_with("tolo")
+        screen.on_button_pressed(Button.Pressed(button=MagicMock(id="tier-change-seed")))
+        screen._open_tier_model_picker.assert_called_once_with("seed")
 
     def test_gen_pick_routes_to_open_general_picker(self):
         screen = self._make_screen()
@@ -1273,7 +1273,7 @@ class TestSettingsScreenPickerFlows(unittest.TestCase):
     def test_theme_picker_callback_updates_config(self):
         screen = self._make_screen()
         captured = self._capture_callback(screen)
-        with patch("stupidex.themes.get_theme_registry") as reg:
+        with patch("orchid.themes.get_theme_registry") as reg:
             reg.return_value.list_themes.return_value = ["default", "monokai", "dracula"]
             screen._open_theme_picker()
         self.assertIsInstance(captured["picker"], OptionPicker)
@@ -1285,7 +1285,7 @@ class TestSettingsScreenPickerFlows(unittest.TestCase):
     def test_personality_picker_callback_updates_config(self):
         screen = self._make_screen()
         captured = self._capture_callback(screen)
-        with patch("stupidex.personality.load_personalities", return_value={"concise": "x", "verbose": "y"}):
+        with patch("orchid.personality.load_personalities", return_value={"concise": "x", "verbose": "y"}):
             screen._open_personality_picker()
         self.assertIsInstance(captured["picker"], OptionPicker)
         captured["callback"]("verbose")
@@ -1297,7 +1297,7 @@ class TestSettingsScreenPickerFlows(unittest.TestCase):
         screen = self._make_screen()
         captured = self._capture_callback(screen)
         items = [PickerItem(label="prov-a / gpt-4o", id="prov-a/gpt-4o")]
-        with patch("stupidex.screens.settings._build_model_picker_items", return_value=items):
+        with patch("orchid.screens.settings._build_model_picker_items", return_value=items):
             screen._open_default_model_picker()
         self.assertIsInstance(captured["picker"], OptionPicker)
         captured["callback"]("prov-a/gpt-4o")
@@ -1307,7 +1307,7 @@ class TestSettingsScreenPickerFlows(unittest.TestCase):
 
     def test_default_model_picker_no_items_does_not_push(self):
         screen = self._make_screen()
-        with patch("stupidex.screens.settings._build_model_picker_items", return_value=[]):
+        with patch("orchid.screens.settings._build_model_picker_items", return_value=[]):
             screen._open_default_model_picker()
         screen.app.push_screen.assert_not_called()
 
@@ -1315,8 +1315,8 @@ class TestSettingsScreenPickerFlows(unittest.TestCase):
         screen = self._make_screen()
         captured = self._capture_callback(screen)
         with (
-            patch("stupidex.screens.settings._list_fastembed_models", return_value=["X"]),
-            patch("stupidex.screens.settings._build_model_picker_items", return_value=[]),
+            patch("orchid.screens.settings._list_fastembed_models", return_value=["X"]),
+            patch("orchid.screens.settings._build_model_picker_items", return_value=[]),
         ):
             screen._open_embedding_model_picker()
         self.assertIsInstance(captured["picker"], OptionPicker)
@@ -1328,8 +1328,8 @@ class TestSettingsScreenPickerFlows(unittest.TestCase):
     def test_embedding_model_picker_no_items_does_not_push(self):
         screen = self._make_screen()
         with (
-            patch("stupidex.screens.settings._list_fastembed_models", return_value=[]),
-            patch("stupidex.screens.settings._build_model_picker_items", return_value=[]),
+            patch("orchid.screens.settings._list_fastembed_models", return_value=[]),
+            patch("orchid.screens.settings._build_model_picker_items", return_value=[]),
         ):
             screen._open_embedding_model_picker()
         screen.app.push_screen.assert_not_called()

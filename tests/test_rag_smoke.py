@@ -1,8 +1,8 @@
 import random
 import tempfile
 
-from stupidex.rag.chunker import chunk_file
-from stupidex.rag.store import RAGStore
+from orchid.rag.chunker import chunk_file
+from orchid.rag.store import RAGStore
 
 
 def test_chunker_produces_multiple_chunks():
@@ -104,7 +104,7 @@ def test_embedder_fastembed_local_routes_correctly():
 
     import numpy as np
 
-    from stupidex.rag.embedder import Embedder
+    from orchid.rag.embedder import Embedder
 
     e = Embedder("fastembed/BAAI/bge-small-en-v1.5")
     Embedder._fastembed_cache.clear()

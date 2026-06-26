@@ -13,12 +13,12 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from stupidex.commands.session_commands import (
+from orchid.commands.session_commands import (
     _build_model_picker_items,
     _format_model_label,
     execute_command,
 )
-from stupidex.config import Config
+from orchid.config import Config
 
 
 def _meta(
@@ -36,9 +36,9 @@ def _meta(
     }
 
 
-_RESOLVER = "stupidex.commands.session_commands.resolve_model_metadata"
-_GET_CONFIG = "stupidex.commands.session_commands.get_config"
-_DISCOVER = "stupidex.commands.session_commands.discover_provider_models"
+_RESOLVER = "orchid.commands.session_commands.resolve_model_metadata"
+_GET_CONFIG = "orchid.commands.session_commands.get_config"
+_DISCOVER = "orchid.commands.session_commands.discover_provider_models"
 
 
 class TestBuildModelPickerItems(unittest.TestCase):
@@ -435,7 +435,7 @@ class TestFormatModelLabel(unittest.TestCase):
         The truncated prefix + ellipsis must fit in `_MODEL_COL_REF_WIDTH`; the
         full ref is preserved on the PickerItem.id (not the label).
         """
-        from stupidex.commands.session_commands import _MODEL_COL_REF_WIDTH
+        from orchid.commands.session_commands import _MODEL_COL_REF_WIDTH
 
         long_alias = "very-long-alias-name-that-exceeds-the-column"
         long_model = "model-with-an-exceptionally-long-identifier"
@@ -451,7 +451,7 @@ class TestModelPickerHeader(unittest.TestCase):
     """Verify the column-titles header is built with the right widths + labels."""
 
     def test_header_contains_column_titles(self):
-        from stupidex.commands.session_commands import _MODEL_PICKER_HEADER
+        from orchid.commands.session_commands import _MODEL_PICKER_HEADER
 
         self.assertIn("Model", _MODEL_PICKER_HEADER)
         self.assertIn("In", _MODEL_PICKER_HEADER)
@@ -460,7 +460,7 @@ class TestModelPickerHeader(unittest.TestCase):
 
     def test_header_width_matches_label_width(self):
         """Header and label rows share the same column widths so they align."""
-        from stupidex.commands.session_commands import _MODEL_PICKER_HEADER
+        from orchid.commands.session_commands import _MODEL_PICKER_HEADER
 
         label = _format_model_label("p1", "m1", _meta())
         # Strip trailing whitespace for an exact comparison (both end together).

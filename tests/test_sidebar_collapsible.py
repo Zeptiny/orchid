@@ -24,10 +24,10 @@ from unittest.mock import patch
 from textual.app import App, ComposeResult
 from textual.widgets import Collapsible, TabbedContent
 
-from stupidex.agents.manager import SubagentRecord, SubagentState
-from stupidex.domain.chain import Chain
-from stupidex.widgets.sidebar import NavEntry, Sidebar
-from stupidex.widgets.subagent_ui import SubagentUIManager
+from orchid.agents.manager import SubagentRecord, SubagentState
+from orchid.domain.chain import Chain
+from orchid.widgets.sidebar import NavEntry, Sidebar
+from orchid.widgets.subagent_ui import SubagentUIManager
 
 
 def _record(rid: str, state: SubagentState = SubagentState.COMPLETED, label: str = "agent") -> SubagentRecord:

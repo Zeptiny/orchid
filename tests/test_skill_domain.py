@@ -2,7 +2,7 @@
 
 import unittest
 
-from stupidex.domain.skill import Skill, SkillResource
+from orchid.domain.skill import Skill, SkillResource
 
 
 class TestSkillValidate(unittest.TestCase):

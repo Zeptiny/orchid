@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 from textual.widgets import Button, Input
 
-from stupidex.screens.input_modal import InputModal
+from orchid.screens.input_modal import InputModal
 
 
 class TestInputModal(unittest.TestCase):

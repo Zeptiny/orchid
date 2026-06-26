@@ -17,8 +17,8 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from stupidex.mcp import MCPManager
-from stupidex.mcp.schema import convert_mcp_tool
+from orchid.mcp import MCPManager
+from orchid.mcp.schema import convert_mcp_tool
 
 
 class _RecordingHandler(logging.Handler):
@@ -86,7 +86,7 @@ class TestShadowWarning(unittest.IsolatedAsyncioTestCase):
         """
         manager = MCPManager()
         handler = _RecordingHandler()
-        logger = logging.getLogger("stupidex.mcp")
+        logger = logging.getLogger("orchid.mcp")
         logger.addHandler(handler)
         try:
             # Two fake sessions, each advertising a tool named "dup". The
@@ -118,8 +118,8 @@ class TestShadowWarning(unittest.IsolatedAsyncioTestCase):
             # First registration: _connect_server lists "dup" and writes
             # manager._tools["mcp::srv1::dup"]. No prior entry -> no warning.
             with (
-                patch("stupidex.mcp.stdio_client", side_effect=fake_stdio),
-                patch("stupidex.mcp.ClientSession", side_effect=session_cm(session1)),
+                patch("orchid.mcp.stdio_client", side_effect=fake_stdio),
+                patch("orchid.mcp.ClientSession", side_effect=session_cm(session1)),
             ):
                 await manager._connect_server("srv1", config)
             self.assertEqual(handler.warnings_matching("shadows existing registration"), [])
@@ -127,8 +127,8 @@ class TestShadowWarning(unittest.IsolatedAsyncioTestCase):
             # Second registration of the same (server, tool): the REAL guard
             # at line 227 fires before the dict assignment overwrites.
             with (
-                patch("stupidex.mcp.stdio_client", side_effect=fake_stdio),
-                patch("stupidex.mcp.ClientSession", side_effect=session_cm(session2)),
+                patch("orchid.mcp.stdio_client", side_effect=fake_stdio),
+                patch("orchid.mcp.ClientSession", side_effect=session_cm(session2)),
             ):
                 await manager._connect_server("srv1", config)
 
@@ -154,12 +154,12 @@ class TestInvalidServerName(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_server_name_is_skipped(self):
         manager = MCPManager()
         handler = _RecordingHandler()
-        logger = logging.getLogger("stupidex.mcp")
+        logger = logging.getLogger("orchid.mcp")
         logger.addHandler(handler)
         try:
             # Avoid hitting the real transport; only the name guard matters here.
             with (
-                patch("stupidex.mcp.stdio_client", side_effect=AssertionError("should not connect")),
+                patch("orchid.mcp.stdio_client", side_effect=AssertionError("should not connect")),
             ):
                 manager._per_server_timeout = 5.0
                 manager._server_status["Bad_Name"] = {"status": "starting", "tool_count": 0, "error": None}
@@ -214,7 +214,7 @@ class TestCallToolBlocks(unittest.IsolatedAsyncioTestCase):
     async def test_text_only_blocks_joined_no_warning(self):
         manager = MCPManager()
         handler = _RecordingHandler()
-        logger = logging.getLogger("stupidex.mcp")
+        logger = logging.getLogger("orchid.mcp")
         logger.addHandler(handler)
         try:
             session = _FakeSession(call_result=_CallToolResult([
@@ -234,7 +234,7 @@ class TestCallToolBlocks(unittest.IsolatedAsyncioTestCase):
     async def test_mixed_blocks_text_plus_placeholders_and_warning(self):
         manager = MCPManager()
         handler = _RecordingHandler()
-        logger = logging.getLogger("stupidex.mcp")
+        logger = logging.getLogger("orchid.mcp")
         logger.addHandler(handler)
         try:
             embedded_resource = SimpleNamespace(uri="file:///foo/bar.txt")
@@ -262,7 +262,7 @@ class TestCallToolBlocks(unittest.IsolatedAsyncioTestCase):
     async def test_all_non_text_blocks_returns_placeholders(self):
         manager = MCPManager()
         handler = _RecordingHandler()
-        logger = logging.getLogger("stupidex.mcp")
+        logger = logging.getLogger("orchid.mcp")
         logger.addHandler(handler)
         try:
             session = _FakeSession(call_result=_CallToolResult([

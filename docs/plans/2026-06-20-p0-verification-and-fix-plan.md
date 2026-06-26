@@ -130,7 +130,7 @@ No schema changes, no migrations. Localized to `rag/indexer.py` and (optionally)
 - No test loads a session via `Session.from_storage_dict` (which would invoke `TodoStore.from_storage_dict` at `session.py:57`).
 - `tests/test_sidebar_collapsible.py` uses a `_MockSession` without a real `todo_store` — does NOT exercise the real `TodoStore` or `VALID_TRANSITIONS`.
 
-### Untested branches in `src/stupidex/domain/todo.py`
+### Untested branches in `src/orchid/domain/todo.py`
 | Path | Lines |
 |------|-------|
 | `TodoStatus.from_str` happy+error path | 21-28 |
@@ -179,7 +179,7 @@ Run with `pytest tests/test_todo_store.py` (match existing repo convention).
 - No `tests/test_*subagent*.py` or `tests/test_*manager*.py` files exist.
 - `tests/test_sidebar_collapsible.py` is the only test importing `SubagentRecord`; it bypasses the manager via `object.__new__(SubagentRecord)` (test_sidebar_collapsible.py:34) and uses a `_MockManager` stub (lines 148-156). Never invokes `spawn`, `_run`, `cancel_*`, `wait`, `from_storage_dict`.
 - `tests/test_streaming_messages.py` exercises `Message.from_storage_dict` and `record_streamed_message`; never `SubagentRecord.from_storage_dict` or `SubagentManager`.
-- No indirect coverage via `src/stupidex/tools/subagent.py` — no tests import it.
+- No indirect coverage via `src/orchid/tools/subagent.py` — no tests import it.
 
 ### Caveat — the four "fix" commits do NOT touch SubagentManager
 | SHA | Files touched | Tests added |
@@ -189,9 +189,9 @@ Run with `pytest tests/test_todo_store.py` (match existing repo convention).
 | ff4434e | `domain/message.py`, `llm/client.py`, `tests/test_streaming_messages.py` | streaming-message tests only |
 | df34ea4 | `mcp/__init__.py`, a docs `.md` | no pytest tests |
 
-`git show --stat` confirms `src/stupidex/agents/manager.py` is absent from every diff. These commits harden *streaming/persistence* of messages inside `stream_response` (`llm/client.py`) and `Chain` — not the `SubagentManager` lifecycle. The finding's title stands; its "context" rationale misattributes the commits' scope.
+`git show --stat` confirms `src/orchid/agents/manager.py` is absent from every diff. These commits harden *streaming/persistence* of messages inside `stream_response` (`llm/client.py`) and `Chain` — not the `SubagentManager` lifecycle. The finding's title stands; its "context" rationale misattributes the commits' scope.
 
-### Untested code paths in `src/stupidex/agents/manager.py`
+### Untested code paths in `src/orchid/agents/manager.py`
 - `spawn()` (201-283) — registry lookup, record creation, `on_spawn` fire-and-forget, `asyncio.create_task`.
 - `_run()` closure (233-277) — PENDING→RUNNING + `on_state_change`; user msg append + `on_message` + `messages_mounted` increment; streaming loop, `record_streamed_message`, second `on_message`/`messages_mounted` path, TEXT result capture; COMPLETED transition; CancelledError → INTERRUPTED; Exception → FAILED; `finally` sets `end_time` + final `on_state_change`.
 - `cancel_one` (173-179), `cancel_all` (181-189, incl. `self.on_spawn = None` teardown), `cancel_running` (191-199, non-terminal filter).
@@ -202,12 +202,12 @@ Run with `pytest tests/test_todo_store.py` (match existing repo convention).
 - ContextVar accessors `get_subagent_manager`/`set_subagent_manager` (38-43).
 
 ### Fix plan
-Create **`tests/test_subagent_manager.py`**. Use a fake `stream_response` monkeypatched into `stupidex.llm.client.stream_response` (or the local symbol used inside `_run`) yielding an async iterator of canned `Message` objects, and a fake `get_agent_registry` returning a stub `Agent`. No network, no real LLM. Each test drives a real `SubagentManager.spawn(...)` and awaits `record.async_task` (or cancels it).
+Create **`tests/test_subagent_manager.py`**. Use a fake `stream_response` monkeypatched into `orchid.llm.client.stream_response` (or the local symbol used inside `_run`) yielding an async iterator of canned `Message` objects, and a fake `get_agent_registry` returning a stub `Agent`. No network, no real LLM. Each test drives a real `SubagentManager.spawn(...)` and awaits `record.async_task` (or cancels it).
 
 **Fixtures:**
-- `fake_agent` — `stupidex.domain.agent.Agent` instance (or stub dataclass) with `name`, `type.value`, `allowed_tools`, `system_prompt`, `allowed_skills`.
-- `fake_registry` — dict `{"Subagent": fake_agent}` patched into `stupidex.agents.get_agent_registry`.
-- `fake_stream` — async-iterator factory patched into `stupidex.llm.client.stream_response`. Yields `Message` objects of controlled types (TEXT, TOOL_CALL, TOOL_RESULT, THINKING) so all branches of `record_streamed_message` and `on_message`/`messages_mounted` paths are exercised.
+- `fake_agent` — `orchid.domain.agent.Agent` instance (or stub dataclass) with `name`, `type.value`, `allowed_tools`, `system_prompt`, `allowed_skills`.
+- `fake_registry` — dict `{"Subagent": fake_agent}` patched into `orchid.agents.get_agent_registry`.
+- `fake_stream` — async-iterator factory patched into `orchid.llm.client.stream_response`. Yields `Message` objects of controlled types (TEXT, TOOL_CALL, TOOL_RESULT, THINKING) so all branches of `record_streamed_message` and `on_message`/`messages_mounted` paths are exercised.
 - `collecting_callbacks` — `AsyncMock` (or plain coroutine stubs) for `record.on_message`, `record.on_state_change`, and `manager.on_spawn`, asserting call args and ordering.
 
 **Tests to add:**
