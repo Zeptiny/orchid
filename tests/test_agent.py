@@ -40,7 +40,7 @@ class TestModelTierFromStrErrors(unittest.TestCase):
 
     def test_valid_inputs_case_insensitive(self):
         self.assertEqual(ModelTier.from_str("SEED"), ModelTier.SEED)
-        self.assertEqual(ModelTier.from_str("Papudo"), ModelTier.BLOOM)
+        self.assertEqual(ModelTier.from_str("Bloom"), ModelTier.BLOOM)
 
 
 class TestAgentDictRoundTrip(unittest.TestCase):

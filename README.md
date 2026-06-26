@@ -809,7 +809,6 @@ src/
     mcp/                       # Cliente MCP
       __init__.py              # MCPManager, lifecycle
       schema.py                # Conversão de schemas
-      example_server.py        # Servidor exemplo bundled
     tools/                     # Implementação das tools
       _xml_utils.py            # Utilitários de formatação XML (atributos, CDATA)
       file_manipulation.py     # read, write, edit, glob, read_directory

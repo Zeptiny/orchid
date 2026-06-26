@@ -87,10 +87,6 @@ class Config:
                 "command": "npx",
                 "args": ["-y", "@upstash/context7-mcp"],
             },
-            "example": {
-                "command": "python",
-                "args": ["-m", "orchid.mcp.example_server"],
-            },
         }
     )
     providers: dict[str, dict] = field(
