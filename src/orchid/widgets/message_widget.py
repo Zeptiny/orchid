@@ -13,10 +13,18 @@ from textual.widgets import Markdown as TextualMarkdown
 from orchid.domain.chain import Chain, ChainStatus
 from orchid.domain.message import Message, MessageRole, MessageType
 from orchid.tools import get_tool_registry
+from orchid.widgets.live_command import LiveCommandOutputWidget
 
 _THROTTLE_INTERVAL = 0.2
 _TOOL_RESULT_FALLBACK_TITLE = "Tool result"
 _TOOL_RESULT_TITLE_MAX_LENGTH = 120
+_BACKGROUND_CMD_RE = re.compile(
+    r'<background_command\s+id="(\d+)"[^>]*command="([^"]*)"[^>]*/>'
+)
+
+# Module-level mapping of command_id → LiveCommandOutputWidget so the app tick
+# can locate widgets without threading the mapping through every layer.
+live_command_widgets: dict[int, LiveCommandOutputWidget] = {}
 _EDIT_DIFF_MARKER = "\n\nDiff:\n"
 _EDIT_DIFF_CDATA_RE = re.compile(
     r'<diff\s+format="unified">\s*<!\[CDATA\[\n?(?P<diff>.*?)\n?\]\]>\s*</diff>',
@@ -526,15 +534,35 @@ async def mount_streamed_message(container, msg: Message, state: StreamWidgetSta
         if state.thinking:
             state.thinking.finish()
     elif msg.type == MessageType.TOOL_RESULT:
-        w = ToolResultMessageWidget(msg, classes="after-thinking" if state.thinking else None)
-        if state.temp:
-            temp = state.temp.pop(0)
-            async with container.batch():
-                await container.mount(w, before=temp)
-                await temp.remove()
+        bg_match = _BACKGROUND_CMD_RE.search(msg.content)
+        if bg_match:
+            # Mount a LiveCommandOutputWidget for background commands.
+            cmd_id = int(bg_match.group(1))
+            cmd_text = bg_match.group(2)
+            w = LiveCommandOutputWidget(
+                cmd_id,
+                command_text=cmd_text,
+                classes="after-thinking" if state.thinking else None,
+            )
+            live_command_widgets[cmd_id] = w
+            if state.temp:
+                temp = state.temp.pop(0)
+                async with container.batch():
+                    await container.mount(w, before=temp)
+                    await temp.remove()
+            else:
+                await container.mount(w)
+            w.scroll_visible(animate=False)
         else:
-            await container.mount(w)
-        w.scroll_visible(animate=False)
+            w = ToolResultMessageWidget(msg, classes="after-thinking" if state.thinking else None)
+            if state.temp:
+                temp = state.temp.pop(0)
+                async with container.batch():
+                    await container.mount(w, before=temp)
+                    await temp.remove()
+            else:
+                await container.mount(w)
+            w.scroll_visible(animate=False)
         if state.thinking:
             state.thinking.finish()
         state.thinking = None

@@ -29,6 +29,7 @@ from orchid.widgets.message_widget import (
     ChainContainer,
     StreamWidgetState,
     create_message_widget,
+    live_command_widgets,
     mount_streamed_message,
 )
 from orchid.widgets.sidebar import NavEntry, Sidebar, SidebarMainSelected, SidebarSubagentSelected
@@ -204,6 +205,7 @@ class Orchid(App):
         self._current_chain: ChainContainer | None = None
         self._footer_timer: object | None = None
         self._interrupt_timer: object | None = None
+        self._bg_cmd_timer: object | None = None
         self.restart_requested: bool = False
         self._setup_themes()
 
@@ -283,6 +285,9 @@ class Orchid(App):
 
     async def on_unmount(self) -> None:
         self._subagent_ui.stop()
+        if self._bg_cmd_timer is not None:
+            self._bg_cmd_timer.stop()
+            self._bg_cmd_timer = None
         if hasattr(self, '_mcp_manager') and self._mcp_manager is not None:
             try:
                 await self._mcp_manager.shutdown()
@@ -560,6 +565,7 @@ class Orchid(App):
     def streaming_started(self) -> None:
         self.query_one("#spinner").display = True
         self._footer_timer = self.set_interval(1.0, self._tick_footer)
+        self._manage_bg_cmd_timer()
 
     async def streaming_finished(self) -> None:
         self.query_one("#spinner").display = False
@@ -658,6 +664,64 @@ class Orchid(App):
         if self._current_chain:
             self._current_chain.tick()
         await self.rerender_footer()
+
+    # -- live command tick -----------------------------------------------------
+
+    def _manage_bg_cmd_timer(self) -> None:
+        """Start or stop the background-command tick based on active entries."""
+        try:
+            from orchid.tools.background_store import get_background_store
+            store = get_background_store()
+            has_live = any(e.exit_code is None for e in store.list())
+        except Exception:
+            has_live = False
+
+        if has_live and self._bg_cmd_timer is None:
+            self._bg_cmd_timer = self.set_interval(0.5, self._tick_live_commands)
+        elif not has_live and self._bg_cmd_timer is not None:
+            self._bg_cmd_timer.stop()
+            self._bg_cmd_timer = None
+
+    async def _tick_live_commands(self) -> None:
+        """Pull snapshots from the background store and dispatch to live widgets."""
+        try:
+            from orchid.tools.background_store import get_background_store
+            store = get_background_store()
+        except Exception:
+            return
+
+        entries = store.list()
+        if not entries:
+            self._manage_bg_cmd_timer()
+            return
+
+        for entry in entries:
+            widget = live_command_widgets.get(entry.id)
+            if widget is None:
+                continue
+
+            snap = store.snapshot(entry.id)
+            if snap is None:
+                continue
+
+            tail_text, exit_code = snap
+            # Compute the delta since the widget's last known content.
+            widget_lines = widget._lines
+            existing_text = "".join(widget_lines)
+            if tail_text.startswith(existing_text):
+                delta = tail_text[len(existing_text):]
+            else:
+                # Buffer was trimmed or wrapped – push full tail.
+                delta = tail_text
+                widget._lines.clear()
+
+            if delta:
+                widget.update_content(delta)
+
+            if exit_code is not None and not widget._finished:
+                widget.finish(exit_code)
+
+        self._manage_bg_cmd_timer()
 
     def on_sidebar_main_selected(self, event: SidebarMainSelected) -> None:
         tabs = self.query_one("#tabs", TabbedContent)
