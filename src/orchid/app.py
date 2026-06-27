@@ -288,6 +288,8 @@ class Orchid(App):
         if self._bg_cmd_timer is not None:
             self._bg_cmd_timer.stop()
             self._bg_cmd_timer = None
+        from orchid.tools.background_store import get_background_store
+        get_background_store().terminate_all()
         if hasattr(self, '_mcp_manager') and self._mcp_manager is not None:
             try:
                 await self._mcp_manager.shutdown()
