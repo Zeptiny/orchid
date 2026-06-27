@@ -343,6 +343,9 @@ class BackgroundProcessStore:
         poll_interval = 0.05  # 50 ms
 
         while time.monotonic() < deadline:
+            # Entry evicted by LRU?
+            if proc_id not in self._entries:
+                return
             # Process exited?
             if entry.exit_code is not None:
                 return
@@ -371,10 +374,8 @@ class BackgroundProcessStore:
             os.killpg(proc.pid, signal.SIGTERM)
         except (OSError, ProcessLookupError):
             pass
-        # Schedule a hard kill after a brief grace period.
-        asyncio.get_event_loop().call_later(
-            0.5, self._force_kill, proc_id
-        )
+        # Send SIGKILL directly — call_later is unreliable during shutdown.
+        self._force_kill(proc_id)
 
     def _force_kill(self, proc_id: int) -> None:
         entry = self._entries.get(proc_id)
@@ -421,12 +422,12 @@ class BackgroundProcessStore:
         """
         if len(self._entries) <= _MAX_ENTRIES:
             return
-        # Sort by created_at (oldest first), skip protected.
+        # Sort by created_at (oldest first), protect the newest N.
         sorted_ids = sorted(
             self._entries,
             key=lambda k: self._entries[k].created_at,
         )
-        evictable = sorted_ids[_PROTECT_COUNT:]
+        evictable = sorted_ids[:-_PROTECT_COUNT] if len(sorted_ids) > _PROTECT_COUNT else []
         while len(self._entries) > _MAX_ENTRIES and evictable:
             victim_id = evictable.pop(0)
             self._terminate_and_remove(victim_id)
@@ -453,6 +454,7 @@ class BackgroundProcessStore:
         # Close master fd if this was a PTY process.
         if entry.master_fd is not None:
             self._close_master_fd(entry.master_fd)
+            entry.master_fd = None  # prevent double-close by PTYHandle._cleanup
 
     # -- cleanup helpers (U8) ------------------------------------------------
 

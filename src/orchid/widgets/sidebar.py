@@ -932,7 +932,10 @@ class Sidebar(Vertical):
         if entry is None or not entry.interactive or entry.exit_code is not None:
             return
         text = event.input.value + "\n"
-        await store.send(cmd_id, text)
+        ok = await store.send(cmd_id, text)
+        if ok:
+            import time
+            entry.last_user_input_at = time.monotonic()
         event.input.clear()
 
     def _format_bg_entry(self, record: dict) -> str:

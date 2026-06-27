@@ -183,6 +183,14 @@ async def spawn_with_pty(
             start_new_session=True,
             env=env,
         )
+    except Exception:
+        # Close master_fd on failure — PTYHandle was never created so
+        # nobody else will clean it up.
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        raise
     finally:
         # Close slave in parent — child has its own copy via dup2.
         try:

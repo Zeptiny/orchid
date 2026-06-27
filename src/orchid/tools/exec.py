@@ -110,7 +110,17 @@ async def execute_command(
         from orchid.tools.background_store import get_background_store
 
         store = get_background_store()
-        proc_id, _ = await store.spawn(command, cwd=working_directory, interactive=interactive)
+        try:
+            proc_id, _ = await store.spawn(command, cwd=working_directory, interactive=interactive)
+        except Exception as e:
+            return ExecutorResult(
+                display=f"Failed to start background command",
+                content=(
+                    f'<error command="{_xml_attr(command)}">'
+                    f"<![CDATA[{_cdata_text(str(e))}]]>"
+                    f"</error>"
+                ),
+            )
         return ExecutorResult(
             display=f"Started background command (id: {proc_id})",
             content=(

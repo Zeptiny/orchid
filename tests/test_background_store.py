@@ -189,10 +189,11 @@ async def test_lru_eviction_on_65th_entry(fresh_store):
     assert len(fresh_store.list()) <= _MAX_ENTRIES
 
     # The 8 most-recent entries (indices -8..) are protected from eviction.
-    # The oldest entry (proc_ids[0]) is also among the protected (since it's
-    # one of the first 8 spawned).  Instead, the 9th entry (proc_ids[8])
-    # should have been evicted since it's the oldest non-protected entry.
-    assert fresh_store.get(proc_ids[8]) is None
+    # The oldest entry (proc_ids[0]) should have been evicted first.
+    assert fresh_store.get(proc_ids[0]) is None
+    # The newest 8 entries should still be present.
+    for pid in proc_ids[-_MAX_ENTRIES // 2:]:
+        assert fresh_store.get(pid) is not None
 
 
 # ---------------------------------------------------------------------------

@@ -681,9 +681,9 @@ class Orchid(App):
             has_live = False
             has_any = False
 
-        if has_any and self._bg_cmd_timer is None:
+        if has_live and self._bg_cmd_timer is None:
             self._bg_cmd_timer = self.set_interval(0.5, self._tick_live_commands)
-        elif not has_live and not has_any and self._bg_cmd_timer is not None:
+        elif not has_live and self._bg_cmd_timer is not None:
             self._bg_cmd_timer.stop()
             self._bg_cmd_timer = None
 

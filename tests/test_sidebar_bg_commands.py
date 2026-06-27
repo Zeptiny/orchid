@@ -70,6 +70,7 @@ def _make_process_entry(
         "stdin": None,
         "stdout": None,
         "stderr": None,
+        "kill": lambda self: None,
     })()
     return ProcessEntry(
         id=cmd_id,
