@@ -32,7 +32,7 @@ from orchid.widgets.message_widget import (
     live_command_widgets,
     mount_streamed_message,
 )
-from orchid.widgets.sidebar import NavEntry, Sidebar, SidebarMainSelected, SidebarSubagentSelected
+from orchid.widgets.sidebar import NavEntry, Sidebar, SidebarBgCommandSelected, SidebarMainSelected, SidebarSubagentSelected
 from orchid.widgets.subagent_ui import SubagentUIManager
 
 log = logging.getLogger(__name__)
@@ -672,13 +672,16 @@ class Orchid(App):
         try:
             from orchid.tools.background_store import get_background_store
             store = get_background_store()
-            has_live = any(e.exit_code is None for e in store.list())
+            entries = store.list()
+            has_live = any(e.exit_code is None for e in entries)
+            has_any = len(entries) > 0
         except Exception:
             has_live = False
+            has_any = False
 
-        if has_live and self._bg_cmd_timer is None:
+        if has_any and self._bg_cmd_timer is None:
             self._bg_cmd_timer = self.set_interval(0.5, self._tick_live_commands)
-        elif not has_live and self._bg_cmd_timer is not None:
+        elif not has_live and not has_any and self._bg_cmd_timer is not None:
             self._bg_cmd_timer.stop()
             self._bg_cmd_timer = None
 
@@ -689,6 +692,14 @@ class Orchid(App):
             store = get_background_store()
         except Exception:
             return
+
+        # Check idle ownership auto-release
+        try:
+            from orchid.config import get_config
+            cfg = get_config()
+            store.check_idle_ownership(cfg.background_command_idle_timeout)
+        except Exception:
+            pass
 
         entries = store.list()
         if not entries:
@@ -721,6 +732,26 @@ class Orchid(App):
             if exit_code is not None and not widget._finished:
                 widget.finish(exit_code)
 
+        # Update sidebar background commands section
+        try:
+            import time
+            sidebar = self.query_one("#sidebar", Sidebar)
+            records = []
+            for entry in entries:
+                last_output_age = time.monotonic() - entry.last_output_at
+                records.append({
+                    "id": entry.id,
+                    "command": entry.command,
+                    "owner": entry.owner,
+                    "status": "running" if entry.exit_code is None else "exited",
+                    "last_output_age": last_output_age,
+                    "interactive": entry.interactive,
+                    "has_tail": entry.buffer.total_bytes() > 0,
+                })
+            await sidebar.update_background_commands(records)
+        except Exception:
+            pass
+
         self._manage_bg_cmd_timer()
 
     def on_sidebar_main_selected(self, event: SidebarMainSelected) -> None:
@@ -736,6 +767,11 @@ class Orchid(App):
         self.query_one("#input", TextArea).display = False
         sidebar = self.query_one("#sidebar", Sidebar)
         sidebar.set_active(event.subagent_id)
+
+    async def on_sidebar_bg_command_selected(self, event: SidebarBgCommandSelected) -> None:
+        """Expand/collapse a background command entry in the sidebar."""
+        sidebar = self.query_one("#sidebar", Sidebar)
+        await sidebar._expand_bg_cmd(event.command_id)
 
     async def mount_message(self, msg: Message) -> None:
         await self._mount_in_chain(msg)
