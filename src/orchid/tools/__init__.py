@@ -54,6 +54,12 @@ from orchid.tools.todo import (
     todo_update_tool,
 )
 from orchid.tools.web_fetch import execute_web_fetch, web_fetch_tool
+from orchid.tools.background_io import (
+    read_output_tool,
+    execute_read_output,
+    send_input_tool,
+    execute_send_input,
+)
 
 _TOOL_REGISTRY: dict[str, dict] | None = None
 
@@ -87,6 +93,8 @@ def get_tool_registry() -> dict[str, dict]:
         "find_symbol_references": {"tool": find_symbol_references_tool, "executor": execute_find_symbol_references},
         "replace_symbol": {"tool": replace_symbol_tool, "executor": execute_replace_symbol},
         "rename_symbol": {"tool": rename_symbol_tool, "executor": execute_rename_symbol},
+        "read_output": {"tool": read_output_tool, "executor": execute_read_output},
+        "send_input": {"tool": send_input_tool, "executor": execute_send_input},
     }
     return _TOOL_REGISTRY
 

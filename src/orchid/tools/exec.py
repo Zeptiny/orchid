@@ -79,6 +79,12 @@ execute_command_tool = Tool(
             "shell": ToolParameterProperties(
                 type="boolean", description="Whether to run the command through the shell (default: true)"
             ),
+            "background": ToolParameterProperties(
+                type="boolean", description="When true, run the command in the background and return immediately with a process id"
+            ),
+            "interactive": ToolParameterProperties(
+                type="boolean", description="When true, allocate a PTY and enable writable stdin for interactive commands"
+            ),
         },
         required=["command", "description"],
     ),
@@ -92,12 +98,30 @@ async def execute_command(
     working_directory: str = ".",
     timeout: int | None = None,
     shell: bool = True,
+    background: bool = False,
+    interactive: bool = False,
 ) -> ExecutorResult:
     """Execute a system command using asyncio subprocess."""
-    if timeout is None:
-        timeout = get_config().command_timeout
     if description is None:
         description = command
+
+    # -- background path ---------------------------------------------------
+    if background:
+        from orchid.tools.background_store import get_background_store
+
+        store = get_background_store()
+        proc_id, _ = await store.spawn(command, cwd=working_directory, interactive=interactive)
+        return ExecutorResult(
+            display=f"Started background command (id: {proc_id})",
+            content=(
+                f'<background_command id="{proc_id}" '
+                f'command="{_xml_attr(command)}" status="started" />'
+            ),
+        )
+
+    # -- foreground path (original) ----------------------------------------
+    if timeout is None:
+        timeout = get_config().command_timeout
     env = {**os.environ, **ENV_SUPPRESSION}
     try:
         if shell:
