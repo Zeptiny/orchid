@@ -100,6 +100,7 @@ class Config:
     )
     llm_stream_idle_timeout: float = 300.0
     llm_stream_retries: int = 3
+    background_command_idle_timeout: float = 900.0  # 15 minutes
 
     def __post_init__(self) -> None:
         """Normalise nested dataclass fields after construction.
@@ -127,6 +128,7 @@ _ENV_MAP = {
     "ORCHID_LLM_STREAM_RETRIES": "llm_stream_retries",
     "ORCHID_MCP_STARTUP_TIMEOUT": "mcp_startup_timeout",
     "ORCHID_MCP_PER_SERVER_TIMEOUT": "mcp_per_server_timeout",
+    "ORCHID_BACKGROUND_COMMAND_IDLE_TIMEOUT": "background_command_idle_timeout",
 }
 
 _RAG_ENV_MAP = {
@@ -239,6 +241,7 @@ def validate_config(cfg: Config) -> list[str]:
 
     _check_positive_float(cfg, "mcp_startup_timeout", errors)
     _check_positive_float(cfg, "mcp_per_server_timeout", errors)
+    _check_positive_float(cfg, "background_command_idle_timeout", errors)
 
     # Validate RAG
     if not isinstance(cfg.rag, RAGConfig):

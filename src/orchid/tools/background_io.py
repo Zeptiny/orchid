@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from orchid.domain.tool import ExecutorResult, Tool, ToolParameter, ToolParameterProperties
 from orchid.tools._xml_utils import _cdata_text, _xml_attr
 from orchid.tools.background_store import get_background_store
@@ -184,6 +186,9 @@ async def execute_send_input(
                 f"</error>"
             ),
         )
+
+    # Record user input time for idle auto-release.
+    entry.last_user_input_at = time.monotonic()
 
     return ExecutorResult(
         display=f"Sent input to command {id}",

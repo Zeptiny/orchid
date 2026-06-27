@@ -117,6 +117,7 @@ class ProcessEntry:
     buffer: HeadTailBuffer
     owner: str = "AGENT"
     last_output_at: float = 0.0
+    last_user_input_at: float = 0.0  # monotonic time of last user input / ownership take
     exit_code: int | None = None
     created_at: float = 0.0
     interactive: bool = False
@@ -248,7 +249,10 @@ class BackgroundProcessStore:
             pass
         finally:
             # Record exit code once the process finishes.
-            exit_code = await proc.wait()
+            try:
+                exit_code = await proc.wait()
+            except ProcessLookupError:
+                exit_code = -1
             entry.exit_code = exit_code
 
     # -- query ---------------------------------------------------------------
@@ -292,6 +296,37 @@ class BackgroundProcessStore:
         except (BrokenPipeError, OSError):
             return False
 
+    # -- ownership -----------------------------------------------------------
+
+    def take_ownership(self, proc_id: int) -> bool:
+        """Set *owner* to ``USER``.  Returns ``True`` on success."""
+        entry = self._entries.get(proc_id)
+        if entry is None:
+            return False
+        entry.owner = "USER"
+        entry.last_user_input_at = time.monotonic()
+        return True
+
+    def release_ownership(self, proc_id: int) -> bool:
+        """Set *owner* back to ``AGENT``.  Returns ``True`` on success."""
+        entry = self._entries.get(proc_id)
+        if entry is None:
+            return False
+        entry.owner = "AGENT"
+        return True
+
+    def check_idle_ownership(self, idle_timeout: float) -> None:
+        """Revert ``USER``-owned entries idle beyond *idle_timeout* seconds.
+
+        Called periodically (wired in U7).  Iterates all entries whose owner
+        is ``USER`` and whose ``last_user_input_at`` is older than *idle_timeout*
+        relative to ``time.monotonic()``.
+        """
+        now = time.monotonic()
+        for entry in list(self._entries.values()):
+            if entry.owner == "USER" and (now - entry.last_user_input_at) > idle_timeout:
+                entry.owner = "AGENT"
+
     # -- progress waiting ----------------------------------------------------
 
     async def wait_for_progress(self, proc_id: int, wait_ms: int) -> None:
@@ -308,11 +343,17 @@ class BackgroundProcessStore:
         poll_interval = 0.05  # 50 ms
 
         while time.monotonic() < deadline:
-            # New output arrived?
-            if entry.last_output_at > last_seen:
-                return
             # Process exited?
             if entry.exit_code is not None:
+                return
+            # New output arrived?
+            if entry.last_output_at > last_seen:
+                # Give the drain task a moment to set exit_code if the
+                # process is about to exit (output EOF → wait() race).
+                for _ in range(6):  # up to ~300ms
+                    if entry.exit_code is not None:
+                        return
+                    await asyncio.sleep(0.05)
                 return
             await asyncio.sleep(poll_interval)
 
