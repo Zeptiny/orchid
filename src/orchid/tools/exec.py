@@ -9,6 +9,10 @@ from orchid.tools._xml_utils import _cdata_text, _xml_attr
 
 MAX_OUTPUT_BYTES = 1 * 1024 * 1024
 
+# Environment variables forced for every command spawn (foreground and
+# background).  Imported by ``background_store.py`` so both paths stay in sync.
+ENV_SUPPRESSION: dict[str, str] = {"NO_COLOR": "1", "TERM": "dumb", "PAGER": "cat"}
+
 
 async def _read_bounded(
     process: asyncio.subprocess.Process,
@@ -94,6 +98,7 @@ async def execute_command(
         timeout = get_config().command_timeout
     if description is None:
         description = command
+    env = {**os.environ, **ENV_SUPPRESSION}
     try:
         if shell:
             process = await asyncio.create_subprocess_shell(
@@ -102,6 +107,7 @@ async def execute_command(
                 stderr=asyncio.subprocess.PIPE,
                 cwd=working_directory,
                 start_new_session=True,
+                env=env,
             )
         else:
             args = shlex.split(command)
@@ -111,6 +117,7 @@ async def execute_command(
                 stderr=asyncio.subprocess.PIPE,
                 cwd=working_directory,
                 start_new_session=True,
+                env=env,
             )
 
         try:
