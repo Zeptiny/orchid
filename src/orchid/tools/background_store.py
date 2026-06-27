@@ -161,6 +161,10 @@ class BackgroundProcessStore:
         The process is started with ``start_new_session=True`` and its
         stdout/stderr are drained into a ``HeadTailBuffer``.  When
         *interactive* is ``False`` (the default) stdin is ``/dev/null``.
+
+        When *interactive* is ``True`` a real PTY is allocated so that
+        ``isatty()`` returns ``True`` inside the child and ``send()``
+        writes to the master fd.
         """
         proc_id = self._next_id
         self._next_id += 1
@@ -170,27 +174,39 @@ class BackgroundProcessStore:
 
         env = {**os.environ, **ENV_SUPPRESSION}
 
-        stdin_stream = asyncio.subprocess.PIPE if interactive else asyncio.subprocess.DEVNULL
+        if interactive:
+            from orchid.tools.pty_support import spawn_with_pty
 
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdin=stdin_stream,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-            start_new_session=True,
-            env=env,
-        )
-
-        entry = ProcessEntry(
-            id=proc_id,
-            command=command,
-            process=process,
-            buffer=buf,
-            last_output_at=now,
-            created_at=now,
-            interactive=interactive,
-        )
+            handle = await spawn_with_pty(command, cwd=cwd, env=env)
+            entry = ProcessEntry(
+                id=proc_id,
+                command=command,
+                process=handle,
+                buffer=buf,
+                last_output_at=now,
+                created_at=now,
+                interactive=True,
+                master_fd=handle._master_fd,
+            )
+        else:
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                start_new_session=True,
+                env=env,
+            )
+            entry = ProcessEntry(
+                id=proc_id,
+                command=command,
+                process=process,
+                buffer=buf,
+                last_output_at=now,
+                created_at=now,
+                interactive=False,
+            )
         self._entries[proc_id] = entry
 
         # Start background drain task.
@@ -334,6 +350,21 @@ class BackgroundProcessStore:
             except (OSError, ProcessLookupError):
                 pass
 
+    # -- master fd cleanup (U2) ----------------------------------------------
+
+    @staticmethod
+    def _close_master_fd(master_fd: int) -> None:
+        """Remove *master_fd* from the event loop and close it."""
+        loop = asyncio.get_event_loop()
+        try:
+            loop.remove_reader(master_fd)
+        except (OSError, ValueError, RuntimeError):
+            pass
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
     def terminate_all(self) -> None:
         """Terminate every live background process."""
         for proc_id in list(self._entries):
@@ -378,6 +409,9 @@ class BackgroundProcessStore:
                     proc.kill()
                 except (OSError, ProcessLookupError):
                     pass
+        # Close master fd if this was a PTY process.
+        if entry.master_fd is not None:
+            self._close_master_fd(entry.master_fd)
 
     # -- cleanup helpers (U8) ------------------------------------------------
 
