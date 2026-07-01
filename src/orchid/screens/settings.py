@@ -2,13 +2,15 @@
 
 from dataclasses import asdict
 from functools import partial
+from typing import Any, cast
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static, Tab, Tabs
 
-from orchid.commands.session_commands import _build_model_picker_items
+from orchid.app import Orchid
+from orchid.commands.session_commands import _build_model_picker_items  # pyright: ignore[reportPrivateUsage]
 from orchid.config import (
     Config,
     RAGConfig,
@@ -26,7 +28,7 @@ def _list_fastembed_models() -> list[str]:
         return []
 
 
-class NewProviderForm(ModalScreen[dict | None]):
+class NewProviderForm(ModalScreen[dict[str, Any] | None]):
     """Modal form to add or edit a provider entry.
 
     Per-model attributes are edited inline in a table-like grid.
@@ -122,11 +124,11 @@ class NewProviderForm(ModalScreen[dict | None]):
     }
     """
 
-    def __init__(self, title: str, initial: dict | None = None) -> None:
+    def __init__(self, title: str, initial: dict[str, Any] | None = None) -> None:
         super().__init__()
         self._title = title
-        self._initial = initial or {}
-        self._model_entries: list[dict] = []
+        self._initial: dict[str, Any] = initial or {}
+        self._model_entries: list[dict[str, Any]] = []
         self._model_seq = 0
 
     def compose(self) -> ComposeResult:
@@ -181,12 +183,11 @@ class NewProviderForm(ModalScreen[dict | None]):
                 yield Button("Cancel", variant="default", id="pf-cancel")
 
     def on_mount(self) -> None:
-        initial_models = self._initial.get("models", {}) if isinstance(self._initial, dict) else {}
-        if isinstance(initial_models, dict):
-            for model_id, overrides in initial_models.items():
-                if not isinstance(overrides, dict):
-                    overrides = {}
-                self._add_model_entry(model_id=model_id, overrides=overrides)
+        initial_models: dict[str, Any] = self._initial.get("models", {})
+        for model_id, overrides in initial_models.items():
+            if not isinstance(overrides, dict):
+                overrides = {}
+            self._add_model_entry(model_id=model_id, overrides=overrides)  # type: ignore[arg-type]
         if not self._model_entries:
             self._add_model_entry()
         self.query_one("#pf-alias", Input).focus()
@@ -194,7 +195,7 @@ class NewProviderForm(ModalScreen[dict | None]):
     def _add_model_entry(
         self,
         model_id: str = "",
-        overrides: dict | None = None,
+        overrides: dict[str, Any] | None = None,
     ) -> None:
         overrides = overrides or {}
         idx = self._model_seq
@@ -220,8 +221,8 @@ class NewProviderForm(ModalScreen[dict | None]):
         except Exception:
             pass
 
-    def _build_model_row(self, entry: dict) -> Horizontal:
-        idx = entry["idx"]
+    def _build_model_row(self, entry: dict[str, Any]) -> Horizontal:
+        idx: int = entry["idx"]
         vision_select = Select(
             [("false", False), ("true", True)],
             value=entry["supports_vision"],
@@ -287,7 +288,7 @@ class NewProviderForm(ModalScreen[dict | None]):
     def on_input_changed(self, event: Input.Changed) -> None:
         input_id = event.input.id or ""
         for entry in self._model_entries:
-            i = entry["idx"]
+            i: int = entry["idx"]
             if input_id == f"pf-model-id-{i}":
                 entry["model_id"] = event.value
             elif input_id == f"pf-model-mit-{i}":
@@ -298,7 +299,7 @@ class NewProviderForm(ModalScreen[dict | None]):
     def on_select_changed(self, event: Select.Changed) -> None:
         select_id = event.select.id or ""
         for entry in self._model_entries:
-            i = entry["idx"]
+            i: int = entry["idx"]
             if select_id == f"pf-model-vision-{i}":
                 entry["supports_vision"] = bool(event.value)
             elif select_id == f"pf-model-mode-{i}":
@@ -321,7 +322,7 @@ class NewProviderForm(ModalScreen[dict | None]):
         api_key_env = self.query_one("#pf-api-key-env", Input).value.strip()
         litellm_provider = self.query_one("#pf-litellm-provider", Input).value.strip()
 
-        entry: dict = {}
+        entry: dict[str, Any] = {}
         if base_url:
             entry["base_url"] = base_url
         if api_key:
@@ -331,18 +332,18 @@ class NewProviderForm(ModalScreen[dict | None]):
         if litellm_provider:
             entry["litellm_provider"] = litellm_provider
 
-        models: dict[str, dict] = {}
+        models: dict[str, dict[str, Any]] = {}
         seen_ids: set[str] = set()
         for entry_data in self._model_entries:
-            model_id = entry_data["model_id"].strip()
+            model_id: str = entry_data["model_id"].strip()
             if not model_id:
                 continue
             if model_id in seen_ids:
                 self.query_one("#provider-form-error", Static).update(f"Duplicate model id: {model_id}")
                 return
             seen_ids.add(model_id)
-            overrides: dict = {}
-            mit = entry_data["max_input_tokens"].strip()
+            overrides: dict[str, Any] = {}
+            mit: str = entry_data["max_input_tokens"].strip()
             if mit:
                 try:
                     overrides["max_input_tokens"] = int(mit)
@@ -351,7 +352,7 @@ class NewProviderForm(ModalScreen[dict | None]):
                         f"max_input_tokens must be an integer for {model_id!r}."
                     )
                     return
-            mot = entry_data["max_output_tokens"].strip()
+            mot: str = entry_data["max_output_tokens"].strip()
             if mot:
                 try:
                     overrides["max_output_tokens"] = int(mot)
@@ -362,18 +363,18 @@ class NewProviderForm(ModalScreen[dict | None]):
                     return
             if entry_data["supports_vision"]:
                 overrides["supports_vision"] = True
-            mode = entry_data["mode"].strip()
+            mode: str = entry_data["mode"].strip()
             if mode:
                 overrides["mode"] = mode
             models[model_id] = overrides
         if models:
             entry["models"] = models
 
-        result = {"_alias": alias, **entry}
+        result: dict[str, Any] = {"_alias": alias, **entry}
         self.dismiss(result)
 
 
-class NewMCPServerForm(ModalScreen[dict | None]):
+class NewMCPServerForm(ModalScreen[dict[str, Any] | None]):
     """Modal form to add or edit an MCP server entry."""
 
     CSS = """
@@ -411,10 +412,10 @@ class NewMCPServerForm(ModalScreen[dict | None]):
     }
     """
 
-    def __init__(self, title: str, initial: dict | None = None) -> None:
+    def __init__(self, title: str, initial: dict[str, Any] | None = None) -> None:
         super().__init__()
         self._title = title
-        self._initial = initial or {}
+        self._initial: dict[str, Any] = initial or {}
 
     def compose(self) -> ComposeResult:
         with Vertical(id="mcp-form-container"):
@@ -470,7 +471,7 @@ class NewMCPServerForm(ModalScreen[dict | None]):
         args_str = self.query_one("#mf-args", Input).value.strip()
         url = self.query_one("#mf-url", Input).value.strip()
 
-        entry: dict = {}
+        entry: dict[str, Any] = {}
         if url:
             entry["url"] = url
         elif command:
@@ -483,7 +484,7 @@ class NewMCPServerForm(ModalScreen[dict | None]):
             self.query_one("#mcp-form-error", Static).update("Either command or url is required.")
             return
 
-        result = {"_name": name, **entry}
+        result: dict[str, Any] = {"_name": name, **entry}
         self.dismiss(result)
 
 
@@ -766,6 +767,10 @@ class SettingsScreen(ModalScreen[Config | None]):
         self._original = self._clone_config(config)
         self._items_cache: list[tuple[str, str]] = []
 
+    @property
+    def orchid_app(self) -> Orchid:
+        return cast(Orchid, self.app)  # type: ignore[arg-type]
+
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-container"):
             yield Static("Settings", id="settings-header")
@@ -796,7 +801,9 @@ class SettingsScreen(ModalScreen[Config | None]):
             field = self._RAG_INT_FIELDS[wid]
             try:
                 intval = int(val) if val else 0
-                self._config.rag = RAGConfig(**{**asdict(self._config.rag), field: intval})
+                rag_dict = asdict(self._config.rag)
+                rag_dict[field] = intval
+                self._config.rag = RAGConfig(**rag_dict)  # type: ignore[arg-type]
             except ValueError:
                 pass
             self._mark_dirty("rag")
@@ -820,7 +827,7 @@ class SettingsScreen(ModalScreen[Config | None]):
         container.mount(Static("Providers", classes="settings-section-title"))
         container.mount(Static("Configure API providers and their models.", classes="settings-list-item-detail"))
 
-        items = []
+        items: list[tuple[str, str]] = []
         for alias, entry in self._config.providers.items():
             models = list(entry.get("models", {}).keys())[:3]
             models_str = ", ".join(models) if models else "no models"
@@ -838,9 +845,9 @@ class SettingsScreen(ModalScreen[Config | None]):
 
     def _on_provider_action(self, alias: str, action: str) -> None:
         if action == "edit":
-            entry = self._config.providers.get(alias, {})
-            initial = {"_alias": alias, **entry}
-            self.app.push_screen(
+            entry: dict[str, Any] = self._config.providers.get(alias, {})
+            initial: dict[str, Any] = {"_alias": alias, **entry}
+            self.orchid_app.push_screen(
                 NewProviderForm(f"Edit Provider: {alias}", initial),
                 partial(self._on_edit_provider_result, original_alias=alias),
             )
@@ -849,7 +856,7 @@ class SettingsScreen(ModalScreen[Config | None]):
             self._refresh_tab()
             self._mark_dirty("providers")
 
-    def _on_edit_provider_result(self, result: dict | None, original_alias: str | None = None) -> None:
+    def _on_edit_provider_result(self, result: dict[str, Any] | None, original_alias: str | None = None) -> None:
         if result is not None:
             alias = result.pop("_alias")
             if original_alias and original_alias != alias:
@@ -905,11 +912,11 @@ class SettingsScreen(ModalScreen[Config | None]):
             return
 
         if btn_id == "providers-add":
-            self.app.push_screen(NewProviderForm("Add Provider"), self._on_add_provider_result)
+            self.orchid_app.push_screen(NewProviderForm("Add Provider"), self._on_add_provider_result)
         elif btn_id == "mcp-add":
-            self.app.push_screen(NewMCPServerForm("Add MCP Server"), self._on_add_mcp_result)
+            self.orchid_app.push_screen(NewMCPServerForm("Add MCP Server"), self._on_add_mcp_result)
 
-    def _on_add_provider_result(self, result: dict | None) -> None:
+    def _on_add_provider_result(self, result: dict[str, Any] | None) -> None:
         if result is not None:
             alias = result.pop("_alias")
             self._config.providers[alias] = result
@@ -939,7 +946,7 @@ class SettingsScreen(ModalScreen[Config | None]):
         )
 
     def _render_mcp_list(self, container: ScrollableContainer) -> None:
-        items = []
+        items: list[tuple[str, str]] = []
         for name, entry in self._config.mcp_servers.items():
             if "url" in entry:
                 detail = f"SSE: {entry['url']}"
@@ -964,9 +971,9 @@ class SettingsScreen(ModalScreen[Config | None]):
 
     def _on_mcp_action(self, name: str, action: str) -> None:
         if action == "edit":
-            entry = self._config.mcp_servers.get(name, {})
-            initial = {"_name": name, **entry}
-            self.app.push_screen(
+            entry: dict[str, Any] = self._config.mcp_servers.get(name, {})
+            initial: dict[str, Any] = {"_name": name, **entry}
+            self.orchid_app.push_screen(
                 NewMCPServerForm(f"Edit MCP Server: {name}", initial),
                 partial(self._on_edit_mcp_result, original_name=name),
             )
@@ -975,7 +982,7 @@ class SettingsScreen(ModalScreen[Config | None]):
             self._refresh_tab()
             self._mark_dirty("mcp_servers")
 
-    def _on_edit_mcp_result(self, result: dict | None, original_name: str | None = None) -> None:
+    def _on_edit_mcp_result(self, result: dict[str, Any] | None, original_name: str | None = None) -> None:
         if result is not None:
             name = result.pop("_name")
             if original_name and original_name != name:
@@ -992,7 +999,7 @@ class SettingsScreen(ModalScreen[Config | None]):
             self._refresh_tab()
             self._mark_dirty("mcp_servers")
 
-    def _on_add_mcp_result(self, result: dict | None) -> None:
+    def _on_add_mcp_result(self, result: dict[str, Any] | None) -> None:
         if result is not None:
             name = result.pop("_name")
             self._config.mcp_servers[name] = result
@@ -1045,7 +1052,7 @@ class SettingsScreen(ModalScreen[Config | None]):
             self._refresh_tab()
             self._mark_dirty("tier_models")
 
-        self.app.push_screen(OptionPicker(items), _on_picked)
+        self.orchid_app.push_screen(OptionPicker(items), _on_picked)
 
     # ── RAG tab ───────────────────────────────────────────────────────
 
@@ -1107,11 +1114,13 @@ class SettingsScreen(ModalScreen[Config | None]):
         def _on_picked(selected: str | None) -> None:
             if not selected:
                 return
-            self._config.rag = RAGConfig(**{**asdict(self._config.rag), "embedding_model": selected})
+            rag_dict = asdict(self._config.rag)
+            rag_dict["embedding_model"] = selected
+            self._config.rag = RAGConfig(**rag_dict)  # type: ignore[arg-type]
             self._refresh_tab()
             self._mark_dirty("rag")
 
-        self.app.push_screen(OptionPicker(items, header="Embedding Models"), _on_picked)
+        self.orchid_app.push_screen(OptionPicker(items, header="Embedding Models"), _on_picked)
 
     # ── General tab ───────────────────────────────────────────────────
 
@@ -1189,7 +1198,7 @@ class SettingsScreen(ModalScreen[Config | None]):
             self._refresh_tab()
             self._mark_dirty("general")
 
-        self.app.push_screen(OptionPicker(items), _on_picked)
+        self.orchid_app.push_screen(OptionPicker(items), _on_picked)
 
     def _open_theme_picker(self) -> None:
         from orchid.themes import get_theme_registry
@@ -1208,7 +1217,7 @@ class SettingsScreen(ModalScreen[Config | None]):
             self._refresh_tab()
             self._mark_dirty("general")
 
-        self.app.push_screen(OptionPicker(items, header="Themes"), _on_picked)
+        self.orchid_app.push_screen(OptionPicker(items, header="Themes"), _on_picked)
 
     def _open_personality_picker(self) -> None:
         from orchid.personality import load_personalities
@@ -1224,13 +1233,13 @@ class SettingsScreen(ModalScreen[Config | None]):
             self._refresh_tab()
             self._mark_dirty("general")
 
-        self.app.push_screen(OptionPicker(items, header="Personalities"), _on_picked)
+        self.orchid_app.push_screen(OptionPicker(items, header="Personalities"), _on_picked)
 
     # ── Helpers ───────────────────────────────────────────────────────
 
     @staticmethod
     def _clone_config(config: Config) -> Config:
-        return Config(**asdict(config))
+        return Config(**asdict(config))  # type: ignore[arg-type]
 
     def _render_keyed_list(
         self,
@@ -1279,11 +1288,11 @@ class SettingsScreen(ModalScreen[Config | None]):
 
         from orchid.config import ConfigManager
 
-        ConfigManager._instance = config
+        ConfigManager._instance = config  # pyright: ignore[reportPrivateUsage]
         ConfigManager.save()
 
         if config.theme != self._original.theme:
-            self.app.switch_theme(config.theme)
+            self.orchid_app.switch_theme(config.theme)
 
         self._config = self._clone_config(config)
         self._original = self._clone_config(config)
@@ -1293,7 +1302,7 @@ class SettingsScreen(ModalScreen[Config | None]):
         if close:
             self.dismiss(self._config)
         else:
-            self.app.notify("Settings saved.", severity="information")
+            self.orchid_app.notify("Settings saved.", severity="information")
 
     def key_ctrl_s(self) -> None:
         self._do_save(close=False)
@@ -1313,6 +1322,7 @@ class SettingsScreen(ModalScreen[Config | None]):
         cur = getattr(self._config, field, None)
         orig = getattr(self._original, field, None)
         if field == "rag":
+            assert cur is not None and orig is not None
             return asdict(cur) != asdict(orig)
         return cur != orig
 
@@ -1344,7 +1354,7 @@ class SettingsScreen(ModalScreen[Config | None]):
     def _push_confirm_discard(self) -> None:
         tabs = self._dirty_tab_names()
         summary = ", ".join(tabs) if tabs else "settings"
-        self.app.push_screen(
+        self.orchid_app.push_screen(
             ConfirmScreen(
                 "Unsaved changes",
                 f"You have unsaved changes to: {summary}.",

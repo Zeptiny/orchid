@@ -56,7 +56,7 @@ def _load_language(lang_name: str) -> tree_sitter.Language:
                 lib = ctypes.cdll.LoadLibrary(str(candidate))
                 func = getattr(lib, f"tree_sitter_{so_name}")
                 func.restype = ctypes.c_void_p
-                _grammars[lang_name] = tree_sitter.Language(func())
+                _grammars[lang_name] = tree_sitter.Language(func())  # type: ignore[reportDeprecated]
                 break
         else:
             raise RuntimeError(

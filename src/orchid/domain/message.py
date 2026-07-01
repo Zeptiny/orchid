@@ -33,7 +33,7 @@ class Message:
     content: str
     type: MessageType = MessageType.TEXT
     display: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict[str, Any])
     usage: Usage | None = None
     tool_call_id: str | None = None
     tool_calls: list[dict[str, Any]] | None = None
@@ -88,8 +88,8 @@ class Message:
             # corruption. Explicitly extract the known fields with .get()
             # defaults so a drifted usage dict never raises TypeError and
             # aborts the whole session load (session.py:56/130).
-            src = data["usage"]
-            if not isinstance(src, dict):
+            src: dict[str, Any] = data["usage"]
+            if not isinstance(src, dict):  # type: ignore[reportUnnecessaryIsInstance]
                 usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
             else:
                 usage = Usage(

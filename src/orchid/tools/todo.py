@@ -9,7 +9,7 @@ from orchid.domain.tool import ExecutorResult, Tool, ToolParameter, ToolParamete
 
 _STATUSES = ", ".join(s.value for s in TodoStatus)
 
-_TRANSITION_LINES = []
+_TRANSITION_LINES: list[str] = []
 for _src, _dsts in VALID_TRANSITIONS.items():
     _TRANSITION_LINES.append(f"  {_src.value} → {{{', '.join(d.value for d in _dsts)}}}")
 for _terminal in TERMINAL_STATUSES:
@@ -149,9 +149,10 @@ async def execute_todo_update(
     if error:
         return ExecutorResult(display="Update failed", content=f"Error: {error}")
 
+    assert task is not None
     await notify_todo_changed()
 
-    changes = []
+    changes: list[str] = []
     if title is not None:
         changes.append(f"Title: {task.title}")
     if description is not None:

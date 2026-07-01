@@ -111,7 +111,7 @@ async def execute_wait_for_subagent(subagent_ids: list[str]) -> ExecutorResult:
     if not records:
         return ExecutorResult(display="No subagents found", content=f"No subagents found for IDs: {', '.join(subagent_ids)}")
 
-    parts = []
+    parts: list[str] = []
     for sid, record in records.items():
         status = record.state.value
         elapsed = record.elapsed_seconds
@@ -176,9 +176,9 @@ async def execute_interrupt_subagents(subagent_ids: list[str]) -> ExecutorResult
             content=f"Interrupted subagents: {', '.join(cancelled)}",
         )
 
-    cancelled = []
-    not_found = []
-    already_done = []
+    cancelled: list[str] = []
+    not_found: list[str] = []
+    already_done: list[str] = []
 
     for sid in subagent_ids:
         record = manager.get_record(sid)
@@ -190,7 +190,7 @@ async def execute_interrupt_subagents(subagent_ids: list[str]) -> ExecutorResult
         else:
             already_done.append(sid)
 
-    parts = []
+    parts: list[str] = []
     if cancelled:
         parts.append(f"Interrupted: {', '.join(cancelled)}")
     if already_done:

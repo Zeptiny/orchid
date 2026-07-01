@@ -2,10 +2,13 @@ import asyncio
 import logging
 from collections.abc import Callable
 from enum import Enum
+from typing import Any, cast
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer
+from textual.timer import Timer
 from textual.widgets import LoadingIndicator, Static, TabbedContent, TabPane, TextArea
+from textual.worker import Worker
 
 from orchid.agents import get_agent_registry
 from orchid.agents.manager import set_current_chain_index
@@ -37,7 +40,7 @@ from orchid.widgets.subagent_ui import SubagentUIManager
 log = logging.getLogger(__name__)
 
 
-def _sum_usage(messages: list) -> tuple[int, int, int, int] | None:
+def _sum_usage(messages: list[Message]) -> tuple[int, int, int, int] | None:
     """Sum token usage across all messages carrying ``usage``.
 
     Within a single agentic chain the model may make several LLM calls (think
@@ -150,7 +153,7 @@ def _chain_subagent_subtotals(
 
 
 def _make_subagent_subtotal_provider(
-    session: "Session", chain_index: int
+    session: "Session", chain_index: int | None
 ) -> "Callable[[], tuple[int, int, int, int] | None] | None":
     """Return a closure computing the attributed subagent subtotal for the
     given chain at render time.
@@ -181,10 +184,10 @@ class InputTextArea(TextArea):
     def _on_resize(self) -> None:
         super()._on_resize()
         if self._app_ref is not None:
-            self._app_ref._update_input_height(self)
+            self._app_ref._update_input_height(self)  # pyright: ignore[reportPrivateUsage]
 
 
-class Orchid(App):
+class Orchid(App[None]):
     CSS_PATH = "main.tcss"
     BINDINGS = [
         ("ctrl+p", "command_palette", "Commands"),
@@ -195,15 +198,15 @@ class Orchid(App):
     ]
     COMMANDS = {SessionCommands}
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.sessions: SessionManager = SessionManager()
         self._interrupt_state: InterruptState = InterruptState.IDLE
-        self._active_worker: object | None = None
+        self._active_worker: Worker[None] | None = None
         self._subagent_ui = SubagentUIManager(self)
         self._current_chain: ChainContainer | None = None
-        self._footer_timer: object | None = None
-        self._interrupt_timer: object | None = None
+        self._footer_timer: Timer | None = None
+        self._interrupt_timer: Timer | None = None
         self.restart_requested: bool = False
         self._setup_themes()
 
@@ -254,10 +257,11 @@ class Orchid(App):
     async def on_mount(self) -> None:
         self.sessions.create()
         set_todo_refresh_callback(self.refresh_todos)
+        assert self.sessions.active is not None
         self.query_one("#title", Static).update(self.sessions.active.name)
         await self.mount_all_messages()
         text_area = self.query_one("#input", InputTextArea)
-        text_area._app_ref = self
+        text_area._app_ref = self  # pyright: ignore[reportPrivateUsage]
         text_area.display = True
         self._update_input_height(text_area)
         text_area.focus()
@@ -283,7 +287,7 @@ class Orchid(App):
 
     async def on_unmount(self) -> None:
         self._subagent_ui.stop()
-        if hasattr(self, '_mcp_manager') and self._mcp_manager is not None:
+        if hasattr(self, '_mcp_manager') and self._mcp_manager is not None:  # pyright: ignore[reportUnnecessaryComparison]
             try:
                 await self._mcp_manager.shutdown()
             except Exception:
@@ -334,7 +338,7 @@ class Orchid(App):
                 cancelled = self.sessions.active.subagent_manager.cancel_running()
                 await self.sessions.active.subagent_manager.flush_state_callbacks()
                 if cancelled:
-                    names = []
+                    names: list[str] = []
                     for sid in cancelled:
                         record = self.sessions.active.subagent_manager.get_record(sid)
                         if record:
@@ -388,6 +392,7 @@ class Orchid(App):
         text_area.clear()
         self._start_chain()
         msg = Message(role=MessageRole.USER, content=user_msg)
+        assert self._current_chain is not None
         self._current_chain.chain.messages.append(msg)
         await self.mount_message(msg)
         self._reset_interrupt_state()
@@ -421,7 +426,7 @@ class Orchid(App):
         self.query_one("#command-picker", CommandPicker).hide()
         await execute_command(self, event.command)
 
-    def watch_focused(self, focused) -> None:
+    def watch_focused(self, focused: Any) -> None:
         if focused and focused.id == "input":
             try:
                 picker = self.query_one("#command-picker", CommandPicker)
@@ -441,7 +446,7 @@ class Orchid(App):
         else:
             try:
                 sidebar = self.query_one("#sidebar", Sidebar)
-                entries = sidebar._get_focusable_entries()
+                entries = sidebar._get_focusable_entries()  # pyright: ignore[reportPrivateUsage]
                 if entries:
                     entries[0].focus()
             except Exception:
@@ -461,6 +466,7 @@ class Orchid(App):
         ws = StreamWidgetState()
         history_state = StreamHistoryState()
 
+        assert self.sessions.active is not None
         self._subagent_ui.setup(self.sessions.active.subagent_manager)
 
         try:
@@ -473,6 +479,7 @@ class Orchid(App):
                 system_prompt=system_prompt,
                 allowed_skills=general.allowed_skills,
             ):
+                assert self._current_chain is not None
                 record_streamed_message(self._current_chain.chain.messages, msg, history_state)
 
                 await mount_streamed_message(container, msg, ws)
@@ -536,11 +543,10 @@ class Orchid(App):
             self.sessions.active.chains.append(chain)
             chain_index = len(self.sessions.active.chains) - 1
             set_current_chain_index(chain_index)
-        subtotal_provider = (
-            _make_subagent_subtotal_provider(self.sessions.active, chain_index)
-            if chain_index is not None
-            else None
-        )
+        subtotal_provider = None
+        if chain_index is not None:
+            assert self.sessions.active is not None
+            subtotal_provider = _make_subagent_subtotal_provider(self.sessions.active, chain_index)
         container = self.query_one("#output", ScrollableContainer)
         self._current_chain = ChainContainer(chain, subagent_subtotal=subtotal_provider)
         container.mount(self._current_chain)
@@ -635,14 +641,18 @@ class Orchid(App):
                     model or get_config().default_model
                 )
                 litellm_model = qualify_model(litellm_provider, model_id)
-                response = await litellm.acompletion(
+                response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
                     model=litellm_model,
                     messages=[{"role": "user", "content": prompt}],
                     base_url=base_url,
                     api_key=api_key,
                     timeout=60,
                 )
-                title = response.choices[0].message.content.strip().strip('"').strip("'")
+                result = cast(Any, response)
+                assert result.choices
+                title = result.choices[0].message.content
+                assert isinstance(title, str)
+                title = title.strip().strip('"').strip("'")
                 if title and len(title) < 80:
                     session.name = title
                     if self.sessions.active is session:
@@ -697,6 +707,7 @@ class Orchid(App):
                 )
                 widget = create_message_widget(msg, loaded=True, classes=classes)
                 if widget is not None:
+                    assert chain_container.messages_area is not None
                     await chain_container.messages_area.mount(widget)
                 if msg.type == MessageType.THINKING:
                     prev_was_thinking = True

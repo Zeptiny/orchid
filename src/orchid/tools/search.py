@@ -95,8 +95,8 @@ async def execute_grep_tool(
             file_regex = re.compile(glob_regex, re.IGNORECASE)
 
         # Collect all file paths using os.walk (blocking) in executor
-        def _collect_files():
-            collected = []
+        def _collect_files() -> list[str]:
+            collected: list[str] = []
             for root, dirs, files in os.walk(base_path):
                 dirs[:] = [d for d in dirs if not _should_skip_dir(d)]
                 for filename in sorted(files):
@@ -112,7 +112,7 @@ async def execute_grep_tool(
         semaphore = asyncio.Semaphore(32)
         results: list[str] = []
 
-        def _search_file_sync(file_path: str, regex, max_results: int) -> list[str] | None:
+        def _search_file_sync(file_path: str, regex: re.Pattern[str], max_results: int) -> list[str] | None:
             try:
                 relative_path = os.path.relpath(file_path, base_path)
                 matches: list[str] = []

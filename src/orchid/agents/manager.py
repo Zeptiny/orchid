@@ -34,18 +34,12 @@ def set_current_chain_index(index: int | None) -> None:
     _current_chain_index.set(index)
 
 
-def _log_task_exception(task: asyncio.Task) -> None:
+def _log_task_exception(task: asyncio.Task[Any]) -> None:
     if task.cancelled():
         return
     exc = task.exception()
     if exc is not None:
         log.error("Unhandled exception in background task: %s", exc, exc_info=exc)
-
-
-def _fire_and_forget(coro: Coroutine) -> asyncio.Task:
-    task = asyncio.create_task(coro)
-    task.add_done_callback(_log_task_exception)
-    return task
 
 
 def get_subagent_manager() -> SubagentManager:
@@ -109,7 +103,7 @@ class SubagentRecord:
     state: SubagentState
     label: str = ""
     task: str = ""
-    async_task: asyncio.Task | None = None
+    async_task: asyncio.Task[None] | None = None
     result: str | None = None
     error: str | None = None
     start_time: float = 0.0
@@ -213,7 +207,7 @@ class SubagentRecord:
         # orphan-tool-result reconciliation once (R9). Old records persisted
         # a flat `messages` list rather than a nested `chain` dict; fall back
         # to that shape so legacy sessions keep loading.
-        chain_data = data.get("chain")
+        chain_data: dict[str, Any] | None = data.get("chain")
         if isinstance(chain_data, dict):
             chain = Chain.from_storage_dict(chain_data)
         else:
@@ -287,9 +281,9 @@ class SubagentManager:
         self._subagents: dict[str, SubagentRecord] = {}
         self.on_spawn: Callable[[SubagentRecord],
                                 Coroutine[Any, Any, None]] | None = None
-        self._pending_callback_tasks: set[asyncio.Task] = set()
+        self._pending_callback_tasks: set[asyncio.Task[Any]] = set()
 
-    def _fire_and_forget(self, coro: Coroutine) -> asyncio.Task:
+    def _fire_and_forget(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         task = asyncio.create_task(coro)
         self._pending_callback_tasks.add(task)
         task.add_done_callback(_log_task_exception)
@@ -325,7 +319,7 @@ class SubagentManager:
 
     def cancel_all(self) -> list[str]:
         """Cancel all running subagents. Returns list of cancelled IDs."""
-        cancelled = []
+        cancelled: list[str] = []
         for record in self._subagents.values():
             if self._cancel_record(record):
                 cancelled.append(record.id)
@@ -334,7 +328,7 @@ class SubagentManager:
 
     def cancel_running(self) -> list[str]:
         """Cancel all non-terminal subagents. Returns list of cancelled IDs."""
-        cancelled = []
+        cancelled: list[str] = []
         for record in self._subagents.values():
             if record.state in TERMINAL:
                 continue
@@ -438,7 +432,7 @@ class SubagentManager:
 
     async def wait(self, ids: list[str]) -> dict[str, SubagentRecord]:
         """Wait for all specified subagents to complete. Returns their records."""
-        tasks = []
+        tasks: list[asyncio.Task[None]] = []
         for sid in ids:
             record = self._subagents.get(sid)
             if record and record.async_task and not record.async_task.done():
@@ -449,9 +443,9 @@ class SubagentManager:
 
         return {sid: self._subagents[sid] for sid in ids if sid in self._subagents}
 
-    def get_states(self) -> list[dict]:
+    def get_states(self) -> list[dict[str, Any]]:
         """Return state info for all tracked subagents."""
-        states = []
+        states: list[dict[str, Any]] = []
         for record in self._subagents.values():
             states.append({
                 "id": record.id,

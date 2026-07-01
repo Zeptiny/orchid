@@ -31,6 +31,7 @@ dev = [
     "pytest-asyncio",
     "pytest-timeout>=2.0",
     "ruff",
+    "pyright",
 ]
 
 [tool.ruff]
@@ -45,3 +46,10 @@ ignore = ["E501", "SIM105"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 timeout = 120
+
+[tool.pyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.11"
+include = ["src"]
+exclude = [".venv"]
+reportMissingTypeStubs = false

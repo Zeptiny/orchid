@@ -14,6 +14,7 @@ docs/plans/2026-06-18-001-feat-multi-provider-support-plan.md (unit U2).
 
 import logging
 import os
+from typing import Any
 
 # litellm fetches `model_prices_and_context_window.json` over the network at
 # import time unless this flag is set first. Set it before the `import litellm`
@@ -34,14 +35,14 @@ def qualify_model(provider: str | None, model_id: str) -> str:
 
 
 _SUPPORTED_FIELDS = ("max_input_tokens", "max_output_tokens", "supports_vision", "mode")
-_DEFAULT_METADATA: dict = {
+_DEFAULT_METADATA: dict[str, Any] = {
     "max_input_tokens": None,
     "max_output_tokens": None,
     "supports_vision": False,
     "mode": "chat",
 }
 
-_metadata_cache: dict[tuple[str, str], dict] = {}
+_metadata_cache: dict[tuple[str, str], dict[str, Any]] = {}
 _discovery_cache: dict[str, list[str]] = {}
 _DISCOVERY_TIMEOUT = 2.0
 _DISABLE_DISCOVERY_VALUES = {"1", "true", "yes"}
@@ -51,7 +52,7 @@ class ProviderResolutionError(Exception):
     """Raised when an `alias/model` reference cannot be resolved to a provider."""
 
 
-def get_provider(alias: str) -> dict:
+def get_provider(alias: str) -> dict[str, Any]:
     """Return the provider entry for `alias`, or raise `ProviderResolutionError`."""
     cfg = get_config()
     provider = cfg.providers.get(alias)
@@ -62,7 +63,7 @@ def get_provider(alias: str) -> dict:
     return provider
 
 
-def _resolve_api_key(provider: dict, alias: str) -> str | None:
+def _resolve_api_key(provider: dict[str, Any], alias: str) -> str | None:
     """Resolve an API key for a provider entry.
 
     Prefers a literal `api_key`; falls back to the env var named by
@@ -117,12 +118,12 @@ def resolve_model_ref(alias_model: str) -> tuple[str, str, str, str | None]:
         )
     provider = get_provider(alias)
     api_key = _resolve_api_key(provider, alias)
-    base_url = provider.get("base_url") or ""
-    litellm_provider = provider.get("litellm_provider") or ""
+    base_url: str = provider.get("base_url") or ""
+    litellm_provider: str = provider.get("litellm_provider") or ""
     return litellm_provider, model_id, base_url, api_key
 
 
-def resolve_model_metadata(alias: str, model_id: str) -> dict:
+def resolve_model_metadata(alias: str, model_id: str) -> dict[str, Any]:
     """Resolve capability metadata for a (provider alias, model id) pair.
 
     Field-level merge: text-only default <- litellm registry <- user override
@@ -142,14 +143,14 @@ def resolve_model_metadata(alias: str, model_id: str) -> dict:
 
     cfg = get_config()
     provider = cfg.providers.get(alias, {})
-    override = provider.get("models", {}).get(model_id, {})
+    override: dict[str, Any] = provider.get("models", {}).get(model_id, {})
 
     # A model-scoped litellm_provider override takes precedence over the
     # provider entry's litellm_provider when forming the litellm query.
-    effective_provider = override.get("litellm_provider") or provider.get("litellm_provider")
+    effective_provider: str | None = override.get("litellm_provider") or provider.get("litellm_provider")
     qualified = qualify_model(effective_provider, model_id)
 
-    registry: dict = {}
+    registry: dict[str, Any] = {}
     try:
         info = litellm.get_model_info(qualified)
         if info:
@@ -217,7 +218,7 @@ def discover_provider_models(alias: str, force: bool = False) -> list[str]:
         return _discovery_cache[alias]
 
     provider = get_provider(alias)
-    base_url = provider.get("base_url") or ""
+    base_url: str = provider.get("base_url") or ""
     if not base_url:
         _discovery_cache[alias] = []
         return []
@@ -229,12 +230,12 @@ def discover_provider_models(alias: str, force: bool = False) -> list[str]:
         with httpx.Client(timeout=_DISCOVERY_TIMEOUT) as client:
             response = client.get(f"{base_url.rstrip('/')}/models", headers=headers)
             response.raise_for_status()
-            data = response.json()
-            model_ids = [
+            data: Any = response.json()
+            model_ids: list[str] = [
                 m["id"]
                 for m in data.get("data", [])
                 if isinstance(m, dict)
-                and isinstance(m.get("id"), str)
+                and isinstance(m.get("id"), str)  # type: ignore[reportUnknownMemberType]
                 and m["id"]
             ]
     except Exception as e:  # noqa: BLE001 -- network is best-effort

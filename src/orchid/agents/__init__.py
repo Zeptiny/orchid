@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Any
 
 from orchid.config import HOME_AGENTS_DIR, PROJECT_AGENTS_DIR
 from orchid.domain.agent import Agent, AgentTypes, ModelTier
@@ -34,9 +35,9 @@ def _load_agents_from_dir(agents_dir: Path) -> dict[str, Agent]:
         name = metadata.get('name', path.name)
         agent_type = metadata.get('type', 'subagent')
         tier = metadata.get('tier', 'bloom')
-        description = metadata.get('description', '')
-        allowed_tools = metadata.get('allowed_tools')
-        allowed_skills = metadata.get('allowed_skills', [])
+        description: str = metadata.get('description', '')
+        allowed_tools: Any = metadata.get('allowed_tools')
+        allowed_skills: Any = metadata.get('allowed_skills', [])
         if isinstance(allowed_tools, str):
             if allowed_tools.strip() in ('[]', ''):
                 allowed_tools = []
@@ -47,7 +48,7 @@ def _load_agents_from_dir(agents_dir: Path) -> dict[str, Agent]:
                 allowed_skills = []
             else:
                 allowed_skills = [s.strip() for s in allowed_skills.split(',') if s.strip()]
-        if not isinstance(allowed_skills, list) or not all(isinstance(s, str) for s in allowed_skills):
+        if not isinstance(allowed_skills, list) or not all(isinstance(s, str) for s in allowed_skills):  # pyright: ignore[reportUnknownVariableType]
             log.warning("Skipping %s: allowed_skills must be a list of strings", agent_file)
             allowed_skills = []
 
@@ -59,7 +60,7 @@ def _load_agents_from_dir(agents_dir: Path) -> dict[str, Agent]:
             log.warning("Skipping %s: no allowed_tools in frontmatter", agent_file)
             continue
 
-        if not isinstance(allowed_tools, list) or not all(isinstance(t, str) for t in allowed_tools):
+        if not isinstance(allowed_tools, list) or not all(isinstance(t, str) for t in allowed_tools):  # pyright: ignore[reportUnknownVariableType]
             log.warning("Skipping %s: allowed_tools must be a list of strings", agent_file)
             continue
 
@@ -70,8 +71,8 @@ def _load_agents_from_dir(agents_dir: Path) -> dict[str, Agent]:
                 tier=ModelTier.from_str(str(tier)),
                 description=description,
                 system_prompt=body.strip(),
-                allowed_tools=allowed_tools,
-                allowed_skills=allowed_skills,
+                allowed_tools=allowed_tools,  # pyright: ignore[reportUnknownArgumentType]
+                allowed_skills=allowed_skills,  # pyright: ignore[reportUnknownArgumentType]
             )
         except (KeyError, ValueError, AttributeError) as e:
             log.warning("Skipping %s: %s", agent_file, e)
@@ -96,7 +97,7 @@ def load_agents() -> dict[str, Agent]:
     project_agents = _load_agents_from_dir(project_agents_dir)
 
     merged = {**home_agents, **project_agents}
-    AGENT_REGISTRY = merged
+    AGENT_REGISTRY = merged  # pyright: ignore[reportConstantRedefinition]
 
     from orchid.tools import reset_tool_registry
     reset_tool_registry()

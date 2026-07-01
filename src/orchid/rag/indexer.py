@@ -39,7 +39,7 @@ class IndexResult:
     files_skipped: int = 0
     files_deleted: int = 0
     chunks_created: int = 0
-    errors: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list[str])
     duration_seconds: float = 0.0
 
 
@@ -104,7 +104,7 @@ async def index_project(
     paths: list[str] | None = None,
     force: bool = False,
     embedder: Embedder | None = None,
-    progress_callback: Callable | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> IndexResult:
     """Run the full RAG indexing pipeline.
 
@@ -140,7 +140,7 @@ async def _index_project_impl(
     paths: list[str] | None = None,
     force: bool = False,
     embedder: Embedder | None = None,
-    progress_callback: Callable | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> IndexResult:
     cfg = get_config()
     if project_path is None:

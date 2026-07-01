@@ -87,7 +87,7 @@ class Embedder:
         for attempt in range(MAX_RETRIES):
             try:
                 def _run() -> list[list[float]]:
-                    return [v.tolist() for v in embedder.embed(texts)]
+                    return [v.tolist() for v in embedder.embed(texts)]  # type: ignore[reportAttributeAccessIssue]
 
                 return await asyncio.to_thread(_run)
             except _NON_RETRYABLE as e:
@@ -118,7 +118,7 @@ class Embedder:
         api_key: str | None,
     ) -> list[list[float]]:
         try:
-            from litellm import aembedding
+            from litellm import aembedding  # type: ignore[reportUnknownVariableType]
         except ImportError as err:
             raise EmbeddingError(
                 "litellm is required for embeddings. "
@@ -135,11 +135,11 @@ class Embedder:
                     base_url=base_url or None,
                     api_key=api_key,
                 )
-                if not response.data:
+                if not response.data:  # type: ignore[reportUnknownMemberType]
                     raise EmbeddingError(
                         f"Embedding provider returned empty response.data for model: {model}"
                     )
-                return [item["embedding"] for item in response.data]
+                return [item["embedding"] for item in response.data]  # type: ignore[reportUnknownVariableType,reportUnknownMemberType]
             except EmbeddingError:
                 raise
             except _NON_RETRYABLE as e:

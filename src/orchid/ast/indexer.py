@@ -39,7 +39,7 @@ class IndexResult:
     files_skipped: int = 0
     files_deleted: int = 0
     symbols_extracted: int = 0
-    errors: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list[str])
     duration_seconds: float = 0.0
 
 
@@ -91,7 +91,7 @@ async def update_file(file_path: str, project_path: str | None = None) -> None:
 async def index_project(
     project_path: str | None = None,
     force: bool = False,
-    progress_callback: Callable | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> IndexResult:
     """Run a full AST indexing scan of the project.
 
@@ -123,7 +123,7 @@ async def index_project(
 async def _index_project_impl(
     project_path: str | None = None,
     force: bool = False,
-    progress_callback: Callable | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> IndexResult:
     global _session_initialized
 

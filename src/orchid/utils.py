@@ -1,6 +1,7 @@
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 from orchid.config import get_config
 
@@ -10,7 +11,7 @@ _FRONTMATTER_PATTERN = re.compile(
 )
 
 
-def parse_frontmatter(content: str) -> tuple[dict, str]:
+def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     """Parse YAML frontmatter from markdown content.
 
     Returns (metadata_dict, body_content).
@@ -105,7 +106,7 @@ def directory_tree(path: str, max_depth: int, include_hidden: bool = False, _dep
     if _depth >= max_depth:
         return ""
 
-    lines = []
+    lines: list[str] = []
     try:
         entries = sorted(os.listdir(path))
     except PermissionError:

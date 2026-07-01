@@ -68,7 +68,7 @@ _REGISTRY: ThemeRegistry | None = None
 
 
 def get_theme_registry() -> ThemeRegistry:
-    global _REGISTRY
+    global _REGISTRY  # noqa: reportConstantRedefinition
     if _REGISTRY is None:
-        _REGISTRY = ThemeRegistry()
+        _REGISTRY = ThemeRegistry()  # type: ignore[reportConstantRedefinition]
     return _REGISTRY

@@ -3,6 +3,7 @@ import os
 import re
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import Any, cast
 from urllib.parse import urlparse
 from xml.sax.saxutils import escape, quoteattr
 
@@ -74,7 +75,7 @@ class _TitleParser(HTMLParser):
 
 
 def _xml_attrs(**attrs: object) -> str:
-    parts = []
+    parts: list[str] = []
     for key, value in attrs.items():
         if value is None:
             continue
@@ -232,15 +233,21 @@ def _raw_result(url: str, title: str, content_type: str, content: str) -> Execut
     )
 
 
-def _choice_content(response: object) -> str:
+def _choice_content(response: Any) -> str:
     try:
-        choices = response["choices"] if isinstance(response, dict) else response.choices
-        choice = choices[0]
-        message = choice["message"] if isinstance(choice, dict) else choice.message
-        content = message.get("content") if isinstance(message, dict) else message.content
-        return (content or "").strip()
+        if isinstance(response, dict):
+            choices = cast(list[Any], response["choices"])
+            choice = choices[0]
+            message = cast(dict[str, Any], choice["message"])
+            content_val = message.get("content")
+        else:
+            choices = response.choices
+            choice = choices[0]
+            message = choice.message
+            content_val = message.content
+        return str(content_val or "").strip()
     except (AttributeError, KeyError, IndexError, TypeError):
-        return str(response).strip()
+        return str(cast(Any, response)).strip()
 
 
 async def _summarize_result(url: str, title: str, content_type: str, content: str, query: str) -> ExecutorResult:
@@ -273,7 +280,7 @@ async def _summarize_result(url: str, title: str, content_type: str, content: st
     )
 
     try:
-        response = await litellm.acompletion(
+        response = await litellm.acompletion(  # type: ignore[reportUnknownMemberType]
             model=qualify_model(litellm_provider, model_id),
             messages=[
                 {"role": "system", "content": agent.system_prompt},

@@ -2,7 +2,7 @@ from contextvars import ContextVar
 from fnmatch import fnmatch
 from xml.sax.saxutils import escape
 
-from orchid.domain.skill import Skill
+from orchid.domain.skill import Skill, SkillResource
 from orchid.domain.tool import ExecutorResult, Tool, ToolParameter, ToolParameterProperties
 from orchid.skills import get_skill_registry
 
@@ -72,10 +72,10 @@ def _format_resource_listing(skill: Skill) -> str:
     sections: list[str] = []
 
     for attr, label in [("references", "references"), ("scripts", "scripts"), ("assets", "assets")]:
-        resources = getattr(skill, attr)
+        resources: list[SkillResource] = getattr(skill, attr)
         if not resources:
             continue
-        lines = []
+        lines: list[str] = []
         for r in resources:
             if r.description:
                 lines.append(f"- {r.path} — {r.description}")
