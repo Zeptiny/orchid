@@ -66,13 +66,14 @@
   - Ainda precisa ser investigado
 
 ### Configuração
-- Adicionar provedor tem como colcoar api key e env auth ao mesmo tempo
+- Adicionar provedor tem como colocar api key e env auth ao mesmo tempo
   - Deixar apenas um visivel, selecionado por botão
 - Adicionar um MCP tem como colocar comandos e URL ao mesmo tempo
   - Deixar apenas um visivel, selecionado por botão
   - Não tem como colocar auth token
 - Remover o provedor e agentes nos tiers default
   - Onboarding
+- Modelo selecionado por /model ficar como padrão para novas sessões
 
 ### Considerações
 - Tornar a ferramenta read utilizável com diretórios?
