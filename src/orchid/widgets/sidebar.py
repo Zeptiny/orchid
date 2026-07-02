@@ -102,7 +102,6 @@ class Sidebar(Vertical):
     def compose(self):
         yield Static("Tokens", id="sidebar-tokens-label")
         yield Static("Context: 0", id="token-info")
-        yield Static("", id="context-breakdown")
         with Vertical(id="sidebar-nav"):
             yield NavEntry("▸ Main", "main", id="nav-main")
         yield Static("Subagents", id="sidebar-subagents-label")
@@ -112,6 +111,7 @@ class Sidebar(Vertical):
         yield Static("Todos", id="sidebar-todos-label")
         yield Vertical(id="todo-entries")
         yield Static(id="sidebar-spacer")
+        yield Static("", id="context-breakdown")
         yield Static("AST", id="sidebar-ast-label")
         yield Static("", id="ast-status")
         yield Static("RAG", id="sidebar-rag-label")

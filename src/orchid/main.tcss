@@ -1,10 +1,13 @@
 Screen {
-    layout: horizontal;
+    layout: vertical;
+}
+
+#body {
+    height: 1fr;
 }
 
 #main-pane {
     width: 1fr;
-    height: 100%;
     layout: vertical;
 }
 

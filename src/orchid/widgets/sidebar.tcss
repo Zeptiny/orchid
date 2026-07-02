@@ -1,7 +1,7 @@
 Sidebar {
     width: 30;
     min-width: 30;
-    dock: right;
+    max-width: 30;
     background: $surface;
     padding: 1 0 0 0;
 }
@@ -22,7 +22,7 @@ Sidebar #sidebar-mcp-label,
 Sidebar #sidebar-todos-label,
 Sidebar #sidebar-rag-label,
 Sidebar #sidebar-ast-label {
-    margin-top: 1;
+    margin-top: 0;
 }
 
 Sidebar #rag-status,

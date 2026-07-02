@@ -257,19 +257,20 @@ class Orchid(App[None]):
         return self.sessions.active.model if self.sessions.active else None
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="main-pane"):
-            with Horizontal(id="header"):
-                yield Static(self.sessions.active.name if self.sessions.active else "No Session", id="title")
-            with TabbedContent(id="tabs", initial="main"), TabPane("Main", id="main"):
-                yield ScrollableContainer(id="output")
-            yield CommandPicker(SessionCommands.COMMANDS)
-            yield InputTextArea(id="input", highlight_cursor_line=False)
-            with Horizontal(id="footer"):
-                yield LoadingIndicator(id="spinner")
-                yield Static("N/A Model", id="model")
-                yield Static("", id="interrupt-hint")
-                yield Static("", id="shortcuts")
-        yield Sidebar(id="sidebar")
+        with Horizontal(id="body"):
+            with Vertical(id="main-pane"):
+                with Horizontal(id="header"):
+                    yield Static(self.sessions.active.name if self.sessions.active else "No Session", id="title")
+                with TabbedContent(id="tabs", initial="main"), TabPane("Main", id="main"):
+                    yield ScrollableContainer(id="output")
+                yield CommandPicker(SessionCommands.COMMANDS)
+                yield InputTextArea(id="input", highlight_cursor_line=False)
+                with Horizontal(id="footer"):
+                    yield LoadingIndicator(id="spinner")
+                    yield Static("N/A Model", id="model")
+                    yield Static("", id="interrupt-hint")
+                    yield Static("", id="shortcuts")
+            yield Sidebar(id="sidebar")
 
     async def on_mount(self) -> None:
         self.sessions.create()
