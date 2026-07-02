@@ -12,9 +12,9 @@ Covers:
 
 import time
 import unittest
-from unittest.mock import MagicMock
 
 from textual.app import App, ComposeResult
+from textual.events import Blur
 from textual.widgets import Collapsible, Static
 
 from orchid.tools.background_store import (
@@ -242,7 +242,7 @@ class TestBgCmdInputOwnership(unittest.IsolatedAsyncioTestCase):
 
             # Simulate blur by focusing the main input area (if it exists)
             # or just call the blur handler directly
-            input_widget._on_blur(MagicMock())
+            input_widget._on_blur(Blur())
             await pilot.pause()
 
             self.assertEqual(self._store.get(1).owner, "AGENT")

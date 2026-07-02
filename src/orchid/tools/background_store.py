@@ -161,7 +161,13 @@ class BackgroundProcessStore:
         When *interactive* is ``True`` a real PTY is allocated so that
         ``isatty()`` returns ``True`` inside the child and ``send()``
         writes to the master fd.
+
+        If *session_id* is not provided, it is captured automatically
+        from the current session ContextVar.
         """
+        if session_id is None:
+            from orchid.domain.session import get_current_session_id
+            session_id = get_current_session_id()
         proc_id = self._next_id
         self._next_id += 1
 

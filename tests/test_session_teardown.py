@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 import unittest
 from unittest.mock import patch
@@ -14,7 +15,6 @@ from orchid.tools.background_store import (
     get_background_store,
     set_background_store,
 )
-
 
 # ---------------------------------------------------------------------------
 # Synchronous tests (unittest style)
@@ -131,7 +131,8 @@ async def _fresh_store():
         proc = entry.process
         if proc.returncode is None:
             try:
-                import os, signal
+                import os
+                import signal
                 os.killpg(proc.pid, signal.SIGKILL)
             except (OSError, ProcessLookupError):
                 pass
@@ -201,6 +202,27 @@ async def test_check_idle_keeps_recent_user_entry(_fresh_store):
     entry_after = _fresh_store.get(_id)
     assert entry_after is not None
     assert entry_after.owner == "USER"
+
+
+@pytest.mark.asyncio
+async def test_terminate_session_only_kills_matching_session(_fresh_store):
+    """terminate_session kills only processes belonging to the given session."""
+    _id_a, _ = await _fresh_store.spawn("sleep 60", session_id="sess-A")
+    _id_b, _ = await _fresh_store.spawn("sleep 60", session_id="sess-B")
+    _fresh_store.terminate_session("sess-A")
+    entry_a = _fresh_store.get(_id_a)
+    entry_b = _fresh_store.get(_id_b)
+    assert entry_a is not None
+    assert entry_b is not None
+    await entry_a.process.wait()
+    # Give the drain task time to update exit_code after the process exits.
+    await asyncio.sleep(0.1)
+    assert entry_a.exit_code is not None
+    # Entry B should still be alive
+    assert entry_b.exit_code is None
+    # Clean up entry B
+    _fresh_store.terminate(_id_b)
+    await entry_b.process.wait()
 
 
 if __name__ == "__main__":

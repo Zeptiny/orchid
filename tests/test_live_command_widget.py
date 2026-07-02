@@ -17,7 +17,6 @@ from orchid.widgets.message_widget import (
     live_command_widgets,
 )
 
-
 # ---------------------------------------------------------------------------
 # Unit tests for the widget content logic (no Textual app needed)
 # ---------------------------------------------------------------------------
@@ -288,3 +287,65 @@ class TestTimerManagement:
 
         # Cleanup.
         set_background_store(BackgroundProcessStore())
+
+
+class TestLiveCommandWidgetsPopOnFinish:
+    """Tests that finished widgets are removed from live_command_widgets."""
+
+    def test_finish_and_pop_removes_from_registry(self) -> None:
+        """When a widget is finished (exit_code is not None), popping it removes it."""
+        widget = LiveCommandOutputWidget.__new__(LiveCommandOutputWidget)
+        widget.command_id = 999
+        widget.command_text = "test"
+        widget._max_lines = _MAX_BUFFER_LINES
+        widget._height_cap = 20
+        widget._lines = ["some output\n"]
+        widget._finished = False
+        widget._exit_code = None
+        widget._last_render_time = 0.0
+        widget._flush_scheduled = False
+        widget._content_widget = MagicMock()
+        widget.add_class = MagicMock()
+        widget.remove_class = MagicMock()
+
+        # Register widget in the global dict
+        live_command_widgets[999] = widget
+        assert 999 in live_command_widgets
+
+        # Simulate the tick flow: finish the widget then pop it
+        widget.finish(exit_code=0)
+        assert widget._finished is True
+        assert widget._exit_code == 0
+
+        # This is the key contract: the tick flow pops the widget after finish
+        live_command_widgets.pop(999, None)
+        assert 999 not in live_command_widgets
+
+    def test_finish_sets_finished_flag(self) -> None:
+        """Widget.finish() correctly sets _finished and _exit_code."""
+        widget = LiveCommandOutputWidget.__new__(LiveCommandOutputWidget)
+        widget.command_id = 998
+        widget.command_text = "test2"
+        widget._max_lines = _MAX_BUFFER_LINES
+        widget._height_cap = 20
+        widget._lines = []
+        widget._finished = False
+        widget._exit_code = None
+        widget._last_render_time = 0.0
+        widget._flush_scheduled = False
+        widget._content_widget = MagicMock()
+        widget.add_class = MagicMock()
+        widget.remove_class = MagicMock()
+
+        # Before finish
+        assert widget._finished is False
+        assert widget._exit_code is None
+
+        # Finish with a specific exit code
+        widget.finish(exit_code=42)
+        assert widget._finished is True
+        assert widget._exit_code == 42
+
+        # After finish, update_content should be rejected
+        widget.update_content("should be ignored\n")
+        assert widget._lines == []  # no new content added

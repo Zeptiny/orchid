@@ -23,25 +23,42 @@ class _PTYStdinWriter:
 
     Provides ``write(data)`` and ``drain()`` matching the interface that
     :meth:`BackgroundProcessStore.send` expects from ``process.stdin``.
+
+    Writes are offloaded to a background thread via :func:`asyncio.to_thread`
+    so that a full PTY buffer cannot block the event loop.
     """
 
-    __slots__ = ("_master_fd",)
+    __slots__ = ("_master_fd", "_write_task")
 
     def __init__(self, master_fd: int) -> None:
         self._master_fd = master_fd
+        self._write_task: asyncio.Task[None] | None = None
 
     def write(self, data: bytes) -> None:
-        """Write *data* to the PTY master fd."""
+        """Queue *data* for writing to the PTY master fd (non-blocking)."""
+        self._write_task = asyncio.ensure_future(
+            asyncio.to_thread(self._blocking_write, data)
+        )
+
+    def _blocking_write(self, data: bytes) -> None:
+        """Write data in a thread — safe to block without freezing the event loop."""
         mv = memoryview(data)
         while mv:
             try:
                 written = os.write(self._master_fd, mv)
             except BlockingIOError:
+                import time
+                time.sleep(0.001)
                 continue
+            if written == 0:
+                raise OSError("PTY write returned 0")
             mv = mv[written:]
 
     async def drain(self) -> None:
-        """No-op — PTY writes are kernel-buffered."""
+        """Wait for the background write to complete."""
+        if self._write_task is not None:
+            await self._write_task
+            self._write_task = None
 
 
 # ---------------------------------------------------------------------------

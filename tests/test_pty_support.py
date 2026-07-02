@@ -14,8 +14,8 @@ import pytest
 
 from orchid.tools.background_store import (
     BackgroundProcessStore,
-    set_background_store,
     get_background_store,
+    set_background_store,
 )
 from orchid.tools.pty_support import (
     PTYHandle,
@@ -23,7 +23,6 @@ from orchid.tools.pty_support import (
     open_pty,
     spawn_with_pty,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -240,19 +239,88 @@ def test_open_pty_returns_pair():
 
 
 def test_pty_stdin_writer_write():
-    """_PTYStdinWriter.write() writes bytes to the master fd."""
+    """_PTYStdinWriter._blocking_write() writes bytes to the master fd."""
     import select
 
     master, slave = open_pty()
     try:
         writer = _PTYStdinWriter(master)
-        # Write with newline — PTY line discipline buffers until \n.
-        writer.write(b"hello\n")
+        # Use _blocking_write directly in sync context (write() now requires an event loop).
+        writer._blocking_write(b"hello\n")
         # Wait for data to be available on the slave side.
         ready, _, _ = select.select([slave], [], [], 2.0)
         assert ready, "No data available on slave within 2 s"
         data = os.read(slave, 1024)
         assert data == b"hello\n"
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_pty_stdin_writer_short_write():
+    """_PTYStdinWriter._blocking_write() retries when os.write returns fewer bytes."""
+    import select
+    from unittest.mock import patch
+
+    master, slave = open_pty()
+    try:
+        writer = _PTYStdinWriter(master)
+        original_os_write = os.write
+
+        call_count = {"n": 0}
+        # Use data with newline so PTY line discipline flushes it
+        data = b"hello\n"
+
+        def mock_os_write(fd, d):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # Short write: only write 3 bytes of the 6-byte data
+                return original_os_write(fd, bytes(d[:3]))
+            return original_os_write(fd, d)
+
+        with patch("os.write", side_effect=mock_os_write):
+            writer._blocking_write(data)
+
+        # Wait for data on the slave side
+        ready, _, _ = select.select([slave], [], [], 2.0)
+        assert ready, "No data available on slave within 2 s"
+        result = os.read(slave, 1024)
+        assert result == data
+        assert call_count["n"] == 2  # Two write calls (short + full)
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_pty_stdin_writer_blocking_io_error():
+    """_PTYStdinWriter._blocking_write() retries after BlockingIOError."""
+    import select
+    from unittest.mock import patch
+
+    master, slave = open_pty()
+    try:
+        writer = _PTYStdinWriter(master)
+        original_os_write = os.write
+
+        call_count = {"n": 0}
+        # Use data with newline so PTY line discipline flushes it
+        data = b"hello\n"
+
+        def mock_os_write(fd, d):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise BlockingIOError()
+            return original_os_write(fd, d)
+
+        with patch("os.write", side_effect=mock_os_write):
+            writer._blocking_write(data)
+
+        # Wait for data on the slave side
+        ready, _, _ = select.select([slave], [], [], 2.0)
+        assert ready, "No data available on slave within 2 s"
+        result = os.read(slave, 1024)
+        assert result == data
+        assert call_count["n"] == 2  # Two calls: error + success
     finally:
         os.close(master)
         os.close(slave)

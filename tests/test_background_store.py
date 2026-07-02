@@ -87,6 +87,23 @@ class TestHeadTailBuffer:
         result = buf.get_tail(last_n=0)
         assert result == ""
 
+    def test_get_tail_last_n_no_trailing_newline(self):
+        buf = HeadTailBuffer()
+        buf.append(b"line1\nline2\nline3")  # no trailing newline
+        result = buf.get_tail(last_n=1)
+        assert result == "line3"
+
+    def test_get_tail_last_n_no_newlines(self):
+        buf = HeadTailBuffer()
+        buf.append(b"partial")
+        result = buf.get_tail(last_n=3)
+        assert result == "partial"
+
+    def test_get_tail_last_n_empty_buffer(self):
+        buf = HeadTailBuffer()
+        result = buf.get_tail(last_n=5)
+        assert result == ""
+
     def test_head_preserved_when_over_cap(self):
         """After exceeding the cap, head still holds the first 512 KiB."""
         buf = HeadTailBuffer()

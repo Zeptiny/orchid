@@ -3,6 +3,7 @@ import time
 from datetime import UTC, datetime
 
 from textual.containers import Vertical
+from textual.events import Blur, Focus
 from textual.message import Message
 from textual.widgets import Collapsible, Input, Static
 
@@ -63,12 +64,12 @@ class BgCommandInput(Input):
         self._bg_command_id = command_id
         super().__init__(**kwargs)
 
-    def _on_focus(self, event) -> None:
+    def _on_focus(self, event: Focus) -> None:
         super()._on_focus(event)
         from orchid.tools.background_store import get_background_store
         get_background_store().take_ownership(self._bg_command_id)
 
-    def _on_blur(self, event) -> None:
+    def _on_blur(self, event: Blur) -> None:
         super()._on_blur(event)
         from orchid.tools.background_store import get_background_store
         get_background_store().release_ownership(self._bg_command_id)
@@ -912,8 +913,12 @@ class Sidebar(Vertical):
         # Restore expanded state from before the rebuild
         restore_id = focused_cmd_id or saved_expanded_id
         if restore_id is not None and any(r["id"] == restore_id for r in records):
-            self._expanded_bg_cmd_id = None  # clear so _expand_bg_cmd doesn't skip
-            await self._expand_bg_cmd(restore_id)
+            # Skip expansion if command is finished (inside Collapsible, not a direct child)
+            if restore_id in finished_ids:
+                self._expanded_bg_cmd_id = None
+            else:
+                self._expanded_bg_cmd_id = None  # clear so _expand_bg_cmd doesn't skip
+                await self._expand_bg_cmd(restore_id)
             # Re-focus the input if it was focused before
             if focused_cmd_id is not None:
                 try:

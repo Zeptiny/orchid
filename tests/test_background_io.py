@@ -339,3 +339,31 @@ def test_send_input_tool_shape():
     assert "id" in params
     assert "text" in params
     assert set(d["function"]["parameters"]["required"]) == {"id", "text"}
+
+
+# ---------------------------------------------------------------------------
+# Test: Long-poll wait_ms clamping
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_output_long_poll_clamped(fresh_store):
+    """execute_read_output clamps wait_ms to 60s maximum."""
+    from unittest.mock import AsyncMock, patch
+
+    proc_id, _ = await fresh_store.spawn("sleep 60")
+    await asyncio.sleep(0.1)
+
+    # Patch store.wait_for_progress to capture what it receives
+    with patch.object(
+        fresh_store, "wait_for_progress", new_callable=AsyncMock
+    ) as mock_wait:
+        # Request 120 seconds — should be clamped to 60s
+        await execute_read_output(id=proc_id, wait_ms=120000)
+        assert mock_wait.call_count == 1
+        # The second arg should be min(120000, 60000) = 60000
+        assert mock_wait.call_args[0][1] == 60000
+
+    # Clean up
+    fresh_store.terminate(proc_id)
+    await asyncio.sleep(0.8)
