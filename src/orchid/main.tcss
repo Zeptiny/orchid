@@ -12,6 +12,11 @@ Screen {
     layout: vertical;
 }
 
+#sidebar {
+    width: 25;
+    max-width: 25;
+}
+
 #header {
     height: 3;
     padding: 1;
