@@ -220,6 +220,13 @@ OptionPicker {
     text-style: italic;
 }
 
+.collapsed-chain-stub {
+    padding: 0 1;
+    height: 1;
+    color: $text-muted;
+    text-style: dim;
+}
+
 Button.settings-add-btn {
     content-align: center middle;
     text-align: center;

@@ -280,7 +280,9 @@ class AssistantMessageWidget(TextualMarkdown):
     """Assistant message using Textual's MarkdownStream for incremental streaming.
 
     Uses ``MarkdownStream.write()`` which handles buffering, coalescing,
-    and back-pressure internally.
+    and back-pressure internally. A throttle gate ensures that writes are
+    batched at most every ``_THROTTLE_INTERVAL`` seconds to avoid excessive
+    re-parsing of the full markdown document on every LLM chunk.
     """
 
     def __init__(self, msg: Message, *, loaded: bool = False, **kwargs):
@@ -288,13 +290,34 @@ class AssistantMessageWidget(TextualMarkdown):
         super().__init__(msg.content, **kwargs)
         self._stream = TextualMarkdown.get_stream(self)
         self._last_appended_len: int = len(msg.content)
+        self._last_write_time: float = 0
+        self._write_scheduled: bool = False
 
     async def update_content(self, content: str) -> None:
         self.msg.content = content
-        delta = content[self._last_appended_len :]
+        delta = content[self._last_appended_len:]
         if not delta:
             return
-        self._last_appended_len = len(content)
+        now = time.monotonic()
+        if now - self._last_write_time >= _THROTTLE_INTERVAL:
+            self._last_write_time = now
+            self._last_appended_len = len(content)
+            await self._stream.write(delta)
+        elif not self._write_scheduled:
+            self._write_scheduled = True
+            remaining = _THROTTLE_INTERVAL - (now - self._last_write_time)
+            self.set_timer(remaining, self._flush_write)
+
+    def _flush_write(self) -> None:
+        self._write_scheduled = False
+        self._last_write_time = time.monotonic()
+        delta = self.msg.content[self._last_appended_len:]
+        if delta:
+            self._last_appended_len = len(self.msg.content)
+            # Use call_later to write from within an async context
+            self.call_later(self._do_write, delta)
+
+    async def _do_write(self, delta: str) -> None:
         await self._stream.write(delta)
 
 

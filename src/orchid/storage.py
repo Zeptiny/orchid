@@ -52,23 +52,60 @@ def load_session(session_id: str) -> dict | None:
 
 
 def list_saved_sessions() -> list[dict]:
-    """Return metadata for all saved sessions (id, name, model) sorted by most recent chains."""
+    """Return metadata for all saved sessions (id, name, model) sorted by most recent.
+
+    Uses a partial read strategy: reads only the first 2KB of each file to
+    extract metadata fields without parsing the entire JSON (which can be
+    large due to message histories). Falls back to full parse if the partial
+    read doesn't contain enough data.
+    """
     ensure_sessions_dir()
     sessions = []
+    partial_read_size = 2048
     for path in SESSIONS_DIR.glob("*.json"):
         try:
+            # Try partial read first — metadata fields are at the top of the file
             with open(path) as f:
-                data = json.load(f)
-            # Extract just the metadata we need for listing
-            sessions.append({
-                "id": data["id"],
-                "name": data.get("name", "Unnamed"),
-                "model": data.get("model"),
-                "chain_count": len(data.get("chains", [])),
-            })
+                head = f.read(partial_read_size)
+            # Quick extraction via string search (avoids full JSON parse)
+            session_id = _extract_json_string(head, '"id"')
+            name = _extract_json_string(head, '"name"')
+            model = _extract_json_string(head, '"model"')
+            if session_id:
+                sessions.append({
+                    "id": session_id,
+                    "name": name or "Unnamed",
+                    "model": model,
+                    "chain_count": head.count('"messages"'),  # rough estimate
+                })
+            else:
+                # Fallback: full parse
+                with open(path) as f:
+                    data = json.load(f)
+                sessions.append({
+                    "id": data["id"],
+                    "name": data.get("name", "Unnamed"),
+                    "model": data.get("model"),
+                    "chain_count": len(data.get("chains", [])),
+                })
         except (json.JSONDecodeError, OSError, KeyError, TypeError, AttributeError) as e:
             log.warning("Skipping corrupted session file %s: %s", path.name, e)
     return sessions
+
+
+def _extract_json_string(text: str, key: str) -> str | None:
+    """Extract a simple string value for a JSON key from partial text.
+
+    Works for flat top-level keys like "id", "name", "model" where the
+    value is a quoted string. Returns None if the key is not found or
+    value is null.
+    """
+    import re
+    pattern = key + r'\s*:\s*"([^"]*)"'
+    match = re.search(pattern, text)
+    if match:
+        return match.group(1)
+    return None
 
 
 def delete_session(session_id: str) -> bool:

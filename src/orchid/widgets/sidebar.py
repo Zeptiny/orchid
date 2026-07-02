@@ -621,10 +621,20 @@ class Sidebar(Vertical):
                 await container.remove_children()
             return
 
-        entries: list[Static] = []
-        for name, info in statuses.items():
-            entries.append(Static(self._format_mcp_server(name, info)))
+        # Diff-based update: update existing entries in-place, only rebuild
+        # if the number of servers changed.
+        new_texts = [self._format_mcp_server(name, info) for name, info in statuses.items()]
+        existing = list(container.children)
 
+        if len(existing) == len(new_texts):
+            # Same count — update labels in-place (no flicker)
+            for widget, text in zip(existing, new_texts, strict=True):
+                if isinstance(widget, Static):
+                    widget.update(text)
+            return
+
+        # Server count changed — must rebuild
+        entries: list[Static] = [Static(text) for text in new_texts]
         await container.remove_children()
         if entries:
             await container.mount(*entries)
@@ -673,13 +683,37 @@ class Sidebar(Vertical):
         active = [t for t in tasks if t.status not in TERMINAL_STATUSES]
         done = [t for t in tasks if t.status in TERMINAL_STATUSES]
 
+        # Detect current structure for diff comparison
         existing_collapse: Collapsible | None = None
+        current_active_count = 0
+        current_done_count = 0
         for child in container.children:
             if isinstance(child, Collapsible):
                 existing_collapse = child
+                current_done_count = len(list(child.query(".todo-entry")))
+            elif isinstance(child, Static) and "todo-entry" in child.classes:
+                current_active_count += 1
 
         was_finished_collapsed = existing_collapse.collapsed if existing_collapse else True
 
+        # If structure matches (same active/done counts), update in-place
+        if current_active_count == len(active) and current_done_count == len(done):
+            # Update active entries in-place
+            active_widgets = [
+                child for child in container.children
+                if isinstance(child, Static) and "todo-entry" in child.classes
+            ]
+            for widget, task in zip(active_widgets, active, strict=True):
+                widget.update(self._format_todo(task))
+            # Update done entries in-place
+            if existing_collapse:
+                done_widgets = list(existing_collapse.query(".todo-entry"))
+                for widget, task in zip(done_widgets, reversed(done), strict=True):
+                    if isinstance(widget, Static):
+                        widget.update(self._format_todo(task))
+            return
+
+        # Structure changed — rebuild
         active_entries: list[Static] = []
         for task in active:
             entry = Static(self._format_todo(task), classes="todo-entry")
@@ -696,17 +730,12 @@ class Sidebar(Vertical):
             await container.mount(*active_entries)
 
         if done_entries:
-            # See _refresh_subagent_display: children are passed to the
-            # Collapsible constructor rather than mounted via a post-mount
-            # query_one("Contents") to avoid the teardown NoMatches race.
             collapse = Collapsible(
                 *done_entries,
                 classes="finished-collapse",
                 title=f"Done ({len(done)})",
                 collapsed=was_finished_collapsed,
             )
-            # Pre-set the -collapsed class before mount to avoid a one-frame
-            # flash of the expanded dropdown (see _refresh_subagent_display).
             collapse.set_class(was_finished_collapsed, "-collapsed", update=False)
             await container.mount(collapse)
 
