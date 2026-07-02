@@ -296,6 +296,10 @@ class Sidebar(Vertical):
     _CTX_BLOCK_TOOL   = "[on #fbbf24]  [/]"
     _CTX_BLOCK_MSGS   = "[on #a78bfa]  [/]"
 
+    _CTX_GRID_ROWS = 8
+    _CTX_GRID_COLS = 8
+    _CTX_GRID_TOTAL = _CTX_GRID_ROWS * _CTX_GRID_COLS  # 64 blocks
+
     def _build_context_breakdown(self) -> str:
         """Estimate token attribution by character-based proportional allocation.
 
@@ -353,36 +357,110 @@ class Sidebar(Vertical):
             else:
                 msg_tokens += diff
 
-        # Format lines for the sidebar with colored blocks (Claude Code–style)
-        lines: list[str] = []
+        # Calculate free tokens
         if self._max_context and self._max_context > 0:
-            pct = prompt_tokens / self._max_context * 100
-            pct = max(0.0, min(100.0, pct))
             free_tokens = max(0, self._max_context - prompt_tokens)
+        else:
+            free_tokens = 0
+
+        # Build 8x8 visual block grid
+        total_display_tokens = prompt_tokens + free_tokens
+        if total_display_tokens == 0:
+            return ""
+
+        tokens_per_block = total_display_tokens / self._CTX_GRID_TOTAL
+
+        # Calculate block counts for each category
+        system_blocks = round(system_tokens / tokens_per_block)
+        tools_blocks = round(tools_tokens / tokens_per_block)
+        tool_use_blocks = round(tool_use_tokens / tokens_per_block)
+        msg_blocks = round(msg_tokens / tokens_per_block)
+        used_blocks = system_blocks + tools_blocks + tool_use_blocks + msg_blocks
+        free_blocks = max(0, self._CTX_GRID_TOTAL - used_blocks)
+
+        # Normalize block counts to ensure they sum to exactly 64
+        total_blocks = system_blocks + tools_blocks + tool_use_blocks + msg_blocks + free_blocks
+        if total_blocks != self._CTX_GRID_TOTAL:
+            # Adjust the largest category to make up the difference
+            diff_blocks = self._CTX_GRID_TOTAL - total_blocks
+            categories = [
+                ("system", system_blocks),
+                ("tools", tools_blocks),
+                ("tool_use", tool_use_blocks),
+                ("messages", msg_blocks),
+                ("free", free_blocks),
+            ]
+            largest_cat = max(categories, key=lambda x: x[1])[0]
+            if largest_cat == "system":
+                system_blocks += diff_blocks
+            elif largest_cat == "tools":
+                tools_blocks += diff_blocks
+            elif largest_cat == "tool_use":
+                tool_use_blocks += diff_blocks
+            elif largest_cat == "messages":
+                msg_blocks += diff_blocks
+            else:
+                free_blocks += diff_blocks
+
+        # Build the grid as a list of colored block strings
+        block_map = {
+            "system": self._CTX_BLOCK_SYSTEM,
+            "tools": self._CTX_BLOCK_TOOLS,
+            "tool_use": self._CTX_BLOCK_TOOL,
+            "messages": self._CTX_BLOCK_MSGS,
+            "free": self._CTX_BLOCK_FREE,
+        }
+
+        # Create a flat list of 64 blocks in order
+        blocks: list[str] = []
+        for _ in range(system_blocks):
+            blocks.append(block_map["system"])
+        for _ in range(tools_blocks):
+            blocks.append(block_map["tools"])
+        for _ in range(tool_use_blocks):
+            blocks.append(block_map["tool_use"])
+        for _ in range(msg_blocks):
+            blocks.append(block_map["messages"])
+        for _ in range(free_blocks):
+            blocks.append(block_map["free"])
+
+        # Build 8x8 grid rows
+        grid_lines: list[str] = []
+        for row in range(self._CTX_GRID_ROWS):
+            start = row * self._CTX_GRID_COLS
+            end = start + self._CTX_GRID_COLS
+            row_blocks = blocks[start:end]
+            grid_lines.append("".join(row_blocks))
+
+        # Build legend lines with category counts
+        legend_lines: list[str] = []
+        if self._max_context and self._max_context > 0:
             free_pct = free_tokens / self._max_context * 100
-            lines.append(
+            legend_lines.append(
                 f"{self._CTX_BLOCK_FREE} Free: "
                 f"{Chain.format_tokens(free_tokens)} ({free_pct:.1f}%)"
             )
         else:
-            free_tokens = max(0, self._max_context - prompt_tokens) if self._max_context else 0
-            lines.append(
+            legend_lines.append(
                 f"{self._CTX_BLOCK_FREE} Free: {Chain.format_tokens(free_tokens)}"
             )
 
-        lines.append(
+        legend_lines.append(
             f"{self._CTX_BLOCK_SYSTEM} System: {Chain.format_tokens(system_tokens)}"
         )
-        lines.append(
+        legend_lines.append(
             f"{self._CTX_BLOCK_TOOLS} Tools: {Chain.format_tokens(tools_tokens)}"
         )
-        lines.append(
+        legend_lines.append(
             f"{self._CTX_BLOCK_TOOL} Tool use: {Chain.format_tokens(tool_use_tokens)}"
         )
-        lines.append(
+        legend_lines.append(
             f"{self._CTX_BLOCK_MSGS} Messages: {Chain.format_tokens(msg_tokens)}"
         )
-        return "\n".join(lines)
+
+        # Combine grid and legend
+        all_lines = grid_lines + [""] + legend_lines
+        return "\n".join(all_lines)
 
     def _flush_token_update(self) -> None:
         self._token_flush_scheduled = False
