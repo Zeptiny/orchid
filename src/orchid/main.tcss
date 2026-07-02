@@ -4,6 +4,7 @@ Screen {
 
 #body {
     height: 1fr;
+    layout: horizontal;
 }
 
 #main-pane {

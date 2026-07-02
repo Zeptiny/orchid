@@ -100,8 +100,6 @@ class Sidebar(Vertical):
         self._cached_tools_char_count: int = 0
 
     def compose(self):
-        yield Static("Tokens", id="sidebar-tokens-label")
-        yield Static("Context: 0", id="token-info")
         with Vertical(id="sidebar-nav"):
             yield NavEntry("▸ Main", "main", id="nav-main")
         yield Static("Subagents", id="sidebar-subagents-label")
@@ -110,7 +108,6 @@ class Sidebar(Vertical):
         yield Vertical(id="mcp-entries")
         yield Static("Todos", id="sidebar-todos-label")
         yield Vertical(id="todo-entries")
-        yield Static(id="sidebar-spacer")
         yield Static("", id="context-breakdown")
         yield Static("AST", id="sidebar-ast-label")
         yield Static("", id="ast-status")
@@ -361,13 +358,6 @@ class Sidebar(Vertical):
         self._token_flush_scheduled = False
         self._last_token_update = time.monotonic()
         try:
-            line = f"Context: {self._prompt_tokens}"
-            if self._max_context and self._max_context > 0:
-                pct = self._prompt_tokens / self._max_context * 100
-                # Clamp so 0% and 100% render cleanly; never show negative.
-                pct = max(0.0, min(100.0, pct))
-                line += f" ({pct:.1f}%)"
-            self.query_one("#token-info", Static).update(line)
             breakdown = self._build_context_breakdown()
             if breakdown:
                 self.query_one("#context-breakdown", Static).update(breakdown)
