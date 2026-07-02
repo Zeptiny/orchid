@@ -118,8 +118,8 @@ class Sidebar(Vertical):
         yield Vertical(id="mcp-entries")
         yield Static("Todos", id="sidebar-todos-label")
         yield Vertical(id="todo-entries")
-        yield Static("", id="context-breakdown")
         yield Static("", id="sidebar-spacer")
+        yield Static("", id="context-breakdown")
         yield Static("AST", id="sidebar-ast-label")
         yield Static("", id="ast-status")
         yield Static("RAG", id="sidebar-rag-label")
@@ -289,6 +289,13 @@ class Sidebar(Vertical):
         self._cached_tools_keys = current_keys
         return self._cached_tools_char_count
 
+    # Colored blocks for context breakdown (Claude Code–style visual bars)
+    _CTX_BLOCK_FREE   = "[on #4ade80]  [/]"
+    _CTX_BLOCK_SYSTEM = "[on #60a5fa]  [/]"
+    _CTX_BLOCK_TOOLS  = "[on #f472b6]  [/]"
+    _CTX_BLOCK_TOOL   = "[on #fbbf24]  [/]"
+    _CTX_BLOCK_MSGS   = "[on #a78bfa]  [/]"
+
     def _build_context_breakdown(self) -> str:
         """Estimate token attribution by character-based proportional allocation.
 
@@ -346,23 +353,35 @@ class Sidebar(Vertical):
             else:
                 msg_tokens += diff
 
-        # Format lines for the sidebar (30 cols wide, abbreviated labels)
-        lines: list[str] = [f"Context: {Chain.format_tokens(prompt_tokens)}"]
+        # Format lines for the sidebar with colored blocks (Claude Code–style)
+        lines: list[str] = []
         if self._max_context and self._max_context > 0:
             pct = prompt_tokens / self._max_context * 100
             pct = max(0.0, min(100.0, pct))
-            lines[0] += f" ({pct:.1f}%)"
             free_tokens = max(0, self._max_context - prompt_tokens)
             free_pct = free_tokens / self._max_context * 100
-            lines.append(f"Free: {Chain.format_tokens(free_tokens)} ({free_pct:.1f}%)")
+            lines.append(
+                f"{self._CTX_BLOCK_FREE} Free: "
+                f"{Chain.format_tokens(free_tokens)} ({free_pct:.1f}%)"
+            )
         else:
             free_tokens = max(0, self._max_context - prompt_tokens) if self._max_context else 0
-            lines.append(f"Free: {Chain.format_tokens(free_tokens)}")
+            lines.append(
+                f"{self._CTX_BLOCK_FREE} Free: {Chain.format_tokens(free_tokens)}"
+            )
 
-        lines.append(f"System: {Chain.format_tokens(system_tokens)}")
-        lines.append(f"Tools: {Chain.format_tokens(tools_tokens)}")
-        lines.append(f"Tool use: {Chain.format_tokens(tool_use_tokens)}")
-        lines.append(f"Messages: {Chain.format_tokens(msg_tokens)}")
+        lines.append(
+            f"{self._CTX_BLOCK_SYSTEM} System: {Chain.format_tokens(system_tokens)}"
+        )
+        lines.append(
+            f"{self._CTX_BLOCK_TOOLS} Tools: {Chain.format_tokens(tools_tokens)}"
+        )
+        lines.append(
+            f"{self._CTX_BLOCK_TOOL} Tool use: {Chain.format_tokens(tool_use_tokens)}"
+        )
+        lines.append(
+            f"{self._CTX_BLOCK_MSGS} Messages: {Chain.format_tokens(msg_tokens)}"
+        )
         return "\n".join(lines)
 
     def _flush_token_update(self) -> None:

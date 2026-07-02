@@ -108,9 +108,9 @@ Sidebar .finished-collapse > Contents {
 }
 
 Sidebar #context-breakdown {
-    color: $text-muted;
+    color: $text;
     padding: 0 1;
-    text-style: dim;
+    text-style: none;
     height: auto;
     margin: 0;
 }
