@@ -123,6 +123,24 @@ def _format_session_model_label(
     )
 
 
+def _format_footer_usage_label(
+    totals: tuple[int, int, int, int] | None,
+    max_context: int | None = None,
+) -> str:
+    """Render compact, descriptive usage for the input footer."""
+    if totals is None:
+        return ""
+    prompt, cached, completion, total = totals
+    context = ""
+    if max_context and max_context > 0:
+        context = f" ({prompt / max_context * 100:.0f}%)"
+    return (
+        f"Σ{Chain.format_tokens(total)}{context} · "
+        f"↑{Chain.format_tokens(prompt)} "
+        f"(⟲{Chain.format_tokens(cached)}) ↓{Chain.format_tokens(completion)}"
+    )
+
+
 def _chain_subagent_subtotals(
     session: "Session", chain_index: int
 ) -> tuple[int, int, int, int] | None:
@@ -181,15 +199,20 @@ class InterruptState(Enum):
 def _get_shortcut_hints(
     interrupt_state: InterruptState,
     is_streaming: bool,
+    has_running_subagents: bool,
     input_has_text: bool,
 ) -> str:
     """Return a contextual keyboard-shortcut hint string for the footer."""
-    if interrupt_state != InterruptState.IDLE:
-        return "Esc: confirm"
+    if interrupt_state == InterruptState.CONFIRM_AGENT:
+        return "Esc again: interrupt agent"
+    if interrupt_state == InterruptState.CONFIRM_SUBAGENTS:
+        return "Esc again: interrupt subagents"
     if is_streaming:
-        return "Esc: interrupt | Ctrl+P: commands | Ctrl+S: submit"
+        return "Esc: interrupt agent | Ctrl+P: commands"
+    if has_running_subagents:
+        return "Esc: interrupt subagents | Ctrl+P: commands"
     if input_has_text:
-        return "Ctrl+S: submit | Ctrl+P: commands | Ctrl+C: clear"
+        return "Ctrl+S: submit | Ctrl+C: clear | Ctrl+P: commands"
     return "Ctrl+P: commands"
 
 
@@ -200,6 +223,22 @@ class InputTextArea(TextArea):
         super()._on_resize()
         if self._app_ref is not None:
             self._app_ref._update_input_height(self)  # pyright: ignore[reportPrivateUsage]
+
+    def on_focus(self) -> None:
+        if self._app_ref is not None:
+            try:
+                wrapper = self._app_ref.query_one("#input-wrapper", Vertical)
+                wrapper.add_class("-focused")
+            except Exception:
+                pass
+
+    def on_blur(self) -> None:
+        if self._app_ref is not None:
+            try:
+                wrapper = self._app_ref.query_one("#input-wrapper", Vertical)
+                wrapper.remove_class("-focused")
+            except Exception:
+                pass
 
 
 class Orchid(App[None]):
@@ -259,16 +298,15 @@ class Orchid(App[None]):
     def compose(self) -> ComposeResult:
         with Horizontal(id="body"):
             with Vertical(id="main-pane"):
-                with Horizontal(id="header"):
-                    yield Static(self.sessions.active.name if self.sessions.active else "No Session", id="title")
                 with TabbedContent(id="tabs", initial="main"), TabPane("Main", id="main"):
                     yield ScrollableContainer(id="output")
                 yield CommandPicker(SessionCommands.COMMANDS)
-                yield InputTextArea(id="input", highlight_cursor_line=False)
+                with Vertical(id="input-wrapper"):
+                    yield InputTextArea(id="input", highlight_cursor_line=False)
+                    yield Static("", id="input-meta")
                 with Horizontal(id="footer"):
                     yield LoadingIndicator(id="spinner")
-                    yield Static("N/A Model", id="model")
-                    yield Static("", id="interrupt-hint")
+                    yield Static("", id="footer-usage")
                     yield Static("", id="shortcuts")
             yield Sidebar(id="sidebar")
 
@@ -276,7 +314,7 @@ class Orchid(App[None]):
         self.sessions.create()
         set_todo_refresh_callback(self.refresh_todos)
         assert self.sessions.active is not None
-        self.query_one("#title", Static).update(self.sessions.active.name)
+        self.query_one("#sidebar", Sidebar).set_title(self.sessions.active.name)
         await self.mount_all_messages()
         text_area = self.query_one("#input", InputTextArea)
         text_area._app_ref = self  # pyright: ignore[reportPrivateUsage]
@@ -331,23 +369,18 @@ class Orchid(App[None]):
         except Exception:
             pass
 
-        hint = self.query_one("#interrupt-hint", Static)
-
         if self._interrupt_state == InterruptState.IDLE:
             if self._is_streaming():
                 self._interrupt_state = InterruptState.CONFIRM_AGENT
-                hint.update("[bold yellow]Press Esc again to interrupt agent[/]")
                 self._start_interrupt_timeout()
             elif self._has_running_subagents():
                 self._interrupt_state = InterruptState.CONFIRM_SUBAGENTS
-                hint.update("[bold red]Press Esc again to interrupt subagents[/]")
                 self._start_interrupt_timeout()
         elif self._interrupt_state == InterruptState.CONFIRM_AGENT:
             self._interrupt_state = InterruptState.CONFIRM_SUBAGENTS
             if self._active_worker and not self._active_worker.is_finished:
                 self._active_worker.cancel()
             if self._has_running_subagents():
-                hint.update("[bold red]Press Esc again to interrupt subagents[/]")
                 self._start_interrupt_timeout()
             else:
                 self._reset_interrupt_state()
@@ -374,16 +407,14 @@ class Orchid(App[None]):
                     except Exception:
                         pass
             self._reset_interrupt_state()
+        self._render_footer_shortcuts()
 
     def _reset_interrupt_state(self) -> None:
         self._interrupt_state = InterruptState.IDLE
         if self._interrupt_timer is not None:
             self._interrupt_timer.stop()
             self._interrupt_timer = None
-        try:
-            self.query_one("#interrupt-hint", Static).update("")
-        except Exception:
-            pass
+        self._render_footer_shortcuts()
 
     def _start_interrupt_timeout(self) -> None:
         """Auto-reset interrupt state after 5 seconds of inactivity."""
@@ -429,6 +460,7 @@ class Orchid(App[None]):
         if event.text_area.id != "input":
             return
         self._update_input_height(event.text_area)
+        self._render_footer_shortcuts()
         text = event.text_area.text.strip()
         try:
             picker = self.query_one("#command-picker", CommandPicker)
@@ -588,6 +620,7 @@ class Orchid(App[None]):
         self._footer_timer = self.set_interval(1.0, self._tick_footer)
 
     async def streaming_finished(self) -> None:
+        self._active_worker = None
         self.query_one("#spinner").display = False
         self._freeze_chain()
         if self._interrupt_state != InterruptState.CONFIRM_SUBAGENTS:
@@ -677,7 +710,7 @@ class Orchid(App[None]):
                     session.name = title
                     if self.sessions.active is session:
                         try:
-                            self.query_one("#title", Static).update(title)
+                            self.query_one("#sidebar", Sidebar).set_title(title)
                         except Exception:
                             pass
             except Exception:
@@ -738,7 +771,7 @@ class Orchid(App[None]):
         if not self.sessions.active:
             return
 
-        self.query_one("#title", Static).update(self.sessions.active.name)
+        self.query_one("#sidebar", Sidebar).set_title(self.sessions.active.name)
         await self.mount_all_messages()
         await self._subagent_ui.sync_tabs(self.sessions.active.subagent_manager)
         await self.rerender_footer()
@@ -748,6 +781,7 @@ class Orchid(App[None]):
         if not self.sessions.active:
             return
 
+        max_context = self._resolve_active_max_context()
         last_usage = None
         for msg in reversed(self.sessions.active.messages):
             if msg.usage:
@@ -761,11 +795,11 @@ class Orchid(App[None]):
                     last_usage.completion_tokens,
                     last_usage.total_tokens,
                     view_id="main",
-                    max_context=self._resolve_active_max_context(),
+                    max_context=max_context,
                 )
             else:
                 sidebar.update_tokens(
-                    0, 0, 0, view_id="main", max_context=self._resolve_active_max_context()
+                    0, 0, 0, view_id="main", max_context=max_context
                 )
             # Provide raw sources for the context-breakdown estimator
             general = get_agent_registry()["general"]
@@ -777,20 +811,35 @@ class Orchid(App[None]):
         except Exception:
             pass
 
-        model_label = self.model or "No Model"
         totals = _session_usage_totals(self.sessions.active)
-        self.query_one("#model", Static).update(_format_session_model_label(model_label, totals))
+        try:
+            self.query_one("#input-meta", Static).update(self.model or "No Model")
+            self.query_one("#footer-usage", Static).update(
+                _format_footer_usage_label(totals, max_context)
+            )
+        except Exception:
+            pass
 
+        self._render_footer_shortcuts()
+        await self._subagent_ui.update_sidebar()
+
+    def _render_footer_shortcuts(self) -> None:
         try:
             text_area = self.query_one("#input", TextArea)
             input_has_text = bool(text_area.text.strip())
         except Exception:
             input_has_text = False
-        self.query_one("#shortcuts", Static).update(
-            _get_shortcut_hints(self._interrupt_state, self._is_streaming(), input_has_text)
-        )
-
-        await self._subagent_ui.update_sidebar()
+        try:
+            self.query_one("#shortcuts", Static).update(
+                _get_shortcut_hints(
+                    self._interrupt_state,
+                    self._is_streaming(),
+                    self._has_running_subagents(),
+                    input_has_text,
+                )
+            )
+        except Exception:
+            pass
 
     def _resolve_active_max_context(self) -> int | None:
         """Look up the active session's model `max_input_tokens`.

@@ -110,6 +110,7 @@ class Sidebar(Vertical):
         self._cached_tools_char_count: int = 0
 
     def compose(self):
+        yield Static("", id="sidebar-title")
         with Vertical(id="sidebar-nav"):
             yield NavEntry("▸ Main", "main", id="nav-main")
         yield Static("Subagents", id="sidebar-subagents-label")
@@ -135,6 +136,13 @@ class Sidebar(Vertical):
             if len(parts) > 3:
                 return f"  ~/{'/'.join(parts[-2:])}"
         return f"  {cwd}"
+
+    def set_title(self, text: str) -> None:
+        """Update the session title shown at the top of the sidebar."""
+        try:
+            self.query_one("#sidebar-title", Static).update(text)
+        except Exception:
+            pass
 
     def on_nav_entry_pressed(self, event: NavEntry.Pressed) -> None:
         if event.control.view_id == "main":
