@@ -1,0 +1,135 @@
+Sidebar {
+    width: 30;
+    min-width: 30;
+    dock: right;
+    background: $surface;
+    padding: 1 0 0 0;
+}
+
+Sidebar #sidebar-tokens-label,
+Sidebar #sidebar-subagents-label,
+Sidebar #sidebar-todos-label,
+Sidebar #sidebar-mcp-label,
+Sidebar #sidebar-rag-label,
+Sidebar #sidebar-ast-label {
+    color: $text-muted;
+    text-style: bold;
+    padding: 0 1;
+}
+
+Sidebar #sidebar-subagents-label,
+Sidebar #sidebar-mcp-label,
+Sidebar #sidebar-todos-label,
+Sidebar #sidebar-rag-label,
+Sidebar #sidebar-ast-label {
+    margin-top: 1;
+}
+
+Sidebar #rag-status,
+Sidebar #ast-status {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+Sidebar #token-info {
+    color: $text;
+    padding: 0 1 0 1;
+}
+
+Sidebar #context-breakdown {
+    color: $text-muted;
+    padding: 0 1 1 1;
+    text-style: dim;
+}
+
+Sidebar #sidebar-nav {
+    height: auto;
+    padding: 0 0;
+}
+
+Sidebar NavEntry {
+    width: 100%;
+    min-height: 1;
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+Sidebar NavEntry:hover {
+    background: $surface-darken-1;
+}
+
+Sidebar NavEntry:focus {
+    background: $accent-darken-1;
+    color: $text;
+}
+
+Sidebar NavEntry.-active {
+    color: $primary-lighten-1;
+    text-style: bold;
+}
+
+Sidebar #subagent-entries,
+Sidebar #mcp-entries,
+Sidebar #todo-entries {
+    height: auto;
+    padding: 0 0;
+}
+
+Sidebar .todo-entry {
+    width: 100%;
+    min-height: 1;
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+Sidebar .subagent-entry {
+    width: 100%;
+    min-height: 1;
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+Sidebar .subagent-entry:hover {
+    background: $surface-darken-1;
+}
+
+Sidebar .subagent-entry.-active {
+    color: $primary-lighten-1;
+    text-style: bold;
+}
+
+Sidebar .finished-collapse {
+    margin: 0;
+    padding: 0 0;
+    border: none;
+}
+
+Sidebar .finished-collapse > CollapsibleTitle {
+    color: $text-muted;
+    padding: 0 1;
+    text-style: dim;
+}
+
+Sidebar .finished-collapse > CollapsibleTitle:hover {
+    background: $surface-darken-1;
+}
+
+Sidebar .finished-collapse > Contents {
+    padding: 0;
+}
+
+Sidebar #working-directory {
+    width: 100%;
+    padding: 1 1 0 1;
+    color: $text-muted;
+    text-style: dim;
+}
+
+Sidebar #sidebar-spacer {
+    height: 1fr;
+}

@@ -1,9 +1,14 @@
 Screen {
+    layout: horizontal;
+}
+
+#main-pane {
+    width: 1fr;
+    height: 100%;
     layout: vertical;
 }
 
 #header {
-    dock: top;
     height: 3;
     padding: 1;
 }
@@ -37,10 +42,9 @@ TabbedContent Tabs {
 }
 
 #footer {
-    dock: bottom;
     height: 1;
     margin-left: 1;
-    margin-right: 31;
+    margin-right: 1;
 }
 
 #spinner {
@@ -61,8 +65,16 @@ TabbedContent Tabs {
     margin-left: 1;
 }
 
+#shortcuts {
+    color: $text-muted;
+    text-style: dim;
+    width: 1fr;
+    content-align: right middle;
+    margin-left: 1;
+}
+
 UserMessageWidget {
-    background: #333333;
+    background: $panel;
     margin: 0 1 0 0;
     padding: 1;
     border-left: thick $primary;

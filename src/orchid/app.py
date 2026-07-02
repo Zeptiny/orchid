@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, cast
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, ScrollableContainer
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.timer import Timer
 from textual.widgets import LoadingIndicator, Static, TabbedContent, TabPane, TextArea
 from textual.worker import Worker
@@ -178,6 +178,21 @@ class InterruptState(Enum):
     CONFIRM_SUBAGENTS = "confirm_subagents"
 
 
+def _get_shortcut_hints(
+    interrupt_state: InterruptState,
+    is_streaming: bool,
+    input_has_text: bool,
+) -> str:
+    """Return a contextual keyboard-shortcut hint string for the footer."""
+    if interrupt_state != InterruptState.IDLE:
+        return "Esc: confirm"
+    if is_streaming:
+        return "Esc: interrupt | Ctrl+P: commands | Ctrl+S: submit"
+    if input_has_text:
+        return "Ctrl+S: submit | Ctrl+P: commands | Ctrl+C: clear"
+    return "Ctrl+P: commands"
+
+
 class InputTextArea(TextArea):
     _app_ref: "Orchid | None" = None
 
@@ -242,16 +257,18 @@ class Orchid(App[None]):
         return self.sessions.active.model if self.sessions.active else None
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="header"):
-            yield Static(self.sessions.active.name if self.sessions.active else "No Session", id="title")
-        with TabbedContent(id="tabs", initial="main"), TabPane("Main", id="main"):
-            yield ScrollableContainer(id="output")
-        yield CommandPicker(SessionCommands.COMMANDS)
-        yield InputTextArea(id="input", highlight_cursor_line=False)
-        with Horizontal(id="footer"):
-            yield LoadingIndicator(id="spinner")
-            yield Static("N/A Model", id="model")
-            yield Static("", id="interrupt-hint")
+        with Vertical(id="main-pane"):
+            with Horizontal(id="header"):
+                yield Static(self.sessions.active.name if self.sessions.active else "No Session", id="title")
+            with TabbedContent(id="tabs", initial="main"), TabPane("Main", id="main"):
+                yield ScrollableContainer(id="output")
+            yield CommandPicker(SessionCommands.COMMANDS)
+            yield InputTextArea(id="input", highlight_cursor_line=False)
+            with Horizontal(id="footer"):
+                yield LoadingIndicator(id="spinner")
+                yield Static("N/A Model", id="model")
+                yield Static("", id="interrupt-hint")
+                yield Static("", id="shortcuts")
         yield Sidebar(id="sidebar")
 
     async def on_mount(self) -> None:
@@ -347,6 +364,7 @@ class Orchid(App[None]):
                     interrupt_msg = Message(
                         role=MessageRole.ASSISTANT,
                         content=f"[Subagents interrupted by user: {detail}]",
+                        hidden=True,
                     )
                     if self._current_chain:
                         self._current_chain.chain.messages.append(interrupt_msg)
@@ -490,6 +508,7 @@ class Orchid(App[None]):
             interrupted_msg = Message(
                 role=MessageRole.ASSISTANT,
                 content="[Interrupted by user]",
+                hidden=True,
             )
             if self._current_chain:
                 self._current_chain.chain.messages.append(interrupted_msg)
@@ -747,12 +766,28 @@ class Orchid(App[None]):
                 sidebar.update_tokens(
                     0, 0, 0, view_id="main", max_context=self._resolve_active_max_context()
                 )
+            # Provide raw sources for the context-breakdown estimator
+            general = get_agent_registry()["general"]
+            system_prompt = append_personality(general.system_prompt)
+            sidebar.set_context_sources(
+                self.sessions.active.messages,
+                system_prompt,
+            )
         except Exception:
             pass
 
         model_label = self.model or "No Model"
         totals = _session_usage_totals(self.sessions.active)
         self.query_one("#model", Static).update(_format_session_model_label(model_label, totals))
+
+        try:
+            text_area = self.query_one("#input", TextArea)
+            input_has_text = bool(text_area.text.strip())
+        except Exception:
+            input_has_text = False
+        self.query_one("#shortcuts", Static).update(
+            _get_shortcut_hints(self._interrupt_state, self._is_streaming(), input_has_text)
+        )
 
         await self._subagent_ui.update_sidebar()
 

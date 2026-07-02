@@ -1,3 +1,4 @@
+import os
 import re
 import time
 from collections.abc import Callable
@@ -60,11 +61,25 @@ def get_tool_action_label(tool_name: str) -> str:
     return f"Using {tool_name}..."
 
 
+def _shorten_paths(title: str) -> str:
+    """Replace absolute paths in title with paths relative to cwd."""
+    cwd = os.getcwd()
+    if not cwd or cwd == "/":
+        return title
+    # Normalize trailing slash for clean prefix matching
+    cwd_prefix = cwd if cwd.endswith("/") else cwd + "/"
+    # Only replace when the path starts with cwd + "/" to avoid partial matches
+    if cwd_prefix in title:
+        return title.replace(cwd_prefix, "")
+    return title
+
+
 def get_tool_result_title(msg: Message) -> str:
     if msg.display is None:
         return _TOOL_RESULT_FALLBACK_TITLE
 
     title = " ".join(msg.display.split())
+    title = _shorten_paths(title)
     if not title:
         return _TOOL_RESULT_FALLBACK_TITLE
     if len(title) <= _TOOL_RESULT_TITLE_MAX_LENGTH:
@@ -478,6 +493,9 @@ def create_message_widget(
     msg: Message, *, loaded: bool = False, classes: str | None = None
 ) -> Static | TextualMarkdown | None:
     """Factory function to create the appropriate widget for a message."""
+    # Skip hidden/internal messages (e.g. interrupt markers) from display
+    if msg.hidden:
+        return None
     match msg.type:
         case MessageType.THINKING:
             return ThinkingMessageWidget(msg, loaded=loaded, classes=classes)

@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from datetime import UTC, datetime
@@ -8,6 +9,8 @@ from textual.message import Message
 from textual.widgets import Collapsible, Static
 
 from orchid.agents.manager import SUBAGENT_INDICATORS, SubagentRecord, SubagentState
+from orchid.domain.chain import Chain
+from orchid.domain.message import Message as DomainMessage, MessageRole, MessageType
 from orchid.domain.todo import TERMINAL_STATUSES, TodoStatus, TodoTask
 
 _TOKEN_THROTTLE_INTERVAL = 0.5
@@ -76,131 +79,8 @@ class NavEntry(Static):
 class Sidebar(Vertical):
     """Right sidebar showing token counts, subagents, and working directory."""
 
+    CSS_PATH = "sidebar.tcss"
     BINDINGS = [("up", "navigate_up"), ("down", "navigate_down")]
-
-    DEFAULT_CSS = """
-    Sidebar {
-        width: 30;
-        min-width: 30;
-        dock: right;
-        background: $surface;
-        padding: 1 0 0 0;
-    }
-
-    Sidebar #sidebar-tokens-label,
-    Sidebar #sidebar-subagents-label,
-    Sidebar #sidebar-todos-label,
-    Sidebar #sidebar-mcp-label,
-    Sidebar #sidebar-rag-label,
-    Sidebar #sidebar-ast-label {
-        color: $text-muted;
-        text-style: bold;
-        padding: 0 1;
-    }
-
-    Sidebar #rag-status,
-    Sidebar #ast-status {
-        width: 100%;
-        height: auto;
-        padding: 0 1;
-        color: $text-muted;
-    }
-
-    Sidebar #token-info {
-        color: $text;
-        padding: 0 1 1 1;
-    }
-
-    Sidebar #sidebar-nav {
-        height: auto;
-        padding: 0 0;
-    }
-
-    Sidebar NavEntry {
-        width: 100%;
-        min-height: 1;
-        height: auto;
-        padding: 0 1;
-        color: $text-muted;
-    }
-
-    Sidebar NavEntry:hover {
-        background: $surface-darken-1;
-    }
-
-    Sidebar NavEntry:focus {
-        background: $accent-darken-1;
-        color: $text;
-    }
-
-    Sidebar NavEntry.-active {
-        color: $primary-lighten-1;
-        text-style: bold;
-    }
-
-    Sidebar #subagent-entries,
-    Sidebar #mcp-entries,
-    Sidebar #todo-entries {
-        height: auto;
-        padding: 0 0;
-    }
-
-    Sidebar .todo-entry {
-        width: 100%;
-        min-height: 1;
-        height: auto;
-        padding: 0 1;
-        color: $text-muted;
-    }
-
-    Sidebar .subagent-entry {
-        width: 100%;
-        min-height: 1;
-        height: auto;
-        padding: 0 1;
-        color: $text-muted;
-    }
-
-    Sidebar .subagent-entry:hover {
-        background: $surface-darken-1;
-    }
-
-    Sidebar .subagent-entry.-active {
-        color: $primary-lighten-1;
-        text-style: bold;
-    }
-
-    Sidebar .finished-collapse {
-        margin: 0;
-        padding: 0 0;
-        border: none;
-    }
-
-    Sidebar .finished-collapse > CollapsibleTitle {
-        color: $text-muted;
-        padding: 0 1;
-        text-style: dim;
-    }
-
-    Sidebar .finished-collapse > CollapsibleTitle:hover {
-        background: $surface-darken-1;
-    }
-
-    Sidebar .finished-collapse > Contents {
-        padding: 0;
-    }
-
-    Sidebar #working-directory {
-        width: 100%;
-        padding: 1 1 0 1;
-        color: $text-muted;
-        text-style: dim;
-    }
-
-    Sidebar #sidebar-spacer {
-        height: 1fr;
-    }
-    """
 
     _prompt_tokens: int = 0
     _completion_tokens: int = 0
@@ -214,10 +94,15 @@ class Sidebar(Vertical):
         super().__init__(*args, **kwargs)
         self._usage_by_view: dict[str, Any] = {}
         self._subagent_records: list[SubagentRecord] = []
+        self._context_messages: list[DomainMessage] = []
+        self._system_prompt: str = ""
+        self._cached_tools_keys: tuple[str, ...] = ()
+        self._cached_tools_char_count: int = 0
 
     def compose(self):
         yield Static("Tokens", id="sidebar-tokens-label")
         yield Static("Context: 0", id="token-info")
+        yield Static("", id="context-breakdown")
         with Vertical(id="sidebar-nav"):
             yield NavEntry("▸ Main", "main", id="nav-main")
         yield Static("Subagents", id="sidebar-subagents-label")
@@ -367,6 +252,111 @@ class Sidebar(Vertical):
             remaining = _TOKEN_THROTTLE_INTERVAL - (now - self._last_token_update)
             self.set_timer(remaining, self._flush_token_update)
 
+    def set_context_sources(
+        self,
+        messages: list[DomainMessage],
+        system_prompt: str,
+    ) -> None:
+        """Store the raw message list and system prompt for breakdown estimation."""
+        self._context_messages = list(messages)
+        self._system_prompt = system_prompt
+
+    def _get_tools_char_count(self) -> int:
+        """Return the character count of the current tool registry JSON.
+
+        Cached so that MCP server additions (which call ``reset_tool_registry``)
+        are picked up automatically on the next flush.
+        """
+        from orchid.tools import get_tool_registry
+
+        registry = get_tool_registry()
+        current_keys = tuple(sorted(registry.keys()))
+        if self._cached_tools_keys == current_keys:
+            return self._cached_tools_char_count
+        tools_list = []
+        for name in current_keys:
+            tool: Any = registry[name]["tool"]
+            tools_list.append(tool.to_dict())
+        self._cached_tools_char_count = len(json.dumps(tools_list))
+        self._cached_tools_keys = current_keys
+        return self._cached_tools_char_count
+
+    def _build_context_breakdown(self) -> str:
+        """Estimate token attribution by character-based proportional allocation.
+
+        Categories: System prompt, System tools, Tool use & results, Messages,
+        Free space. Percentages shown when ``max_context`` is known.
+        """
+        if not self._context_messages:
+            return ""
+
+        # Character counts per category
+        system_chars = len(self._system_prompt)
+        tools_chars = self._get_tools_char_count()
+        tool_msgs_chars = sum(
+            len(m.content)
+            for m in self._context_messages
+            if m.type in (MessageType.TOOL_RESULT, MessageType.TOOL_CALL)
+        )
+        msg_chars = sum(
+            len(m.content)
+            for m in self._context_messages
+            if m.role in (MessageRole.USER, MessageRole.ASSISTANT)
+            and not m.hidden
+            and m.type == MessageType.TEXT
+        )
+
+        total_chars = system_chars + tools_chars + tool_msgs_chars + msg_chars
+        if total_chars == 0:
+            return ""
+
+        prompt_tokens = self._prompt_tokens
+        system_tokens = int(system_chars / total_chars * prompt_tokens)
+        tools_tokens = int(tools_chars / total_chars * prompt_tokens)
+        tool_use_tokens = int(tool_msgs_chars / total_chars * prompt_tokens)
+        msg_tokens = int(msg_chars / total_chars * prompt_tokens)
+
+        # Normalize: adjust the largest category so the sum exactly matches
+        allocated = system_tokens + tools_tokens + tool_use_tokens + msg_tokens
+        diff = prompt_tokens - allocated
+        if diff != 0:
+            largest = max(
+                [
+                    ("system", system_tokens),
+                    ("tools", tools_tokens),
+                    ("tool_use", tool_use_tokens),
+                    ("messages", msg_tokens),
+                ],
+                key=lambda x: x[1],
+            )[0]
+            if largest == "system":
+                system_tokens += diff
+            elif largest == "tools":
+                tools_tokens += diff
+            elif largest == "tool_use":
+                tool_use_tokens += diff
+            else:
+                msg_tokens += diff
+
+        # Format lines for the sidebar (30 cols wide, abbreviated labels)
+        lines: list[str] = [f"Context: {Chain.format_tokens(prompt_tokens)}"]
+        if self._max_context and self._max_context > 0:
+            pct = prompt_tokens / self._max_context * 100
+            pct = max(0.0, min(100.0, pct))
+            lines[0] += f" ({pct:.1f}%)"
+            free_tokens = max(0, self._max_context - prompt_tokens)
+            free_pct = free_tokens / self._max_context * 100
+            lines.append(f"Free: {Chain.format_tokens(free_tokens)} ({free_pct:.1f}%)")
+        else:
+            free_tokens = max(0, self._max_context - prompt_tokens) if self._max_context else 0
+            lines.append(f"Free: {Chain.format_tokens(free_tokens)}")
+
+        lines.append(f"System: {Chain.format_tokens(system_tokens)}")
+        lines.append(f"Tools: {Chain.format_tokens(tools_tokens)}")
+        lines.append(f"Tool use: {Chain.format_tokens(tool_use_tokens)}")
+        lines.append(f"Messages: {Chain.format_tokens(msg_tokens)}")
+        return "\n".join(lines)
+
     def _flush_token_update(self) -> None:
         self._token_flush_scheduled = False
         self._last_token_update = time.monotonic()
@@ -378,6 +368,9 @@ class Sidebar(Vertical):
                 pct = max(0.0, min(100.0, pct))
                 line += f" ({pct:.1f}%)"
             self.query_one("#token-info", Static).update(line)
+            breakdown = self._build_context_breakdown()
+            if breakdown:
+                self.query_one("#context-breakdown", Static).update(breakdown)
         except Exception:
             pass
 
