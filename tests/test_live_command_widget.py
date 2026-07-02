@@ -30,11 +30,13 @@ class TestLiveCommandOutputWidgetContent:
         command_id: int = 1,
         max_lines: int = _MAX_BUFFER_LINES,
         height_cap: int = 20,
+        description: str = "",
     ) -> LiveCommandOutputWidget:
         """Create a widget without mounting it (bypass compose)."""
         w = LiveCommandOutputWidget.__new__(LiveCommandOutputWidget)
         w.command_id = command_id
         w.command_text = "echo hello"
+        w.description = description
         w._max_lines = max_lines
         w._height_cap = height_cap
         w._lines = []
@@ -92,7 +94,6 @@ class TestLiveCommandOutputWidgetContent:
         stub = w._build_stub_text()
         assert "Command #5" in stub
         assert "running" in stub
-        assert "sidebar" in stub
 
     def test_stub_text_finished(self) -> None:
         w = self._make_widget(command_id=5)
@@ -128,6 +129,7 @@ class TestLiveCommandOutputWidgetThrottling:
         w = LiveCommandOutputWidget.__new__(LiveCommandOutputWidget)
         w.command_id = 1
         w.command_text = "test"
+        w.description = ""
         w._max_lines = _MAX_BUFFER_LINES
         w._height_cap = 20
         w._lines = []
@@ -173,6 +175,7 @@ class TestLiveCommandOutputWidgetCollapse:
         w = LiveCommandOutputWidget.__new__(LiveCommandOutputWidget)
         w.command_id = 1
         w.command_text = "chatty"
+        w.description = ""
         w._max_lines = 100
         w._height_cap = 5
         w._lines = []
@@ -196,6 +199,7 @@ class TestLiveCommandOutputWidgetCollapse:
         w = LiveCommandOutputWidget.__new__(LiveCommandOutputWidget)
         w.command_id = 1
         w.command_text = "chatty"
+        w.description = ""
         w._max_lines = 100
         w._height_cap = 5
         w._lines = []
@@ -224,18 +228,20 @@ class TestLiveCommandWidgetsRegistry:
     """Tests for the module-level live_command_widgets mapping."""
 
     def test_regex_matches_background_command(self) -> None:
-        content = '<background_command id="42" command="npm run build" status="started" />'
+        content = '<background_command id="42" command="npm run build" description="Build the project" status="started" />'
         m = _BACKGROUND_CMD_RE.search(content)
         assert m is not None
         assert m.group(1) == "42"
         assert m.group(2) == "npm run build"
+        assert m.group(3) == "Build the project"
 
     def test_regex_matches_with_extra_attrs(self) -> None:
-        content = '<background_command id="1" command="echo hi" interactive="true" status="started" />'
+        content = '<background_command id="1" command="echo hi" description="Say hi" interactive="true" status="started" />'
         m = _BACKGROUND_CMD_RE.search(content)
         assert m is not None
         assert m.group(1) == "1"
         assert m.group(2) == "echo hi"
+        assert m.group(3) == "Say hi"
 
     def test_regex_no_match_on_normal_result(self) -> None:
         content = "File written successfully."
@@ -297,6 +303,7 @@ class TestLiveCommandWidgetsPopOnFinish:
         widget = LiveCommandOutputWidget.__new__(LiveCommandOutputWidget)
         widget.command_id = 999
         widget.command_text = "test"
+        widget.description = ""
         widget._max_lines = _MAX_BUFFER_LINES
         widget._height_cap = 20
         widget._lines = ["some output\n"]
@@ -326,6 +333,7 @@ class TestLiveCommandWidgetsPopOnFinish:
         widget = LiveCommandOutputWidget.__new__(LiveCommandOutputWidget)
         widget.command_id = 998
         widget.command_text = "test2"
+        widget.description = ""
         widget._max_lines = _MAX_BUFFER_LINES
         widget._height_cap = 20
         widget._lines = []

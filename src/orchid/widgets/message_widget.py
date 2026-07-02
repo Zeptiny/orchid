@@ -19,7 +19,7 @@ _THROTTLE_INTERVAL = 0.2
 _TOOL_RESULT_FALLBACK_TITLE = "Tool result"
 _TOOL_RESULT_TITLE_MAX_LENGTH = 120
 _BACKGROUND_CMD_RE = re.compile(
-    r'<background_command\s+id="(\d+)"[^>]*command="([^"]*)"[^>]*/>'
+    r'<background_command\s+id="(\d+)"[^>]*command="([^"]*)"[^>]*description="([^"]*)"[^>]*/>'
 )
 
 # Module-level mapping of command_id → LiveCommandOutputWidget so the app tick
@@ -539,9 +539,11 @@ async def mount_streamed_message(container, msg: Message, state: StreamWidgetSta
             # Mount a LiveCommandOutputWidget for background commands.
             cmd_id = int(bg_match.group(1))
             cmd_text = bg_match.group(2)
+            cmd_description = bg_match.group(3)
             w = LiveCommandOutputWidget(
                 cmd_id,
                 command_text=cmd_text,
+                description=cmd_description,
                 classes="after-thinking" if state.thinking else None,
             )
             live_command_widgets[cmd_id] = w

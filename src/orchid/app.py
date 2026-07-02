@@ -574,6 +574,7 @@ class Orchid(App):
         self._freeze_chain()
         if self._interrupt_state != InterruptState.CONFIRM_SUBAGENTS:
             self._reset_interrupt_state()
+        self._manage_bg_cmd_timer()
         await self.rerender_footer()
         named_session = await self._auto_name_session()
         await self._auto_save_session(named_session)
@@ -665,6 +666,7 @@ class Orchid(App):
     async def _tick_footer(self) -> None:
         if self._current_chain:
             self._current_chain.tick()
+        self._manage_bg_cmd_timer()
         await self.rerender_footer()
 
     # -- live command tick -----------------------------------------------------
@@ -743,6 +745,7 @@ class Orchid(App):
                 records.append({
                     "id": entry.id,
                     "command": entry.command,
+                    "description": entry.description,
                     "owner": entry.owner,
                     "status": "running" if entry.exit_code is None else "exited",
                     "last_output_age": last_output_age,

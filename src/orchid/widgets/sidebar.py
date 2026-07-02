@@ -962,11 +962,11 @@ class Sidebar(Vertical):
         owner_badge = "[dim]USER[/dim]" if owner == "USER" else ""
         age_str = self._format_age(last_output_age) if last_output_age is not None else ""
 
-        cmd = record.get("command", "")
-        if len(cmd) > 14:
-            cmd = cmd[:12] + ".."
+        label = record.get("description", "") or record.get("command", "")
+        if len(label) > 24:
+            label = label[:22] + ".."
 
-        line = f"[{indicator_color}]{indicator}[/{indicator_color}] {cmd}"
+        line = f"[{indicator_color}]{indicator}[/{indicator_color}] {label}"
         if owner_badge:
             line += f" {owner_badge}"
         if age_str:

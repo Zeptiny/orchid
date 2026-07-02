@@ -120,7 +120,7 @@ async def execute_command(
 
         store = get_background_store()
         try:
-            proc_id, _ = await store.spawn(command, cwd=working_directory, interactive=interactive)
+            proc_id, _ = await store.spawn(command, cwd=working_directory, interactive=interactive, description=description or command)
         except Exception as e:
             return ExecutorResult(
                 display="Failed to start background command",
@@ -131,10 +131,12 @@ async def execute_command(
                 ),
             )
         return ExecutorResult(
-            display=f"Started background command (id: {proc_id})",
+            display=f"{description} (id: {proc_id})",
             content=(
                 f'<background_command id="{proc_id}" '
-                f'command="{_xml_attr(command)}" status="started" />'
+                f'command="{_xml_attr(command)}" '
+                f'description="{_xml_attr(description or command)}" '
+                f'status="started" />'
             ),
         )
 

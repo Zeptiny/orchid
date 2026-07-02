@@ -48,9 +48,10 @@ async def test_execute_command_background_returns_immediately(fresh_store):
     result = await execute_command(
         "sleep 60", description="sleep bg", background=True, working_directory="."
     )
-    assert "Started background command" in result.display
+    assert "sleep bg" in result.display
     assert '<background_command' in result.content
     assert 'status="started"' in result.content
+    assert 'description="sleep bg"' in result.content
 
     # Extract the id from content
     import re

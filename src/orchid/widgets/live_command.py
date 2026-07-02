@@ -38,9 +38,6 @@ class LiveCommandOutputWidget(Static):
         height: auto;
         max-height: 20;
         overflow-y: auto;
-        background: $surface;
-        border: solid $primary;
-        padding: 0 1;
         margin: 1 0;
     }
     LiveCommandOutputWidget.collapsed {
@@ -69,6 +66,7 @@ class LiveCommandOutputWidget(Static):
         command_id: int,
         command_text: str = "",
         *,
+        description: str = "",
         max_lines: int = _MAX_BUFFER_LINES,
         height_cap: int = _HEIGHT_CAP,
         **kwargs,
@@ -76,6 +74,7 @@ class LiveCommandOutputWidget(Static):
         super().__init__(**kwargs)
         self.command_id = command_id
         self.command_text = command_text
+        self.description = description
         self._max_lines = max_lines
         self._height_cap = height_cap
         self._lines: list[str] = []
@@ -168,28 +167,30 @@ class LiveCommandOutputWidget(Static):
 
     def _render_text(self) -> str:
         """Build the full display text from the line buffer."""
+        label = self.description or f"Command #{self.command_id}"
         if self._finished:
             status = (
                 f"exit {self._exit_code}"
                 if self._exit_code is not None
                 else "exited"
             )
-            header = f"── Command #{self.command_id} ({status}) ──\n"
+            header = f"── {label} ({status}) ──\n"
         else:
-            header = f"── Command #{self.command_id} (running) ──\n"
+            header = f"── {label} (running) ──\n"
         body = "".join(self._lines)
         return header + body
 
     def _build_stub_text(self) -> str:
         """Build the compact stub shown when collapsed or finished."""
+        label = self.description or f"Command #{self.command_id}"
         if self._finished:
             status = (
                 f"exit {self._exit_code}"
                 if self._exit_code is not None
                 else "exited"
             )
-            return f"Command #{self.command_id}: {status} (click to expand in sidebar)"
-        return f"Command #{self.command_id}: running (click to expand in sidebar)"
+            return f"{label}: {status}"
+        return f"{label}: running"
 
     # -- throttled rendering --------------------------------------------------
 

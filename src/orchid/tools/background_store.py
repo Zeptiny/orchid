@@ -116,6 +116,7 @@ class ProcessEntry:
     interactive: bool = False
     master_fd: int | None = None  # stub for PTY (U2)
     session_id: str | None = None  # owning session for scoped cleanup
+    description: str = ""  # human-readable description from execute_command
 
     def __post_init__(self) -> None:
         if self.created_at == 0.0:
@@ -151,6 +152,7 @@ class BackgroundProcessStore:
         cwd: str = ".",
         interactive: bool = False,
         session_id: str | None = None,
+        description: str = "",
     ) -> tuple[int, None]:
         """Spawn a background process, returning ``(id, None)``.
 
@@ -190,6 +192,7 @@ class BackgroundProcessStore:
                 interactive=True,
                 master_fd=handle._master_fd,
                 session_id=session_id,
+                description=description,
             )
         else:
             process = await asyncio.create_subprocess_shell(
@@ -210,6 +213,7 @@ class BackgroundProcessStore:
                 created_at=now,
                 interactive=False,
                 session_id=session_id,
+                description=description,
             )
         self._entries[proc_id] = entry
 

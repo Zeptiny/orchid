@@ -34,6 +34,7 @@ from orchid.widgets.sidebar import (
 def _make_bg_record(
     cmd_id: int,
     command: str = "echo hello",
+    description: str = "",
     owner: str = "AGENT",
     status: str = "running",
     last_output_age: float = 5.0,
@@ -43,6 +44,7 @@ def _make_bg_record(
     return {
         "id": cmd_id,
         "command": command,
+        "description": description or command,
         "owner": owner,
         "status": status,
         "last_output_age": last_output_age,

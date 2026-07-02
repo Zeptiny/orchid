@@ -8,6 +8,14 @@ from orchid.domain.tool import ExecutorResult, Tool, ToolParameter, ToolParamete
 from orchid.tools._xml_utils import _cdata_text, _xml_attr
 from orchid.tools.background_store import get_background_store
 
+
+def _truncate_preview(text: str, max_len: int = 60) -> str:
+    """Return a short preview of *text*, truncating with … if needed."""
+    text = text.replace("\n", "\\n").replace("\r", "")
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
 # ---------------------------------------------------------------------------
 # Tool definitions
 # ---------------------------------------------------------------------------
@@ -195,8 +203,8 @@ async def execute_send_input(
     entry.last_user_input_at = time.monotonic()
 
     return ExecutorResult(
-        display=f"Sent input to command {id}",
+        display=f"Sent input to command {id}: {_truncate_preview(text)}",
         content=(
-            f'<input_sent id="{id}" />'
+            f'<input_sent id="{id}"><text><![CDATA[{_cdata_text(text)}]]></text></input_sent>'
         ),
     )
