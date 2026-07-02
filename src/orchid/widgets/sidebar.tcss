@@ -1,39 +1,21 @@
 Sidebar {
-    width: 25;
-    min-width: 25;
-    max-width: 25;
+    width: 35;
+    min-width: 35;
+    max-width: 35;
     background: $surface;
-    padding: 0 0 0 0;
+    padding: 0;
+    layout: vertical;
+    align-vertical: top;
 }
 
-Sidebar #sidebar-subagents-label,
-Sidebar #sidebar-todos-label,
-Sidebar #sidebar-mcp-label,
-Sidebar #sidebar-rag-label,
-Sidebar #sidebar-ast-label {
-    color: $text-muted;
-    text-style: bold;
-    padding: 0 1;
-    margin-top: 0;
-}
-
-Sidebar #rag-status,
-Sidebar #ast-status {
-    width: 100%;
+Sidebar #sidebar-top {
     height: auto;
-    padding: 0 1;
-    color: $text-muted;
-}
-
-Sidebar #context-breakdown {
-    color: $text-muted;
-    padding: 0 1 1 1;
-    text-style: dim;
+    padding: 0;
 }
 
 Sidebar #sidebar-nav {
     height: auto;
-    padding: 0 0;
+    padding: 0;
 }
 
 Sidebar NavEntry {
@@ -58,11 +40,24 @@ Sidebar NavEntry.-active {
     text-style: bold;
 }
 
+Sidebar #sidebar-subagents-label,
+Sidebar #sidebar-todos-label,
+Sidebar #sidebar-mcp-label,
+Sidebar #sidebar-rag-label,
+Sidebar #sidebar-ast-label {
+    color: $text-muted;
+    text-style: bold;
+    padding: 0 1;
+    height: auto;
+    margin: 0;
+}
+
 Sidebar #subagent-entries,
 Sidebar #mcp-entries,
 Sidebar #todo-entries {
     height: auto;
-    padding: 0 0;
+    padding: 0;
+    margin: 0;
 }
 
 Sidebar .todo-entry {
@@ -71,6 +66,7 @@ Sidebar .todo-entry {
     height: auto;
     padding: 0 1;
     color: $text-muted;
+    margin: 0;
 }
 
 Sidebar .subagent-entry {
@@ -79,6 +75,7 @@ Sidebar .subagent-entry {
     height: auto;
     padding: 0 1;
     color: $text-muted;
+    margin: 0;
 }
 
 Sidebar .subagent-entry:hover {
@@ -92,7 +89,7 @@ Sidebar .subagent-entry.-active {
 
 Sidebar .finished-collapse {
     margin: 0;
-    padding: 0 0;
+    padding: 0;
     border: none;
 }
 
@@ -100,6 +97,7 @@ Sidebar .finished-collapse > CollapsibleTitle {
     color: $text-muted;
     padding: 0 1;
     text-style: dim;
+    margin: 0;
 }
 
 Sidebar .finished-collapse > CollapsibleTitle:hover {
@@ -108,11 +106,31 @@ Sidebar .finished-collapse > CollapsibleTitle:hover {
 
 Sidebar .finished-collapse > Contents {
     padding: 0;
+    margin: 0;
+}
+
+Sidebar #context-breakdown {
+    color: $text-muted;
+    padding: 0 1;
+    text-style: dim;
+    height: auto;
+    margin: 0;
+}
+
+Sidebar #rag-status,
+Sidebar #ast-status {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+    margin: 0;
 }
 
 Sidebar #working-directory {
     width: 100%;
-    padding: 0 1 0 1;
+    padding: 0 1;
     color: $text-muted;
     text-style: dim;
+    height: auto;
+    margin: 0;
 }

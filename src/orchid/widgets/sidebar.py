@@ -100,15 +100,16 @@ class Sidebar(Vertical):
         self._cached_tools_char_count: int = 0
 
     def compose(self):
-        with Vertical(id="sidebar-nav"):
-            yield NavEntry("▸ Main", "main", id="nav-main")
-        yield Static("Subagents", id="sidebar-subagents-label")
-        yield Vertical(id="subagent-entries")
-        yield Static("MCP Servers", id="sidebar-mcp-label")
-        yield Vertical(id="mcp-entries")
-        yield Static("Todos", id="sidebar-todos-label")
-        yield Vertical(id="todo-entries")
-        yield Static("", id="context-breakdown")
+        with Vertical(id="sidebar-top"):
+            with Vertical(id="sidebar-nav"):
+                yield NavEntry("▸ Main", "main", id="nav-main")
+            yield Static("Subagents", id="sidebar-subagents-label")
+            yield Vertical(id="subagent-entries")
+            yield Static("MCP Servers", id="sidebar-mcp-label")
+            yield Vertical(id="mcp-entries")
+            yield Static("Todos", id="sidebar-todos-label")
+            yield Vertical(id="todo-entries")
+            yield Static("", id="context-breakdown")
         yield Static("AST", id="sidebar-ast-label")
         yield Static("", id="ast-status")
         yield Static("RAG", id="sidebar-rag-label")
