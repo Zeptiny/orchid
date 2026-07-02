@@ -53,7 +53,7 @@ def load_session(session_id: str) -> dict[str, Any] | None:
 
 
 def list_saved_sessions() -> list[dict[str, Any]]:
-    """Return metadata for all saved sessions (id, name, model) sorted by most recent chains."""
+    """Return metadata for all saved sessions sorted by most recent update (newest first)."""
     ensure_sessions_dir()
     sessions: list[dict[str, Any]] = []
     for path in SESSIONS_DIR.glob("*.json"):
@@ -66,9 +66,11 @@ def list_saved_sessions() -> list[dict[str, Any]]:
                 "name": data.get("name", "Unnamed"),
                 "model": data.get("model"),
                 "chain_count": len(data.get("chains", [])),
+                "updated_at": path.stat().st_mtime,
             })
         except (json.JSONDecodeError, OSError, KeyError, TypeError, AttributeError) as e:
             log.warning("Skipping corrupted session file %s: %s", path.name, e)
+    sessions.sort(key=lambda s: s.get("updated_at", 0.0), reverse=True)
     return sessions
 
 

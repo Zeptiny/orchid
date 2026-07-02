@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import date as date_type
+from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
@@ -178,6 +180,70 @@ def _build_model_picker_items(cfg: Config, mode: str = "chat") -> list[PickerIte
     return items
 
 
+# Total label width for the sessions picker (name left, time right).
+_SESSION_LABEL_WIDTH = 60
+
+
+def _format_session_label(name: str, time_str: str) -> str:
+    """Format a session label with name left-aligned and time right-aligned.
+
+    Example: ``"My session                         6:46 PM"``
+    """
+    time_part = time_str.rjust(8)
+    name_width = _SESSION_LABEL_WIDTH - len(time_part) - 2
+    if len(name) > name_width:
+        name = name[: name_width - 1] + "\u2026"
+    return f"{name.ljust(name_width)}  {time_part}"
+
+
+def _group_sessions_by_date(saved: list[dict[str, Any]]) -> list[PickerItem]:
+    """Build PickerItems with date group headers for the sessions picker.
+
+    Sessions in *saved* must already be sorted newest-first (as returned by
+    ``list_saved_sessions``).  One non-selectable header item is inserted
+    before each group of sessions that share the same calendar date:
+
+    * Today     -- for sessions whose file mtime is today's date
+    * Yesterday -- for sessions from the previous calendar day
+    * Otherwise -- short weekday + month + day + year, e.g. "Wed Jul 01 2026"
+    """
+    items: list[PickerItem] = []
+    today = date_type.today()
+    yesterday = date_type(today.year, today.month, today.day - 1) if today.day > 1 else (
+        date_type.fromordinal(today.toordinal() - 1)
+    )
+    last_date_header: str | None = None
+
+    for s in saved:
+        updated_at: float | None = s.get("updated_at")
+        if updated_at is not None:
+            dt = datetime.fromtimestamp(updated_at)
+            d = dt.date()
+            hour = dt.hour % 12 or 12
+            am_pm = "AM" if dt.hour < 12 else "PM"
+            time_str = f"{hour}:{dt.minute:02d} {am_pm}"
+            if d == today:
+                date_header = "Today"
+            elif d == yesterday:
+                date_header = "Yesterday"
+            else:
+                date_header = dt.strftime("%a %b %d %Y")
+        else:
+            date_header = "Unknown date"
+            time_str = ""
+
+        if date_header != last_date_header:
+            items.append(
+                PickerItem(label=date_header, id=f"__header_{date_header}__", is_header=True)
+            )
+            last_date_header = date_header
+
+        label = _format_session_label(s["name"], time_str) if time_str else s["name"]
+        items.append(PickerItem(label=label, id=s["id"]))
+
+    return items
+
+
 async def execute_command(app: App[Any], cmd: str) -> None:
     app = cast("Orchid", app)
     match cmd:
@@ -206,7 +272,7 @@ async def execute_command(app: App[Any], cmd: str) -> None:
             if not saved:
                 app.notify("No saved sessions found.", severity="information")
                 return
-            items = [PickerItem(label=s["name"], id=s["id"]) for s in saved]
+            items = _group_sessions_by_date(saved)
 
             async def on_sessions_picked(result: str | None):
                 if result:
@@ -222,7 +288,7 @@ async def execute_command(app: App[Any], cmd: str) -> None:
             if not saved:
                 app.notify("No saved sessions found.", severity="information")
                 return
-            items = [PickerItem(label=s["name"], id=s["id"]) for s in saved]
+            items = _group_sessions_by_date(saved)
 
             async def on_sessions_delete_picked(result: str | None):
                 if result:
