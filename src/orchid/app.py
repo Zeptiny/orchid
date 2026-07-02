@@ -224,6 +224,7 @@ class Orchid(App):
         self._footer_timer: object | None = None
         self._interrupt_timer: object | None = None
         self._bg_cmd_timer: object | None = None
+        self._bg_cmd_sidebar_pending: bool = True  # ensure first tick always updates sidebar
         self.restart_requested: bool = False
         self._setup_themes()
 
@@ -696,12 +697,21 @@ class Orchid(App):
             store = get_background_store()
             entries = store.list()
             has_live = any(e.exit_code is None for e in entries)
+            has_entries = bool(entries)
         except Exception:
             has_live = False
+            has_entries = False
 
-        if has_live and self._bg_cmd_timer is None:
+        # Start the timer when there are any entries (including finished) so the
+        # sidebar renders them at least once.  Keep running while live commands
+        # exist.  Once all have finished AND the sidebar has had a tick to
+        # render them, the timer stops on the next call from _tick_live_commands.
+        if has_entries and self._bg_cmd_timer is None:
+            self._bg_cmd_sidebar_pending = True
             self._bg_cmd_timer = self.set_interval(1.5, self._tick_live_commands)
-        elif not has_live and self._bg_cmd_timer is not None:
+        elif has_live:
+            self._bg_cmd_sidebar_pending = True
+        elif not self._bg_cmd_sidebar_pending and self._bg_cmd_timer is not None:
             self._bg_cmd_timer.stop()
             self._bg_cmd_timer = None
 
@@ -771,6 +781,7 @@ class Orchid(App):
                     "has_tail": entry.buffer.total_bytes() > 0,
                 })
             await sidebar.update_background_commands(records)
+            self._bg_cmd_sidebar_pending = False
         except Exception:
             pass
 
