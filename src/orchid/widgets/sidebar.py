@@ -458,9 +458,14 @@ class Sidebar(Vertical):
             f"{self._CTX_BLOCK_MSGS} Messages: {Chain.format_tokens(msg_tokens)}"
         )
 
-        # Combine grid and legend
-        all_lines = grid_lines + [""] + legend_lines
-        return "\n".join(all_lines)
+        # Place legend text to the right of the grid rows
+        combined_lines: list[str] = []
+        for i, grid_row in enumerate(grid_lines):
+            if i < len(legend_lines):
+                combined_lines.append(f"{grid_row}  {legend_lines[i]}")
+            else:
+                combined_lines.append(grid_row)
+        return "\n".join(combined_lines)
 
     def _flush_token_update(self) -> None:
         self._token_flush_scheduled = False
