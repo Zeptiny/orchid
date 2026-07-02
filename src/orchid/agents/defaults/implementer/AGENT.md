@@ -11,6 +11,8 @@ allowed_tools:
   - edit
   - write
   - execute_command
+  - read_output
+  - send_input
   - mcp::context7::*
   - get_file_skeleton
   - get_function

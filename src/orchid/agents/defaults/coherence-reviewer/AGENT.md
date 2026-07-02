@@ -9,6 +9,8 @@ allowed_tools:
   - glob
   - grep
   - execute_command
+  - read_output
+  - send_input
 allowed_skills: []
 ---
 

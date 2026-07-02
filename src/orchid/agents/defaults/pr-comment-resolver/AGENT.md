@@ -9,6 +9,8 @@ allowed_tools:
   - glob
   - grep
   - execute_command
+  - read_output
+  - send_input
   - get_file_skeleton
   - get_function
   - find_symbol_references

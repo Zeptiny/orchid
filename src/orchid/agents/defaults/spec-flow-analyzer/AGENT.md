@@ -9,6 +9,8 @@ allowed_tools:
   - glob
   - grep
   - execute_command
+  - read_output
+  - send_input
 ---
 
 Analyze specifications, plans, and feature descriptions from the end user's perspective. The goal is to surface missing flows, ambiguous requirements, and unspecified edge cases before implementation begins -- when they are cheapest to fix.
