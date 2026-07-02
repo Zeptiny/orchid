@@ -70,6 +70,9 @@ send_input_tool = Tool(
 # ---------------------------------------------------------------------------
 
 
+_MAX_LONG_POLL_MS = 60_000
+
+
 async def execute_read_output(
     id: int,  # noqa: A002 – matches tool param name
     last_n: int | None = None,
@@ -90,7 +93,8 @@ async def execute_read_output(
 
     # Long-poll: wait for new output or exit before snapshotting.
     if wait_ms is not None and wait_ms > 0 and entry.exit_code is None:
-        await store.wait_for_progress(id, wait_ms)
+        bounded = min(wait_ms, _MAX_LONG_POLL_MS)
+        await store.wait_for_progress(id, bounded)
 
     result = store.snapshot(id, last_n)
     if result is None:

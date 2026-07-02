@@ -89,17 +89,10 @@ class HeadTailBuffer:
 
     def _tail_last_n_lines(self, n: int) -> bytearray:
         """Return the last *n* lines from the tail buffer."""
-        buf = self.tail
         if n == 0:
             return bytearray()
-        # Count newlines from the end.
-        count = 0
-        for i in range(len(buf) - 1, -1, -1):
-            if buf[i] == 0x0A:  # '\n'
-                count += 1
-                if count == n + 1:
-                    return buf[i + 1 :]
-        return buf
+        lines = self.tail.splitlines(keepends=True)
+        return bytearray(b"".join(lines[-n:]))
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +115,7 @@ class ProcessEntry:
     created_at: float = 0.0
     interactive: bool = False
     master_fd: int | None = None  # stub for PTY (U2)
+    session_id: str | None = None  # owning session for scoped cleanup
 
     def __post_init__(self) -> None:
         if self.created_at == 0.0:
@@ -156,6 +150,7 @@ class BackgroundProcessStore:
         command: str,
         cwd: str = ".",
         interactive: bool = False,
+        session_id: str | None = None,
     ) -> tuple[int, None]:
         """Spawn a background process, returning ``(id, None)``.
 
@@ -188,6 +183,7 @@ class BackgroundProcessStore:
                 created_at=now,
                 interactive=True,
                 master_fd=handle._master_fd,
+                session_id=session_id,
             )
         else:
             process = await asyncio.create_subprocess_shell(
@@ -207,6 +203,7 @@ class BackgroundProcessStore:
                 last_output_at=now,
                 created_at=now,
                 interactive=False,
+                session_id=session_id,
             )
         self._entries[proc_id] = entry
 
@@ -411,6 +408,12 @@ class BackgroundProcessStore:
         """Terminate every live background process."""
         for proc_id in list(self._entries):
             self.terminate(proc_id)
+
+    def terminate_session(self, session_id: str) -> None:
+        """Terminate background processes belonging to *session_id*."""
+        for proc_id, entry in list(self._entries.items()):
+            if entry.session_id == session_id:
+                self.terminate(proc_id)
 
     # -- LRU eviction --------------------------------------------------------
 

@@ -63,11 +63,13 @@ class BgCommandInput(Input):
         self._bg_command_id = command_id
         super().__init__(**kwargs)
 
-    def _on_focus(self) -> None:
+    def _on_focus(self, event) -> None:
+        super()._on_focus(event)
         from orchid.tools.background_store import get_background_store
         get_background_store().take_ownership(self._bg_command_id)
 
-    def _on_blur(self) -> None:
+    def _on_blur(self, event) -> None:
+        super()._on_blur(event)
         from orchid.tools.background_store import get_background_store
         get_background_store().release_ownership(self._bg_command_id)
 
@@ -886,6 +888,7 @@ class Sidebar(Vertical):
             done_entries.append(entry)
 
         # Clear expanded state (will be restored below if needed)
+        saved_expanded_id = self._expanded_bg_cmd_id
         self._expanded_bg_cmd_id = None
 
         # Single remove, then mount all at once
@@ -907,7 +910,7 @@ class Sidebar(Vertical):
             await container.mount(collapse)
 
         # Restore expanded state from before the rebuild
-        restore_id = focused_cmd_id or self._expanded_bg_cmd_id
+        restore_id = focused_cmd_id or saved_expanded_id
         if restore_id is not None and any(r["id"] == restore_id for r in records):
             self._expanded_bg_cmd_id = None  # clear so _expand_bg_cmd doesn't skip
             await self._expand_bg_cmd(restore_id)
@@ -1022,13 +1025,10 @@ class Sidebar(Vertical):
                 except (ValueError, TypeError):
                     pass
 
-        if insert_idx <= len(container.children):
-            children = list(container.children)
-            children.insert(insert_idx, collapsible)
-            await container.remove_children()
-            await container.mount(*children)
-        else:
-            await container.mount(collapsible)
+        children = list(container.children)
+        children.insert(insert_idx, collapsible)
+        await container.remove_children()
+        await container.mount(*children)
 
     async def _collapse_bg_cmd(self, cmd_id: int) -> None:
         """Remove the collapsible for a previously expanded bg command."""

@@ -107,14 +107,23 @@ async def execute_command(
 
     # -- background path ---------------------------------------------------
     if background:
+        if not shell:
+            return ExecutorResult(
+                display="Background commands require shell=True",
+                content="<error><![CDATA[background=True is not supported with shell=False]]></error>",
+            )
         from orchid.tools.background_store import get_background_store
 
         store = get_background_store()
         try:
-            proc_id, _ = await store.spawn(command, cwd=working_directory, interactive=interactive)
+            from orchid.domain.session import get_current_session_id
+            proc_id, _ = await store.spawn(
+                command, cwd=working_directory, interactive=interactive,
+                session_id=get_current_session_id(),
+            )
         except Exception as e:
             return ExecutorResult(
-                display=f"Failed to start background command",
+                display="Failed to start background command",
                 content=(
                     f'<error command="{_xml_attr(command)}">'
                     f"<![CDATA[{_cdata_text(str(e))}]]>"

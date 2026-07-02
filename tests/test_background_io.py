@@ -6,23 +6,20 @@ import asyncio
 
 import pytest
 
-from orchid.tools.background_store import (
-    BackgroundProcessStore,
-    ProcessEntry,
-    HeadTailBuffer,
-    get_background_store,
-    set_background_store,
-)
-from orchid.tools.exec import execute_command
+from orchid.llm.client import _TOOLS_WITHOUT_TIMEOUT
+from orchid.tools import get_tool_registry
 from orchid.tools.background_io import (
     execute_read_output,
     execute_send_input,
     read_output_tool,
     send_input_tool,
 )
-from orchid.llm.client import _TOOLS_WITHOUT_TIMEOUT
-from orchid.tools import get_tool_registry
-
+from orchid.tools.background_store import (
+    BackgroundProcessStore,
+    get_background_store,
+    set_background_store,
+)
+from orchid.tools.exec import execute_command
 
 # ---------------------------------------------------------------------------
 # Fixtures

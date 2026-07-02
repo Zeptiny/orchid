@@ -259,7 +259,7 @@ class TestTimerManagement:
     """Tests that the timer start/stop logic works correctly."""
 
     def test_manage_bg_cmd_timer_starts_when_live(self) -> None:
-        """Verify _manage_bg_cmd_timer starts the timer when there are live commands."""
+        """Verify a live entry is present in the store (timer start precondition)."""
         from orchid.tools.background_store import (
             BackgroundProcessStore,
             HeadTailBuffer,

@@ -32,7 +32,13 @@ class _PTYStdinWriter:
 
     def write(self, data: bytes) -> None:
         """Write *data* to the PTY master fd."""
-        os.write(self._master_fd, data)
+        mv = memoryview(data)
+        while mv:
+            try:
+                written = os.write(self._master_fd, mv)
+            except BlockingIOError:
+                continue
+            mv = mv[written:]
 
     async def drain(self) -> None:
         """No-op — PTY writes are kernel-buffered."""

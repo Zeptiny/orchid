@@ -10,6 +10,12 @@ from orchid.tools.ast import (
     rename_symbol_tool,
     replace_symbol_tool,
 )
+from orchid.tools.background_io import (
+    execute_read_output,
+    execute_send_input,
+    read_output_tool,
+    send_input_tool,
+)
 from orchid.tools.exec import execute_command, execute_command_tool
 from orchid.tools.file_manipulation import (
     edit_tool,
@@ -54,12 +60,6 @@ from orchid.tools.todo import (
     todo_update_tool,
 )
 from orchid.tools.web_fetch import execute_web_fetch, web_fetch_tool
-from orchid.tools.background_io import (
-    read_output_tool,
-    execute_read_output,
-    send_input_tool,
-    execute_send_input,
-)
 
 _TOOL_REGISTRY: dict[str, dict] | None = None
 

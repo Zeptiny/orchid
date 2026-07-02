@@ -161,9 +161,6 @@ class LiveCommandOutputWidget(Static):
 
         if trailing_partial:
             self._lines.append(trailing_partial)
-        elif complete_parts and new_text.endswith("\n"):
-            # Input ended with \n — nothing to do; complete lines already added.
-            pass
 
         # Enforce line cap by trimming from the head.
         if len(self._lines) > self._max_lines:

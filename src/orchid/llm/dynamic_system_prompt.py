@@ -108,10 +108,10 @@ async def build_dynamic_system_prompt() -> Message:
             tail_escaped = escape(tail_text)
 
             bg_lines.append(f'  <command {attrs}>')
-            bg_lines.append(f"    <tail>")
+            bg_lines.append("    <tail>")
             bg_lines.append(f"      {tail_escaped}")
-            bg_lines.append(f"    </tail>")
-            bg_lines.append(f"  </command>")
+            bg_lines.append("    </tail>")
+            bg_lines.append("  </command>")
 
         content += "\n<background_commands>\n" + "\n".join(bg_lines) + "\n</background_commands>\n"
 

@@ -676,10 +676,8 @@ class Orchid(App):
             store = get_background_store()
             entries = store.list()
             has_live = any(e.exit_code is None for e in entries)
-            has_any = len(entries) > 0
         except Exception:
             has_live = False
-            has_any = False
 
         if has_live and self._bg_cmd_timer is None:
             self._bg_cmd_timer = self.set_interval(0.5, self._tick_live_commands)
@@ -733,6 +731,7 @@ class Orchid(App):
 
             if exit_code is not None and not widget._finished:
                 widget.finish(exit_code)
+                live_command_widgets.pop(entry.id, None)
 
         # Update sidebar background commands section
         try:

@@ -12,6 +12,7 @@ Covers:
 
 import time
 import unittest
+from unittest.mock import MagicMock
 
 from textual.app import App, ComposeResult
 from textual.widgets import Collapsible, Static
@@ -241,7 +242,7 @@ class TestBgCmdInputOwnership(unittest.IsolatedAsyncioTestCase):
 
             # Simulate blur by focusing the main input area (if it exists)
             # or just call the blur handler directly
-            input_widget._on_blur()
+            input_widget._on_blur(MagicMock())
             await pilot.pause()
 
             self.assertEqual(self._store.get(1).owner, "AGENT")

@@ -22,7 +22,7 @@ from orchid.tools.background_store import (
 
 
 class TestSessionDeleteTerminatesBackgroundProcesses(unittest.TestCase):
-    """Deleting a session calls terminate_all() on the background store."""
+    """Deleting a session calls terminate_session() on the background store."""
 
     def _manager_with_session(self, sess_id: str) -> SessionManager:
         mgr = SessionManager()
@@ -32,22 +32,22 @@ class TestSessionDeleteTerminatesBackgroundProcesses(unittest.TestCase):
         return mgr
 
     @patch("orchid.storage.delete_session")
-    def test_delete_calls_terminate_all(self, mock_delete):
-        """terminate_all is called during session delete."""
+    def test_delete_calls_terminate_session(self, mock_delete):
+        """terminate_session is called during session delete."""
         prior = get_background_store()
         mock_store = BackgroundProcessStore()
         set_background_store(mock_store)
         try:
             mgr = self._manager_with_session("sess-1")
-            with patch.object(mock_store, "terminate_all") as mock_term:
+            with patch.object(mock_store, "terminate_session") as mock_term:
                 self.assertTrue(mgr.delete("sess-1"))
-                mock_term.assert_called_once()
+                mock_term.assert_called_once_with("sess-1")
         finally:
             set_background_store(prior)
 
     @patch("orchid.storage.delete_session")
-    def test_delete_terminate_all_before_disk_delete(self, mock_delete):
-        """terminate_all is called before delete_session (cleanup ordering)."""
+    def test_delete_terminate_session_before_disk_delete(self, mock_delete):
+        """terminate_session is called before delete_session (cleanup ordering)."""
         prior = get_background_store()
         mock_store = BackgroundProcessStore()
         set_background_store(mock_store)
@@ -64,16 +64,16 @@ class TestSessionDeleteTerminatesBackgroundProcesses(unittest.TestCase):
         def track_cancel():
             call_order.append("cancel_all")
 
-        def track_terminate():
-            call_order.append("terminate_all")
+        def track_terminate(sid):
+            call_order.append("terminate_session")
 
         with (
             patch.object(session.subagent_manager, "cancel_all", side_effect=track_cancel),
-            patch.object(mock_store, "terminate_all", side_effect=track_terminate),
+            patch.object(mock_store, "terminate_session", side_effect=track_terminate),
         ):
             self.assertTrue(mgr.delete("sess-1"))
 
-        self.assertEqual(call_order, ["cancel_all", "terminate_all", "delete_session"])
+        self.assertEqual(call_order, ["cancel_all", "terminate_session", "delete_session"])
         set_background_store(prior)
 
     @patch("orchid.storage.delete_session")
@@ -84,7 +84,7 @@ class TestSessionDeleteTerminatesBackgroundProcesses(unittest.TestCase):
         set_background_store(mock_store)
         try:
             mgr = SessionManager()
-            with patch.object(mock_store, "terminate_all") as mock_term:
+            with patch.object(mock_store, "terminate_session") as mock_term:
                 self.assertFalse(mgr.delete("missing"))
                 mock_term.assert_not_called()
         finally:
