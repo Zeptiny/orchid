@@ -11,6 +11,7 @@ allowed_tools:
   - execute_command
   - read_output
   - send_input
+  - terminate_command
 allowed_skills: []
 ---
 

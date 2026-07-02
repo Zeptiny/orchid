@@ -131,7 +131,7 @@ async def execute_command(
                 ),
             )
         return ExecutorResult(
-            display=f"{description} (id: {proc_id})",
+            display=f"$ {command} (id: {proc_id}, background)",
             content=(
                 f'<background_command id="{proc_id}" '
                 f'command="{_xml_attr(command)}" '
@@ -148,6 +148,7 @@ async def execute_command(
         if shell:
             process = await asyncio.create_subprocess_shell(
                 command,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=working_directory,
@@ -158,6 +159,7 @@ async def execute_command(
             args = shlex.split(command)
             process = await asyncio.create_subprocess_exec(
                 *args,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=working_directory,
@@ -174,7 +176,7 @@ async def execute_command(
                 process.kill()
             await process.wait()
             return ExecutorResult(
-                display=f"{description} - Timed out after {timeout} seconds",
+                display=f"$ {command} - Timed out after {timeout} seconds",
                 content=(
                     f'<command_result command="{_xml_attr(command)}" exit_code="-1" '
                     f'timed_out="true">\n'
@@ -206,7 +208,7 @@ async def execute_command(
         )
 
         return ExecutorResult(
-            display=f"{description} (exit code: {process.returncode})",
+            display=f"$ {command} (exit code: {process.returncode})",
             content=(
                 f'<command_result command="{_xml_attr(command)}" '
                 f'exit_code="{process.returncode}">\n'
@@ -217,7 +219,7 @@ async def execute_command(
 
     except Exception as e:
         return ExecutorResult(
-            display=f"{description} - Execution error",
+            display=f"$ {command} - Execution error",
             content=(
                 f'<command_result command="{_xml_attr(command)}" exit_code="-1" '
                 f'error="true">\n'

@@ -11,6 +11,7 @@ allowed_tools:
   - execute_command
   - read_output
   - send_input
+  - terminate_command
   - get_file_skeleton
   - get_function
   - find_symbol_references

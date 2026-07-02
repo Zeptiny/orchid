@@ -4,7 +4,8 @@ A ``LiveCommandOutputWidget`` is mounted in the chat thread when a background
 command is spawned.  The app-level tick feeds deltas via ``update_content()``
 and the widget renders them in-place, throttled to avoid excessive redraws.
 
-Past a configurable line cap the widget collapses to a one-line stub.
+Renders inside a ``Collapsible`` matching the standard ``ToolResultMessageWidget``
+style for visual consistency with other tool results.
 """
 
 from __future__ import annotations
@@ -13,39 +14,23 @@ import time
 
 from textual.app import ComposeResult
 from textual.message import Message
-from textual.widgets import Static
+from textual.widgets import Collapsible, Static
 
 _THROTTLE_INTERVAL = 0.2  # seconds – matches ThinkingMessageWidget
 _MAX_BUFFER_LINES = 50  # hard cap on lines kept in the widget
-_HEIGHT_CAP = 20  # lines before the widget collapses
 
 
 class LiveCommandOutputWidget(Static):
     """Live-updating output widget for a background command.
 
-    The widget is self-contained: it holds its own line buffer and renders
-    its content in place.  The ``app.py`` tick calls ``update_content``
-    (or posts a ``ContentUpdate`` message) whenever new data arrives.
+    Renders inside a Collapsible matching ToolResultMessageWidget style.
+    The ``app.py`` tick calls ``update_content`` whenever new data arrives.
 
     When the process exits, ``finish()`` marks the widget as done and
     stops accepting further updates.
     """
 
     can_focus = True
-
-    DEFAULT_CSS = """
-    LiveCommandOutputWidget {
-        height: auto;
-        max-height: 20;
-        overflow-y: auto;
-        margin: 1 0;
-    }
-    LiveCommandOutputWidget.collapsed {
-        height: 3;
-        max-height: 3;
-        overflow-y: hidden;
-    }
-    """
 
     class ContentUpdate(Message):
         """Posted when new content should be flushed to the widget."""
@@ -68,7 +53,6 @@ class LiveCommandOutputWidget(Static):
         *,
         description: str = "",
         max_lines: int = _MAX_BUFFER_LINES,
-        height_cap: int = _HEIGHT_CAP,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -76,19 +60,25 @@ class LiveCommandOutputWidget(Static):
         self.command_text = command_text
         self.description = description
         self._max_lines = max_lines
-        self._height_cap = height_cap
         self._lines: list[str] = []
         self._finished: bool = False
         self._exit_code: int | None = None
         self._last_render_time: float = 0.0
         self._flush_scheduled: bool = False
         self._content_widget: Static | None = None
+        self._collapsible: Collapsible | None = None
 
     # -- composition ----------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        self._content_widget = Static(self._build_stub_text(), classes="live-cmd-content")
-        yield self._content_widget
+        self._content_widget = Static("", classes="tool-result-content")
+        self._collapsible = Collapsible(
+            self._content_widget,
+            title=self._build_title(),
+            collapsed=False,
+            classes="tool-result-collapse",
+        )
+        yield self._collapsible
 
     # -- public API -----------------------------------------------------------
 
@@ -106,8 +96,7 @@ class LiveCommandOutputWidget(Static):
         self._exit_code = exit_code
         self._flush_scheduled = False
         self._do_render()
-        if self._content_widget is not None:
-            self._content_widget.update(self._build_stub_text())
+        self._update_title()
 
     # -- Textual message handling ---------------------------------------------
 
@@ -116,6 +105,25 @@ class LiveCommandOutputWidget(Static):
 
     def on_live_command_output_widget_finished(self, msg: Finished) -> None:
         self.finish(msg.exit_code)
+
+    # -- title management -----------------------------------------------------
+
+    def _build_title(self) -> str:
+        """Build the collapsible title showing command and status."""
+        cmd_display = f"$ {self.command_text}" if self.command_text else (self.description or f"Command #{self.command_id}")
+        if self._finished:
+            status = (
+                f"exit {self._exit_code}"
+                if self._exit_code is not None
+                else "exited"
+            )
+            return f"{cmd_display} ({status})"
+        return f"{cmd_display} (running)"
+
+    def _update_title(self) -> None:
+        """Update the collapsible title to reflect current status."""
+        if self._collapsible is not None:
+            self._collapsible.title = self._build_title()
 
     # -- content management ---------------------------------------------------
 
@@ -165,33 +173,6 @@ class LiveCommandOutputWidget(Static):
         if len(self._lines) > self._max_lines:
             self._lines = self._lines[-self._max_lines :]
 
-    def _render_text(self) -> str:
-        """Build the full display text from the line buffer."""
-        label = self.description or f"Command #{self.command_id}"
-        if self._finished:
-            status = (
-                f"exit {self._exit_code}"
-                if self._exit_code is not None
-                else "exited"
-            )
-            header = f"── {label} ({status}) ──\n"
-        else:
-            header = f"── {label} (running) ──\n"
-        body = "".join(self._lines)
-        return header + body
-
-    def _build_stub_text(self) -> str:
-        """Build the compact stub shown when collapsed or finished."""
-        label = self.description or f"Command #{self.command_id}"
-        if self._finished:
-            status = (
-                f"exit {self._exit_code}"
-                if self._exit_code is not None
-                else "exited"
-            )
-            return f"{label}: {status}"
-        return f"{label}: running"
-
     # -- throttled rendering --------------------------------------------------
 
     def _schedule_flush(self) -> None:
@@ -212,14 +193,8 @@ class LiveCommandOutputWidget(Static):
     def _do_render(self) -> None:
         if self._content_widget is None:
             return
-        visible_lines = len(self._lines)
-        if visible_lines > self._height_cap and not self._finished:
-            # Collapse to stub when above the height cap while still running.
-            self.add_class("collapsed")
-            self._content_widget.update(self._build_stub_text())
-        else:
-            self.remove_class("collapsed")
-            self._content_widget.update(self._render_text())
+        body = "".join(self._lines)
+        self._content_widget.update(body)
 
     def flush(self) -> None:
         """Force immediate re-render, bypassing throttle."""

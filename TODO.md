@@ -71,6 +71,8 @@
 - O tempo de indexação RAG e AST na barra lateral não é atualizado regularmente, ficando obsoleto
 - Contexto não está sendo atualizado constantemente
   - Ainda precisa ser investigado
+- Excluir wait for subagent da limitação de tamanho do tool result
+- Input de comandos podem estar ficando no buffer e não serem enviados
 
 ### Configuração
 - Adicionar provedor tem como colcoar api key e env auth ao mesmo tempo

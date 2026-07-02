@@ -1,4 +1,4 @@
-"""Tool executors for ``read_output`` and ``send_input`` background commands."""
+"""Tool executors for ``read_output``, ``send_input``, and ``terminate_command`` background commands."""
 
 from __future__ import annotations
 
@@ -126,8 +126,9 @@ async def execute_read_output(
 
     status = "exited" if exit_code is not None else "running"
 
+    cmd_preview = _truncate_preview(entry.command, max_len=80)
     return ExecutorResult(
-        display=f"Background command {id} ({status})",
+        display=f"$ {cmd_preview} ({status})",
         content=(
             f'<command_output id="{id}"{exit_tag}>\n'
             f"<stdout><![CDATA[{_cdata_text(tail_text)}]]></stdout>\n"
@@ -206,5 +207,64 @@ async def execute_send_input(
         display=f"Sent input to command {id}: {_truncate_preview(text)}",
         content=(
             f'<input_sent id="{id}"><text><![CDATA[{_cdata_text(text)}]]></text></input_sent>'
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# terminate_command
+# ---------------------------------------------------------------------------
+
+terminate_command_tool = Tool(
+    name="terminate_command",
+    description=(
+        "Terminate a running background command. Sends SIGTERM followed by "
+        "SIGKILL to the process group. Use when a background command is no "
+        "longer needed or is stuck."
+    ),
+    parameters=ToolParameter(
+        properties={
+            "id": ToolParameterProperties(
+                type="integer",
+                description="The background command id to terminate",
+            ),
+        },
+        required=["id"],
+    ),
+    action_label="Terminating...",
+)
+
+
+async def execute_terminate_command(
+    id: int,  # noqa: A002 – matches tool param name
+) -> ExecutorResult:
+    """Terminate a running background command."""
+    store = get_background_store()
+    entry = store.get(id)
+    if entry is None:
+        return ExecutorResult(
+            display=f"Background command {id} not found",
+            content=(
+                f'<error id="{id}">'
+                f"<![CDATA[No background command with id {id}.]]>"
+                f"</error>"
+            ),
+        )
+
+    if entry.exit_code is not None:
+        return ExecutorResult(
+            display=f"Command {id} already exited (code {entry.exit_code})",
+            content=(
+                f'<command_terminated id="{id}" already_exited="true" '
+                f'exit_code="{entry.exit_code}" />'
+            ),
+        )
+
+    store.terminate(id)
+
+    return ExecutorResult(
+        display=f"Terminated command {id}: $ {_truncate_preview(entry.command)}",
+        content=(
+            f'<command_terminated id="{id}" command="{_xml_attr(entry.command)}" />'
         ),
     )

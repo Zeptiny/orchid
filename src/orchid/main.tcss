@@ -137,7 +137,8 @@ Collapsible.tool-result-collapse {
     border: none;
 }
 
-ToolResultMessageWidget.after-thinking {
+ToolResultMessageWidget.after-thinking,
+LiveCommandOutputWidget.after-thinking {
     margin-top: 1;
 }
 

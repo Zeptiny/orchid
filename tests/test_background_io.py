@@ -48,7 +48,8 @@ async def test_execute_command_background_returns_immediately(fresh_store):
     result = await execute_command(
         "sleep 60", description="sleep bg", background=True, working_directory="."
     )
-    assert "sleep bg" in result.display
+    assert "sleep 60" in result.display
+    assert "background" in result.display
     assert '<background_command' in result.content
     assert 'status="started"' in result.content
     assert 'description="sleep bg"' in result.content
@@ -263,11 +264,12 @@ def test_read_output_and_send_input_registered():
 
 
 def test_three_tools_present():
-    """execute_command, read_output, and send_input are all registered."""
+    """execute_command, read_output, send_input, and terminate_command are all registered."""
     registry = get_tool_registry()
     assert "execute_command" in registry
     assert "read_output" in registry
     assert "send_input" in registry
+    assert "terminate_command" in registry
 
 
 # ---------------------------------------------------------------------------
