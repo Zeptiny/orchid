@@ -52,9 +52,9 @@ _REGISTRY: PersonalityRegistry | None = None
 
 
 def get_personality_registry() -> PersonalityRegistry:
-    global _REGISTRY  # noqa: reportConstantRedefinition
+    global _REGISTRY  # pyright: ignore[reportConstantRedefinition]
     if _REGISTRY is None:
-        _REGISTRY = PersonalityRegistry()  # type: ignore[reportConstantRedefinition]
+        _REGISTRY = PersonalityRegistry()  # pyright: ignore[reportConstantRedefinition]
     return _REGISTRY
 
 

@@ -110,9 +110,9 @@ class Config:
         nested dataclass instances. This fix-up converts the dict to a ``RAGConfig``
         when the constructor receives a dict.
         """
-        if isinstance(self.rag, dict):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: dict from JSON deserialization
-            rag_as_dict: dict[str, Any] = self.rag  # type: ignore[assignment]
-            object.__setattr__(self, "rag", RAGConfig(**rag_as_dict))  # type: ignore[reportUnknownArgumentType]
+        if isinstance(self.rag, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: dict from JSON deserialization
+            rag_as_dict: dict[str, Any] = self.rag  # pyright: ignore[reportAssignmentType]
+            object.__setattr__(self, "rag", RAGConfig(**rag_as_dict))  # pyright: ignore[reportUnknownArgumentType]
 
 
 _ENV_MAP = {
@@ -185,14 +185,14 @@ def _merge_from_env(cfg: Config) -> Config:
     for env_key, field_name in _ENV_MAP.items():
         raw = os.environ.get(env_key)
         if raw is not None:
-            target_type: type[Any] = type(values[field_name])  # type: ignore[reportUnknownVariableType]
+            target_type: type[Any] = type(values[field_name])  # pyright: ignore[reportUnknownVariableType]
             values[field_name] = _cast_value(raw, target_type)
     # Nested RAG env overrides
     rag_values: dict[str, Any] = dict(values["rag"])
     for env_key, field_name in _RAG_ENV_MAP.items():
         raw = os.environ.get(env_key)
         if raw is not None:
-            rag_target_type: type[Any] = type(rag_values[field_name])  # type: ignore[reportUnknownVariableType]
+            rag_target_type: type[Any] = type(rag_values[field_name])  # pyright: ignore[reportUnknownVariableType]
             rag_values[field_name] = _cast_value(raw, rag_target_type)
     values["rag"] = RAGConfig(**rag_values)
     return Config(**values)
@@ -213,21 +213,21 @@ def validate_config(cfg: Config) -> list[str]:
 
     for field_name in _NON_EMPTY_STRINGS:
         val = getattr(cfg, field_name)
-        if not val or not isinstance(val, str):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+        if not val or not isinstance(val, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
             errors.append(f"'{field_name}' must be a non-empty string, got {type(val).__name__}")
 
     # Validate tier_models
-    if not isinstance(cfg.tier_models, dict):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+    if not isinstance(cfg.tier_models, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'tier_models' must be a dict")
     else:
         for tier, model in cfg.tier_models.items():
-            if not isinstance(tier, str) or not tier:  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+            if not isinstance(tier, str) or not tier:  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'tier_models' key must be a non-empty string, got {tier!r}")
-            if not isinstance(model, str) or not model:  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+            if not isinstance(model, str) or not model:  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'tier_models.{tier}' must be a non-empty string, got {model!r}")
 
     # Validate ignored_dirs
-    if not isinstance(cfg.ignored_dirs, list):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+    if not isinstance(cfg.ignored_dirs, list):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'ignored_dirs' must be a list")
 
     # Validate int fields
@@ -244,28 +244,28 @@ def validate_config(cfg: Config) -> list[str]:
     _check_positive_float(cfg, "mcp_per_server_timeout", errors)
 
     # Validate RAG
-    if not isinstance(cfg.rag, RAGConfig):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+    if not isinstance(cfg.rag, RAGConfig):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'rag' must be a RAGConfig object")
     else:
         _check_positive_int(cfg.rag, "chunk_size", errors, prefix="rag")
         _check_nonneg_int(cfg.rag, "chunk_overlap", errors, prefix="rag")
-        if isinstance(cfg.rag.chunk_size, int) and isinstance(cfg.rag.chunk_overlap, int) and cfg.rag.chunk_overlap >= cfg.rag.chunk_size:  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+        if isinstance(cfg.rag.chunk_size, int) and isinstance(cfg.rag.chunk_overlap, int) and cfg.rag.chunk_overlap >= cfg.rag.chunk_size:  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
             errors.append("'rag.chunk_overlap' must be less than 'rag.chunk_size'")
         _check_positive_int(cfg.rag, "top_k", errors, prefix="rag")
         _check_positive_int(cfg.rag, "max_file_size", errors, prefix="rag")
-        if not isinstance(cfg.rag.embedding_model, str) or not cfg.rag.embedding_model:  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+        if not isinstance(cfg.rag.embedding_model, str) or not cfg.rag.embedding_model:  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
             errors.append("'rag.embedding_model' must be a non-empty string")
 
     # Validate providers
-    if not isinstance(cfg.providers, dict):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+    if not isinstance(cfg.providers, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'providers' must be a dict")
     else:
         for alias, entry in cfg.providers.items():
-            if not isinstance(alias, str) or not _PROVIDER_ALIAS_RE.match(alias):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+            if not isinstance(alias, str) or not _PROVIDER_ALIAS_RE.match(alias):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'providers.{alias}': alias must match [a-z0-9-]+ (no '/')")
             if alias in _RESERVED_PROVIDER_ALIASES:
                 errors.append(f"'providers.{alias}': alias is reserved (built-in pseudo-provider)")
-            if not isinstance(entry, dict):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+            if not isinstance(entry, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'providers.{alias}': must be a dict, got {type(entry).__name__}")
                 continue
             base_url: Any = entry.get("base_url")
@@ -283,22 +283,22 @@ def validate_config(cfg: Config) -> list[str]:
             if litellm_provider is not None and (not isinstance(litellm_provider, str) or not litellm_provider):
                 errors.append(f"'providers.{alias}.litellm_provider': must be a non-empty string")
             models: Any = entry.get("models", {})
-            if not isinstance(models, dict):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+            if not isinstance(models, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'providers.{alias}.models': must be a dict")
             else:
-                models_dict: dict[str, Any] = models  # type: ignore[assignment]
+                models_dict: dict[str, Any] = models  # pyright: ignore[reportAssignmentType,reportUnknownVariableType]
                 for model_id, override in models_dict.items():
-                    if override is not None and not isinstance(override, dict):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+                    if override is not None and not isinstance(override, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                         errors.append(f"'providers.{alias}.models.{model_id}': override must be a dict")
 
     # Validate mcp_servers
-    if not isinstance(cfg.mcp_servers, dict):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+    if not isinstance(cfg.mcp_servers, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'mcp_servers' must be a dict")
     else:
         for name, server_cfg in cfg.mcp_servers.items():
-            if not isinstance(name, str) or not _MCP_SERVER_NAME_RE.match(name):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+            if not isinstance(name, str) or not _MCP_SERVER_NAME_RE.match(name):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'mcp_servers.{name}': name must match [a-z0-9-]+")
-            if not isinstance(server_cfg, dict):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+            if not isinstance(server_cfg, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'mcp_servers.{name}': must be a dict, got {type(server_cfg).__name__}")
                 continue
             if "url" not in server_cfg:
@@ -306,16 +306,16 @@ def validate_config(cfg: Config) -> list[str]:
                 if not isinstance(cmd, str) or not cmd:
                     errors.append(f"'mcp_servers.{name}.command': must be a non-empty string")
                 args: Any = server_cfg.get("args", [])
-                if not isinstance(args, list):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+                if not isinstance(args, list):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                     errors.append(f"'mcp_servers.{name}.args': must be a list")
             env: Any = server_cfg.get("env")
-            if env is not None and not isinstance(env, dict):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+            if env is not None and not isinstance(env, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'mcp_servers.{name}.env': must be a dict")
 
     # Validate theme and personality (basic existence check — full validation done at load time)
-    if not isinstance(cfg.theme, str) or not cfg.theme:  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+    if not isinstance(cfg.theme, str) or not cfg.theme:  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'theme' must be a non-empty string")
-    if not isinstance(cfg.personality, str) or not cfg.personality:  # type: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
+    if not isinstance(cfg.personality, str) or not cfg.personality:  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'personality' must be a non-empty string")
 
     return errors
@@ -324,7 +324,7 @@ def validate_config(cfg: Config) -> list[str]:
 def _check_positive_int(obj: Any, field: str, errors: list[str], prefix: str | None = None) -> None:
     val = getattr(obj, field)
     key = f"{prefix}.{field}" if prefix else f"'{field}'"
-    if not isinstance(val, int) or isinstance(val, bool):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: bool is subclass of int
+    if not isinstance(val, int) or isinstance(val, bool):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: bool is subclass of int
         errors.append(f"{key} must be a positive integer, got {type(val).__name__}")
     elif val <= 0:
         errors.append(f"{key} must be a positive integer, got {val}")
@@ -333,7 +333,7 @@ def _check_positive_int(obj: Any, field: str, errors: list[str], prefix: str | N
 def _check_nonneg_int(obj: Any, field: str, errors: list[str], prefix: str | None = None) -> None:
     val = getattr(obj, field)
     key = f"{prefix}.{field}" if prefix else f"'{field}'"
-    if not isinstance(val, int) or isinstance(val, bool):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: bool is subclass of int
+    if not isinstance(val, int) or isinstance(val, bool):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: bool is subclass of int
         errors.append(f"{key} must be a non-negative integer, got {type(val).__name__}")
     elif val < 0:
         errors.append(f"{key} must be a non-negative integer, got {val}")
@@ -342,7 +342,7 @@ def _check_nonneg_int(obj: Any, field: str, errors: list[str], prefix: str | Non
 def _check_positive_float(obj: Any, field: str, errors: list[str], prefix: str | None = None) -> None:
     val = getattr(obj, field)
     key = f"{prefix}.{field}" if prefix else f"'{field}'"
-    if not isinstance(val, (int, float)) or isinstance(val, bool):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: bool is subclass of int
+    if not isinstance(val, (int, float)) or isinstance(val, bool):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: bool is subclass of int
         errors.append(f"{key} must be a positive number, got {type(val).__name__}")
     elif val <= 0:
         errors.append(f"{key} must be a positive number, got {val}")
@@ -372,13 +372,13 @@ def _deep_merge_provider_dict(home: dict[str, Any], project: dict[str, Any]) -> 
             continue
         home_entry: Any = home[alias]
         project_entry: Any = project[alias]
-        if not isinstance(home_entry, dict) or not isinstance(project_entry, dict):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: values from JSON may be any type
+        if not isinstance(home_entry, dict) or not isinstance(project_entry, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: values from JSON may be any type
             result[alias] = project_entry
             continue
         merged_entry: dict[str, Any] = {**home_entry, **project_entry}
-        home_models: Any = home_entry.get("models")  # type: ignore[reportUnknownMemberType]
-        project_models: Any = project_entry.get("models")  # type: ignore[reportUnknownMemberType]
-        if isinstance(home_models, dict) and isinstance(project_models, dict):  # type: ignore[reportUnnecessaryIsInstance]  # defensive: values from JSON may be any type
+        home_models: Any = home_entry.get("models")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        project_models: Any = project_entry.get("models")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        if isinstance(home_models, dict) and isinstance(project_models, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: values from JSON may be any type
             merged_entry["models"] = {**home_models, **project_models}
         result[alias] = merged_entry
     return result

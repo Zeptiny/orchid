@@ -69,7 +69,7 @@ def _load_agents_from_dir(agents_dir: Path) -> dict[str, Agent]:
                 name=str(name),
                 type=AgentTypes.from_str(str(agent_type)),
                 tier=ModelTier.from_str(str(tier)),
-                description=description,
+                description=str(description),
                 system_prompt=body.strip(),
                 allowed_tools=allowed_tools,  # pyright: ignore[reportUnknownArgumentType]
                 allowed_skills=allowed_skills,  # pyright: ignore[reportUnknownArgumentType]

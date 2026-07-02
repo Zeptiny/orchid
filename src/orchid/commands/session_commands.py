@@ -130,7 +130,7 @@ def _build_model_picker_items(cfg: Config, mode: str = "chat") -> list[PickerIte
     """
     items: list[PickerItem] = []
     for alias, provider_entry in cfg.providers.items():
-        if not isinstance(provider_entry, dict):  # type: ignore[reportUnnecessaryIsInstance]
+        if not isinstance(provider_entry, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
             log.warning(
                 "Skipping provider %r: entry must be a dict, got %s",
                 alias,
@@ -138,7 +138,7 @@ def _build_model_picker_items(cfg: Config, mode: str = "chat") -> list[PickerIte
             )
             continue
         models: dict[str, Any] = provider_entry.get("models", {})
-        if not isinstance(models, dict):  # type: ignore[reportUnnecessaryIsInstance]
+        if not isinstance(models, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
             log.warning(
                 "Skipping provider %r: 'models' must be a dict, got %s",
                 alias,
@@ -300,12 +300,12 @@ async def execute_command(app: App[Any], cmd: str) -> None:
                 # mcp_servers changes that warrant a restart prompt. Only short
                 # -circuit when result is None AND mcp_servers are unchanged.
                 if result is None:
-                    current = ConfigManager._instance  # type: ignore[reportPrivateUsage]
+                    current = ConfigManager._instance  # pyright: ignore[reportPrivateUsage]
                     if current is None or current.mcp_servers == cfg.mcp_servers:
                         return
                     saved = current
                 else:
-                    ConfigManager._instance = result  # type: ignore[reportPrivateUsage]
+                    ConfigManager._instance = result  # pyright: ignore[reportPrivateUsage]
                     ConfigManager.save()
                     saved = result
                 needs_restart = saved.mcp_servers != cfg.mcp_servers

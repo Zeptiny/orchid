@@ -31,7 +31,7 @@ dev = [
     "pytest-asyncio",
     "pytest-timeout>=2.0",
     "ruff",
-    "pyright",
+    "pyright==1.1.411",
 ]
 
 [tool.ruff]

@@ -71,7 +71,7 @@ def _load_skills_from_dir(skills_dir: Path) -> dict[str, Skill]:
 
         requires_raw = metadata.get("requires", [])
         if isinstance(requires_raw, list):
-            requires: list[str] = requires_raw  # type: ignore[reportUnknownVariableType]
+            requires: list[str] = requires_raw  # pyright: ignore[reportUnknownVariableType]
         else:
             if requires_raw:
                 log.warning("%s: 'requires' must be a list, got %s — ignoring", skill_file, type(requires_raw).__name__)
@@ -108,7 +108,7 @@ def seed_skills_dir(skills_dir: Path) -> None:
 
 
 def load_skills() -> dict[str, Skill]:
-    global SKILL_REGISTRY  # noqa: reportConstantRedefinition
+    global SKILL_REGISTRY  # pyright: ignore[reportConstantRedefinition]
 
     home_skills = _load_skills_from_dir(HOME_SKILLS_DIR)
 
@@ -116,7 +116,7 @@ def load_skills() -> dict[str, Skill]:
     project_skills = _load_skills_from_dir(project_skills_dir)
 
     merged = {**home_skills, **project_skills}
-    SKILL_REGISTRY = merged  # type: ignore[reportConstantRedefinition]
+    SKILL_REGISTRY = merged  # pyright: ignore[reportConstantRedefinition]
 
     from orchid.tools import reset_tool_registry
     reset_tool_registry()

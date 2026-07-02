@@ -466,10 +466,10 @@ class Orchid(App[None]):
         ws = StreamWidgetState()
         history_state = StreamHistoryState()
 
-        assert self.sessions.active is not None
-        self._subagent_ui.setup(self.sessions.active.subagent_manager)
-
         try:
+            assert self.sessions.active is not None
+            self._subagent_ui.setup(self.sessions.active.subagent_manager)
+
             general = get_agent_registry()["general"]
             system_prompt = append_personality(general.system_prompt)
             async for msg in stream_response(
