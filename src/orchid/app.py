@@ -32,7 +32,13 @@ from orchid.widgets.message_widget import (
     live_command_widgets,
     mount_streamed_message,
 )
-from orchid.widgets.sidebar import NavEntry, Sidebar, SidebarBgCommandSelected, SidebarMainSelected, SidebarSubagentSelected
+from orchid.widgets.sidebar import (
+    NavEntry,
+    Sidebar,
+    SidebarBgCommandSelected,
+    SidebarMainSelected,
+    SidebarSubagentSelected,
+)
 from orchid.widgets.subagent_ui import SubagentUIManager
 
 log = logging.getLogger(__name__)
@@ -67,16 +73,22 @@ def _sum_usage(messages: list) -> tuple[int, int, int, int] | None:
 def _session_usage_totals(session: "Session") -> tuple[int, int, int, int] | None:
     """Sum token usage across chains and subagent records in ``session``.
 
-    Each chain contributes the sum of every usage-bearing message it holds
-    (cumulative across the chain's agentic-loop calls), not just the last
-    snapshot. Subagent records (R5/R6) are reached via
-    ``session.subagent_manager.all_records()``; each contributes the same sum
-    over its composed ``record.chain``.
-
-    Returns ``(prompt_tokens, cached_tokens, completion_tokens, total_tokens)``
-    when at least one message-list has usage, otherwise ``None``.
+    Uses a cached result stored on the session object to avoid re-iterating
+    all messages every tick. The cache is invalidated by comparing message
+    counts. Returns ``(prompt_tokens, cached_tokens, completion_tokens,
+    total_tokens)`` when at least one message-list has usage, otherwise ``None``.
     """
-    prompt = cached = completion = total = 0
+    # Build a lightweight fingerprint to detect changes
+    chain_msg_count = sum(len(c.messages) for c in session.chains)
+    sub_records = session.subagent_manager.all_records()
+    sub_msg_count = sum(len(r.chain.messages) for r in sub_records)
+    fingerprint = (chain_msg_count, sub_msg_count, len(session.chains), len(sub_records))
+
+    cached = getattr(session, "_usage_cache", None)
+    if cached is not None and cached[0] == fingerprint:
+        return cached[1]
+
+    prompt = cached_tok = completion = total = 0
     found = False
     for chain in session.chains:
         usage = _sum_usage(chain.messages)
@@ -84,23 +96,21 @@ def _session_usage_totals(session: "Session") -> tuple[int, int, int, int] | Non
             continue
         found = True
         prompt += usage[0]
-        cached += usage[1]
+        cached_tok += usage[1]
         completion += usage[2]
         total += usage[3]
-    # Fold subagent usage into the session total (R6). Each subagent's
-    # composed chain contributes its own usage sum.
-    for record in session.subagent_manager.all_records():
+    for record in sub_records:
         usage = _sum_usage(record.chain.messages)
         if usage is None:
             continue
         found = True
         prompt += usage[0]
-        cached += usage[1]
+        cached_tok += usage[1]
         completion += usage[2]
         total += usage[3]
-    if not found:
-        return None
-    return (prompt, cached, completion, total)
+    result = (prompt, cached_tok, completion, total) if found else None
+    session._usage_cache = (fingerprint, result)  # type: ignore[attr-defined]
+    return result
 
 
 def _format_session_model_label(
@@ -195,6 +205,14 @@ class Orchid(App):
         ("ctrl+b", "toggle_sidebar_focus", "Toggle Sidebar"),
     ]
     COMMANDS = {SessionCommands}
+
+    # Pause Python garbage collection during scroll to avoid GC-induced
+    # frame drops when the DOM tree is large (many message widgets).
+    PAUSE_GC_ON_SCROLL = True
+
+    # Maximum number of chains to keep fully mounted. Older chains are
+    # collapsed into lightweight stubs to bound DOM tree size.
+    _CHAIN_COLLAPSE_THRESHOLD = 20
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -682,7 +700,7 @@ class Orchid(App):
             has_live = False
 
         if has_live and self._bg_cmd_timer is None:
-            self._bg_cmd_timer = self.set_interval(0.5, self._tick_live_commands)
+            self._bg_cmd_timer = self.set_interval(1.5, self._tick_live_commands)
         elif not has_live and self._bg_cmd_timer is not None:
             self._bg_cmd_timer.stop()
             self._bg_cmd_timer = None
@@ -785,27 +803,58 @@ class Orchid(App):
         await container.remove_children()
         if not self.sessions.active:
             return
+
+        total_chains = len(self.sessions.active.chains)
+        # Determine which chains get full widgets vs collapsed stubs
+        collapse_count = max(0, total_chains - self._CHAIN_COLLAPSE_THRESHOLD)
+
+        # Build all chain containers first, then batch-mount them
+        chain_containers: list[ChainContainer | Static] = []
+        chain_widgets: list[list] = []
         for chain_index, chain in enumerate(self.sessions.active.chains):
-            subtotal_provider = _make_subagent_subtotal_provider(
-                self.sessions.active, chain_index
-            )
-            chain_container = ChainContainer(chain, subagent_subtotal=subtotal_provider)
-            await container.mount(chain_container)
-            chain_container.freeze()
-            prev_was_thinking = False
-            for msg in chain.messages:
-                classes = (
-                    "after-thinking"
-                    if msg.type == MessageType.TOOL_RESULT and prev_was_thinking
-                    else None
+            if chain_index < collapse_count:
+                # Collapse old chains into a lightweight stub
+                msg_count = len(chain.messages)
+                user_msgs = [m for m in chain.messages if m.role == MessageRole.USER]
+                preview = user_msgs[0].content[:60] + "..." if user_msgs else f"{msg_count} messages"
+                stub = Static(
+                    f"[dim]▸ Chain {chain_index + 1}: {preview}[/dim]",
+                    classes="collapsed-chain-stub",
                 )
-                widget = create_message_widget(msg, loaded=True, classes=classes)
-                if widget is not None:
-                    await chain_container.messages_area.mount(widget)
-                if msg.type == MessageType.THINKING:
-                    prev_was_thinking = True
-                elif msg.type != MessageType.TOOL_CALL:
-                    prev_was_thinking = False
+                chain_containers.append(stub)
+                chain_widgets.append([])  # no widgets for stubs
+            else:
+                subtotal_provider = _make_subagent_subtotal_provider(
+                    self.sessions.active, chain_index
+                )
+                chain_container = ChainContainer(chain, subagent_subtotal=subtotal_provider)
+                chain_containers.append(chain_container)
+                # Pre-build message widgets for this chain
+                widgets = []
+                prev_was_thinking = False
+                for msg in chain.messages:
+                    classes = (
+                        "after-thinking"
+                        if msg.type == MessageType.TOOL_RESULT and prev_was_thinking
+                        else None
+                    )
+                    widget = create_message_widget(msg, loaded=True, classes=classes)
+                    if widget is not None:
+                        widgets.append(widget)
+                    if msg.type == MessageType.THINKING:
+                        prev_was_thinking = True
+                    elif msg.type != MessageType.TOOL_CALL:
+                        prev_was_thinking = False
+                chain_widgets.append(widgets)
+        # Batch-mount all chain containers at once (single layout pass)
+        if chain_containers:
+            await container.mount(*chain_containers)
+        # Batch-mount message widgets within each chain container
+        for chain_container, widgets in zip(chain_containers, chain_widgets, strict=True):
+            if isinstance(chain_container, ChainContainer):
+                chain_container.freeze()
+                if widgets and chain_container.messages_area:
+                    await chain_container.messages_area.mount(*widgets)
 
     async def rerender_all(self) -> None:
         if not self.sessions.active:
@@ -821,10 +870,15 @@ class Orchid(App):
         if not self.sessions.active:
             return
 
+        # Find last usage by iterating chains in reverse without materializing
+        # the full flat message list (avoids O(n) list creation every tick).
         last_usage = None
-        for msg in reversed(self.sessions.active.messages):
-            if msg.usage:
-                last_usage = msg.usage
+        for chain in reversed(self.sessions.active.chains):
+            for msg in reversed(chain.messages):
+                if msg.usage:
+                    last_usage = msg.usage
+                    break
+            if last_usage:
                 break
         try:
             sidebar = self.query_one("#sidebar", Sidebar)

@@ -294,6 +294,7 @@ class Sidebar(Vertical):
         self._subagent_records: list = []
         self._bg_cmd_records: list = []
         self._expanded_bg_cmd_id: int | None = None
+        self._bg_cmd_label_cache: dict[int, str] = {}
 
     def compose(self):
         yield Static("Tokens", id="sidebar-tokens-label")
@@ -621,10 +622,20 @@ class Sidebar(Vertical):
                 await container.remove_children()
             return
 
-        entries: list[Static] = []
-        for name, info in statuses.items():
-            entries.append(Static(self._format_mcp_server(name, info)))
+        # Diff-based update: update existing entries in-place, only rebuild
+        # if the number of servers changed.
+        new_texts = [self._format_mcp_server(name, info) for name, info in statuses.items()]
+        existing = list(container.children)
 
+        if len(existing) == len(new_texts):
+            # Same count — update labels in-place (no flicker)
+            for widget, text in zip(existing, new_texts, strict=True):
+                if isinstance(widget, Static):
+                    widget.update(text)
+            return
+
+        # Server count changed — must rebuild
+        entries: list[Static] = [Static(text) for text in new_texts]
         await container.remove_children()
         if entries:
             await container.mount(*entries)
@@ -673,13 +684,37 @@ class Sidebar(Vertical):
         active = [t for t in tasks if t.status not in TERMINAL_STATUSES]
         done = [t for t in tasks if t.status in TERMINAL_STATUSES]
 
+        # Detect current structure for diff comparison
         existing_collapse: Collapsible | None = None
+        current_active_count = 0
+        current_done_count = 0
         for child in container.children:
             if isinstance(child, Collapsible):
                 existing_collapse = child
+                current_done_count = len(list(child.query(".todo-entry")))
+            elif isinstance(child, Static) and "todo-entry" in child.classes:
+                current_active_count += 1
 
         was_finished_collapsed = existing_collapse.collapsed if existing_collapse else True
 
+        # If structure matches (same active/done counts), update in-place
+        if current_active_count == len(active) and current_done_count == len(done):
+            # Update active entries in-place
+            active_widgets = [
+                child for child in container.children
+                if isinstance(child, Static) and "todo-entry" in child.classes
+            ]
+            for widget, task in zip(active_widgets, active, strict=True):
+                widget.update(self._format_todo(task))
+            # Update done entries in-place
+            if existing_collapse:
+                done_widgets = list(existing_collapse.query(".todo-entry"))
+                for widget, task in zip(done_widgets, reversed(done), strict=True):
+                    if isinstance(widget, Static):
+                        widget.update(self._format_todo(task))
+            return
+
+        # Structure changed — rebuild
         active_entries: list[Static] = []
         for task in active:
             entry = Static(self._format_todo(task), classes="todo-entry")
@@ -696,17 +731,12 @@ class Sidebar(Vertical):
             await container.mount(*active_entries)
 
         if done_entries:
-            # See _refresh_subagent_display: children are passed to the
-            # Collapsible constructor rather than mounted via a post-mount
-            # query_one("Contents") to avoid the teardown NoMatches race.
             collapse = Collapsible(
                 *done_entries,
                 classes="finished-collapse",
                 title=f"Done ({len(done)})",
                 collapsed=was_finished_collapsed,
             )
-            # Pre-set the -collapsed class before mount to avoid a one-frame
-            # flash of the expanded dropdown (see _refresh_subagent_display).
             collapse.set_class(was_finished_collapsed, "-collapsed", update=False)
             await container.mount(collapse)
 
@@ -774,9 +804,18 @@ class Sidebar(Vertical):
 
     @staticmethod
     def _format_age(seconds: float) -> str:
-        """Format a monotonic-time age into a human-readable string."""
+        """Format a monotonic-time age into a human-readable string.
+
+        Rounds to reduce update frequency: 5s buckets under 1m, 1m buckets
+        under 1h, so the formatted string changes less often and avoids
+        triggering unnecessary widget repaints.
+        """
+        if seconds < 5:
+            return "now"
         if seconds < 60:
-            return f"{int(seconds)}s ago"
+            # Round to nearest 5s to reduce churn
+            rounded = int(seconds // 5) * 5
+            return f"{rounded}s ago"
         if seconds < 3600:
             return f"{int(seconds / 60)}m ago"
         return f"{int(seconds / 3600)}h ago"
@@ -850,17 +889,31 @@ class Sidebar(Vertical):
         )
 
         if not structure_changed:
-            # Label-only updates (age, owner, status)
+            # Label-only updates (age, owner, status) — only update if text changed
             for child in container.children:
                 if isinstance(child, NavEntry) and "bg-cmd-entry" in child.classes:
-                    r = records_by_id.get(int(child.view_id))
+                    try:
+                        cmd_id = int(child.view_id)
+                    except (ValueError, TypeError):
+                        continue
+                    r = records_by_id.get(cmd_id)
                     if r:
-                        child.update(self._format_bg_entry(r))
-                elif isinstance(child, Collapsible):
+                        new_text = self._format_bg_entry(r)
+                        if self._bg_cmd_label_cache.get(cmd_id) != new_text:
+                            self._bg_cmd_label_cache[cmd_id] = new_text
+                            child.update(new_text)
+                elif isinstance(child, Collapsible) and "finished-collapse" in child.classes:
                     for entry in child.query(NavEntry):
-                        r = records_by_id.get(int(entry.view_id))
+                        try:
+                            cmd_id = int(entry.view_id)
+                        except (ValueError, TypeError):
+                            continue
+                        r = records_by_id.get(cmd_id)
                         if r:
-                            entry.update(self._format_bg_entry(r))
+                            new_text = self._format_bg_entry(r)
+                            if self._bg_cmd_label_cache.get(cmd_id) != new_text:
+                                self._bg_cmd_label_cache[cmd_id] = new_text
+                                entry.update(new_text)
             return
 
         # Structure changed — batch rebuild
@@ -1019,21 +1072,27 @@ class Sidebar(Vertical):
         )
         collapsible.set_class(False, "-collapsed", update=False)
 
-        # Find the index to insert after the correct NavEntry
-        insert_idx = 0
-        for i, child in enumerate(container.children):
+        # Find the NavEntry to insert after, and mount directly (no teardown)
+        target_entry = None
+        for child in container.children:
             if isinstance(child, NavEntry) and "bg-cmd-entry" in child.classes:
                 try:
                     if int(child.view_id) == cmd_id:
-                        insert_idx = i + 1
+                        target_entry = child
                         break
                 except (ValueError, TypeError):
                     pass
 
-        children = list(container.children)
-        children.insert(insert_idx, collapsible)
-        await container.remove_children()
-        await container.mount(*children)
+        if target_entry is not None:
+            # Mount after the target entry using sibling index
+            children_list = list(container.children)
+            idx = children_list.index(target_entry)
+            if idx + 1 < len(children_list):
+                await container.mount(collapsible, before=children_list[idx + 1])
+            else:
+                await container.mount(collapsible)
+        else:
+            await container.mount(collapsible)
 
     async def _collapse_bg_cmd(self, cmd_id: int) -> None:
         """Remove the collapsible for a previously expanded bg command."""
