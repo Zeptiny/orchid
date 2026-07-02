@@ -76,10 +76,20 @@ class NavEntry(Static):
         self.post_message(self.Pressed(self))
 
 
+def _load_sidebar_css() -> str:
+    """Read sidebar styles from the external TCSS file."""
+    try:
+        base = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(base, "sidebar.tcss"), "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 class Sidebar(Vertical):
     """Right sidebar showing token counts, subagents, and working directory."""
 
-    CSS_PATH = "sidebar.tcss"
+    DEFAULT_CSS = _load_sidebar_css()
     BINDINGS = [("up", "navigate_up"), ("down", "navigate_down")]
 
     _prompt_tokens: int = 0
@@ -100,16 +110,16 @@ class Sidebar(Vertical):
         self._cached_tools_char_count: int = 0
 
     def compose(self):
-        with Vertical(id="sidebar-top"):
-            with Vertical(id="sidebar-nav"):
-                yield NavEntry("▸ Main", "main", id="nav-main")
-            yield Static("Subagents", id="sidebar-subagents-label")
-            yield Vertical(id="subagent-entries")
-            yield Static("MCP Servers", id="sidebar-mcp-label")
-            yield Vertical(id="mcp-entries")
-            yield Static("Todos", id="sidebar-todos-label")
-            yield Vertical(id="todo-entries")
-            yield Static("", id="context-breakdown")
+        with Vertical(id="sidebar-nav"):
+            yield NavEntry("▸ Main", "main", id="nav-main")
+        yield Static("Subagents", id="sidebar-subagents-label")
+        yield Vertical(id="subagent-entries")
+        yield Static("MCP Servers", id="sidebar-mcp-label")
+        yield Vertical(id="mcp-entries")
+        yield Static("Todos", id="sidebar-todos-label")
+        yield Vertical(id="todo-entries")
+        yield Static("", id="context-breakdown")
+        yield Static("", id="sidebar-spacer")
         yield Static("AST", id="sidebar-ast-label")
         yield Static("", id="ast-status")
         yield Static("RAG", id="sidebar-rag-label")

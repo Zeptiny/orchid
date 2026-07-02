@@ -4,13 +4,11 @@ Sidebar {
     max-width: 35;
     background: $surface;
     padding: 0;
-    layout: vertical;
-    align-vertical: top;
+    align: left top;
 }
 
-Sidebar #sidebar-top {
-    height: auto;
-    padding: 0;
+Sidebar #sidebar-spacer {
+    height: 1fr;
 }
 
 Sidebar #sidebar-nav {
