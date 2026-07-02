@@ -398,7 +398,7 @@ class ChainContainer(Static):
         color: $text-muted;
         text-style: dim;
         padding: 0 1 1 1;
-        margin: 0 1 0 1;
+        margin: 1 1 0 1;
     }
     """
 

@@ -90,7 +90,21 @@ UserMessageWidget > MarkdownParagraph {
 
 AssistantMessageWidget {
     margin: 0 1;
-    padding: 1;
+    padding: 1 1 0 1;
+}
+
+/* Switch markdown blocks from bottom-margin to top-margin spacing so the last
+   block's margin doesn't stack with the chain-footer's margin-top. */
+AssistantMessageWidget > MarkdownBlock {
+    margin-bottom: 0;
+}
+
+AssistantMessageWidget > MarkdownBlock:first-child {
+    margin-top: 0;
+}
+
+AssistantMessageWidget > MarkdownParagraph {
+    margin-top: 1;
 }
 
 ThinkingMessageWidget {
