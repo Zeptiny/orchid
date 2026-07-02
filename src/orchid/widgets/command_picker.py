@@ -55,12 +55,12 @@ class CommandPicker(OptionList):
         self._filtered = []
         self.clear_options()
         try:
-            self.app.query_one("#input", TextArea).focus()
+            self.app.query_one("#input", TextArea).focus()  # pyright: ignore[reportOptionalMemberAccess,reportUnknownMemberType]
         except Exception:
             pass
 
     def on_key(self, event: events.Key) -> None:
-        text_area = self.app.query_one("#input", TextArea)
+        text_area = self.app.query_one("#input", TextArea)  # pyright: ignore[reportOptionalMemberAccess,reportUnknownMemberType]
 
         if event.key == "escape":
             self.hide()

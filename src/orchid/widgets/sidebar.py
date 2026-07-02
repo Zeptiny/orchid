@@ -1,6 +1,7 @@
 import os
 import time
 from datetime import UTC, datetime
+from typing import Any
 
 from textual.containers import Vertical
 from textual.message import Message
@@ -61,7 +62,7 @@ class NavEntry(Static):
         def control(self) -> "NavEntry":
             return self.nav_entry
 
-    def __init__(self, label: str, view_id: str, **kwargs) -> None:
+    def __init__(self, label: str, view_id: str, **kwargs: Any) -> None:
         self.view_id = view_id
         super().__init__(label, **kwargs)
 
@@ -209,10 +210,10 @@ class Sidebar(Vertical):
     _last_token_update: float = 0
     _token_flush_scheduled: bool = False
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._usage_by_view: dict = {}
-        self._subagent_records: list = []
+        self._usage_by_view: dict[str, Any] = {}
+        self._subagent_records: list[SubagentRecord] = []
 
     def compose(self):
         yield Static("Tokens", id="sidebar-tokens-label")
@@ -241,12 +242,11 @@ class Sidebar(Vertical):
         return f"  {cwd}"
 
     def on_nav_entry_pressed(self, event: NavEntry.Pressed) -> None:
-        if isinstance(event.control, NavEntry):
-            if event.control.view_id == "main":
-                self.post_message(SidebarMainSelected())
-            else:
-                self.post_message(
-                    SidebarSubagentSelected(event.control.view_id))
+        if event.control.view_id == "main":
+            self.post_message(SidebarMainSelected())
+        else:
+            self.post_message(
+                SidebarSubagentSelected(event.control.view_id))
 
     def _get_focusable_entries(self) -> list[NavEntry | Collapsible]:
         entries: list[NavEntry | Collapsible] = []
@@ -272,8 +272,9 @@ class Sidebar(Vertical):
         entries = self._get_focusable_entries()
         if not entries:
             return
-        focused = self.app.focused
+        focused = self.app.focused  # type: ignore[union-attr]
         if focused in entries:
+            assert isinstance(focused, (NavEntry, Collapsible))
             idx = entries.index(focused)
             entries[(idx - 1) % len(entries)].focus()
         else:
@@ -283,8 +284,9 @@ class Sidebar(Vertical):
         entries = self._get_focusable_entries()
         if not entries:
             return
-        focused = self.app.focused
+        focused = self.app.focused  # type: ignore[union-attr]
         if focused in entries:
+            assert isinstance(focused, (NavEntry, Collapsible))
             idx = entries.index(focused)
             entries[(idx + 1) % len(entries)].focus()
         else:
@@ -326,6 +328,7 @@ class Sidebar(Vertical):
         try:
             entries = self.query_one("#subagent-entries", Vertical)
             for entry in entries.query(".subagent-entry"):
+                assert isinstance(entry, NavEntry)
                 if entry.view_id == self._active_view:
                     entry.add_class("-active")
                 else:
@@ -521,7 +524,7 @@ class Sidebar(Vertical):
         else:
             return f"{elapsed / 3600:.1f}h"
 
-    async def update_mcp_servers(self, statuses: dict[str, dict]) -> None:
+    async def update_mcp_servers(self, statuses: dict[str, dict[str, Any]]) -> None:
         try:
             container = self.query_one("#mcp-entries", Vertical)
         except Exception:
@@ -541,10 +544,10 @@ class Sidebar(Vertical):
             await container.mount(*entries)
 
     @staticmethod
-    def _format_mcp_server(name: str, info: dict) -> str:
-        status = info.get("status", "unknown")
-        tool_count = info.get("tool_count", 0)
-        error = info.get("error")
+    def _format_mcp_server(name: str, info: dict[str, Any]) -> str:
+        status: str = info.get("status", "unknown")
+        tool_count: int = info.get("tool_count", 0)
+        error: str | None = info.get("error")
 
         indicator = {
             "connected": "●",

@@ -5,6 +5,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -79,7 +80,7 @@ class VectorState:
 class RAGStore:
     # Process-level search cache: str(db_path) -> (vectors_ndarray, chunks_list).
     # Invalidated by any mutation method on any store instance for that path.
-    _search_cache: dict[str, tuple[np.ndarray, list[dict]]] = {}
+    _search_cache: dict[str, tuple[np.ndarray, list[dict[str, Any]]]] = {}
 
     def __init__(self, project_path: str):
         self.project_path = project_path
@@ -207,7 +208,7 @@ class RAGStore:
         )
         os.close(tmp_fd)
         try:
-            np.save(tmp_path, arr, allow_pickle=False)
+            np.save(tmp_path, arr, allow_pickle=False)  # type: ignore[reportUnknownMemberType]
             actual = tmp_path + ".npy"
             os.replace(actual, str(self.vectors_file))
             self._invalidate_cache(self.db_path)
@@ -255,7 +256,7 @@ class RAGStore:
             self.clear()
             return None
 
-    def _get_all_chunks(self) -> list[dict]:
+    def _get_all_chunks(self) -> list[dict[str, Any]]:
         conn = self._get_conn()
         try:
             cursor = conn.execute(
@@ -275,7 +276,7 @@ class RAGStore:
         finally:
             conn.close()
 
-    def _load_search_data(self) -> tuple[np.ndarray | None, list[dict] | None]:
+    def _load_search_data(self) -> tuple[np.ndarray | None, list[dict[str, Any]] | None]:
         """Load vectors (as ndarray) and chunks, using the process cache when valid."""
         cache_key = str(self.db_path)
         if cache_key in RAGStore._search_cache:
@@ -348,8 +349,8 @@ class RAGStore:
     ) -> list[float]:
         q = np.asarray(query, dtype=np.float32)
         v = np.asarray(vectors, dtype=np.float32)
-        norms = np.linalg.norm(v, axis=1) * np.linalg.norm(q)
-        norms = np.where(norms == 0, 1, norms)
+        norms = np.linalg.norm(v, axis=1) * np.linalg.norm(q)  # type: ignore[reportUnknownMemberType]
+        norms = np.where(norms == 0, 1, norms)  # type: ignore[reportUnknownMemberType]
         return (v @ q / norms).tolist()
 
     def clear(self) -> None:

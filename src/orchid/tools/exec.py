@@ -5,7 +5,7 @@ import signal
 
 from orchid.config import get_config
 from orchid.domain.tool import ExecutorResult, Tool, ToolParameter, ToolParameterProperties
-from orchid.tools._xml_utils import _cdata_text, _xml_attr
+from orchid.tools._xml_utils import cdata_text, xml_attr
 
 MAX_OUTPUT_BYTES = 1 * 1024 * 1024
 
@@ -124,7 +124,7 @@ async def execute_command(
             return ExecutorResult(
                 display=f"{description} - Timed out after {timeout} seconds",
                 content=(
-                    f'<command_result command="{_xml_attr(command)}" exit_code="-1" '
+                    f'<command_result command="{xml_attr(command)}" exit_code="-1" '
                     f'timed_out="true">\n'
                     f"  <error><![CDATA[Command timed out after {timeout} seconds.]]></error>\n"
                     f"</command_result>"
@@ -144,10 +144,10 @@ async def execute_command(
         stderr = stderr_bytes.decode("utf-8", errors="replace").strip() if stderr_bytes else ""
 
         stdout_section = (
-            f"  <stdout><![CDATA[{_cdata_text(stdout)}]]></stdout>\n" if stdout else ""
+            f"  <stdout><![CDATA[{cdata_text(stdout)}]]></stdout>\n" if stdout else ""
         )
         stderr_section = (
-            f"  <stderr><![CDATA[{_cdata_text(stderr)}]]></stderr>\n" if stderr else ""
+            f"  <stderr><![CDATA[{cdata_text(stderr)}]]></stderr>\n" if stderr else ""
         )
         truncation_section = (
             "  <truncated>true</truncated>\n" if truncated else ""
@@ -156,7 +156,7 @@ async def execute_command(
         return ExecutorResult(
             display=f"{description} (exit code: {process.returncode})",
             content=(
-                f'<command_result command="{_xml_attr(command)}" '
+                f'<command_result command="{xml_attr(command)}" '
                 f'exit_code="{process.returncode}">\n'
                 f"{stdout_section}{stderr_section}{truncation_section}"
                 f"</command_result>"
@@ -167,9 +167,9 @@ async def execute_command(
         return ExecutorResult(
             display=f"{description} - Execution error",
             content=(
-                f'<command_result command="{_xml_attr(command)}" exit_code="-1" '
+                f'<command_result command="{xml_attr(command)}" exit_code="-1" '
                 f'error="true">\n'
-                f"  <error><![CDATA[{_cdata_text(str(e))}]]></error>\n"
+                f"  <error><![CDATA[{cdata_text(str(e))}]]></error>\n"
                 f"</command_result>"
             ),
         )

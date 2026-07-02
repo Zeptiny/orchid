@@ -11,10 +11,22 @@ import time
 import traceback
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import litellm
+from litellm import (  # type: ignore[reportPrivateImportUsage]
+    REPEATED_STREAMING_CHUNK_LIMIT,  # type: ignore[reportPrivateImportUsage]
+    APIConnectionError,  # type: ignore[reportPrivateImportUsage]
+    APIError,  # type: ignore[reportPrivateImportUsage]
+    AuthenticationError,  # type: ignore[reportPrivateImportUsage]
+    BadGatewayError,  # type: ignore[reportPrivateImportUsage]
+    BadRequestError,  # type: ignore[reportPrivateImportUsage]
+    InternalServerError,  # type: ignore[reportPrivateImportUsage]
+    RateLimitError,  # type: ignore[reportPrivateImportUsage]
+    ServiceUnavailableError,  # type: ignore[reportPrivateImportUsage]
+    Timeout,  # type: ignore[reportPrivateImportUsage]
+)
 from litellm.exceptions import MidStreamFallbackError
 
 from orchid.config import HOME_CONFIG_DIR, get_config
@@ -51,23 +63,23 @@ def classify_error(exc: Exception) -> tuple[str, str]:
             "Unknown Provider",
             detail or "The model reference could not be resolved. Check your providers config.",
         )
-    if isinstance(exc, litellm.AuthenticationError):
+    if isinstance(exc, AuthenticationError):
         return "Authentication Failed", "Invalid or missing API key. Check your configuration."
-    if isinstance(exc, litellm.RateLimitError):
+    if isinstance(exc, RateLimitError):
         return "Rate Limit Exceeded", "Too many requests. Please wait and try again."
-    if isinstance(exc, litellm.Timeout):
+    if isinstance(exc, Timeout):
         return "Request Timed Out", "The API did not respond in time. Try again later."
-    if isinstance(exc, litellm.APIConnectionError):
+    if isinstance(exc, APIConnectionError):
         return "Connection Failed", "Could not reach the API server. Check your network and base_url."
-    if isinstance(exc, litellm.BadRequestError):
+    if isinstance(exc, BadRequestError):
         return "Invalid Request", detail or "The request was rejected by the API."
-    if isinstance(exc, litellm.InternalServerError):
+    if isinstance(exc, InternalServerError):
         return "Server Error", detail or "The API server encountered an internal error."
-    if isinstance(exc, litellm.ServiceUnavailableError):
+    if isinstance(exc, ServiceUnavailableError):
         return "Service Unavailable", detail or "The API service is temporarily unavailable."
-    if isinstance(exc, litellm.BadGatewayError):
+    if isinstance(exc, BadGatewayError):
         return "Bad Gateway", detail or "The API server returned a bad gateway error."
-    if isinstance(exc, litellm.APIError):
+    if isinstance(exc, APIError):
         return "API Error", detail or "The API returned an error."
     if isinstance(exc, httpx.TimeoutException):
         return "Request Timed Out", "The API did not respond in time. Try again later."
@@ -86,19 +98,19 @@ def _raise_first_task_exception(results: tuple[Any, ...]) -> None:
 def _is_transient_error(exc: Exception) -> bool:
     """Check if an exception is a transient provider error worth retrying."""
     transient_types = (
-        litellm.RateLimitError,
-        litellm.Timeout,
-        litellm.APIConnectionError,
-        litellm.InternalServerError,
-        litellm.ServiceUnavailableError,
-        litellm.BadGatewayError,
+        RateLimitError,
+        Timeout,
+        APIConnectionError,
+        InternalServerError,
+        ServiceUnavailableError,
+        BadGatewayError,
     )
     if isinstance(exc, transient_types):
         return True
     if isinstance(exc, httpx.TimeoutException):
         return True
     if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code if exc.response is not None else None
+        status = exc.response.status_code
         return status in (408, 429, 500, 502, 503, 504)
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):
@@ -131,7 +143,7 @@ def _patch_litellm_raise_on_model_repetition() -> None:
 
     _orig = CustomStreamWrapper.raise_on_model_repetition
 
-    def _safe_raise_on_model_repetition(self) -> None:
+    def _safe_raise_on_model_repetition(self: Any) -> None:
         if len(self.chunks) < 2:
             return
         last = None
@@ -154,8 +166,8 @@ def _patch_litellm_raise_on_model_repetition() -> None:
             self._repeated_messages_count += 1
         else:
             self._repeated_messages_count = 1
-        if self._repeated_messages_count >= litellm.REPEATED_STREAMING_CHUNK_LIMIT:
-            raise litellm.InternalServerError(
+        if self._repeated_messages_count >= REPEATED_STREAMING_CHUNK_LIMIT:
+            raise InternalServerError(
                 message=f"The model is repeating the same chunk = {last_content}.",
                 model="",
                 llm_provider="",
@@ -202,7 +214,7 @@ def _is_benign_midstream_litellm_error(exc: MidStreamFallbackError) -> bool:
     return orig is not None and _MID_STREAM_BENIGN_SIGNATURE in str(orig)
 
 
-def _validate_tool_args(tool: Tool, args: dict) -> str | None:
+def _validate_tool_args(tool: Tool, args: dict[str, Any]) -> str | None:
     """Return error message if args are invalid, None if ok."""
     known = set(tool.parameters.properties.keys())
     unknown = set(args.keys()) - known
@@ -335,7 +347,7 @@ def _history_to_api_messages(messages: list[Message]) -> list[dict[str, Any]]:
         # An emitted non-tool message breaks the sequence: results from a
         # later turn can no longer legitimately pair with earlier tool_calls.
         # A new assistant tool_calls block resets pending to its own ids.
-        pending_tool_call_ids = {tc.get("id") for tc in msg.tool_calls if tc.get("id")} if msg.tool_calls else set()
+        pending_tool_call_ids = {x for x in (tc.get("id") for tc in msg.tool_calls) if x is not None} if msg.tool_calls else set()
 
     api_messages: list[dict[str, Any]] = []
     last_assistant_tool_call_ids: set[str] = set()
@@ -395,14 +407,14 @@ def _history_to_api_messages(messages: list[Message]) -> list[dict[str, Any]]:
                     continue
         api_messages.append(d)
         if msg.tool_calls:
-            last_assistant_tool_call_ids = {tc.get("id") for tc in msg.tool_calls if tc.get("id")}
+            last_assistant_tool_call_ids = {x for x in (tc.get("id") for tc in msg.tool_calls) if x is not None}
         else:
             last_assistant_tool_call_ids = set()
     return api_messages
 
 
 async def _execute_tool(
-    tc: dict,
+    tc: dict[str, Any],
     filtered_tools: dict[str, dict[str, Any]],
 ) -> Message:
     """Execute a single tool call and return the result message."""
@@ -428,7 +440,7 @@ async def _execute_tool(
             )
         else:
             tool_def = filtered_tools[name]["tool"]
-            validation_error = _validate_tool_args(tool_def, args)
+            validation_error = _validate_tool_args(tool_def, cast(dict[str, Any], args))
             if validation_error:
                 result = ExecutorResult(
                     display=f"Invalid args for {name}",
@@ -584,7 +596,7 @@ def _log_stream_termination(
     chunk_count: int,
     content: str,
     thinking: str,
-    tool_calls: list[dict],
+    tool_calls: list[dict[str, Any]],
 ) -> None:
     """Log a diagnostic summary at stream end to catch silent truncation.
 
@@ -659,7 +671,7 @@ def _log_stream_termination(
 async def _stream_task(
     response: Any,
     msg_q: asyncio.Queue[Message | None],
-    ready_q: asyncio.Queue[dict | None],
+    ready_q: asyncio.Queue[dict[str, Any] | None],
     api_messages: list[dict[str, Any]],
     assistant_appended: asyncio.Event,
     tool_calls_started: asyncio.Event,
@@ -668,7 +680,7 @@ async def _stream_task(
     try:
         thinking = ""
         content = ""
-        tool_calls: list[dict] = []
+        tool_calls: list[dict[str, Any]] = []
         emitted_tool_calls: set[int] = set()
         enqueued_tool_calls: set[int] = set()
         usage = None
@@ -686,7 +698,7 @@ async def _stream_task(
         # well-formed are appended here so the persisted assistant message and
         # the anchored api_messages entry both see them (shared list ref),
         # without mutating the raw `tool_calls` working buffer.
-        committed_tool_calls: list[dict] | None = None
+        committed_tool_calls: list[dict[str, Any]] | None = None
         committed_indices: set[int] = set()
 
         async def flush_thinking() -> None:
@@ -970,7 +982,7 @@ async def _stream_task(
 
 async def _executor_task(
     msg_q: asyncio.Queue[Message | None],
-    ready_q: asyncio.Queue[dict | None],
+    ready_q: asyncio.Queue[dict[str, Any] | None],
     api_messages: list[dict[str, Any]],
     filtered_tools: dict[str, dict[str, Any]],
     assistant_appended: asyncio.Event,
@@ -1020,10 +1032,10 @@ async def stream_response(
         [system_msg.to_dict()] + _history_to_api_messages(messages) + [dynamic_prompt.to_dict()]
     )
 
-    registry = get_tool_registry()
+    registry: dict[str, dict[str, Any]] = get_tool_registry()
     from fnmatch import fnmatch
 
-    filtered_tools = {k: v for k, v in registry.items() if any(fnmatch(k, p) for p in allowed_tools)}
+    filtered_tools: dict[str, dict[str, Any]] = {k: v for k, v in registry.items() if any(fnmatch(k, p) for p in allowed_tools)}
 
     from orchid.mcp import get_mcp_manager
 
@@ -1052,7 +1064,7 @@ async def stream_response(
 
             try:
                 response = await asyncio.wait_for(
-                    litellm.acompletion(
+                    litellm.acompletion(  # type: ignore[reportUnknownMemberType]
                         model=litellm_model,
                         messages=api_messages,
                         tools=tools_list,
@@ -1091,7 +1103,7 @@ async def stream_response(
                 raise
 
             msg_q: asyncio.Queue[Message | None] = asyncio.Queue(maxsize=1)
-            ready_q: asyncio.Queue[dict | None] = asyncio.Queue()
+            ready_q: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
             assistant_appended = asyncio.Event()
             tool_calls_started = asyncio.Event()
 

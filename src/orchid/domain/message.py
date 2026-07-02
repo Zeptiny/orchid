@@ -33,7 +33,7 @@ class Message:
     content: str
     type: MessageType = MessageType.TEXT
     display: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict[str, Any])
     usage: Usage | None = None
     tool_call_id: str | None = None
     tool_calls: list[dict[str, Any]] | None = None
@@ -88,15 +88,15 @@ class Message:
             # corruption. Explicitly extract the known fields with .get()
             # defaults so a drifted usage dict never raises TypeError and
             # aborts the whole session load (session.py:56/130).
-            src = data["usage"]
+            src: Any = data["usage"]
             if not isinstance(src, dict):
                 usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
             else:
                 usage = Usage(
-                    prompt_tokens=src.get("prompt_tokens", 0),
-                    completion_tokens=src.get("completion_tokens", 0),
-                    total_tokens=src.get("total_tokens", 0),
-                    cached_tokens=src.get("cached_tokens", 0),
+                    prompt_tokens=src.get("prompt_tokens", 0),  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+                    completion_tokens=src.get("completion_tokens", 0),  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+                    total_tokens=src.get("total_tokens", 0),  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+                    cached_tokens=src.get("cached_tokens", 0),  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
                 )
         metadata = dict(data.get("metadata", {}))
         warnings: list[str] = []

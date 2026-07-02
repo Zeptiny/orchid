@@ -1,8 +1,15 @@
+from __future__ import annotations
+
 import logging
 from functools import partial
+from typing import TYPE_CHECKING, Any, cast
 
 from textual.app import App
 from textual.command import DiscoveryHit, Hit, Hits, Matcher, Provider
+from textual.widgets import Static
+
+if TYPE_CHECKING:
+    from orchid.app import Orchid
 
 from orchid.config import (
     Config,
@@ -62,7 +69,7 @@ _MODEL_PICKER_HEADER = (
 )
 
 
-def _format_model_label(alias: str, model_id: str, metadata: dict) -> str:
+def _format_model_label(alias: str, model_id: str, metadata: dict[str, Any]) -> str:
     """Render a tabular label for the `/model` picker.
 
     Each label is a single padded row with four fixed-width columns so multiple
@@ -123,15 +130,15 @@ def _build_model_picker_items(cfg: Config, mode: str = "chat") -> list[PickerIte
     """
     items: list[PickerItem] = []
     for alias, provider_entry in cfg.providers.items():
-        if not isinstance(provider_entry, dict):
+        if not isinstance(provider_entry, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
             log.warning(
                 "Skipping provider %r: entry must be a dict, got %s",
                 alias,
                 type(provider_entry).__name__,
             )
             continue
-        models = provider_entry.get("models", {})
-        if not isinstance(models, dict):
+        models: dict[str, Any] = provider_entry.get("models", {})
+        if not isinstance(models, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
             log.warning(
                 "Skipping provider %r: 'models' must be a dict, got %s",
                 alias,
@@ -171,7 +178,8 @@ def _build_model_picker_items(cfg: Config, mode: str = "chat") -> list[PickerIte
     return items
 
 
-async def execute_command(app: App, cmd: str) -> None:
+async def execute_command(app: App[Any], cmd: str) -> None:
+    app = cast("Orchid", app)
     match cmd:
         case "/new":
             app.sessions.create()
@@ -239,8 +247,9 @@ async def execute_command(app: App, cmd: str) -> None:
 
             async def on_rename_result(result: str | None):
                 if result and result.strip():
+                    assert app.sessions.active is not None
                     app.sessions.active.name = result.strip()
-                    app.query_one("#title").update(result.strip())
+                    cast(Static, app.query_one("#title")).update(result.strip())
                     app.sessions.save_active()
 
             app.push_screen(
@@ -291,19 +300,19 @@ async def execute_command(app: App, cmd: str) -> None:
                 # mcp_servers changes that warrant a restart prompt. Only short
                 # -circuit when result is None AND mcp_servers are unchanged.
                 if result is None:
-                    current = ConfigManager._instance
+                    current = ConfigManager._instance  # pyright: ignore[reportPrivateUsage]
                     if current is None or current.mcp_servers == cfg.mcp_servers:
                         return
                     saved = current
                 else:
-                    ConfigManager._instance = result
+                    ConfigManager._instance = result  # pyright: ignore[reportPrivateUsage]
                     ConfigManager.save()
                     saved = result
                 needs_restart = saved.mcp_servers != cfg.mcp_servers
                 if needs_restart:
                     from orchid.screens.settings import ConfirmScreen
 
-                    async def on_restart_confirm(confirmed: bool | None) -> None:
+                    async def on_restart_confirm(confirmed: str | None) -> None:
                         if confirmed:
                             app.request_restart()
                         else:
@@ -402,6 +411,8 @@ async def execute_command(app: App, cmd: str) -> None:
             clear_index()
             app.notify("RAG index cleared.", severity="information")
             await app.refresh_index_status()
+        case _:
+            pass
 
 
 class SessionCommands(Provider):

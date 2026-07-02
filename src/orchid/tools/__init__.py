@@ -55,14 +55,14 @@ from orchid.tools.todo import (
 )
 from orchid.tools.web_fetch import execute_web_fetch, web_fetch_tool
 
-_TOOL_REGISTRY: dict[str, dict] | None = None
+_tool_registry: dict[str, dict[str, object]] | None = None
 
 
-def get_tool_registry() -> dict[str, dict]:
-    global _TOOL_REGISTRY
-    if _TOOL_REGISTRY is not None:
-        return _TOOL_REGISTRY
-    _TOOL_REGISTRY = {
+def get_tool_registry() -> dict[str, dict[str, object]]:
+    global _tool_registry
+    if _tool_registry is not None:
+        return _tool_registry
+    _tool_registry = {
         "read": {"tool": read_tool, "executor": execute_read_tool},
         "edit": {"tool": edit_tool, "executor": execute_edit_tool},
         "read_directory": {"tool": read_directory, "executor": execute_read_directory_tool},
@@ -88,10 +88,10 @@ def get_tool_registry() -> dict[str, dict]:
         "replace_symbol": {"tool": replace_symbol_tool, "executor": execute_replace_symbol},
         "rename_symbol": {"tool": rename_symbol_tool, "executor": execute_rename_symbol},
     }
-    return _TOOL_REGISTRY
+    return _tool_registry
 
 
 def reset_tool_registry() -> None:
     """Call after agents/skills change to rebuild on next access."""
-    global _TOOL_REGISTRY
-    _TOOL_REGISTRY = None
+    global _tool_registry
+    _tool_registry = None

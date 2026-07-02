@@ -4,6 +4,7 @@ import os
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any, cast
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ class Config:
     ast_max_file_size: int = 1_048_576
     mcp_startup_timeout: float = 60.0
     mcp_per_server_timeout: float = 10.0
-    mcp_servers: dict[str, dict] = field(
+    mcp_servers: dict[str, dict[str, Any]] = field(
         default_factory=lambda: {
             "context7": {
                 "command": "npx",
@@ -89,7 +90,7 @@ class Config:
             },
         }
     )
-    providers: dict[str, dict] = field(
+    providers: dict[str, dict[str, Any]] = field(
         default_factory=lambda: {
             "default": {
                 "base_url": "https://opencode.ai/zen/go/v1",
@@ -109,8 +110,9 @@ class Config:
         nested dataclass instances. This fix-up converts the dict to a ``RAGConfig``
         when the constructor receives a dict.
         """
-        if isinstance(self.rag, dict):
-            object.__setattr__(self, "rag", RAGConfig(**self.rag))
+        if isinstance(self.rag, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: dict from JSON deserialization
+            rag_as_dict: dict[str, Any] = self.rag  # pyright: ignore[reportAssignmentType]
+            object.__setattr__(self, "rag", RAGConfig(**rag_as_dict))  # pyright: ignore[reportUnknownArgumentType]
 
 
 _ENV_MAP = {
@@ -138,15 +140,16 @@ _RAG_ENV_MAP = {
 }
 
 
-def _load_json(path: Path) -> dict:
+def _load_json(path: Path) -> dict[str, Any]:
     try:
         with open(path) as f:
-            return json.load(f)
+            result: dict[str, Any] = json.load(f)
+            return result
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
 
-def _convert_from_dict(data: dict) -> dict:
+def _convert_from_dict(data: dict[str, Any]) -> dict[str, Any]:
     """Normalize a raw dict before constructing Config.
 
     Strips None values so they don't shadow dataclass defaults. Legacy
@@ -156,7 +159,7 @@ def _convert_from_dict(data: dict) -> dict:
     defaults (unknown top-level keys are ignored by ``ConfigManager.load``).
     Never mutates the input.
     """
-    result = dict(data)
+    result: dict[str, Any] = dict(data)
 
     for k in list(result.keys()):
         if result[k] is None:
@@ -165,7 +168,7 @@ def _convert_from_dict(data: dict) -> dict:
     return result
 
 
-def _cast_value(value: str, target_type):
+def _cast_value(value: str, target_type: type[Any]) -> Any:
     if target_type is bool:
         return value.lower() in ("true", "1", "yes")
     if target_type is int:
@@ -178,19 +181,19 @@ def _cast_value(value: str, target_type):
 
 
 def _merge_from_env(cfg: Config) -> Config:
-    values = asdict(cfg)
+    values: dict[str, Any] = asdict(cfg)
     for env_key, field_name in _ENV_MAP.items():
         raw = os.environ.get(env_key)
         if raw is not None:
-            target_type = type(values[field_name])
+            target_type: type[Any] = type(values[field_name])  # pyright: ignore[reportUnknownVariableType]
             values[field_name] = _cast_value(raw, target_type)
     # Nested RAG env overrides
-    rag_values = dict(values["rag"])
+    rag_values: dict[str, Any] = dict(values["rag"])
     for env_key, field_name in _RAG_ENV_MAP.items():
         raw = os.environ.get(env_key)
         if raw is not None:
-            target_type = type(rag_values[field_name])
-            rag_values[field_name] = _cast_value(raw, target_type)
+            rag_target_type: type[Any] = type(rag_values[field_name])  # pyright: ignore[reportUnknownVariableType]
+            rag_values[field_name] = _cast_value(raw, rag_target_type)
     values["rag"] = RAGConfig(**rag_values)
     return Config(**values)
 
@@ -210,21 +213,21 @@ def validate_config(cfg: Config) -> list[str]:
 
     for field_name in _NON_EMPTY_STRINGS:
         val = getattr(cfg, field_name)
-        if not val or not isinstance(val, str):
+        if not val or not isinstance(val, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
             errors.append(f"'{field_name}' must be a non-empty string, got {type(val).__name__}")
 
     # Validate tier_models
-    if not isinstance(cfg.tier_models, dict):
+    if not isinstance(cfg.tier_models, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'tier_models' must be a dict")
     else:
         for tier, model in cfg.tier_models.items():
-            if not isinstance(tier, str) or not tier:
+            if not isinstance(tier, str) or not tier:  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'tier_models' key must be a non-empty string, got {tier!r}")
-            if not isinstance(model, str) or not model:
+            if not isinstance(model, str) or not model:  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'tier_models.{tier}' must be a non-empty string, got {model!r}")
 
     # Validate ignored_dirs
-    if not isinstance(cfg.ignored_dirs, list):
+    if not isinstance(cfg.ignored_dirs, list):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'ignored_dirs' must be a list")
 
     # Validate int fields
@@ -241,110 +244,111 @@ def validate_config(cfg: Config) -> list[str]:
     _check_positive_float(cfg, "mcp_per_server_timeout", errors)
 
     # Validate RAG
-    if not isinstance(cfg.rag, RAGConfig):
+    if not isinstance(cfg.rag, RAGConfig):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'rag' must be a RAGConfig object")
     else:
         _check_positive_int(cfg.rag, "chunk_size", errors, prefix="rag")
         _check_nonneg_int(cfg.rag, "chunk_overlap", errors, prefix="rag")
-        if isinstance(cfg.rag.chunk_size, int) and isinstance(cfg.rag.chunk_overlap, int) and cfg.rag.chunk_overlap >= cfg.rag.chunk_size:
+        if isinstance(cfg.rag.chunk_size, int) and isinstance(cfg.rag.chunk_overlap, int) and cfg.rag.chunk_overlap >= cfg.rag.chunk_size:  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
             errors.append("'rag.chunk_overlap' must be less than 'rag.chunk_size'")
         _check_positive_int(cfg.rag, "top_k", errors, prefix="rag")
         _check_positive_int(cfg.rag, "max_file_size", errors, prefix="rag")
-        if not isinstance(cfg.rag.embedding_model, str) or not cfg.rag.embedding_model:
+        if not isinstance(cfg.rag.embedding_model, str) or not cfg.rag.embedding_model:  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
             errors.append("'rag.embedding_model' must be a non-empty string")
 
     # Validate providers
-    if not isinstance(cfg.providers, dict):
+    if not isinstance(cfg.providers, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'providers' must be a dict")
     else:
         for alias, entry in cfg.providers.items():
-            if not isinstance(alias, str) or not _PROVIDER_ALIAS_RE.match(alias):
+            if not isinstance(alias, str) or not _PROVIDER_ALIAS_RE.match(alias):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'providers.{alias}': alias must match [a-z0-9-]+ (no '/')")
             if alias in _RESERVED_PROVIDER_ALIASES:
                 errors.append(f"'providers.{alias}': alias is reserved (built-in pseudo-provider)")
-            if not isinstance(entry, dict):
+            if not isinstance(entry, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'providers.{alias}': must be a dict, got {type(entry).__name__}")
                 continue
-            base_url = entry.get("base_url")
+            base_url: Any = entry.get("base_url")
             if base_url is not None and (not isinstance(base_url, str) or not base_url):
                 errors.append(f"'providers.{alias}.base_url': must be a non-empty string")
-            api_key = entry.get("api_key")
+            api_key: Any = entry.get("api_key")
             if api_key is not None and (not isinstance(api_key, str) or not api_key):
                 errors.append(f"'providers.{alias}.api_key': must be a non-empty string")
-            api_key_env = entry.get("api_key_env")
+            api_key_env: Any = entry.get("api_key_env")
             if api_key_env is not None and (not isinstance(api_key_env, str) or not api_key_env):
                 errors.append(f"'providers.{alias}.api_key_env': must be a non-empty string")
             if api_key and api_key_env:
                 errors.append(f"'providers.{alias}': both 'api_key' and 'api_key_env' set; use only one")
-            litellm_provider = entry.get("litellm_provider")
+            litellm_provider: Any = entry.get("litellm_provider")
             if litellm_provider is not None and (not isinstance(litellm_provider, str) or not litellm_provider):
                 errors.append(f"'providers.{alias}.litellm_provider': must be a non-empty string")
-            models = entry.get("models", {})
-            if not isinstance(models, dict):
+            models: Any = entry.get("models", {})
+            if not isinstance(models, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'providers.{alias}.models': must be a dict")
             else:
-                for model_id, override in models.items():
-                    if override is not None and not isinstance(override, dict):
+                models_dict: dict[str, Any] = models  # pyright: ignore[reportAssignmentType,reportUnknownVariableType]
+                for model_id, override in models_dict.items():
+                    if override is not None and not isinstance(override, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                         errors.append(f"'providers.{alias}.models.{model_id}': override must be a dict")
 
     # Validate mcp_servers
-    if not isinstance(cfg.mcp_servers, dict):
+    if not isinstance(cfg.mcp_servers, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'mcp_servers' must be a dict")
     else:
         for name, server_cfg in cfg.mcp_servers.items():
-            if not isinstance(name, str) or not _MCP_SERVER_NAME_RE.match(name):
+            if not isinstance(name, str) or not _MCP_SERVER_NAME_RE.match(name):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'mcp_servers.{name}': name must match [a-z0-9-]+")
-            if not isinstance(server_cfg, dict):
+            if not isinstance(server_cfg, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'mcp_servers.{name}': must be a dict, got {type(server_cfg).__name__}")
                 continue
             if "url" not in server_cfg:
-                cmd = server_cfg.get("command")
+                cmd: Any = server_cfg.get("command")
                 if not isinstance(cmd, str) or not cmd:
                     errors.append(f"'mcp_servers.{name}.command': must be a non-empty string")
-                args = server_cfg.get("args", [])
-                if not isinstance(args, list):
+                args: Any = server_cfg.get("args", [])
+                if not isinstance(args, list):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                     errors.append(f"'mcp_servers.{name}.args': must be a list")
-            env = server_cfg.get("env")
-            if env is not None and not isinstance(env, dict):
+            env: Any = server_cfg.get("env")
+            if env is not None and not isinstance(env, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
                 errors.append(f"'mcp_servers.{name}.env': must be a dict")
 
     # Validate theme and personality (basic existence check — full validation done at load time)
-    if not isinstance(cfg.theme, str) or not cfg.theme:
+    if not isinstance(cfg.theme, str) or not cfg.theme:  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'theme' must be a non-empty string")
-    if not isinstance(cfg.personality, str) or not cfg.personality:
+    if not isinstance(cfg.personality, str) or not cfg.personality:  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: validating runtime input
         errors.append("'personality' must be a non-empty string")
 
     return errors
 
 
-def _check_positive_int(obj, field: str, errors: list[str], prefix: str | None = None) -> None:
+def _check_positive_int(obj: Any, field: str, errors: list[str], prefix: str | None = None) -> None:
     val = getattr(obj, field)
     key = f"{prefix}.{field}" if prefix else f"'{field}'"
-    if not isinstance(val, int) or isinstance(val, bool):
+    if not isinstance(val, int) or isinstance(val, bool):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: bool is subclass of int
         errors.append(f"{key} must be a positive integer, got {type(val).__name__}")
     elif val <= 0:
         errors.append(f"{key} must be a positive integer, got {val}")
 
 
-def _check_nonneg_int(obj, field: str, errors: list[str], prefix: str | None = None) -> None:
+def _check_nonneg_int(obj: Any, field: str, errors: list[str], prefix: str | None = None) -> None:
     val = getattr(obj, field)
     key = f"{prefix}.{field}" if prefix else f"'{field}'"
-    if not isinstance(val, int) or isinstance(val, bool):
+    if not isinstance(val, int) or isinstance(val, bool):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: bool is subclass of int
         errors.append(f"{key} must be a non-negative integer, got {type(val).__name__}")
     elif val < 0:
         errors.append(f"{key} must be a non-negative integer, got {val}")
 
 
-def _check_positive_float(obj, field: str, errors: list[str], prefix: str | None = None) -> None:
+def _check_positive_float(obj: Any, field: str, errors: list[str], prefix: str | None = None) -> None:
     val = getattr(obj, field)
     key = f"{prefix}.{field}" if prefix else f"'{field}'"
-    if not isinstance(val, (int, float)) or isinstance(val, bool):
+    if not isinstance(val, (int, float)) or isinstance(val, bool):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: bool is subclass of int
         errors.append(f"{key} must be a positive number, got {type(val).__name__}")
     elif val <= 0:
         errors.append(f"{key} must be a positive number, got {val}")
 
 
-def _deep_merge_provider_dict(home: dict, project: dict) -> dict:
+def _deep_merge_provider_dict(home: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
     """Recursively merge two provider-dict-shaped values (`providers` or `mcp_servers`).
 
     For each alias present in either side:
@@ -358,7 +362,7 @@ def _deep_merge_provider_dict(home: dict, project: dict) -> dict:
     Anything other than a dict on either side falls back to the project value
     (matches the prior `mcp_servers` merge behavior).
     """
-    result: dict[str, dict] = {}
+    result: dict[str, Any] = {}
     for alias in set(home) | set(project):
         if alias not in project:
             result[alias] = home[alias]
@@ -366,15 +370,15 @@ def _deep_merge_provider_dict(home: dict, project: dict) -> dict:
         if alias not in home:
             result[alias] = project[alias]
             continue
-        home_entry = home[alias]
-        project_entry = project[alias]
-        if not isinstance(home_entry, dict) or not isinstance(project_entry, dict):
+        home_entry: Any = home[alias]
+        project_entry: Any = project[alias]
+        if not isinstance(home_entry, dict) or not isinstance(project_entry, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: values from JSON may be any type
             result[alias] = project_entry
             continue
-        merged_entry = {**home_entry, **project_entry}
-        home_models = home_entry.get("models")
-        project_models = project_entry.get("models")
-        if isinstance(home_models, dict) and isinstance(project_models, dict):
+        merged_entry: dict[str, Any] = {**home_entry, **project_entry}
+        home_models: Any = home_entry.get("models")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        project_models: Any = project_entry.get("models")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        if isinstance(home_models, dict) and isinstance(project_models, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # defensive: values from JSON may be any type
             merged_entry["models"] = {**home_models, **project_models}
         result[alias] = merged_entry
     return result
@@ -398,36 +402,36 @@ class ConfigManager:
             return cls._instance
 
         defaults = Config()
-        merged = asdict(defaults)
+        merged: dict[str, Any] = asdict(defaults)
 
-        home = _load_json(HOME_CONFIG_PATH)
+        home: dict[str, Any] = _load_json(HOME_CONFIG_PATH)
         home = _convert_from_dict(home)
         for k, v in home.items():
             if k not in merged:
                 continue
             if k in _DEEP_MERGE_KEYS and isinstance(v, dict) and isinstance(merged.get(k), dict):
-                merged[k] = _deep_merge_provider_dict(merged[k], v)
+                merged[k] = _deep_merge_provider_dict(merged[k], cast(dict[str, Any], v))
             elif isinstance(v, dict) and isinstance(merged.get(k), dict):
                 # Deep-merge nested dicts even outside _DEEP_MERGE_KEYS so
                 # partial nested configs (e.g. project setting only `rag.top_k`)
                 # merge with home-level values instead of replacing them wholesale.
-                merged[k] = _deep_merge_provider_dict(merged[k], v)
+                merged[k] = _deep_merge_provider_dict(merged[k], cast(dict[str, Any], v))
             else:
                 merged[k] = v
 
         project_path = Path.cwd() / PROJECT_CONFIG_NAME
-        project = _load_json(project_path)
+        project: dict[str, Any] = _load_json(project_path)
         project = _convert_from_dict(project)
         for k, v in project.items():
             if k not in merged:
                 continue
             if k in _DEEP_MERGE_KEYS and isinstance(v, dict) and isinstance(merged.get(k), dict):
-                merged[k] = _deep_merge_provider_dict(merged[k], v)
+                merged[k] = _deep_merge_provider_dict(merged[k], cast(dict[str, Any], v))
             elif isinstance(v, dict) and isinstance(merged.get(k), dict):
                 # Deep-merge nested dicts even outside _DEEP_MERGE_KEYS so
                 # partial nested configs (e.g. project setting only `rag.top_k`)
                 # merge with home-level values instead of replacing them wholesale.
-                merged[k] = _deep_merge_provider_dict(merged[k], v)
+                merged[k] = _deep_merge_provider_dict(merged[k], cast(dict[str, Any], v))
             else:
                 merged[k] = v
 

@@ -9,8 +9,8 @@ import aiofiles
 
 from orchid.config import get_config
 from orchid.domain.tool import ExecutorResult, Tool, ToolParameter, ToolParameterProperties
-from orchid.tools._xml_utils import _count_diff_changes
-from orchid.tools.ast import _format_edit_result, _trigger_post_write_callbacks, atomic_write
+from orchid.tools._xml_utils import count_diff_changes
+from orchid.tools.ast import atomic_write, format_edit_result, trigger_post_write_callbacks
 from orchid.utils import directory_tree
 
 logger = logging.getLogger(__name__)
@@ -119,7 +119,7 @@ async def execute_edit_tool(
         if old_string not in content:
             return ExecutorResult(
                 display=f"String not found in {file_path}",
-                content=_format_edit_result(
+                content=format_edit_result(
                     file_path,
                     success=False,
                     replacements=0,
@@ -135,7 +135,7 @@ async def execute_edit_tool(
         if not replace_all and match_count > 1:
             return ExecutorResult(
                 display=f"Multiple matches in {file_path}",
-                content=_format_edit_result(
+                content=format_edit_result(
                     file_path,
                     success=False,
                     replacements=0,
@@ -168,17 +168,17 @@ async def execute_edit_tool(
         )
         diff_text = "\n".join(_normalize_diff_lines(diff))
 
-        cb_failures = await _trigger_post_write_callbacks(file_path)
+        cb_failures = await trigger_post_write_callbacks(file_path)
 
         display = f"Edited {file_path}"
         added = 0
         removed = 0
         if diff_text:
-            added, removed = _count_diff_changes(diff_text)
+            added, removed = count_diff_changes(diff_text)
             display = f"{display} (+{added} -{removed})"
         if cb_failures:
             display += f" [warnings: {len(cb_failures)} callback(s) failed]"
-        result = _format_edit_result(
+        result = format_edit_result(
             file_path,
             success=True,
             replacements=replacements,
@@ -191,7 +191,7 @@ async def execute_edit_tool(
     except Exception as e:
         return ExecutorResult(
             display=f"Edit error {file_path}",
-            content=_format_edit_result(
+            content=format_edit_result(
                 file_path,
                 success=False,
                 replacements=0,
@@ -332,7 +332,7 @@ async def execute_write_tool(file_path: str, content: str) -> ExecutorResult:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, atomic_write, str(path), content)
 
-        cb_failures = await _trigger_post_write_callbacks(str(path))
+        cb_failures = await trigger_post_write_callbacks(str(path))
 
         lines = content.splitlines()
         display = f"Wrote {len(lines)} lines to {path}"

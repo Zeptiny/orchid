@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 
 class AgentTypes(Enum):
@@ -69,10 +70,10 @@ class Agent:
     tier: ModelTier
     description: str
     system_prompt: str
-    allowed_tools: list[str] = field(default_factory=list)
-    allowed_skills: list[str] = field(default_factory=list)
+    allowed_tools: list[str] = field(default_factory=list[str])
+    allowed_skills: list[str] = field(default_factory=list[str])
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "type": self.type.value.lower(),
@@ -84,7 +85,7 @@ class Agent:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Agent":
+    def from_dict(cls, data: dict[str, Any]) -> "Agent":
         return cls(
             name=data["name"],
             type=AgentTypes.from_str(data["type"]),

@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
+from typing import Any
 
 from orchid.config import HOME_CONFIG_DIR
 
@@ -16,9 +17,9 @@ def ensure_sessions_dir() -> Path:
     return SESSIONS_DIR
 
 
-def save_session(data: dict) -> None:
+def save_session(data: dict[str, Any]) -> None:
     """Save a session dict to ~/.orchid/sessions/<uuid>.json atomically."""
-    session_id = data["id"]
+    session_id: str = data["id"]
     ensure_sessions_dir()
     path = SESSIONS_DIR / f"{session_id}.json"
     tmp = path.with_suffix(".tmp")
@@ -38,7 +39,7 @@ def save_session(data: dict) -> None:
         raise
 
 
-def load_session(session_id: str) -> dict | None:
+def load_session(session_id: str) -> dict[str, Any] | None:
     """Load a session dict from disk by ID. Returns None if not found."""
     path = SESSIONS_DIR / f"{session_id}.json"
     if not path.exists():
@@ -51,14 +52,14 @@ def load_session(session_id: str) -> dict | None:
         return None
 
 
-def list_saved_sessions() -> list[dict]:
+def list_saved_sessions() -> list[dict[str, Any]]:
     """Return metadata for all saved sessions (id, name, model) sorted by most recent chains."""
     ensure_sessions_dir()
-    sessions = []
+    sessions: list[dict[str, Any]] = []
     for path in SESSIONS_DIR.glob("*.json"):
         try:
             with open(path) as f:
-                data = json.load(f)
+                data: dict[str, Any] = json.load(f)
             # Extract just the metadata we need for listing
             sessions.append({
                 "id": data["id"],

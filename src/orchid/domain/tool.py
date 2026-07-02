@@ -30,8 +30,8 @@ class Tool:
     type: str = "function"
     strict: bool = True
 
-    def to_dict(self) -> dict:
-        properties = {}
+    def to_dict(self) -> dict[str, Any]:
+        properties: dict[str, dict[str, Any]] = {}
         for k, v in self.parameters.properties.items():
             prop: dict[str, Any] = {"description": v.description}
             if v.type:

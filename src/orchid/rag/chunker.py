@@ -32,7 +32,7 @@ def _line_break_offsets(lines: list[str]) -> list[int]:
 
 def _find_break_points(lines: list[str]) -> list[int]:
     """Find natural break points (blank lines) for smarter chunking."""
-    breaks = []
+    breaks: list[int] = []
     for i, line in enumerate(lines):
         if not line.strip():
             breaks.append(i)

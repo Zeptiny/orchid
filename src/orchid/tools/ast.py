@@ -6,6 +6,7 @@ import stat
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 from xml.sax.saxutils import escape
 
 import tree_sitter
@@ -14,7 +15,7 @@ from orchid.ast.indexer import ensure_indexed
 from orchid.ast.parser import lang_for_extension, load_query_file, parse_file, run_query
 from orchid.ast.store import ASTStore
 from orchid.domain.tool import ExecutorResult, Tool, ToolParameter, ToolParameterProperties
-from orchid.tools._xml_utils import _cdata_text, _count_diff_changes, _xml_attr
+from orchid.tools._xml_utils import cdata_text, count_diff_changes, xml_attr
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ def _generate_diff(old: str, new: str, path: str) -> str:
     return "\n".join(diff)
 
 
-def _format_edit_result(
+def format_edit_result(
     file_path: str,
     *,
     success: bool,
@@ -118,7 +119,7 @@ def _format_edit_result(
     replace_all: bool = False,
 ) -> str:
     attrs = [
-        f'path="{_xml_attr(file_path)}"',
+        f'path="{xml_attr(file_path)}"',
         f'success="{str(success).lower()}"',
         f'replacements="{replacements}"',
         f'replace_all="{str(replace_all).lower()}"',
@@ -126,13 +127,13 @@ def _format_edit_result(
         f'removed="{removed}"',
     ]
     if error:
-        attrs.append(f'error="{_xml_attr(error)}"')
+        attrs.append(f'error="{xml_attr(error)}"')
 
     lines = [f"<edit_result {' '.join(attrs)}>"]
     if message:
-        lines.extend(["<message><![CDATA[", _cdata_text(message), "]]></message>"])
+        lines.extend(["<message><![CDATA[", cdata_text(message), "]]></message>"])
     if diff_text:
-        lines.extend(['<diff format="unified"><![CDATA[', _cdata_text(diff_text), "]]></diff>"])
+        lines.extend(['<diff format="unified"><![CDATA[', cdata_text(diff_text), "]]></diff>"])
     else:
         lines.append('<diff format="unified" />')
     lines.append("</edit_result>")
@@ -229,7 +230,7 @@ def _atomic_write(file_path: str, content: str) -> None:
 atomic_write = _atomic_write
 
 
-async def _trigger_post_write_callbacks(file_path: str) -> list[str]:
+async def trigger_post_write_callbacks(file_path: str) -> list[str]:
     """Run all post-write callbacks and return a list of failure messages."""
     failures: list[str] = []
     for cb in post_write_callbacks:
@@ -375,7 +376,7 @@ async def execute_get_file_skeleton(file_path: str) -> ExecutorResult:
         if not filepath.exists():
             return ExecutorResult(
                 display=f"File not found: {file_path}",
-                content=f'<ast_error tool="get_file_skeleton" file="{_xml_attr(file_path)}">'
+                content=f'<ast_error tool="get_file_skeleton" file="{xml_attr(file_path)}">'
                 f"File not found: {escape(file_path)}</ast_error>",
             )
 
@@ -386,7 +387,7 @@ async def execute_get_file_skeleton(file_path: str) -> ExecutorResult:
         captures = run_query(tree, lang_name, query_text, content)
 
         content_bytes = content.encode("utf-8")
-        definitions = []
+        definitions: list[tuple[int, str, tree_sitter.Node | None]] = []
         for cap_name, results in captures.items():
             if cap_name.startswith("name.definition."):
                 for r in results:
@@ -396,15 +397,15 @@ async def execute_get_file_skeleton(file_path: str) -> ExecutorResult:
         if not definitions:
             return ExecutorResult(
                 display=f"No definitions in {file_path}",
-                content=f'<file_skeleton file="{_xml_attr(file_path)}" definitions="0">\n'
+                content=f'<file_skeleton file="{xml_attr(file_path)}" definitions="0">\n'
                 "No definitions found.\n</file_skeleton>",
             )
 
         definitions.sort(key=lambda x: x[0])
 
-        lines_buf = []
+        lines_buf: list[str] = []
         lines_buf.append(
-            f'<file_skeleton file="{_xml_attr(file_path)}" definitions="{len(definitions)}">'
+            f'<file_skeleton file="{xml_attr(file_path)}" definitions="{len(definitions)}">'
         )
         prev_line = None
         for line_num, name, parent_node in definitions:
@@ -440,14 +441,14 @@ async def execute_get_file_skeleton(file_path: str) -> ExecutorResult:
     except ValueError as e:
         return ExecutorResult(
             display=f"Unsupported file type: {file_path}",
-            content=f'<ast_error tool="get_file_skeleton" file="{_xml_attr(file_path)}">'
+            content=f'<ast_error tool="get_file_skeleton" file="{xml_attr(file_path)}">'
             f"{escape(str(e))}</ast_error>",
         )
     except Exception as e:
         logger.warning("get_file_skeleton error: %s", e)
         return ExecutorResult(
             display=f"Error: {file_path}",
-            content=f'<ast_error tool="get_file_skeleton" file="{_xml_attr(file_path)}">'
+            content=f'<ast_error tool="get_file_skeleton" file="{xml_attr(file_path)}">'
             f"{escape(str(e))}</ast_error>",
         )
 
@@ -460,7 +461,7 @@ async def execute_get_function(
         if not filepath.exists():
             return ExecutorResult(
                 display=f"File not found: {file_path}",
-                content=f'<ast_error tool="get_function" file="{_xml_attr(file_path)}">'
+                content=f'<ast_error tool="get_function" file="{xml_attr(file_path)}">'
                 f"File not found: {escape(file_path)}</ast_error>",
             )
 
@@ -489,7 +490,7 @@ async def execute_get_function(
         name_caps = captures.get("name.definition.function", [])
         method_caps = captures.get("name.definition.method", [])
 
-        found_functions = []
+        found_functions: list[str] = []
         for target_name in names:
             matched = False
             for r in name_caps + method_caps:
@@ -538,16 +539,16 @@ async def execute_get_function(
 
                 if last_hash is not None and last_hash == current_hash:
                     found_functions.append(
-                        f'<function name="{_xml_attr(target_name)}" '
-                        f'file="{_xml_attr(file_path)}" '
+                        f'<function name="{xml_attr(target_name)}" '
+                        f'file="{xml_attr(file_path)}" '
                         f'start_line="{start_line}" end_line="{end_line}">\n'
                         "No changes have been made since last retrieval.\n</function>"
                     )
                 else:
-                    parts = []
+                    parts: list[str] = []
                     parts.append(
-                        f'<function name="{_xml_attr(target_name)}" '
-                        f'file="{_xml_attr(file_path)}" '
+                        f'<function name="{xml_attr(target_name)}" '
+                        f'file="{xml_attr(file_path)}" '
                         f'start_line="{start_line}" end_line="{end_line}">'
                     )
                     if imports_text:
@@ -569,13 +570,13 @@ async def execute_get_function(
 
             if not matched:
                 found_functions.append(
-                    f'<function name="{_xml_attr(target_name)}" '
-                    f'file="{_xml_attr(file_path)}" status="not_found">\n'
+                    f'<function name="{xml_attr(target_name)}" '
+                    f'file="{xml_attr(file_path)}" status="not_found">\n'
                     f"Function '{escape(target_name)}' not found.\n</function>"
                 )
 
         content_xml = (
-            f'<functions file="{_xml_attr(file_path)}" count="{len(found_functions)}">\n'
+            f'<functions file="{xml_attr(file_path)}" count="{len(found_functions)}">\n'
             + "\n".join(found_functions)
             + "\n</functions>"
         )
@@ -588,14 +589,14 @@ async def execute_get_function(
     except ValueError as e:
         return ExecutorResult(
             display=f"Unsupported file type: {file_path}",
-            content=f'<ast_error tool="get_function" file="{_xml_attr(file_path)}">'
+            content=f'<ast_error tool="get_function" file="{xml_attr(file_path)}">'
             f"{escape(str(e))}</ast_error>",
         )
     except Exception as e:
         logger.warning("get_function error: %s", e)
         return ExecutorResult(
             display=f"Error: {file_path}",
-            content=f'<ast_error tool="get_function" file="{_xml_attr(file_path)}">'
+            content=f'<ast_error tool="get_function" file="{xml_attr(file_path)}">'
             f"{escape(str(e))}</ast_error>",
         )
 
@@ -625,24 +626,24 @@ async def execute_find_symbol_references(
         project_path = str(Path.cwd())
         store = ASTStore(project_path)
 
-        symbols = await loop.run_in_executor(
+        symbols: list[dict[str, Any]] = await loop.run_in_executor(
             None, store.get_symbols_by_name, name, type_filter
         )
 
         if not symbols:
             return ExecutorResult(
                 display=f"No references for '{name}'",
-                content=f'<symbol_references name="{_xml_attr(name)}" count="0" />',
+                content=f'<symbol_references name="{xml_attr(name)}" count="0" />',
             )
 
         e = escape
-        parts = []
+        parts: list[str] = []
         for s in symbols:
             parts.append(
-                f'  <symbol name="{_xml_attr(s["name"])}" '
+                f'  <symbol name="{xml_attr(s["name"])}" '
                 f'type="{s["type"]}" '
                 f'kind="{s["kind"]}" '
-                f'file="{_xml_attr(s["file_path"])}" '
+                f'file="{xml_attr(s["file_path"])}" '
                 f'start_line="{s["start_line"] + 1}" '
                 f'start_column="{s["start_column"]}" '
                 f'end_line="{s["end_line"] + 1}" '
@@ -650,7 +651,7 @@ async def execute_find_symbol_references(
             )
 
         result_xml = (
-            f'<symbol_references name="{_xml_attr(name)}" '
+            f'<symbol_references name="{xml_attr(name)}" '
             f'type_filter="{type_filter}" count="{len(symbols)}">\n'
             + "\n".join(parts)
             + "\n</symbol_references>"
@@ -680,7 +681,7 @@ async def execute_replace_symbol(
         if not filepath.exists():
             return ExecutorResult(
                 display=f"File not found: {file_path}",
-                content=_format_edit_result(
+                content=format_edit_result(
                     file_path,
                     success=False,
                     replacements=0,
@@ -707,7 +708,7 @@ async def execute_replace_symbol(
         if not target_caps:
             return ExecutorResult(
                 display=f"Symbol '{name}' not found in {file_path}",
-                content=_format_edit_result(
+                content=format_edit_result(
                     file_path,
                     success=False,
                     replacements=0,
@@ -718,7 +719,7 @@ async def execute_replace_symbol(
                 ),
             )
 
-        replacements_list = []
+        replacements_list: list[tuple[int, int]] = []
         parent_contexts: list[str] = []
         for r in target_caps:
             if r.node.parent is None:
@@ -766,7 +767,7 @@ async def execute_replace_symbol(
         if not replacements_list:
             return ExecutorResult(
                 display=f"Symbol '{name}' not found in {file_path}",
-                content=_format_edit_result(
+                content=format_edit_result(
                     file_path,
                     success=False,
                     replacements=0,
@@ -781,7 +782,7 @@ async def execute_replace_symbol(
         # ask the user to disambiguate rather than silently replacing all.
         unique_contexts = set(parent_contexts)
         if len(replacements_list) > 1 and len(unique_contexts) > 1:
-            locations = []
+            locations: list[str] = []
             for ctx, (_, end) in zip(parent_contexts, replacements_list, strict=False):
                 # Compute line number from byte offset.
                 line_num = content_bytes[:end].count(b"\n") + 1
@@ -789,7 +790,7 @@ async def execute_replace_symbol(
             ctx_list = "\n".join(locations)
             return ExecutorResult(
                 display=f"Multiple '{name}' definitions found — disambiguate",
-                content=_format_edit_result(
+                content=format_edit_result(
                     file_path,
                     success=False,
                     replacements=0,
@@ -820,7 +821,7 @@ async def execute_replace_symbol(
         if new_content == content:
             return ExecutorResult(
                 display=f"No changes for '{name}' in {file_path}",
-                content=_format_edit_result(
+                content=format_edit_result(
                     file_path,
                     success=True,
                     replacements=0,
@@ -833,9 +834,9 @@ async def execute_replace_symbol(
         _atomic_write(file_path, new_content)
 
         diff_text = _generate_diff(content, new_content, file_path)
-        added, removed = _count_diff_changes(diff_text)
+        added, removed = count_diff_changes(diff_text)
 
-        cb_failures = await _trigger_post_write_callbacks(file_path)
+        cb_failures = await trigger_post_write_callbacks(file_path)
 
         msg = f"Replaced '{name}' in {file_path} (+{added} -{removed})"
         if cb_failures:
@@ -843,7 +844,7 @@ async def execute_replace_symbol(
 
         return ExecutorResult(
             display=msg,
-            content=_format_edit_result(
+            content=format_edit_result(
                 file_path,
                 success=True,
                 replacements=len(replacements_list),
@@ -857,7 +858,7 @@ async def execute_replace_symbol(
     except ValueError as e:
         return ExecutorResult(
             display=f"Unsupported file type: {file_path}",
-            content=_format_edit_result(
+            content=format_edit_result(
                 file_path,
                 success=False,
                 replacements=0,
@@ -871,7 +872,7 @@ async def execute_replace_symbol(
         logger.warning("replace_symbol error: %s", e)
         return ExecutorResult(
             display=f"Error replacing '{name}'",
-            content=_format_edit_result(
+            content=format_edit_result(
                 file_path,
                 success=False,
                 replacements=0,
@@ -905,7 +906,7 @@ async def execute_rename_symbol(name: str, new_name: str) -> ExecutorResult:
         project_path = str(Path.cwd())
         store = ASTStore(project_path)
 
-        symbols = await loop.run_in_executor(
+        symbols: list[dict[str, Any]] = await loop.run_in_executor(
             None, store.get_symbols_by_name, name, "both"
         )
 
@@ -917,7 +918,7 @@ async def execute_rename_symbol(name: str, new_name: str) -> ExecutorResult:
                 f"No files modified.</ast_error>",
             )
 
-        by_file: dict[str, list[dict]] = {}
+        by_file: dict[str, list[dict[str, Any]]] = {}
         for s in symbols:
             by_file.setdefault(s["file_path"], []).append(s)
 
@@ -950,14 +951,14 @@ async def execute_rename_symbol(name: str, new_name: str) -> ExecutorResult:
 
             file_replacements = 0
             for s in sorted_syms:
-                line_idx = s["start_line"]
-                byte_col = s["start_column"]
+                line_idx: int = s["start_line"]
+                byte_col: int = s["start_column"]
                 if line_idx >= len(lines):
                     continue
-                line = lines[line_idx]
+                line: str = lines[line_idx]
 
                 # P0 #2: Convert byte-based column to character-based column.
-                line_bytes = line.encode("utf-8")
+                line_bytes: bytes = line.encode("utf-8")
                 if byte_col > len(line_bytes):
                     continue
                 char_col = len(line_bytes[:byte_col].decode("utf-8", errors="replace"))
@@ -992,7 +993,7 @@ async def execute_rename_symbol(name: str, new_name: str) -> ExecutorResult:
         # Phase 2: write all files. Track successes and failures.
         total_added = 0
         total_removed = 0
-        edit_results = []
+        edit_results: list[str] = []
 
         for rel_path, abs_path, content, new_content, file_replacements in planned:
             try:
@@ -1001,19 +1002,19 @@ async def execute_rename_symbol(name: str, new_name: str) -> ExecutorResult:
                 failed_files.append(rel_path)
                 logger.warning("rename_symbol write failed for %s: %s", rel_path, write_err)
                 edit_results.append(
-                    f'<edit_result path="{_xml_attr(rel_path)}" success="false" '
+                    f'<edit_result path="{xml_attr(rel_path)}" success="false" '
                     f'replacements="0" replace_all="false" '
                     f'added="0" removed="0" '
-                    f'error="{_xml_attr(str(write_err))}" />'
+                    f'error="{xml_attr(str(write_err))}" />'
                 )
                 continue
 
             diff_text = _generate_diff(content, new_content, rel_path)
-            added, removed = _count_diff_changes(diff_text)
+            added, removed = count_diff_changes(diff_text)
             total_added += added
             total_removed += removed
 
-            cb_failures = await _trigger_post_write_callbacks(rel_path)
+            cb_failures = await trigger_post_write_callbacks(rel_path)
             if cb_failures:
                 failed_files.append(rel_path)
                 logger.warning(
@@ -1023,10 +1024,10 @@ async def execute_rename_symbol(name: str, new_name: str) -> ExecutorResult:
                 )
 
             edit_results.append(
-                f'<edit_result path="{_xml_attr(rel_path)}" success="true" '
+                f'<edit_result path="{xml_attr(rel_path)}" success="true" '
                 f'replacements="{file_replacements}" replace_all="false" '
                 f'added="{added}" removed="{removed}">\n'
-                f'<diff format="unified"><![CDATA[{_cdata_text(diff_text)}]]></diff>\n'
+                f'<diff format="unified"><![CDATA[{cdata_text(diff_text)}]]></diff>\n'
                 f"</edit_result>"
             )
 
@@ -1039,8 +1040,8 @@ async def execute_rename_symbol(name: str, new_name: str) -> ExecutorResult:
 
         overall_success = len(failed_files) == 0
         result_xml = (
-            f'<rename_result name="{_xml_attr(name)}" '
-            f'new_name="{_xml_attr(new_name)}" '
+            f'<rename_result name="{xml_attr(name)}" '
+            f'new_name="{xml_attr(new_name)}" '
             f'files="{len(edit_results)}" '
             f'total_added="{total_added}" total_removed="{total_removed}" '
             f'success="{str(overall_success).lower()}">\n'
