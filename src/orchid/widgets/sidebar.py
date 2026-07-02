@@ -294,6 +294,7 @@ class Sidebar(Vertical):
         self._subagent_records: list = []
         self._bg_cmd_records: list = []
         self._expanded_bg_cmd_id: int | None = None
+        self._bg_cmd_label_cache: dict[int, str] = {}
 
     def compose(self):
         yield Static("Tokens", id="sidebar-tokens-label")
@@ -803,9 +804,18 @@ class Sidebar(Vertical):
 
     @staticmethod
     def _format_age(seconds: float) -> str:
-        """Format a monotonic-time age into a human-readable string."""
+        """Format a monotonic-time age into a human-readable string.
+
+        Rounds to reduce update frequency: 5s buckets under 1m, 1m buckets
+        under 1h, so the formatted string changes less often and avoids
+        triggering unnecessary widget repaints.
+        """
+        if seconds < 5:
+            return "now"
         if seconds < 60:
-            return f"{int(seconds)}s ago"
+            # Round to nearest 5s to reduce churn
+            rounded = int(seconds // 5) * 5
+            return f"{rounded}s ago"
         if seconds < 3600:
             return f"{int(seconds / 60)}m ago"
         return f"{int(seconds / 3600)}h ago"
@@ -879,17 +889,31 @@ class Sidebar(Vertical):
         )
 
         if not structure_changed:
-            # Label-only updates (age, owner, status)
+            # Label-only updates (age, owner, status) — only update if text changed
             for child in container.children:
                 if isinstance(child, NavEntry) and "bg-cmd-entry" in child.classes:
-                    r = records_by_id.get(int(child.view_id))
+                    try:
+                        cmd_id = int(child.view_id)
+                    except (ValueError, TypeError):
+                        continue
+                    r = records_by_id.get(cmd_id)
                     if r:
-                        child.update(self._format_bg_entry(r))
-                elif isinstance(child, Collapsible):
+                        new_text = self._format_bg_entry(r)
+                        if self._bg_cmd_label_cache.get(cmd_id) != new_text:
+                            self._bg_cmd_label_cache[cmd_id] = new_text
+                            child.update(new_text)
+                elif isinstance(child, Collapsible) and "finished-collapse" in child.classes:
                     for entry in child.query(NavEntry):
-                        r = records_by_id.get(int(entry.view_id))
+                        try:
+                            cmd_id = int(entry.view_id)
+                        except (ValueError, TypeError):
+                            continue
+                        r = records_by_id.get(cmd_id)
                         if r:
-                            entry.update(self._format_bg_entry(r))
+                            new_text = self._format_bg_entry(r)
+                            if self._bg_cmd_label_cache.get(cmd_id) != new_text:
+                                self._bg_cmd_label_cache[cmd_id] = new_text
+                                entry.update(new_text)
             return
 
         # Structure changed — batch rebuild
@@ -1048,21 +1072,27 @@ class Sidebar(Vertical):
         )
         collapsible.set_class(False, "-collapsed", update=False)
 
-        # Find the index to insert after the correct NavEntry
-        insert_idx = 0
-        for i, child in enumerate(container.children):
+        # Find the NavEntry to insert after, and mount directly (no teardown)
+        target_entry = None
+        for child in container.children:
             if isinstance(child, NavEntry) and "bg-cmd-entry" in child.classes:
                 try:
                     if int(child.view_id) == cmd_id:
-                        insert_idx = i + 1
+                        target_entry = child
                         break
                 except (ValueError, TypeError):
                     pass
 
-        children = list(container.children)
-        children.insert(insert_idx, collapsible)
-        await container.remove_children()
-        await container.mount(*children)
+        if target_entry is not None:
+            # Mount after the target entry using sibling index
+            children_list = list(container.children)
+            idx = children_list.index(target_entry)
+            if idx + 1 < len(children_list):
+                await container.mount(collapsible, before=children_list[idx + 1])
+            else:
+                await container.mount(collapsible)
+        else:
+            await container.mount(collapsible)
 
     async def _collapse_bg_cmd(self, cmd_id: int) -> None:
         """Remove the collapsible for a previously expanded bg command."""
