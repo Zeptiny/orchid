@@ -61,7 +61,6 @@
 - Conversa não rolando automaticamente para baixo
   - Deve permitir o usuário dar scroll para cima ainda
 - Algo pode estar bloqueando/não paralelo - quando múltiplos subagentes são instanciados, a CPU usa apenas um núcleo
-- O tempo de indexação RAG e AST na barra lateral não é atualizado regularmente, ficando obsoleto
 - Contexto não está sendo atualizado constantemente
   - Ainda precisa ser investigado
 
