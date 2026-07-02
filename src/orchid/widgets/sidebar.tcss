@@ -125,7 +125,7 @@ Sidebar #context-breakdown {
     layout: horizontal;
     height: auto;
     padding: 0;
-    margin: 0;
+    margin: 1 0 0 0;
 }
 
 Sidebar #context-grid {
@@ -139,7 +139,8 @@ Sidebar #context-grid {
 Sidebar #context-legend {
     width: 1fr;
     height: auto;
-    color: $text;
+    color: $text-muted;
+    text-style: dim;
     margin: 0 0 0 1;
     padding: 0;
 }

@@ -300,11 +300,11 @@ class Sidebar(Vertical):
         return self._cached_tools_char_count
 
     # Colored blocks for context breakdown (Claude Code–style visual bars)
-    _CTX_BLOCK_FREE   = "[on #4ade80]  [/]"
-    _CTX_BLOCK_SYSTEM = "[on #60a5fa]  [/]"
-    _CTX_BLOCK_TOOLS  = "[on #f472b6]  [/]"
-    _CTX_BLOCK_TOOL   = "[on #fbbf24]  [/]"
-    _CTX_BLOCK_MSGS   = "[on #a78bfa]  [/]"
+    _CTX_BLOCK_FREE   = "[on #3f7f57]  [/]"
+    _CTX_BLOCK_SYSTEM = "[on #4c6f91]  [/]"
+    _CTX_BLOCK_TOOLS  = "[on #9a5f87]  [/]"
+    _CTX_BLOCK_TOOL   = "[on #a98232]  [/]"
+    _CTX_BLOCK_MSGS   = "[on #6f5f9a]  [/]"
 
     _CTX_GRID_ROWS = 8
     _CTX_GRID_COLS = 8
