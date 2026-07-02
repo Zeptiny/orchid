@@ -108,6 +108,12 @@ class Sidebar(Vertical):
         self._system_prompt: str = ""
         self._cached_tools_keys: tuple[str, ...] = ()
         self._cached_tools_char_count: int = 0
+        self._rag_last: str | None = None
+        self._rag_duration: float | None = None
+        self._rag_indexing: bool = False
+        self._ast_last: str | None = None
+        self._ast_duration: float | None = None
+        self._ast_indexing: bool = False
 
     def compose(self):
         yield Static("", id="sidebar-title")
@@ -128,6 +134,19 @@ class Sidebar(Vertical):
         yield Static("RAG", id="sidebar-rag-label")
         yield Static("", id="rag-status")
         yield Static(self._get_working_dir(), id="working-directory")
+
+    def on_mount(self) -> None:
+        self.set_interval(30, self._refresh_index_display)
+
+    def _refresh_index_display(self) -> None:
+        """Re-render AST/RAG status widgets using stored timestamps."""
+        try:
+            rag_widget = self.query_one("#rag-status", Static)
+            ast_widget = self.query_one("#ast-status", Static)
+        except Exception:
+            return
+        rag_widget.update(self._format_index_line(self._rag_last, self._rag_duration, self._rag_indexing))
+        ast_widget.update(self._format_index_line(self._ast_last, self._ast_duration, self._ast_indexing))
 
     def _get_working_dir(self) -> str:
         cwd = os.getcwd()
@@ -766,14 +785,13 @@ class Sidebar(Vertical):
         rag_indexing: bool = False,
         ast_indexing: bool = False,
     ) -> None:
-        try:
-            rag_widget = self.query_one("#rag-status", Static)
-            ast_widget = self.query_one("#ast-status", Static)
-        except Exception:
-            return
-
-        rag_widget.update(self._format_index_line(rag_last, rag_duration, rag_indexing))
-        ast_widget.update(self._format_index_line(ast_last, ast_duration, ast_indexing))
+        self._rag_last = rag_last
+        self._rag_duration = rag_duration
+        self._rag_indexing = rag_indexing
+        self._ast_last = ast_last
+        self._ast_duration = ast_duration
+        self._ast_indexing = ast_indexing
+        self._refresh_index_display()
 
     @staticmethod
     def _format_index_line(last_indexed: str | None, duration: float | None, indexing: bool = False) -> str:
