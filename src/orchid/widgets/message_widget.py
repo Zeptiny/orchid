@@ -518,6 +518,7 @@ class StreamWidgetState:
     thinking: Any = None
     content: Any = None
     temp: list[Any] = field(default_factory=list[Any])
+    in_tool_group: bool = False
 
 
 async def mount_streamed_message(container: Any, msg: Message, state: StreamWidgetState) -> None:
@@ -525,44 +526,54 @@ async def mount_streamed_message(container: Any, msg: Message, state: StreamWidg
     if msg.type == MessageType.ERROR:
         w = ErrorMessageWidget(msg)
         await container.mount(w)
-        w.scroll_visible(animate=False)
+        state.in_tool_group = False
         return
     if msg.type == MessageType.THINKING:
         if state.thinking is None:
             w = ThinkingMessageWidget(msg)
             await container.mount(w)
             state.thinking = w
-            w.scroll_visible(animate=False)
         else:
             state.thinking.update_content(msg.content)
+        state.in_tool_group = False
     elif msg.type == MessageType.TOOL_CALL:
         tool_name = msg.metadata.get("tool_name", "")
-        temp = Static(get_tool_action_label(tool_name), classes="temp-tool-message")
+        classes = "temp-tool-message"
+        if not state.in_tool_group:
+            classes += " tool-group-start"
+        temp = Static(get_tool_action_label(tool_name), classes=classes)
         await container.mount(temp)
-        temp.scroll_visible(animate=False)
         state.temp.append(temp)
+        state.in_tool_group = True
         if state.thinking:
             state.thinking.finish()
     elif msg.type == MessageType.TOOL_RESULT:
-        w = ToolResultMessageWidget(msg, classes="after-thinking" if state.thinking else None)
+        classes = None
+        temp = None
         if state.temp:
             temp = state.temp.pop(0)
+            if temp.has_class("tool-group-start"):
+                classes = "tool-group-start"
+        elif not state.in_tool_group:
+            classes = "tool-group-start"
+        w = ToolResultMessageWidget(msg, classes=classes)
+        if temp is not None:
             async with container.batch():
                 await container.mount(w, before=temp)
                 await temp.remove()
         else:
             await container.mount(w)
-        w.scroll_visible(animate=False)
         if state.thinking:
             state.thinking.finish()
         state.thinking = None
         state.content = None
+        state.in_tool_group = True
     elif msg.role == MessageRole.USER:
         w = UserMessageWidget(msg)
         await container.mount(w)
-        w.scroll_visible(animate=False)
         state.thinking = None
         state.content = None
+        state.in_tool_group = False
     else:
         if state.content is None:
             if msg.content:
@@ -572,7 +583,7 @@ async def mount_streamed_message(container: Any, msg: Message, state: StreamWidg
                 await container.mount(w)
                 state.content = w
                 state.thinking = None
-                w.scroll_visible(animate=False)
+                state.in_tool_group = False
         else:
             if msg.content:
                 await state.content.update_content(msg.content)

@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, cast
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.containers import Horizontal, Vertical
 from textual.timer import Timer
 from textual.widgets import LoadingIndicator, Static, TabbedContent, TabPane, TextArea
 from textual.worker import Worker
@@ -35,6 +35,7 @@ from orchid.widgets.message_widget import (
     mount_streamed_message,
 )
 from orchid.widgets.sidebar import NavEntry, Sidebar, SidebarMainSelected, SidebarSubagentSelected
+from orchid.widgets.smart_scroll import SmartScrollContainer
 from orchid.widgets.subagent_ui import SubagentUIManager
 
 log = logging.getLogger(__name__)
@@ -170,6 +171,14 @@ def _chain_subagent_subtotals(
     return (prompt, cached, completion, total)
 
 
+def _replayed_message_classes(
+    msg: Message, *, has_visible_message: bool, prev_was_tool: bool
+) -> str | None:
+    if msg.type == MessageType.TOOL_RESULT and has_visible_message and not prev_was_tool:
+        return "tool-group-start"
+    return None
+
+
 def _make_subagent_subtotal_provider(
     session: "Session", chain_index: int | None
 ) -> "Callable[[], tuple[int, int, int, int] | None] | None":
@@ -299,7 +308,7 @@ class Orchid(App[None]):
         with Horizontal(id="body"):
             with Vertical(id="main-pane"):
                 with TabbedContent(id="tabs", initial="main"), TabPane("Main", id="main"):
-                    yield ScrollableContainer(id="output")
+                    yield SmartScrollContainer(id="output")
                 yield CommandPicker(SessionCommands.COMMANDS)
                 with Vertical(id="input-wrapper"):
                     yield InputTextArea(id="input", highlight_cursor_line=False)
@@ -445,6 +454,7 @@ class Orchid(App[None]):
         assert self._current_chain is not None
         self._current_chain.chain.messages.append(msg)
         await self.mount_message(msg)
+        self.query_one("#output", SmartScrollContainer).force_scroll_to_end()
         self._reset_interrupt_state()
         self.streaming_started()
         self._active_worker = self.run_worker(self._stream_response(), exit_on_error=False)
@@ -511,7 +521,7 @@ class Orchid(App[None]):
         sidebar.set_active("main")
 
     async def _stream_response(self) -> None:
-        output = self.query_one("#output", ScrollableContainer)
+        output = self.query_one("#output", SmartScrollContainer)
         container = self._current_chain.messages_area if self._current_chain else output
 
         ws = StreamWidgetState()
@@ -534,6 +544,7 @@ class Orchid(App[None]):
                 record_streamed_message(self._current_chain.chain.messages, msg, history_state)
 
                 await mount_streamed_message(container, msg, ws)
+                output.maybe_scroll_to_end()
 
                 if ws.content and msg.usage:
                     ws.content.msg.usage = msg.usage
@@ -599,7 +610,7 @@ class Orchid(App[None]):
         if chain_index is not None:
             assert self.sessions.active is not None
             subtotal_provider = _make_subagent_subtotal_provider(self.sessions.active, chain_index)
-        container = self.query_one("#output", ScrollableContainer)
+        container = self.query_one("#output", SmartScrollContainer)
         self._current_chain = ChainContainer(chain, subagent_subtotal=subtotal_provider)
         container.mount(self._current_chain)
 
@@ -609,11 +620,9 @@ class Orchid(App[None]):
             return
         if self._current_chain and self._current_chain.messages_area:
             await self._current_chain.messages_area.mount(widget)
-            widget.scroll_visible(animate=False)
         else:
-            container = self.query_one("#output", ScrollableContainer)
+            container = self.query_one("#output", SmartScrollContainer)
             await container.mount(widget)
-            widget.scroll_visible(animate=False)
 
     def streaming_started(self) -> None:
         self.query_one("#spinner").display = True
@@ -623,6 +632,10 @@ class Orchid(App[None]):
         self._active_worker = None
         self.query_one("#spinner").display = False
         self._freeze_chain()
+        # Final scroll after chain footer is frozen — catches any layout change
+        # from the footer text update that happened after the stream loop's last
+        # maybe_scroll_to_end() call.
+        self.query_one("#output", SmartScrollContainer).maybe_scroll_to_end()
         if self._interrupt_state != InterruptState.CONFIRM_SUBAGENTS:
             self._reset_interrupt_state()
         await self.rerender_footer()
@@ -740,9 +753,12 @@ class Orchid(App[None]):
         await self._mount_in_chain(msg)
 
     async def mount_all_messages(self) -> None:
-        container = self.query_one("#output", ScrollableContainer)
+        container = self.query_one("#output", SmartScrollContainer)
+        # Suppress auto-scroll during bulk history load — scroll once at the end.
+        container.disable_auto_scroll()
         await container.remove_children()
         if not self.sessions.active:
+            container.reset_auto_scroll()
             return
         for chain_index, chain in enumerate(self.sessions.active.chains):
             subtotal_provider = _make_subagent_subtotal_provider(
@@ -751,21 +767,23 @@ class Orchid(App[None]):
             chain_container = ChainContainer(chain, subagent_subtotal=subtotal_provider)
             await container.mount(chain_container)
             chain_container.freeze()
-            prev_was_thinking = False
+            has_visible_message = False
+            prev_was_tool = False
             for msg in chain.messages:
-                classes = (
-                    "after-thinking"
-                    if msg.type == MessageType.TOOL_RESULT and prev_was_thinking
-                    else None
+                classes = _replayed_message_classes(
+                    msg,
+                    has_visible_message=has_visible_message,
+                    prev_was_tool=prev_was_tool,
                 )
                 widget = create_message_widget(msg, loaded=True, classes=classes)
                 if widget is not None:
                     assert chain_container.messages_area is not None
                     await chain_container.messages_area.mount(widget)
-                if msg.type == MessageType.THINKING:
-                    prev_was_thinking = True
+                    has_visible_message = True
+                    prev_was_tool = msg.type == MessageType.TOOL_RESULT
                 elif msg.type != MessageType.TOOL_CALL:
-                    prev_was_thinking = False
+                    prev_was_tool = False
+        container.force_scroll_to_end()
 
     async def rerender_all(self) -> None:
         if not self.sessions.active:
