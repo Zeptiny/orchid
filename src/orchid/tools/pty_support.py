@@ -24,24 +24,26 @@ class _PTYStdinWriter:
     Provides ``write(data)`` and ``drain()`` matching the interface that
     :meth:`BackgroundProcessStore.send` expects from ``process.stdin``.
 
-    Writes are offloaded to a background thread via :func:`asyncio.to_thread`
-    so that a full PTY buffer cannot block the event loop.
+    The master fd is put in nonblocking mode and ``drain()`` retries with a
+    short async backoff, so a full PTY buffer cannot block the event loop.
     """
 
-    __slots__ = ("_master_fd", "_write_task")
+    __slots__ = ("_master_fd", "_pending")
 
     def __init__(self, master_fd: int) -> None:
         self._master_fd = master_fd
-        self._write_task: asyncio.Task[None] | None = None
+        self._pending = bytearray()
+        try:
+            os.set_blocking(master_fd, False)
+        except OSError:
+            pass
 
     def write(self, data: bytes) -> None:
-        """Queue *data* for writing to the PTY master fd (non-blocking)."""
-        self._write_task = asyncio.ensure_future(
-            asyncio.to_thread(self._blocking_write, data)
-        )
+        """Queue *data* for writing to the PTY master fd."""
+        self._pending.extend(data)
 
     def _blocking_write(self, data: bytes) -> None:
-        """Write data in a thread — safe to block without freezing the event loop."""
+        """Write data synchronously, retrying short writes."""
         mv = memoryview(data)
         while mv:
             try:
@@ -55,10 +57,16 @@ class _PTYStdinWriter:
             mv = mv[written:]
 
     async def drain(self) -> None:
-        """Wait for the background write to complete."""
-        if self._write_task is not None:
-            await self._write_task
-            self._write_task = None
+        """Flush queued data without blocking the event loop."""
+        while self._pending:
+            try:
+                written = os.write(self._master_fd, self._pending)
+            except BlockingIOError:
+                await asyncio.sleep(0.001)
+                continue
+            if written == 0:
+                raise OSError("PTY write returned 0")
+            del self._pending[:written]
 
 
 # ---------------------------------------------------------------------------

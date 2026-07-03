@@ -328,9 +328,28 @@ def test_pty_stdin_writer_blocking_io_error():
 
 @pytest.mark.asyncio
 async def test_pty_stdin_writer_drain():
-    """_PTYStdinWriter.drain() is a no-op coroutine."""
+    """_PTYStdinWriter.drain() is harmless when nothing is queued."""
     writer = _PTYStdinWriter(-1)
     await writer.drain()  # Should not raise
+
+
+@pytest.mark.asyncio
+async def test_pty_stdin_writer_write_and_drain():
+    """_PTYStdinWriter.write() queues bytes and drain() flushes them."""
+    import select
+
+    master, slave = open_pty()
+    try:
+        writer = _PTYStdinWriter(master)
+        writer.write(b"hello\n")
+        await writer.drain()
+
+        ready, _, _ = select.select([slave], [], [], 2.0)
+        assert ready, "No data available on slave within 2 s"
+        assert os.read(slave, 1024) == b"hello\n"
+    finally:
+        os.close(master)
+        os.close(slave)
 
 
 # ---------------------------------------------------------------------------
