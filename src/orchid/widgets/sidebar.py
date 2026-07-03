@@ -850,10 +850,12 @@ class Sidebar(Vertical):
 
         # Determine if the focused widget is a bg-cmd input before rebuild
         focused_cmd_id: int | None = None
+        focused_input_value: str | None = None
         try:
             focused = self.app.focused
             if isinstance(focused, BgCommandInput):
                 focused_cmd_id = focused._bg_command_id
+                focused_input_value = focused.value
         except Exception:
             pass
 
@@ -978,6 +980,8 @@ class Sidebar(Vertical):
                     input_widget = self.query_one(
                         f"#bg-cmd-input-{focused_cmd_id}", BgCommandInput
                     )
+                    if focused_input_value is not None:
+                        input_widget.value = focused_input_value
                     input_widget.focus()
                 except Exception:
                     pass
@@ -997,7 +1001,7 @@ class Sidebar(Vertical):
         if ok:
             import time
             entry.last_user_input_at = time.monotonic()
-        event.input.clear()
+            event.input.clear()
 
     def _format_bg_entry(self, record: dict) -> str:
         """Format a single background-command sidebar entry."""

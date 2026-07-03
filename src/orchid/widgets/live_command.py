@@ -18,6 +18,7 @@ from textual.widgets import Collapsible, Static
 
 _THROTTLE_INTERVAL = 0.2  # seconds – matches ThinkingMessageWidget
 _MAX_BUFFER_LINES = 50  # hard cap on lines kept in the widget
+_MAX_PARTIAL_LINE_CHARS = 4096  # cap CR-only / no-newline interactive output
 
 
 class LiveCommandOutputWidget(Static):
@@ -98,6 +99,14 @@ class LiveCommandOutputWidget(Static):
         self._do_render()
         self._update_title()
 
+    def get_buffered_text(self) -> str:
+        """Return the accumulated output currently retained by the widget."""
+        return "".join(self._lines)
+
+    def reset_buffer(self) -> None:
+        """Clear buffered output retained by the widget."""
+        self._lines.clear()
+
     # -- Textual message handling ---------------------------------------------
 
     def on_live_command_output_widget_content_update(self, msg: ContentUpdate) -> None:
@@ -145,10 +154,10 @@ class LiveCommandOutputWidget(Static):
             first_nl = new_text.find("\n")
             if first_nl == -1:
                 # No newline in new input — extend the partial line.
-                self._lines[-1] += new_text
+                self._lines[-1] = self._cap_line(self._lines[-1] + new_text)
                 return
             # Merge up to and including the first newline.
-            self._lines[-1] += new_text[: first_nl + 1]
+            self._lines[-1] = self._cap_line(self._lines[-1] + new_text[: first_nl + 1])
             new_text = new_text[first_nl + 1 :]
 
         if not new_text:
@@ -164,14 +173,22 @@ class LiveCommandOutputWidget(Static):
         complete_parts = parts[:-1]
 
         for part in complete_parts:
-            self._lines.append(part + "\n")
+            self._lines.append(self._cap_line(part + "\n"))
 
         if trailing_partial:
-            self._lines.append(trailing_partial)
+            self._lines.append(self._cap_line(trailing_partial))
 
         # Enforce line cap by trimming from the head.
         if len(self._lines) > self._max_lines:
             self._lines = self._lines[-self._max_lines :]
+
+    def _cap_line(self, line: str) -> str:
+        has_newline = line.endswith("\n")
+        body = line[:-1] if has_newline else line
+        if len(body) <= _MAX_PARTIAL_LINE_CHARS:
+            return line
+        body = body[-_MAX_PARTIAL_LINE_CHARS:]
+        return body + ("\n" if has_newline else "")
 
     # -- throttled rendering --------------------------------------------------
 

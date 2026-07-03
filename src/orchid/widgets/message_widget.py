@@ -68,6 +68,14 @@ def get_tool_action_label(tool_name: str) -> str:
     return f"Using {tool_name}..."
 
 
+def remove_live_command_widgets_for_messages(messages: list[Message]) -> None:
+    """Drop live-command widget references created by the given messages."""
+    for msg in messages:
+        match = _BACKGROUND_CMD_RE.search(msg.content)
+        if match:
+            live_command_widgets.pop(int(match.group(1)), None)
+
+
 def get_tool_result_title(msg: Message) -> str:
     if msg.display is None:
         return _TOOL_RESULT_FALLBACK_TITLE

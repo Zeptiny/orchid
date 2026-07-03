@@ -54,10 +54,9 @@ def load_session(session_id: str) -> dict | None:
 def list_saved_sessions() -> list[dict]:
     """Return metadata for all saved sessions (id, name, model) sorted by most recent.
 
-    Uses a partial read strategy: reads only the first 2KB of each file to
-    extract metadata fields without parsing the entire JSON (which can be
-    large due to message histories). Falls back to full parse if the partial
-    read doesn't contain enough data.
+    Uses a partial read strategy for top-level string metadata, then parses
+    the session to report an exact chain count. Falls back to full metadata
+    parsing if the partial read doesn't contain enough data.
     """
     ensure_sessions_dir()
     sessions = []
@@ -72,11 +71,13 @@ def list_saved_sessions() -> list[dict]:
             name = _extract_json_string(head, '"name"')
             model = _extract_json_string(head, '"model"')
             if session_id:
+                with open(path) as f:
+                    data = json.load(f)
                 sessions.append({
                     "id": session_id,
                     "name": name or "Unnamed",
                     "model": model,
-                    "chain_count": head.count('"messages"'),  # rough estimate
+                    "chain_count": len(data.get("chains", [])),
                 })
             else:
                 # Fallback: full parse
@@ -101,10 +102,13 @@ def _extract_json_string(text: str, key: str) -> str | None:
     value is null.
     """
     import re
-    pattern = key + r'\s*:\s*"([^"]*)"'
+    pattern = re.escape(key) + r'\s*:\s*"((?:\\.|[^"\\])*)"'
     match = re.search(pattern, text)
     if match:
-        return match.group(1)
+        try:
+            return json.loads(f'"{match.group(1)}"')
+        except json.JSONDecodeError:
+            return None
     return None
 
 

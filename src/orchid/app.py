@@ -31,6 +31,7 @@ from orchid.widgets.message_widget import (
     create_message_widget,
     live_command_widgets,
     mount_streamed_message,
+    remove_live_command_widgets_for_messages,
 )
 from orchid.widgets.sidebar import (
     NavEntry,
@@ -309,6 +310,7 @@ class Orchid(App):
             self._bg_cmd_timer = None
         from orchid.tools.background_store import get_background_store
         get_background_store().terminate_all()
+        live_command_widgets.clear()
         if hasattr(self, '_mcp_manager') and self._mcp_manager is not None:
             try:
                 await self._mcp_manager.shutdown()
@@ -505,6 +507,8 @@ class Orchid(App):
 
                 if ws.content and msg.usage:
                     ws.content.msg.usage = msg.usage
+                    if self.sessions.active:
+                        self.sessions.active._usage_cache = None  # type: ignore[attr-defined]
         except asyncio.CancelledError:
             interrupted_msg = Message(
                 role=MessageRole.ASSISTANT,
@@ -603,6 +607,8 @@ class Orchid(App):
             self._footer_timer.stop()
             self._footer_timer = None
         if self._current_chain:
+            if status is not ChainStatus.COMPLETED:
+                remove_live_command_widgets_for_messages(self._current_chain.chain.messages)
             self._current_chain.chain.finish(status)
             self._current_chain.freeze()
             self._current_chain = None
@@ -702,6 +708,9 @@ class Orchid(App):
             has_live = False
             has_entries = False
 
+        if not has_entries:
+            self._bg_cmd_sidebar_pending = False
+
         # Start the timer when there are any entries (including finished) so the
         # sidebar renders them at least once.  Keep running while live commands
         # exist.  Once all have finished AND the sidebar has had a tick to
@@ -747,14 +756,13 @@ class Orchid(App):
 
             tail_text, exit_code = snap
             # Compute the delta since the widget's last known content.
-            widget_lines = widget._lines
-            existing_text = "".join(widget_lines)
+            existing_text = widget.get_buffered_text()
             if tail_text.startswith(existing_text):
                 delta = tail_text[len(existing_text):]
             else:
                 # Buffer was trimmed or wrapped – push full tail.
                 delta = tail_text
-                widget._lines.clear()
+                widget.reset_buffer()
 
             if delta:
                 widget.update_content(delta)

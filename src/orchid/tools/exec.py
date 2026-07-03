@@ -176,11 +176,12 @@ async def execute_command(
                 process.kill()
             await process.wait()
             return ExecutorResult(
-                display=f"$ {command} - Timed out after {timeout} seconds",
+                display=f"$ {description} - Timed out after {timeout} seconds",
                 content=(
-                    f'<command_result command="{_xml_attr(command)}" exit_code="-1" '
+                    f'<command_result command="{_xml_attr(command)}" '
+                    f'description="{_xml_attr(description)}" exit_code="-1" '
                     f'timed_out="true">\n'
-                    f"  <error><![CDATA[Command timed out after {timeout} seconds.]]></error>\n"
+                    f"  <error><![CDATA[{_cdata_text(description)} timed out after {timeout} seconds.]]></error>\n"
                     f"</command_result>"
                 ),
             )
@@ -208,9 +209,10 @@ async def execute_command(
         )
 
         return ExecutorResult(
-            display=f"$ {command} (exit code: {process.returncode})",
+            display=f"$ {description} (exit code: {process.returncode})",
             content=(
                 f'<command_result command="{_xml_attr(command)}" '
+                f'description="{_xml_attr(description)}" '
                 f'exit_code="{process.returncode}">\n'
                 f"{stdout_section}{stderr_section}{truncation_section}"
                 f"</command_result>"
@@ -219,9 +221,10 @@ async def execute_command(
 
     except Exception as e:
         return ExecutorResult(
-            display=f"$ {command} - Execution error",
+            display=f"$ {description} - Execution error",
             content=(
-                f'<command_result command="{_xml_attr(command)}" exit_code="-1" '
+                f'<command_result command="{_xml_attr(command)}" '
+                f'description="{_xml_attr(description)}" exit_code="-1" '
                 f'error="true">\n'
                 f"  <error><![CDATA[{_cdata_text(str(e))}]]></error>\n"
                 f"</command_result>"

@@ -1,0 +1,198 @@
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from textual.app import App, ComposeResult
+
+from orchid.app import Orchid
+from orchid.domain.message import Message, MessageRole
+from orchid.storage import _extract_json_string, list_saved_sessions
+from orchid.tools.background_store import (
+    BackgroundProcessStore,
+    HeadTailBuffer,
+    ProcessEntry,
+    set_background_store,
+)
+from orchid.tools.exec import execute_command
+from orchid.widgets.live_command import _MAX_PARTIAL_LINE_CHARS, LiveCommandOutputWidget
+from orchid.widgets.message_widget import (
+    live_command_widgets,
+    remove_live_command_widgets_for_messages,
+)
+from orchid.widgets.sidebar import BgCommandInput, Sidebar
+
+
+class _SidebarApp(App):
+    def compose(self) -> ComposeResult:
+        yield Sidebar(id="sidebar")
+
+
+def _make_live_widget(max_lines: int = 50) -> LiveCommandOutputWidget:
+    widget = LiveCommandOutputWidget.__new__(LiveCommandOutputWidget)
+    widget.command_id = 1
+    widget.command_text = "cmd"
+    widget.description = "cmd"
+    widget._max_lines = max_lines
+    widget._lines = []
+    widget._finished = False
+    widget._exit_code = None
+    widget._last_render_time = 0.0
+    widget._flush_scheduled = False
+    widget._content_widget = None
+    widget._collapsible = None
+    return widget
+
+
+def _make_process_entry(cmd_id: int, *, interactive: bool = True) -> ProcessEntry:
+    proc = MagicMock()
+    proc.returncode = None
+    proc.pid = cmd_id
+    return ProcessEntry(
+        id=cmd_id,
+        command="cat",
+        process=proc,
+        buffer=HeadTailBuffer(),
+        interactive=interactive,
+    )
+
+
+def _make_bg_record(cmd_id: int, *, interactive: bool = True) -> dict:
+    return {
+        "id": cmd_id,
+        "command": "cat",
+        "description": "cat",
+        "owner": "AGENT",
+        "status": "running",
+        "last_output_age": 0.1,
+        "interactive": interactive,
+        "has_tail": True,
+    }
+
+
+def test_extract_json_string_decodes_escaped_quotes() -> None:
+    text = r'{"id": "abc", "name": "say \"hello\"", "model": "x"}'
+    assert _extract_json_string(text, '"name"') == 'say "hello"'
+
+
+def test_list_saved_sessions_reports_exact_chain_count(tmp_path, monkeypatch) -> None:
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    monkeypatch.setattr("orchid.storage.SESSIONS_DIR", sessions_dir)
+    data = {
+        "id": "session-1",
+        "name": "example",
+        "model": "model",
+        "chains": [{"messages": []}, {"messages": []}, {"messages": []}],
+    }
+    (sessions_dir / "session-1.json").write_text(json.dumps(data))
+
+    [session] = list_saved_sessions()
+    assert session["chain_count"] == 3
+
+
+def test_live_command_public_buffer_api_and_partial_line_cap() -> None:
+    widget = _make_live_widget()
+    widget._append_delta("prefix")
+    widget._append_delta("x" * (_MAX_PARTIAL_LINE_CHARS + 20))
+
+    buffered = widget.get_buffered_text()
+    assert len(buffered) == _MAX_PARTIAL_LINE_CHARS
+    assert buffered.endswith("x" * 20)
+
+    widget.reset_buffer()
+    assert widget.get_buffered_text() == ""
+
+
+def test_manage_bg_cmd_timer_stops_empty_store_with_pending_sidebar() -> None:
+    store = BackgroundProcessStore()
+    set_background_store(store)
+    app = Orchid.__new__(Orchid)
+    app._bg_cmd_sidebar_pending = True
+    timer = MagicMock()
+    app._bg_cmd_timer = timer
+
+    app._manage_bg_cmd_timer()
+
+    timer.stop.assert_called_once()
+    assert app._bg_cmd_timer is None
+    assert app._bg_cmd_sidebar_pending is False
+    set_background_store(BackgroundProcessStore())
+
+
+@pytest.mark.asyncio
+async def test_execute_command_foreground_display_uses_description() -> None:
+    result = await execute_command("echo hello", description="Say hello", timeout=5)
+
+    assert result.display.startswith("$ Say hello ")
+    assert 'command="echo hello"' in result.content
+    assert 'description="Say hello"' in result.content
+
+
+def test_remove_live_command_widgets_for_messages() -> None:
+    live_command_widgets[42] = MagicMock()
+    messages = [
+        Message(
+            role=MessageRole.TOOL,
+            content='<background_command id="42" command="cat" description="cat" status="started" />',
+        )
+    ]
+
+    remove_live_command_widgets_for_messages(messages)
+
+    assert 42 not in live_command_widgets
+
+
+@pytest.mark.asyncio
+async def test_bg_command_submit_preserves_input_when_send_fails() -> None:
+    store = BackgroundProcessStore()
+    store._entries[1] = _make_process_entry(1)
+    store.send = AsyncMock(return_value=False)  # type: ignore[method-assign]
+    set_background_store(store)
+
+    async with _SidebarApp().run_test() as pilot:
+        sidebar = pilot.app.query_one("#sidebar", Sidebar)
+        await sidebar.update_background_commands([_make_bg_record(1)])
+        await pilot.pause()
+        await sidebar._expand_bg_cmd(1)
+        await pilot.pause()
+
+        input_widget = sidebar.query_one("#bg-cmd-input-1", BgCommandInput)
+        input_widget.value = "retry me"
+        await sidebar.on_input_submitted(SimpleNamespace(input=input_widget))
+        assert input_widget.value == "retry me"
+
+    set_background_store(BackgroundProcessStore())
+
+
+@pytest.mark.asyncio
+async def test_bg_command_refresh_restores_focused_input_value() -> None:
+    store = BackgroundProcessStore()
+    store._entries[1] = _make_process_entry(1)
+    set_background_store(store)
+
+    async with _SidebarApp().run_test() as pilot:
+        sidebar = pilot.app.query_one("#sidebar", Sidebar)
+        await sidebar.update_background_commands([_make_bg_record(1)])
+        await pilot.pause()
+        await sidebar._expand_bg_cmd(1)
+        await pilot.pause()
+
+        input_widget = sidebar.query_one("#bg-cmd-input-1", BgCommandInput)
+        input_widget.value = "draft stdin"
+        input_widget.focus()
+        await pilot.pause()
+
+        await sidebar.update_background_commands([
+            _make_bg_record(1),
+            _make_bg_record(2),
+        ])
+        await pilot.pause()
+
+        restored = sidebar.query_one("#bg-cmd-input-1", BgCommandInput)
+        assert restored.value == "draft stdin"
+        assert pilot.app.focused is restored
+
+    set_background_store(BackgroundProcessStore())
