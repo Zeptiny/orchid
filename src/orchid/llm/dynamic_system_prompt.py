@@ -2,6 +2,7 @@ import asyncio
 import os
 import time
 from datetime import datetime
+from typing import Any
 from xml.sax.saxutils import escape
 
 from orchid.agents.manager import format_subagent_attrs, get_subagent_manager
@@ -31,7 +32,7 @@ async def build_dynamic_system_prompt() -> Message:
     else:
         loop = asyncio.get_running_loop()
         tree = await loop.run_in_executor(None, directory_tree, cwd, cfg.directory_tree_depth)
-        _TREE_CACHE = (cwd, now + _TREE_TTL, tree)
+        _TREE_CACHE = (cwd, now + _TREE_TTL, tree)  # type: ignore[reportConstantRedefinition]
 
     esc_cwd = escape(cwd)
     esc_tree = escape(tree)
@@ -44,9 +45,9 @@ async def build_dynamic_system_prompt() -> Message:
 """
 
     subagent_manager = get_subagent_manager()
-    states = subagent_manager.get_states()
+    states: list[dict[str, Any]] = subagent_manager.get_states()  # type: ignore[reportUnknownVariableType,reportUnknownMemberType]
     if states:
-        parts = []
+        parts: list[str] = []
         for s in states:
             e = escape
             attrs = format_subagent_attrs(s["id"], s["name"], s["type"], s["state"], s["elapsed"])
@@ -59,7 +60,7 @@ async def build_dynamic_system_prompt() -> Message:
     store = get_todo_store()
     tasks = store.list()
     if tasks:
-        lines = []
+        lines: list[str] = []
         for t in tasks:
             line = f"  <todo id=\"{escape(t.id)}\" status=\"{escape(t.status.value)}\">"
             line += f"\n    <title>{escape(t.title)}</title>"

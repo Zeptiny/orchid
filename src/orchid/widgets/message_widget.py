@@ -61,8 +61,8 @@ _DIFF_LEXER_BY_EXTENSION = {
 
 
 def get_tool_action_label(tool_name: str) -> str:
-    registry = get_tool_registry()
-    entry = registry.get(tool_name)
+    registry: dict[str, dict[str, Any]] = get_tool_registry()
+    entry: dict[str, Any] | None = registry.get(tool_name)
     if entry and entry["tool"].action_label:
         return entry["tool"].action_label
     return f"Using {tool_name}..."
@@ -199,7 +199,7 @@ def _highlight_diff_content(content: str, style: str, lexer: str) -> Text:
 
 
 class UserMessageWidget(TextualMarkdown):
-    def __init__(self, msg: Message, **kwargs):
+    def __init__(self, msg: Message, **kwargs: Any):
         self.msg = msg
         super().__init__(msg.content, **kwargs)
 
@@ -207,7 +207,7 @@ class UserMessageWidget(TextualMarkdown):
 class ThinkingMessageWidget(Static):
     """A collapsible widget that shows 'Thinking...' when collapsed and full thinking when expanded."""
 
-    def __init__(self, msg: Message, *, loaded: bool = False, **kwargs):
+    def __init__(self, msg: Message, *, loaded: bool = False, **kwargs: Any):
         self.msg = msg
         self._last_render_time: float = 0
         self._flush_scheduled: bool = False
@@ -279,7 +279,7 @@ class ThinkingMessageWidget(Static):
         if self._collapsible is not None:
             self._collapsible.title = f"Thought: {label}"
 
-    def on_collapsible_toggle(self, event) -> None:
+    def on_collapsible_toggle(self, event: Any) -> None:
         if not event.collapsed:
             self._do_update()
 
@@ -293,7 +293,7 @@ class AssistantMessageWidget(TextualMarkdown):
     re-parsing of the full markdown document on every LLM chunk.
     """
 
-    def __init__(self, msg: Message, *, loaded: bool = False, **kwargs):
+    def __init__(self, msg: Message, *, loaded: bool = False, **kwargs: Any):
         self.msg = msg
         super().__init__(msg.content, **kwargs)
         self._stream = TextualMarkdown.get_stream(self)
@@ -342,7 +342,7 @@ class ChainFooterWidget(Static):
         self,
         chain: Chain,
         subagent_subtotal: Callable[[], tuple[int, int, int, int] | None] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ):
         self._chain = chain
         self._subagent_subtotal = subagent_subtotal
@@ -430,7 +430,7 @@ class ChainContainer(Static):
         self,
         chain: Chain,
         subagent_subtotal: Callable[[], tuple[int, int, int, int] | None] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ):
         self.chain = chain
         self._subagent_subtotal = subagent_subtotal
@@ -487,12 +487,12 @@ class ErrorMessageWidget(Static):
     }
     """
 
-    def __init__(self, msg: Message, **kwargs):
+    def __init__(self, msg: Message, **kwargs: Any):
         self.msg = msg
         super().__init__(**kwargs)
 
     def compose(self) -> ComposeResult:
-        title = self.msg.metadata.get("error_title", "Error")
+        title: str = self.msg.metadata.get("error_title", "Error")
         yield Static(title, classes="error-title")
         yield Static(self.msg.content, classes="error-detail")
 
@@ -500,7 +500,7 @@ class ErrorMessageWidget(Static):
 class ToolResultMessageWidget(Static):
     """A collapsible widget that shows the display summary when collapsed and full content when expanded."""
 
-    def __init__(self, msg: Message, **kwargs):
+    def __init__(self, msg: Message, **kwargs: Any):
         self.msg = msg
         super().__init__(**kwargs)
 
@@ -538,10 +538,10 @@ class StreamWidgetState:
 
     thinking: Any = None
     content: Any = None
-    temp: list[Static] = field(default_factory=list)
+    temp: list[Any] = field(default_factory=list[Any])
 
 
-async def mount_streamed_message(container, msg: Message, state: StreamWidgetState) -> None:
+async def mount_streamed_message(container: Any, msg: Message, state: StreamWidgetState) -> None:
     """Mount or update widgets for a streamed message."""
     if msg.type == MessageType.ERROR:
         w = ErrorMessageWidget(msg)

@@ -28,7 +28,7 @@ def set_current_session_id(session_id: str | None) -> None:
 class Session:
     name: str
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    chains: list[Chain] = field(default_factory=list)
+    chains: list[Chain] = field(default_factory=list[Chain])
     model: str | None = None
     subagent_manager: SubagentManager = field(default_factory=SubagentManager)
     todo_store: TodoStore = field(default_factory=TodoStore)
@@ -38,7 +38,7 @@ class Session:
         return [msg for chain in self.chains for msg in chain.messages]
 
     def to_storage_dict(self) -> dict[str, Any]:
-        subagent_records = []
+        subagent_records: list[dict[str, Any]] = []
         for record in self.subagent_manager.all_records():
             subagent_records.append(record.to_storage_dict())
         return {
@@ -70,7 +70,7 @@ class Session:
         for sd in data.get("subagent_chains", []):
             try:
                 record = SubagentRecord.from_storage_dict(sd)
-                session.subagent_manager._subagents[record.id] = record
+                session.subagent_manager._subagents[record.id] = record  # type: ignore[reportPrivateUsage]
             except Exception:
                 log.warning("Failed to restore subagent record %s", sd, exc_info=True)
         return session
@@ -160,7 +160,7 @@ class SessionManager:
         self._bind_context(session)
         return session
 
-    def list_saved(self) -> list[dict]:
+    def list_saved(self) -> list[dict[str, Any]]:
         """List all saved sessions from disk."""
         from orchid.storage import list_saved_sessions
         return list_saved_sessions()

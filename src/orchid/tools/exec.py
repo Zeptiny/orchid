@@ -5,7 +5,7 @@ import signal
 
 from orchid.config import get_config
 from orchid.domain.tool import ExecutorResult, Tool, ToolParameter, ToolParameterProperties
-from orchid.tools._xml_utils import _cdata_text, _xml_attr
+from orchid.tools._xml_utils import cdata_text, xml_attr
 
 MAX_OUTPUT_BYTES = 1 * 1024 * 1024
 
@@ -111,7 +111,7 @@ async def execute_command(
             return ExecutorResult(
                 display="Background commands require shell=True",
                 content=(
-                    f'<error command="{_xml_attr(command)}">'
+                    f'<error command="{xml_attr(command)}">'
                     f"<![CDATA[background=True is not supported with shell=False]]>"
                     f"</error>"
                 ),
@@ -125,8 +125,8 @@ async def execute_command(
             return ExecutorResult(
                 display="Failed to start background command",
                 content=(
-                    f'<error command="{_xml_attr(command)}">'
-                    f"<![CDATA[{_cdata_text(str(e))}]]>"
+                    f'<error command="{xml_attr(command)}">'
+                    f"<![CDATA[{cdata_text(str(e))}]]>"
                     f"</error>"
                 ),
             )
@@ -134,8 +134,8 @@ async def execute_command(
             display=f"$ {command} (id: {proc_id}, background)",
             content=(
                 f'<background_command id="{proc_id}" '
-                f'command="{_xml_attr(command)}" '
-                f'description="{_xml_attr(description or command)}" '
+                f'command="{xml_attr(command)}" '
+                f'description="{xml_attr(description or command)}" '
                 f'status="started" />'
             ),
         )
@@ -178,10 +178,10 @@ async def execute_command(
             return ExecutorResult(
                 display=f"$ {description} - Timed out after {timeout} seconds",
                 content=(
-                    f'<command_result command="{_xml_attr(command)}" '
-                    f'description="{_xml_attr(description)}" exit_code="-1" '
+                    f'<command_result command="{xml_attr(command)}" '
+                    f'description="{xml_attr(description)}" exit_code="-1" '
                     f'timed_out="true">\n'
-                    f"  <error><![CDATA[{_cdata_text(description)} timed out after {timeout} seconds.]]></error>\n"
+                    f"  <error><![CDATA[{cdata_text(description)} timed out after {timeout} seconds.]]></error>\n"
                     f"</command_result>"
                 ),
             )
@@ -199,10 +199,10 @@ async def execute_command(
         stderr = stderr_bytes.decode("utf-8", errors="replace").strip() if stderr_bytes else ""
 
         stdout_section = (
-            f"  <stdout><![CDATA[{_cdata_text(stdout)}]]></stdout>\n" if stdout else ""
+            f"  <stdout><![CDATA[{cdata_text(stdout)}]]></stdout>\n" if stdout else ""
         )
         stderr_section = (
-            f"  <stderr><![CDATA[{_cdata_text(stderr)}]]></stderr>\n" if stderr else ""
+            f"  <stderr><![CDATA[{cdata_text(stderr)}]]></stderr>\n" if stderr else ""
         )
         truncation_section = (
             "  <truncated>true</truncated>\n" if truncated else ""
@@ -211,8 +211,8 @@ async def execute_command(
         return ExecutorResult(
             display=f"$ {description} (exit code: {process.returncode})",
             content=(
-                f'<command_result command="{_xml_attr(command)}" '
-                f'description="{_xml_attr(description)}" '
+                f'<command_result command="{xml_attr(command)}" '
+                f'description="{xml_attr(description)}" '
                 f'exit_code="{process.returncode}">\n'
                 f"{stdout_section}{stderr_section}{truncation_section}"
                 f"</command_result>"
@@ -223,10 +223,10 @@ async def execute_command(
         return ExecutorResult(
             display=f"$ {description} - Execution error",
             content=(
-                f'<command_result command="{_xml_attr(command)}" '
-                f'description="{_xml_attr(description)}" exit_code="-1" '
+                f'<command_result command="{xml_attr(command)}" exit_code="-1" '
+                f'description="{xml_attr(description)}" '
                 f'error="true">\n'
-                f"  <error><![CDATA[{_cdata_text(str(e))}]]></error>\n"
+                f"  <error><![CDATA[{cdata_text(str(e))}]]></error>\n"
                 f"</command_result>"
             ),
         )

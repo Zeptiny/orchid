@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import time
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from orchid.widgets.live_command import (
     _MAX_BUFFER_LINES,
-    _THROTTLE_INTERVAL,
     LiveCommandOutputWidget,
 )
 from orchid.widgets.message_widget import (
@@ -45,6 +41,7 @@ class TestLiveCommandOutputWidgetContent:
         w._last_render_time = 0.0
         w._flush_scheduled = False
         w._content_widget = None
+        w._collapsible = None
         return w
 
     def test_append_delta_basic(self) -> None:
@@ -73,35 +70,29 @@ class TestLiveCommandOutputWidgetContent:
         assert "line5" in w._lines[0]
         assert "line9" in w._lines[-1]
 
-    def test_render_text_running(self) -> None:
+    def test_build_title_running(self) -> None:
         w = self._make_widget(command_id=7)
-        w._append_delta("hello\n")
-        text = w._render_text()
-        assert "Command #7 (running)" in text
-        assert "hello" in text
+        w.command_text = ""
+        assert w._build_title() == "Command #7 (running)"
 
-    def test_render_text_finished(self) -> None:
+    def test_build_title_finished(self) -> None:
         w = self._make_widget(command_id=3)
-        w._append_delta("output\n")
+        w.command_text = ""
         w._exit_code = 0
         w._finished = True
-        text = w._render_text()
-        assert "Command #3 (exit 0)" in text
-        assert "output" in text
+        assert w._build_title() == "Command #3 (exit 0)"
 
-    def test_stub_text_running(self) -> None:
+    def test_build_title_prefers_command_text(self) -> None:
         w = self._make_widget(command_id=5)
-        stub = w._build_stub_text()
-        assert "Command #5" in stub
-        assert "running" in stub
+        assert w._build_title() == "$ echo hello (running)"
 
-    def test_stub_text_finished(self) -> None:
+    def test_build_title_uses_description_without_command_text(self) -> None:
         w = self._make_widget(command_id=5)
+        w.command_text = ""
+        w.description = "build assets"
         w._exit_code = 1
         w._finished = True
-        stub = w._build_stub_text()
-        assert "Command #5" in stub
-        assert "exit 1" in stub
+        assert w._build_title() == "build assets (exit 1)"
 
     def test_update_content_rejects_after_finish(self) -> None:
         w = self._make_widget()
@@ -138,6 +129,7 @@ class TestLiveCommandOutputWidgetThrottling:
         w._last_render_time = 0.0
         w._flush_scheduled = False
         w._content_widget = MagicMock()
+        w._collapsible = None
         w.add_class = MagicMock()
         w.remove_class = MagicMock()
         # Mock set_timer to avoid needing a running event loop.
@@ -168,10 +160,10 @@ class TestLiveCommandOutputWidgetThrottling:
         w._content_widget.update.assert_called()
 
 
-class TestLiveCommandOutputWidgetCollapse:
-    """Tests for the height-cap collapse behavior."""
+class TestLiveCommandOutputWidgetRender:
+    """Tests for rendering retained output into the content widget."""
 
-    def test_collapses_past_height_cap(self) -> None:
+    def test_do_render_updates_content_widget(self) -> None:
         w = LiveCommandOutputWidget.__new__(LiveCommandOutputWidget)
         w.command_id = 1
         w.command_text = "chatty"
@@ -184,18 +176,14 @@ class TestLiveCommandOutputWidgetCollapse:
         w._last_render_time = 0.0
         w._flush_scheduled = False
         w._content_widget = MagicMock()
-        # Mock add_class / remove_class
-        w.add_class = MagicMock()
-        w.remove_class = MagicMock()
+        w._collapsible = None
 
-        # Push past the cap.
         for i in range(10):
             w._append_delta(f"line{i}\n")
         w._do_render()
-        w.add_class.assert_called_with("collapsed")
-        w._content_widget.update.assert_called_with(w._build_stub_text())
+        w._content_widget.update.assert_called_with("".join(w._lines))
 
-    def test_finished_un_collapses(self) -> None:
+    def test_finish_updates_collapsible_title(self) -> None:
         w = LiveCommandOutputWidget.__new__(LiveCommandOutputWidget)
         w.command_id = 1
         w.command_text = "chatty"
@@ -208,20 +196,10 @@ class TestLiveCommandOutputWidgetCollapse:
         w._last_render_time = 0.0
         w._flush_scheduled = False
         w._content_widget = MagicMock()
-        w.add_class = MagicMock()
-        w.remove_class = MagicMock()
+        w._collapsible = MagicMock()
 
-        # Push past the cap.
-        for i in range(10):
-            w._append_delta(f"line{i}\n")
-        w._do_render()
-        assert w.add_class.called
-
-        # Finish should un-collapse.
-        w._content_widget.update.reset_mock()
-        w.remove_class.reset_mock()
         w.finish(exit_code=0)
-        w.remove_class.assert_called_with("collapsed")
+        assert w._collapsible.title == "$ chatty (exit 0)"
 
 
 class TestLiveCommandWidgetsRegistry:
@@ -312,6 +290,7 @@ class TestLiveCommandWidgetsPopOnFinish:
         widget._last_render_time = 0.0
         widget._flush_scheduled = False
         widget._content_widget = MagicMock()
+        widget._collapsible = None
         widget.add_class = MagicMock()
         widget.remove_class = MagicMock()
 
@@ -342,6 +321,7 @@ class TestLiveCommandWidgetsPopOnFinish:
         widget._last_render_time = 0.0
         widget._flush_scheduled = False
         widget._content_widget = MagicMock()
+        widget._collapsible = None
         widget.add_class = MagicMock()
         widget.remove_class = MagicMock()
 

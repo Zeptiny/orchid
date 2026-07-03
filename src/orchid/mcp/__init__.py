@@ -4,13 +4,14 @@ import asyncio
 import contextlib
 import logging
 from contextvars import ContextVar
+from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.types import BlobResourceContents, TextResourceContents
 
-from orchid.config import _MCP_SERVER_NAME_RE
+from orchid.config import _MCP_SERVER_NAME_RE  # type: ignore[reportPrivateUsage]
 from orchid.domain.tool import ExecutorResult
 
 logger = logging.getLogger(__name__)
@@ -57,10 +58,10 @@ class MCPManager:
     def __init__(self):
         self._exit_stack = contextlib.AsyncExitStack()
         self._sessions: dict[str, ClientSession] = {}
-        self._tools: dict[str, dict] = {}
+        self._tools: dict[str, dict[str, Any]] = {}
         self._uri_map: dict[str, str] = {}  # uri -> server_name
-        self._server_status: dict[str, dict] = {}  # name -> {status, tool_count, error}
-        self._runner: asyncio.Task | None = None
+        self._server_status: dict[str, dict[str, Any]] = {}  # name -> {status, tool_count, error}
+        self._runner: asyncio.Task[None] | None = None
         self._ready: asyncio.Event = asyncio.Event()
         self._stop: asyncio.Event = asyncio.Event()
         self._start_error: BaseException | None = None
@@ -72,7 +73,7 @@ class MCPManager:
 
     async def start_all(
         self,
-        servers: dict[str, dict],
+        servers: dict[str, dict[str, Any]],
         *,
         per_server_timeout: float | None = None,
         startup_timeout: float | None = None,
@@ -132,7 +133,7 @@ class MCPManager:
             # don't keep advertising dead tool entries to the LLM.
             if self._sessions:
                 await asyncio.gather(
-                    *[_close_session(s) for s in self._sessions.values() if s is not None],
+                    *[_close_session(s) for s in self._sessions.values() if s is not None],  # type: ignore[reportUnnecessaryComparison]
                     return_exceptions=True,
                 )
             self._sessions.clear()
@@ -144,7 +145,7 @@ class MCPManager:
             await self._await_runner()
             raise self._start_error
 
-    async def _run(self, servers: dict[str, dict]) -> None:
+    async def _run(self, servers: dict[str, dict[str, Any]]) -> None:
         try:
             await self._exit_stack.__aenter__()
             for server_name, config in servers.items():
@@ -200,7 +201,7 @@ class MCPManager:
                 logger.warning("MCP runner task ended with an error", exc_info=True)
         self._runner = None
 
-    async def _start_server(self, server_name: str, config: dict) -> None:
+    async def _start_server(self, server_name: str, config: dict[str, Any]) -> None:
         if not _MCP_SERVER_NAME_RE.match(server_name):
             logger.warning(
                 "Skipping MCP server '%s': name does not match [a-z0-9-]+",
@@ -232,7 +233,7 @@ class MCPManager:
                 f"MCP server '{server_name}' startup timed out after {self._per_server_timeout}s"
             ) from e
 
-    async def _connect_server(self, server_name: str, config: dict) -> None:
+    async def _connect_server(self, server_name: str, config: dict[str, Any]) -> None:
         from orchid.mcp.schema import convert_mcp_tool, make_mcp_executor
 
         if "url" in config:
@@ -273,16 +274,16 @@ class MCPManager:
         self._tools.clear()
         self._uri_map.clear()
 
-    def get_tools(self) -> dict[str, dict]:
+    def get_tools(self) -> dict[str, dict[str, Any]]:
         return dict(self._tools)
 
-    def get_server_statuses(self) -> dict[str, dict]:
+    def get_server_statuses(self) -> dict[str, dict[str, Any]]:
         return dict(self._server_status)
 
     def get_resource_server(self, uri: str) -> str | None:
         return self._uri_map.get(uri)
 
-    async def call_tool(self, server_name: str, tool_name: str, arguments: dict) -> ExecutorResult:
+    async def call_tool(self, server_name: str, tool_name: str, arguments: dict[str, Any]) -> ExecutorResult:
         session = self._sessions.get(server_name)
         if session is None:
             return ExecutorResult(
@@ -326,7 +327,7 @@ class MCPManager:
         for item in result.contents:
             if isinstance(item, TextResourceContents):
                 parts.append(item.text)
-            elif isinstance(item, BlobResourceContents):
+            elif isinstance(item, BlobResourceContents):  # type: ignore[reportUnnecessaryIsInstance]
                 mime = getattr(item, "mimeType", None) or "application/octet-stream"
                 parts.append(f"[binary resource: {mime}, {len(item.blob)} base64 chars]")
                 logger.debug(

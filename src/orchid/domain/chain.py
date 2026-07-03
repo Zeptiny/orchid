@@ -19,7 +19,7 @@ class ChainStatus(Enum):
 @dataclass
 class Chain:
     model: str | None = None
-    messages: list[Message] = field(default_factory=list)
+    messages: list[Message] = field(default_factory=list[Message])
     start_time: float = field(default_factory=time.monotonic)
     end_time: float | None = None
     status: ChainStatus = ChainStatus.RUNNING

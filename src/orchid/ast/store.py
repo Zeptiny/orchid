@@ -4,6 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from orchid.ast.symbols import Symbol
 from orchid.config import AST_INDEX_DB, PROJECT_AST_DIR
@@ -159,7 +160,7 @@ class ASTStore:
 
     def get_symbols_by_name(
         self, name: str, type_filter: str = "both"
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         conn = self._get_conn()
         try:
             if type_filter == "both":

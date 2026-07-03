@@ -68,7 +68,7 @@ _REGISTRY: ThemeRegistry | None = None
 
 
 def get_theme_registry() -> ThemeRegistry:
-    global _REGISTRY
+    global _REGISTRY  # pyright: ignore[reportConstantRedefinition]
     if _REGISTRY is None:
-        _REGISTRY = ThemeRegistry()
+        _REGISTRY = ThemeRegistry()  # pyright: ignore[reportConstantRedefinition]
     return _REGISTRY

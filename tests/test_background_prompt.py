@@ -1,15 +1,15 @@
 """Tests for <background_commands> system-prompt block (U4)."""
-from unittest.mock import MagicMock, patch
+
+import os
 import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from orchid.llm import dynamic_system_prompt as dsp
 from orchid.tools.background_store import (
-    BackgroundProcessStore,
     HeadTailBuffer,
     ProcessEntry,
-    set_background_store,
 )
 
 
@@ -22,6 +22,7 @@ def _reset_tree_cache():
 
 def _patch_deps(states=None, todos=None, tree="TREE", bg_entries=None):
     """Return a dict of context-manager patches for all build_dynamic_system_prompt deps."""
+    dsp._TREE_CACHE = (os.getcwd(), time.monotonic() + 60, tree)
     cfg = MagicMock()
     cfg.directory_tree_depth = 2
     sub_mgr = MagicMock()

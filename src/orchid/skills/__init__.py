@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Any
 
 from orchid.config import HOME_SKILLS_DIR, PROJECT_SKILLS_DIR
 from orchid.domain.skill import Skill, SkillResource
@@ -29,8 +30,8 @@ def _scan_resource_dir(skill_dir: Path, dirname: str) -> list[SkillResource]:
         if file_path.suffix in (".md", ".txt", ".sh", ".py", ".rb", ".js", ".ts", ".yaml", ".yml", ".json", ".toml", ".cfg", ".ini", ".bash", ".zsh", ".fish"):
             try:
                 text = file_path.read_text()
-                metadata, _ = parse_frontmatter(text)
-                description = metadata.get("description", "")
+                metadata: dict[str, Any] = parse_frontmatter(text)[0]
+                description = str(metadata.get("description", ""))
             except (OSError, UnicodeDecodeError):
                 pass
 
@@ -58,10 +59,11 @@ def _load_skills_from_dir(skills_dir: Path) -> dict[str, Skill]:
             log.warning("Skipping %s: %s", skill_file, e)
             continue
 
-        metadata, body = parse_frontmatter(content)
+        metadata: dict[str, Any] = parse_frontmatter(content)[0]
+        body = parse_frontmatter(content)[1]
 
-        name = metadata.get("name", path.name)
-        description = metadata.get("description", "")
+        name = str(metadata.get("name", path.name))
+        description = str(metadata.get("description", ""))
 
         if not description:
             log.warning("Skipping %s: no description in frontmatter", skill_file)
@@ -69,7 +71,7 @@ def _load_skills_from_dir(skills_dir: Path) -> dict[str, Skill]:
 
         requires_raw = metadata.get("requires", [])
         if isinstance(requires_raw, list):
-            requires = requires_raw
+            requires: list[str] = requires_raw  # pyright: ignore[reportUnknownVariableType]
         else:
             if requires_raw:
                 log.warning("%s: 'requires' must be a list, got %s — ignoring", skill_file, type(requires_raw).__name__)
@@ -106,7 +108,7 @@ def seed_skills_dir(skills_dir: Path) -> None:
 
 
 def load_skills() -> dict[str, Skill]:
-    global SKILL_REGISTRY
+    global SKILL_REGISTRY  # pyright: ignore[reportConstantRedefinition]
 
     home_skills = _load_skills_from_dir(HOME_SKILLS_DIR)
 
@@ -114,7 +116,7 @@ def load_skills() -> dict[str, Skill]:
     project_skills = _load_skills_from_dir(project_skills_dir)
 
     merged = {**home_skills, **project_skills}
-    SKILL_REGISTRY = merged
+    SKILL_REGISTRY = merged  # pyright: ignore[reportConstantRedefinition]
 
     from orchid.tools import reset_tool_registry
     reset_tool_registry()

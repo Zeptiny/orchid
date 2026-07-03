@@ -1,4 +1,4 @@
-def _xml_attr(value: object) -> str:
+def xml_attr(value: object) -> str:
     return (
         str(value)
         .replace("&", "&amp;")
@@ -8,11 +8,11 @@ def _xml_attr(value: object) -> str:
     )
 
 
-def _cdata_text(value: str) -> str:
+def cdata_text(value: str) -> str:
     return value.replace("]]>", "]]]]><![CDATA[>")
 
 
-def _count_diff_changes(diff_text: str) -> tuple[int, int]:
+def count_diff_changes(diff_text: str) -> tuple[int, int]:
     added = 0
     removed = 0
     for line in diff_text.splitlines():

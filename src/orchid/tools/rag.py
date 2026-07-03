@@ -117,7 +117,7 @@ async def execute_rag_search(
         )
 
     e = escape
-    parts = []
+    parts: list[str] = []
     for r in results:
         parts.append(
             f'<result file="{e(r.file_path)}" lines="{r.start_line}-{r.end_line}" '

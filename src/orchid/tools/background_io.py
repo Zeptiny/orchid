@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from orchid.domain.tool import ExecutorResult, Tool, ToolParameter, ToolParameterProperties
-from orchid.tools._xml_utils import _cdata_text, _xml_attr
+from orchid.tools._xml_utils import cdata_text, xml_attr
 from orchid.tools.background_store import get_background_store
 
 
@@ -119,7 +119,7 @@ async def execute_read_output(
 
     exit_attr = str(exit_code) if exit_code is not None else "running"
     exit_tag = (
-        f' exit_code="{_xml_attr(exit_attr)}"'
+        f' exit_code="{xml_attr(exit_attr)}"'
         if exit_code is not None
         else ""
     )
@@ -131,7 +131,7 @@ async def execute_read_output(
         display=f"$ {cmd_preview} ({status})",
         content=(
             f'<command_output id="{id}"{exit_tag}>\n'
-            f"<stdout><![CDATA[{_cdata_text(tail_text)}]]></stdout>\n"
+            f"<stdout><![CDATA[{cdata_text(tail_text)}]]></stdout>\n"
             f"</command_output>"
         ),
     )
@@ -206,7 +206,7 @@ async def execute_send_input(
     return ExecutorResult(
         display=f"Sent input to command {id}: {_truncate_preview(text)}",
         content=(
-            f'<input_sent id="{id}"><text><![CDATA[{_cdata_text(text)}]]></text></input_sent>'
+            f'<input_sent id="{id}"><text><![CDATA[{cdata_text(text)}]]></text></input_sent>'
         ),
     )
 
@@ -265,6 +265,6 @@ async def execute_terminate_command(
     return ExecutorResult(
         display=f"Terminated command {id}: $ {_truncate_preview(entry.command)}",
         content=(
-            f'<command_terminated id="{id}" command="{_xml_attr(entry.command)}" />'
+            f'<command_terminated id="{id}" command="{xml_attr(entry.command)}" />'
         ),
     )

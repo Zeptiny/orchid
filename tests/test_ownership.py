@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 
 import pytest
 
+from orchid.tools.background_io import execute_read_output, execute_send_input
 from orchid.tools.background_store import (
     BackgroundProcessStore,
     HeadTailBuffer,
@@ -15,8 +15,6 @@ from orchid.tools.background_store import (
     get_background_store,
     set_background_store,
 )
-from orchid.tools.background_io import execute_read_output, execute_send_input
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -169,7 +167,7 @@ async def test_user_input_refreshes_idle_window(fresh_store, short_timeout):
 
 def test_config_idle_timeout_from_env(monkeypatch):
     """Setting ORCHID_BACKGROUND_COMMAND_IDLE_TIMEOUT env var overrides config."""
-    from orchid.config import Config, ConfigManager, validate_config
+    from orchid.config import ConfigManager, validate_config
 
     ConfigManager.reset()
     monkeypatch.setenv("ORCHID_BACKGROUND_COMMAND_IDLE_TIMEOUT", "42.5")
