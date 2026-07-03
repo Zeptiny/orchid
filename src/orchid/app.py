@@ -37,6 +37,7 @@ from orchid.widgets.message_widget import (
     remove_live_command_widgets_for_messages,
 )
 from orchid.widgets.sidebar import (
+    BgCommandRecord,
     NavEntry,
     Sidebar,
     SidebarBgCommandSelected,
@@ -777,7 +778,7 @@ class Orchid(App[None]):
             if delta:
                 widget.update_content(delta)
 
-            if exit_code is not None and not widget._finished:
+            if exit_code is not None and not widget.is_finished:
                 widget.finish(exit_code)
                 live_command_widgets.pop(entry.id, None)
 
@@ -785,7 +786,7 @@ class Orchid(App[None]):
         try:
             import time
             sidebar = self.query_one("#sidebar", Sidebar)
-            records = []
+            records: list[BgCommandRecord] = []
             for entry in entries:
                 last_output_age = time.monotonic() - entry.last_output_at
                 records.append({
@@ -822,7 +823,7 @@ class Orchid(App[None]):
     async def on_sidebar_bg_command_selected(self, event: SidebarBgCommandSelected) -> None:
         """Expand/collapse a background command entry in the sidebar."""
         sidebar = self.query_one("#sidebar", Sidebar)
-        await sidebar._expand_bg_cmd(event.command_id)
+        await sidebar.expand_bg_cmd(event.command_id)
 
     async def mount_message(self, msg: Message) -> None:
         await self._mount_in_chain(msg)
@@ -839,7 +840,7 @@ class Orchid(App[None]):
 
         # Build all chain containers first, then batch-mount them
         chain_containers: list[ChainContainer | Static] = []
-        chain_widgets: list[list] = []
+        chain_widgets: list[list[Any]] = []
         for chain_index, chain in enumerate(self.sessions.active.chains):
             if chain_index < collapse_count:
                 # Collapse old chains into a lightweight stub

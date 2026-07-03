@@ -13,8 +13,12 @@ import signal
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from orchid.tools.exec import ENV_SUPPRESSION
+
+if TYPE_CHECKING:
+    from orchid.tools.pty_support import PTYHandle
 
 # ---------------------------------------------------------------------------
 # Head / tail ring-buffer (capped at ~1 MiB)
@@ -106,7 +110,7 @@ class ProcessEntry:
 
     id: int
     command: str
-    process: asyncio.subprocess.Process
+    process: asyncio.subprocess.Process | PTYHandle
     buffer: HeadTailBuffer
     owner: str = "AGENT"
     last_output_at: float = 0.0
@@ -190,7 +194,7 @@ class BackgroundProcessStore:
                 last_output_at=now,
                 created_at=now,
                 interactive=True,
-                master_fd=handle._master_fd,
+                master_fd=handle.master_fd,
                 session_id=session_id,
                 description=description,
             )

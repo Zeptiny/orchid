@@ -106,6 +106,10 @@ class PTYHandle:
 
     # -- public API ----------------------------------------------------------
 
+    @property
+    def master_fd(self) -> int:
+        return self._master_fd
+
     async def wait(self) -> int:
         """Wait for the child process to exit and clean up the master fd."""
         self.returncode = await self._process.wait()

@@ -179,12 +179,13 @@ async def test_terminate_all_multiple_processes(_fresh_store):
 @pytest.mark.asyncio
 async def test_check_idle_reverts_expired_entry(_fresh_store):
     """USER-owned entry idle beyond timeout reverts to AGENT."""
+    idle_timeout = 900.0
     _id, _ = await _fresh_store.spawn("sleep 60", cwd=".")
     entry = _fresh_store.get(_id)
     assert entry is not None
     entry.owner = "USER"
-    entry.last_user_input_at = 0.0  # far in the past
-    _fresh_store.check_idle_ownership(900.0)
+    entry.last_user_input_at = time.monotonic() - idle_timeout - 1
+    _fresh_store.check_idle_ownership(idle_timeout)
     entry_after = _fresh_store.get(_id)
     assert entry_after is not None
     assert entry_after.owner == "AGENT"

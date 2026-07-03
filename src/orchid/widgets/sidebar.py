@@ -1,7 +1,7 @@
 import os
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal, TypedDict, cast
 
 from textual.containers import Vertical
 from textual.events import Blur, Focus
@@ -12,6 +12,17 @@ from orchid.agents.manager import SUBAGENT_INDICATORS, SubagentRecord, SubagentS
 from orchid.domain.todo import TERMINAL_STATUSES, TodoStatus, TodoTask
 
 _TOKEN_THROTTLE_INTERVAL = 0.5
+
+
+class BgCommandRecord(TypedDict):
+    id: int
+    command: str
+    description: str
+    owner: str
+    status: Literal["running", "exited"]
+    last_output_age: float
+    interactive: bool
+    has_tail: bool
 
 
 def _relative_time(iso_timestamp: str) -> str:
@@ -61,19 +72,23 @@ class BgCommandInput(Input):
 
     can_focus = True
 
-    def __init__(self, command_id: int, **kwargs) -> None:
+    def __init__(self, command_id: int, **kwargs: Any) -> None:
         self._bg_command_id = command_id
         super().__init__(**kwargs)
+
+    @property
+    def command_id(self) -> int:
+        return self._bg_command_id
 
     def _on_focus(self, event: Focus) -> None:
         super()._on_focus(event)
         from orchid.tools.background_store import get_background_store
-        get_background_store().take_ownership(self._bg_command_id)
+        get_background_store().take_ownership(self.command_id)
 
     def _on_blur(self, event: Blur) -> None:
         super()._on_blur(event)
         from orchid.tools.background_store import get_background_store
-        get_background_store().release_ownership(self._bg_command_id)
+        get_background_store().release_ownership(self.command_id)
 
 
 class NavEntry(Static):
@@ -293,7 +308,7 @@ class Sidebar(Vertical):
         super().__init__(*args, **kwargs)
         self._usage_by_view: dict[str, Any] = {}
         self._subagent_records: list[SubagentRecord] = []
-        self._bg_cmd_records: list[dict[str, Any]] = []
+        self._bg_cmd_records: list[BgCommandRecord] = []
         self._expanded_bg_cmd_id: int | None = None
         self._bg_cmd_label_cache: dict[int, str] = {}
 
@@ -824,7 +839,7 @@ class Sidebar(Vertical):
             return f"{int(seconds / 60)}m ago"
         return f"{int(seconds / 3600)}h ago"
 
-    async def update_background_commands(self, records: list[dict]) -> None:
+    async def update_background_commands(self, records: list[BgCommandRecord]) -> None:
         """Update the background-commands section from a list of record dicts.
 
         Each record should contain:
@@ -856,9 +871,9 @@ class Sidebar(Vertical):
         focused_cmd_id: int | None = None
         focused_input_value: str | None = None
         try:
-            focused = self.app.focused
+            focused = getattr(cast(Any, self.app), "focused", None)
             if isinstance(focused, BgCommandInput):
-                focused_cmd_id = focused._bg_command_id
+                focused_cmd_id = focused.command_id
                 focused_input_value = focused.value
         except Exception:
             pass
@@ -990,11 +1005,11 @@ class Sidebar(Vertical):
                 except Exception:
                     pass
 
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
+    async def on_input_submitted(self, event: Any) -> None:
         """Handle Enter in a bg-cmd input: send text to the command's stdin."""
         if not isinstance(event.input, BgCommandInput):
             return
-        cmd_id = event.input._bg_command_id
+        cmd_id = event.input.command_id
         from orchid.tools.background_store import get_background_store
         store = get_background_store()
         entry = store.get(cmd_id)
@@ -1007,7 +1022,7 @@ class Sidebar(Vertical):
             entry.last_user_input_at = time.monotonic()
             event.input.clear()
 
-    def _format_bg_entry(self, record: dict) -> str:
+    def _format_bg_entry(self, record: BgCommandRecord) -> str:
         """Format a single background-command sidebar entry."""
         status = record["status"]
         owner = record["owner"]
@@ -1021,9 +1036,9 @@ class Sidebar(Vertical):
             indicator_color = "dim"
 
         owner_badge = "[dim]USER[/dim]" if owner == "USER" else ""
-        age_str = self._format_age(last_output_age) if last_output_age is not None else ""
+        age_str = self._format_age(last_output_age)
 
-        label = record.get("description", "") or record.get("command", "")
+        label = record["description"] or record["command"]
         if len(label) > 24:
             label = label[:22] + ".."
 
@@ -1033,6 +1048,9 @@ class Sidebar(Vertical):
         if age_str:
             line += f" [dim]{age_str}[/dim]"
         return line
+
+    async def expand_bg_cmd(self, cmd_id: int) -> None:
+        await self._expand_bg_cmd(cmd_id)
 
     async def _expand_bg_cmd(self, cmd_id: int) -> None:
         """Mount a Collapsible with tail output and input for a bg command."""

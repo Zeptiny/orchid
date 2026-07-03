@@ -11,6 +11,7 @@ style for visual consistency with other tool results.
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from textual.app import ComposeResult
 from textual.message import Message
@@ -54,7 +55,7 @@ class LiveCommandOutputWidget(Static):
         *,
         description: str = "",
         max_lines: int = _MAX_BUFFER_LINES,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.command_id = command_id
@@ -68,6 +69,10 @@ class LiveCommandOutputWidget(Static):
         self._flush_scheduled: bool = False
         self._content_widget: Static | None = None
         self._collapsible: Collapsible | None = None
+
+    @property
+    def is_finished(self) -> bool:
+        return self._finished
 
     # -- composition ----------------------------------------------------------
 
