@@ -10,7 +10,8 @@ from textual.widgets import Collapsible, Static
 
 from orchid.agents.manager import SUBAGENT_INDICATORS, SubagentRecord, SubagentState
 from orchid.domain.chain import Chain
-from orchid.domain.message import Message as DomainMessage, MessageRole, MessageType
+from orchid.domain.message import Message as DomainMessage
+from orchid.domain.message import MessageRole, MessageType
 from orchid.domain.todo import TERMINAL_STATUSES, TodoStatus, TodoTask
 
 _TOKEN_THROTTLE_INTERVAL = 0.5
@@ -80,7 +81,7 @@ def _load_sidebar_css() -> str:
     """Read sidebar styles from the external TCSS file."""
     try:
         base = os.path.dirname(os.path.abspath(__file__))
-        with open(os.path.join(base, "sidebar.tcss"), "r", encoding="utf-8") as f:
+        with open(os.path.join(base, "sidebar.tcss"), encoding="utf-8") as f:
             return f.read()
     except OSError:
         return ""
@@ -385,10 +386,7 @@ class Sidebar(Vertical):
             else:
                 msg_tokens += diff
 
-        if self._max_context and self._max_context > 0:
-            free_tokens = max(0, self._max_context - prompt_tokens)
-        else:
-            free_tokens = 0
+        free_tokens = max(0, self._max_context - prompt_tokens) if self._max_context and self._max_context > 0 else 0
 
         return (free_tokens, system_tokens, tools_tokens, tool_use_tokens, msg_tokens)
 
