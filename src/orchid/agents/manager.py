@@ -376,6 +376,9 @@ class SubagentManager:
         self._subagents[subagent_id] = record
 
         async def _run() -> None:
+            from orchid.tools.background_store import set_current_agent_scope_id
+
+            set_current_agent_scope_id(record.id)
             record.state = SubagentState.RUNNING
             if record.on_state_change:
                 self._fire_and_forget(record.on_state_change(record.state))

@@ -10,6 +10,14 @@ from orchid.tools.ast import (
     rename_symbol_tool,
     replace_symbol_tool,
 )
+from orchid.tools.background_io import (
+    execute_read_output,
+    execute_send_input,
+    execute_terminate_command,
+    read_output_tool,
+    send_input_tool,
+    terminate_command_tool,
+)
 from orchid.tools.exec import execute_command, execute_command_tool
 from orchid.tools.file_manipulation import (
     edit_tool,
@@ -87,6 +95,9 @@ def get_tool_registry() -> dict[str, dict[str, object]]:
         "find_symbol_references": {"tool": find_symbol_references_tool, "executor": execute_find_symbol_references},
         "replace_symbol": {"tool": replace_symbol_tool, "executor": execute_replace_symbol},
         "rename_symbol": {"tool": rename_symbol_tool, "executor": execute_rename_symbol},
+        "read_output": {"tool": read_output_tool, "executor": execute_read_output},
+        "send_input": {"tool": send_input_tool, "executor": execute_send_input},
+        "terminate_command": {"tool": terminate_command_tool, "executor": execute_terminate_command},
     }
     return _tool_registry
 

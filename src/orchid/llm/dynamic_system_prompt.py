@@ -9,10 +9,17 @@ from orchid.agents.manager import format_subagent_attrs, get_subagent_manager
 from orchid.config import get_config
 from orchid.domain.message import Message, MessageRole, MessageType
 from orchid.domain.todo import get_todo_store
+from orchid.tools._xml_utils import xml_attr
+from orchid.tools.background_store import get_background_store
 from orchid.utils import directory_tree
 
 _TREE_CACHE: tuple[str, float, str] | None = None
 _TREE_TTL = 5.0
+
+# -- background commands display caps -----------------------------------------
+_BG_MAX_ENTRIES = 5       # most-recent agent entries shown
+_BG_TAIL_LINES = 8        # lines per entry tail
+_BG_TAIL_CHARS = 500      # max chars per entry tail
 
 
 async def build_dynamic_system_prompt() -> Message:
@@ -65,6 +72,50 @@ async def build_dynamic_system_prompt() -> Message:
             line += "\n  </todo>"
             lines.append(line)
         content += "\n<todos>\n" + "\n".join(lines) + "\n</todos>\n"
+
+    # -- <background_commands> block -------------------------------------------
+    bg_store = get_background_store()
+    bg_entries = bg_store.list_visible()
+    if bg_entries:
+        now = time.monotonic()
+        # Split into USER-owned and AGENT-owned.
+        user_entries = [e for e in bg_entries if e.owner == "USER"]
+        agent_entries = [e for e in bg_entries if e.owner != "USER"]
+        # Keep most-recent _BG_MAX_ENTRIES from agent, plus all USER entries.
+        agent_entries = agent_entries[-_BG_MAX_ENTRIES:]
+        selected = agent_entries + user_entries
+
+        bg_lines: list[str] = []
+        for entry in selected:
+            runtime = int(now - entry.created_at)
+            last_output_age = int(now - entry.last_output_at)
+            status = "running" if entry.exit_code is None else "exited"
+
+            attrs = (
+                f'id="{entry.id}" '
+                f'command="{xml_attr(entry.command)}" '
+                f'runtime="{runtime}" '
+                f'last_output_age="{last_output_age}" '
+                f'owner="{escape(entry.owner)}" '
+                f'interactive="{"true" if entry.interactive else "false"}" '
+                f'status="{status}"'
+            )
+            if entry.exit_code is not None:
+                attrs += f' exit_code="{entry.exit_code}"'
+
+            tail_text = entry.buffer.get_tail(_BG_TAIL_LINES)
+            # Cap tail chars.
+            if len(tail_text) > _BG_TAIL_CHARS:
+                tail_text = "..." + tail_text[-(_BG_TAIL_CHARS - 3):]
+            tail_escaped = escape(tail_text)
+
+            bg_lines.append(f'  <command {attrs}>')
+            bg_lines.append("    <tail>")
+            bg_lines.append(f"      {tail_escaped}")
+            bg_lines.append("    </tail>")
+            bg_lines.append("  </command>")
+
+        content += "\n<background_commands>\n" + "\n".join(bg_lines) + "\n</background_commands>\n"
 
     return Message(
         role=MessageRole.SYSTEM,

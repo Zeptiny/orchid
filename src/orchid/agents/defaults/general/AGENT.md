@@ -11,6 +11,9 @@ allowed_tools:
   - edit
   - write
   - execute_command
+  - read_output
+  - send_input
+  - terminate_command
   - web_fetch
   - delegate_to_subagent
   - wait_for_subagent

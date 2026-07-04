@@ -52,6 +52,7 @@ _TOOLS_WITHOUT_TIMEOUT = {
     "find_symbol_references",
     "replace_symbol",
     "rename_symbol",
+    "read_output",
 }
 
 

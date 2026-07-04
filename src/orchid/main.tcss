@@ -168,6 +168,7 @@ Collapsible.tool-result-collapse {
 }
 
 ToolResultMessageWidget.tool-group-start,
+LiveCommandOutputWidget.tool-group-start,
 .temp-tool-message.tool-group-start {
     margin-top: 1;
 }
@@ -274,6 +275,13 @@ OptionPicker .option-list--option-disabled {
     padding: 0 1;
     color: $text-muted;
     text-style: italic;
+}
+
+.collapsed-chain-stub {
+    padding: 0 1;
+    height: 1;
+    color: $text-muted;
+    text-style: dim;
 }
 
 Button.settings-add-btn {

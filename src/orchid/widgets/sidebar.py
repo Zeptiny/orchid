@@ -2,11 +2,12 @@ import json
 import os
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal, TypedDict, cast
 
 from textual.containers import Horizontal, Vertical
+from textual.events import Blur, Focus
 from textual.message import Message
-from textual.widgets import Collapsible, Static
+from textual.widgets import Collapsible, Input, Static
 
 from orchid.agents.manager import SUBAGENT_INDICATORS, SubagentRecord, SubagentState
 from orchid.domain.chain import Chain
@@ -15,6 +16,33 @@ from orchid.domain.message import MessageRole, MessageType
 from orchid.domain.todo import TERMINAL_STATUSES, TodoStatus, TodoTask
 
 _TOKEN_THROTTLE_INTERVAL = 0.5
+
+
+class BgCommandRecord(TypedDict):
+    id: int
+    command: str
+    description: str
+    owner: str
+    status: Literal["running", "exited"]
+    last_output_age: float
+    interactive: bool
+    has_tail: bool
+
+
+def _current_bg_session_id() -> str | None:
+    from orchid.domain.session import get_current_session_id
+    return get_current_session_id()
+
+
+def _active_bg_agent_scope_id(app: Any) -> str:
+    from orchid.tools.background_store import MAIN_AGENT_SCOPE_ID
+
+    try:
+        sidebar = app.query_one("#sidebar", Sidebar)
+        view_id = sidebar.active_view
+    except Exception:
+        view_id = "main"
+    return MAIN_AGENT_SCOPE_ID if view_id == "main" else view_id
 
 
 def _relative_time(iso_timestamp: str) -> str:
@@ -49,6 +77,50 @@ class SidebarSubagentSelected(Message):
 class SidebarMainSelected(Message):
     """Emitted when the Main entry is clicked."""
     pass
+
+
+class SidebarBgCommandSelected(Message):
+    """Emitted when a background command entry is clicked."""
+
+    def __init__(self, command_id: int) -> None:
+        self.command_id = command_id
+        super().__init__()
+
+
+class BgCommandInput(Input):
+    """Input widget for background command stdin, with ownership management."""
+
+    can_focus = True
+
+    def __init__(self, command_id: int, **kwargs: Any) -> None:
+        self._bg_command_id = command_id
+        super().__init__(**kwargs)
+
+    @property
+    def command_id(self) -> int:
+        return self._bg_command_id
+
+    def _on_focus(self, event: Focus) -> None:
+        super()._on_focus(event)
+        from orchid.tools.background_store import get_background_store
+        store = get_background_store()
+        if store.get_visible(
+            self.command_id,
+            session_id=_current_bg_session_id(),
+            agent_scope_id=_active_bg_agent_scope_id(cast(Any, self).app),
+        ):
+            store.take_ownership(self.command_id)
+
+    def _on_blur(self, event: Blur) -> None:
+        super()._on_blur(event)
+        from orchid.tools.background_store import get_background_store
+        store = get_background_store()
+        if store.get_visible(
+            self.command_id,
+            session_id=_current_bg_session_id(),
+            agent_scope_id=_active_bg_agent_scope_id(cast(Any, self).app),
+        ):
+            store.release_ownership(self.command_id)
 
 
 class NavEntry(Static):
@@ -115,6 +187,9 @@ class Sidebar(Vertical):
         self._ast_last: str | None = None
         self._ast_duration: float | None = None
         self._ast_indexing: bool = False
+        self._bg_cmd_records: list[BgCommandRecord] = []
+        self._expanded_bg_cmd_id: int | None = None
+        self._bg_cmd_label_cache: dict[int, str] = {}
 
     def compose(self):
         yield Static("", id="sidebar-title")
@@ -122,6 +197,8 @@ class Sidebar(Vertical):
             yield NavEntry("▸ Main", "main", id="nav-main")
         yield Static("Subagents", id="sidebar-subagents-label")
         yield Vertical(id="subagent-entries")
+        yield Static("Background Commands", id="sidebar-bg-cmds-label")
+        yield Vertical(id="bg-cmds-entries")
         yield Static("MCP Servers", id="sidebar-mcp-label")
         yield Vertical(id="mcp-entries")
         yield Static("Todos", id="sidebar-todos-label")
@@ -165,6 +242,13 @@ class Sidebar(Vertical):
             pass
 
     def on_nav_entry_pressed(self, event: NavEntry.Pressed) -> None:
+        if "bg-cmd-entry" in event.control.classes:
+            try:
+                cmd_id = int(event.control.view_id)
+                self.post_message(SidebarBgCommandSelected(cmd_id))
+            except (ValueError, TypeError):
+                pass
+            return
         if event.control.view_id == "main":
             self.post_message(SidebarMainSelected())
         else:
@@ -219,6 +303,10 @@ class Sidebar(Vertical):
         self._active_view = view_id
         self._update_active_styles()
         self._show_usage_for_view(view_id)
+
+    @property
+    def active_view(self) -> str:
+        return self._active_view
 
     def _show_usage_for_view(self, view_id: str) -> None:
         usage = self._usage_by_view.get(view_id)
@@ -656,10 +744,20 @@ class Sidebar(Vertical):
                 await container.remove_children()
             return
 
-        entries: list[Static] = []
-        for name, info in statuses.items():
-            entries.append(Static(self._format_mcp_server(name, info)))
+        # Diff-based update: update existing entries in-place, only rebuild
+        # if the number of servers changed.
+        new_texts = [self._format_mcp_server(name, info) for name, info in statuses.items()]
+        existing = list(container.children)
 
+        if len(existing) == len(new_texts):
+            # Same count — update labels in-place (no flicker)
+            for widget, text in zip(existing, new_texts, strict=True):
+                if isinstance(widget, Static):
+                    widget.update(text)
+            return
+
+        # Server count changed — must rebuild
+        entries: list[Static] = [Static(text) for text in new_texts]
         await container.remove_children()
         if entries:
             await container.mount(*entries)
@@ -708,13 +806,37 @@ class Sidebar(Vertical):
         active = [t for t in tasks if t.status not in TERMINAL_STATUSES]
         done = [t for t in tasks if t.status in TERMINAL_STATUSES]
 
+        # Detect current structure for diff comparison
         existing_collapse: Collapsible | None = None
+        current_active_count = 0
+        current_done_count = 0
         for child in container.children:
             if isinstance(child, Collapsible):
                 existing_collapse = child
+                current_done_count = len(list(child.query(".todo-entry")))
+            elif isinstance(child, Static) and "todo-entry" in child.classes:
+                current_active_count += 1
 
         was_finished_collapsed = existing_collapse.collapsed if existing_collapse else True
 
+        # If structure matches (same active/done counts), update in-place
+        if current_active_count == len(active) and current_done_count == len(done):
+            # Update active entries in-place
+            active_widgets = [
+                child for child in container.children
+                if isinstance(child, Static) and "todo-entry" in child.classes
+            ]
+            for widget, task in zip(active_widgets, active, strict=True):
+                widget.update(self._format_todo(task))
+            # Update done entries in-place
+            if existing_collapse:
+                done_widgets = list(existing_collapse.query(".todo-entry"))
+                for widget, task in zip(done_widgets, reversed(done), strict=True):
+                    if isinstance(widget, Static):
+                        widget.update(self._format_todo(task))
+            return
+
+        # Structure changed — rebuild
         active_entries: list[Static] = []
         for task in active:
             entry = Static(self._format_todo(task), classes="todo-entry")
@@ -731,17 +853,12 @@ class Sidebar(Vertical):
             await container.mount(*active_entries)
 
         if done_entries:
-            # See _refresh_subagent_display: children are passed to the
-            # Collapsible constructor rather than mounted via a post-mount
-            # query_one("Contents") to avoid the teardown NoMatches race.
             collapse = Collapsible(
                 *done_entries,
                 classes="finished-collapse",
                 title=f"Done ({len(done)})",
                 collapsed=was_finished_collapsed,
             )
-            # Pre-set the -collapsed class before mount to avoid a one-frame
-            # flash of the expanded dropdown (see _refresh_subagent_display).
             collapse.set_class(was_finished_collapsed, "-collapsed", update=False)
             await container.mount(collapse)
 
@@ -803,3 +920,357 @@ class Sidebar(Vertical):
         if duration is not None:
             parts.append(f"[dim]({duration:.1f}s)[/dim]")
         return " ".join(parts)
+
+    # -- background commands ---------------------------------------------------
+
+    @staticmethod
+    def _format_age(seconds: float) -> str:
+        """Format a monotonic-time age into a human-readable string.
+
+        Rounds to reduce update frequency: 5s buckets under 1m, 1m buckets
+        under 1h, so the formatted string changes less often and avoids
+        triggering unnecessary widget repaints.
+        """
+        if seconds < 5:
+            return "now"
+        if seconds < 60:
+            # Round to nearest 5s to reduce churn
+            rounded = int(seconds // 5) * 5
+            return f"{rounded}s ago"
+        if seconds < 3600:
+            return f"{int(seconds / 60)}m ago"
+        return f"{int(seconds / 3600)}h ago"
+
+    async def update_background_commands(self, records: list[BgCommandRecord]) -> None:
+        """Update the background-commands section from a list of record dicts.
+
+        Each record should contain:
+            id, command, owner, status, last_output_age, interactive, has_tail
+        """
+        self._bg_cmd_records = list(records)
+        await self._refresh_bg_cmd_display()
+
+    async def _refresh_bg_cmd_display(self) -> None:
+        try:
+            container = self.query_one("#bg-cmds-entries", Vertical)
+            label = self.query_one("#sidebar-bg-cmds-label", Static)
+        except Exception:
+            return
+
+        records = self._bg_cmd_records
+
+        # Hide section when no records
+        if not records:
+            label.display = False
+            if self._expanded_bg_cmd_id is not None:
+                self._expanded_bg_cmd_id = None
+            if container.children:
+                await container.remove_children()
+            return
+        label.display = True
+
+        # Determine if the focused widget is a bg-cmd input before rebuild
+        focused_cmd_id: int | None = None
+        focused_input_value: str | None = None
+        try:
+            focused = cast(Any, self).app.focused
+            if isinstance(focused, BgCommandInput):
+                focused_cmd_id = focused.command_id
+                focused_input_value = focused.value
+        except Exception:
+            pass
+
+        running = [r for r in records if r["status"] == "running"]
+        finished = [r for r in records if r["status"] == "exited"]
+
+        active_ids = [r["id"] for r in running]
+        finished_ids = [r["id"] for r in finished]
+
+        # Detect current structure
+        current_active_ids: list[int] = []
+        current_finished_ids: list[int] = []
+        existing_collapse: Collapsible | None = None
+        records_by_id = {r["id"]: r for r in records}
+
+        for child in container.children:
+            if isinstance(child, NavEntry) and "bg-cmd-entry" in child.classes:
+                try:
+                    current_active_ids.append(int(child.view_id))
+                except (ValueError, TypeError):
+                    pass
+            elif isinstance(child, Collapsible) and "finished-collapse" in child.classes:
+                existing_collapse = child
+                for entry in child.query(NavEntry):
+                    try:
+                        current_finished_ids.append(int(entry.view_id))
+                    except (ValueError, TypeError):
+                        pass
+
+        structure_changed = (
+            active_ids != current_active_ids
+            or finished_ids != current_finished_ids
+        )
+
+        if not structure_changed:
+            # Label-only updates (age, owner, status) — only update if text changed
+            for child in container.children:
+                if isinstance(child, NavEntry) and "bg-cmd-entry" in child.classes:
+                    try:
+                        cmd_id = int(child.view_id)
+                    except (ValueError, TypeError):
+                        continue
+                    r = records_by_id.get(cmd_id)
+                    if r:
+                        new_text = self._format_bg_entry(r)
+                        if self._bg_cmd_label_cache.get(cmd_id) != new_text:
+                            self._bg_cmd_label_cache[cmd_id] = new_text
+                            child.update(new_text)
+                elif isinstance(child, Collapsible) and "finished-collapse" in child.classes:
+                    for entry in child.query(NavEntry):
+                        try:
+                            cmd_id = int(entry.view_id)
+                        except (ValueError, TypeError):
+                            continue
+                        r = records_by_id.get(cmd_id)
+                        if r:
+                            new_text = self._format_bg_entry(r)
+                            if self._bg_cmd_label_cache.get(cmd_id) != new_text:
+                                self._bg_cmd_label_cache[cmd_id] = new_text
+                                entry.update(new_text)
+                elif isinstance(child, Collapsible) and "bg-cmd-expand" in child.classes:
+                    cmd_id = self._expanded_bg_cmd_id
+                    if cmd_id is None:
+                        continue
+                    r = records_by_id.get(cmd_id)
+                    if not r:
+                        continue
+                    try:
+                        tail_widget = child.query_one(".bg-cmd-expand-tail", Static)
+                    except Exception:
+                        continue
+                    from orchid.tools.background_store import get_background_store
+                    store = get_background_store()
+                    snap = store.snapshot_visible(
+                        cmd_id,
+                        session_id=_current_bg_session_id(),
+                        agent_scope_id=_active_bg_agent_scope_id(cast(Any, self).app),
+                    )
+                    tail_text = snap[0] if snap else "(no output yet)"
+                    if not tail_text.strip():
+                        tail_text = "(no output yet)"
+                    tail_lines = tail_text.split("\n")
+                    if len(tail_lines) > 16:
+                        tail_lines = tail_lines[-16:]
+                        tail_text = "...\n" + "\n".join(tail_lines)
+                    tail_widget.update(tail_text)
+            return
+
+        # Structure changed — batch rebuild
+        was_finished_collapsed = True
+        if existing_collapse:
+            was_finished_collapsed = existing_collapse.collapsed
+
+        # Build active entries
+        active_entries: list[NavEntry] = []
+        for record in running:
+            label_text = self._format_bg_entry(record)
+            entry = NavEntry(
+                label_text, str(record["id"]),
+                classes="bg-cmd-entry",
+            )
+            active_entries.append(entry)
+
+        # Build finished entries
+        done_entries: list[NavEntry] = []
+        for record in reversed(finished):
+            label_text = self._format_bg_entry(record)
+            entry = NavEntry(
+                label_text, str(record["id"]),
+                classes="bg-cmd-entry",
+            )
+            done_entries.append(entry)
+
+        # Clear expanded state (will be restored below if needed)
+        saved_expanded_id = self._expanded_bg_cmd_id
+        self._expanded_bg_cmd_id = None
+
+        # Single remove, then mount all at once
+        await container.remove_children()
+
+        if active_entries:
+            await container.mount(*active_entries)
+
+        if done_entries:
+            finished_label = f"Finished ({len(finished)})"
+            collapse = Collapsible(
+                *done_entries,
+                classes="finished-collapse",
+                title=finished_label,
+                collapsed=was_finished_collapsed,
+            )
+            collapse.set_class(was_finished_collapsed, "-collapsed", update=False)
+            collapse.can_focus = True
+            await container.mount(collapse)
+
+        # Restore expanded state from before the rebuild
+        restore_id = focused_cmd_id or saved_expanded_id
+        if restore_id is not None and any(r["id"] == restore_id for r in records):
+            # Skip expansion if command is finished (inside Collapsible, not a direct child)
+            if restore_id in finished_ids:
+                self._expanded_bg_cmd_id = None
+            else:
+                self._expanded_bg_cmd_id = None  # clear so _expand_bg_cmd doesn't skip
+                await self._expand_bg_cmd(restore_id)
+            # Re-focus the input if it was focused before
+            if focused_cmd_id is not None:
+                try:
+                    input_widget = self.query_one(
+                        f"#bg-cmd-input-{focused_cmd_id}", BgCommandInput
+                    )
+                    if focused_input_value is not None:
+                        input_widget.value = focused_input_value
+                    input_widget.focus()
+                except Exception:
+                    pass
+
+    async def on_input_submitted(self, event: Any) -> None:
+        """Handle Enter in a bg-cmd input: send text to the command's stdin."""
+        if not isinstance(event.input, BgCommandInput):
+            return
+        cmd_id = event.input.command_id
+        from orchid.tools.background_store import get_background_store
+        store = get_background_store()
+        entry = store.get_visible(
+            cmd_id,
+            session_id=_current_bg_session_id(),
+            agent_scope_id=_active_bg_agent_scope_id(cast(Any, self).app),
+        )
+        if entry is None or not entry.interactive or entry.exit_code is not None:
+            return
+        text = event.input.value + "\n"
+        ok = await store.send(cmd_id, text)
+        if ok:
+            import time
+            entry.last_user_input_at = time.monotonic()
+            event.input.clear()
+
+    def _format_bg_entry(self, record: BgCommandRecord) -> str:
+        """Format a single background-command sidebar entry."""
+        status = record["status"]
+        owner = record["owner"]
+        last_output_age = record["last_output_age"]
+
+        if status == "running":
+            indicator = "●"
+            indicator_color = "green"
+        else:
+            indicator = "○"
+            indicator_color = "dim"
+
+        owner_badge = "[dim]USER[/dim]" if owner == "USER" else ""
+        age_str = self._format_age(last_output_age)
+
+        label = record["description"] or record["command"]
+        if len(label) > 24:
+            label = label[:22] + ".."
+
+        line = f"[{indicator_color}]{indicator}[/{indicator_color}] {label}"
+        if owner_badge:
+            line += f" {owner_badge}"
+        if age_str:
+            line += f" [dim]{age_str}[/dim]"
+        return line
+
+    async def expand_bg_cmd(self, cmd_id: int) -> None:
+        await self._expand_bg_cmd(cmd_id)
+
+    async def _expand_bg_cmd(self, cmd_id: int) -> None:
+        """Mount a Collapsible with tail output and input for a bg command."""
+        try:
+            container = self.query_one("#bg-cmds-entries", Vertical)
+        except Exception:
+            return
+
+        from orchid.tools.background_store import get_background_store
+        store = get_background_store()
+        entry = store.get_visible(
+            cmd_id,
+            session_id=_current_bg_session_id(),
+            agent_scope_id=_active_bg_agent_scope_id(cast(Any, self).app),
+        )
+        if entry is None:
+            return
+
+        # Collapse the previously expanded entry
+        if self._expanded_bg_cmd_id is not None:
+            await self._collapse_bg_cmd(self._expanded_bg_cmd_id)
+
+        self._expanded_bg_cmd_id = cmd_id
+
+        # Build the expand content
+        snap = store.snapshot_visible(
+            cmd_id,
+            session_id=_current_bg_session_id(),
+            agent_scope_id=_active_bg_agent_scope_id(cast(Any, self).app),
+        )
+        tail_text = snap[0] if snap else "(no output yet)"
+        if not tail_text.strip():
+            tail_text = "(no output yet)"
+        # Cap to last 16 lines to keep the sidebar compact
+        tail_lines = tail_text.split("\n")
+        if len(tail_lines) > 16:
+            tail_lines = tail_lines[-16:]
+            tail_text = "...\n" + "\n".join(tail_lines)
+
+        tail_widget = Static(tail_text, markup=False, classes="bg-cmd-expand-tail")
+        input_widget = BgCommandInput(
+            cmd_id,
+            placeholder="Type to send input...",
+            id=f"bg-cmd-input-{cmd_id}",
+        )
+
+        collapsible = Collapsible(
+            tail_widget,
+            input_widget,
+            classes="bg-cmd-expand",
+            title=f"▸ Command #{cmd_id}",
+            collapsed=False,
+        )
+        collapsible.set_class(False, "-collapsed", update=False)
+
+        # Find the NavEntry to insert after, and mount directly (no teardown)
+        target_entry = None
+        for child in container.children:
+            if isinstance(child, NavEntry) and "bg-cmd-entry" in child.classes:
+                try:
+                    if int(child.view_id) == cmd_id:
+                        target_entry = child
+                        break
+                except (ValueError, TypeError):
+                    pass
+
+        if target_entry is not None:
+            # Mount after the target entry using sibling index
+            children_list = list(container.children)
+            idx = children_list.index(target_entry)
+            if idx + 1 < len(children_list):
+                await container.mount(collapsible, before=children_list[idx + 1])
+            else:
+                await container.mount(collapsible)
+        else:
+            await container.mount(collapsible)
+
+    async def _collapse_bg_cmd(self, cmd_id: int) -> None:
+        """Remove the collapsible for a previously expanded bg command."""
+        try:
+            container = self.query_one("#bg-cmds-entries", Vertical)
+        except Exception:
+            return
+
+        for child in list(container.children):
+            if isinstance(child, Collapsible) and "bg-cmd-expand" in child.classes:
+                await child.remove()
+                break
+
+        if self._expanded_bg_cmd_id == cmd_id:
+            self._expanded_bg_cmd_id = None
