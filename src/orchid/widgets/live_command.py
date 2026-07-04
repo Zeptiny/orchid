@@ -82,7 +82,7 @@ class LiveCommandOutputWidget(Static):
         self._collapsible = Collapsible(
             self._content_widget,
             title=self._build_title(),
-            collapsed=False,
+            collapsed=True,
             classes="tool-result-collapse",
         )
         yield self._collapsible

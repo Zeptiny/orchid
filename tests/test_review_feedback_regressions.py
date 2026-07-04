@@ -74,6 +74,10 @@ def _make_bg_record(cmd_id: int, *, interactive: bool = True) -> dict:
     }
 
 
+def _visible_bg_command_count(sidebar: Sidebar) -> int:
+    return len(sidebar.query(".bg-cmd-entry"))
+
+
 def test_extract_json_string_decodes_escaped_quotes() -> None:
     text = r'{"id": "abc", "name": "say \"hello\"", "model": "x"}'
     assert _extract_json_string(text, '"name"') == 'say "hello"'
@@ -156,6 +160,46 @@ def test_manage_bg_cmd_timer_stops_empty_store_with_pending_sidebar() -> None:
     assert app._bg_cmd_timer is None
     assert app._bg_cmd_sidebar_pending is False
     set_background_store(BackgroundProcessStore())
+
+
+@pytest.mark.asyncio
+async def test_rerender_all_clears_previous_session_background_commands(monkeypatch) -> None:
+    cfg = SimpleNamespace(
+        default_model="test/model",
+        theme="textual-dark",
+        mcp_servers={},
+        background_command_idle_timeout=900.0,
+    )
+    monkeypatch.setattr("orchid.config.get_config", lambda: cfg)
+    monkeypatch.setattr("orchid.domain.session.get_config", lambda: cfg)
+
+    store = BackgroundProcessStore()
+    set_background_store(store)
+
+    try:
+        async with Orchid().run_test() as pilot:
+            app = pilot.app
+            assert app.sessions.active is not None
+            old_session_id = app.sessions.active.id
+            entry = _make_process_entry(1)
+            entry.session_id = old_session_id
+            entry.exit_code = 0
+            store._entries[1] = entry
+
+            sidebar = app.query_one("#sidebar", Sidebar)
+            await sidebar.update_background_commands([_make_bg_record(1)])
+            await pilot.pause()
+            assert _visible_bg_command_count(sidebar) == 1
+
+            app.sessions.create()
+            await app.rerender_all()
+            await pilot.pause()
+
+            assert app.sessions.active is not None
+            assert app.sessions.active.id != old_session_id
+            assert _visible_bg_command_count(sidebar) == 0
+    finally:
+        set_background_store(BackgroundProcessStore())
 
 
 @pytest.mark.asyncio

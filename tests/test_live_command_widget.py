@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from textual.widgets import Collapsible
+
 from orchid.widgets.live_command import (
     _MAX_BUFFER_LINES,
     LiveCommandOutputWidget,
@@ -162,6 +164,14 @@ class TestLiveCommandOutputWidgetThrottling:
 
 class TestLiveCommandOutputWidgetRender:
     """Tests for rendering retained output into the content widget."""
+
+    def test_compose_starts_collapsed_like_other_tool_results(self) -> None:
+        w = LiveCommandOutputWidget(1, command_text="echo hello")
+
+        [collapsible] = list(w.compose())
+
+        assert isinstance(collapsible, Collapsible)
+        assert collapsible.collapsed is True
 
     def test_do_render_updates_content_widget(self) -> None:
         w = LiveCommandOutputWidget.__new__(LiveCommandOutputWidget)

@@ -988,6 +988,7 @@ class Orchid(App[None]):
         await self._subagent_ui.sync_tabs(self.sessions.active.subagent_manager)
         await self.rerender_footer()
         await self.refresh_todos()
+        await self._tick_live_commands()
 
     async def rerender_footer(self) -> None:
         if not self.sessions.active:
