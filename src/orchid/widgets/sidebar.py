@@ -871,7 +871,7 @@ class Sidebar(Vertical):
         focused_cmd_id: int | None = None
         focused_input_value: str | None = None
         try:
-            focused = getattr(cast(Any, self.app), "focused", None)
+            focused = getattr(cast(Any, self), "app", None).focused
             if isinstance(focused, BgCommandInput):
                 focused_cmd_id = focused.command_id
                 focused_input_value = focused.value

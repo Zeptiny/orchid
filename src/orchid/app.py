@@ -860,7 +860,7 @@ class Orchid(App[None]):
                 chain_container = ChainContainer(chain, subagent_subtotal=subtotal_provider)
                 chain_containers.append(chain_container)
                 # Pre-build message widgets for this chain
-                widgets = []
+                widgets: list[Any] = []
                 prev_was_thinking = False
                 for msg in chain.messages:
                     classes = (
