@@ -1102,7 +1102,9 @@ class Orchid(App[None]):
 
         totals = _session_usage_totals(self.sessions.active)
         try:
-            self.query_one("#input-meta", Static).update(self.model or "No Model")
+            self.query_one("#input-meta", Static).update(
+                _format_session_model_label(self.model or "No Model", None)
+            )
             self.query_one("#footer-usage", Static).update(
                 _format_footer_usage_label(totals, max_context)
             )

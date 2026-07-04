@@ -399,10 +399,10 @@ class Sidebar(Vertical):
         current_keys = tuple(sorted(registry.keys()))
         if self._cached_tools_keys == current_keys:
             return self._cached_tools_char_count
-        tools_list = []
+        tools_list: list[dict[str, Any]] = []
         for name in current_keys:
             tool: Any = registry[name]["tool"]
-            tools_list.append(tool.to_dict())
+            tools_list.append(cast(dict[str, Any], tool.to_dict()))
         self._cached_tools_char_count = len(json.dumps(tools_list))
         self._cached_tools_keys = current_keys
         return self._cached_tools_char_count

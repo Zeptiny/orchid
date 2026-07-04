@@ -580,17 +580,6 @@ class StreamWidgetState:
     in_tool_group: bool = False
 
 
-async def _mount_before_temp_or_end(container: Any, widget: Any, state: StreamWidgetState) -> None:
-    """Replace the oldest temp tool widget with *widget*, or append it."""
-    if state.temp:
-        temp = state.temp.pop(0)
-        async with container.batch():
-            await container.mount(widget, before=temp)
-            await temp.remove()
-    else:
-        await container.mount(widget)
-
-
 async def mount_streamed_message(container: Any, msg: Message, state: StreamWidgetState) -> None:
     """Mount or update widgets for a streamed message."""
     if msg.type == MessageType.ERROR:
