@@ -62,7 +62,20 @@ def list_saved_sessions() -> list[dict[str, Any]]:
     ensure_sessions_dir()
     sessions: list[dict[str, Any]] = []
     partial_read_size = 2048
-    for path in SESSIONS_DIR.glob("*.json"):
+
+    def _session_mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError as e:
+            log.warning("Could not stat session file %s: %s", path.name, e)
+            return 0
+
+    session_paths = sorted(
+        SESSIONS_DIR.glob("*.json"),
+        key=_session_mtime,
+        reverse=True,
+    )
+    for path in session_paths:
         try:
             # Try partial read first — metadata fields are at the top of the file
             with open(path) as f:

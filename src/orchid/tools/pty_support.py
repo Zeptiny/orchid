@@ -9,9 +9,15 @@ used instead of pipes.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import time
 
-from orchid.tools.exec import ENV_SUPPRESSION
+from orchid.tools.exec import PTY_ENV_SUPPRESSION
+
+log = logging.getLogger(__name__)
+_PTY_DRAIN_TIMEOUT = 5.0
+_PTY_DRAIN_RETRY_SLEEP = 0.001
 
 # ---------------------------------------------------------------------------
 # PTY stdin writer (duck-types asyncio.StreamWriter for send() compat)
@@ -35,37 +41,30 @@ class _PTYStdinWriter:
         self._pending = bytearray()
         try:
             os.set_blocking(master_fd, False)
-        except OSError:
-            pass
+        except OSError as exc:
+            log.warning("Failed to set PTY master fd %s nonblocking: %s", master_fd, exc)
 
     def write(self, data: bytes) -> None:
         """Queue *data* for writing to the PTY master fd."""
         self._pending.extend(data)
 
-    def _blocking_write(self, data: bytes) -> None:
-        """Write data synchronously, retrying short writes."""
-        mv = memoryview(data)
-        while mv:
-            try:
-                written = os.write(self._master_fd, mv)
-            except BlockingIOError:
-                import time
-                time.sleep(0.001)
-                continue
-            if written == 0:
-                raise OSError("PTY write returned 0")
-            mv = mv[written:]
-
     async def drain(self) -> None:
         """Flush queued data without blocking the event loop."""
+        deadline = time.monotonic() + _PTY_DRAIN_TIMEOUT
         while self._pending:
             try:
                 written = os.write(self._master_fd, self._pending)
-            except BlockingIOError:
-                await asyncio.sleep(0.001)
+            except BlockingIOError as exc:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Timed out writing to PTY stdin") from exc
+                await asyncio.sleep(_PTY_DRAIN_RETRY_SLEEP)
                 continue
+            except OSError as exc:
+                self._pending.clear()
+                raise BrokenPipeError("PTY stdin is closed") from exc
             if written == 0:
-                raise OSError("PTY write returned 0")
+                self._pending.clear()
+                raise BrokenPipeError("PTY write returned 0")
             del self._pending[:written]
 
 
@@ -196,10 +195,10 @@ async def spawn_with_pty(
         Working directory for the child process.
     env:
         Environment dict.  Falls back to ``os.environ`` merged with
-        :data:`ENV_SUPPRESSION`.
+        :data:`PTY_ENV_SUPPRESSION`.
     """
     if env is None:
-        env = {**os.environ, **ENV_SUPPRESSION}
+        env = {**os.environ, **PTY_ENV_SUPPRESSION}
 
     master_fd, slave_fd = open_pty()
 

@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer
+from textual.message import Message as TextualMessage
 from textual.timer import Timer
 from textual.widgets import LoadingIndicator, Static, TabbedContent, TabPane, TextArea
 from textual.worker import Worker
@@ -189,6 +190,29 @@ class InterruptState(Enum):
     IDLE = "idle"
     CONFIRM_AGENT = "confirm_agent"
     CONFIRM_SUBAGENTS = "confirm_subagents"
+
+
+class CollapsedChainStub(Static):
+    """Clickable placeholder for a collapsed historical chain."""
+
+    can_focus = True
+    BINDINGS = [("enter", "expand"), ("space", "expand")]
+
+    class ExpandRequested(TextualMessage):
+        def __init__(self, stub: "CollapsedChainStub", chain_index: int) -> None:
+            super().__init__()
+            self.stub = stub
+            self.chain_index = chain_index
+
+    def __init__(self, chain_index: int, label: str, **kwargs: Any) -> None:
+        super().__init__(label, **kwargs)
+        self.chain_index = chain_index
+
+    def on_click(self) -> None:
+        self.post_message(self.ExpandRequested(self, self.chain_index))
+
+    def action_expand(self) -> None:
+        self.post_message(self.ExpandRequested(self, self.chain_index))
 
 
 class InputTextArea(TextArea):
@@ -882,35 +906,17 @@ class Orchid(App[None]):
                 msg_count = len(chain.messages)
                 user_msgs = [m for m in chain.messages if m.role == MessageRole.USER]
                 preview = user_msgs[0].content[:60] + "..." if user_msgs else f"{msg_count} messages"
-                stub = Static(
+                stub = CollapsedChainStub(
+                    chain_index,
                     f"[dim]▸ Chain {chain_index + 1}: {preview}[/dim]",
                     classes="collapsed-chain-stub",
                 )
                 chain_containers.append(stub)
                 chain_widgets.append([])  # no widgets for stubs
             else:
-                subtotal_provider = _make_subagent_subtotal_provider(
-                    self.sessions.active, chain_index
-                )
-                chain_container = ChainContainer(chain, subagent_subtotal=subtotal_provider)
+                chain_container = self._create_chain_container(self.sessions.active, chain_index, chain)
                 chain_containers.append(chain_container)
-                # Pre-build message widgets for this chain
-                widgets: list[Any] = []
-                prev_was_thinking = False
-                for msg in chain.messages:
-                    classes = (
-                        "after-thinking"
-                        if msg.type == MessageType.TOOL_RESULT and prev_was_thinking
-                        else None
-                    )
-                    widget = create_message_widget(msg, loaded=True, classes=classes)
-                    if widget is not None:
-                        widgets.append(widget)
-                    if msg.type == MessageType.THINKING:
-                        prev_was_thinking = True
-                    elif msg.type != MessageType.TOOL_CALL:
-                        prev_was_thinking = False
-                chain_widgets.append(widgets)
+                chain_widgets.append(self._create_loaded_message_widgets(chain))
         # Batch-mount all chain containers at once (single layout pass)
         if chain_containers:
             await container.mount(*chain_containers)
@@ -921,6 +927,56 @@ class Orchid(App[None]):
                 if widgets and chain_container.messages_area:
                     assert chain_container.messages_area is not None
                     await chain_container.messages_area.mount(*widgets)
+
+    def _create_chain_container(
+        self,
+        session: Session,
+        chain_index: int,
+        chain: Chain,
+    ) -> ChainContainer:
+        subtotal_provider = _make_subagent_subtotal_provider(session, chain_index)
+        return ChainContainer(chain, subagent_subtotal=subtotal_provider)
+
+    def _create_loaded_message_widgets(self, chain: Chain) -> list[Any]:
+        widgets: list[Any] = []
+        prev_was_thinking = False
+        for msg in chain.messages:
+            classes = (
+                "after-thinking"
+                if msg.type == MessageType.TOOL_RESULT and prev_was_thinking
+                else None
+            )
+            widget = create_message_widget(msg, loaded=True, classes=classes)
+            if widget is not None:
+                widgets.append(widget)
+            if msg.type == MessageType.THINKING:
+                prev_was_thinking = True
+            elif msg.type != MessageType.TOOL_CALL:
+                prev_was_thinking = False
+        return widgets
+
+    async def on_collapsed_chain_stub_expand_requested(
+        self,
+        event: CollapsedChainStub.ExpandRequested,
+    ) -> None:
+        if not self.sessions.active:
+            return
+        if event.chain_index < 0 or event.chain_index >= len(self.sessions.active.chains):
+            return
+        chain = self.sessions.active.chains[event.chain_index]
+        chain_container = self._create_chain_container(
+            self.sessions.active,
+            event.chain_index,
+            chain,
+        )
+        widgets = self._create_loaded_message_widgets(chain)
+        container = self.query_one("#output", ScrollableContainer)
+        await container.mount(chain_container, before=event.stub)
+        await event.stub.remove()
+        chain_container.freeze()
+        if widgets and chain_container.messages_area:
+            await chain_container.messages_area.mount(*widgets)
+        await self._tick_live_commands()
 
     async def rerender_all(self) -> None:
         if not self.sessions.active:

@@ -13,6 +13,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from rich.markup import escape as escape_markup
 from textual.app import ComposeResult
 from textual.message import Message
 from textual.widgets import Collapsible, Static
@@ -77,7 +78,7 @@ class LiveCommandOutputWidget(Static):
     # -- composition ----------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        self._content_widget = Static("", classes="tool-result-content")
+        self._content_widget = Static("", markup=False, classes="tool-result-content")
         self._collapsible = Collapsible(
             self._content_widget,
             title=self._build_title(),
@@ -100,8 +101,7 @@ class LiveCommandOutputWidget(Static):
         """Mark the widget as finished.  Flushes any pending content."""
         self._finished = True
         self._exit_code = exit_code
-        self._flush_scheduled = False
-        self._do_render()
+        self.flush()
         self._update_title()
 
     def get_buffered_text(self) -> str:
@@ -125,6 +125,7 @@ class LiveCommandOutputWidget(Static):
     def _build_title(self) -> str:
         """Build the collapsible title showing command and status."""
         cmd_display = f"$ {self.command_text}" if self.command_text else (self.description or f"Command #{self.command_id}")
+        cmd_display = escape_markup(cmd_display)
         if self._finished:
             status = (
                 f"exit {self._exit_code}"

@@ -238,15 +238,16 @@ def test_open_pty_returns_pair():
 # ---------------------------------------------------------------------------
 
 
-def test_pty_stdin_writer_write():
-    """_PTYStdinWriter._blocking_write() writes bytes to the master fd."""
+@pytest.mark.asyncio
+async def test_pty_stdin_writer_write():
+    """_PTYStdinWriter.drain() writes queued bytes to the master fd."""
     import select
 
     master, slave = open_pty()
     try:
         writer = _PTYStdinWriter(master)
-        # Use _blocking_write directly in sync context (write() now requires an event loop).
-        writer._blocking_write(b"hello\n")
+        writer.write(b"hello\n")
+        await writer.drain()
         # Wait for data to be available on the slave side.
         ready, _, _ = select.select([slave], [], [], 2.0)
         assert ready, "No data available on slave within 2 s"
@@ -257,8 +258,9 @@ def test_pty_stdin_writer_write():
         os.close(slave)
 
 
-def test_pty_stdin_writer_short_write():
-    """_PTYStdinWriter._blocking_write() retries when os.write returns fewer bytes."""
+@pytest.mark.asyncio
+async def test_pty_stdin_writer_short_write():
+    """_PTYStdinWriter.drain() retries when os.write returns fewer bytes."""
     import select
     from unittest.mock import patch
 
@@ -279,7 +281,8 @@ def test_pty_stdin_writer_short_write():
             return original_os_write(fd, d)
 
         with patch("os.write", side_effect=mock_os_write):
-            writer._blocking_write(data)
+            writer.write(data)
+            await writer.drain()
 
         # Wait for data on the slave side
         ready, _, _ = select.select([slave], [], [], 2.0)
@@ -292,8 +295,9 @@ def test_pty_stdin_writer_short_write():
         os.close(slave)
 
 
-def test_pty_stdin_writer_blocking_io_error():
-    """_PTYStdinWriter._blocking_write() retries after BlockingIOError."""
+@pytest.mark.asyncio
+async def test_pty_stdin_writer_blocking_io_error():
+    """_PTYStdinWriter.drain() retries after BlockingIOError."""
     import select
     from unittest.mock import patch
 
@@ -313,7 +317,8 @@ def test_pty_stdin_writer_blocking_io_error():
             return original_os_write(fd, d)
 
         with patch("os.write", side_effect=mock_os_write):
-            writer._blocking_write(data)
+            writer.write(data)
+            await writer.drain()
 
         # Wait for data on the slave side
         ready, _, _ = select.select([slave], [], [], 2.0)
@@ -323,6 +328,19 @@ def test_pty_stdin_writer_blocking_io_error():
         assert call_count["n"] == 2  # Two calls: error + success
     finally:
         os.close(master)
+        os.close(slave)
+
+
+@pytest.mark.asyncio
+async def test_pty_stdin_writer_drain_closed_fd_raises_broken_pipe():
+    master, slave = open_pty()
+    writer = _PTYStdinWriter(master)
+    writer.write(b"hello\n")
+    os.close(master)
+    try:
+        with pytest.raises(BrokenPipeError):
+            await writer.drain()
+    finally:
         os.close(slave)
 
 

@@ -928,7 +928,7 @@ class Sidebar(Vertical):
                     current_active_ids.append(int(child.view_id))
                 except (ValueError, TypeError):
                     pass
-            elif isinstance(child, Collapsible):
+            elif isinstance(child, Collapsible) and "finished-collapse" in child.classes:
                 existing_collapse = child
                 for entry in child.query(NavEntry):
                     try:
@@ -967,6 +967,32 @@ class Sidebar(Vertical):
                             if self._bg_cmd_label_cache.get(cmd_id) != new_text:
                                 self._bg_cmd_label_cache[cmd_id] = new_text
                                 entry.update(new_text)
+                elif isinstance(child, Collapsible) and "bg-cmd-expand" in child.classes:
+                    cmd_id = self._expanded_bg_cmd_id
+                    if cmd_id is None:
+                        continue
+                    r = records_by_id.get(cmd_id)
+                    if not r:
+                        continue
+                    try:
+                        tail_widget = child.query_one(".bg-cmd-expand-tail", Static)
+                    except Exception:
+                        continue
+                    from orchid.tools.background_store import get_background_store
+                    store = get_background_store()
+                    snap = store.snapshot_visible(
+                        cmd_id,
+                        session_id=_current_bg_session_id(),
+                        agent_scope_id=_active_bg_agent_scope_id(cast(Any, self).app),
+                    )
+                    tail_text = snap[0] if snap else "(no output yet)"
+                    if not tail_text.strip():
+                        tail_text = "(no output yet)"
+                    tail_lines = tail_text.split("\n")
+                    if len(tail_lines) > 16:
+                        tail_lines = tail_lines[-16:]
+                        tail_text = "...\n" + "\n".join(tail_lines)
+                    tail_widget.update(tail_text)
             return
 
         # Structure changed — batch rebuild
@@ -1126,7 +1152,7 @@ class Sidebar(Vertical):
             tail_lines = tail_lines[-16:]
             tail_text = "...\n" + "\n".join(tail_lines)
 
-        tail_widget = Static(tail_text, classes="bg-cmd-expand-tail")
+        tail_widget = Static(tail_text, markup=False, classes="bg-cmd-expand-tail")
         input_widget = BgCommandInput(
             cmd_id,
             placeholder="Type to send input...",

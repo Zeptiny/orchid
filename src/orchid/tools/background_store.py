@@ -15,7 +15,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from orchid.tools.exec import ENV_SUPPRESSION
+from orchid.tools.exec import ENV_SUPPRESSION, PTY_ENV_SUPPRESSION
 
 if TYPE_CHECKING:
     from orchid.tools.pty_support import PTYHandle
@@ -54,6 +54,12 @@ class HeadTailBuffer:
         if not data:
             return
         self._total_written += len(data)
+
+        if self.head:
+            self.tail.extend(data)
+            if len(self.tail) > _TAIL_CAP:
+                del self.tail[: len(self.tail) - _TAIL_CAP]
+            return
 
         if len(self.head) + len(self.tail) + len(data) <= _TOTAL_CAP:
             # Still under the cap – just append to the tail.
@@ -186,11 +192,10 @@ class BackgroundProcessStore:
         buf = HeadTailBuffer()
         now = time.monotonic()
 
-        env = {**os.environ, **ENV_SUPPRESSION}
-
         if interactive:
             from orchid.tools.pty_support import spawn_with_pty
 
+            env = {**os.environ, **PTY_ENV_SUPPRESSION}
             handle = await spawn_with_pty(command, cwd=cwd, env=env)
             entry = ProcessEntry(
                 id=proc_id,
@@ -206,6 +211,7 @@ class BackgroundProcessStore:
                 description=description,
             )
         else:
+            env = {**os.environ, **ENV_SUPPRESSION}
             process = await asyncio.create_subprocess_shell(
                 command,
                 stdin=asyncio.subprocess.DEVNULL,

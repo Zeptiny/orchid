@@ -188,7 +188,7 @@ async def test_tail_xml_chars_escaped():
     assert "&lt;html&gt;&amp;\"test\"" in c
     assert "<html>" not in c
     # Command attr should also be escaped
-    assert "&quot;" in c or "python -c" in c  # command uses double quotes inside, they'll be escaped by escape()
+    assert 'command="python -c &quot;print(\'hello\')&quot;"' in c
 
 
 # ---------------------------------------------------------------------------
@@ -243,16 +243,16 @@ async def test_entry_count_cap():
 
 @pytest.mark.asyncio
 async def test_tail_char_cap():
-    """Tail exceeding 500 chars is truncated with '...'."""
-    long_text = "A" * 600 + "\n"
+    """Tail exceeding 500 chars is truncated from the older leading side."""
+    long_text = "A" * 200 + "B" * 400 + "\n"
     entry = _make_entry(id=1, tail_bytes=long_text.encode())
     patches = _patch_deps(bg_entries=[entry])
     with patches["get_config"], patches["directory_tree"], patches["get_subagent_manager"], patches["get_todo_store"], patches["get_background_store"]:
         msg = await dsp.build_dynamic_system_prompt()
     c = msg.content
     assert "..." in c
-    # The full 600-char block should NOT appear
-    assert "A" * 600 not in c
+    assert "A" * 100 not in c
+    assert "B" * 300 in c
 
 
 # ---------------------------------------------------------------------------

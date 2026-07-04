@@ -9,9 +9,15 @@ from orchid.tools._xml_utils import cdata_text, xml_attr
 
 MAX_OUTPUT_BYTES = 1 * 1024 * 1024
 
-# Environment variables forced for every command spawn (foreground and
-# background).  Imported by ``background_store.py`` so both paths stay in sync.
+# Environment variables forced for non-interactive command spawns. Imported by
+# ``background_store.py`` so foreground and background pipe paths stay in sync.
 ENV_SUPPRESSION: dict[str, str] = {"NO_COLOR": "1", "TERM": "dumb", "PAGER": "cat"}
+_PTY_TERM = os.environ.get("TERM")
+PTY_ENV_SUPPRESSION: dict[str, str] = {
+    "NO_COLOR": "1",
+    "TERM": _PTY_TERM if _PTY_TERM and _PTY_TERM != "dumb" else "xterm-256color",
+    "PAGER": "cat",
+}
 
 
 async def _read_bounded(
@@ -83,7 +89,11 @@ execute_command_tool = Tool(
                 type="boolean", description="When true, run the command in the background and return immediately with a process id"
             ),
             "interactive": ToolParameterProperties(
-                type="boolean", description="When true, allocate a PTY and enable writable stdin for interactive commands"
+                type="boolean",
+                description=(
+                    "When true with background=true, allocate a PTY and enable "
+                    "writable stdin for interactive commands"
+                ),
             ),
         },
         required=["command", "description"],
@@ -104,6 +114,16 @@ async def execute_command(
     """Execute a system command using asyncio subprocess."""
     if description is None:
         description = command
+
+    if interactive and not background:
+        return ExecutorResult(
+            display="interactive=True requires background=True",
+            content=(
+                f'<error command="{xml_attr(command)}">'
+                f"<![CDATA[interactive=True is only supported with background=True]]>"
+                f"</error>"
+            ),
+        )
 
     # -- background path ---------------------------------------------------
     if background:

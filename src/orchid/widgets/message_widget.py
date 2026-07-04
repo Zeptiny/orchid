@@ -69,11 +69,14 @@ def get_tool_action_label(tool_name: str) -> str:
 
 
 def remove_live_command_widgets_for_messages(messages: list[Message]) -> None:
-    """Drop live-command widget references created by the given messages."""
+    """Drop terminal live-command widget references created by the given messages."""
     for msg in messages:
         match = _BACKGROUND_CMD_RE.search(msg.content)
         if match:
-            live_command_widgets.pop(int(match.group(1)), None)
+            cmd_id = int(match.group(1))
+            widget = live_command_widgets.get(cmd_id)
+            if widget is not None and widget.is_finished:
+                live_command_widgets.pop(cmd_id, None)
 
 
 def get_tool_result_title(msg: Message) -> str:
@@ -523,6 +526,23 @@ def create_message_widget(
         case MessageType.TOOL_CALL:
             return None
         case MessageType.TOOL_RESULT:
+            bg_match = _BACKGROUND_CMD_RE.search(msg.content)
+            if loaded and bg_match:
+                cmd_id = int(bg_match.group(1))
+                try:
+                    from orchid.tools.background_store import get_background_store
+                    entry = get_background_store().get_visible(cmd_id)
+                except Exception:
+                    entry = None
+                if entry is not None and entry.exit_code is None:
+                    widget = LiveCommandOutputWidget(
+                        cmd_id,
+                        command_text=bg_match.group(2),
+                        description=bg_match.group(3),
+                        classes=classes,
+                    )
+                    live_command_widgets[cmd_id] = widget
+                    return widget
             return ToolResultMessageWidget(msg, classes=classes)
         case MessageType.ERROR:
             return ErrorMessageWidget(msg, classes=classes)
@@ -539,6 +559,17 @@ class StreamWidgetState:
     thinking: Any = None
     content: Any = None
     temp: list[Any] = field(default_factory=list[Any])
+
+
+async def _mount_before_temp_or_end(container: Any, widget: Any, state: StreamWidgetState) -> None:
+    """Replace the oldest temp tool widget with *widget*, or append it."""
+    if state.temp:
+        temp = state.temp.pop(0)
+        async with container.batch():
+            await container.mount(widget, before=temp)
+            await temp.remove()
+    else:
+        await container.mount(widget)
 
 
 async def mount_streamed_message(container: Any, msg: Message, state: StreamWidgetState) -> None:
@@ -578,23 +609,11 @@ async def mount_streamed_message(container: Any, msg: Message, state: StreamWidg
                 classes="after-thinking" if state.thinking else None,
             )
             live_command_widgets[cmd_id] = w
-            if state.temp:
-                temp = state.temp.pop(0)
-                async with container.batch():
-                    await container.mount(w, before=temp)
-                    await temp.remove()
-            else:
-                await container.mount(w)
+            await _mount_before_temp_or_end(container, w, state)
             w.scroll_visible(animate=False)
         else:
             w = ToolResultMessageWidget(msg, classes="after-thinking" if state.thinking else None)
-            if state.temp:
-                temp = state.temp.pop(0)
-                async with container.batch():
-                    await container.mount(w, before=temp)
-                    await temp.remove()
-            else:
-                await container.mount(w)
+            await _mount_before_temp_or_end(container, w, state)
             w.scroll_visible(animate=False)
         if state.thinking:
             state.thinking.finish()

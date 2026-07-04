@@ -164,6 +164,7 @@ class TestBgCmdRunningEntry(unittest.IsolatedAsyncioTestCase):
             # Verify the entry is properly formed with the bg-cmd-entry class
             self.assertIn("bg-cmd-entry", entry.classes)
             self.assertEqual(entry.view_id, "1")
+            self.assertIn("green", repr(entry.render()))
 
     async def test_running_entry_shows_command_name(self):
         async with _SidebarApp().run_test() as pilot:
@@ -178,6 +179,7 @@ class TestBgCmdRunningEntry(unittest.IsolatedAsyncioTestCase):
             # Verify the entry is properly formed
             self.assertIn("bg-cmd-entry", entry.classes)
             self.assertEqual(entry.view_id, "1")
+            self.assertIn("my-long-command", str(entry.render()))
 
 
 class TestBgCmdInputOwnership(unittest.IsolatedAsyncioTestCase):

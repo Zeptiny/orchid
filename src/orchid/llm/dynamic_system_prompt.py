@@ -9,6 +9,7 @@ from orchid.agents.manager import format_subagent_attrs, get_subagent_manager
 from orchid.config import get_config
 from orchid.domain.message import Message, MessageRole, MessageType
 from orchid.domain.todo import get_todo_store
+from orchid.tools._xml_utils import xml_attr
 from orchid.tools.background_store import get_background_store
 from orchid.utils import directory_tree
 
@@ -92,7 +93,7 @@ async def build_dynamic_system_prompt() -> Message:
 
             attrs = (
                 f'id="{entry.id}" '
-                f'command="{escape(entry.command)}" '
+                f'command="{xml_attr(entry.command)}" '
                 f'runtime="{runtime}" '
                 f'last_output_age="{last_output_age}" '
                 f'owner="{escape(entry.owner)}" '
@@ -105,7 +106,7 @@ async def build_dynamic_system_prompt() -> Message:
             tail_text = entry.buffer.get_tail(_BG_TAIL_LINES)
             # Cap tail chars.
             if len(tail_text) > _BG_TAIL_CHARS:
-                tail_text = tail_text[:_BG_TAIL_CHARS] + "..."
+                tail_text = "..." + tail_text[-(_BG_TAIL_CHARS - 3):]
             tail_escaped = escape(tail_text)
 
             bg_lines.append(f'  <command {attrs}>')
