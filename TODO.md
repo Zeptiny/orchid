@@ -54,34 +54,27 @@
 - Mensagens de erro vazam strings de comando e caminhos de arquivo em erros de execução de ferramentas (exec.py)
 - Correspondência difusa (fuzzy matching) na ferramenta edit
   - Por exemplo, opencode tem 9 maneira de fuzzy matching
-- Não mostrar [interrupted by user]
 - Multiline todo items
 - MCP Servers não tem o mesmo espaçamento da esquerda como Subagentes e todo
-
-### Comandos
-- Comandos que precisam de input
-  - Ex: Perssione y para instalar
-  - Agente deve ser capaz de responder
-- Visualizar comandos executando em tempo real
 
 ### Bugs
 - Conversa não rolando automaticamente para baixo
   - Deve permitir o usuário dar scroll para cima ainda
 - Algo pode estar bloqueando/não paralelo - quando múltiplos subagentes são instanciados, a CPU usa apenas um núcleo
-- O tempo de indexação RAG e AST na barra lateral não é atualizado regularmente, ficando obsoleto
 - Contexto não está sendo atualizado constantemente
   - Ainda precisa ser investigado
 - Excluir wait for subagent da limitação de tamanho do tool result
 - Input de comandos podem estar ficando no buffer e não serem enviados
 
 ### Configuração
-- Adicionar provedor tem como colcoar api key e env auth ao mesmo tempo
+- Adicionar provedor tem como colocar api key e env auth ao mesmo tempo
   - Deixar apenas um visivel, selecionado por botão
 - Adicionar um MCP tem como colocar comandos e URL ao mesmo tempo
   - Deixar apenas um visivel, selecionado por botão
   - Não tem como colocar auth token
 - Remover o provedor e agentes nos tiers default
   - Onboarding
+- Modelo selecionado por /model ficar como padrão para novas sessões
 
 ### Considerações
 - Tornar a ferramenta read utilizável com diretórios?

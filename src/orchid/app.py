@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, cast
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, ScrollableContainer
+from textual.containers import Horizontal, Vertical
 from textual.message import Message as TextualMessage
 from textual.timer import Timer
 from textual.widgets import LoadingIndicator, Static, TabbedContent, TabPane, TextArea
@@ -45,6 +45,7 @@ from orchid.widgets.sidebar import (
     SidebarMainSelected,
     SidebarSubagentSelected,
 )
+from orchid.widgets.smart_scroll import SmartScrollContainer
 from orchid.widgets.subagent_ui import SubagentUIManager
 
 log = logging.getLogger(__name__)
@@ -137,6 +138,24 @@ def _format_session_model_label(
     )
 
 
+def _format_footer_usage_label(
+    totals: tuple[int, int, int, int] | None,
+    max_context: int | None = None,
+) -> str:
+    """Render compact, descriptive usage for the input footer."""
+    if totals is None:
+        return ""
+    prompt, cached, completion, total = totals
+    context = ""
+    if max_context and max_context > 0:
+        context = f" ({prompt / max_context * 100:.0f}%)"
+    return (
+        f"Σ{Chain.format_tokens(total)}{context} · "
+        f"↑{Chain.format_tokens(prompt)} "
+        f"(⟲{Chain.format_tokens(cached)}) ↓{Chain.format_tokens(completion)}"
+    )
+
+
 def _chain_subagent_subtotals(
     session: "Session", chain_index: int
 ) -> tuple[int, int, int, int] | None:
@@ -166,6 +185,14 @@ def _chain_subagent_subtotals(
     return (prompt, cached, completion, total)
 
 
+def _replayed_message_classes(
+    msg: Message, *, has_visible_message: bool, prev_was_tool: bool
+) -> str | None:
+    if msg.type == MessageType.TOOL_RESULT and has_visible_message and not prev_was_tool:
+        return "tool-group-start"
+    return None
+
+
 def _make_subagent_subtotal_provider(
     session: "Session", chain_index: int | None
 ) -> "Callable[[], tuple[int, int, int, int] | None] | None":
@@ -190,6 +217,26 @@ class InterruptState(Enum):
     IDLE = "idle"
     CONFIRM_AGENT = "confirm_agent"
     CONFIRM_SUBAGENTS = "confirm_subagents"
+
+
+def _get_shortcut_hints(
+    interrupt_state: InterruptState,
+    is_streaming: bool,
+    has_running_subagents: bool,
+    input_has_text: bool,
+) -> str:
+    """Return a contextual keyboard-shortcut hint string for the footer."""
+    if interrupt_state == InterruptState.CONFIRM_AGENT:
+        return "Esc again: interrupt agent"
+    if interrupt_state == InterruptState.CONFIRM_SUBAGENTS:
+        return "Esc again: interrupt subagents"
+    if is_streaming:
+        return "Esc: interrupt agent | Ctrl+P: commands"
+    if has_running_subagents:
+        return "Esc: interrupt subagents | Ctrl+P: commands"
+    if input_has_text:
+        return "Ctrl+S: submit | Ctrl+C: clear | Ctrl+P: commands"
+    return "Ctrl+P: commands"
 
 
 class CollapsedChainStub(Static):
@@ -222,6 +269,22 @@ class InputTextArea(TextArea):
         super()._on_resize()
         if self._app_ref is not None:
             self._app_ref._update_input_height(self)  # pyright: ignore[reportPrivateUsage]
+
+    def on_focus(self) -> None:
+        if self._app_ref is not None:
+            try:
+                wrapper = self._app_ref.query_one("#input-wrapper", Vertical)
+                wrapper.add_class("-focused")
+            except Exception:
+                pass
+
+    def on_blur(self) -> None:
+        if self._app_ref is not None:
+            try:
+                wrapper = self._app_ref.query_one("#input-wrapper", Vertical)
+                wrapper.remove_class("-focused")
+            except Exception:
+                pass
 
 
 class Orchid(App[None]):
@@ -289,23 +352,25 @@ class Orchid(App[None]):
         return self.sessions.active.model if self.sessions.active else None
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="header"):
-            yield Static(self.sessions.active.name if self.sessions.active else "No Session", id="title")
-        with TabbedContent(id="tabs", initial="main"), TabPane("Main", id="main"):
-            yield ScrollableContainer(id="output")
-        yield CommandPicker(SessionCommands.COMMANDS)
-        yield InputTextArea(id="input", highlight_cursor_line=False)
-        with Horizontal(id="footer"):
-            yield LoadingIndicator(id="spinner")
-            yield Static("N/A Model", id="model")
-            yield Static("", id="interrupt-hint")
-        yield Sidebar(id="sidebar")
+        with Horizontal(id="body"):
+            with Vertical(id="main-pane"):
+                with TabbedContent(id="tabs", initial="main"), TabPane("Main", id="main"):
+                    yield SmartScrollContainer(id="output")
+                yield CommandPicker(SessionCommands.COMMANDS)
+                with Vertical(id="input-wrapper"):
+                    yield InputTextArea(id="input", highlight_cursor_line=False)
+                    yield Static("", id="input-meta")
+                with Horizontal(id="footer"):
+                    yield LoadingIndicator(id="spinner")
+                    yield Static("", id="footer-usage")
+                    yield Static("", id="shortcuts")
+            yield Sidebar(id="sidebar")
 
     async def on_mount(self) -> None:
         self.sessions.create()
         set_todo_refresh_callback(self.refresh_todos)
         assert self.sessions.active is not None
-        self.query_one("#title", Static).update(self.sessions.active.name)
+        self.query_one("#sidebar", Sidebar).set_title(self.sessions.active.name)
         await self.mount_all_messages()
         text_area = self.query_one("#input", InputTextArea)
         text_area._app_ref = self  # pyright: ignore[reportPrivateUsage]
@@ -366,23 +431,18 @@ class Orchid(App[None]):
         except Exception:
             pass
 
-        hint = self.query_one("#interrupt-hint", Static)
-
         if self._interrupt_state == InterruptState.IDLE:
             if self._is_streaming():
                 self._interrupt_state = InterruptState.CONFIRM_AGENT
-                hint.update("[bold yellow]Press Esc again to interrupt agent[/]")
                 self._start_interrupt_timeout()
             elif self._has_running_subagents():
                 self._interrupt_state = InterruptState.CONFIRM_SUBAGENTS
-                hint.update("[bold red]Press Esc again to interrupt subagents[/]")
                 self._start_interrupt_timeout()
         elif self._interrupt_state == InterruptState.CONFIRM_AGENT:
             self._interrupt_state = InterruptState.CONFIRM_SUBAGENTS
             if self._active_worker and not self._active_worker.is_finished:
                 self._active_worker.cancel()
             if self._has_running_subagents():
-                hint.update("[bold red]Press Esc again to interrupt subagents[/]")
                 self._start_interrupt_timeout()
             else:
                 self._reset_interrupt_state()
@@ -400,6 +460,7 @@ class Orchid(App[None]):
                     interrupt_msg = Message(
                         role=MessageRole.ASSISTANT,
                         content=f"[Subagents interrupted by user: {detail}]",
+                        hidden=True,
                     )
                     if self._current_chain:
                         self._current_chain.chain.messages.append(interrupt_msg)
@@ -408,16 +469,14 @@ class Orchid(App[None]):
                     except Exception:
                         pass
             self._reset_interrupt_state()
+        self._render_footer_shortcuts()
 
     def _reset_interrupt_state(self) -> None:
         self._interrupt_state = InterruptState.IDLE
         if self._interrupt_timer is not None:
             self._interrupt_timer.stop()
             self._interrupt_timer = None
-        try:
-            self.query_one("#interrupt-hint", Static).update("")
-        except Exception:
-            pass
+        self._render_footer_shortcuts()
 
     def _start_interrupt_timeout(self) -> None:
         """Auto-reset interrupt state after 5 seconds of inactivity."""
@@ -448,6 +507,7 @@ class Orchid(App[None]):
         assert self._current_chain is not None
         self._current_chain.chain.messages.append(msg)
         await self.mount_message(msg)
+        self.query_one("#output", SmartScrollContainer).force_scroll_to_end()
         self._reset_interrupt_state()
         self.streaming_started()
         self._active_worker = self.run_worker(self._stream_response(), exit_on_error=False)
@@ -463,6 +523,7 @@ class Orchid(App[None]):
         if event.text_area.id != "input":
             return
         self._update_input_height(event.text_area)
+        self._render_footer_shortcuts()
         text = event.text_area.text.strip()
         try:
             picker = self.query_one("#command-picker", CommandPicker)
@@ -513,7 +574,7 @@ class Orchid(App[None]):
         sidebar.set_active("main")
 
     async def _stream_response(self) -> None:
-        output = self.query_one("#output", ScrollableContainer)
+        output = self.query_one("#output", SmartScrollContainer)
         container = self._current_chain.messages_area if self._current_chain else output
 
         ws = StreamWidgetState()
@@ -538,6 +599,7 @@ class Orchid(App[None]):
                 record_streamed_message(self._current_chain.chain.messages, msg, history_state)
 
                 await mount_streamed_message(container, msg, ws)
+                output.maybe_scroll_to_end()
 
                 if ws.content and msg.usage:
                     ws.content.msg.usage = msg.usage
@@ -547,6 +609,7 @@ class Orchid(App[None]):
             interrupted_msg = Message(
                 role=MessageRole.ASSISTANT,
                 content="[Interrupted by user]",
+                hidden=True,
             )
             if self._current_chain:
                 self._current_chain.chain.messages.append(interrupted_msg)
@@ -604,7 +667,7 @@ class Orchid(App[None]):
         if chain_index is not None:
             assert self.sessions.active is not None
             subtotal_provider = _make_subagent_subtotal_provider(self.sessions.active, chain_index)
-        container = self.query_one("#output", ScrollableContainer)
+        container = self.query_one("#output", SmartScrollContainer)
         self._current_chain = ChainContainer(chain, subagent_subtotal=subtotal_provider)
         container.mount(self._current_chain)
 
@@ -614,11 +677,9 @@ class Orchid(App[None]):
             return
         if self._current_chain and self._current_chain.messages_area:
             await self._current_chain.messages_area.mount(widget)
-            widget.scroll_visible(animate=False)
         else:
-            container = self.query_one("#output", ScrollableContainer)
+            container = self.query_one("#output", SmartScrollContainer)
             await container.mount(widget)
-            widget.scroll_visible(animate=False)
 
     def streaming_started(self) -> None:
         self.query_one("#spinner").display = True
@@ -626,8 +687,13 @@ class Orchid(App[None]):
         self._manage_bg_cmd_timer()
 
     async def streaming_finished(self) -> None:
+        self._active_worker = None
         self.query_one("#spinner").display = False
         self._freeze_chain()
+        # Final scroll after chain footer is frozen — catches any layout change
+        # from the footer text update that happened after the stream loop's last
+        # maybe_scroll_to_end() call.
+        self.query_one("#output", SmartScrollContainer).maybe_scroll_to_end()
         if self._interrupt_state != InterruptState.CONFIRM_SUBAGENTS:
             self._reset_interrupt_state()
         self._manage_bg_cmd_timer()
@@ -718,7 +784,7 @@ class Orchid(App[None]):
                     session.name = title
                     if self.sessions.active is session:
                         try:
-                            self.query_one("#title", Static).update(title)
+                            self.query_one("#sidebar", Sidebar).set_title(title)
                         except Exception:
                             pass
             except Exception:
@@ -888,9 +954,12 @@ class Orchid(App[None]):
         await self._mount_in_chain(msg)
 
     async def mount_all_messages(self) -> None:
-        container = self.query_one("#output", ScrollableContainer)
+        container = self.query_one("#output", SmartScrollContainer)
+        # Suppress auto-scroll during bulk history load — scroll once at the end.
+        container.disable_auto_scroll()
         await container.remove_children()
         if not self.sessions.active:
+            container.reset_auto_scroll()
             return
 
         total_chains = len(self.sessions.active.chains)
@@ -927,6 +996,7 @@ class Orchid(App[None]):
                 if widgets and chain_container.messages_area:
                     assert chain_container.messages_area is not None
                     await chain_container.messages_area.mount(*widgets)
+        container.force_scroll_to_end()
 
     def _create_chain_container(
         self,
@@ -939,20 +1009,21 @@ class Orchid(App[None]):
 
     def _create_loaded_message_widgets(self, chain: Chain) -> list[Any]:
         widgets: list[Any] = []
-        prev_was_thinking = False
+        has_visible_message = False
+        prev_was_tool = False
         for msg in chain.messages:
-            classes = (
-                "after-thinking"
-                if msg.type == MessageType.TOOL_RESULT and prev_was_thinking
-                else None
+            classes = _replayed_message_classes(
+                msg,
+                has_visible_message=has_visible_message,
+                prev_was_tool=prev_was_tool,
             )
             widget = create_message_widget(msg, loaded=True, classes=classes)
             if widget is not None:
                 widgets.append(widget)
-            if msg.type == MessageType.THINKING:
-                prev_was_thinking = True
+                has_visible_message = True
+                prev_was_tool = msg.type == MessageType.TOOL_RESULT
             elif msg.type != MessageType.TOOL_CALL:
-                prev_was_thinking = False
+                prev_was_tool = False
         return widgets
 
     async def on_collapsed_chain_stub_expand_requested(
@@ -970,7 +1041,7 @@ class Orchid(App[None]):
             chain,
         )
         widgets = self._create_loaded_message_widgets(chain)
-        container = self.query_one("#output", ScrollableContainer)
+        container = self.query_one("#output", SmartScrollContainer)
         await container.mount(chain_container, before=event.stub)
         await event.stub.remove()
         chain_container.freeze()
@@ -983,7 +1054,7 @@ class Orchid(App[None]):
             return
 
         live_command_widgets.clear()
-        self.query_one("#title", Static).update(self.sessions.active.name)
+        self.query_one("#sidebar", Sidebar).set_title(self.sessions.active.name)
         await self.mount_all_messages()
         await self._subagent_ui.sync_tabs(self.sessions.active.subagent_manager)
         await self.rerender_footer()
@@ -994,6 +1065,7 @@ class Orchid(App[None]):
         if not self.sessions.active:
             return
 
+        max_context = self._resolve_active_max_context()
         # Find last usage by iterating chains in reverse without materializing
         # the full flat message list (avoids O(n) list creation every tick).
         last_usage = None
@@ -1012,20 +1084,53 @@ class Orchid(App[None]):
                     last_usage.completion_tokens,
                     last_usage.total_tokens,
                     view_id="main",
-                    max_context=self._resolve_active_max_context(),
+                    max_context=max_context,
                 )
             else:
                 sidebar.update_tokens(
-                    0, 0, 0, view_id="main", max_context=self._resolve_active_max_context()
+                    0, 0, 0, view_id="main", max_context=max_context
                 )
+            # Provide raw sources for the context-breakdown estimator
+            general = get_agent_registry()["general"]
+            system_prompt = append_personality(general.system_prompt)
+            sidebar.set_context_sources(
+                self.sessions.active.messages,
+                system_prompt,
+            )
         except Exception:
             pass
 
-        model_label = self.model or "No Model"
         totals = _session_usage_totals(self.sessions.active)
-        self.query_one("#model", Static).update(_format_session_model_label(model_label, totals))
+        try:
+            self.query_one("#input-meta", Static).update(
+                _format_session_model_label(self.model or "No Model", None)
+            )
+            self.query_one("#footer-usage", Static).update(
+                _format_footer_usage_label(totals, max_context)
+            )
+        except Exception:
+            pass
 
+        self._render_footer_shortcuts()
         await self._subagent_ui.update_sidebar()
+
+    def _render_footer_shortcuts(self) -> None:
+        try:
+            text_area = self.query_one("#input", TextArea)
+            input_has_text = bool(text_area.text.strip())
+        except Exception:
+            input_has_text = False
+        try:
+            self.query_one("#shortcuts", Static).update(
+                _get_shortcut_hints(
+                    self._interrupt_state,
+                    self._is_streaming(),
+                    self._has_running_subagents(),
+                    input_has_text,
+                )
+            )
+        except Exception:
+            pass
 
     def _resolve_active_max_context(self) -> int | None:
         """Look up the active session's model `max_input_tokens`.

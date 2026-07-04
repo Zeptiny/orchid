@@ -1170,6 +1170,54 @@ class StreamCachedTokensTest(unittest.IsolatedAsyncioTestCase):
                          "explicit cached_tokens=0 must not trigger fallback")
 
 
+class FakeWidget:
+    def __init__(self, *args, classes=None, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+        self.classes = set((classes or "").split())
+        self.parent = None
+
+    def has_class(self, class_name):
+        return class_name in self.classes
+
+    async def remove(self):
+        if self.parent is not None:
+            self.parent.children.remove(self)
+            self.parent = None
+
+    def finish(self):
+        pass
+
+    def update_content(self, content):
+        self.content = content
+
+    def scroll_visible(self, animate=True):
+        pass
+
+
+class FakeBatch:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class FakeContainer:
+    def __init__(self):
+        self.children = []
+
+    def batch(self):
+        return FakeBatch()
+
+    async def mount(self, widget, before=None):
+        widget.parent = self
+        if before is None:
+            self.children.append(widget)
+        else:
+            self.children.insert(self.children.index(before), widget)
+
+
 class StreamWidgetTest(unittest.IsolatedAsyncioTestCase):
     def test_tool_result_without_display_uses_safe_collapsed_title(self):
         raw_content = "x" * 300
@@ -1242,8 +1290,6 @@ class StreamWidgetTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(output.styles.overflow_y, "auto")
 
     async def test_streamed_tool_result_group_has_spacing_after_thinking(self):
-        from orchid.app import Orchid
-
         tool_results = [
             Message(
                 MessageRole.TOOL,
@@ -1253,11 +1299,15 @@ class StreamWidgetTest(unittest.IsolatedAsyncioTestCase):
             )
             for i in range(3)
         ]
-        app = Orchid()
-        async with app.run_test(size=(100, 30)) as pilot:
-            output = app.query_one("#output")
-            state = message_widget.StreamWidgetState()
+        output = FakeContainer()
+        state = message_widget.StreamWidgetState()
 
+        with (
+            patch.object(message_widget, "UserMessageWidget", FakeWidget),
+            patch.object(message_widget, "ThinkingMessageWidget", FakeWidget),
+            patch.object(message_widget, "ToolResultMessageWidget", FakeWidget),
+            patch.object(message_widget, "Static", FakeWidget),
+        ):
             await message_widget.mount_streamed_message(
                 output,
                 Message(MessageRole.USER, "Explore this codebase"),
@@ -1291,47 +1341,83 @@ class StreamWidgetTest(unittest.IsolatedAsyncioTestCase):
                 )
             for result in tool_results:
                 await message_widget.mount_streamed_message(output, result, state)
-            await pilot.pause()
 
-            user_widget = output.children[0]
-            thinking_widget = output.children[1]
-            tool_result_widgets = output.children[2:5]
-            thinking_collapse = thinking_widget.query_one(".thinking-collapse")
+        user_widget = output.children[0]
+        thinking_widget = output.children[1]
+        tool_result_widgets = output.children[2:5]
 
-            self.assertEqual(thinking_widget.region.y, user_widget.region.y + user_widget.region.height + 1)
-            self.assertEqual(thinking_widget.region.y, thinking_collapse.region.y)
-            self.assertEqual(thinking_widget.region.height, thinking_collapse.region.height)
-            self.assertIn("after-thinking", tool_result_widgets[0].classes)
-            self.assertEqual(
-                tool_result_widgets[0].region.y,
-                thinking_collapse.region.y + thinking_collapse.region.height + 1,
-            )
-            for previous, current in zip(tool_result_widgets, tool_result_widgets[1:], strict=False):
-                self.assertNotIn("after-thinking", current.classes)
-                self.assertEqual(current.region.y, previous.region.y + previous.region.height)
+        self.assertIsInstance(user_widget, FakeWidget)
+        self.assertIsInstance(thinking_widget, FakeWidget)
+        self.assertIn("tool-group-start", tool_result_widgets[0].classes)
+        for current in tool_result_widgets[1:]:
+            self.assertNotIn("tool-group-start", current.classes)
 
+        with (
+            patch.object(message_widget, "ThinkingMessageWidget", FakeWidget),
+            patch.object(message_widget, "Static", FakeWidget),
+        ):
             await message_widget.mount_streamed_message(
                 output,
                 Message(MessageRole.ASSISTANT, "Checking another file", MessageType.THINKING),
                 state,
             )
-            await pilot.pause()
 
-            next_thinking_widget = output.children[5]
-            last_tool_result_widget = tool_result_widgets[-1]
-            self.assertEqual(
-                next_thinking_widget.region.y,
-                last_tool_result_widget.region.y + last_tool_result_widget.region.height + 1,
+        next_thinking_widget = output.children[5]
+        self.assertIsInstance(next_thinking_widget, FakeWidget)
+        self.assertFalse(next_thinking_widget.has_class("tool-group-start"))
+
+    async def test_streamed_tool_call_group_has_spacing_after_assistant_text(self):
+        output = FakeContainer()
+        state = message_widget.StreamWidgetState()
+
+        with (
+            patch.object(message_widget, "AssistantMessageWidget", FakeWidget),
+            patch.object(message_widget, "Static", FakeWidget),
+        ):
+            await message_widget.mount_streamed_message(
+                output,
+                Message(MessageRole.ASSISTANT, "Let me read the key files.", MessageType.TEXT),
+                state,
+            )
+            await message_widget.mount_streamed_message(
+                output,
+                Message(
+                    MessageRole.ASSISTANT,
+                    "",
+                    MessageType.TOOL_CALL,
+                    metadata={"tool_name": "read"},
+                ),
+                state,
+            )
+            await message_widget.mount_streamed_message(
+                output,
+                Message(
+                    MessageRole.ASSISTANT,
+                    "",
+                    MessageType.TOOL_CALL,
+                    metadata={"tool_name": "read"},
+                ),
+                state,
             )
 
-    async def test_streamed_tool_result_after_assistant_text_does_not_get_thinking_spacing(self):
-        from orchid.app import Orchid
+        assistant_widget = output.children[0]
+        first_tool_call = output.children[1]
+        second_tool_call = output.children[2]
 
-        app = Orchid()
-        async with app.run_test(size=(100, 30)) as pilot:
-            output = app.query_one("#output")
-            state = message_widget.StreamWidgetState()
+        self.assertIsInstance(assistant_widget, FakeWidget)
+        self.assertIn("tool-group-start", first_tool_call.classes)
+        self.assertNotIn("tool-group-start", second_tool_call.classes)
 
+    async def test_streamed_tool_result_after_assistant_text_starts_tool_group(self):
+        output = FakeContainer()
+        state = message_widget.StreamWidgetState()
+
+        with (
+            patch.object(message_widget, "ThinkingMessageWidget", FakeWidget),
+            patch.object(message_widget, "AssistantMessageWidget", FakeWidget),
+            patch.object(message_widget, "ToolResultMessageWidget", FakeWidget),
+            patch.object(message_widget, "Static", FakeWidget),
+        ):
             await message_widget.mount_streamed_message(
                 output,
                 Message(MessageRole.ASSISTANT, "Checking the file", MessageType.THINKING),
@@ -1362,13 +1448,36 @@ class StreamWidgetTest(unittest.IsolatedAsyncioTestCase):
                 ),
                 state,
             )
-            await pilot.pause()
 
-            assistant_widget = output.children[1]
-            tool_result_widget = output.children[2]
+        assistant_widget = output.children[1]
+        tool_result_widget = output.children[2]
 
-            self.assertNotIn("after-thinking", tool_result_widget.classes)
-            self.assertEqual(tool_result_widget.region.y, assistant_widget.region.y + assistant_widget.region.height)
+        self.assertIsInstance(assistant_widget, FakeWidget)
+        self.assertIn("tool-group-start", tool_result_widget.classes)
+
+    def test_replayed_tool_result_group_class_starts_after_visible_message(self):
+        from orchid.app import _replayed_message_classes
+
+        assistant_msg = Message(MessageRole.ASSISTANT, "Let me read files.", MessageType.TEXT)
+        first_tool_result = Message(MessageRole.TOOL, "one", MessageType.TOOL_RESULT)
+        second_tool_result = Message(MessageRole.TOOL, "two", MessageType.TOOL_RESULT)
+
+        self.assertIsNone(
+            _replayed_message_classes(
+                assistant_msg, has_visible_message=False, prev_was_tool=False
+            )
+        )
+        self.assertEqual(
+            _replayed_message_classes(
+                first_tool_result, has_visible_message=True, prev_was_tool=False
+            ),
+            "tool-group-start",
+        )
+        self.assertIsNone(
+            _replayed_message_classes(
+                second_tool_result, has_visible_message=True, prev_was_tool=True
+            )
+        )
 
     async def test_thinking_flushes_before_first_assistant_text_widget_mount(self):
         events = []

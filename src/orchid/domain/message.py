@@ -37,6 +37,7 @@ class Message:
     usage: Usage | None = None
     tool_call_id: str | None = None
     tool_calls: list[dict[str, Any]] | None = None
+    hidden: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         # OpenAI convention: assistant messages carrying only tool_calls
@@ -72,6 +73,8 @@ class Message:
                 "total_tokens": self.usage.total_tokens,
                 "cached_tokens": self.usage.cached_tokens,
             }
+        if self.hidden:
+            d["hidden"] = True
         if self.tool_call_id:
             d["tool_call_id"] = self.tool_call_id
         if self.tool_calls:
@@ -123,6 +126,7 @@ class Message:
             usage=usage,
             tool_call_id=data.get("tool_call_id"),
             tool_calls=data.get("tool_calls"),
+            hidden=data.get("hidden", False),
         )
 
 

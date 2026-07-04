@@ -2,10 +2,19 @@ Screen {
     layout: vertical;
 }
 
-#header {
-    dock: top;
-    height: 3;
-    padding: 1;
+#body {
+    height: 1fr;
+    layout: horizontal;
+}
+
+#main-pane {
+    width: 1fr;
+    layout: vertical;
+}
+
+#sidebar {
+    width: 42;
+    max-width: 42;
 }
 
 #output {
@@ -22,6 +31,7 @@ TabPane > ScrollableContainer {
 
 #tabs {
     height: 1fr;
+    margin-bottom: 1;
 }
 
 #tabs > ContentSwitcher {
@@ -37,10 +47,8 @@ TabbedContent Tabs {
 }
 
 #footer {
-    dock: bottom;
     height: 1;
-    margin-left: 1;
-    margin-right: 31;
+    margin: 0 2 0 2;
 }
 
 #spinner {
@@ -49,20 +57,28 @@ TabbedContent Tabs {
     margin-right: 1;
 }
 
-#model {
-    color: gray;
-    width: auto;
+#footer-usage {
+    color: $text-muted;
+    text-style: dim;
+    width: 1fr;
+    min-width: 0;
+    content-align: right middle;
+    margin-right: 2;
     overflow: hidden;
 }
 
-#interrupt-hint {
+#shortcuts {
+    color: $text-muted;
+    text-style: dim;
     width: auto;
     min-width: 0;
-    margin-left: 1;
+    content-align: right middle;
+    margin-left: 0;
+    overflow: hidden;
 }
 
 UserMessageWidget {
-    background: #333333;
+    background: $panel;
     margin: 0 1 0 0;
     padding: 1;
     border-left: thick $primary;
@@ -74,7 +90,21 @@ UserMessageWidget > MarkdownParagraph {
 
 AssistantMessageWidget {
     margin: 0 1;
-    padding: 1;
+    padding: 1 1 0 1;
+}
+
+/* Switch markdown blocks from bottom-margin to top-margin spacing so the last
+   block's margin doesn't stack with the chain-footer's margin-top. */
+AssistantMessageWidget > MarkdownBlock {
+    margin-bottom: 0;
+}
+
+AssistantMessageWidget > MarkdownBlock:first-child {
+    margin-top: 0;
+}
+
+AssistantMessageWidget > MarkdownParagraph {
+    margin-top: 1;
 }
 
 ThinkingMessageWidget {
@@ -137,8 +167,9 @@ Collapsible.tool-result-collapse {
     border: none;
 }
 
-ToolResultMessageWidget.after-thinking,
-LiveCommandOutputWidget.after-thinking {
+ToolResultMessageWidget.tool-group-start,
+LiveCommandOutputWidget.tool-group-start,
+.temp-tool-message.tool-group-start {
     margin-top: 1;
 }
 
@@ -162,16 +193,35 @@ Collapsible.tool-result-collapse > CollapsibleTitle {
     width: 1fr;
 }
 
-#input {
-    width: 1fr;
-    border: none;
-    padding: 1 1;
-    margin-left: 1;
-    margin-right: 1;
+#input-wrapper {
+    background: $surface;
+    margin: 1 2 0 2;
+    padding: 0;
+    height: auto;
+    border-left: thick $surface;
 }
 
-#input:focus {
+#input-wrapper.-focused {
     border-left: thick $primary;
+}
+
+#input {
+    width: 1fr;
+    background: $surface;
+    border: none;
+    padding: 1 2 0 2;
+    margin: 0;
+    height: auto;
+}
+
+#input-meta {
+    width: 1fr;
+    height: auto;
+    background: $surface;
+    padding: 0 2 1 2;
+    color: $text;
+    text-style: none;
+    margin: 0;
 }
 
 #command-picker {
@@ -188,6 +238,11 @@ Collapsible.tool-result-collapse > CollapsibleTitle {
 
 OptionPicker {
     align: center middle;
+}
+
+OptionPicker .option-list--option-disabled {
+    color: $primary;
+    text-style: bold;
 }
 
 #picker-container {
@@ -216,6 +271,7 @@ OptionPicker {
 }
 
 .temp-tool-message {
+    margin: 0;
     padding: 0 1;
     color: $text-muted;
     text-style: italic;

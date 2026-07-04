@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 
 from textual.containers import Vertical
 from textual.screen import Screen
@@ -10,6 +12,7 @@ from textual.widgets.option_list import Option
 class PickerItem:
     label: str
     id: str
+    is_header: bool = field(default=False)
 
 
 class OptionPicker(Screen[str]):
@@ -22,7 +25,13 @@ class OptionPicker(Screen[str]):
         self._header = header
 
     def _build_options(self) -> list[Option]:
-        return [Option(item.label, id=item.id) for item in self._filtered]
+        options: list[Option] = []
+        for item in self._filtered:
+            if item.is_header:
+                options.append(Option(item.label, id=None, disabled=True))
+            else:
+                options.append(Option(item.label, id=item.id))
+        return options
 
     def compose(self):
         with Vertical(id="picker-container"):
@@ -35,13 +44,32 @@ class OptionPicker(Screen[str]):
         self.query_one("#picker-search", Input).focus()
 
     def _filter(self, query: str) -> None:
-        q = query.lower()
-        self._filtered = [item for item in self._items if q in item.label.lower() or q in item.id.lower()]
+        if not query:
+            self._filtered = list(self._items)
+        else:
+            q = query.lower()
+            result: list[PickerItem] = []
+            pending_header: PickerItem | None = None
+            for item in self._items:
+                if item.is_header:
+                    pending_header = item
+                else:
+                    if q in item.label.lower() or q in item.id.lower():
+                        if pending_header is not None:
+                            result.append(pending_header)
+                            pending_header = None
+                        result.append(item)
+            self._filtered = result
         option_list = self.query_one("#picker-list", OptionList)
         option_list.clear_options()
         if self._filtered:
             option_list.add_options(self._build_options())
-            option_list.highlighted = 0
+            # Highlight the first non-header (selectable) option
+            first_selectable = next(
+                (i for i, item in enumerate(self._filtered) if not item.is_header), None
+            )
+            if first_selectable is not None:
+                option_list.highlighted = first_selectable
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "picker-search":
@@ -58,10 +86,18 @@ class OptionPicker(Screen[str]):
         if not self._filtered:
             return
         option_list = self.query_one("#picker-list", OptionList)
-        if option_list.highlighted is not None and 0 <= option_list.highlighted < len(self._filtered):
-            self.dismiss(self._filtered[option_list.highlighted].id)
-        else:
-            self.dismiss(self._filtered[0].id)
+        highlighted = option_list.highlighted
+        # Prefer the currently highlighted option if it's selectable
+        if highlighted is not None and 0 <= highlighted < len(self._filtered):
+            item = self._filtered[highlighted]
+            if not item.is_header:
+                self.dismiss(item.id)
+                return
+        # Fallback: first non-header item
+        for item in self._filtered:
+            if not item.is_header:
+                self.dismiss(item.id)
+                return
 
     def key_escape(self) -> None:
         self.dismiss(None)
@@ -72,7 +108,11 @@ class OptionPicker(Screen[str]):
         if self.focused is search:
             option_list.focus()
             if option_list.highlighted is None and self._filtered:
-                option_list.highlighted = 0
+                first_selectable = next(
+                    (i for i, item in enumerate(self._filtered) if not item.is_header), None
+                )
+                if first_selectable is not None:
+                    option_list.highlighted = first_selectable
 
     def key_up(self) -> None:
         search = self.query_one("#picker-search", Input)

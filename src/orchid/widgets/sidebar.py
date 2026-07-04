@@ -1,14 +1,18 @@
+import json
 import os
 import time
 from datetime import UTC, datetime
 from typing import Any, Literal, TypedDict, cast
 
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.events import Blur, Focus
 from textual.message import Message
 from textual.widgets import Collapsible, Input, Static
 
 from orchid.agents.manager import SUBAGENT_INDICATORS, SubagentRecord, SubagentState
+from orchid.domain.chain import Chain
+from orchid.domain.message import Message as DomainMessage
+from orchid.domain.message import MessageRole, MessageType
 from orchid.domain.todo import TERMINAL_STATUSES, TodoStatus, TodoTask
 
 _TOKEN_THROTTLE_INTERVAL = 0.5
@@ -145,184 +149,21 @@ class NavEntry(Static):
         self.post_message(self.Pressed(self))
 
 
+def _load_sidebar_css() -> str:
+    """Read sidebar styles from the external TCSS file."""
+    try:
+        base = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(base, "sidebar.tcss"), encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 class Sidebar(Vertical):
     """Right sidebar showing token counts, subagents, and working directory."""
 
+    DEFAULT_CSS = _load_sidebar_css()
     BINDINGS = [("up", "navigate_up"), ("down", "navigate_down")]
-
-    DEFAULT_CSS = """
-    Sidebar {
-        width: 30;
-        min-width: 30;
-        dock: right;
-        background: $surface;
-        padding: 1 0 0 0;
-    }
-
-    Sidebar #sidebar-tokens-label,
-    Sidebar #sidebar-subagents-label,
-    Sidebar #sidebar-todos-label,
-    Sidebar #sidebar-mcp-label,
-    Sidebar #sidebar-rag-label,
-    Sidebar #sidebar-ast-label,
-    Sidebar #sidebar-bg-cmds-label {
-        color: $text-muted;
-        text-style: bold;
-        padding: 0 1;
-    }
-
-    Sidebar #rag-status,
-    Sidebar #ast-status {
-        width: 100%;
-        height: auto;
-        padding: 0 1;
-        color: $text-muted;
-    }
-
-    Sidebar #token-info {
-        color: $text;
-        padding: 0 1 1 1;
-    }
-
-    Sidebar #sidebar-nav {
-        height: auto;
-        padding: 0 0;
-    }
-
-    Sidebar NavEntry {
-        width: 100%;
-        min-height: 1;
-        height: auto;
-        padding: 0 1;
-        color: $text-muted;
-    }
-
-    Sidebar NavEntry:hover {
-        background: $surface-darken-1;
-    }
-
-    Sidebar NavEntry:focus {
-        background: $accent-darken-1;
-        color: $text;
-    }
-
-    Sidebar NavEntry.-active {
-        color: $primary-lighten-1;
-        text-style: bold;
-    }
-
-    Sidebar #subagent-entries,
-    Sidebar #mcp-entries,
-    Sidebar #todo-entries,
-    Sidebar #bg-cmds-entries {
-        height: auto;
-        padding: 0 0;
-    }
-
-    Sidebar .todo-entry {
-        width: 100%;
-        min-height: 1;
-        height: auto;
-        padding: 0 1;
-        color: $text-muted;
-    }
-
-    Sidebar .subagent-entry {
-        width: 100%;
-        min-height: 1;
-        height: auto;
-        padding: 0 1;
-        color: $text-muted;
-    }
-
-    Sidebar .subagent-entry:hover {
-        background: $surface-darken-1;
-    }
-
-    Sidebar .subagent-entry.-active {
-        color: $primary-lighten-1;
-        text-style: bold;
-    }
-
-    Sidebar .finished-collapse {
-        margin: 0;
-        padding: 0 0;
-        border: none;
-    }
-
-    Sidebar .finished-collapse > CollapsibleTitle {
-        color: $text-muted;
-        padding: 0 1;
-        text-style: dim;
-    }
-
-    Sidebar .finished-collapse > CollapsibleTitle:hover {
-        background: $surface-darken-1;
-    }
-
-    Sidebar .finished-collapse > Contents {
-        padding: 0;
-    }
-
-    Sidebar .bg-cmd-entry {
-        width: 100%;
-        min-height: 1;
-        height: auto;
-        padding: 0 1;
-        color: $text-muted;
-    }
-
-    Sidebar .bg-cmd-entry:hover {
-        background: $surface-darken-1;
-    }
-
-    Sidebar .bg-cmd-entry:focus {
-        background: $accent-darken-1;
-        color: $text;
-    }
-
-    Sidebar .bg-cmd-expand {
-        margin: 0;
-        padding: 0 0;
-        border: none;
-    }
-
-    Sidebar .bg-cmd-expand > CollapsibleTitle {
-        color: $text-muted;
-        padding: 0 1;
-        text-style: dim;
-    }
-
-    Sidebar .bg-cmd-expand > Contents {
-        padding: 0 1;
-        height: auto;
-    }
-
-    Sidebar .bg-cmd-expand > Contents Static {
-        color: $text-muted;
-        width: 100%;
-        height: auto;
-    }
-
-    Sidebar .bg-cmd-expand > Contents Input {
-        width: 100%;
-        height: 3;
-        border: solid $primary;
-        padding: 0 1;
-        margin-top: 0;
-    }
-
-    Sidebar #working-directory {
-        width: 100%;
-        padding: 1 1 0 1;
-        color: $text-muted;
-        text-style: dim;
-    }
-
-    Sidebar #sidebar-spacer {
-        height: 1fr;
-    }
-    """
 
     _prompt_tokens: int = 0
     _completion_tokens: int = 0
@@ -336,13 +177,22 @@ class Sidebar(Vertical):
         super().__init__(*args, **kwargs)
         self._usage_by_view: dict[str, Any] = {}
         self._subagent_records: list[SubagentRecord] = []
+        self._context_messages: list[DomainMessage] = []
+        self._system_prompt: str = ""
+        self._cached_tools_keys: tuple[str, ...] = ()
+        self._cached_tools_char_count: int = 0
+        self._rag_last: str | None = None
+        self._rag_duration: float | None = None
+        self._rag_indexing: bool = False
+        self._ast_last: str | None = None
+        self._ast_duration: float | None = None
+        self._ast_indexing: bool = False
         self._bg_cmd_records: list[BgCommandRecord] = []
         self._expanded_bg_cmd_id: int | None = None
         self._bg_cmd_label_cache: dict[int, str] = {}
 
     def compose(self):
-        yield Static("Tokens", id="sidebar-tokens-label")
-        yield Static("Context: 0", id="token-info")
+        yield Static("", id="sidebar-title")
         with Vertical(id="sidebar-nav"):
             yield NavEntry("▸ Main", "main", id="nav-main")
         yield Static("Subagents", id="sidebar-subagents-label")
@@ -353,12 +203,28 @@ class Sidebar(Vertical):
         yield Vertical(id="mcp-entries")
         yield Static("Todos", id="sidebar-todos-label")
         yield Vertical(id="todo-entries")
-        yield Static(id="sidebar-spacer")
+        yield Static("", id="sidebar-spacer")
+        with Horizontal(id="context-breakdown"):
+            yield Static("", id="context-grid")
+            yield Static("", id="context-legend")
         yield Static("AST", id="sidebar-ast-label")
         yield Static("", id="ast-status")
         yield Static("RAG", id="sidebar-rag-label")
         yield Static("", id="rag-status")
         yield Static(self._get_working_dir(), id="working-directory")
+
+    def on_mount(self) -> None:
+        self.set_interval(30, self._refresh_index_display)
+
+    def _refresh_index_display(self) -> None:
+        """Re-render AST/RAG status widgets using stored timestamps."""
+        try:
+            rag_widget = self.query_one("#rag-status", Static)
+            ast_widget = self.query_one("#ast-status", Static)
+        except Exception:
+            return
+        rag_widget.update(self._format_index_line(self._rag_last, self._rag_duration, self._rag_indexing))
+        ast_widget.update(self._format_index_line(self._ast_last, self._ast_duration, self._ast_indexing))
 
     def _get_working_dir(self) -> str:
         cwd = os.getcwd()
@@ -367,6 +233,13 @@ class Sidebar(Vertical):
             if len(parts) > 3:
                 return f"  ~/{'/'.join(parts[-2:])}"
         return f"  {cwd}"
+
+    def set_title(self, text: str) -> None:
+        """Update the session title shown at the top of the sidebar."""
+        try:
+            self.query_one("#sidebar-title", Static).update(text)
+        except Exception:
+            pass
 
     def on_nav_entry_pressed(self, event: NavEntry.Pressed) -> None:
         if "bg-cmd-entry" in event.control.classes:
@@ -505,17 +378,215 @@ class Sidebar(Vertical):
             remaining = _TOKEN_THROTTLE_INTERVAL - (now - self._last_token_update)
             self.set_timer(remaining, self._flush_token_update)
 
+    def set_context_sources(
+        self,
+        messages: list[DomainMessage],
+        system_prompt: str,
+    ) -> None:
+        """Store the raw message list and system prompt for breakdown estimation."""
+        self._context_messages = list(messages)
+        self._system_prompt = system_prompt
+
+    def _get_tools_char_count(self) -> int:
+        """Return the character count of the current tool registry JSON.
+
+        Cached so that MCP server additions (which call ``reset_tool_registry``)
+        are picked up automatically on the next flush.
+        """
+        from orchid.tools import get_tool_registry
+
+        registry = get_tool_registry()
+        current_keys = tuple(sorted(registry.keys()))
+        if self._cached_tools_keys == current_keys:
+            return self._cached_tools_char_count
+        tools_list: list[dict[str, Any]] = []
+        for name in current_keys:
+            tool: Any = registry[name]["tool"]
+            tools_list.append(cast(dict[str, Any], tool.to_dict()))
+        self._cached_tools_char_count = len(json.dumps(tools_list))
+        self._cached_tools_keys = current_keys
+        return self._cached_tools_char_count
+
+    # Colored blocks for context breakdown (Claude Code–style visual bars)
+    _CTX_BLOCK_FREE   = "[on #3f7f57]  [/]"
+    _CTX_BLOCK_SYSTEM = "[on #4c6f91]  [/]"
+    _CTX_BLOCK_TOOLS  = "[on #9a5f87]  [/]"
+    _CTX_BLOCK_TOOL   = "[on #a98232]  [/]"
+    _CTX_BLOCK_MSGS   = "[on #6f5f9a]  [/]"
+
+    _CTX_GRID_ROWS = 8
+    _CTX_GRID_COLS = 8
+    _CTX_GRID_TOTAL = _CTX_GRID_ROWS * _CTX_GRID_COLS  # 64 blocks
+
+    def _compute_context_tokens(self) -> tuple[int, int, int, int, int] | None:
+        """Compute token counts for each context category.
+
+        Returns (free, system, tools, tool_use, messages) or None when
+        there is insufficient data.
+        """
+        if not self._context_messages:
+            return None
+
+        system_chars = len(self._system_prompt)
+        tools_chars = self._get_tools_char_count()
+        tool_msgs_chars = sum(
+            len(m.content)
+            for m in self._context_messages
+            if m.type in (MessageType.TOOL_RESULT, MessageType.TOOL_CALL)
+        )
+        msg_chars = sum(
+            len(m.content)
+            for m in self._context_messages
+            if m.role in (MessageRole.USER, MessageRole.ASSISTANT)
+            and not m.hidden
+            and m.type == MessageType.TEXT
+        )
+
+        total_chars = system_chars + tools_chars + tool_msgs_chars + msg_chars
+        if total_chars == 0:
+            return None
+
+        prompt_tokens = self._prompt_tokens
+        system_tokens = int(system_chars / total_chars * prompt_tokens)
+        tools_tokens = int(tools_chars / total_chars * prompt_tokens)
+        tool_use_tokens = int(tool_msgs_chars / total_chars * prompt_tokens)
+        msg_tokens = int(msg_chars / total_chars * prompt_tokens)
+
+        # Normalize: adjust the largest category so the sum exactly matches
+        allocated = system_tokens + tools_tokens + tool_use_tokens + msg_tokens
+        diff = prompt_tokens - allocated
+        if diff != 0:
+            largest = max(
+                [
+                    ("system", system_tokens),
+                    ("tools", tools_tokens),
+                    ("tool_use", tool_use_tokens),
+                    ("messages", msg_tokens),
+                ],
+                key=lambda x: x[1],
+            )[0]
+            if largest == "system":
+                system_tokens += diff
+            elif largest == "tools":
+                tools_tokens += diff
+            elif largest == "tool_use":
+                tool_use_tokens += diff
+            else:
+                msg_tokens += diff
+
+        free_tokens = max(0, self._max_context - prompt_tokens) if self._max_context and self._max_context > 0 else 0
+
+        return (free_tokens, system_tokens, tools_tokens, tool_use_tokens, msg_tokens)
+
+    def _build_context_grid(self, tokens: tuple[int, int, int, int, int]) -> str:
+        """Build the 8×8 colored block grid string."""
+        free_tokens, system_tokens, tools_tokens, tool_use_tokens, msg_tokens = tokens
+        total_display_tokens = (
+            free_tokens + system_tokens + tools_tokens + tool_use_tokens + msg_tokens
+        )
+        if total_display_tokens == 0:
+            return ""
+
+        tokens_per_block = total_display_tokens / self._CTX_GRID_TOTAL
+
+        system_blocks = round(system_tokens / tokens_per_block)
+        tools_blocks = round(tools_tokens / tokens_per_block)
+        tool_use_blocks = round(tool_use_tokens / tokens_per_block)
+        msg_blocks = round(msg_tokens / tokens_per_block)
+        used_blocks = system_blocks + tools_blocks + tool_use_blocks + msg_blocks
+        free_blocks = max(0, self._CTX_GRID_TOTAL - used_blocks)
+
+        # Normalize block counts to ensure they sum to exactly 64
+        total_blocks = system_blocks + tools_blocks + tool_use_blocks + msg_blocks + free_blocks
+        if total_blocks != self._CTX_GRID_TOTAL:
+            diff_blocks = self._CTX_GRID_TOTAL - total_blocks
+            categories = [
+                ("system", system_blocks),
+                ("tools", tools_blocks),
+                ("tool_use", tool_use_blocks),
+                ("messages", msg_blocks),
+                ("free", free_blocks),
+            ]
+            largest_cat = max(categories, key=lambda x: x[1])[0]
+            if largest_cat == "system":
+                system_blocks += diff_blocks
+            elif largest_cat == "tools":
+                tools_blocks += diff_blocks
+            elif largest_cat == "tool_use":
+                tool_use_blocks += diff_blocks
+            elif largest_cat == "messages":
+                msg_blocks += diff_blocks
+            else:
+                free_blocks += diff_blocks
+
+        block_map = {
+            "system": self._CTX_BLOCK_SYSTEM,
+            "tools": self._CTX_BLOCK_TOOLS,
+            "tool_use": self._CTX_BLOCK_TOOL,
+            "messages": self._CTX_BLOCK_MSGS,
+            "free": self._CTX_BLOCK_FREE,
+        }
+
+        blocks: list[str] = []
+        for _ in range(system_blocks):
+            blocks.append(block_map["system"])
+        for _ in range(tools_blocks):
+            blocks.append(block_map["tools"])
+        for _ in range(tool_use_blocks):
+            blocks.append(block_map["tool_use"])
+        for _ in range(msg_blocks):
+            blocks.append(block_map["messages"])
+        for _ in range(free_blocks):
+            blocks.append(block_map["free"])
+
+        grid_lines: list[str] = []
+        for row in range(self._CTX_GRID_ROWS):
+            start = row * self._CTX_GRID_COLS
+            end = start + self._CTX_GRID_COLS
+            grid_lines.append("".join(blocks[start:end]))
+        return "\n".join(grid_lines)
+
+    def _build_context_legend(self, tokens: tuple[int, int, int, int, int]) -> str:
+        """Build the legend text showing token counts per category."""
+        free_tokens, system_tokens, tools_tokens, tool_use_tokens, msg_tokens = tokens
+        lines: list[str] = []
+        if self._max_context and self._max_context > 0:
+            free_pct = free_tokens / self._max_context * 100
+            lines.append(
+                f"{self._CTX_BLOCK_FREE} Free: "
+                f"{Chain.format_tokens(free_tokens)} ({free_pct:.1f}%)"
+            )
+        else:
+            lines.append(
+                f"{self._CTX_BLOCK_FREE} Free: {Chain.format_tokens(free_tokens)}"
+            )
+
+        lines.append(
+            f"{self._CTX_BLOCK_SYSTEM} System: {Chain.format_tokens(system_tokens)}"
+        )
+        lines.append(
+            f"{self._CTX_BLOCK_TOOLS} Tools: {Chain.format_tokens(tools_tokens)}"
+        )
+        lines.append(
+            f"{self._CTX_BLOCK_TOOL} Tool use: {Chain.format_tokens(tool_use_tokens)}"
+        )
+        lines.append(
+            f"{self._CTX_BLOCK_MSGS} Messages: {Chain.format_tokens(msg_tokens)}"
+        )
+        return "\n".join(lines)
+
     def _flush_token_update(self) -> None:
         self._token_flush_scheduled = False
         self._last_token_update = time.monotonic()
         try:
-            line = f"Context: {self._prompt_tokens}"
-            if self._max_context and self._max_context > 0:
-                pct = self._prompt_tokens / self._max_context * 100
-                # Clamp so 0% and 100% render cleanly; never show negative.
-                pct = max(0.0, min(100.0, pct))
-                line += f" ({pct:.1f}%)"
-            self.query_one("#token-info", Static).update(line)
+            tokens = self._compute_context_tokens()
+            if tokens is not None:
+                self.query_one("#context-grid", Static).update(
+                    self._build_context_grid(tokens)
+                )
+                self.query_one("#context-legend", Static).update(
+                    self._build_context_legend(tokens)
+                )
         except Exception:
             pass
 
@@ -829,14 +900,13 @@ class Sidebar(Vertical):
         rag_indexing: bool = False,
         ast_indexing: bool = False,
     ) -> None:
-        try:
-            rag_widget = self.query_one("#rag-status", Static)
-            ast_widget = self.query_one("#ast-status", Static)
-        except Exception:
-            return
-
-        rag_widget.update(self._format_index_line(rag_last, rag_duration, rag_indexing))
-        ast_widget.update(self._format_index_line(ast_last, ast_duration, ast_indexing))
+        self._rag_last = rag_last
+        self._rag_duration = rag_duration
+        self._rag_indexing = rag_indexing
+        self._ast_last = ast_last
+        self._ast_duration = ast_duration
+        self._ast_indexing = ast_indexing
+        self._refresh_index_display()
 
     @staticmethod
     def _format_index_line(last_indexed: str | None, duration: float | None, indexing: bool = False) -> str:

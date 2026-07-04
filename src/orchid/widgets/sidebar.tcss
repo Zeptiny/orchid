@@ -1,0 +1,217 @@
+Sidebar {
+    width: 42;
+    min-width: 42;
+    max-width: 42;
+    background: $surface;
+    padding: 1;
+    align: left top;
+}
+
+Sidebar #sidebar-title {
+    width: 100%;
+    height: auto;
+    color: $text;
+    text-style: bold;
+    content-align: center middle;
+    margin: 0 0 1 0;
+    padding: 0;
+}
+
+Sidebar #sidebar-spacer {
+    height: 1fr;
+}
+
+Sidebar #sidebar-nav {
+    height: auto;
+    padding: 0;
+}
+
+Sidebar NavEntry {
+    width: 100%;
+    min-height: 1;
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+Sidebar NavEntry:hover {
+    background: $surface-darken-1;
+}
+
+Sidebar NavEntry:focus {
+    background: $accent-darken-1;
+    color: $text;
+}
+
+Sidebar NavEntry.-active {
+    color: $primary-lighten-1;
+    text-style: bold;
+}
+
+Sidebar #sidebar-subagents-label,
+Sidebar #sidebar-bg-cmds-label,
+Sidebar #sidebar-todos-label,
+Sidebar #sidebar-mcp-label,
+Sidebar #sidebar-rag-label,
+Sidebar #sidebar-ast-label {
+    color: $text;
+    text-style: bold;
+    padding: 0 1;
+    height: auto;
+    margin: 1 0 0 0;
+}
+
+Sidebar #sidebar-subagents-label {
+    margin: 0;
+}
+
+Sidebar #subagent-entries,
+Sidebar #bg-cmds-entries,
+Sidebar #mcp-entries,
+Sidebar #todo-entries {
+    height: auto;
+    padding: 0;
+    margin: 0;
+}
+
+Sidebar .todo-entry {
+    width: 100%;
+    min-height: 1;
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+    margin: 0;
+}
+
+Sidebar .subagent-entry {
+    width: 100%;
+    min-height: 1;
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+    margin: 0;
+}
+
+Sidebar .subagent-entry:hover {
+    background: $surface-darken-1;
+}
+
+Sidebar .subagent-entry.-active {
+    color: $primary-lighten-1;
+    text-style: bold;
+}
+
+Sidebar .bg-cmd-entry {
+    width: 100%;
+    min-height: 1;
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+    margin: 0;
+}
+
+Sidebar .bg-cmd-entry:hover {
+    background: $surface-darken-1;
+}
+
+Sidebar .bg-cmd-entry:focus {
+    background: $accent-darken-1;
+    color: $text;
+}
+
+Sidebar .bg-cmd-expand {
+    margin: 0;
+    padding: 0;
+    border: none;
+}
+
+Sidebar .bg-cmd-expand > CollapsibleTitle {
+    color: $text-muted;
+    padding: 0 1;
+    text-style: dim;
+    margin: 0;
+}
+
+Sidebar .bg-cmd-expand > Contents {
+    padding: 0 1;
+    height: auto;
+    margin: 0;
+}
+
+Sidebar .bg-cmd-expand > Contents Static {
+    color: $text-muted;
+    width: 100%;
+    height: auto;
+}
+
+Sidebar .bg-cmd-expand > Contents Input {
+    width: 100%;
+    height: 3;
+    border: solid $primary;
+    padding: 0 1;
+    margin-top: 0;
+}
+
+Sidebar .finished-collapse {
+    margin: 0;
+    padding: 0;
+    border: none;
+}
+
+Sidebar .finished-collapse > CollapsibleTitle {
+    color: $text-muted;
+    padding: 0 1;
+    text-style: dim;
+    margin: 0;
+}
+
+Sidebar .finished-collapse > CollapsibleTitle:hover {
+    background: $surface-darken-1;
+}
+
+Sidebar .finished-collapse > Contents {
+    padding: 0;
+    margin: 0;
+}
+
+Sidebar #context-breakdown {
+    layout: horizontal;
+    height: auto;
+    padding: 0;
+    margin: 1 0 0 0;
+}
+
+Sidebar #context-grid {
+    width: auto;
+    height: auto;
+    color: $text;
+    margin: 0;
+    padding: 0;
+}
+
+Sidebar #context-legend {
+    width: 1fr;
+    height: auto;
+    color: $text-muted;
+    text-style: dim;
+    margin: 0 0 0 1;
+    padding: 0;
+}
+
+Sidebar #rag-status,
+Sidebar #ast-status {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+    margin: 0;
+}
+
+Sidebar #working-directory {
+    width: 100%;
+    padding: 0 1;
+    color: $text-muted;
+    text-style: dim;
+    height: auto;
+    margin: 0;
+}

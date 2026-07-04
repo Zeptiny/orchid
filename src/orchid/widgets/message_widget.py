@@ -1,3 +1,4 @@
+import os
 import re
 import time
 from collections.abc import Callable
@@ -68,6 +69,19 @@ def get_tool_action_label(tool_name: str) -> str:
     return f"Using {tool_name}..."
 
 
+def _shorten_paths(title: str) -> str:
+    """Replace absolute paths in title with paths relative to cwd."""
+    cwd = os.getcwd()
+    if not cwd or cwd == "/":
+        return title
+    # Normalize trailing slash for clean prefix matching
+    cwd_prefix = cwd if cwd.endswith("/") else cwd + "/"
+    # Only replace when the path starts with cwd + "/" to avoid partial matches
+    if cwd_prefix in title:
+        return title.replace(cwd_prefix, "")
+    return title
+
+
 def remove_live_command_widgets_for_messages(messages: list[Message]) -> None:
     """Drop terminal live-command widget references created by the given messages."""
     for msg in messages:
@@ -84,6 +98,7 @@ def get_tool_result_title(msg: Message) -> str:
         return _TOOL_RESULT_FALLBACK_TITLE
 
     title = " ".join(msg.display.split())
+    title = _shorten_paths(title)
     if not title:
         return _TOOL_RESULT_FALLBACK_TITLE
     if len(title) <= _TOOL_RESULT_TITLE_MAX_LENGTH:
@@ -425,7 +440,7 @@ class ChainContainer(Static):
         color: $text-muted;
         text-style: dim;
         padding: 0 1 1 1;
-        margin: 0 1 0 1;
+        margin: 1 1 0 1;
     }
     """
 
@@ -520,6 +535,9 @@ def create_message_widget(
     msg: Message, *, loaded: bool = False, classes: str | None = None
 ) -> Static | TextualMarkdown | None:
     """Factory function to create the appropriate widget for a message."""
+    # Skip hidden/internal messages (e.g. interrupt markers) from display
+    if msg.hidden:
+        return None
     match msg.type:
         case MessageType.THINKING:
             return ThinkingMessageWidget(msg, loaded=loaded, classes=classes)
@@ -559,17 +577,7 @@ class StreamWidgetState:
     thinking: Any = None
     content: Any = None
     temp: list[Any] = field(default_factory=list[Any])
-
-
-async def _mount_before_temp_or_end(container: Any, widget: Any, state: StreamWidgetState) -> None:
-    """Replace the oldest temp tool widget with *widget*, or append it."""
-    if state.temp:
-        temp = state.temp.pop(0)
-        async with container.batch():
-            await container.mount(widget, before=temp)
-            await temp.remove()
-    else:
-        await container.mount(widget)
+    in_tool_group: bool = False
 
 
 async def mount_streamed_message(container: Any, msg: Message, state: StreamWidgetState) -> None:
@@ -577,54 +585,66 @@ async def mount_streamed_message(container: Any, msg: Message, state: StreamWidg
     if msg.type == MessageType.ERROR:
         w = ErrorMessageWidget(msg)
         await container.mount(w)
-        w.scroll_visible(animate=False)
+        state.in_tool_group = False
         return
     if msg.type == MessageType.THINKING:
         if state.thinking is None:
             w = ThinkingMessageWidget(msg)
             await container.mount(w)
             state.thinking = w
-            w.scroll_visible(animate=False)
         else:
             state.thinking.update_content(msg.content)
+        state.in_tool_group = False
     elif msg.type == MessageType.TOOL_CALL:
         tool_name = msg.metadata.get("tool_name", "")
-        temp = Static(get_tool_action_label(tool_name), classes="temp-tool-message")
+        classes = "temp-tool-message"
+        if not state.in_tool_group:
+            classes += " tool-group-start"
+        temp = Static(get_tool_action_label(tool_name), classes=classes)
         await container.mount(temp)
-        temp.scroll_visible(animate=False)
         state.temp.append(temp)
+        state.in_tool_group = True
         if state.thinking:
             state.thinking.finish()
     elif msg.type == MessageType.TOOL_RESULT:
+        classes = None
+        temp = None
+        if state.temp:
+            temp = state.temp.pop(0)
+            if temp.has_class("tool-group-start"):
+                classes = "tool-group-start"
+        elif not state.in_tool_group:
+            classes = "tool-group-start"
         bg_match = _BACKGROUND_CMD_RE.search(msg.content)
         if bg_match:
-            # Mount a LiveCommandOutputWidget for background commands.
             cmd_id = int(bg_match.group(1))
-            cmd_text = bg_match.group(2)
-            cmd_description = bg_match.group(3)
             w = LiveCommandOutputWidget(
                 cmd_id,
-                command_text=cmd_text,
-                description=cmd_description,
-                classes="after-thinking" if state.thinking else None,
+                command_text=bg_match.group(2),
+                description=bg_match.group(3),
+                classes=classes,
             )
             live_command_widgets[cmd_id] = w
-            await _mount_before_temp_or_end(container, w, state)
-            w.scroll_visible(animate=False)
         else:
-            w = ToolResultMessageWidget(msg, classes="after-thinking" if state.thinking else None)
-            await _mount_before_temp_or_end(container, w, state)
-            w.scroll_visible(animate=False)
+            w = ToolResultMessageWidget(msg, classes=classes)
+        if temp is not None:
+            async with container.batch():
+                await container.mount(w, before=temp)
+                await temp.remove()
+        else:
+            await container.mount(w)
+        w.scroll_visible(animate=False)
         if state.thinking:
             state.thinking.finish()
         state.thinking = None
         state.content = None
+        state.in_tool_group = True
     elif msg.role == MessageRole.USER:
         w = UserMessageWidget(msg)
         await container.mount(w)
-        w.scroll_visible(animate=False)
         state.thinking = None
         state.content = None
+        state.in_tool_group = False
     else:
         if state.content is None:
             if msg.content:
@@ -634,7 +654,7 @@ async def mount_streamed_message(container: Any, msg: Message, state: StreamWidg
                 await container.mount(w)
                 state.content = w
                 state.thinking = None
-                w.scroll_visible(animate=False)
+                state.in_tool_group = False
         else:
             if msg.content:
                 await state.content.update_content(msg.content)

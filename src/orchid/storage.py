@@ -84,6 +84,7 @@ def list_saved_sessions() -> list[dict[str, Any]]:
             session_id = _extract_json_string(head, '"id"')
             name = _extract_json_string(head, '"name"')
             model = _extract_json_string(head, '"model"')
+            updated_at = path.stat().st_mtime
             if session_id:
                 with open(path) as f:
                     data: dict[str, Any] = json.load(f)
@@ -92,6 +93,7 @@ def list_saved_sessions() -> list[dict[str, Any]]:
                     "name": name or "Unnamed",
                     "model": model,
                     "chain_count": len(data.get("chains", [])),
+                    "updated_at": updated_at,
                 })
             else:
                 # Fallback: full parse
@@ -102,9 +104,11 @@ def list_saved_sessions() -> list[dict[str, Any]]:
                     "name": data.get("name", "Unnamed"),
                     "model": data.get("model"),
                     "chain_count": len(data.get("chains", [])),
+                    "updated_at": updated_at,
                 })
         except (json.JSONDecodeError, OSError, KeyError, TypeError, AttributeError) as e:
             log.warning("Skipping corrupted session file %s: %s", path.name, e)
+    sessions.sort(key=lambda s: s.get("updated_at", 0.0), reverse=True)
     return sessions
 
 
