@@ -137,7 +137,8 @@ Collapsible.tool-result-collapse {
     border: none;
 }
 
-ToolResultMessageWidget.after-thinking {
+ToolResultMessageWidget.after-thinking,
+LiveCommandOutputWidget.after-thinking {
     margin-top: 1;
 }
 
@@ -218,6 +219,13 @@ OptionPicker {
     padding: 0 1;
     color: $text-muted;
     text-style: italic;
+}
+
+.collapsed-chain-stub {
+    padding: 0 1;
+    height: 1;
+    color: $text-muted;
+    text-style: dim;
 }
 
 Button.settings-add-btn {

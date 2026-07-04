@@ -116,6 +116,8 @@ class SessionManager:
             return False
         session = self.sessions[id]
         session.subagent_manager.cancel_all()
+        from orchid.tools.background_store import get_background_store
+        get_background_store().terminate_session(id)
         from orchid.storage import delete_session
         try:
             delete_session(id)

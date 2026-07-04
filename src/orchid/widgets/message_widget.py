@@ -13,10 +13,18 @@ from textual.widgets import Markdown as TextualMarkdown
 from orchid.domain.chain import Chain, ChainStatus
 from orchid.domain.message import Message, MessageRole, MessageType
 from orchid.tools import get_tool_registry
+from orchid.widgets.live_command import LiveCommandOutputWidget
 
 _THROTTLE_INTERVAL = 0.2
 _TOOL_RESULT_FALLBACK_TITLE = "Tool result"
 _TOOL_RESULT_TITLE_MAX_LENGTH = 120
+_BACKGROUND_CMD_RE = re.compile(
+    r'<background_command\s+id="(\d+)"[^>]*command="([^"]*)"[^>]*description="([^"]*)"[^>]*/>'
+)
+
+# Module-level mapping of command_id → LiveCommandOutputWidget so the app tick
+# can locate widgets without threading the mapping through every layer.
+live_command_widgets: dict[int, LiveCommandOutputWidget] = {}
 _EDIT_DIFF_MARKER = "\n\nDiff:\n"
 _EDIT_DIFF_CDATA_RE = re.compile(
     r'<diff\s+format="unified">\s*<!\[CDATA\[\n?(?P<diff>.*?)\n?\]\]>\s*</diff>',
@@ -58,6 +66,17 @@ def get_tool_action_label(tool_name: str) -> str:
     if entry and entry["tool"].action_label:
         return entry["tool"].action_label
     return f"Using {tool_name}..."
+
+
+def remove_live_command_widgets_for_messages(messages: list[Message]) -> None:
+    """Drop terminal live-command widget references created by the given messages."""
+    for msg in messages:
+        match = _BACKGROUND_CMD_RE.search(msg.content)
+        if match:
+            cmd_id = int(match.group(1))
+            widget = live_command_widgets.get(cmd_id)
+            if widget is not None and widget.is_finished:
+                live_command_widgets.pop(cmd_id, None)
 
 
 def get_tool_result_title(msg: Message) -> str:
@@ -272,7 +291,9 @@ class AssistantMessageWidget(TextualMarkdown):
     """Assistant message using Textual's MarkdownStream for incremental streaming.
 
     Uses ``MarkdownStream.write()`` which handles buffering, coalescing,
-    and back-pressure internally.
+    and back-pressure internally. A throttle gate ensures that writes are
+    batched at most every ``_THROTTLE_INTERVAL`` seconds to avoid excessive
+    re-parsing of the full markdown document on every LLM chunk.
     """
 
     def __init__(self, msg: Message, *, loaded: bool = False, **kwargs: Any):
@@ -280,13 +301,34 @@ class AssistantMessageWidget(TextualMarkdown):
         super().__init__(msg.content, **kwargs)
         self._stream = TextualMarkdown.get_stream(self)
         self._last_appended_len: int = len(msg.content)
+        self._last_write_time: float = 0
+        self._write_scheduled: bool = False
 
     async def update_content(self, content: str) -> None:
         self.msg.content = content
-        delta = content[self._last_appended_len :]
+        delta = content[self._last_appended_len:]
         if not delta:
             return
-        self._last_appended_len = len(content)
+        now = time.monotonic()
+        if now - self._last_write_time >= _THROTTLE_INTERVAL:
+            self._last_write_time = now
+            self._last_appended_len = len(content)
+            await self._stream.write(delta)
+        elif not self._write_scheduled:
+            self._write_scheduled = True
+            remaining = _THROTTLE_INTERVAL - (now - self._last_write_time)
+            self.set_timer(remaining, self._flush_write)
+
+    def _flush_write(self) -> None:
+        self._write_scheduled = False
+        self._last_write_time = time.monotonic()
+        delta = self.msg.content[self._last_appended_len:]
+        if delta:
+            self._last_appended_len = len(self.msg.content)
+            # Use call_later to write from within an async context
+            self.call_later(self._do_write, delta)
+
+    async def _do_write(self, delta: str) -> None:
         await self._stream.write(delta)
 
 
@@ -484,6 +526,23 @@ def create_message_widget(
         case MessageType.TOOL_CALL:
             return None
         case MessageType.TOOL_RESULT:
+            bg_match = _BACKGROUND_CMD_RE.search(msg.content)
+            if loaded and bg_match:
+                cmd_id = int(bg_match.group(1))
+                try:
+                    from orchid.tools.background_store import get_background_store
+                    entry = get_background_store().get_visible(cmd_id)
+                except Exception:
+                    entry = None
+                if entry is not None and entry.exit_code is None:
+                    widget = LiveCommandOutputWidget(
+                        cmd_id,
+                        command_text=bg_match.group(2),
+                        description=bg_match.group(3),
+                        classes=classes,
+                    )
+                    live_command_widgets[cmd_id] = widget
+                    return widget
             return ToolResultMessageWidget(msg, classes=classes)
         case MessageType.ERROR:
             return ErrorMessageWidget(msg, classes=classes)
@@ -500,6 +559,17 @@ class StreamWidgetState:
     thinking: Any = None
     content: Any = None
     temp: list[Any] = field(default_factory=list[Any])
+
+
+async def _mount_before_temp_or_end(container: Any, widget: Any, state: StreamWidgetState) -> None:
+    """Replace the oldest temp tool widget with *widget*, or append it."""
+    if state.temp:
+        temp = state.temp.pop(0)
+        async with container.batch():
+            await container.mount(widget, before=temp)
+            await temp.remove()
+    else:
+        await container.mount(widget)
 
 
 async def mount_streamed_message(container: Any, msg: Message, state: StreamWidgetState) -> None:
@@ -526,15 +596,25 @@ async def mount_streamed_message(container: Any, msg: Message, state: StreamWidg
         if state.thinking:
             state.thinking.finish()
     elif msg.type == MessageType.TOOL_RESULT:
-        w = ToolResultMessageWidget(msg, classes="after-thinking" if state.thinking else None)
-        if state.temp:
-            temp = state.temp.pop(0)
-            async with container.batch():
-                await container.mount(w, before=temp)
-                await temp.remove()
+        bg_match = _BACKGROUND_CMD_RE.search(msg.content)
+        if bg_match:
+            # Mount a LiveCommandOutputWidget for background commands.
+            cmd_id = int(bg_match.group(1))
+            cmd_text = bg_match.group(2)
+            cmd_description = bg_match.group(3)
+            w = LiveCommandOutputWidget(
+                cmd_id,
+                command_text=cmd_text,
+                description=cmd_description,
+                classes="after-thinking" if state.thinking else None,
+            )
+            live_command_widgets[cmd_id] = w
+            await _mount_before_temp_or_end(container, w, state)
+            w.scroll_visible(animate=False)
         else:
-            await container.mount(w)
-        w.scroll_visible(animate=False)
+            w = ToolResultMessageWidget(msg, classes="after-thinking" if state.thinking else None)
+            await _mount_before_temp_or_end(container, w, state)
+            w.scroll_visible(animate=False)
         if state.thinking:
             state.thinking.finish()
         state.thinking = None

@@ -9,6 +9,16 @@ from orchid.tools._xml_utils import cdata_text, xml_attr
 
 MAX_OUTPUT_BYTES = 1 * 1024 * 1024
 
+# Environment variables forced for non-interactive command spawns. Imported by
+# ``background_store.py`` so foreground and background pipe paths stay in sync.
+ENV_SUPPRESSION: dict[str, str] = {"NO_COLOR": "1", "TERM": "dumb", "PAGER": "cat"}
+_PTY_TERM = os.environ.get("TERM")
+PTY_ENV_SUPPRESSION: dict[str, str] = {
+    "NO_COLOR": "1",
+    "TERM": _PTY_TERM if _PTY_TERM and _PTY_TERM != "dumb" else "xterm-256color",
+    "PAGER": "cat",
+}
+
 
 async def _read_bounded(
     process: asyncio.subprocess.Process,
@@ -75,6 +85,16 @@ execute_command_tool = Tool(
             "shell": ToolParameterProperties(
                 type="boolean", description="Whether to run the command through the shell (default: true)"
             ),
+            "background": ToolParameterProperties(
+                type="boolean", description="When true, run the command in the background and return immediately with a process id"
+            ),
+            "interactive": ToolParameterProperties(
+                type="boolean",
+                description=(
+                    "When true with background=true, allocate a PTY and enable "
+                    "writable stdin for interactive commands"
+                ),
+            ),
         },
         required=["command", "description"],
     ),
@@ -88,29 +108,83 @@ async def execute_command(
     working_directory: str = ".",
     timeout: int | None = None,
     shell: bool = True,
+    background: bool = False,
+    interactive: bool = False,
 ) -> ExecutorResult:
     """Execute a system command using asyncio subprocess."""
-    if timeout is None:
-        timeout = get_config().command_timeout
     if description is None:
         description = command
+
+    if interactive and not background:
+        return ExecutorResult(
+            display="interactive=True requires background=True",
+            content=(
+                f'<error command="{xml_attr(command)}">'
+                f"<![CDATA[interactive=True is only supported with background=True]]>"
+                f"</error>"
+            ),
+        )
+
+    # -- background path ---------------------------------------------------
+    if background:
+        if not shell:
+            return ExecutorResult(
+                display="Background commands require shell=True",
+                content=(
+                    f'<error command="{xml_attr(command)}">'
+                    f"<![CDATA[background=True is not supported with shell=False]]>"
+                    f"</error>"
+                ),
+            )
+        from orchid.tools.background_store import get_background_store
+
+        store = get_background_store()
+        try:
+            proc_id, _ = await store.spawn(command, cwd=working_directory, interactive=interactive, description=description or command)
+        except Exception as e:
+            return ExecutorResult(
+                display="Failed to start background command",
+                content=(
+                    f'<error command="{xml_attr(command)}">'
+                    f"<![CDATA[{cdata_text(str(e))}]]>"
+                    f"</error>"
+                ),
+            )
+        return ExecutorResult(
+            display=f"$ {command} (id: {proc_id}, background)",
+            content=(
+                f'<background_command id="{proc_id}" '
+                f'command="{xml_attr(command)}" '
+                f'description="{xml_attr(description or command)}" '
+                f'status="started" />'
+            ),
+        )
+
+    # -- foreground path (original) ----------------------------------------
+    if timeout is None:
+        timeout = get_config().command_timeout
+    env = {**os.environ, **ENV_SUPPRESSION}
     try:
         if shell:
             process = await asyncio.create_subprocess_shell(
                 command,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=working_directory,
                 start_new_session=True,
+                env=env,
             )
         else:
             args = shlex.split(command)
             process = await asyncio.create_subprocess_exec(
                 *args,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=working_directory,
                 start_new_session=True,
+                env=env,
             )
 
         try:
@@ -122,11 +196,12 @@ async def execute_command(
                 process.kill()
             await process.wait()
             return ExecutorResult(
-                display=f"{description} - Timed out after {timeout} seconds",
+                display=f"$ {description} - Timed out after {timeout} seconds",
                 content=(
-                    f'<command_result command="{xml_attr(command)}" exit_code="-1" '
+                    f'<command_result command="{xml_attr(command)}" '
+                    f'description="{xml_attr(description)}" exit_code="-1" '
                     f'timed_out="true">\n'
-                    f"  <error><![CDATA[Command timed out after {timeout} seconds.]]></error>\n"
+                    f"  <error><![CDATA[{cdata_text(description)} timed out after {timeout} seconds.]]></error>\n"
                     f"</command_result>"
                 ),
             )
@@ -154,9 +229,10 @@ async def execute_command(
         )
 
         return ExecutorResult(
-            display=f"{description} (exit code: {process.returncode})",
+            display=f"$ {description} (exit code: {process.returncode})",
             content=(
                 f'<command_result command="{xml_attr(command)}" '
+                f'description="{xml_attr(description)}" '
                 f'exit_code="{process.returncode}">\n'
                 f"{stdout_section}{stderr_section}{truncation_section}"
                 f"</command_result>"
@@ -165,9 +241,10 @@ async def execute_command(
 
     except Exception as e:
         return ExecutorResult(
-            display=f"{description} - Execution error",
+            display=f"$ {description} - Execution error",
             content=(
                 f'<command_result command="{xml_attr(command)}" exit_code="-1" '
+                f'description="{xml_attr(description)}" '
                 f'error="true">\n'
                 f"  <error><![CDATA[{cdata_text(str(e))}]]></error>\n"
                 f"</command_result>"

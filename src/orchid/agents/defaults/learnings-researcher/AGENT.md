@@ -10,6 +10,9 @@ allowed_tools:
   - grep
   - rag_search
   - execute_command
+  - read_output
+  - send_input
+  - terminate_command
 allowed_skills: []
 ---
 

@@ -164,3 +164,16 @@ def mocked_process_factory():
         return process
 
     return _factory
+
+
+@pytest.mark.asyncio
+async def test_background_shell_false_returns_error():
+    """execute_command with background=True and shell=False returns error mentioning shell=True."""
+    result = await execute_command(
+        "echo hello",
+        description="echo",
+        background=True,
+        shell=False,
+    )
+    assert "shell=True" in result.display
+    assert "background" in result.content.lower() or "shell" in result.content.lower()

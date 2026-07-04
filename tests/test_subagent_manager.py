@@ -1218,6 +1218,30 @@ class TestSubagentRecordComposition(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record.parent_chain_index, 3)
         self.assertIsNone(record.model)  # no model passed to spawn
 
+    async def test_subagent_run_sets_background_agent_scope_to_record_id(self):
+        """Subagent streams run with their record id as background-command scope."""
+        from orchid.tools.background_store import (
+            MAIN_AGENT_SCOPE_ID,
+            get_current_agent_scope_id,
+            set_current_agent_scope_id,
+        )
+
+        observed_scopes: list[str] = []
+
+        async def fake_stream(*args, **kwargs):
+            observed_scopes.append(get_current_agent_scope_id())
+            yield Message(MessageRole.ASSISTANT, "done", MessageType.TEXT)
+
+        set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
+        with patch_registry(), patch_stream(fake_stream):
+            manager = SubagentManager()
+            record = await manager.spawn("sub1", "t", "Subagent")
+            await record.async_task
+            await drain()
+
+        self.assertEqual(observed_scopes, [record.id])
+        self.assertEqual(get_current_agent_scope_id(), MAIN_AGENT_SCOPE_ID)
+
 
 class TestFlushStateCallbacks(unittest.IsolatedAsyncioTestCase):
     async def test_flush_awaits_single_callback(self):
