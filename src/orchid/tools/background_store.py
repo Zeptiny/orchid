@@ -454,7 +454,7 @@ class BackgroundProcessStore:
         if entry is None:
             return
         proc = entry.process
-        if proc.returncode is not None:
+        if entry.exit_code is not None or proc.returncode is not None:
             return  # already exited
         try:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -468,7 +468,7 @@ class BackgroundProcessStore:
         if entry is None:
             return
         proc = entry.process
-        if proc.returncode is not None:
+        if entry.exit_code is not None or proc.returncode is not None:
             return
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -535,7 +535,7 @@ class BackgroundProcessStore:
             task.cancel()
         # Force-kill the process.
         proc = entry.process
-        if proc.returncode is None:
+        if entry.exit_code is None and proc.returncode is None:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except (OSError, ProcessLookupError):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -293,6 +294,29 @@ async def test_terminate_all_kills_sleeping_processes(fresh_store):
         if entry is not None:
             # Process should have been killed (exit code != 0 or entry removed).
             assert entry.exit_code is not None
+
+
+def test_terminate_skips_entries_with_recorded_exit_code(fresh_store, monkeypatch):
+    """A completed entry should not be signaled during app/test cleanup."""
+    process = MagicMock()
+    process.returncode = None
+    process.pid = 1
+    entry = ProcessEntry(
+        id=1,
+        command="echo done",
+        process=process,
+        buffer=HeadTailBuffer(),
+        exit_code=0,
+    )
+    fresh_store._entries[1] = entry
+
+    killpg = MagicMock()
+    monkeypatch.setattr("orchid.tools.background_store.os.killpg", killpg)
+
+    fresh_store.terminate(1)
+
+    killpg.assert_not_called()
+    process.kill.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
