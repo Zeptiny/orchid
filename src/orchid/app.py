@@ -501,6 +501,8 @@ class Orchid(App[None]):
 
             general = get_agent_registry()["general"]
             system_prompt = append_personality(general.system_prompt)
+            from orchid.tools.background_store import MAIN_AGENT_SCOPE_ID, set_current_agent_scope_id
+            set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
             async for msg in stream_response(
                 messages=self.messages,
                 model=self.model,
@@ -712,7 +714,10 @@ class Orchid(App[None]):
         try:
             from orchid.tools.background_store import get_background_store
             store = get_background_store()
-            entries = store.list()
+            entries = store.list_visible(
+                session_id=self.sessions.active.id if self.sessions.active else None,
+                agent_scope_id=self._active_bg_agent_scope_id(),
+            )
             has_live = any(e.exit_code is None for e in entries)
             has_entries = bool(entries)
         except Exception:
@@ -751,8 +756,17 @@ class Orchid(App[None]):
         except Exception:
             pass
 
-        entries = store.list()
+        entries = store.list_visible(
+            session_id=self.sessions.active.id if self.sessions.active else None,
+            agent_scope_id=self._active_bg_agent_scope_id(),
+        )
         if not entries:
+            try:
+                sidebar = self.query_one("#sidebar", Sidebar)
+                await sidebar.update_background_commands([])
+                self._bg_cmd_sidebar_pending = False
+            except Exception:
+                pass
             self._manage_bg_cmd_timer()
             return
 
@@ -761,7 +775,11 @@ class Orchid(App[None]):
             if widget is None:
                 continue
 
-            snap = store.snapshot(entry.id)
+            snap = store.snapshot_visible(
+                entry.id,
+                session_id=self.sessions.active.id if self.sessions.active else None,
+                agent_scope_id=self._active_bg_agent_scope_id(),
+            )
             if snap is None:
                 continue
 
@@ -806,19 +824,36 @@ class Orchid(App[None]):
 
         self._manage_bg_cmd_timer()
 
-    def on_sidebar_main_selected(self, event: SidebarMainSelected) -> None:
+    def _active_bg_agent_scope_id(self) -> str:
+        try:
+            sidebar = self.query_one("#sidebar", Sidebar)
+            view_id = sidebar.active_view
+        except Exception:
+            view_id = "main"
+        if view_id == "main":
+            from orchid.tools.background_store import MAIN_AGENT_SCOPE_ID
+            return MAIN_AGENT_SCOPE_ID
+        return view_id
+
+    async def on_sidebar_main_selected(self, event: SidebarMainSelected) -> None:
         tabs = self.query_one("#tabs", TabbedContent)
         tabs.active = "main"
         self.query_one("#input", TextArea).display = True
         sidebar = self.query_one("#sidebar", Sidebar)
         sidebar.set_active("main")
+        self._bg_cmd_sidebar_pending = True
+        self._manage_bg_cmd_timer()
+        await self._tick_live_commands()
 
-    def on_sidebar_subagent_selected(self, event: SidebarSubagentSelected) -> None:
+    async def on_sidebar_subagent_selected(self, event: SidebarSubagentSelected) -> None:
         tabs = self.query_one("#tabs", TabbedContent)
         tabs.active = f"sub-{event.subagent_id}"
         self.query_one("#input", TextArea).display = False
         sidebar = self.query_one("#sidebar", Sidebar)
         sidebar.set_active(event.subagent_id)
+        self._bg_cmd_sidebar_pending = True
+        self._manage_bg_cmd_timer()
+        await self._tick_live_commands()
 
     async def on_sidebar_bg_command_selected(self, event: SidebarBgCommandSelected) -> None:
         """Expand/collapse a background command entry in the sidebar."""
@@ -891,6 +926,7 @@ class Orchid(App[None]):
         if not self.sessions.active:
             return
 
+        live_command_widgets.clear()
         self.query_one("#title", Static).update(self.sessions.active.name)
         await self.mount_all_messages()
         await self._subagent_ui.sync_tabs(self.sessions.active.subagent_manager)

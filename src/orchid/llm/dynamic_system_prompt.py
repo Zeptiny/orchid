@@ -74,7 +74,7 @@ async def build_dynamic_system_prompt() -> Message:
 
     # -- <background_commands> block -------------------------------------------
     bg_store = get_background_store()
-    bg_entries = bg_store.list()
+    bg_entries = bg_store.list_visible()
     if bg_entries:
         now = time.monotonic()
         # Split into USER-owned and AGENT-owned.

@@ -8,6 +8,8 @@ import pytest
 
 from orchid.llm import dynamic_system_prompt as dsp
 from orchid.tools.background_store import (
+    MAIN_AGENT_SCOPE_ID,
+    BackgroundProcessStore,
     HeadTailBuffer,
     ProcessEntry,
 )
@@ -15,9 +17,16 @@ from orchid.tools.background_store import (
 
 @pytest.fixture(autouse=True)
 def _reset_tree_cache():
+    from orchid.domain.session import set_current_session_id
+    from orchid.tools.background_store import set_current_agent_scope_id
+
+    set_current_session_id(None)
+    set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
     dsp._TREE_CACHE = None
     yield
     dsp._TREE_CACHE = None
+    set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
+    set_current_session_id(None)
 
 
 def _patch_deps(states=None, todos=None, tree="TREE", bg_entries=None):
@@ -32,6 +41,10 @@ def _patch_deps(states=None, todos=None, tree="TREE", bg_entries=None):
 
     bg_store = MagicMock()
     bg_store.list.return_value = bg_entries if bg_entries is not None else []
+    entries = bg_entries if bg_entries is not None else []
+    bg_store.list_visible.side_effect = lambda: [
+        entry for entry in entries if BackgroundProcessStore.is_visible(entry)
+    ]
 
     return {
         "get_config": patch("orchid.llm.dynamic_system_prompt.get_config", return_value=cfg),
@@ -52,6 +65,8 @@ def _make_entry(
     created_at=None,
     last_output_at=None,
     tail_bytes=b"hello\n",
+    session_id=None,
+    agent_scope_id=MAIN_AGENT_SCOPE_ID,
 ) -> MagicMock:
     """Build a mock ProcessEntry for testing."""
     entry = MagicMock(spec=ProcessEntry)
@@ -63,6 +78,8 @@ def _make_entry(
     now = time.monotonic()
     entry.created_at = created_at if created_at is not None else now - 10
     entry.last_output_at = last_output_at if last_output_at is not None else now - 5
+    entry.session_id = session_id
+    entry.agent_scope_id = agent_scope_id
     buf = HeadTailBuffer()
     buf.append(tail_bytes)
     entry.buffer = buf
@@ -103,6 +120,39 @@ async def test_one_running_command_includes_block():
     assert "last_output_age=" in c
     # exit_code must NOT appear for a running command
     assert 'exit_code=' not in c
+
+
+@pytest.mark.asyncio
+async def test_omits_commands_from_other_sessions_and_agent_scopes():
+    from orchid.domain.session import set_current_session_id
+    from orchid.tools.background_store import set_current_agent_scope_id
+
+    set_current_session_id("session-a")
+    set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
+    entries = [
+        _make_entry(id=1, command="visible", session_id="session-a"),
+        _make_entry(id=2, command="other-session", session_id="session-b"),
+        _make_entry(id=3, command="other-agent", session_id="session-a", agent_scope_id="subagent-a"),
+    ]
+    patches = _patch_deps(bg_entries=entries)
+    with patches["get_config"], patches["directory_tree"], patches["get_subagent_manager"], patches["get_todo_store"], patches["get_background_store"]:
+        msg = await dsp.build_dynamic_system_prompt()
+    c = msg.content
+
+    assert 'command="visible"' in c
+    assert 'command="other-session"' not in c
+    assert 'command="other-agent"' not in c
+
+    set_current_agent_scope_id("subagent-a")
+    patches = _patch_deps(bg_entries=entries)
+    with patches["get_config"], patches["directory_tree"], patches["get_subagent_manager"], patches["get_todo_store"], patches["get_background_store"]:
+        msg = await dsp.build_dynamic_system_prompt()
+    c = msg.content
+    assert 'command="other-agent"' in c
+    assert 'command="visible"' not in c
+
+    set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
+    set_current_session_id(None)
 
 
 # ---------------------------------------------------------------------------

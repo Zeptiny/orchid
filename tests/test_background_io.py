@@ -15,9 +15,13 @@ from orchid.tools.background_io import (
     send_input_tool,
 )
 from orchid.tools.background_store import (
+    MAIN_AGENT_SCOPE_ID,
     BackgroundProcessStore,
+    HeadTailBuffer,
+    ProcessEntry,
     get_background_store,
     set_background_store,
+    set_current_agent_scope_id,
 )
 from orchid.tools.exec import execute_command
 
@@ -34,6 +38,7 @@ def fresh_store():
     set_background_store(store)
     yield store
     store.clear()
+    set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
     set_background_store(prior)
 
 
@@ -283,6 +288,67 @@ async def test_read_output_missing_id(fresh_store):
     result = await execute_read_output(id=99999)
     assert "not found" in result.display.lower()
     assert "<error" in result.content
+
+
+@pytest.mark.asyncio
+async def test_read_output_denies_other_session_command(fresh_store):
+    """A command from another session is not visible by id."""
+    from unittest.mock import MagicMock
+
+    from orchid.domain.session import set_current_session_id
+
+    buf = HeadTailBuffer()
+    buf.append(b"secret\n")
+    fresh_store._entries[1] = ProcessEntry(
+        id=1,
+        command="echo secret",
+        process=MagicMock(),
+        buffer=buf,
+        session_id="session-a",
+        agent_scope_id=MAIN_AGENT_SCOPE_ID,
+    )
+
+    set_current_session_id("session-b")
+    set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
+
+    result = await execute_read_output(id=1)
+    assert "not found" in result.display.lower()
+    assert "secret" not in result.content
+
+    set_current_session_id(None)
+
+
+@pytest.mark.asyncio
+async def test_read_output_denies_other_agent_scope_command(fresh_store):
+    """A command from another agent scope is not visible by id."""
+    from unittest.mock import MagicMock
+
+    from orchid.domain.session import set_current_session_id
+
+    buf = HeadTailBuffer()
+    buf.append(b"subagent-output\n")
+    fresh_store._entries[1] = ProcessEntry(
+        id=1,
+        command="echo subagent-output",
+        process=MagicMock(),
+        buffer=buf,
+        session_id="session-a",
+        agent_scope_id="subagent-a",
+    )
+
+    set_current_session_id("session-a")
+    set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
+
+    result = await execute_read_output(id=1)
+    assert "not found" in result.display.lower()
+    assert "subagent-output" not in result.content
+
+    set_current_agent_scope_id("subagent-a")
+    result = await execute_read_output(id=1)
+    assert "subagent-output" in result.content
+
+    set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
+    set_current_session_id(None)
 
 
 # ---------------------------------------------------------------------------

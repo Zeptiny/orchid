@@ -88,7 +88,7 @@ async def execute_read_output(
 ) -> ExecutorResult:
     """Read / long-poll output from a background command."""
     store = get_background_store()
-    entry = store.get(id)
+    entry = store.get_visible(id)
     if entry is None:
         return ExecutorResult(
             display=f"Background command {id} not found",
@@ -104,7 +104,7 @@ async def execute_read_output(
         bounded = min(wait_ms, _MAX_LONG_POLL_MS)
         await store.wait_for_progress(id, bounded)
 
-    result = store.snapshot(id, last_n)
+    result = store.snapshot_visible(id, last_n)
     if result is None:
         return ExecutorResult(
             display=f"Background command {id} not found",
@@ -143,7 +143,7 @@ async def execute_send_input(
 ) -> ExecutorResult:
     """Send stdin input to an interactive background command."""
     store = get_background_store()
-    entry = store.get(id)
+    entry = store.get_visible(id)
     if entry is None:
         return ExecutorResult(
             display=f"Background command {id} not found",
@@ -240,7 +240,7 @@ async def execute_terminate_command(
 ) -> ExecutorResult:
     """Terminate a running background command."""
     store = get_background_store()
-    entry = store.get(id)
+    entry = store.get_visible(id)
     if entry is None:
         return ExecutorResult(
             display=f"Background command {id} not found",

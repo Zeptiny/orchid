@@ -25,6 +25,22 @@ class BgCommandRecord(TypedDict):
     has_tail: bool
 
 
+def _current_bg_session_id() -> str | None:
+    from orchid.domain.session import get_current_session_id
+    return get_current_session_id()
+
+
+def _active_bg_agent_scope_id(app: Any) -> str:
+    from orchid.tools.background_store import MAIN_AGENT_SCOPE_ID
+
+    try:
+        sidebar = app.query_one("#sidebar", Sidebar)
+        view_id = sidebar.active_view
+    except Exception:
+        view_id = "main"
+    return MAIN_AGENT_SCOPE_ID if view_id == "main" else view_id
+
+
 def _relative_time(iso_timestamp: str) -> str:
     """Convert an ISO timestamp to a relative 'X ago' string."""
     try:
@@ -83,12 +99,24 @@ class BgCommandInput(Input):
     def _on_focus(self, event: Focus) -> None:
         super()._on_focus(event)
         from orchid.tools.background_store import get_background_store
-        get_background_store().take_ownership(self.command_id)
+        store = get_background_store()
+        if store.get_visible(
+            self.command_id,
+            session_id=_current_bg_session_id(),
+            agent_scope_id=_active_bg_agent_scope_id(cast(Any, self).app),
+        ):
+            store.take_ownership(self.command_id)
 
     def _on_blur(self, event: Blur) -> None:
         super()._on_blur(event)
         from orchid.tools.background_store import get_background_store
-        get_background_store().release_ownership(self.command_id)
+        store = get_background_store()
+        if store.get_visible(
+            self.command_id,
+            session_id=_current_bg_session_id(),
+            agent_scope_id=_active_bg_agent_scope_id(cast(Any, self).app),
+        ):
+            store.release_ownership(self.command_id)
 
 
 class NavEntry(Static):
@@ -402,6 +430,10 @@ class Sidebar(Vertical):
         self._active_view = view_id
         self._update_active_styles()
         self._show_usage_for_view(view_id)
+
+    @property
+    def active_view(self) -> str:
+        return self._active_view
 
     def _show_usage_for_view(self, view_id: str) -> None:
         usage = self._usage_by_view.get(view_id)
@@ -1012,7 +1044,11 @@ class Sidebar(Vertical):
         cmd_id = event.input.command_id
         from orchid.tools.background_store import get_background_store
         store = get_background_store()
-        entry = store.get(cmd_id)
+        entry = store.get_visible(
+            cmd_id,
+            session_id=_current_bg_session_id(),
+            agent_scope_id=_active_bg_agent_scope_id(cast(Any, self).app),
+        )
         if entry is None or not entry.interactive or entry.exit_code is not None:
             return
         text = event.input.value + "\n"
@@ -1061,7 +1097,11 @@ class Sidebar(Vertical):
 
         from orchid.tools.background_store import get_background_store
         store = get_background_store()
-        entry = store.get(cmd_id)
+        entry = store.get_visible(
+            cmd_id,
+            session_id=_current_bg_session_id(),
+            agent_scope_id=_active_bg_agent_scope_id(cast(Any, self).app),
+        )
         if entry is None:
             return
 
@@ -1072,7 +1112,11 @@ class Sidebar(Vertical):
         self._expanded_bg_cmd_id = cmd_id
 
         # Build the expand content
-        snap = store.snapshot(cmd_id)
+        snap = store.snapshot_visible(
+            cmd_id,
+            session_id=_current_bg_session_id(),
+            agent_scope_id=_active_bg_agent_scope_id(cast(Any, self).app),
+        )
         tail_text = snap[0] if snap else "(no output yet)"
         if not tail_text.strip():
             tail_text = "(no output yet)"

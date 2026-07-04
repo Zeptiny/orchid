@@ -9,11 +9,13 @@ import pytest
 from orchid.tools.background_store import (
     _MAX_ENTRIES,
     _TOTAL_CAP,
+    MAIN_AGENT_SCOPE_ID,
     BackgroundProcessStore,
     HeadTailBuffer,
     ProcessEntry,
     get_background_store,
     set_background_store,
+    set_current_agent_scope_id,
 )
 
 # ---------------------------------------------------------------------------
@@ -30,6 +32,7 @@ def fresh_store():
     yield store
     # Clean up any lingering processes before restoring.
     store.clear()
+    set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
     set_background_store(prior)
 
 
@@ -161,6 +164,61 @@ async def test_spawn_populates_buffer_and_records_exit_code(fresh_store):
     text, exit_code = fresh_store.snapshot(proc_id)
     assert exit_code == 0
     assert "hello-from-bg" in text
+
+
+@pytest.mark.asyncio
+async def test_spawn_records_current_session_and_agent_scope(fresh_store):
+    """Spawn captures session and agent scope metadata for isolation."""
+    from orchid.domain.session import set_current_session_id
+
+    set_current_session_id("session-a")
+    set_current_agent_scope_id("subagent-a")
+    proc_id, _ = await fresh_store.spawn("echo scoped")
+    await asyncio.sleep(0.3)
+
+    entry = fresh_store.get(proc_id)
+    assert entry is not None
+    assert entry.session_id == "session-a"
+    assert entry.agent_scope_id == "subagent-a"
+
+    set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
+    set_current_session_id(None)
+
+
+def test_list_visible_filters_by_session_and_agent_scope(fresh_store):
+    """Visible entries are scoped to both active session and active agent."""
+    from unittest.mock import MagicMock
+
+    from orchid.domain.session import set_current_session_id
+
+    for idx, session_id, agent_scope_id in [
+        (1, "session-a", MAIN_AGENT_SCOPE_ID),
+        (2, "session-a", "subagent-a"),
+        (3, "session-b", MAIN_AGENT_SCOPE_ID),
+    ]:
+        fresh_store._entries[idx] = ProcessEntry(
+            id=idx,
+            command=f"cmd-{idx}",
+            process=MagicMock(),
+            buffer=HeadTailBuffer(),
+            session_id=session_id,
+            agent_scope_id=agent_scope_id,
+        )
+
+    set_current_session_id("session-a")
+    set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
+
+    visible = fresh_store.list_visible()
+    assert [entry.id for entry in visible] == [1]
+    assert fresh_store.get_visible(2) is None
+    assert fresh_store.get_visible(3) is None
+    assert fresh_store.get(2) is not None
+
+    set_current_agent_scope_id("subagent-a")
+    assert [entry.id for entry in fresh_store.list_visible()] == [2]
+
+    set_current_agent_scope_id(MAIN_AGENT_SCOPE_ID)
+    set_current_session_id(None)
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +425,7 @@ def test_process_entry_defaults():
     mock_proc = MagicMock()
     entry = ProcessEntry(id=1, command="echo test", process=mock_proc, buffer=HeadTailBuffer())
     assert entry.owner == "AGENT"
+    assert entry.agent_scope_id == MAIN_AGENT_SCOPE_ID
     assert entry.exit_code is None
     assert entry.interactive is False
     assert entry.master_fd is None

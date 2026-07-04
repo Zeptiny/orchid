@@ -20,6 +20,8 @@ from orchid.tools.exec import ENV_SUPPRESSION
 if TYPE_CHECKING:
     from orchid.tools.pty_support import PTYHandle
 
+MAIN_AGENT_SCOPE_ID = "main"
+
 # ---------------------------------------------------------------------------
 # Head / tail ring-buffer (capped at ~1 MiB)
 # ---------------------------------------------------------------------------
@@ -120,6 +122,7 @@ class ProcessEntry:
     interactive: bool = False
     master_fd: int | None = None  # stub for PTY (U2)
     session_id: str | None = None  # owning session for scoped cleanup
+    agent_scope_id: str = MAIN_AGENT_SCOPE_ID  # owning agent/subagent scope
     description: str = ""  # human-readable description from execute_command
 
     def __post_init__(self) -> None:
@@ -156,6 +159,7 @@ class BackgroundProcessStore:
         cwd: str = ".",
         interactive: bool = False,
         session_id: str | None = None,
+        agent_scope_id: str | None = None,
         description: str = "",
     ) -> tuple[int, None]:
         """Spawn a background process, returning ``(id, None)``.
@@ -174,6 +178,8 @@ class BackgroundProcessStore:
         if session_id is None:
             from orchid.domain.session import get_current_session_id
             session_id = get_current_session_id()
+        if agent_scope_id is None:
+            agent_scope_id = get_current_agent_scope_id()
         proc_id = self._next_id
         self._next_id += 1
 
@@ -196,6 +202,7 @@ class BackgroundProcessStore:
                 interactive=True,
                 master_fd=handle.master_fd,
                 session_id=session_id,
+                agent_scope_id=agent_scope_id,
                 description=description,
             )
         else:
@@ -217,6 +224,7 @@ class BackgroundProcessStore:
                 created_at=now,
                 interactive=False,
                 session_id=session_id,
+                agent_scope_id=agent_scope_id,
                 description=description,
             )
         self._entries[proc_id] = entry
@@ -272,15 +280,76 @@ class BackgroundProcessStore:
         """Return the entry for *proc_id*, or ``None``."""
         return self._entries.get(proc_id)
 
+    def get_visible(
+        self,
+        proc_id: int,
+        *,
+        session_id: str | None | object = None,
+        agent_scope_id: str | None | object = None,
+    ) -> ProcessEntry | None:
+        """Return an entry only when it is visible to the requested scope."""
+        entry = self._entries.get(proc_id)
+        if entry is None:
+            return None
+        if not self.is_visible(entry, session_id=session_id, agent_scope_id=agent_scope_id):
+            return None
+        return entry
+
     def list(self) -> list[ProcessEntry]:
         """Return all entries (insertion order)."""
         return list(self._entries.values())
+
+    def list_visible(
+        self,
+        *,
+        session_id: str | None | object = None,
+        agent_scope_id: str | None | object = None,
+    ) -> list[ProcessEntry]:
+        """Return entries visible to the requested session and agent scope."""
+        return [
+            entry
+            for entry in self._entries.values()
+            if self.is_visible(entry, session_id=session_id, agent_scope_id=agent_scope_id)
+        ]
+
+    @staticmethod
+    def is_visible(
+        entry: ProcessEntry,
+        *,
+        session_id: str | None | object = None,
+        agent_scope_id: str | None | object = None,
+    ) -> bool:
+        """Check whether an entry belongs to the requested session/agent scope."""
+        if session_id is None:
+            from orchid.domain.session import get_current_session_id
+            session_id = get_current_session_id()
+        if agent_scope_id is None:
+            agent_scope_id = get_current_agent_scope_id()
+        return entry.session_id == session_id and entry.agent_scope_id == agent_scope_id
 
     def snapshot(
         self, proc_id: int, last_n: int | None = None
     ) -> tuple[str, int | None] | None:
         """Return ``(tail_text, exit_code)`` for *proc_id*, or ``None``."""
         entry = self._entries.get(proc_id)
+        if entry is None:
+            return None
+        return entry.buffer.get_tail(last_n), entry.exit_code
+
+    def snapshot_visible(
+        self,
+        proc_id: int,
+        last_n: int | None = None,
+        *,
+        session_id: str | None | object = None,
+        agent_scope_id: str | None | object = None,
+    ) -> tuple[str, int | None] | None:
+        """Return a snapshot only when *proc_id* is visible to the scope."""
+        entry = self.get_visible(
+            proc_id,
+            session_id=session_id,
+            agent_scope_id=agent_scope_id,
+        )
         if entry is None:
             return None
         return entry.buffer.get_tail(last_n), entry.exit_code
@@ -492,6 +561,9 @@ class BackgroundProcessStore:
 _current_store: ContextVar[BackgroundProcessStore | None] = ContextVar(
     "current_bg_store", default=None
 )
+_current_agent_scope_id: ContextVar[str] = ContextVar(
+    "current_bg_agent_scope_id", default=MAIN_AGENT_SCOPE_ID
+)
 
 
 def get_background_store() -> BackgroundProcessStore:
@@ -506,3 +578,13 @@ def get_background_store() -> BackgroundProcessStore:
 def set_background_store(store: BackgroundProcessStore) -> None:
     """Override the current singleton (useful in tests)."""
     _current_store.set(store)
+
+
+def get_current_agent_scope_id() -> str:
+    """Return the agent/subagent scope that owns new background commands."""
+    return _current_agent_scope_id.get()
+
+
+def set_current_agent_scope_id(scope_id: str) -> None:
+    """Set the current agent/subagent scope for background command access."""
+    _current_agent_scope_id.set(scope_id)
