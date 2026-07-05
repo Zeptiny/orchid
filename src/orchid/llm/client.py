@@ -43,8 +43,8 @@ log = logging.getLogger(__name__)
 _YIELD_THROTTLE = 0.1
 _TOOL_TIMEOUT = 60
 _ERROR_DETAIL_MAX_LEN = 200
-_TOOL_OUTPUT_INLINE_THRESHOLD = 10_000
-_TOOLS_WITHOUT_OUTPUT_OFFLOAD = {"read", "grep", "glob", "directory_tree", "web_fetch", "skill", "write"}
+_TOOL_OUTPUT_INLINE_THRESHOLD = 20_000
+_TOOLS_WITHOUT_OUTPUT_OFFLOAD = {"read", "grep", "glob", "directory_tree", "web_fetch", "skill", "write", "wait_for_subagent"}
 _TOOLS_WITHOUT_TIMEOUT = {
     "wait_for_subagent",
     "get_file_skeleton",
