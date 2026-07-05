@@ -172,17 +172,17 @@ class MCPManager:
             # the async generators (stdio_client, sse_client) dangle and
             # their finalizers later raise "exit cancel scope in a different
             # task" when the event loop runs shutdown_asyncgens.
-            cancelled: bool = False
+            cancellation: asyncio.CancelledError | None = None
             try:
                 await self._stop.wait()
-            except asyncio.CancelledError:
-                cancelled = True
+            except asyncio.CancelledError as e:
+                cancellation = e
             try:
                 await self._exit_stack.aclose()
             except Exception:
                 logger.warning("Error during MCP shutdown", exc_info=True)
-            if cancelled:
-                raise
+            if cancellation is not None:
+                raise cancellation
 
     async def _await_runner(self, timeout: float = 3.0) -> None:
         self._stop.set()

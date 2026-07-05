@@ -200,6 +200,34 @@ class TestMCPLifecycle(unittest.IsolatedAsyncioTestCase):
             finally:
                 await manager.shutdown()
 
+    async def test_runner_cancellation_reraises_cancelled_error_after_cleanup(self):
+        """External runner cancellation must not turn into a bare-raise error.
+
+        ``asyncio.run()`` cancels pending tasks during event-loop shutdown. If
+        the MCP runner is still waiting on ``_stop`` at that point, it must
+        close its transports and then preserve cancellation semantics instead
+        of raising ``RuntimeError: No active exception to reraise``.
+        """
+        from orchid.mcp import MCPManager
+
+        manager = MCPManager()
+        servers = {"srv1": {"command": "fake", "args": []}}
+
+        with (
+            patch("orchid.mcp.stdio_client", fake_stdio_client),
+            patch("orchid.mcp.ClientSession", FakeClientSession),
+        ):
+            await manager.start_all(servers)
+            assert manager._runner is not None
+            runner = manager._runner
+            runner.cancel()
+
+            with self.assertRaises(asyncio.CancelledError):
+                await runner
+
+            self.assertTrue(runner.cancelled())
+            manager._runner = None
+
 
 _SSE_SENTINEL = object()
 
