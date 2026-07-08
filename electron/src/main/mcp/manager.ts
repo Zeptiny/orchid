@@ -279,6 +279,16 @@ export class MCPManager {
   }
 
   /**
+   * Look up which MCP server owns a given resource URI.
+   *
+   * @param uri - The resource URI to look up.
+   * @returns The server name, or undefined if no server owns this URI.
+   */
+  getResourceServer(uri: string): string | undefined {
+    return this._uriMap.get(uri);
+  }
+
+  /**
    * Get the status of all configured MCP servers.
    */
   getStatus(): MCPServerStatus[] {

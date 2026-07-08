@@ -177,6 +177,8 @@ function loadSkillsFromDir(skillsDir: string): Map<string, Skill> {
       description,
       requires: Object.freeze(requires),
       resources: Object.freeze([...scripts, ...references, ...assets]),
+      location: skillFile,
+      content: body,
     };
 
     skills.set(skill.name, skill);

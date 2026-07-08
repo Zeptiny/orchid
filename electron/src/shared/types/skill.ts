@@ -25,6 +25,10 @@ export interface Skill {
   readonly description: string;
   readonly requires: readonly string[];
   readonly resources: readonly SkillResource[];
+  /** Absolute path to the SKILL.md file (set during loading, not serialized) */
+  readonly location?: string;
+  /** Body content of the SKILL.md file (set during loading, not serialized) */
+  readonly content?: string;
 }
 
 export const skillSchema = z.object({

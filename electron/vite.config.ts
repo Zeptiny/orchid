@@ -16,5 +16,6 @@ export default defineConfig({
   test: {
     root: path.resolve(__dirname),
     include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
+    teardownTimeout: 1000,
   },
 });
