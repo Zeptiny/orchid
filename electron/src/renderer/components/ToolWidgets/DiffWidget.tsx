@@ -7,9 +7,17 @@
  * Supported tools: edit, write, replace_symbol, rename_symbol.
  */
 import { useMemo } from 'react';
-import { DiffEditor } from '@monaco-editor/react';
+import { DiffEditor, loader } from '@monaco-editor/react';
 import type { ToolCallEvent, DiffData } from './types';
 import { detectLanguage } from './types';
+
+// Configure Monaco to load from local node_modules instead of CDN
+// This ensures the editor works in packaged Electron builds without internet
+loader.config({
+  paths: {
+    vs: new URL('../../../../node_modules/monaco-editor/min/vs', import.meta.url).pathname,
+  },
+});
 
 // ── Props ────────────────────────────────────────────────────────────────────
 

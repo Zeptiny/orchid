@@ -6,6 +6,7 @@
  */
 import { minimatch } from 'minimatch';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import { type ZodType } from 'zod';
 import type { ToolDefinition, ToolHandler, RegisteredTool } from './types';
 
 export class ToolRegistry {
@@ -80,7 +81,7 @@ export class ToolRegistry {
       schemas[name] = {
         name: definition.name,
         description: definition.description,
-        inputSchema: zodToJsonSchema(definition.inputSchema),
+        inputSchema: zodToJsonSchema(definition.inputSchema as any),
         ...(definition.actionLabel && { actionLabel: definition.actionLabel }),
         ...(definition.category && { category: definition.category }),
         ...(definition.noTimeout !== undefined && { noTimeout: definition.noTimeout }),

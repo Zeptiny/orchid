@@ -11,6 +11,7 @@ import { readdir } from 'node:fs/promises';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import { type ZodType } from 'zod';
 
 /**
  * Zod schema for the list_files tool input.
@@ -50,7 +51,7 @@ export const listFilesTool = tool({
  */
 export function validateJsonSchema(): { valid: boolean; schema: unknown } {
   try {
-    const jsonSchema = zodToJsonSchema(listFilesSchema);
+    const jsonSchema = zodToJsonSchema(listFilesSchema as any);
     return { valid: true, schema: jsonSchema };
   } catch {
     return { valid: false, schema: null };
