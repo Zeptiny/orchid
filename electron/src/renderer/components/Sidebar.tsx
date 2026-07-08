@@ -184,9 +184,12 @@ function SessionsSection({
       <ul className="menu menu-sm">
         {sessions.map((session) => (
           <li key={session.id}>
-            <button
-              className={`flex items-center justify-between ${session.id === activeSessionId ? 'active' : ''}`}
+            <div
+              className={`flex items-center justify-between cursor-pointer ${session.id === activeSessionId ? 'active' : ''}`}
               onClick={() => onSelect(session.id)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter') onSelect(session.id); }}
             >
               <div className="flex-1 min-w-0">
                 <div className="truncate text-xs">{session.name}</div>
@@ -200,7 +203,7 @@ function SessionsSection({
               >
                 ✕
               </button>
-            </button>
+            </div>
           </li>
         ))}
       </ul>

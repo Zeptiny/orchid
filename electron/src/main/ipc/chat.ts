@@ -19,6 +19,8 @@ import { getConfig } from '../config/loader';
 import { listAgents, getAgent } from '../agents/registry';
 import { resolveModelRef } from '../llm/providers';
 import { createProviderModel } from '../llm/providers-factory';
+import { MessageRole, MessageType } from '../../shared/types/message';
+import type { Message } from '../../shared/types/message';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -33,6 +35,7 @@ type ActiveAgent = {
   actor: ActorRefFrom<typeof agentMachine>;
   webContents: WebContents;
   abortController: AbortController;
+  messages: Message[];
 };
 
 let activeAgents = new Map<string, ActiveAgent>();
@@ -43,7 +46,7 @@ let activeAgents = new Map<string, ActiveAgent>();
  * Creates a StreamFn compatible with the agent machine.
  * In production, this wraps the streamChat orchestrator from U9.
  */
-function createStreamFn(config: Config) {
+function createStreamFn(config: Config, messages: Message[]) {
   return async function* (params: {
     message: string;
     agent: Agent;
@@ -52,7 +55,6 @@ function createStreamFn(config: Config) {
   }): AsyncGenerator<StreamEvent> {
     // Dynamic import to avoid circular dependency issues
     const { streamChat } = await import('../llm/orchestrator');
-    const { SessionManager } = await import('../session/manager');
 
     // Resolve the model for this agent
     const modelRef = resolveModelRef(
@@ -60,9 +62,6 @@ function createStreamFn(config: Config) {
       config,
     );
     const modelInstance = createProviderModel(modelRef);
-
-    // Create or get session manager (simplified — real impl uses singleton)
-    const sessionMgr = new SessionManager();
 
     // Build system prompt context
     const context = {
@@ -74,9 +73,9 @@ function createStreamFn(config: Config) {
       backgroundCommands: [],
     };
 
-    // Use the orchestrator to stream
+    // Use the orchestrator to stream with full message history
     const stream = streamChat({
-      messages: [], // New conversation for now — full history comes from session
+      messages,
       agent: params.agent,
       systemPrompt: params.systemPrompt,
       context,
@@ -139,11 +138,31 @@ export function registerChatIPC(): void {
     // Cancel any existing actor for this window
     const windowId = String(webContents.id);
     const existing = activeAgents.get(windowId);
+    let existingMessages: Message[] = [];
+
     if (existing) {
+      existingMessages = existing.messages;
       existing.abortController.abort();
       existing.actor.send({ type: 'CANCEL' });
       activeAgents.delete(windowId);
     }
+
+    // Build message history: existing messages + new user message
+    const userMessage: Message = {
+      id: crypto.randomUUID(),
+      role: MessageRole.USER,
+      content: message,
+      type: MessageType.TEXT,
+      tool_calls: null,
+      tool_call_id: null,
+      name: null,
+      thinking: null,
+      timestamp: new Date().toISOString(),
+      usage: null,
+      hidden: false,
+    };
+
+    const messages = [...existingMessages, userMessage];
 
     // Get or create agent (default to "general" agent)
     const agents = listAgents();
@@ -156,13 +175,13 @@ export function registerChatIPC(): void {
       allowed_skills: ['*'],
     };
 
-    // Create the agent actor
+    // Create the agent actor with message history
     const abortController = new AbortController();
     const actor = createActor(agentMachine, {
       input: {
         agent,
         systemPrompt: 'You are a helpful assistant.',
-        streamFn: createStreamFn(config),
+        streamFn: createStreamFn(config, messages),
         executeFn: createExecuteFn(),
       },
     });
@@ -171,6 +190,7 @@ export function registerChatIPC(): void {
       actor,
       webContents,
       abortController,
+      messages,
     });
 
     // Track response for incremental updates
@@ -199,11 +219,32 @@ export function registerChatIPC(): void {
 
       // Clean up on terminal states
       if (snapshot.value === 'idle' && lastSentLength > 0) {
+        // Add assistant response to message history
+        const assistantMessage: Message = {
+          id: crypto.randomUUID(),
+          role: MessageRole.ASSISTANT,
+          content: context.response,
+          type: MessageType.TEXT,
+          tool_calls: null,
+          tool_call_id: null,
+          name: null,
+          thinking: null,
+          timestamp: new Date().toISOString(),
+          usage: null,
+          hidden: false,
+        };
+
+        // Update the stored messages for this window
+        const agentData = activeAgents.get(windowId);
+        if (agentData) {
+          agentData.messages = [...messages, assistantMessage];
+        }
+
         webContents.send(IPC_CHANNELS.CHAT_DONE, {
           type: 'done',
           response: context.response,
         });
-        activeAgents.delete(windowId);
+        // Don't delete the agent - keep it for message history
       }
 
       if (snapshot.value === 'error') {

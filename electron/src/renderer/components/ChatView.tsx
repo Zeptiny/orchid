@@ -31,6 +31,7 @@ export function ChatView() {
   const [astStatus, setAstStatus] = useState<ASTStoreStatus | null>(null);
   const [currentTheme, setCurrentTheme] = useState('default');
   const [currentPersonality, setCurrentPersonality] = useState('default');
+  const [currentModel, setCurrentModel] = useState('');
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => !prev);
@@ -58,6 +59,7 @@ export function ChatView() {
           const config = await window.orchid.config.get();
           if (config.theme) setCurrentTheme(config.theme);
           if (config.personality) setCurrentPersonality(config.personality);
+          if (config.default_model) setCurrentModel(config.default_model);
         }
       } catch {
         // Non-fatal
@@ -204,7 +206,8 @@ export function ChatView() {
     onClose: () => setPaletteOpen(false),
   };
 
-  const model = session.activeSession?.model ?? '';
+  // Use session model or fall back to config default
+  const model = session.activeSession?.model ?? currentModel ?? '';
 
   const sessions =
     session.listState.status === 'ready' || session.listState.status === 'partial'
