@@ -147,7 +147,7 @@ export function classifyError(exc: unknown): ClassifiedError {
   if (exc instanceof AuthenticationError) {
     return {
       title: 'Authentication Failed',
-      detail: 'Invalid or missing API key. Check your configuration.',
+      detail: detail || 'Invalid or missing API key. Check your configuration.',
     };
   }
 
@@ -155,7 +155,7 @@ export function classifyError(exc: unknown): ClassifiedError {
   if (exc instanceof RateLimitError) {
     return {
       title: 'Rate Limit Exceeded',
-      detail: 'Too many requests. Please wait and try again.',
+      detail: detail || 'Too many requests. Please wait and try again.',
     };
   }
 
@@ -163,7 +163,7 @@ export function classifyError(exc: unknown): ClassifiedError {
   if (exc instanceof TimeoutError) {
     return {
       title: 'Request Timed Out',
-      detail: 'The API did not respond in time. Try again later.',
+      detail: detail || 'The API did not respond in time. Try again later.',
     };
   }
 
@@ -171,8 +171,7 @@ export function classifyError(exc: unknown): ClassifiedError {
   if (exc instanceof APIConnectionError) {
     return {
       title: 'Connection Failed',
-      detail:
-        'Could not reach the API server. Check your network and base_url.',
+      detail: detail || 'Could not reach the API server. Check your network and base_url.',
     };
   }
 
@@ -220,7 +219,7 @@ export function classifyError(exc: unknown): ClassifiedError {
   if (exc instanceof Error && isTimeoutLikeMessage(exc.message)) {
     return {
       title: 'Request Timed Out',
-      detail: 'The API did not respond in time. Try again later.',
+      detail: detail || 'The API did not respond in time. Try again later.',
     };
   }
 

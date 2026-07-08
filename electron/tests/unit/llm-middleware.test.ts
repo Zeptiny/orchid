@@ -287,7 +287,7 @@ describe('Error classification', () => {
     const result = classifyError(new AuthenticationError());
     expect(result).toEqual({
       title: 'Authentication Failed',
-      detail: 'Invalid or missing API key. Check your configuration.',
+      detail: 'Invalid or missing API key',
     });
   });
 
@@ -295,7 +295,7 @@ describe('Error classification', () => {
     const result = classifyError(new RateLimitError());
     expect(result).toEqual({
       title: 'Rate Limit Exceeded',
-      detail: 'Too many requests. Please wait and try again.',
+      detail: 'Rate limit exceeded',
     });
   });
 
@@ -303,7 +303,7 @@ describe('Error classification', () => {
     const result = classifyError(new TimeoutError());
     expect(result).toEqual({
       title: 'Request Timed Out',
-      detail: 'The API did not respond in time. Try again later.',
+      detail: 'Request timed out',
     });
   });
 
@@ -311,7 +311,7 @@ describe('Error classification', () => {
     const result = classifyError(new APIConnectionError());
     expect(result).toEqual({
       title: 'Connection Failed',
-      detail: 'Could not reach the API server. Check your network and base_url.',
+      detail: 'Connection failed',
     });
   });
 
@@ -359,7 +359,7 @@ describe('Error classification', () => {
     const result = classifyError(new Error('Connection timed out'));
     expect(result).toEqual({
       title: 'Request Timed Out',
-      detail: 'The API did not respond in time. Try again later.',
+      detail: 'Connection timed out',
     });
   });
 

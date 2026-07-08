@@ -361,19 +361,37 @@ export function buildToolMap(
 // Error classification
 // ---------------------------------------------------------------------------
 
-function classifyStreamError(err: unknown): { title: string; detail: string } {
-  if (err instanceof Error) {
-    const msg = err.message.toLowerCase();
-    if (msg.includes('timeout') || msg.includes('timed out')) {
-      return { title: 'Request Timed Out', detail: 'The API did not respond in time. Try again later.' };
+/**
+ * Extract the deepest error message from an error chain.
+ * AI SDK wraps errors in RetryError → APICallError; this unwraps to the
+ * provider's actual message (e.g. "5-hour usage limit reached…").
+ */
+function extractErrorMessage(err: unknown): string {
+  if (err && typeof err === 'object' && 'errors' in err) {
+    const errors = (err as { errors: unknown[] }).errors;
+    if (Array.isArray(errors) && errors.length > 0) {
+      return extractErrorMessage(errors[errors.length - 1]);
     }
-    if (msg.includes('rate limit') || msg.includes('429')) {
-      return { title: 'Rate Limit Exceeded', detail: 'Too many requests. Please wait and try again.' };
-    }
-    if (msg.includes('auth') || msg.includes('401') || msg.includes('403')) {
-      return { title: 'Authentication Failed', detail: 'Invalid or missing API key. Check your configuration.' };
-    }
-    return { title: 'Stream Error', detail: err.message };
   }
-  return { title: 'Unexpected Error', detail: String(err) };
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function classifyStreamError(err: unknown): { title: string; detail: string } {
+  const detail = extractErrorMessage(err);
+  const lower = detail.toLowerCase();
+
+  if (lower.includes('timeout') || lower.includes('timed out')) {
+    return { title: 'Request Timed Out', detail };
+  }
+  if (lower.includes('rate limit') || lower.includes('429') || lower.includes('usage limit')) {
+    return { title: 'Rate Limit Exceeded', detail };
+  }
+  if (lower.includes('auth') || lower.includes('401') || lower.includes('403')) {
+    return { title: 'Authentication Failed', detail };
+  }
+  if (err instanceof Error) {
+    return { title: 'Stream Error', detail };
+  }
+  return { title: 'Unexpected Error', detail };
 }
