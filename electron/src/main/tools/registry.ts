@@ -6,7 +6,7 @@
  */
 import { minimatch } from 'minimatch';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { type ZodType } from 'zod';
+import { type ZodType, type ZodError } from 'zod';
 import type { ToolDefinition, ToolHandler, RegisteredTool } from './types';
 
 export class ToolRegistry {
@@ -88,6 +88,40 @@ export class ToolRegistry {
       };
     }
     return schemas;
+  }
+
+  /**
+   * Validate tool arguments against its Zod input schema.
+   *
+   * Returns `{ ok: true, data }` on success with the parsed/typed data,
+   * or `{ ok: false, error }` with a human-readable error message on failure.
+   *
+   * This is used by the tool execution pipeline to reject malformed
+   * tool calls from the LLM before they reach the handler.
+   */
+  validate(
+    toolName: string,
+    args: unknown,
+  ): { ok: true; data: unknown } | { ok: false; error: string } {
+    const tool = this.tools.get(toolName);
+    if (!tool) {
+      return { ok: false, error: `Tool '${toolName}' not found` };
+    }
+
+    const result = tool.definition.inputSchema.safeParse(args);
+    if (result.success) {
+      return { ok: true, data: result.data };
+    }
+
+    // Format Zod errors into a human-readable message for the LLM
+    const issues = result.error.issues
+      .map((issue: ZodError['issues'][number]) => {
+        const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
+        return `${path}${issue.message}`;
+      })
+      .join('; ');
+
+    return { ok: false, error: `Invalid arguments: ${issues}` };
   }
 
   /**

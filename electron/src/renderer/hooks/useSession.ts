@@ -70,6 +70,21 @@ export function useSession(): UseSessionReturn {
     refresh();
   }, [refresh]);
 
+  // Listen for push rename events from main process (e.g. auto-naming)
+  useEffect(() => {
+    const unsubscribe = window.orchid.session.onRenamed((event) => {
+      setActiveSession((prev) => {
+        if (prev && prev.id === event.id) {
+          return { ...prev, name: event.name };
+        }
+        return prev;
+      });
+      // Refresh session list so sidebar shows updated name
+      refresh();
+    });
+    return unsubscribe;
+  }, [refresh]);
+
   const load = useCallback(async (id: string): Promise<Session | null> => {
     setIsLoading(true);
     try {

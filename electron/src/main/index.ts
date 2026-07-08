@@ -16,6 +16,7 @@ import { loadAgents, seedAgentsDir } from './agents/registry';
 import { HOME_AGENTS_DIR } from './config/loader';
 import { MCPManager } from './mcp';
 import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
+import { initFileLogging, closeFileLogging } from './logging';
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
@@ -58,6 +59,9 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
   try {
+    // 0. Initialize persistent file logging (before anything else logs)
+    initFileLogging();
+
     // 1. Ensure home config structure exists
     ensureHomeConfig();
 
@@ -134,7 +138,10 @@ app.on('before-quit', async (event) => {
   event.preventDefault();
 
   try {
-    // 1. Unregister IPC handlers
+    // 1. Close file logging stream
+    await closeFileLogging();
+
+    // 2. Unregister IPC handlers
     unregisterAllIPC();
 
     // 2. Shut down MCP transports

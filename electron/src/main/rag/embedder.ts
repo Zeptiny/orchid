@@ -52,6 +52,11 @@ const MODEL_FILES: Array<{ relativePath: string; url: string; required: boolean 
     required: false,
   },
   {
+    relativePath: 'tokenizer_config.json',
+    url: 'https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/tokenizer_config.json',
+    required: false,
+  },
+  {
     relativePath: 'config.json',
     url: 'https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/config.json',
     required: false,
@@ -358,15 +363,32 @@ async function runOnnxEmbedding(
   // and keeps the implementation simpler. The embedder is already async.
   const session = await getOrCreateSession(ort, modelName);
 
-  // Tokenize (simple whitespace tokenizer for BGE models)
+  // Tokenize using proper BPE tokenizer, falling back to simpleTokenize
   const maxLength = 512;
   const inputIds: number[][] = [];
   const attentionMask: number[][] = [];
 
+  const tokenizer = await getTokenizer(modelName);
   for (const text of texts) {
-    const tokens = simpleTokenize(text, maxLength);
-    inputIds.push(tokens);
-    attentionMask.push(tokens.map(() => 1));
+    if (tokenizer) {
+      const encoded = tokenizer.encode(text, { add_special_tokens: true });
+      // @huggingface/tokenizers JS version returns plain object with .ids, .attention_mask
+      const ids: number[] = encoded.ids;
+      const mask: number[] = encoded.attention_mask;
+      // Truncate or pad to maxLength
+      const truncatedIds = ids.slice(0, maxLength);
+      const truncatedMask = mask.slice(0, maxLength);
+      while (truncatedIds.length < maxLength) {
+        truncatedIds.push(0);
+        truncatedMask.push(0);
+      }
+      inputIds.push(truncatedIds);
+      attentionMask.push(truncatedMask);
+    } else {
+      const tokens = simpleTokenize(text, maxLength);
+      inputIds.push(tokens);
+      attentionMask.push(tokens.map((t) => (t === 0 ? 0 : 1)));
+    }
   }
 
   const batchSize = texts.length;
@@ -493,7 +515,82 @@ async function resolveModelPath(modelName: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Simple tokenizer
+// BPE Tokenizer
+// ---------------------------------------------------------------------------
+
+/** Cached tokenizer instances keyed by model name. Null means fallback to simpleTokenize. */
+const tokenizerCache = new Map<string, InstanceType<typeof import('@huggingface/tokenizers').Tokenizer> | null>();
+
+/**
+ * Load the BPE tokenizer for the given model using @huggingface/tokenizers.
+ *
+ * Caches the tokenizer instance for reuse. Returns null if the tokenizer
+ * file is not found or the library fails to load, signaling that the caller
+ * should fall back to simpleTokenize().
+ */
+async function getTokenizer(
+  modelName: string,
+): Promise<InstanceType<typeof import('@huggingface/tokenizers').Tokenizer> | null> {
+  if (tokenizerCache.has(modelName)) {
+    return tokenizerCache.get(modelName)!;
+  }
+
+  try {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const os = await import('node:os');
+
+    const modelDir = path.join(os.homedir(), '.orchid', 'models', modelName);
+    const tokenizerPath = path.join(modelDir, 'tokenizer.json');
+
+    if (!fs.existsSync(tokenizerPath)) {
+      console.warn(
+        `BPE tokenizer file not found at ${tokenizerPath}, falling back to simpleTokenize`,
+      );
+      tokenizerCache.set(modelName, null);
+      return null;
+    }
+
+    const { Tokenizer } = await import('@huggingface/tokenizers');
+
+    // Load tokenizer.json
+    const tokenizerJson = JSON.parse(fs.readFileSync(tokenizerPath, 'utf-8'));
+
+    // Load tokenizer_config.json if available, otherwise use empty config
+    const configPath = path.join(modelDir, 'tokenizer_config.json');
+    let tokenizerConfig: Record<string, unknown> = {};
+    if (fs.existsSync(configPath)) {
+      try {
+        tokenizerConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      } catch {
+        console.warn('Failed to parse tokenizer_config.json, using empty config');
+      }
+    }
+
+    const tokenizer = new Tokenizer(tokenizerJson, tokenizerConfig);
+    tokenizerCache.set(modelName, tokenizer);
+    return tokenizer;
+  } catch (err) {
+    // MODULE_NOT_FOUND or any other error — fall back gracefully
+    console.warn(
+      `Failed to load BPE tokenizer for ${modelName}, falling back to simpleTokenize: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    tokenizerCache.set(modelName, null);
+    return null;
+  }
+}
+
+/**
+ * Clear the tokenizer cache. Useful for testing.
+ */
+export function clearTokenizerCache(): void {
+  tokenizerCache.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Simple tokenizer (fallback)
 // ---------------------------------------------------------------------------
 
 /**

@@ -299,14 +299,22 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
     // Get the finish reason from the result
     const finishReason = await result.finishReason;
+
+    // Yield usage BEFORE finish so the agent machine receives it while
+    // still in streaming state (not yet transitioned to idle).
+    yield { type: 'usage', usage: totalUsage };
     yield { type: 'finish', finishReason: finishReason ?? 'stop' };
+
+    // Stream termination diagnostics (R19)
+    if (finishReason === 'length') {
+      console.warn('[orchestrator] Stream terminated due to max token limit');
+    } else if (finishReason === 'content-filter') {
+      console.warn('[orchestrator] Stream terminated by content filter');
+    }
   } catch (err) {
     const { title, detail } = classifyStreamError(err);
     yield { type: 'error', title, detail };
   }
-
-  // ── Yield final usage ──
-  yield { type: 'usage', usage: totalUsage };
 }
 
 // ---------------------------------------------------------------------------

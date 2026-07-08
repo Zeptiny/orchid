@@ -26,6 +26,7 @@ import { assign, setup, fromCallback, fromPromise, type ActorRefFrom } from 'xst
 import type { StreamEvent } from '../../llm/orchestrator';
 import type { AgentEvent } from './events';
 import type { Agent } from '../../../shared/types/agent';
+import type { Usage } from '../../../shared/types/message';
 
 // ── Context ─────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,8 @@ export interface AgentContext {
   } | null;
   /** Error message if in error state. */
   error: string | null;
+  /** Token usage data from the most recent stream. */
+  usage: Usage | null;
   /** The agent configuration. */
   agent: Agent;
   /** System prompt for the agent. */
@@ -173,7 +176,10 @@ const streamCallback = fromCallback(
             case 'error':
               sendBack({ type: 'ERROR', error: event.detail, title: event.title });
               break;
-            // thinking, usage, step_finish are ignored by the agent machine
+            case 'usage':
+              sendBack({ type: 'USAGE', usage: event.usage });
+              break;
+            // thinking, step_finish are ignored by the agent machine
             default:
               break;
           }
@@ -259,6 +265,7 @@ export const agentMachine = setup({
     currentInput: '',
     currentToolCall: null,
     error: null,
+    usage: null,
     agent: input.agent,
     systemPrompt: input.systemPrompt,
     abortController: null,
@@ -276,7 +283,13 @@ export const agentMachine = setup({
             response: '',
             error: null,
             currentToolCall: null,
+            usage: () => null,
             abortController: () => new AbortController(),
+          }),
+        },
+        USAGE: {
+          actions: assign({
+            usage: ({ event }) => event.usage,
           }),
         },
       },
@@ -312,6 +325,11 @@ export const agentMachine = setup({
           target: 'idle',
           actions: assign({
             abortController: () => null,
+          }),
+        },
+        USAGE: {
+          actions: assign({
+            usage: ({ event }) => event.usage,
           }),
         },
         ERROR: {

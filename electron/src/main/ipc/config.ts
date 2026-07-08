@@ -12,6 +12,8 @@ import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { getConfig, ConfigManager, atomicWriteJson, HOME_CONFIG_PATH } from '../config/loader';
 import { configSchema } from '../config/schema';
+import { resolveModelMetadata } from '../llm/model-metadata';
+import { discoverModelsAsync } from '../llm/providers';
 import {
   encryptAndStore,
   providerKeychainKey,
@@ -66,6 +68,24 @@ export function registerConfigIPC(): void {
     return redactConfig(config as unknown as Record<string, unknown>);
   });
 
+  // config:model_metadata — resolve metadata for a given model ID
+  ipcMain.handle(IPC_CHANNELS.CONFIG_MODEL_METADATA, async (_event, modelId: unknown) => {
+    if (typeof modelId !== 'string' || !modelId) {
+      throw new Error('config:model_metadata requires a non-empty modelId string');
+    }
+    const config = getConfig();
+    return resolveModelMetadata(modelId, config);
+  });
+
+  // config:discover_models — discover models from a provider's GET /models endpoint
+  ipcMain.handle(IPC_CHANNELS.CONFIG_DISCOVER_MODELS, async (_event, alias: unknown, force?: unknown) => {
+    if (typeof alias !== 'string' || !alias) {
+      throw new Error('config:discover_models requires a non-empty alias string');
+    }
+    const config = getConfig();
+    return discoverModelsAsync(alias, config, force === true);
+  });
+
   // config:save — merge updates into the home config and persist.
   // API keys in providers are stored in the keychain and removed from the
   // config file before persistence.
@@ -106,4 +126,6 @@ export function registerConfigIPC(): void {
 export function unregisterConfigIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_GET);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_SAVE);
+  ipcMain.removeHandler(IPC_CHANNELS.CONFIG_MODEL_METADATA);
+  ipcMain.removeHandler(IPC_CHANNELS.CONFIG_DISCOVER_MODELS);
 }

@@ -6,7 +6,7 @@
 import { z } from 'zod';
 import type { Config, RAGConfig } from '../../shared/types/ipc-boundary';
 
-export type { Config, RAGConfig } from '../../shared/types/ipc-boundary';
+export type { Config, RAGConfig, ModelMetadata } from '../../shared/types/ipc-boundary';
 
 // ---------------------------------------------------------------------------
 // Nested schemas
@@ -21,6 +21,17 @@ export const ragConfigSchema = z.object({
     .string()
     .min(1)
     .default('fastembed/BAAI/bge-small-en-v1.5'),
+});
+
+/**
+ * Per-model metadata overrides that can be set in provider config.
+ * When present, these override the built-in defaults in model-metadata.ts.
+ */
+export const modelMetadataOverridesSchema = z.object({
+  max_input_tokens: z.number().int().positive().nullable().optional(),
+  max_output_tokens: z.number().int().positive().nullable().optional(),
+  supports_vision: z.boolean().optional(),
+  mode: z.enum(['chat', 'completion']).optional(),
 });
 
 // ---------------------------------------------------------------------------

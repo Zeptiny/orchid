@@ -5,7 +5,7 @@ import { useState, useCallback, useEffect } from 'react';
 import type { SessionSummary, MCPServerStatus, RAGStoreStatus, ASTStoreStatus } from '../../shared/types/ipc-boundary';
 import { TodoStatus } from '../../shared/types/todo';
 import type { SessionListState } from '../hooks/useSession';
-import type { SubagentListState } from '../hooks/useSubagents';
+import type { SubagentListState, SubagentDetail } from '../hooks/useSubagents';
 import type { TodoListState } from '../hooks/useTodos';
 
 interface SidebarProps {
@@ -19,6 +19,9 @@ interface SidebarProps {
   onRefreshSessions: () => void;
   subagentState: SubagentListState;
   onRefreshSubagents: () => void;
+  selectedSubagentId: string | null;
+  onSelectSubagent: (id: string | null) => void;
+  getSubagentDetail: (id: string) => SubagentDetail | null;
   todoState: TodoListState;
   onRefreshTodos: () => void;
   mcpServers: MCPServerStatus[];
@@ -41,6 +44,9 @@ export function Sidebar({
   onRefreshSessions,
   subagentState,
   onRefreshSubagents,
+  selectedSubagentId,
+  onSelectSubagent,
+  getSubagentDetail,
   todoState,
   onRefreshTodos,
   mcpServers,
@@ -95,7 +101,13 @@ export function Sidebar({
           <input type="checkbox" defaultChecked />
           <div className="collapse-title text-sm font-medium">Subagents</div>
           <div className="collapse-content">
-            <SubagentsSection state={subagentState} onRefresh={onRefreshSubagents} />
+            <SubagentsSection
+              state={subagentState}
+              onRefresh={onRefreshSubagents}
+              selectedId={selectedSubagentId}
+              onSelect={onSelectSubagent}
+              getDetail={getSubagentDetail}
+            />
           </div>
         </div>
 
@@ -219,9 +231,12 @@ function SessionsSection({
 interface SubagentsSectionProps {
   state: SubagentListState;
   onRefresh: () => void;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  getDetail: (id: string) => SubagentDetail | null;
 }
 
-function SubagentsSection({ state, onRefresh }: SubagentsSectionProps) {
+function SubagentsSection({ state, onRefresh, selectedId, onSelect, getDetail }: SubagentsSectionProps) {
   if (state.status === 'loading') {
     return <span className="loading loading-spinner loading-sm" />;
   }
@@ -242,23 +257,152 @@ function SubagentsSection({ state, onRefresh }: SubagentsSectionProps) {
   const agents = state.status === 'ready' ? state.subagents : [];
 
   return (
-    <ul className="menu menu-sm">
-      {agents.map((agent) => (
-        <li key={agent.id}>
-          <div className="flex items-center justify-between">
-            <div className="flex-1 min-w-0">
-              <div className="truncate text-xs">{agent.agent_name}</div>
-              <div className="text-[10px] opacity-50">{agent.status}</div>
-            </div>
-            <span className={`badge badge-xs ${
-              agent.status === 'running' ? 'badge-warning' :
-              agent.status === 'completed' ? 'badge-success' :
-              agent.status === 'failed' ? 'badge-error' : 'badge-ghost'
-            }`} />
+    <div className="space-y-1">
+      {agents.map((agent) => {
+        const detail = getDetail(agent.id);
+        return (
+          <SubagentPane
+            key={agent.id}
+            detail={detail}
+            agent={agent}
+            isSelected={selectedId === agent.id}
+            onSelect={onSelect}
+          />
+        );
+      })}
+      <button className="btn btn-ghost btn-xs w-full mt-2" onClick={onRefresh}>
+        Refresh
+      </button>
+    </div>
+  );
+}
+
+// ── Subagent Pane ────────────────────────────────────────────────────────────
+
+interface SubagentPaneProps {
+  detail: SubagentDetail | null;
+  agent: { id: string; agent_name: string; status: string };
+  isSelected: boolean;
+  onSelect: (id: string | null) => void;
+}
+
+function SubagentPane({ detail, agent, isSelected, onSelect }: SubagentPaneProps) {
+  const name = detail?.name || agent.agent_name || 'Subagent';
+  const state = detail?.state || agent.status;
+  const isRunning = state === 'running' || state === 'pending';
+
+  return (
+    <div
+      className={`rounded-lg border transition-colors cursor-pointer ${
+        isSelected
+          ? 'border-primary bg-primary/5'
+          : 'border-base-300 bg-base-100 hover:border-base-content/20'
+      }`}
+      onClick={() => onSelect(agent.id)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect(agent.id); }}
+    >
+      {/* Header row */}
+      <div className="flex items-center gap-2 px-3 py-2">
+        {/* State indicator */}
+        {isRunning ? (
+          <span className="loading loading-spinner loading-xs text-primary" />
+        ) : state === 'completed' ? (
+          <span className="text-success text-xs">✓</span>
+        ) : state === 'failed' ? (
+          <span className="text-error text-xs">✕</span>
+        ) : (
+          <span className="text-base-content/30 text-xs">○</span>
+        )}
+
+        {/* Name and metadata */}
+        <div className="flex-1 min-w-0">
+          <div className="truncate text-xs font-medium">{name}</div>
+          {detail?.task && (
+            <div className="text-[10px] opacity-50 truncate">{detail.task}</div>
+          )}
+        </div>
+
+        {/* Badges */}
+        <div className="flex items-center gap-1 shrink-0">
+          {detail?.tier && (
+            <span className="badge badge-xs badge-outline">{detail.tier}</span>
+          )}
+          <SubagentStateBadge state={state} />
+        </div>
+      </div>
+
+      {/* Elapsed time */}
+      {detail && (
+        <div className="px-3 pb-1.5">
+          <span className={`text-[10px] ${isRunning ? 'text-primary font-mono' : 'opacity-50'}`}>
+            {isRunning ? '⏱' : '⏱'} {detail.elapsed}
+          </span>
+        </div>
+      )}
+
+      {/* Expanded detail */}
+      {isSelected && detail && (
+        <div className="px-3 pb-2 border-t border-base-300 mt-1 pt-2 space-y-1.5">
+          {/* Type and tier row */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] opacity-50">Type:</span>
+            <span className="text-[10px] font-mono">{detail.type}</span>
           </div>
-        </li>
-      ))}
-    </ul>
+
+          {/* Task description */}
+          {detail.task && (
+            <div>
+              <span className="text-[10px] opacity-50 block mb-0.5">Task</span>
+              <p className="text-[10px] leading-relaxed bg-base-200 rounded p-1.5 break-words">
+                {detail.task}
+              </p>
+            </div>
+          )}
+
+          {/* Result */}
+          {detail.result && state === 'completed' && (
+            <div>
+              <span className="text-[10px] opacity-50 block mb-0.5">Result</span>
+              <p className="text-[10px] leading-relaxed bg-success/10 text-success-content rounded p-1.5 break-words max-h-32 overflow-y-auto">
+                {detail.result}
+              </p>
+            </div>
+          )}
+
+          {/* Error */}
+          {detail.error && (state === 'failed' || state === 'interrupted') && (
+            <div>
+              <span className="text-[10px] opacity-50 block mb-0.5">Error</span>
+              <p className="text-[10px] leading-relaxed bg-error/10 text-error-content rounded p-1.5 break-words max-h-32 overflow-y-auto">
+                {detail.error}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Subagent State Badge ─────────────────────────────────────────────────────
+
+function SubagentStateBadge({ state }: { state: string }) {
+  const config: Record<string, { cls: string; label: string }> = {
+    pending: { cls: 'badge-ghost', label: 'pending' },
+    running: { cls: 'badge-warning', label: 'running' },
+    completed: { cls: 'badge-success', label: 'done' },
+    failed: { cls: 'badge-error', label: 'failed' },
+    interrupted: { cls: 'badge-info', label: 'interrupted' },
+  };
+
+  const { cls, label } = config[state] ?? { cls: 'badge-ghost', label: state };
+
+  return (
+    <span className={`badge badge-xs ${cls}`}>
+      {label}
+    </span>
   );
 }
 

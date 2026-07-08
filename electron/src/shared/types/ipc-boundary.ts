@@ -21,6 +21,30 @@ export interface SessionSummary {
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
+export interface ModelMetadata {
+  /** Maximum input tokens the model accepts. Null if unknown. */
+  max_input_tokens: number | null;
+  /** Maximum output tokens the model can generate. Null if unknown. */
+  max_output_tokens: number | null;
+  /** Whether the model supports image/vision inputs. */
+  supports_vision: boolean;
+  /** Model operating mode. */
+  mode: 'chat' | 'completion';
+}
+
+/**
+ * A model discovered from a provider's `GET /models` endpoint.
+ * Used by the renderer model picker to show available models.
+ */
+export interface DiscoveredModel {
+  /** The model ID (e.g., 'gpt-4o', 'claude-3-5-sonnet-20241022'). */
+  readonly id: string;
+  /** Optional human-readable name. */
+  readonly name?: string;
+  /** Optional model owner/organization. */
+  readonly owned_by?: string;
+}
+
 export interface RAGConfig {
   chunk_size: number;
   chunk_overlap: number;

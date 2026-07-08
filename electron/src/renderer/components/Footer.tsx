@@ -18,24 +18,17 @@ export function Footer({ model, usage, elapsedSeconds, isStreaming }: FooterProp
       <div className="flex items-center gap-2 px-4 text-xs">
         <span className="font-medium">Model:</span>
         <span className="opacity-70">{model || '—'}</span>
-        {usage && (
-          <>
-            <span className="opacity-30">|</span>
-            <span className="font-medium">Prompt:</span>
-            <span className="opacity-70">{formatTokens(usage.prompt_tokens)}</span>
-            <span className="opacity-30">|</span>
-            <span className="font-medium">Cached:</span>
-            <span className="opacity-70">{formatTokens(usage.cached_tokens)}</span>
-            <span className="opacity-30">|</span>
-            <span className="font-medium">Completion:</span>
-            <span className="opacity-70">{formatTokens(usage.completion_tokens)}</span>
-          </>
-        )}
         {isStreaming && (
           <>
             <span className="opacity-30">|</span>
             <span className="font-medium">Elapsed:</span>
             <span className="opacity-70">{formatElapsed(elapsedSeconds)}</span>
+          </>
+        )}
+        {!isStreaming && usage && (
+          <>
+            <span className="opacity-30">|</span>
+            <span className="opacity-70">{formatUsageCompact(usage)}</span>
           </>
         )}
       </div>
@@ -44,6 +37,30 @@ export function Footer({ model, usage, elapsedSeconds, isStreaming }: FooterProp
       </div>
     </div>
   );
+}
+
+/**
+ * Compact usage format: ΣX · ↑Y (⟲Z) ↓W
+ *
+ * - ΣX = total tokens
+ * - ↑Y = prompt tokens
+ * - (⟲Z) = cached tokens (only shown if > 0)
+ * - ↓W = completion tokens
+ */
+function formatUsageCompact(usage: Usage): string {
+  const total = formatTokens(usage.total_tokens);
+  const prompt = formatTokens(usage.prompt_tokens);
+  const completion = formatTokens(usage.completion_tokens);
+
+  let result = `Σ${total} · ↑${prompt}`;
+
+  if (usage.cached_tokens > 0) {
+    const cached = formatTokens(usage.cached_tokens);
+    result += ` (⟲${cached})`;
+  }
+
+  result += ` ↓${completion}`;
+  return result;
 }
 
 function formatTokens(n: number): string {

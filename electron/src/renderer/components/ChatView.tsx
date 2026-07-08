@@ -260,6 +260,9 @@ export function ChatView() {
         onRefreshSessions={session.refresh}
         subagentState={subagents.state}
         onRefreshSubagents={subagents.refresh}
+        selectedSubagentId={subagents.selectedId}
+        onSelectSubagent={subagents.select}
+        getSubagentDetail={subagents.getDetail}
         todoState={todos.state}
         onRefreshTodos={todos.refresh}
         mcpServers={mcpServers}

@@ -50,6 +50,8 @@ export function buildInterruptTool(
     // Empty list → cancel all running
     if (!subagent_ids || subagent_ids.length === 0) {
       const cancelled = manager.cancelRunning();
+      // Flush any remaining pending state callbacks for clean state transitions
+      manager.flushStateCallbacks();
 
       if (cancelled.length === 0) {
         return {
@@ -80,6 +82,9 @@ export function buildInterruptTool(
         cancelled.push(sid);
       }
     }
+
+    // Flush any remaining pending state callbacks for clean state transitions
+    manager.flushStateCallbacks();
 
     // Build status message
     const parts: string[] = [];

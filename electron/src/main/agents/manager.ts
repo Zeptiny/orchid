@@ -295,6 +295,33 @@ export class SubagentManager {
   }
 
   /**
+   * Flush pending state callbacks — resolves any outstanding `_resolveWait`
+   * promises on all tracked subagents.
+   *
+   * Called by `interrupt_subagents` before cancelling to ensure clean state
+   * transitions and no dangling promises.  Mirrors Python's
+   * `SubagentManager.flush_state_callbacks()`.
+   *
+   * @returns List of subagent IDs whose callbacks were flushed
+   */
+  flushStateCallbacks(): string[] {
+    const flushed: string[] = [];
+
+    for (const record of this._subagents.values()) {
+      if (record._resolveWait && record._resolveWait.length > 0) {
+        // Resolve all pending waiters with the current record state
+        for (const resolve of record._resolveWait) {
+          resolve(record);
+        }
+        record._resolveWait = null;
+        flushed.push(record.id);
+      }
+    }
+
+    return flushed;
+  }
+
+  /**
    * Get state info for all tracked subagents.
    *
    * @returns Array of state snapshots

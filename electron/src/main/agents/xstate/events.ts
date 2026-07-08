@@ -64,6 +64,17 @@ export interface ErrorEvent {
   title?: string;
 }
 
+/** LLM stream emitted token usage data. */
+export interface UsageEvent {
+  type: 'USAGE';
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    cached_tokens: number;
+  };
+}
+
 // ── Subagent events ─────────────────────────────────────────────────────────
 
 /** Parent requests spawning a new subagent. */
@@ -113,7 +124,8 @@ export type AgentEvent =
   | ToolErrorEvent
   | StreamEndEvent
   | CancelEvent
-  | ErrorEvent;
+  | ErrorEvent
+  | UsageEvent;
 
 /** All events the session machine can receive. */
 export type SessionEvent =

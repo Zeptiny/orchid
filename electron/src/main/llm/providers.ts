@@ -223,3 +223,190 @@ export function getDefaultModelRef(config: Config): string {
 export function getModelForTier(config: Config, tier: string): string {
   return config.tier_models[tier] || config.default_model;
 }
+
+// ---------------------------------------------------------------------------
+// Model endpoint discovery
+// ---------------------------------------------------------------------------
+
+/**
+ * A discovered model from a provider's `GET /models` endpoint.
+ */
+export interface DiscoveredModel {
+  /** The model ID (e.g., 'gpt-4o', 'claude-3-5-sonnet-20241022'). */
+  id: string;
+  /** Optional human-readable name. */
+  name?: string;
+  /** Optional model owner/organization. */
+  owned_by?: string;
+}
+
+/**
+ * Cache of discovered models keyed by provider alias.
+ * Matches Python `_discovery_cache: dict[str, list[str]]` pattern.
+ */
+const discoveryCache = new Map<string, DiscoveredModel[]>();
+
+/** Discovery request timeout in milliseconds (10s, matching Python). */
+const DISCOVERY_TIMEOUT_MS = 10_000;
+
+/** Env var values that disable discovery (case-insensitive). */
+const DISABLE_DISCOVERY_VALUES = new Set(['1', 'true', 'yes']);
+
+/**
+ * Clear the discovery cache. Useful when config changes or for test hooks.
+ */
+export function resetDiscoveryCache(): void {
+  discoveryCache.clear();
+}
+
+/**
+ * Discover available model IDs from a provider's `GET /models` endpoint.
+ *
+ * Returns cached results if available. For actual HTTP fetching, use
+ * `discoverModelsAsync()` (IPC handlers are async, so they should use
+ * the async variant).
+ *
+ * Behavior:
+ * - Returns cached results if available.
+ * - Returns `[]` for all other cases (cache miss, disabled, missing config).
+ * - **Never throws**.
+ *
+ * @param alias - The provider alias from config (e.g. 'default', 'openai')
+ * @param config - The application config containing provider definitions
+ * @param force - Ignored for sync version (use async variant for fetches)
+ * @returns Array of discovered models from cache, or empty array
+ */
+export function discoverModels(
+  alias: string,
+  _config: Config,
+  _force = false,
+): DiscoveredModel[] {
+  // Check env var to disable discovery
+  const disableVal = process.env['ORCHID_DISABLE_MODEL_DISCOVERY']?.toLowerCase() ?? '';
+  if (DISABLE_DISCOVERY_VALUES.has(disableVal)) {
+    return [];
+  }
+
+  // Return cached results only
+  return discoveryCache.get(alias) ?? [];
+}
+
+/**
+ * Async version of discoverModels that performs the actual HTTP fetch.
+ *
+ * Used by IPC handlers which are async. Results are cached just like the
+ * sync version.
+ *
+ * @param alias - The provider alias from config
+ * @param config - The application config
+ * @param force - Bypass cache and refetch
+ * @returns Array of discovered models (empty on failure)
+ */
+export async function discoverModelsAsync(
+  alias: string,
+  config: Config,
+  force = false,
+): Promise<DiscoveredModel[]> {
+  // Check env var to disable discovery
+  const disableVal = process.env['ORCHID_DISABLE_MODEL_DISCOVERY']?.toLowerCase() ?? '';
+  if (DISABLE_DISCOVERY_VALUES.has(disableVal)) {
+    console.debug('Model discovery disabled via ORCHID_DISABLE_MODEL_DISCOVERY');
+    return [];
+  }
+
+  // Return cached results if available and not forcing
+  if (!force && discoveryCache.has(alias)) {
+    return discoveryCache.get(alias)!;
+  }
+
+  // Look up provider config
+  const providerConfig = config.providers[alias];
+  if (!providerConfig) {
+    discoveryCache.set(alias, []);
+    return [];
+  }
+
+  // Must have a base_url to discover models
+  const baseUrl = (providerConfig.base_url as string) || '';
+  if (!baseUrl) {
+    discoveryCache.set(alias, []);
+    return [];
+  }
+
+  // Resolve API key
+  const apiKey = resolveApiKey(providerConfig, alias);
+  const headers: Record<string, string> = {};
+  if (apiKey) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+
+  const url = `${baseUrl.replace(/\/+$/, '')}/models`;
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), DISCOVERY_TIMEOUT_MS);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      console.warn(
+        `Model discovery for provider '${alias}' returned HTTP ${response.status}`,
+      );
+      discoveryCache.set(alias, []);
+      return [];
+    }
+
+    const data = (await response.json()) as {
+      data?: Array<{ id?: string; name?: string; owned_by?: string }>;
+    };
+
+    const models: DiscoveredModel[] = (data.data ?? [])
+      .filter(
+        (m): m is { id: string; name?: string; owned_by?: string } =>
+          typeof m === 'object' && m !== null && typeof m.id === 'string' && m.id.length > 0,
+      )
+      .map((m) => ({
+        id: m.id,
+        ...(m.name ? { name: m.name } : {}),
+        ...(m.owned_by ? { owned_by: m.owned_by } : {}),
+      }));
+
+    discoveryCache.set(alias, models);
+    return models;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`Model discovery for provider '${alias}' failed: ${msg}`);
+    discoveryCache.set(alias, []);
+    return [];
+  }
+}
+
+/**
+ * Discover models for ALL configured providers.
+ *
+ * Returns a map of provider alias → discovered models.
+ * Useful for the model picker to show all available models across providers.
+ *
+ * @param config - The application config
+ * @param force - Bypass cache and refetch all
+ */
+export async function discoverAllModels(
+  config: Config,
+  force = false,
+): Promise<Record<string, DiscoveredModel[]>> {
+  const results: Record<string, DiscoveredModel[]> = {};
+  const aliases = Object.keys(config.providers);
+
+  // Run discoveries in parallel
+  const promises = aliases.map(async (alias) => {
+    results[alias] = await discoverModelsAsync(alias, config, force);
+  });
+
+  await Promise.allSettled(promises);
+  return results;
+}

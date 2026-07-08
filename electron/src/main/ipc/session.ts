@@ -29,7 +29,13 @@ const sessionRenameSchema = z.object({
 
 let sessionManager: SessionManager | null = null;
 
-function getSessionManager(): SessionManager {
+/**
+ * Get the singleton SessionManager instance.
+ *
+ * Creates one lazily on first call. Exported so that other IPC modules
+ * (e.g. chat.ts for auto-naming) can share the same instance.
+ */
+export function getSessionManager(): SessionManager {
   if (!sessionManager) {
     sessionManager = new SessionManager();
   }
@@ -76,7 +82,7 @@ export function registerSessionIPC(): void {
   });
 
   // session:rename — rename a session
-  ipcMain.handle(IPC_CHANNELS.SESSION_RENAME, async (_event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.SESSION_RENAME, async (event, payload: unknown) => {
     const parsed = sessionRenameSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid session:rename payload: ${parsed.error.message}`);
@@ -84,6 +90,13 @@ export function registerSessionIPC(): void {
 
     const manager = getSessionManager();
     manager.rename(parsed.data.id, parsed.data.name);
+
+    // Push rename event to renderer so sidebar/list updates reactively
+    event.sender.send(IPC_CHANNELS.SESSION_RENAMED, {
+      id: parsed.data.id,
+      name: parsed.data.name,
+    });
+
     return { status: 'renamed' };
   });
 }

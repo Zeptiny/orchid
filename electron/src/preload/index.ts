@@ -22,13 +22,16 @@ import type {
   ChatStateEvent,
   ChatDoneEvent,
   ChatErrorEvent,
+  ChatUsageEvent,
   ConfigSaveMessage,
   SessionLoadMessage,
   SessionDeleteMessage,
+  SessionRenamedEvent,
   ToolExecuteMessage,
   AgentSpawnMessage,
   RAGIndexMessage,
   ASTIndexMessage,
+  BgCommandSnapshotRequest,
   UpdaterProgress,
   UpdaterErrorEvent,
 } from '../shared/types/ipc';
@@ -88,6 +91,9 @@ const orchidAPI: OrchidAPI = {
 
     onError: (callback: (event: ChatErrorEvent) => void) =>
       on(IPC_CHANNELS.CHAT_ERROR, (...args) => callback(args[0] as ChatErrorEvent)),
+
+    onUsage: (callback: (event: ChatUsageEvent) => void) =>
+      on(IPC_CHANNELS.CHAT_USAGE, (...args) => callback(args[0] as ChatUsageEvent)),
   },
 
   config: {
@@ -96,6 +102,12 @@ const orchidAPI: OrchidAPI = {
 
     save: (updates: ConfigSaveMessage) =>
       invoke(IPC_CHANNELS.CONFIG_SAVE, updates),
+
+    modelMetadata: (modelId: string) =>
+      invoke(IPC_CHANNELS.CONFIG_MODEL_METADATA, modelId),
+
+    discoverModels: (alias: string, force?: boolean) =>
+      invoke(IPC_CHANNELS.CONFIG_DISCOVER_MODELS, alias, force),
   },
 
   session: {
@@ -113,6 +125,9 @@ const orchidAPI: OrchidAPI = {
 
     rename: (id: string, name: string) =>
       invoke(IPC_CHANNELS.SESSION_RENAME, { id, name }),
+
+    onRenamed: (callback: (event: SessionRenamedEvent) => void) =>
+      on(IPC_CHANNELS.SESSION_RENAMED, (...args) => callback(args[0] as SessionRenamedEvent)),
   },
 
   tool: {
@@ -150,6 +165,11 @@ const orchidAPI: OrchidAPI = {
 
     index: (message?: ASTIndexMessage) =>
       invoke(IPC_CHANNELS.AST_INDEX, message),
+  },
+
+  bgCmd: {
+    snapshot: (request: BgCommandSnapshotRequest) =>
+      invoke(IPC_CHANNELS.BG_CMD_SNAPSHOT, request),
   },
 
   updater: {

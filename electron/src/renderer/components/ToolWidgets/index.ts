@@ -17,6 +17,7 @@ export { FilePreview } from './FilePreview';
 export { ResultsTable } from './ResultsTable';
 export { ToolWidgetContainer } from './ToolWidgetContainer';
 export { ToolRail } from './ToolRail';
+export { LiveCommandInline } from './LiveCommandInline';
 
 export type {
   ToolCallEvent,

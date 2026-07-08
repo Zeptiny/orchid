@@ -12,6 +12,8 @@ import type { Agent } from './agent';
 import type {
   SessionSummary,
   Config,
+  ModelMetadata,
+  DiscoveredModel,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -23,6 +25,8 @@ import type {
 export type {
   SessionSummary,
   Config,
+  ModelMetadata,
+  DiscoveredModel,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -66,6 +70,32 @@ export interface ChatErrorEvent {
   error: string;
 }
 
+export interface ChatUsageEvent {
+  type: 'usage';
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    cached_tokens: number;
+  };
+}
+
+// ── Background Command API ────────────────────────────────────────────────
+
+export interface BgCommandSnapshotRequest {
+  /** The background command ID. */
+  commandId: number;
+  /** Optional last N lines to retrieve (default: 50). */
+  lastN?: number;
+}
+
+export interface BgCommandSnapshotResult {
+  /** Tail output text. */
+  tail: string;
+  /** Exit code (null if still running). */
+  exitCode: number | null;
+}
+
 // ── Config API ───────────────────────────────────────────────────────────────
 
 export interface ConfigSaveMessage {
@@ -83,6 +113,11 @@ export interface SessionDeleteMessage {
 }
 
 export interface SessionRenameMessage {
+  id: string;
+  name: string;
+}
+
+export interface SessionRenamedEvent {
   id: string;
   name: string;
 }
@@ -149,11 +184,14 @@ export interface OrchidAPI {
     onState: (callback: (event: ChatStateEvent) => void) => () => void;
     onDone: (callback: (event: ChatDoneEvent) => void) => () => void;
     onError: (callback: (event: ChatErrorEvent) => void) => () => void;
+    onUsage: (callback: (event: ChatUsageEvent) => void) => () => void;
   };
 
   config: {
     get: () => Promise<Config>;
     save: (updates: ConfigSaveMessage) => Promise<{ status: string }>;
+    modelMetadata: (modelId: string) => Promise<ModelMetadata>;
+    discoverModels: (alias: string, force?: boolean) => Promise<DiscoveredModel[]>;
   };
 
   session: {
@@ -162,6 +200,7 @@ export interface OrchidAPI {
     create: () => Promise<Session>;
     delete: (id: SessionDeleteMessage) => Promise<{ status: string }>;
     rename: (id: string, name: string) => Promise<{ status: string }>;
+    onRenamed: (callback: (event: SessionRenamedEvent) => void) => () => void;
   };
 
   tool: {
@@ -188,6 +227,10 @@ export interface OrchidAPI {
     index: (message?: ASTIndexMessage) => Promise<ASTIndexResult>;
   };
 
+  bgCmd: {
+    snapshot: (request: BgCommandSnapshotRequest) => Promise<BgCommandSnapshotResult>;
+  };
+
   updater: {
     check: () => Promise<UpdaterState>;
     install: () => Promise<{ status: string }>;
@@ -209,10 +252,13 @@ export const IPC_CHANNELS = {
   CHAT_STATE: 'chat:state',
   CHAT_DONE: 'chat:done',
   CHAT_ERROR: 'chat:error',
+  CHAT_USAGE: 'chat:usage',
 
   // Config
   CONFIG_GET: 'config:get',
   CONFIG_SAVE: 'config:save',
+  CONFIG_MODEL_METADATA: 'config:model_metadata',
+  CONFIG_DISCOVER_MODELS: 'config:discover_models',
 
   // Session
   SESSION_LIST: 'session:list',
@@ -220,6 +266,7 @@ export const IPC_CHANNELS = {
   SESSION_CREATE: 'session:create',
   SESSION_DELETE: 'session:delete',
   SESSION_RENAME: 'session:rename',
+  SESSION_RENAMED: 'session:renamed',
 
   // Tool
   TOOL_EXECUTE: 'tool:execute',
@@ -240,6 +287,9 @@ export const IPC_CHANNELS = {
   AST_STATUS: 'ast:status',
   AST_INDEX: 'ast:index',
 
+  // Background Commands
+  BG_CMD_SNAPSHOT: 'bgcmd:snapshot',
+
   // Updater
   UPDATER_CHECK: 'updater:check',
   UPDATER_INSTALL: 'updater:install',
@@ -259,6 +309,8 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.CHAT_CANCEL,
   IPC_CHANNELS.CONFIG_GET,
   IPC_CHANNELS.CONFIG_SAVE,
+  IPC_CHANNELS.CONFIG_MODEL_METADATA,
+  IPC_CHANNELS.CONFIG_DISCOVER_MODELS,
   IPC_CHANNELS.SESSION_LIST,
   IPC_CHANNELS.SESSION_LOAD,
   IPC_CHANNELS.SESSION_CREATE,
@@ -273,6 +325,7 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.RAG_CLEAR,
   IPC_CHANNELS.AST_STATUS,
   IPC_CHANNELS.AST_INDEX,
+  IPC_CHANNELS.BG_CMD_SNAPSHOT,
   IPC_CHANNELS.UPDATER_CHECK,
   IPC_CHANNELS.UPDATER_INSTALL,
   IPC_CHANNELS.UPDATER_STATUS,
@@ -286,6 +339,8 @@ export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
   IPC_CHANNELS.CHAT_STATE,
   IPC_CHANNELS.CHAT_DONE,
   IPC_CHANNELS.CHAT_ERROR,
+  IPC_CHANNELS.CHAT_USAGE,
+  IPC_CHANNELS.SESSION_RENAMED,
   IPC_CHANNELS.UPDATER_STATUS_UPDATE,
   IPC_CHANNELS.UPDATER_PROGRESS,
   IPC_CHANNELS.UPDATER_ERROR,

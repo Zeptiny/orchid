@@ -16,11 +16,15 @@ import type { Agent } from '../../shared/types/agent';
 import type { Config } from '../config/schema';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { getConfig } from '../config/loader';
-import { listAgents, getAgent } from '../agents/registry';
+import { listAgents } from '../agents/registry';
 import { resolveModelRef } from '../llm/providers';
 import { createProviderModel } from '../llm/providers-factory';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import type { Message } from '../../shared/types/message';
+import type { GenerateTitleCallback } from '../session/manager';
+import { getSessionManager } from './session';
+import { importESM } from '../utils/esm-import';
+import { getBackgroundStore } from '../tools/process/background-store';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -29,16 +33,29 @@ const chatSendSchema = z.object({
   sessionId: z.string().optional(),
 });
 
+const bgCommandSnapshotSchema = z.object({
+  commandId: z.number().int().positive(),
+  lastN: z.number().int().positive().optional(),
+});
+
 // ── Active actor tracking ────────────────────────────────────────────────────
 
 type ActiveAgent = {
   actor: ActorRefFrom<typeof agentMachine>;
-  webContents: WebContents;
   abortController: AbortController;
   messages: Message[];
+  unsubscribe: () => void;
 };
 
-let activeAgents = new Map<string, ActiveAgent>();
+const activeAgents = new Map<string, ActiveAgent>();
+const messageHistory = new Map<string, Message[]>();
+
+function disposeActiveAgent(windowId: string, active: ActiveAgent): void {
+  activeAgents.delete(windowId);
+  active.unsubscribe();
+  active.abortController.abort();
+  active.actor.stop();
+}
 
 // ── Stream function (wraps the orchestrator) ─────────────────────────────────
 
@@ -107,7 +124,14 @@ function createExecuteFn() {
 
     try {
       const parsedArgs = JSON.parse(args);
-      const result = await tool.handler(parsedArgs);
+
+      // Validate args against the tool's Zod schema before execution
+      const validation = toolRegistry.validate(toolName, parsedArgs);
+      if (!validation.ok) {
+        return { content: validation.error, isError: true };
+      }
+
+      const result = await tool.handler(validation.data);
       return {
         content: typeof result === 'string' ? result : JSON.stringify(result),
         isError: false,
@@ -115,6 +139,71 @@ function createExecuteFn() {
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       return { content: `Tool execution failed: ${errorMessage}`, isError: true };
+    }
+  };
+}
+
+// ── Auto-naming callback factory ─────────────────────────────────────────────
+
+/**
+ * Creates a GenerateTitleCallback that uses the seed-tier model to produce
+ * a short descriptive title from the first user/assistant exchange.
+ *
+ * Non-fatal on failure — returns null so the session keeps its default name.
+ */
+function createGenerateTitleCallback(
+  config: Config,
+  messages: Message[],
+): GenerateTitleCallback {
+  return async (_session) => {
+    try {
+      // Extract first user and assistant text messages
+      const userMsg = messages.find((m) => m.role === MessageRole.USER);
+      const assistantMsg = messages.find((m) => m.role === MessageRole.ASSISTANT);
+
+      if (!userMsg || !assistantMsg) {
+        return null;
+      }
+
+      // Resolve the seed-tier model for title generation
+      const modelRef = resolveModelRef(
+        config.tier_models['seed'] || config.default_model,
+        config,
+      );
+      const modelInstance = await createProviderModel(modelRef);
+
+      // Use AI SDK generateText for a simple one-shot title
+      const { generateText } = await importESM<typeof import('ai')>('ai');
+
+      const result = await generateText({
+        model: modelInstance,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Generate a short, descriptive title (3-6 words) for this conversation. ' +
+              'Only output the title, nothing else. No quotes, no punctuation at the end.',
+          },
+          {
+            role: 'user',
+            content:
+              `User: ${userMsg.content.slice(0, 500)}\n\n` +
+              `Assistant: ${assistantMsg.content.slice(0, 500)}`,
+          },
+        ],
+      });
+
+      // Extract the first line, trim, and sanitize
+      const title = result.text.trim().split('\n')[0]?.trim();
+      if (!title || title.length === 0) {
+        return null;
+      }
+
+      return title;
+    } catch (err) {
+      // Non-fatal — log and keep default name
+      console.debug('Auto-naming callback failed:', err);
+      return null;
     }
   };
 }
@@ -132,19 +221,17 @@ export function registerChatIPC(): void {
       throw new Error(`Invalid chat:send payload: ${parsed.error.message}`);
     }
 
-    const { message, sessionId } = parsed.data;
+    const { message } = parsed.data;
     const config = getConfig();
 
     // Cancel any existing actor for this window
     const windowId = String(webContents.id);
     const existing = activeAgents.get(windowId);
-    let existingMessages: Message[] = [];
+    let existingMessages: Message[] = messageHistory.get(windowId) ?? [];
 
     if (existing) {
       existingMessages = existing.messages;
-      existing.abortController.abort();
-      existing.actor.send({ type: 'CANCEL' });
-      activeAgents.delete(windowId);
+      disposeActiveAgent(windowId, existing);
     }
 
     // Build message history: existing messages + new user message
@@ -187,18 +274,22 @@ export function registerChatIPC(): void {
       },
     });
 
-    activeAgents.set(windowId, {
-      actor,
-      webContents,
-      abortController,
-      messages,
-    });
-
     // Track response for incremental updates
     let lastSentLength = 0;
+    let completed = false;
+    let subscription: { unsubscribe: () => void } | null = null;
+    let lastUsage: import('../../shared/types/message').Usage | null = null;
+
+    const activeAgent: ActiveAgent = {
+      actor,
+      abortController,
+      messages,
+      unsubscribe: () => subscription?.unsubscribe(),
+    };
+    activeAgents.set(windowId, activeAgent);
 
     // Subscribe to state changes and stream chunks to renderer
-    actor.subscribe((snapshot) => {
+    subscription = actor.subscribe((snapshot) => {
       const context = snapshot.context as AgentContext;
 
       // Send incremental text updates
@@ -218,8 +309,18 @@ export function registerChatIPC(): void {
         error: context.error,
       });
 
+      // Forward usage data to renderer when it changes
+      if (context.usage && context.usage !== lastUsage) {
+        lastUsage = context.usage;
+        webContents.send(IPC_CHANNELS.CHAT_USAGE, {
+          type: 'usage',
+          usage: context.usage,
+        });
+      }
+
       // Clean up on terminal states
-      if (snapshot.value === 'idle' && lastSentLength > 0) {
+      if (snapshot.value === 'idle' && lastSentLength > 0 && !completed) {
+        completed = true;
         // Add assistant response to message history
         const assistantMessage: Message = {
           id: crypto.randomUUID(),
@@ -231,29 +332,51 @@ export function registerChatIPC(): void {
           name: null,
           thinking: null,
           timestamp: new Date().toISOString(),
-          usage: null,
+          usage: context.usage ?? null,
           hidden: false,
         };
 
-        // Update the stored messages for this window
-        const agentData = activeAgents.get(windowId);
-        if (agentData) {
-          agentData.messages = [...messages, assistantMessage];
-        }
+        messageHistory.set(windowId, [...messages, assistantMessage]);
+        activeAgents.delete(windowId);
 
         webContents.send(IPC_CHANNELS.CHAT_DONE, {
           type: 'done',
           response: context.response,
         });
-        // Don't delete the agent - keep it for message history
+
+        // Auto-name session after first exchange (non-blocking, non-fatal)
+        const allMessages = [...messages, assistantMessage];
+        const sessionManager = getSessionManager();
+        const generateTitle = createGenerateTitleCallback(config, allMessages);
+        sessionManager.autoNameActive(generateTitle).then((updated) => {
+          if (updated && updated.name !== messages[0]?.content?.slice(0, 20) && !webContents.isDestroyed()) {
+            // Notify renderer of the rename so sidebar updates
+            webContents.send(IPC_CHANNELS.SESSION_RENAMED, {
+              id: updated.id,
+              name: updated.name,
+            });
+          }
+        }).catch((err) => {
+          console.debug('Auto-naming failed (non-fatal):', err);
+        });
+
+        queueMicrotask(() => {
+          subscription?.unsubscribe();
+          actor.stop();
+        });
       }
 
       if (snapshot.value === 'error') {
+        completed = true;
         webContents.send(IPC_CHANNELS.CHAT_ERROR, {
           type: 'error',
           error: context.error ?? 'Unknown error',
         });
         activeAgents.delete(windowId);
+        queueMicrotask(() => {
+          subscription?.unsubscribe();
+          actor.stop();
+        });
       }
     });
 
@@ -271,12 +394,28 @@ export function registerChatIPC(): void {
     const existing = activeAgents.get(windowId);
 
     if (existing) {
-      existing.abortController.abort();
-      existing.actor.send({ type: 'CANCEL' });
-      activeAgents.delete(windowId);
+      disposeActiveAgent(windowId, existing);
       return { status: 'cancelled' };
     }
     return { status: 'no_active_stream' };
+  });
+
+  // bgcmd:snapshot — get background command output snapshot
+  ipcMain.handle(IPC_CHANNELS.BG_CMD_SNAPSHOT, async (_event, payload: unknown) => {
+    const parsed = bgCommandSnapshotSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid bgcmd:snapshot payload: ${parsed.error.message}`);
+    }
+
+    const { commandId, lastN } = parsed.data;
+    const store = getBackgroundStore();
+    const snap = store.snapshot(commandId, lastN ?? 50);
+
+    if (!snap) {
+      return { tail: '', exitCode: null };
+    }
+
+    return snap;
   });
 }
 
@@ -286,11 +425,14 @@ export function registerChatIPC(): void {
 export function unregisterChatIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_SEND);
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_CANCEL);
+  ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_SNAPSHOT);
 
   // Cancel all active agents
   for (const [, agent] of activeAgents) {
+    agent.unsubscribe();
     agent.abortController.abort();
-    agent.actor.send({ type: 'CANCEL' });
+    agent.actor.stop();
   }
   activeAgents.clear();
+  messageHistory.clear();
 }

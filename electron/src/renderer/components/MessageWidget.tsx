@@ -3,14 +3,34 @@
  *
  * Uses DaisyUI components for styling.
  */
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import type { Message } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import { MarkdownContent } from './MarkdownContent';
+import { LiveCommandInline } from './ToolWidgets/LiveCommandInline';
 
 interface MessageWidgetProps {
   message: Message;
   isStreaming?: boolean;
+}
+
+// Regex matching Python's _BACKGROUND_CMD_RE for background command tool results.
+// Parses: <background_command id="N" command="..." description="..." />
+const BG_CMD_RE =
+  /<background_command\s+id="(\d+)"[^>]*command="([^"]*)"[^>]*description="([^"]*)"[^>]*\/>/;
+
+function parseBackgroundCommand(content: string): {
+  commandId: number;
+  command: string;
+  description: string;
+} | null {
+  const match = BG_CMD_RE.exec(content);
+  if (!match) return null;
+  return {
+    commandId: parseInt(match[1], 10),
+    command: match[2],
+    description: match[3],
+  };
 }
 
 export function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
@@ -125,6 +145,19 @@ function ToolResultMessage({ message }: { message: Message }) {
   const toggle = useCallback(() => {
     setExpanded((prev) => !prev);
   }, []);
+
+  // Check if this tool result is a background command
+  const bgCmd = useMemo(() => parseBackgroundCommand(message.content), [message.content]);
+
+  if (bgCmd) {
+    return (
+      <LiveCommandInline
+        commandId={bgCmd.commandId}
+        commandText={bgCmd.command}
+        description={bgCmd.description}
+      />
+    );
+  }
 
   const content = message.content;
   const isLong = content.length > 500;

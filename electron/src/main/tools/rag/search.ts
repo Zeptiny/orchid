@@ -21,6 +21,14 @@ const ragSearchSchema = z.object({
     .positive()
     .optional()
     .describe('Number of results to return (default from config)'),
+  file_pattern: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Glob pattern to filter results by file path (e.g. "*.py", "src/**/*.ts"). ' +
+        'When omitted, all indexed files are searched.',
+    ),
 });
 
 // ---------------------------------------------------------------------------
@@ -30,7 +38,8 @@ const ragSearchSchema = z.object({
 export const ragSearchDefinition: ToolDefinition = {
   name: 'rag_search',
   description:
-    'Search the codebase using semantic search (RAG). Returns code chunks most relevant to the query.',
+    'Search the codebase using semantic search (RAG). Returns code chunks most relevant to the query. ' +
+      'Use file_pattern to narrow results to specific files (e.g. "*.py", "src/**/*.ts").',
   inputSchema: ragSearchSchema,
   actionLabel: 'Searching codebase...',
   category: 'rag',
@@ -43,7 +52,11 @@ export const ragSearchDefinition: ToolDefinition = {
 export const ragSearchHandler: ToolHandler = async (
   input: unknown,
 ): Promise<string> => {
-  const { query, top_k } = input as { query: string; top_k?: number };
+  const { query, top_k, file_pattern } = input as {
+    query: string;
+    top_k?: number;
+    file_pattern?: string;
+  };
   const cfg = getConfig();
   const projectPath = process.cwd();
 
@@ -67,6 +80,7 @@ export const ragSearchHandler: ToolHandler = async (
   const results = store.search(
     Array.from(queryEmbedding),
     top_k,
+    file_pattern,
   );
 
   if (results.length === 0) {

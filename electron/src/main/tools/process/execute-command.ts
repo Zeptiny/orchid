@@ -11,6 +11,7 @@
  */
 import { type ChildProcess, spawn } from 'node:child_process';
 import * as path from 'node:path';
+import { parse as shellParse } from 'shell-quote';
 import { z } from 'zod';
 import { getConfig } from '../../config/loader';
 import { getBackgroundStore, ENV_SUPPRESSION } from './background-store';
@@ -163,6 +164,14 @@ export async function executeCommand(
     };
   }
 
+  // shell=false is incompatible with background
+  if (!shell && background) {
+    return {
+      display: 'shell=false is incompatible with background=true',
+      content: `Error: shell=false is not supported with background=true`,
+    };
+  }
+
   // -- background path -----------------------------------------------------
   if (background) {
     const store = getBackgroundStore();
@@ -194,7 +203,31 @@ export async function executeCommand(
   const env = { ...process.env, ...ENV_SUPPRESSION };
 
   try {
-    const proc = spawn('/bin/sh', ['-c', command], {
+    // When shell=false, parse command into args array to avoid shell interpretation
+    let spawnCmd: string;
+    let spawnArgs: string[];
+    if (shell) {
+      spawnCmd = '/bin/sh';
+      spawnArgs = ['-c', command];
+    } else {
+      const parsed = shellParse(command);
+      if (parsed.length === 0) {
+        throw new Error('Empty command after parsing');
+      }
+      // shell-parse returns strings and possibly { op, ... } objects for globs
+      spawnArgs = parsed.map((part) => {
+        if (typeof part === 'string') return part;
+        // For glob patterns, shell-quote returns objects — convert back to string
+        if (typeof part === 'object' && part !== null && 'op' in part) {
+          return String((part as { pattern?: string }).pattern ?? part);
+        }
+        return String(part);
+      });
+      spawnCmd = spawnArgs[0];
+      spawnArgs = spawnArgs.slice(1);
+    }
+
+    const proc = spawn(spawnCmd, spawnArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       cwd: path.resolve(workingDirectory),
       detached: true,

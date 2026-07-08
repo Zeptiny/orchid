@@ -17,6 +17,7 @@ import type {
   ChatStateEvent,
   ChatDoneEvent,
   ChatErrorEvent,
+  ChatUsageEvent,
 } from '../../shared/types/ipc';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -71,6 +72,7 @@ export function useChat(): UseChatReturn {
   const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const accumulatedContentRef = useRef('');
   const accumulatedThinkingRef = useRef('');
+  const usageRef = useRef<Usage | null>(null);
 
   // Elapsed time ticker
   useEffect(() => {
@@ -126,7 +128,7 @@ export function useChat(): UseChatReturn {
           name: null,
           thinking: accumulatedThinkingRef.current || null,
           timestamp: new Date().toISOString(),
-          usage: null,
+          usage: usageRef.current,
           hidden: false,
         };
         setMessages((prev) => [...prev, newMessage]);
@@ -147,11 +149,17 @@ export function useChat(): UseChatReturn {
       accumulatedThinkingRef.current = '';
     });
 
+    const unsubUsage = window.orchid.chat.onUsage((event: ChatUsageEvent) => {
+      setUsage(event.usage);
+      usageRef.current = event.usage;
+    });
+
     return () => {
       unsubChunk();
       unsubState();
       unsubDone();
       unsubError();
+      unsubUsage();
     };
   }, []);
 
@@ -182,6 +190,7 @@ export function useChat(): UseChatReturn {
       setStreamingContent('');
       setStreamingThinking('');
       setUsage(null);
+      usageRef.current = null;
       setStreamStartTime(Date.now());
       setElapsedSeconds(0);
       accumulatedContentRef.current = '';

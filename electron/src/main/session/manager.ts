@@ -201,22 +201,26 @@ export class SessionManager {
    * This method is designed to be called after the first LLM exchange
    * completes. The actual LLM call is delegated to the callback.
    *
+   * @param generateTitle - Optional callback override. If provided, takes
+   *   precedence over the constructor-injected callback. Useful when the
+   *   callback needs to capture per-invocation context (e.g. messages).
    * @returns The session (possibly with updated name), or null if no
    *   active session or naming not applicable.
    */
-  async autoNameActive(): Promise<Session | null> {
+  async autoNameActive(generateTitle?: GenerateTitleCallback): Promise<Session | null> {
+    const callback = generateTitle ?? this._generateTitle;
     if (!this._active) {
       return null;
     }
     if (!this._active.name.startsWith('Session ')) {
       return this._active;
     }
-    if (!this._generateTitle) {
+    if (!callback) {
       return this._active;
     }
 
     try {
-      const title = await this._generateTitle(this._active);
+      const title = await callback(this._active);
       if (title && title.length < 80) {
         this._active = { ...this._active, name: title, updatedAt: new Date().toISOString() };
         storageSaveSession(this._active, this._storageOpts);
