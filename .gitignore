@@ -4,6 +4,8 @@ __pycache__/
 .orchid/rag/
 .orchid/ast/
 build/
+# Electron build resources (icons) are tracked
+!electron/build/
 .orchid/rag/
 
 # Electron
