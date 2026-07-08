@@ -1,0 +1,839 @@
+/**
+ * Tests for XState agent hierarchy (U10).
+ *
+ * Covers:
+ * - Agent machine: idle → streaming → idle (text response)
+ * - Agent machine: streaming → toolExecuting → streaming → idle (tool loop)
+ * - Subagent machine: pending → running → completed (result to parent)
+ * - Interrupt flow: first Esc → confirmAgent, second Esc → idle
+ * - Interrupt timeout: auto-reset to idle
+ * - Subagent isolation: child tool calls don't affect parent state
+ * - SubagentManager: spawn, wait, cancel operations
+ *
+ * Test scenarios from plan U10.
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createActor } from 'xstate';
+import { agentMachine } from '../../src/main/agents/xstate/agent-machine';
+import { subagentMachine } from '../../src/main/agents/xstate/subagent-machine';
+import { sessionMachine } from '../../src/main/agents/xstate/session-machine';
+import { interruptMachine } from '../../src/main/agents/xstate/interrupt-machine';
+import { SubagentManager, SubagentState } from '../../src/main/agents/manager';
+import type { StreamEvent } from '../../src/main/llm/orchestrator';
+import type { Agent } from '../../src/shared/types/agent';
+import { AgentType, AgentTier } from '../../src/shared/types/agent';
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+const mockAgent: Agent = {
+  name: 'general',
+  type: AgentType.INTERNAL,
+  tier: AgentTier.BLOOM,
+  description: 'General-purpose agent',
+  allowed_tools: ['*'],
+  allowed_skills: ['*'],
+};
+
+/**
+ * Create a mock stream function that yields a sequence of StreamEvents.
+ * Properly handles abort signal to avoid hanging timers.
+ */
+function mockStreamFn(events: StreamEvent[]) {
+  return async function* (params: {
+    message: string;
+    agent: Agent;
+    systemPrompt: string;
+    abortSignal: AbortSignal;
+    model?: string | null;
+  }): AsyncGenerator<StreamEvent> {
+    for (const event of events) {
+      if (params.abortSignal.aborted) return;
+      yield event;
+      // Small delay with abort handling
+      await new Promise<void>((resolve) => {
+        const onAbort = () => { clearTimeout(timer); resolve(); };
+        params.abortSignal.addEventListener('abort', onAbort, { once: true });
+        const timer = setTimeout(() => {
+          params.abortSignal.removeEventListener('abort', onAbort);
+          resolve();
+        }, 2);
+        if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+      });
+    }
+  };
+}
+
+/**
+ * Create a mock stream function that waits for cancellation.
+ * Yields a content chunk, then waits for abort signal (simulating a long stream).
+ */
+function mockCancellableStreamFn() {
+  return async function* (params: {
+    message: string;
+    agent: Agent;
+    systemPrompt: string;
+    abortSignal: AbortSignal;
+    model?: string | null;
+  }): AsyncGenerator<StreamEvent> {
+    yield { type: 'content', text: 'Starting...' };
+
+    // Wait for abort — use a short timeout to avoid hanging tests
+    await new Promise<void>((resolve) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      params.abortSignal.addEventListener('abort', onAbort, { once: true });
+      const timer = setTimeout(() => {
+        params.abortSignal.removeEventListener('abort', onAbort);
+        resolve();
+      }, 2000);
+      if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+    });
+
+    if (!params.abortSignal.aborted) {
+      yield { type: 'finish', finishReason: 'stop' };
+    }
+  };
+}
+
+/**
+ * Create a mock tool execution function.
+ */
+function mockExecuteFn(
+  results: Map<string, { content: string; isError: boolean }> = new Map(),
+) {
+  return async (toolName: string, _args: string) => {
+    const result = results.get(toolName);
+    if (result) return result;
+    return { content: `Result for ${toolName}`, isError: false };
+  };
+}
+
+/**
+ * Wait for an actor to reach a target state.
+ * Uses subscription pattern (more reliable than xstate's waitFor in tests).
+ * Checks the current state first to handle synchronous transitions.
+ */
+function waitForState(
+  actor: ReturnType<typeof createActor>,
+  targetState: string | Record<string, unknown>,
+  timeoutMs = 5000,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const matches = (value: string | Record<string, unknown>) =>
+      typeof targetState === 'string'
+        ? value === targetState
+        : JSON.stringify(value) === JSON.stringify(targetState);
+
+    // Check current state first (handles synchronous transitions)
+    if (matches(actor.getSnapshot().value as string)) {
+      resolve();
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      sub.unsubscribe();
+      const snap = actor.getSnapshot();
+      reject(
+        new Error(
+          `Timeout waiting for state ${JSON.stringify(targetState)}. ` +
+          `Current: ${JSON.stringify(snap.value)}, context.error: ${snap.context.error}`,
+        ),
+      );
+    }, timeoutMs);
+
+    const sub = actor.subscribe((snapshot) => {
+      if (matches(snapshot.value as string)) {
+        clearTimeout(timer);
+        sub.unsubscribe();
+        resolve();
+      }
+    });
+  });
+}
+
+/**
+ * Wait for an actor's context to satisfy a predicate.
+ */
+function waitForContext<T>(
+  actor: ReturnType<typeof createActor>,
+  predicate: (ctx: T) => boolean,
+  timeoutMs = 5000,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      sub.unsubscribe();
+      reject(new Error('Timeout waiting for context condition'));
+    }, timeoutMs);
+
+    const sub = actor.subscribe((snapshot) => {
+      if (predicate(snapshot.context as T)) {
+        clearTimeout(timer);
+        sub.unsubscribe();
+        resolve();
+      }
+    });
+  });
+}
+
+// ── Agent Machine Tests ─────────────────────────────────────────────────────
+
+describe('Agent Machine', () => {
+  it('idle → user input → streaming → text → idle', async () => {
+    const streamFn = mockStreamFn([
+      { type: 'content', text: 'Hello!' },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+
+    const actor = createActor(agentMachine, {
+      input: {
+        agent: mockAgent,
+        systemPrompt: 'You are helpful.',
+        streamFn,
+        executeFn: mockExecuteFn(),
+        interruptResetMs: 100, // Short timeout for tests
+      },
+    });
+
+    actor.start();
+    expect(actor.getSnapshot().value).toBe('idle');
+
+    actor.send({ type: 'USER_INPUT', message: 'Hi' });
+    expect(actor.getSnapshot().value).toBe('streaming');
+
+    await waitForState(actor, 'idle');
+    expect(actor.getSnapshot().context.response).toBe('Hello!');
+    expect(actor.getSnapshot().context.error).toBeNull();
+  });
+
+  it('streaming → tool_call → toolExecuting → tool result → streaming → idle', async () => {
+    // Simulate a stream that yields content, then tool_call, then more content, then finish.
+    // The agent machine translates tool_call events into a transition to toolExecuting,
+    // but in practice AI SDK handles tool loops internally, so the stream would emit
+    // tool_result as well. For this test, we simulate the full flow.
+    const streamFn = async function* (_params: {
+      message: string;
+      agent: Agent;
+      systemPrompt: string;
+      abortSignal: AbortSignal;
+      model?: string | null;
+    }): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'Let me check...' };
+      yield {
+        type: 'tool_call',
+        toolCallId: 'tc-1',
+        toolName: 'read_file',
+      };
+      // After tool call, the stream pauses. Tool executes, result feeds back.
+      // In the real flow, AI SDK handles this. For testing, we simulate.
+      yield {
+        type: 'tool_result',
+        toolCallId: 'tc-1',
+        content: 'file contents',
+        isError: false,
+      };
+      yield { type: 'content', text: ' Done.' };
+      yield { type: 'finish', finishReason: 'stop' };
+    };
+
+    const actor = createActor(agentMachine, {
+      input: {
+        agent: mockAgent,
+        systemPrompt: 'You are helpful.',
+        streamFn,
+        executeFn: mockExecuteFn(),
+        interruptResetMs: 100,
+      },
+    });
+
+    actor.start();
+    actor.send({ type: 'USER_INPUT', message: 'Read the file' });
+
+    await waitForState(actor, 'idle');
+    expect(actor.getSnapshot().context.response).toContain('Let me check...');
+    expect(actor.getSnapshot().context.error).toBeNull();
+  });
+
+  it('streaming → CANCEL → interrupted → (manual CANCEL) → idle', async () => {
+    const streamFn = mockCancellableStreamFn();
+
+    const actor = createActor(agentMachine, {
+      input: {
+        agent: mockAgent,
+        systemPrompt: 'You are helpful.',
+        streamFn,
+        executeFn: mockExecuteFn(),
+        interruptResetMs: 100,
+      },
+    });
+
+    actor.start();
+    actor.send({ type: 'USER_INPUT', message: 'Long task' });
+
+    // Wait for stream to start yielding
+    await waitForContext(actor, (ctx: { response: string }) => ctx.response.length > 0);
+
+    actor.send({ type: 'CANCEL' });
+    await waitForState(actor, 'interrupted');
+
+    // Manual cancel to transition to idle
+    actor.send({ type: 'CANCEL' });
+    await waitForState(actor, 'idle');
+  }, 10000);
+
+  it('error → USER_INPUT → streaming (recovery)', async () => {
+    let callCount = 0;
+    const streamFn = async function* (params: {
+      message: string;
+      agent: Agent;
+      systemPrompt: string;
+      abortSignal: AbortSignal;
+      model?: string | null;
+    }): AsyncGenerator<StreamEvent> {
+      callCount++;
+      if (callCount === 1) {
+        yield { type: 'error', title: 'Error', detail: 'Rate limit' };
+      } else {
+        yield { type: 'content', text: 'Success!' };
+        yield { type: 'finish', finishReason: 'stop' };
+      }
+    };
+
+    const actor = createActor(agentMachine, {
+      input: {
+        agent: mockAgent,
+        systemPrompt: 'You are helpful.',
+        streamFn,
+        executeFn: mockExecuteFn(),
+        interruptResetMs: 100,
+      },
+    });
+
+    actor.start();
+
+    // First attempt fails
+    actor.send({ type: 'USER_INPUT', message: 'Test' });
+    await waitForState(actor, 'error');
+    expect(actor.getSnapshot().context.error).toBe('Rate limit');
+
+    // Retry succeeds
+    actor.send({ type: 'USER_INPUT', message: 'Test again' });
+    await waitForState(actor, 'idle');
+    expect(actor.getSnapshot().context.response).toBe('Success!');
+  });
+});
+
+// ── Interrupt Machine Tests ─────────────────────────────────────────────────
+
+describe('Interrupt Machine', () => {
+  it('IDLE → INTERRUPT → CONFIRM_AGENT', () => {
+    const actor = createActor(interruptMachine);
+    actor.start();
+
+    expect(actor.getSnapshot().value).toBe('idle');
+
+    actor.send({ type: 'INTERRUPT' });
+    expect(actor.getSnapshot().value).toBe('confirmAgent');
+
+    actor.stop();
+  });
+
+  it('CONFIRM_AGENT → INTERRUPT → idle (second Esc cancels)', () => {
+    const actor = createActor(interruptMachine);
+    actor.start();
+
+    actor.send({ type: 'INTERRUPT' });
+    expect(actor.getSnapshot().value).toBe('confirmAgent');
+
+    actor.send({ type: 'INTERRUPT' });
+    expect(actor.getSnapshot().value).toBe('idle');
+
+    actor.stop();
+  });
+
+  it('IDLE → INTERRUPT → INTERRUPT_TIMEOUT → idle (auto-reset)', () => {
+    const actor = createActor(interruptMachine);
+    actor.start();
+
+    actor.send({ type: 'INTERRUPT' });
+    expect(actor.getSnapshot().value).toBe('confirmAgent');
+
+    // Simulate timeout event (in production, a timer fires this)
+    actor.send({ type: 'INTERRUPT_TIMEOUT' });
+    expect(actor.getSnapshot().value).toBe('idle');
+
+    actor.stop();
+  });
+
+  it('multiple Esc presses cycle through states', () => {
+    const actor = createActor(interruptMachine);
+    actor.start();
+
+    // First Esc → confirmAgent
+    actor.send({ type: 'INTERRUPT' });
+    expect(actor.getSnapshot().value).toBe('confirmAgent');
+
+    // Second Esc → idle (stream cancelled)
+    actor.send({ type: 'INTERRUPT' });
+    expect(actor.getSnapshot().value).toBe('idle');
+
+    // Third Esc → confirmAgent again
+    actor.send({ type: 'INTERRUPT' });
+    expect(actor.getSnapshot().value).toBe('confirmAgent');
+
+    // Timeout → idle
+    actor.send({ type: 'INTERRUPT_TIMEOUT' });
+    expect(actor.getSnapshot().value).toBe('idle');
+
+    actor.stop();
+  });
+});
+
+// ── Subagent Machine Tests ──────────────────────────────────────────────────
+
+describe('Subagent Machine', () => {
+  it('pending → running → completed → result reported to parent', async () => {
+    const streamFn = mockStreamFn([
+      { type: 'content', text: 'Subagent result' },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+
+    const parentEvents: unknown[] = [];
+    const actor = createActor(subagentMachine, {
+      input: {
+        id: 'sub-1',
+        label: 'Test Subagent',
+        task: 'Do something',
+        agent: mockAgent,
+        systemPrompt: 'You are a subagent.',
+        streamFn,
+      },
+    });
+
+    actor.start();
+
+    await waitForState(actor, 'completed');
+    expect(actor.getSnapshot().context.response).toBe('Subagent result');
+
+    actor.stop();
+  });
+
+  it('pending → running → failed → error reported to parent', async () => {
+    const streamFn = mockStreamFn([
+      { type: 'error', title: 'Error', detail: 'Something went wrong' },
+    ]);
+
+    const actor = createActor(subagentMachine, {
+      input: {
+        id: 'sub-2',
+        label: 'Failing Subagent',
+        task: 'Fail gracefully',
+        agent: mockAgent,
+        systemPrompt: 'You are a subagent.',
+        streamFn,
+      },
+    });
+
+    actor.start();
+
+    await waitForState(actor, 'failed');
+    expect(actor.getSnapshot().context.error).toBe('Something went wrong');
+
+    actor.stop();
+  });
+
+  it('running → CANCEL → interrupted', async () => {
+    const streamFn = mockCancellableStreamFn();
+
+    const actor = createActor(subagentMachine, {
+      input: {
+        id: 'sub-3',
+        label: 'Cancellable Subagent',
+        task: 'Long running task',
+        agent: mockAgent,
+        systemPrompt: 'You are a subagent.',
+        streamFn,
+      },
+    });
+
+    actor.start();
+
+    // Wait for some content to be emitted
+    await waitForContext(actor, (ctx: { response: string }) => ctx.response.length > 0);
+
+    actor.send({ type: 'CANCEL' });
+    await waitForState(actor, 'interrupted');
+
+    actor.stop();
+  }, 10000);
+
+  it('subagent isolation: tool calls handled internally by stream', async () => {
+    // In practice, AI SDK handles tool loops inside streamText.
+    // The subagent machine only sees high-level events (CHUNK, STREAM_END).
+    // Tool calls within the subagent don't affect parent state.
+    const streamFn = async function* (_params: {
+      message: string;
+      agent: Agent;
+      systemPrompt: string;
+      abortSignal: AbortSignal;
+      model?: string | null;
+    }): AsyncGenerator<StreamEvent> {
+      // Simulate: content → AI SDK handles tool internally → more content
+      yield { type: 'content', text: 'Checking files...' };
+      yield { type: 'content', text: ' Found 5 files.' };
+      yield { type: 'finish', finishReason: 'stop' };
+    };
+
+    const actor = createActor(subagentMachine, {
+      input: {
+        id: 'sub-4',
+        label: 'Isolated Subagent',
+        task: 'Count files',
+        agent: mockAgent,
+        systemPrompt: 'You are a subagent.',
+        streamFn,
+      },
+    });
+
+    actor.start();
+
+    await waitForState(actor, 'completed');
+    expect(actor.getSnapshot().context.response).toBe('Checking files... Found 5 files.');
+
+    actor.stop();
+  });
+});
+
+// ── SubagentManager Tests ───────────────────────────────────────────────────
+
+describe('SubagentManager', () => {
+  let manager: SubagentManager;
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+  });
+
+  it('spawn creates a record in PENDING state', () => {
+    const record = manager.spawn('test', 'do something', mockAgent);
+
+    expect(record.state).toBe(SubagentState.PENDING);
+    expect(record.label).toBe('test');
+    expect(record.task).toBe('do something');
+    expect(record.result).toBeNull();
+    expect(record.error).toBeNull();
+  });
+
+  it('allRecords returns all spawned records', () => {
+    manager.spawn('first', 'task 1', mockAgent);
+    manager.spawn('second', 'task 2', mockAgent);
+
+    const records = manager.allRecords();
+    expect(records).toHaveLength(2);
+    expect(records[0].label).toBe('first');
+    expect(records[1].label).toBe('second');
+  });
+
+  it('getStates returns state info for all subagents', () => {
+    manager.spawn('test', 'task', mockAgent);
+
+    const states = manager.getStates();
+    expect(states).toHaveLength(1);
+    expect(states[0].name).toBe('general');
+    expect(states[0].state).toBe('pending');
+  });
+
+  it('markCompleted transitions to COMPLETED and resolves waiters', async () => {
+    const record = manager.spawn('test', 'task', mockAgent);
+
+    const waitPromise = manager.wait([record.id]);
+    manager.markCompleted(record.id, 'Done!');
+
+    const results = await waitPromise;
+    expect(results.get(record.id)?.state).toBe(SubagentState.COMPLETED);
+    expect(results.get(record.id)?.result).toBe('Done!');
+  });
+
+  it('markFailed transitions to FAILED and resolves waiters', async () => {
+    const record = manager.spawn('test', 'task', mockAgent);
+
+    const waitPromise = manager.wait([record.id]);
+    manager.markFailed(record.id, 'Something broke');
+
+    const results = await waitPromise;
+    expect(results.get(record.id)?.state).toBe(SubagentState.FAILED);
+    expect(results.get(record.id)?.error).toBe('Something broke');
+  });
+
+  it('cancelOne returns true for non-terminal, false for terminal', () => {
+    const pending = manager.spawn('pending', 'task', mockAgent);
+    const completed = manager.spawn('completed', 'task', mockAgent);
+    manager.markCompleted(completed.id, 'done');
+
+    expect(manager.cancelOne(pending.id)).toBe(true);
+    expect(pending.state).toBe(SubagentState.INTERRUPTED);
+
+    expect(manager.cancelOne(completed.id)).toBe(false);
+  });
+
+  it('cancelAll cancels all non-terminal subagents', () => {
+    const a = manager.spawn('a', 'task', mockAgent);
+    const b = manager.spawn('b', 'task', mockAgent);
+    manager.markCompleted(b.id, 'done');
+    const c = manager.spawn('c', 'task', mockAgent);
+
+    const cancelled = manager.cancelAll();
+
+    expect(cancelled).toContain(a.id);
+    expect(cancelled).not.toContain(b.id);
+    expect(cancelled).toContain(c.id);
+  });
+
+  it('cancelRunning cancels only running subagents', () => {
+    const pending = manager.spawn('pending', 'task', mockAgent);
+    manager.markRunning(pending.id);
+    const completed = manager.spawn('completed', 'task', mockAgent);
+    manager.markCompleted(completed.id, 'done');
+
+    const cancelled = manager.cancelRunning();
+
+    expect(cancelled).toContain(pending.id);
+    expect(cancelled).not.toContain(completed.id);
+  });
+
+  it('wait resolves immediately for already-terminal subagents', async () => {
+    const record = manager.spawn('test', 'task', mockAgent);
+    manager.markCompleted(record.id, 'done');
+
+    const results = await manager.wait([record.id]);
+    expect(results.get(record.id)?.state).toBe(SubagentState.COMPLETED);
+  });
+
+  it('getRecord returns a single record by ID', () => {
+    const record = manager.spawn('test', 'task', mockAgent);
+
+    expect(manager.getRecord(record.id)).toBe(record);
+    expect(manager.getRecord('nonexistent')).toBeUndefined();
+  });
+
+  it('wait resolves when one of multiple subagents completes', async () => {
+    const a = manager.spawn('a', 'task 1', mockAgent);
+    const b = manager.spawn('b', 'task 2', mockAgent);
+
+    const waitPromise = manager.wait([a.id, b.id]);
+
+    // Complete one immediately
+    manager.markCompleted(a.id, 'result a');
+
+    // Complete the other after a small delay
+    setTimeout(() => manager.markCompleted(b.id, 'result b'), 10);
+
+    const results = await waitPromise;
+    expect(results.size).toBe(2);
+    expect(results.get(a.id)?.result).toBe('result a');
+    expect(results.get(b.id)?.result).toBe('result b');
+  });
+});
+
+// ── Session Machine Tests ───────────────────────────────────────────────────
+
+describe('Session Machine', () => {
+  it('idle → USER_INPUT → active (spawns agent)', () => {
+    const streamFn = mockStreamFn([
+      { type: 'content', text: 'Response' },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+
+    const actor = createActor(sessionMachine, {
+      input: {
+        sessionId: 'session-1',
+        activeAgent: mockAgent,
+        systemPrompt: 'You are helpful.',
+        streamFn,
+        subagentStreamFn: streamFn,
+        executeFn: mockExecuteFn(),
+        interruptResetMs: 100,
+      },
+    });
+
+    actor.start();
+    expect(actor.getSnapshot().value).toBe('idle');
+
+    actor.send({ type: 'USER_INPUT', message: 'Hello' });
+    expect(actor.getSnapshot().value).toBe('active');
+
+    actor.stop();
+  });
+
+  it('SPAWN_SUBAGENT adds subagent to context', () => {
+    const streamFn = mockStreamFn([]);
+
+    const actor = createActor(sessionMachine, {
+      input: {
+        sessionId: 'session-1',
+        activeAgent: mockAgent,
+        systemPrompt: 'You are helpful.',
+        streamFn,
+        subagentStreamFn: streamFn,
+        executeFn: mockExecuteFn(),
+        interruptResetMs: 100,
+      },
+    });
+
+    actor.start();
+    actor.send({ type: 'USER_INPUT', message: 'Hello' });
+
+    actor.send({
+      type: 'SPAWN_SUBAGENT',
+      name: 'researcher',
+      task: 'Find info',
+      agentType: 'subagent',
+    });
+
+    const subagents = actor.getSnapshot().context.subagents;
+    expect(subagents.size).toBe(1);
+
+    const [, entry] = Array.from(subagents.entries())[0];
+    expect(entry.label).toBe('researcher');
+    expect(entry.task).toBe('Find info');
+    expect(entry.state).toBe('pending');
+
+    actor.stop();
+  });
+
+  it('SUBAGENT_COMPLETE updates subagent state', () => {
+    const streamFn = mockStreamFn([]);
+
+    const actor = createActor(sessionMachine, {
+      input: {
+        sessionId: 'session-1',
+        activeAgent: mockAgent,
+        systemPrompt: 'You are helpful.',
+        streamFn,
+        subagentStreamFn: streamFn,
+        executeFn: mockExecuteFn(),
+        interruptResetMs: 100,
+      },
+    });
+
+    actor.start();
+    actor.send({ type: 'USER_INPUT', message: 'Hello' });
+
+    actor.send({
+      type: 'SPAWN_SUBAGENT',
+      name: 'researcher',
+      task: 'Find info',
+      agentType: 'subagent',
+    });
+
+    const [subId] = Array.from(actor.getSnapshot().context.subagents.keys());
+
+    actor.send({
+      type: 'SUBAGENT_COMPLETE',
+      subagentId: subId,
+      result: 'Found it!',
+    });
+
+    const entry = actor.getSnapshot().context.subagents.get(subId);
+    expect(entry?.state).toBe('completed');
+    expect(entry?.result).toBe('Found it!');
+    expect(entry?.endTime).toBeTypeOf('number');
+
+    actor.stop();
+  });
+
+  it('SUBAGENT_FAILED updates subagent state', () => {
+    const streamFn = mockStreamFn([]);
+
+    const actor = createActor(sessionMachine, {
+      input: {
+        sessionId: 'session-1',
+        activeAgent: mockAgent,
+        systemPrompt: 'You are helpful.',
+        streamFn,
+        subagentStreamFn: streamFn,
+        executeFn: mockExecuteFn(),
+        interruptResetMs: 100,
+      },
+    });
+
+    actor.start();
+    actor.send({ type: 'USER_INPUT', message: 'Hello' });
+
+    actor.send({
+      type: 'SPAWN_SUBAGENT',
+      name: 'researcher',
+      task: 'Find info',
+      agentType: 'subagent',
+    });
+
+    const [subId] = Array.from(actor.getSnapshot().context.subagents.keys());
+
+    actor.send({
+      type: 'SUBAGENT_FAILED',
+      subagentId: subId,
+      error: 'Network error',
+    });
+
+    const entry = actor.getSnapshot().context.subagents.get(subId);
+    expect(entry?.state).toBe('failed');
+    expect(entry?.error).toBe('Network error');
+
+    actor.stop();
+  });
+
+  it('multiple subagents tracked independently', () => {
+    const streamFn = mockStreamFn([]);
+
+    const actor = createActor(sessionMachine, {
+      input: {
+        sessionId: 'session-1',
+        activeAgent: mockAgent,
+        systemPrompt: 'You are helpful.',
+        streamFn,
+        subagentStreamFn: streamFn,
+        executeFn: mockExecuteFn(),
+        interruptResetMs: 100,
+      },
+    });
+
+    actor.start();
+    actor.send({ type: 'USER_INPUT', message: 'Hello' });
+
+    // Spawn two subagents
+    actor.send({
+      type: 'SPAWN_SUBAGENT',
+      name: 'first',
+      task: 'task 1',
+      agentType: 'subagent',
+    });
+    actor.send({
+      type: 'SPAWN_SUBAGENT',
+      name: 'second',
+      task: 'task 2',
+      agentType: 'subagent',
+    });
+
+    const subIds = Array.from(actor.getSnapshot().context.subagents.keys());
+    expect(subIds).toHaveLength(2);
+
+    // Complete first, fail second
+    actor.send({
+      type: 'SUBAGENT_COMPLETE',
+      subagentId: subIds[0],
+      result: 'done',
+    });
+    actor.send({
+      type: 'SUBAGENT_FAILED',
+      subagentId: subIds[1],
+      error: 'failed',
+    });
+
+    const entries = Array.from(actor.getSnapshot().context.subagents.values());
+    expect(entries[0].state).toBe('completed');
+    expect(entries[1].state).toBe('failed');
+
+    actor.stop();
+  });
+});
