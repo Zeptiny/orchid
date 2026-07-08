@@ -11,12 +11,14 @@
 import { app, BrowserWindow } from 'electron';
 import * as path from 'path';
 import { registerAllIPC, unregisterAllIPC, setMCPManagerRef } from './ipc';
-import { loadConfig, ensureHomeConfig, ConfigManager } from './config/loader';
+import { ensureHomeConfig, ConfigManager } from './config/loader';
 import { loadAgents, seedAgentsDir } from './agents/registry';
-import { HOME_AGENTS_DIR } from './config/loader';
+import { loadSkills, seedSkillsDir } from './skills/registry';
+import { HOME_AGENTS_DIR, HOME_SKILLS_DIR } from './config/loader';
 import { MCPManager } from './mcp';
 import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
 import { initFileLogging, closeFileLogging } from './logging';
+import { registerBuiltinTools } from './tools';
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
@@ -68,16 +70,19 @@ app.whenReady().then(async () => {
     // 2. Load config
     const config = ConfigManager.load();
 
-    // 3. Seed and load agents
+    // 3. Seed and load agents/skills
     seedAgentsDir(HOME_AGENTS_DIR);
-    loadAgents();
+    const agents = loadAgents();
+    seedSkillsDir(HOME_SKILLS_DIR);
+    const skills = loadSkills();
 
-    // 4. Register all IPC handlers (before creating window)
-    registerAllIPC();
-
-    // 5. Initialize MCP servers (async, non-blocking for window)
+    // 4. Initialize MCP servers (async, non-blocking for window)
     mcpManager = new MCPManager();
     setMCPManagerRef(mcpManager);
+    registerBuiltinTools({ agents, skills, mcpManager });
+
+    // 5. Register all IPC handlers (before creating window)
+    registerAllIPC();
 
     // Start MCP in background — don't block window creation
     mcpManager

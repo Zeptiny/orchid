@@ -26,6 +26,7 @@ import type { GenerateTitleCallback } from '../session/manager';
 import { getSessionManager } from './session';
 import { importESM } from '../utils/esm-import';
 import { getBackgroundStore } from '../tools/process/background-store';
+import { getMCPManagerRef } from './mcp';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -64,6 +65,10 @@ function disposeActiveAgent(windowId: string, active: ActiveAgent): void {
   active.abortController.abort();
   active.actor.stop();
   active.interruptActor.stop();
+}
+
+function canSend(webContents: WebContents): boolean {
+  return typeof webContents.isDestroyed !== 'function' || !webContents.isDestroyed();
 }
 
 // ── Stream function (wraps the orchestrator) ─────────────────────────────────
@@ -107,8 +112,8 @@ function createStreamFn(config: Config, messages: Message[]) {
       context,
       config,
       registry: (await import('../tools')).toolRegistry,
-      mcpManager: null, // MCP manager is injected at app startup
-      sessionId: undefined,
+      mcpManager: getMCPManagerRef(),
+      sessionId: getSessionManager().getActive()?.id,
       abortSignal: params.abortSignal,
       modelInstance,
     });
@@ -329,7 +334,7 @@ export function registerChatIPC(): void {
 
       // Re-send CHAT_STATE with updated interrupt state
       const context = actor.getSnapshot().context as AgentContext;
-      if (!webContents.isDestroyed()) {
+      if (canSend(webContents)) {
         webContents.send(IPC_CHANNELS.CHAT_STATE, {
           state: actor.getSnapshot().value,
           response: context.response,
@@ -407,7 +412,7 @@ export function registerChatIPC(): void {
         const sessionManager = getSessionManager();
         const generateTitle = createGenerateTitleCallback(config, allMessages);
         sessionManager.autoNameActive(generateTitle).then((updated) => {
-          if (updated && updated.name !== messages[0]?.content?.slice(0, 20) && !webContents.isDestroyed()) {
+          if (updated && updated.name !== messages[0]?.content?.slice(0, 20) && canSend(webContents)) {
             // Notify renderer of the rename so sidebar updates
             webContents.send(IPC_CHANNELS.SESSION_RENAMED, {
               id: updated.id,

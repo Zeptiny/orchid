@@ -18,9 +18,8 @@ import type { Skill, SkillResource } from '../../shared/types/skill';
 import {
   parseFrontmatter,
   getString,
-  getStringArray,
 } from '../../shared/utils/frontmatter';
-import { toolRegistry } from '../tools';
+import { registerBuiltinTools } from '../tools';
 import { HOME_SKILLS_DIR } from '../config/loader';
 
 // ---------------------------------------------------------------------------
@@ -28,9 +27,6 @@ import { HOME_SKILLS_DIR } from '../config/loader';
 // ---------------------------------------------------------------------------
 
 const SKILL_FILENAME = 'SKILL.md';
-
-/** Subdirectories to scan for skill resources */
-const RESOURCE_DIRS = ['scripts', 'references', 'assets'];
 
 /** File extensions whose content can be parsed for frontmatter descriptions */
 const PARSEABLE_EXTENSIONS = new Set([
@@ -245,8 +241,8 @@ export function loadSkills(options?: {
   const merged = new Map<string, Skill>([...homeSkills, ...projectSkills]);
   skillRegistry = merged;
 
-  // Reset tool registry so it can be rebuilt with new skill context
-  toolRegistry.reset();
+  // Rebuild dynamic tool descriptions with the latest skill registry.
+  registerBuiltinTools({ skills: merged });
 
   return merged;
 }

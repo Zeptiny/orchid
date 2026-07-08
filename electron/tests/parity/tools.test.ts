@@ -59,6 +59,7 @@ import { buildMcpResourceTool } from '../../src/main/tools/mcp/resource';
 import { buildDelegateTool } from '../../src/main/tools/subagent/delegate';
 import { buildWaitTool } from '../../src/main/tools/subagent/wait';
 import { buildInterruptTool } from '../../src/main/tools/subagent/interrupt';
+import { registerBuiltinTools, toolRegistry } from '../../src/main/tools';
 
 // ── Expected tool names (27 total) ─────────────────────────────────────────
 
@@ -424,5 +425,20 @@ describe('Tool Completeness', () => {
     ];
     expect(allNames).toHaveLength(27);
     expect(new Set(allNames).size).toBe(27);
+  });
+
+  it('registerBuiltinTools populates the singleton registry with all tools', () => {
+    try {
+      registerBuiltinTools();
+
+      const names = toolRegistry
+        .listAll()
+        .map((tool) => tool.definition.name)
+        .sort();
+
+      expect(names).toEqual([...EXPECTED_TOOL_NAMES].sort());
+    } finally {
+      toolRegistry.reset();
+    }
   });
 });

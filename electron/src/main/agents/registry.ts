@@ -21,7 +21,7 @@ import {
   getString,
   getStringArray,
 } from '../../shared/utils/frontmatter';
-import { toolRegistry } from '../tools';
+import { registerBuiltinTools } from '../tools';
 import {
   HOME_AGENTS_DIR,
 } from '../config/loader';
@@ -166,8 +166,8 @@ export function loadAgents(options?: {
   const merged = new Map<string, Agent>([...homeAgents, ...projectAgents]);
   agentRegistry = merged;
 
-  // Reset tool registry so it can be rebuilt with new agent context
-  toolRegistry.reset();
+  // Rebuild dynamic tool descriptions with the latest agent registry.
+  registerBuiltinTools({ agents: merged });
 
   return merged;
 }

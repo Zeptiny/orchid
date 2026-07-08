@@ -27,6 +27,7 @@ import type { Agent } from '../../src/shared/types/agent';
 import { AgentType, AgentTier } from '../../src/shared/types/agent';
 import { toApiMessages } from '../../src/main/llm/history';
 import { executeToolCall, maybeOffloadToolOutput } from '../../src/main/llm/tool-dispatch';
+import { buildToolMap } from '../../src/main/llm/orchestrator';
 import {
   cleanOrphanToolResults,
   cleanDanglingToolCalls,
@@ -765,6 +766,33 @@ describe('ToolRegistry integration with dispatch', () => {
 
     expect(result.content).toContain('does not exist');
     expect(result.content).toContain('existing');
+  });
+
+  it('buildToolMap exposes AI SDK-compatible input schemas', async () => {
+    const inputSchema = z.object({ query: z.string() });
+    registry.register(
+      {
+        name: 'test_tool',
+        description: 'Test',
+        inputSchema,
+        category: 'test',
+      },
+      async () => 'ok',
+    );
+
+    const tools = buildToolMap(['test_tool'], registry, null, {});
+    const { asSchema } = await import('ai');
+
+    expect((tools.test_tool as any).inputSchema).toBe(inputSchema);
+    const jsonSchema = await Promise.resolve(
+      asSchema((tools.test_tool as any).inputSchema).jsonSchema,
+    );
+    expect(jsonSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+      },
+    });
   });
 });
 

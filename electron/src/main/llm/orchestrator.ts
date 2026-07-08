@@ -28,7 +28,7 @@
  * to the model internally. We track tool results via the `onStepFinish` callback
  * and by monitoring what our `tool.execute` functions return.
  */
-import type { ModelMessage, Tool } from 'ai';
+import type { AssistantContent, ModelMessage, Tool } from 'ai';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { Message, Usage } from '../../shared/types/message';
 import type { Agent } from '../../shared/types/agent';
@@ -41,7 +41,6 @@ import { executeToolCall, type ToolDispatchOptions } from './tool-dispatch';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
 import { importESM } from '../utils/esm-import';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -143,7 +142,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           ? [{ type: 'text' as const, text: msg.content }]
           : [];
 
-      const content = msg.tool_calls
+      const content: AssistantContent = msg.tool_calls
         ? [
             ...contentArray,
             ...msg.tool_calls.map((tc) => ({
@@ -158,7 +157,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           : contentArray.length > 0
             ? contentArray
             : '';
-      coreMessages.push({ role: 'assistant', content: content as any });
+      coreMessages.push({ role: 'assistant', content });
     } else if (msg.role === 'tool') {
       // Extract text content for tool results
       const textContent = typeof msg.content === 'string'
@@ -344,13 +343,9 @@ export function buildToolMap(
   const filtered = registry.filter([...allowedTools]);
 
   for (const { definition } of filtered) {
-    // Convert Zod schema to JSON Schema for the API
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const inputSchema = zodToJsonSchema(definition.inputSchema as any) as any;
-
     toolMap[definition.name] = {
       description: definition.description,
-      inputSchema,
+      inputSchema: definition.inputSchema,
       execute: async (args: unknown) => {
         const toolCall: ToolCall = {
           id: crypto.randomUUID(),
@@ -382,13 +377,9 @@ export function buildToolMap(
 
       if (!isAllowed) continue;
 
-      // Convert Zod schema to JSON Schema for the API
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const inputSchema = zodToJsonSchema(definition.inputSchema as any) as any;
-
       toolMap[definition.name] = {
         description: definition.description,
-        inputSchema,
+        inputSchema: definition.inputSchema,
         execute: async (args: unknown) => {
           const result = await mcpManager.callTool(definition.name, args);
           return typeof result === 'string' ? result : JSON.stringify(result);

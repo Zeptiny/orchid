@@ -8,7 +8,12 @@ import { registerConfigIPC, unregisterConfigIPC } from './config';
 import { registerSessionIPC, unregisterSessionIPC } from './session';
 import { registerToolIPC, unregisterToolIPC } from './tool';
 import { registerAgentIPC, unregisterAgentIPC } from './agent';
-import { registerMCPIPC, unregisterMCPIPC, setMCPManagerRef } from './mcp';
+import {
+  registerMCPIPC,
+  unregisterMCPIPC,
+  setMCPManagerRef,
+  getMCPManagerRef,
+} from './mcp';
 import { registerRAGIPC, unregisterRAGIPC } from './rag';
 import { registerASTIPC, unregisterASTIPC } from './ast';
 import { registerUpdaterIPC, unregisterUpdaterIPC } from './updater';
@@ -45,4 +50,4 @@ export function unregisterAllIPC(): void {
   unregisterUpdaterIPC();
 }
 
-export { setMCPManagerRef };
+export { setMCPManagerRef, getMCPManagerRef };
