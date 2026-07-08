@@ -1,0 +1,16 @@
+appId: com.orchid.app
+productName: Orchid
+directories:
+  output: release
+files:
+  - dist/**/*
+  - package.json
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
+win:
+  target: nsis
+linux:
+  target:
+    - AppImage
+    - deb

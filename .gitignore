@@ -5,3 +5,8 @@ __pycache__/
 .orchid/ast/
 build/
 .orchid/rag/
+
+# Electron
+electron/node_modules/
+electron/dist/
+electron/release/
