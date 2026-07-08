@@ -1,15 +1,9 @@
 /**
  * Footer — status bar at the bottom of the chat.
  *
- * Displays:
- * - Model label
- * - Token usage (prompt/cached/completion)
- * - Elapsed time
- * - Keyboard shortcuts hint
+ * Uses DaisyUI components for styling.
  */
 import type { Usage } from '../../shared/types/message';
-
-// ── Props ────────────────────────────────────────────────────────────────────
 
 interface FooterProps {
   model: string;
@@ -18,53 +12,39 @@ interface FooterProps {
   isStreaming: boolean;
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
-
 export function Footer({ model, usage, elapsedSeconds, isStreaming }: FooterProps) {
   return (
-    <div className="footer">
-      <div className="footer-left">
-        <div className="footer-item">
-          <span className="footer-label">Model:</span>
-          <span className="footer-value">{model || '—'}</span>
-        </div>
+    <div className="btm-nav btm-nav-sm bg-base-200 border-t border-base-300 h-8">
+      <div className="flex items-center gap-2 px-4 text-xs">
+        <span className="font-medium">Model:</span>
+        <span className="opacity-70">{model || '—'}</span>
         {usage && (
           <>
-            <span className="footer-separator">|</span>
-            <div className="footer-item">
-              <span className="footer-label">Prompt:</span>
-              <span className="footer-value">{formatTokens(usage.prompt_tokens)}</span>
-            </div>
-            <div className="footer-item">
-              <span className="footer-label">Cached:</span>
-              <span className="footer-value">{formatTokens(usage.cached_tokens)}</span>
-            </div>
-            <div className="footer-item">
-              <span className="footer-label">Completion:</span>
-              <span className="footer-value">{formatTokens(usage.completion_tokens)}</span>
-            </div>
+            <span className="opacity-30">|</span>
+            <span className="font-medium">Prompt:</span>
+            <span className="opacity-70">{formatTokens(usage.prompt_tokens)}</span>
+            <span className="opacity-30">|</span>
+            <span className="font-medium">Cached:</span>
+            <span className="opacity-70">{formatTokens(usage.cached_tokens)}</span>
+            <span className="opacity-30">|</span>
+            <span className="font-medium">Completion:</span>
+            <span className="opacity-70">{formatTokens(usage.completion_tokens)}</span>
           </>
         )}
         {isStreaming && (
           <>
-            <span className="footer-separator">|</span>
-            <div className="footer-item">
-              <span className="footer-label">Elapsed:</span>
-              <span className="footer-value">{formatElapsed(elapsedSeconds)}</span>
-            </div>
+            <span className="opacity-30">|</span>
+            <span className="font-medium">Elapsed:</span>
+            <span className="opacity-70">{formatElapsed(elapsedSeconds)}</span>
           </>
         )}
       </div>
-      <div className="footer-right">
-        <div className="footer-item">
-          Ctrl+K: Command Palette &middot; Ctrl+B: Sidebar &middot; Esc: Cancel
-        </div>
+      <div className="flex items-center justify-end px-4 text-xs opacity-50">
+        Ctrl+K: Command Palette · Ctrl+B: Sidebar · Esc: Cancel
       </div>
     </div>
   );
 }
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatTokens(n: number): string {
   if (n >= 1000) {

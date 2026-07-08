@@ -1,33 +1,19 @@
 /**
  * MessageWidget — renders a single message based on its role/type.
  *
- * Supports:
- * - User messages: right-aligned, distinct background
- * - Assistant messages: left-aligned, markdown rendering
- * - Thinking messages: italic, dimmed
- * - Tool calls: collapsible, shows tool name + args
- * - Tool results: collapsible, shows result content
- * - Error messages: red accent, error icon
- *
- * Interaction states: loading (streaming cursor), partial content.
+ * Uses DaisyUI components for styling.
  */
 import { useState, useCallback } from 'react';
 import type { Message } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import { MarkdownContent } from './MarkdownContent';
 
-// ── Props ────────────────────────────────────────────────────────────────────
-
 interface MessageWidgetProps {
   message: Message;
-  /** Whether this is the currently streaming message. */
   isStreaming?: boolean;
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
-
 export function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
-  // Skip hidden messages
   if (message.hidden) return null;
 
   switch (message.type) {
@@ -55,18 +41,19 @@ export function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
   }
 }
 
-// ── User Message ─────────────────────────────────────────────────────────────
-
 function UserMessage({ message }: { message: Message }) {
   return (
-    <div className="message message-user">
-      <div className="message-role">You</div>
-      <div className="message-content">{message.content}</div>
+    <div className="chat chat-end">
+      <div className="chat-header">
+        You
+        <time className="text-xs opacity-50 ml-1">
+          {new Date(message.timestamp).toLocaleTimeString()}
+        </time>
+      </div>
+      <div className="chat-bubble chat-bubble-primary">{message.content}</div>
     </div>
   );
 }
-
-// ── Assistant Message ────────────────────────────────────────────────────────
 
 function AssistantMessage({
   message,
@@ -76,28 +63,29 @@ function AssistantMessage({
   isStreaming?: boolean;
 }) {
   return (
-    <div className="message message-assistant">
-      <div className="message-role">Assistant</div>
-      <div className="message-content">
+    <div className="chat chat-start">
+      <div className="chat-header">
+        Assistant
+        <time className="text-xs opacity-50 ml-1">
+          {new Date(message.timestamp).toLocaleTimeString()}
+        </time>
+      </div>
+      <div className="chat-bubble chat-bubble-secondary">
         <MarkdownContent content={message.content} />
-        {isStreaming && <span className="streaming-cursor" />}
+        {isStreaming && <span className="loading loading-dots loading-xs ml-1" />}
       </div>
     </div>
   );
 }
 
-// ── Thinking Message ─────────────────────────────────────────────────────────
-
 function ThinkingMessage({ message }: { message: Message }) {
   return (
-    <div className="message message-thinking">
-      <div className="message-role">Thinking</div>
-      <div className="message-content">{message.content}</div>
+    <div className="chat chat-start">
+      <div className="chat-header">Thinking</div>
+      <div className="chat-bubble chat-bubble-accent opacity-70 italic">{message.content}</div>
     </div>
   );
 }
-
-// ── Tool Call Message ────────────────────────────────────────────────────────
 
 function ToolCallMessage({ message }: { message: Message }) {
   const [expanded, setExpanded] = useState(false);
@@ -106,7 +94,6 @@ function ToolCallMessage({ message }: { message: Message }) {
     setExpanded((prev) => !prev);
   }, []);
 
-  // Extract tool call info from message
   const toolCalls = message.tool_calls ?? [];
   const toolName = toolCalls[0]?.function?.name ?? message.name ?? 'unknown';
   const toolArgs = toolCalls[0]?.function?.arguments ?? message.content;
@@ -119,21 +106,17 @@ function ToolCallMessage({ message }: { message: Message }) {
   }
 
   return (
-    <div className="message message-tool-call">
-      <div className="tool-call-header" onClick={toggle} role="button" tabIndex={0}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggle(); }}>
-        <span className="tool-call-icon">&#9881;</span>
-        <span className="tool-call-name">{toolName}</span>
-        <span className={`tool-call-toggle ${expanded ? 'expanded' : ''}`}>&#9654;</span>
+    <div className="collapse collapse-arrow bg-base-200">
+      <input type="checkbox" checked={expanded} onChange={toggle} />
+      <div className="collapse-title text-sm font-medium">
+        ⚙️ {toolName}
       </div>
-      {expanded && (
-        <div className="tool-call-body">{formattedArgs}</div>
-      )}
+      <div className="collapse-content">
+        <pre className="text-xs overflow-x-auto p-2 bg-base-300 rounded">{formattedArgs}</pre>
+      </div>
     </div>
   );
 }
-
-// ── Tool Result Message ──────────────────────────────────────────────────────
 
 function ToolResultMessage({ message }: { message: Message }) {
   const [expanded, setExpanded] = useState(false);
@@ -148,56 +131,46 @@ function ToolResultMessage({ message }: { message: Message }) {
   const displayContent = isLong && !showAll ? content.slice(0, 500) + '...' : content;
 
   return (
-    <div className="message message-tool-result">
-      <div className="tool-result-header" onClick={toggle} role="button" tabIndex={0}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggle(); }}>
-        <span className="tool-result-label">Tool Result</span>
-        <span className={`tool-result-toggle ${expanded ? 'expanded' : ''}`}>&#9654;</span>
+    <div className="collapse collapse-arrow bg-base-200">
+      <input type="checkbox" checked={expanded} onChange={toggle} />
+      <div className="collapse-title text-sm font-medium">
+        Tool Result
       </div>
-      {expanded && (
-        <div className="tool-result-body">
-          {displayContent}
-          {isLong && !showAll && (
-            <button className="show-more-btn" onClick={(e) => { e.stopPropagation(); setShowAll(true); }}>
-              Show more
-            </button>
-          )}
-        </div>
-      )}
+      <div className="collapse-content">
+        <pre className="text-xs overflow-x-auto p-2 bg-base-300 rounded whitespace-pre-wrap">{displayContent}</pre>
+        {isLong && !showAll && (
+          <button className="btn btn-link btn-xs mt-2" onClick={(e) => { e.stopPropagation(); setShowAll(true); }}>
+            Show more
+          </button>
+        )}
+      </div>
     </div>
   );
 }
-
-// ── Error Message ────────────────────────────────────────────────────────────
 
 function ErrorMessage({ message }: { message: Message }) {
   return (
-    <div className="message message-error">
-      <div className="message-role">Error</div>
-      <div className="message-content">
-        <span className="error-icon">&#9888;</span>
-        {message.content}
+    <div className="chat chat-start">
+      <div className="chat-header">Error</div>
+      <div className="chat-bubble chat-bubble-error">
+        ⚠️ {message.content}
       </div>
     </div>
   );
 }
 
-// ── System Message ───────────────────────────────────────────────────────────
-
 function SystemMessage({ message }: { message: Message }) {
   return (
-    <div className="message" style={{ alignSelf: 'center', opacity: 0.6, fontSize: 'var(--font-size-xs)' }}>
-      <div className="message-content">{message.content}</div>
+    <div className="text-center text-xs opacity-50 my-2">
+      {message.content}
     </div>
   );
 }
 
-// ── Default Message ──────────────────────────────────────────────────────────
-
 function DefaultMessage({ message }: { message: Message }) {
   return (
-    <div className="message message-assistant">
-      <div className="message-content">{message.content}</div>
+    <div className="chat chat-start">
+      <div className="chat-bubble">{message.content}</div>
     </div>
   );
 }

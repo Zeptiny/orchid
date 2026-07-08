@@ -1,8 +1,7 @@
 /**
  * ChatView — main chat layout combining ChatStream, InputArea, Footer, Sidebar.
  *
- * This is the primary interface for Phase 1.
- * Manages all state hooks and coordinates the layout.
+ * Uses DaisyUI components for styling.
  */
 import { useState, useCallback, useEffect } from 'react';
 import { useChat } from '../hooks/useChat';
@@ -18,44 +17,29 @@ import { Sidebar } from './Sidebar';
 import { CommandPalette } from './CommandPalette';
 import { ToolRail } from './ToolWidgets';
 
-// ── Component ────────────────────────────────────────────────────────────────
-
 export function ChatView() {
-  // ── State hooks ──────────────────────────────────────────────────────────
   const chat = useChat();
   const session = useSession();
   const subagents = useSubagents(session.activeSession?.id ?? null);
   const todos = useTodos(session.activeSession?.id ?? null);
   const toolRail = useToolRail();
 
-  // Sidebar state
   const [sidebarOpen, setSidebarOpen] = useState(true);
-
-  // Command palette state
   const [paletteOpen, setPaletteOpen] = useState(false);
-
-  // MCP status
   const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
-
-  // Index status
   const [ragStatus, setRagStatus] = useState<RAGStoreStatus | null>(null);
   const [astStatus, setAstStatus] = useState<ASTStoreStatus | null>(null);
-
-  // Current theme and personality for palette sub-pickers
   const [currentTheme, setCurrentTheme] = useState('default');
   const [currentPersonality, setCurrentPersonality] = useState('default');
 
-  // ── Sidebar toggle ──────────────────────────────────────────────────────
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => !prev);
   }, []);
 
-  // ── Command palette toggle ──────────────────────────────────────────────
   const togglePalette = useCallback(() => {
     setPaletteOpen((prev) => !prev);
   }, []);
 
-  // ── Cmd+K / Ctrl+K keyboard shortcut ────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -67,7 +51,6 @@ export function ChatView() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [togglePalette]);
 
-  // ── Load theme and personality from config ───────────────────────────────
   useEffect(() => {
     async function loadConfig() {
       try {
@@ -83,11 +66,9 @@ export function ChatView() {
     loadConfig();
   }, []);
 
-  // ── Session actions ──────────────────────────────────────────────────────
   const handleSessionSelect = useCallback(
     async (id: string) => {
       const loadedSession = await session.load(id);
-      // Use the returned session directly to avoid stale closure
       if (loadedSession) {
         const activeChain = loadedSession.chains.find(
           (c) => c.id === loadedSession.activeChainId,
@@ -103,39 +84,41 @@ export function ChatView() {
   const handleSessionCreate = useCallback(async () => {
     const newSession = await session.create();
     chat.setMessages([]);
-    // Auto-load the new session
     await session.load(newSession.id);
   }, [session, chat]);
 
-  // ── MCP status refresh ──────────────────────────────────────────────────
   const refreshMCP = useCallback(async () => {
     try {
-      const status = await window.orchid.mcp.status();
-      setMcpServers(status);
+      if (window.orchid?.mcp?.status) {
+        const status = await window.orchid.mcp.status();
+        setMcpServers(status);
+      }
     } catch {
       // Non-fatal
     }
   }, []);
 
-  // ── Index status refresh ────────────────────────────────────────────────
   const refreshIndex = useCallback(async () => {
     try {
-      const [rag, ast] = await Promise.all([
-        window.orchid.rag.status(),
-        window.orchid.ast.status(),
-      ]);
-      setRagStatus(rag);
-      setAstStatus(ast);
+      if (window.orchid?.rag?.status && window.orchid?.ast?.status) {
+        const [rag, ast] = await Promise.all([
+          window.orchid.rag.status(),
+          window.orchid.ast.status(),
+        ]);
+        setRagStatus(rag);
+        setAstStatus(ast);
+      }
     } catch {
       // Non-fatal
     }
   }, []);
 
-  // ── Index actions ────────────────────────────────────────────────────────
   const handleIndexRAG = useCallback(async () => {
     try {
-      await window.orchid.rag.index();
-      await refreshIndex();
+      if (window.orchid?.rag?.index) {
+        await window.orchid.rag.index();
+        await refreshIndex();
+      }
     } catch (err) {
       console.error('RAG index failed:', err);
     }
@@ -143,30 +126,27 @@ export function ChatView() {
 
   const handleIndexAST = useCallback(async () => {
     try {
-      await window.orchid.ast.index();
-      await refreshIndex();
+      if (window.orchid?.ast?.index) {
+        await window.orchid.ast.index();
+        await refreshIndex();
+      }
     } catch (err) {
       console.error('AST index failed:', err);
     }
   }, [refreshIndex]);
 
-  // ── Load initial data ───────────────────────────────────────────────────
   useEffect(() => {
     refreshMCP();
     refreshIndex();
   }, [refreshMCP, refreshIndex]);
 
-  // ── Notification helper ─────────────────────────────────────────────────
   const notify = useCallback((message: string, severity: 'info' | 'warning' | 'error' = 'info') => {
-    // Simple notification — could be replaced with a toast system
     console.log(`[${severity.toUpperCase()}] ${message}`);
-    // Also use Electron's notification API if available
     if (severity === 'error') {
       console.error(message);
     }
   }, []);
 
-  // ── Command context for the palette ─────────────────────────────────────
   const commandContext: CommandContext = {
     onCreateSession: handleSessionCreate,
     onLoadSession: handleSessionSelect,
@@ -195,7 +175,6 @@ export function ChatView() {
       }
     },
     onOpenSettings: () => {
-      // Emit event for U24 Preferences to listen to
       window.dispatchEvent(new CustomEvent('orchid:open-settings'));
       notify('Settings: preferences window coming in U24.', 'info');
     },
@@ -203,15 +182,20 @@ export function ChatView() {
     onIndexAST: handleIndexAST,
     onClearRAG: async () => {
       try {
-        await window.orchid.rag.clear();
-        await refreshIndex();
+        if (window.orchid?.rag?.clear) {
+          await window.orchid.rag.clear();
+          await refreshIndex();
+        }
       } catch (err) {
         console.error('RAG clear failed:', err);
       }
     },
     onGetRAGStatus: async () => {
       try {
-        return await window.orchid.rag.status();
+        if (window.orchid?.rag?.status) {
+          return await window.orchid.rag.status();
+        }
+        return null;
       } catch {
         return null;
       }
@@ -220,19 +204,17 @@ export function ChatView() {
     onClose: () => setPaletteOpen(false),
   };
 
-  // ── Model from active session or config ─────────────────────────────────
   const model = session.activeSession?.model ?? '';
 
-  // ── Session list for palette ─────────────────────────────────────────────
   const sessions =
     session.listState.status === 'ready' || session.listState.status === 'partial'
       ? session.listState.sessions
       : [];
 
-  // ── Render ──────────────────────────────────────────────────────────────
   return (
-    <div className="app-layout">
-      <div className={`chat-main ${sidebarOpen ? 'sidebar-open' : ''} ${toolRail.isOpen ? 'tool-rail-open' : ''}`}>
+    <div className="flex h-screen overflow-hidden bg-base-100">
+      {/* Main Chat Area */}
+      <div className="flex-1 flex flex-col min-w-0">
         <ChatStream
           messages={chat.messages}
           streamingContent={chat.streamingContent}
@@ -254,6 +236,7 @@ export function ChatView() {
         />
       </div>
 
+      {/* Tool Rail */}
       <ToolRail
         events={toolRail.events}
         isOpen={toolRail.isOpen}
@@ -262,6 +245,7 @@ export function ChatView() {
         onNavigate={toolRail.onNavigate}
       />
 
+      {/* Sidebar */}
       <Sidebar
         isOpen={sidebarOpen}
         onToggle={toggleSidebar}
@@ -284,6 +268,7 @@ export function ChatView() {
         onRefreshIndex={refreshIndex}
       />
 
+      {/* Command Palette */}
       <CommandPalette
         isOpen={paletteOpen}
         onClose={() => setPaletteOpen(false)}

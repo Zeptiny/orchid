@@ -93,6 +93,11 @@ export function useChat(): UseChatReturn {
 
   // Subscribe to IPC events
   useEffect(() => {
+    if (!window.orchid?.chat) {
+      console.warn('window.orchid.chat not available — IPC not ready');
+      return;
+    }
+
     const unsubChunk = window.orchid.chat.onChunk((event: ChatChunkEvent) => {
       accumulatedContentRef.current += event.data;
       setStreamingContent(accumulatedContentRef.current);
@@ -153,6 +158,10 @@ export function useChat(): UseChatReturn {
   const send = useCallback(
     async (message: string) => {
       if (!message.trim() || status === 'streaming') return;
+      if (!window.orchid?.chat) {
+        setError('Chat IPC not available');
+        return;
+      }
 
       const userMessage: Message = {
         id: crypto.randomUUID(),
@@ -190,6 +199,7 @@ export function useChat(): UseChatReturn {
   );
 
   const cancel = useCallback(async () => {
+    if (!window.orchid?.chat) return;
     try {
       await window.orchid.chat.cancel();
     } catch {

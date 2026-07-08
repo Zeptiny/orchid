@@ -1,21 +1,12 @@
 /**
  * ChatStream — scrollable message stream with smart auto-scroll.
  *
- * Smart auto-scroll: scrolls to bottom on new messages, but doesn't
- * auto-scroll if the user has scrolled up (to allow reading history).
- *
- * Interaction states:
- * - Empty: placeholder with CTA
- * - Loading: spinner (during session load)
- * - Error: error banner with retry
- * - Streaming: partial content with cursor
+ * Uses DaisyUI components for styling.
  */
 import { useRef, useEffect, useCallback, useState } from 'react';
 import type { Message } from '../../shared/types/message';
 import type { ChatStatus } from '../hooks/useChat';
 import { MessageWidget } from './MessageWidget';
-
-// ── Props ────────────────────────────────────────────────────────────────────
 
 interface ChatStreamProps {
   messages: Message[];
@@ -24,8 +15,6 @@ interface ChatStreamProps {
   error: string | null;
   onClearError: () => void;
 }
-
-// ── Component ────────────────────────────────────────────────────────────────
 
 export function ChatStream({
   messages,
@@ -38,21 +27,18 @@ export function ChatStream({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
 
-  // Smart auto-scroll: scroll to bottom unless user has scrolled up
   const scrollToBottom = useCallback(() => {
     if (!isUserScrolledUp) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [isUserScrolledUp]);
 
-  // Detect user scroll position
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = container;
-      // Consider "scrolled up" if user is more than 100px from bottom
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
       setIsUserScrolledUp(distanceFromBottom > 100);
     };
@@ -61,12 +47,10 @@ export function ChatStream({
     return () => container.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Auto-scroll on new messages or streaming content
   useEffect(() => {
     scrollToBottom();
   }, [messages.length, streamingContent, scrollToBottom]);
 
-  // Auto-scroll when streaming starts (user just sent a message)
   useEffect(() => {
     if (status === 'streaming') {
       setIsUserScrolledUp(false);
@@ -74,39 +58,37 @@ export function ChatStream({
     }
   }, [status]);
 
-  // Empty state
   if (messages.length === 0 && !streamingContent && status === 'idle') {
     return (
-      <div className="chat-empty">
-        <div className="chat-empty-icon">&#127793;</div>
-        <div className="chat-empty-title">Welcome to Orchid</div>
-        <div className="chat-empty-subtitle">
-          Start a conversation by typing a message below.
-          <br />
-          Press Enter or Ctrl+S to send, Esc to cancel.
+      <div className="flex-1 flex items-center justify-center">
+        <div className="text-center p-8">
+          <div className="text-6xl mb-4">🌸</div>
+          <h2 className="text-2xl font-bold mb-2">Welcome to Orchid</h2>
+          <p className="text-base-content/60">
+            Start a conversation by typing a message below.
+            <br />
+            Press Enter or Ctrl+S to send, Esc to cancel.
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="chat-stream" ref={containerRef}>
-      {/* Error banner */}
+    <div className="flex-1 overflow-y-auto p-4 space-y-4" ref={containerRef}>
       {error && (
-        <div className="error-banner">
-          <span className="error-banner-message">{error}</span>
+        <div className="alert alert-error">
+          <span>{error}</span>
           <button className="btn btn-ghost btn-sm" onClick={onClearError}>
             Dismiss
           </button>
         </div>
       )}
 
-      {/* Messages */}
       {messages.map((msg) => (
         <MessageWidget key={msg.id} message={msg} />
       ))}
 
-      {/* Streaming content (not yet committed) */}
       {streamingContent && status === 'streaming' && (
         <MessageWidget
           message={{
@@ -126,7 +108,6 @@ export function ChatStream({
         />
       )}
 
-      {/* Scroll anchor */}
       <div ref={messagesEndRef} />
     </div>
   );
