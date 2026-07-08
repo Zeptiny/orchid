@@ -11,7 +11,6 @@ import { readdir } from 'node:fs/promises';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { type ZodType } from 'zod';
 
 /**
  * Zod schema for the list_files tool input.
@@ -29,8 +28,8 @@ export const listFilesSchema = z.object({
  */
 export const listFilesTool = tool({
   description: 'List files and directories in the given directory path',
-  parameters: listFilesSchema,
-  execute: async ({ directory }) => {
+  inputSchema: listFilesSchema as unknown as never,
+  execute: async ({ directory }: { directory: string }) => {
     try {
       const entries = await readdir(directory, { withFileTypes: true });
       const result = entries.map((entry) => ({

@@ -28,8 +28,9 @@
  * to the model internally. We track tool results via the `onStepFinish` callback
  * and by monitoring what our `tool.execute` functions return.
  */
-import { streamText, wrapLanguageModel } from 'ai';
-import type { CoreMessage, Tool, LanguageModelV1 } from 'ai';
+import { streamText, wrapLanguageModel, isStepCount } from 'ai';
+import type { ModelMessage, Tool } from 'ai';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { Message, Usage } from '../../shared/types/message';
 import type { Agent } from '../../shared/types/agent';
 import type { ToolCall } from '../../shared/types/tool';
@@ -77,7 +78,7 @@ export interface StreamChatParams {
   /** Abort signal for cancellation. */
   abortSignal?: AbortSignal;
   /** The AI SDK model instance to use for streaming. */
-  modelInstance: LanguageModelV1;
+  modelInstance: LanguageModelV4;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +119,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   const historyMessages = toApiMessages(messages);
 
   // ── Build CoreMessage array ──
-  const coreMessages: CoreMessage[] = [];
+  const coreMessages: ModelMessage[] = [];
 
   for (const msg of historyMessages) {
     if (msg.role === 'system') {
@@ -133,7 +134,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               type: 'tool-call' as const,
               toolCallId: tc.id,
               toolName: tc.function.name,
-              args: JSON.parse(tc.function.arguments),
+              input: JSON.parse(tc.function.arguments),
             })),
           ]
         : msg.content || '';
@@ -149,7 +150,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             type: 'tool-result' as const,
             toolCallId: msg.tool_call_id!,
             toolName: 'unknown',
-            result: msg.content,
+            output: { type: 'text', value: msg.content ?? '' },
           },
         ],
       });
@@ -199,13 +200,13 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     system: fullSystemPrompt,
     messages: coreMessages,
     tools: Object.keys(tools).length > 0 ? tools : undefined,
-    maxSteps,
+    stopWhen: isStepCount(maxSteps),
     abortSignal,
     onStepFinish: async ({ usage, toolCalls, toolResults }) => {
       if (usage) {
         totalUsage = {
-          prompt_tokens: totalUsage.prompt_tokens + (usage.promptTokens ?? 0),
-          completion_tokens: totalUsage.completion_tokens + (usage.completionTokens ?? 0),
+          prompt_tokens: totalUsage.prompt_tokens + (usage.inputTokens ?? 0),
+          completion_tokens: totalUsage.completion_tokens + (usage.outputTokens ?? 0),
           total_tokens: totalUsage.total_tokens + (usage.totalTokens ?? 0),
           cached_tokens: totalUsage.cached_tokens,
         };
@@ -221,11 +222,11 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       }
       // Capture tool results for yielding to the UI
       if (toolResults) {
-        for (const tr of toolResults as Array<{ toolCallId: string; result: unknown; isError?: boolean }>) {
+        for (const tr of toolResults as Array<{ toolCallId: string; output: unknown }>) {
           pendingToolResults.push({
             toolCallId: tr.toolCallId,
-            content: typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result),
-            isError: tr.isError ?? false,
+            content: typeof tr.output === 'string' ? tr.output : JSON.stringify(tr.output),
+            isError: false,
           });
         }
       }
@@ -292,17 +293,22 @@ export function buildToolMap(
   mcpManager: MCPManager | null,
   dispatchOptions: ToolDispatchOptions,
 ): Record<string, Tool> {
-  const toolMap: Record<string, Tool> = {};
+  // Use a loose record internally to avoid TS2589 (excessively deep
+  // instantiation) from Tool's conditional generic types, then assert to
+  // Record<string, Tool> at the return site. The shape is validated by
+  // `streamText` at runtime.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const toolMap: Record<string, any> = {};
 
   // Get filtered tools from registry
   const filtered = registry.filter([...allowedTools]);
 
   for (const { definition } of filtered) {
-    const parameters = definition.inputSchema;
+    const inputSchema = definition.inputSchema;
 
     toolMap[definition.name] = {
       description: definition.description,
-      parameters,
+      inputSchema,
       execute: async (args: unknown) => {
         const toolCall: ToolCall = {
           id: crypto.randomUUID(),
@@ -336,7 +342,7 @@ export function buildToolMap(
 
       toolMap[definition.name] = {
         description: definition.description,
-        parameters: definition.inputSchema,
+        inputSchema: definition.inputSchema,
         execute: async (args: unknown) => {
           const result = await mcpManager.callTool(definition.name, args);
           return typeof result === 'string' ? result : JSON.stringify(result);
@@ -345,7 +351,7 @@ export function buildToolMap(
     }
   }
 
-  return toolMap;
+  return toolMap as Record<string, Tool>;
 }
 
 // ---------------------------------------------------------------------------

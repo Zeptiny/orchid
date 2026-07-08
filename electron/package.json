@@ -27,13 +27,14 @@
     "package:all": "npm run build && npm run rebuild:native && electron-builder --config electron-builder.yml --mac --win --linux"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^1.0.0",
-    "@ai-sdk/openai-compatible": "^1.0.0",
+    "@ai-sdk/openai": "^4.0.0",
+    "@ai-sdk/openai-compatible": "^3.0.0",
+    "@ai-sdk/provider": "^4.0.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@monaco-editor/react": "^4.6.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
-    "ai": "^4.0.0",
+    "ai": "^7.0.0",
     "electron-updater": "^6.3.0",
     "node-pty": "^1.0.0",
     "react": "^19.0.0",

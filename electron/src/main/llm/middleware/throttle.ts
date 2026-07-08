@@ -7,12 +7,13 @@
  *
  * Uses AI SDK's `LanguageModelV1Middleware` interface.
  */
+import type { LanguageModelMiddleware } from 'ai';
 import type {
-  LanguageModelV1,
-  LanguageModelV1CallOptions,
-  LanguageModelV1Middleware,
-  LanguageModelV1StreamPart,
-} from 'ai';
+  LanguageModelV4,
+  LanguageModelV4CallOptions,
+  LanguageModelV4StreamPart,
+  LanguageModelV4StreamResult,
+} from '@ai-sdk/provider';
 
 // ---------------------------------------------------------------------------
 // Constants — match Python client.py:43
@@ -43,18 +44,18 @@ export interface ThrottleMiddlewareOptions {
  */
 export function createThrottleMiddleware(
   options: ThrottleMiddlewareOptions = {},
-): LanguageModelV1Middleware {
+): LanguageModelMiddleware {
   const intervalMs = options.intervalMs ?? YIELD_THROTTLE_MS;
 
   return {
     wrapStream: async ({
       doStream,
     }: {
-      doGenerate: () => ReturnType<LanguageModelV1['doGenerate']>;
-      doStream: () => ReturnType<LanguageModelV1['doStream']>;
-      params: LanguageModelV1CallOptions;
-      model: LanguageModelV1;
-    }): Promise<Awaited<ReturnType<LanguageModelV1['doStream']>>> => {
+      doGenerate: () => ReturnType<LanguageModelV4['doGenerate']>;
+      doStream: () => ReturnType<LanguageModelV4['doStream']>;
+      params: LanguageModelV4CallOptions;
+      model: LanguageModelV4;
+    }): Promise<LanguageModelV4StreamResult> => {
       const result = await doStream();
       const { stream, ...rest } = result;
 
@@ -63,21 +64,17 @@ export function createThrottleMiddleware(
       let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
       const throttledStream = stream.pipeThrough(
-        new TransformStream<LanguageModelV1StreamPart, LanguageModelV1StreamPart>({
+        new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
           transform(chunk, controller) {
-            // Only throttle reasoning/thinking chunks.
-            // Content and other chunks pass through immediately.
-            if (chunk.type === 'reasoning' && chunk.textDelta.length > 0) {
+            if (chunk.type === 'reasoning-delta' && chunk.delta.length > 0) {
               const now = Date.now();
               const elapsed = now - lastThinkingYield;
 
               if (elapsed >= intervalMs) {
-                // Enough time has passed — yield immediately.
                 lastThinkingYield = now;
                 controller.enqueue(chunk);
               } else {
-                // Buffer the thinking delta and schedule a flush.
-                pendingThinkingDelta += chunk.textDelta;
+                pendingThinkingDelta += chunk.delta;
                 if (flushTimer === null) {
                   const remaining = intervalMs - elapsed;
                   flushTimer = setTimeout(() => {
@@ -85,18 +82,16 @@ export function createThrottleMiddleware(
                     if (pendingThinkingDelta.length > 0) {
                       lastThinkingYield = Date.now();
                       controller.enqueue({
-                        type: 'reasoning',
-                        textDelta: pendingThinkingDelta,
-                      } as LanguageModelV1StreamPart);
+                        type: 'reasoning-delta',
+                        id: 'reasoning-0',
+                        delta: pendingThinkingDelta,
+                      } as LanguageModelV4StreamPart);
                       pendingThinkingDelta = '';
                     }
                   }, remaining);
                 }
               }
             } else {
-              // Non-reasoning chunks pass through immediately.
-              // If there's pending thinking, flush it first so ordering
-              // is preserved (thinking before content).
               if (pendingThinkingDelta.length > 0) {
                 if (flushTimer !== null) {
                   clearTimeout(flushTimer);
@@ -104,9 +99,10 @@ export function createThrottleMiddleware(
                 }
                 lastThinkingYield = Date.now();
                 controller.enqueue({
-                  type: 'reasoning',
-                  textDelta: pendingThinkingDelta,
-                } as LanguageModelV1StreamPart);
+                  type: 'reasoning-delta',
+                  id: 'reasoning-0',
+                  delta: pendingThinkingDelta,
+                } as LanguageModelV4StreamPart);
                 pendingThinkingDelta = '';
               }
               controller.enqueue(chunk);
@@ -114,16 +110,16 @@ export function createThrottleMiddleware(
           },
 
           flush(controller) {
-            // Flush any remaining buffered thinking on stream end.
             if (pendingThinkingDelta.length > 0) {
               if (flushTimer !== null) {
                 clearTimeout(flushTimer);
                 flushTimer = null;
               }
               controller.enqueue({
-                type: 'reasoning',
-                textDelta: pendingThinkingDelta,
-              } as LanguageModelV1StreamPart);
+                type: 'reasoning-delta',
+                id: 'reasoning-0',
+                delta: pendingThinkingDelta,
+              } as LanguageModelV4StreamPart);
               pendingThinkingDelta = '';
             }
           },

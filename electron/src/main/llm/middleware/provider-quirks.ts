@@ -24,12 +24,13 @@
  *
  * Uses AI SDK's `LanguageModelV1Middleware` interface.
  */
+import type { LanguageModelMiddleware } from 'ai';
 import type {
-  LanguageModelV1,
-  LanguageModelV1CallOptions,
-  LanguageModelV1Middleware,
-  LanguageModelV1StreamPart,
-} from 'ai';
+  LanguageModelV4,
+  LanguageModelV4CallOptions,
+  LanguageModelV4StreamPart,
+  LanguageModelV4StreamResult,
+} from '@ai-sdk/provider';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -85,16 +86,16 @@ export const TOOLS_WITHOUT_OUTPUT_OFFLOAD = new Set([
  * owned by U9 (LLM Stream Orchestration). This middleware provides the
  * infrastructure hooks; the actual logic lives in U9's orchestrator.
  */
-export function createProviderQuirksMiddleware(): LanguageModelV1Middleware {
+export function createProviderQuirksMiddleware(): LanguageModelMiddleware {
   return {
     wrapStream: async ({
       doStream,
     }: {
-      doGenerate: () => ReturnType<LanguageModelV1['doGenerate']>;
-      doStream: () => ReturnType<LanguageModelV1['doStream']>;
-      params: LanguageModelV1CallOptions;
-      model: LanguageModelV1;
-    }): Promise<Awaited<ReturnType<LanguageModelV1['doStream']>>> => {
+      doGenerate: () => ReturnType<LanguageModelV4['doGenerate']>;
+      doStream: () => ReturnType<LanguageModelV4['doStream']>;
+      params: LanguageModelV4CallOptions;
+      model: LanguageModelV4;
+    }): Promise<LanguageModelV4StreamResult> => {
       let hasReceivedContent = false;
 
       try {
@@ -103,10 +104,9 @@ export function createProviderQuirksMiddleware(): LanguageModelV1Middleware {
 
         // Wrap the stream to handle provider quirks.
         const quirksStream = stream.pipeThrough(
-          new TransformStream<LanguageModelV1StreamPart, LanguageModelV1StreamPart>({
+          new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
             transform(chunk, controller) {
-              // Track whether we've received any content.
-              if (chunk.type === 'text-delta' && chunk.textDelta.length > 0) {
+              if (chunk.type === 'text-delta' && chunk.delta.length > 0) {
                 hasReceivedContent = true;
               }
 
@@ -194,8 +194,8 @@ function isBenignMidStreamError(error: unknown): boolean {
  * Create an empty stream result for when a benign error is suppressed.
  * The stream yields no additional chunks — the content was already delivered.
  */
-function createEmptyStreamResult(): Awaited<ReturnType<LanguageModelV1['doStream']>> {
-  const stream = new ReadableStream<LanguageModelV1StreamPart>({
+function createEmptyStreamResult(): LanguageModelV4StreamResult {
+  const stream = new ReadableStream<LanguageModelV4StreamPart>({
     start(controller) {
       controller.close();
     },
@@ -203,11 +203,7 @@ function createEmptyStreamResult(): Awaited<ReturnType<LanguageModelV1['doStream
 
   return {
     stream,
-    rawCall: { rawPrompt: '', rawSettings: {} },
-    rawResponse: {},
-    request: { body: '{}' },
-    response: {},
-  } as unknown as Awaited<ReturnType<LanguageModelV1['doStream']>>;
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -123,8 +123,8 @@ describe('R2: AI SDK Retry Middleware', () => {
 
     const mockStream = new ReadableStream({
       start(controller) {
-        controller.enqueue({ type: 'text-delta', textDelta: 'Hello' });
-        controller.enqueue({ type: 'text-delta', textDelta: ' world' });
+        controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
+        controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: ' world' });
         controller.enqueue({ type: 'finish' });
         controller.close();
       },
@@ -153,8 +153,8 @@ describe('R2: AI SDK Retry Middleware', () => {
     }
 
     expect(chunks).toHaveLength(3);
-    expect(chunks[0]).toEqual({ type: 'text-delta', textDelta: 'Hello' });
-    expect(chunks[1]).toEqual({ type: 'text-delta', textDelta: ' world' });
+    expect(chunks[0]).toEqual({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
+    expect(chunks[1]).toEqual({ type: 'text-delta', id: 'txt-0', delta: ' world' });
     expect(chunks[2]).toEqual({ type: 'finish' });
   });
 
@@ -170,7 +170,7 @@ describe('R2: AI SDK Retry Middleware', () => {
       return {
         stream: new ReadableStream({
           start(controller) {
-            controller.enqueue({ type: 'text-delta', textDelta: 'Success' });
+            controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'Success' });
             controller.enqueue({ type: 'finish' });
             controller.close();
           },
@@ -201,7 +201,7 @@ describe('R2: AI SDK Retry Middleware', () => {
         return {
           stream: new ReadableStream({
             start(controller) {
-              controller.enqueue({ type: 'text-delta', textDelta: 'Partial' });
+              controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'Partial' });
               controller.error(new Error('Connection lost'));
             },
           }),
@@ -212,7 +212,7 @@ describe('R2: AI SDK Retry Middleware', () => {
       return {
         stream: new ReadableStream({
           start(controller) {
-            controller.enqueue({ type: 'text-delta', textDelta: 'Retry' });
+            controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'Retry' });
             controller.close();
           },
         }),
@@ -276,13 +276,13 @@ describe('R1: XState Agent Machine Structure', () => {
 
   it('machine transitions from idle to streaming on USER_INPUT', () => {
     const mockModel = {
-      specificationVersion: 'v1' as const,
+      specificationVersion: 'v4' as const,
       provider: 'test',
       modelId: 'test',
       doStream: vi.fn().mockResolvedValue({
         stream: new ReadableStream({
           start(controller) {
-            controller.enqueue({ type: 'text-delta', textDelta: 'test' });
+            controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'test' });
             controller.close();
           },
         }),

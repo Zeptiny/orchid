@@ -11,7 +11,7 @@
  * - Middleware stack composition
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { LanguageModelV1StreamPart } from 'ai';
+import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import {
   createRetryMiddleware,
   createThrottleMiddleware,
@@ -42,10 +42,10 @@ import { defaults } from '../../src/main/config/schema';
 
 /** Create a mock stream that yields the given chunks. */
 function createMockStream(
-  chunks: LanguageModelV1StreamPart[],
-): ReadableStream<LanguageModelV1StreamPart> {
+  chunks: LanguageModelV4StreamPart[],
+): ReadableStream<LanguageModelV4StreamPart> {
   let index = 0;
-  return new ReadableStream<LanguageModelV1StreamPart>({
+  return new ReadableStream<LanguageModelV4StreamPart>({
     pull(controller) {
       if (index < chunks.length) {
         controller.enqueue(chunks[index++]);
@@ -57,7 +57,7 @@ function createMockStream(
 }
 
 /** Create a mock doStream that returns the given chunks. */
-function createMockDoStream(chunks: LanguageModelV1StreamPart[]) {
+function createMockDoStream(chunks: LanguageModelV4StreamPart[]) {
   return async () => ({
     stream: createMockStream(chunks),
     rawCall: { rawPrompt: '', rawSettings: {} },
@@ -78,7 +78,7 @@ function createFailingDoStream(error: Error) {
 function createFailThenSucceedDoStream(
   failCount: number,
   error: Error,
-  chunks: LanguageModelV1StreamPart[],
+  chunks: LanguageModelV4StreamPart[],
 ) {
   let attempts = 0;
   return async () => {
@@ -92,9 +92,9 @@ function createFailThenSucceedDoStream(
 
 /** Collect all chunks from a stream. */
 async function collectStream(
-  stream: ReadableStream<LanguageModelV1StreamPart>,
-): Promise<LanguageModelV1StreamPart[]> {
-  const chunks: LanguageModelV1StreamPart[] = [];
+  stream: ReadableStream<LanguageModelV4StreamPart>,
+): Promise<LanguageModelV4StreamPart[]> {
+  const chunks: LanguageModelV4StreamPart[] = [];
   const reader = stream.getReader();
   while (true) {
     const { done, value } = await reader.read();
@@ -129,7 +129,7 @@ function mockParams() {
 /** Create minimal model mock. */
 function mockModel() {
   return {
-    specificationVersion: 'v1' as const,
+    specificationVersion: 'v4' as const,
     provider: 'test',
     modelId: 'test-model',
     defaultObjectGenerationMode: undefined,
@@ -153,9 +153,9 @@ describe('Retry middleware', () => {
 
   it('retries transient error with backoff and succeeds on second attempt', async () => {
     const middleware = createRetryMiddleware({ maxRetries: 3 });
-    const chunks: LanguageModelV1StreamPart[] = [
-      { type: 'text-delta', textDelta: 'Hello' },
-      { type: 'finish', finishReason: 'stop', usage: { promptTokens: 10, completionTokens: 5 } },
+    const chunks: LanguageModelV4StreamPart[] = [
+      { type: 'text-delta', id: 'txt-0', delta: 'Hello' },
+      { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 5, textTokens: 5, reasoningTokens: undefined }, totalTokens: 15 } },
     ];
 
     const error = new RateLimitError('Rate limit exceeded');
@@ -176,7 +176,7 @@ describe('Retry middleware', () => {
     const collected = await collectStream(result.stream);
 
     expect(collected).toHaveLength(2);
-    expect(collected[0]).toEqual({ type: 'text-delta', textDelta: 'Hello' });
+    expect(collected[0]).toEqual({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
   });
 
   it('does not retry non-transient errors', async () => {
@@ -234,9 +234,9 @@ describe('Retry guard: no retry after content delivered', () => {
       doStreamCalls++;
       if (doStreamCalls === 1) {
         // First call: stream that yields content then throws
-        const stream = new ReadableStream<LanguageModelV1StreamPart>({
+        const stream = new ReadableStream<LanguageModelV4StreamPart>({
           start(controller) {
-            controller.enqueue({ type: 'text-delta', textDelta: 'Hello' });
+            controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
             // Simulate a mid-stream error after content was delivered
             controller.error(new RateLimitError('Rate limit mid-stream'));
           },
@@ -458,10 +458,10 @@ describe('Transient error detection', () => {
 describe('Provider quirks middleware', () => {
   it('passes through normal chunks unchanged', async () => {
     const middleware = createProviderQuirksMiddleware();
-    const chunks: LanguageModelV1StreamPart[] = [
-      { type: 'text-delta', textDelta: 'Hello' },
-      { type: 'text-delta', textDelta: ' world' },
-      { type: 'finish', finishReason: 'stop', usage: { promptTokens: 10, completionTokens: 5 } },
+    const chunks: LanguageModelV4StreamPart[] = [
+      { type: 'text-delta', id: 'txt-0', delta: 'Hello' },
+      { type: 'text-delta', id: 'txt-0', delta: ' world' },
+      { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 5, textTokens: 5, reasoningTokens: undefined }, totalTokens: 15 } },
     ];
 
     const result = await middleware.wrapStream!({
@@ -529,9 +529,9 @@ describe('Provider quirks middleware', () => {
     // We use a deferred error (via queueMicrotask) so the stream is created
     // first, and the error occurs during the first read.
     let errorFn: (() => void) | null = null;
-    const stream = new ReadableStream<LanguageModelV1StreamPart>({
+    const stream = new ReadableStream<LanguageModelV4StreamPart>({
       start(controller) {
-        controller.enqueue({ type: 'text-delta', textDelta: 'Hello' });
+        controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
         // Defer the error so it happens during read, not during construction
         errorFn = () => controller.error(new Error('list index out of range'));
       },
@@ -555,7 +555,7 @@ describe('Provider quirks middleware', () => {
     const reader = result.stream.getReader();
     // First read succeeds (the content chunk)
     const first = await reader.read();
-    expect(first.value).toEqual({ type: 'text-delta', textDelta: 'Hello' });
+    expect(first.value).toEqual({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
 
     // Trigger the deferred error, then try to read — the error should propagate
     if (errorFn) errorFn();
@@ -578,10 +578,10 @@ describe('Throttle middleware', () => {
 
   it('passes through non-reasoning chunks immediately', async () => {
     const middleware = createThrottleMiddleware({ intervalMs: 100 });
-    const chunks: LanguageModelV1StreamPart[] = [
-      { type: 'text-delta', textDelta: 'Hello' },
-      { type: 'text-delta', textDelta: ' world' },
-      { type: 'finish', finishReason: 'stop', usage: { promptTokens: 10, completionTokens: 5 } },
+    const chunks: LanguageModelV4StreamPart[] = [
+      { type: 'text-delta', id: 'txt-0', delta: 'Hello' },
+      { type: 'text-delta', id: 'txt-0', delta: ' world' },
+      { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 5, textTokens: 5, reasoningTokens: undefined }, totalTokens: 15 } },
     ];
 
     const result = await middleware.wrapStream!({
@@ -597,10 +597,10 @@ describe('Throttle middleware', () => {
 
   it('throttles reasoning chunks', async () => {
     const middleware = createThrottleMiddleware({ intervalMs: 100 });
-    const chunks: LanguageModelV1StreamPart[] = [
-      { type: 'reasoning', textDelta: 'Thinking...' },
-      { type: 'reasoning', textDelta: ' still thinking' },
-      { type: 'text-delta', textDelta: 'Answer' },
+    const chunks: LanguageModelV4StreamPart[] = [
+      { type: 'reasoning-delta', id: 'reasoning-0', delta: 'Thinking...' },
+      { type: 'reasoning-delta', id: 'reasoning-0', delta: ' still thinking' },
+      { type: 'text-delta', id: 'txt-0', delta: 'Answer' },
     ];
 
     const result = await middleware.wrapStream!({
@@ -613,18 +613,18 @@ describe('Throttle middleware', () => {
     // First reasoning chunk should pass through immediately
     const reader = result.stream.getReader();
     const first = await reader.read();
-    expect(first.value).toEqual({ type: 'reasoning', textDelta: 'Thinking...' });
+    expect(first.value).toEqual({ type: 'reasoning-delta', id: 'reasoning-0', delta: 'Thinking...' });
 
     // Second reasoning chunk should be buffered
     // Advance time to trigger flush
     await vi.advanceTimersByTimeAsync(150);
 
     const second = await reader.read();
-    expect(second.value).toEqual({ type: 'reasoning', textDelta: ' still thinking' });
+    expect(second.value).toEqual({ type: 'reasoning-delta', id: 'reasoning-0', delta: ' still thinking' });
 
     // Text chunk should come through
     const third = await reader.read();
-    expect(third.value).toEqual({ type: 'text-delta', textDelta: 'Answer' });
+    expect(third.value).toEqual({ type: 'text-delta', id: 'txt-0', delta: 'Answer' });
   });
 });
 

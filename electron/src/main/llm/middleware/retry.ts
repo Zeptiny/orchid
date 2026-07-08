@@ -9,12 +9,13 @@
  *
  * Uses AI SDK's `LanguageModelV1Middleware` interface.
  */
+import type { LanguageModelMiddleware } from 'ai';
 import type {
-  LanguageModelV1,
-  LanguageModelV1CallOptions,
-  LanguageModelV1Middleware,
-  LanguageModelV1StreamPart,
-} from 'ai';
+  LanguageModelV4,
+  LanguageModelV4CallOptions,
+  LanguageModelV4StreamPart,
+  LanguageModelV4StreamResult,
+} from '@ai-sdk/provider';
 import { isTransientError } from './error-classification';
 
 // ---------------------------------------------------------------------------
@@ -67,18 +68,18 @@ export interface RetryMiddlewareOptions {
  */
 export function createRetryMiddleware(
   options: RetryMiddlewareOptions = {},
-): LanguageModelV1Middleware {
+): LanguageModelMiddleware {
   const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
 
   return {
     wrapStream: async ({
       doStream,
     }: {
-      doGenerate: () => ReturnType<LanguageModelV1['doGenerate']>;
-      doStream: () => ReturnType<LanguageModelV1['doStream']>;
-      params: LanguageModelV1CallOptions;
-      model: LanguageModelV1;
-    }): Promise<Awaited<ReturnType<LanguageModelV1['doStream']>>> => {
+      doGenerate: () => ReturnType<LanguageModelV4['doGenerate']>;
+      doStream: () => ReturnType<LanguageModelV4['doStream']>;
+      params: LanguageModelV4CallOptions;
+      model: LanguageModelV4;
+    }): Promise<LanguageModelV4StreamResult> => {
       let attempt = 0;
       let contentDelivered = false;
 
@@ -91,11 +92,11 @@ export function createRetryMiddleware(
           // This is the critical guard: once any text-delta is emitted,
           // contentDelivered = true and retries are suppressed.
           const trackedStream = stream.pipeThrough(
-            new TransformStream<LanguageModelV1StreamPart, LanguageModelV1StreamPart>({
+            new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
               transform(chunk, controller) {
                 if (
                   chunk.type === 'text-delta' &&
-                  chunk.textDelta.length > 0
+                  chunk.delta.length > 0
                 ) {
                   contentDelivered = true;
                 }

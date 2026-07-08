@@ -55,7 +55,6 @@ export function registerSpikeChatIPC(): void {
     const provider = createOpenAI({
       baseURL: config.baseURL,
       apiKey: config.apiKey,
-      compatibility: 'compatible',
     });
     const model = provider.chat(config.modelId);
 

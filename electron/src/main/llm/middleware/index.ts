@@ -13,7 +13,7 @@
  * provider-specific handling is in the middle, and yield throttling is
  * closest to the stream consumer.
  */
-import type { LanguageModelV1Middleware } from 'ai';
+import type { LanguageModelMiddleware } from 'ai';
 import { createRetryMiddleware, type RetryMiddlewareOptions } from './retry';
 import { createThrottleMiddleware, type ThrottleMiddlewareOptions } from './throttle';
 import { createProviderQuirksMiddleware } from './provider-quirks';
@@ -67,7 +67,7 @@ export interface MiddlewareStackOptions {
  */
 export function createMiddlewareStack(
   options: MiddlewareStackOptions = {},
-): LanguageModelV1Middleware[] {
+): LanguageModelMiddleware[] {
   return [
     // 1. Retry (outermost) — catches transient errors before they propagate
     createRetryMiddleware(options.retry),
@@ -75,7 +75,7 @@ export function createMiddlewareStack(
     // 2. Provider quirks — handles empty-choices, mid-stream errors
     createProviderQuirksMiddleware(),
 
-    // 3. Throttle (innermost) — rate-limits thinking yields
+    // 3. Throttle — rate-limits thinking yields
     createThrottleMiddleware(options.throttle),
   ];
 }

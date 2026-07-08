@@ -17,7 +17,8 @@
  * This is throwaway code — real agent hierarchy comes in U10.
  */
 import { assign, setup, fromCallback, type ActorRefFrom } from 'xstate';
-import { streamText, wrapLanguageModel, type LanguageModelV1 } from 'ai';
+import { streamText, wrapLanguageModel, isStepCount } from 'ai';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { listFilesTool } from '../../tools/spike-tool';
 import { createRetryMiddleware } from '../../llm/middleware/retry';
 
@@ -42,7 +43,7 @@ export interface SpikeAgentContext {
   /** Error message if in error state */
   error: string | null;
   /** Model reference for LLM calls */
-  model: LanguageModelV1;
+  model: LanguageModelV4;
   /** System prompt for the agent */
   systemPrompt: string;
 }
@@ -51,7 +52,7 @@ export interface SpikeAgentContext {
 
 interface StreamCallbackInput {
   message: string;
-  model: LanguageModelV1;
+  model: LanguageModelV4;
   systemPrompt: string;
   abortController: AbortController;
 }
@@ -95,7 +96,7 @@ const streamCallback = fromCallback(
           tools: {
             list_files: listFilesTool,
           },
-          maxSteps: 5,
+          stopWhen: isStepCount(5),
           abortSignal: abortController.signal,
         });
 
@@ -134,7 +135,7 @@ export const spikeAgentMachine = setup({
     context: {} as SpikeAgentContext,
     events: {} as SpikeAgentEvent,
     input: {} as {
-      model: LanguageModelV1;
+model: LanguageModelV4;
       systemPrompt?: string;
     },
   },
