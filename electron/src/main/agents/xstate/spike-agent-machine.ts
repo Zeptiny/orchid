@@ -17,7 +17,6 @@
  * This is throwaway code — real agent hierarchy comes in U10.
  */
 import { assign, setup, fromCallback, type ActorRefFrom } from 'xstate';
-import { streamText, wrapLanguageModel, isStepCount } from 'ai';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { listFilesTool } from '../../tools/spike-tool';
 import { createRetryMiddleware } from '../../llm/middleware/retry';
@@ -83,6 +82,9 @@ const streamCallback = fromCallback(
     // Run the async stream
     const runStream = async () => {
       try {
+        // Dynamic import — `ai` is ESM-only but Electron main compiles to CJS
+        const { streamText, wrapLanguageModel, isStepCount } = await import('ai');
+
         // Wrap model with retry middleware
         const wrappedModel = wrapLanguageModel({
           model,

@@ -28,7 +28,6 @@
  * to the model internally. We track tool results via the `onStepFinish` callback
  * and by monitoring what our `tool.execute` functions return.
  */
-import { streamText, wrapLanguageModel, isStepCount } from 'ai';
 import type { ModelMessage, Tool } from 'ai';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { Message, Usage } from '../../shared/types/message';
@@ -111,6 +110,9 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     abortSignal,
     modelInstance,
   } = params;
+
+  // Dynamic import — `ai` is ESM-only but Electron main compiles to CJS
+  const { streamText, wrapLanguageModel, isStepCount } = await import('ai');
 
   // ── Build system prompt ──
   const fullSystemPrompt = buildSystemPrompt(systemPrompt, context);

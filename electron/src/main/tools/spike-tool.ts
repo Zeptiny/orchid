@@ -8,7 +8,6 @@
  * This is throwaway code — real tool registry comes in U7.
  */
 import { readdir } from 'node:fs/promises';
-import { tool } from 'ai';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
@@ -23,10 +22,10 @@ export const listFilesSchema = z.object({
 });
 
 /**
- * The list_files tool defined with AI SDK's `tool()` helper.
- * Uses zod `parameters` for validation.
+ * The list_files tool defined as a plain object.
+ * Avoids top-level import of `tool()` from `ai` (ESM-only) in CommonJS build.
  */
-export const listFilesTool = tool({
+export const listFilesTool = {
   description: 'List files and directories in the given directory path',
   inputSchema: listFilesSchema as unknown as never,
   execute: async ({ directory }: { directory: string }) => {
@@ -42,7 +41,7 @@ export const listFilesTool = tool({
       return `Error listing files: ${message}`;
     }
   },
-});
+};
 
 /**
  * Validate that the zod schema produces valid JSON Schema.
