@@ -228,8 +228,15 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   try {
     for await (const chunk of result.fullStream) {
       switch (chunk.type) {
-        case 'reasoning': {
-          if (chunk.textDelta) {
+        case 'step-start': {
+          // Step starting — no action needed
+          break;
+        }
+
+        case 'reasoning':
+        case 'reasoning-signature':
+        case 'redacted-reasoning': {
+          if ('textDelta' in chunk && chunk.textDelta) {
             yield { type: 'thinking', text: chunk.textDelta };
           }
           break;
@@ -250,6 +257,12 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             toolCallId: chunk.toolCallId,
             toolName: chunk.toolName,
           };
+          break;
+        }
+
+        case 'tool-call-streaming-start':
+        case 'tool-call-delta': {
+          // Tool call streaming — we wait for the full tool-call event
           break;
         }
 
@@ -287,10 +300,17 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           break;
         }
 
-        // Other chunk types (step-start, tool-call-streaming-start,
-        // tool-call-delta, source, file, etc.) are ignored
-        default:
+        case 'source':
+        case 'file': {
+          // Source and file events — not yet supported
           break;
+        }
+
+        default: {
+          // Exhaustive check — should never reach here
+          const _exhaustiveCheck: never = chunk;
+          break;
+        }
       }
     }
   } catch (err) {
