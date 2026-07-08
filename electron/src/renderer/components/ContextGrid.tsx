@@ -253,6 +253,12 @@ export function ContextGrid({ usage, messages, maxContext, breakdown: propBreakd
 
   const breakdown = propBreakdown ?? computedBreakdown;
 
+  const blocks = useMemo(() => (breakdown ? buildBlockList(breakdown) : []), [breakdown]);
+  const legendEntries = useMemo(
+    () => (breakdown ? buildLegendEntries(breakdown, maxContext) : []),
+    [breakdown, maxContext],
+  );
+
   // No data → show gray grid placeholder
   if (!breakdown) {
     return (
@@ -284,12 +290,6 @@ export function ContextGrid({ usage, messages, maxContext, breakdown: propBreakd
       </div>
     );
   }
-
-  const blocks = useMemo(() => buildBlockList(breakdown), [breakdown]);
-  const legendEntries = useMemo(
-    () => buildLegendEntries(breakdown, maxContext),
-    [breakdown, maxContext],
-  );
 
   return (
     <div className="flex gap-3 items-start">
