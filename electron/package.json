@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "description": "Orchid — AI-powered desktop coding assistant",
+  "author": {
+    "name": "Orchid Contributors",
+    "email": "orchid@example.com"
+  },
+  "homepage": "https://github.com/Zeptiny/orchid",
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "tsc -p tsconfig.node.json && concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
@@ -51,7 +56,7 @@
     "@types/turndown": "^5.0.6",
     "@vitejs/plugin-react": "^4.3.0",
     "concurrently": "^9.0.0",
-    "electron": "^33.0.0",
+    "electron": "^33.4.11",
     "electron-builder": "^25.0.0",
     "eslint": "^9.0.0",
     "prettier": "^3.4.0",
