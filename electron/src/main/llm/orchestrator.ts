@@ -189,8 +189,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     cached_tokens: 0,
   };
 
-  // Track tool results for yielding (since AI SDK doesn't yield tool-result
-  // in the stream, we capture them from our execute functions)
+  // ── Track tool calls and results for yielding ──
+  const pendingToolCalls: Array<{ toolCallId: string; toolName: string }> = [];
   const pendingToolResults: Array<{ toolCallId: string; content: string; isError: boolean }> = [];
 
   // ── Call streamText ──
@@ -201,7 +201,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     tools: Object.keys(tools).length > 0 ? tools : undefined,
     maxSteps,
     abortSignal,
-    onStepFinish: async ({ usage, toolResults }) => {
+    onStepFinish: async ({ usage, toolCalls, toolResults }) => {
       if (usage) {
         totalUsage = {
           prompt_tokens: totalUsage.prompt_tokens + (usage.promptTokens ?? 0),
@@ -210,8 +210,16 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           cached_tokens: totalUsage.cached_tokens,
         };
       }
-      // Capture tool results for yielding to the UI (AI SDK doesn't yield
-      // tool-result in the stream, so we capture them here from the callback).
+      // Capture tool calls for yielding to the UI
+      if (toolCalls) {
+        for (const tc of toolCalls as Array<{ toolCallId: string; toolName: string }>) {
+          pendingToolCalls.push({
+            toolCallId: tc.toolCallId,
+            toolName: tc.toolName,
+          });
+        }
+      }
+      // Capture tool results for yielding to the UI
       if (toolResults) {
         for (const tr of toolResults as Array<{ toolCallId: string; result: unknown; isError?: boolean }>) {
           pendingToolResults.push({
@@ -224,95 +232,41 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     },
   });
 
-  // ── Process the stream ──
+  // ── Process the text stream ──
   try {
-    for await (const chunk of result.fullStream) {
-      switch (chunk.type) {
-        case 'step-start': {
-          // Step starting — no action needed
-          break;
-        }
+    // Use textStream to avoid AI SDK's chunk type issues with fullStream.
+    // Tool calls and results are captured via onStepFinish callback.
+    for await (const textDelta of result.textStream) {
+      if (textDelta) {
+        yield { type: 'content', text: textDelta };
+      }
 
-        case 'reasoning':
-        case 'reasoning-signature':
-        case 'redacted-reasoning': {
-          if ('textDelta' in chunk && chunk.textDelta) {
-            yield { type: 'thinking', text: chunk.textDelta };
-          }
-          break;
-        }
+      // Yield any pending tool calls
+      while (pendingToolCalls.length > 0) {
+        const tc = pendingToolCalls.shift()!;
+        yield { type: 'tool_call', ...tc };
+      }
 
-        case 'text-delta': {
-          if (chunk.textDelta) {
-            yield { type: 'content', text: chunk.textDelta };
-          }
-          break;
-        }
-
-        case 'tool-call': {
-          // AI SDK will execute the tool via our custom execute function.
-          // Yield the tool_call event for UI display.
-          yield {
-            type: 'tool_call',
-            toolCallId: chunk.toolCallId,
-            toolName: chunk.toolName,
-          };
-          break;
-        }
-
-        case 'tool-call-streaming-start':
-        case 'tool-call-delta': {
-          // Tool call streaming — we wait for the full tool-call event
-          break;
-        }
-
-        case 'step-finish': {
-          // Step finished — yield any pending tool results first,
-          // then the step_finish event.
-          while (pendingToolResults.length > 0) {
-            const tr = pendingToolResults.shift()!;
-            yield { type: 'tool_result', ...tr };
-          }
-          yield {
-            type: 'step_finish',
-            stepIndex: 0,
-            finishReason: chunk.finishReason,
-          };
-          break;
-        }
-
-        case 'finish': {
-          // Yield any remaining pending tool results
-          while (pendingToolResults.length > 0) {
-            const tr = pendingToolResults.shift()!;
-            yield { type: 'tool_result', ...tr };
-          }
-          yield { type: 'finish', finishReason: chunk.finishReason };
-          break;
-        }
-
-        case 'error': {
-          yield {
-            type: 'error',
-            title: 'Stream Error',
-            detail: chunk.error instanceof Error ? chunk.error.message : String(chunk.error),
-          };
-          break;
-        }
-
-        case 'source':
-        case 'file': {
-          // Source and file events — not yet supported
-          break;
-        }
-
-        default: {
-          // Exhaustive check — should never reach here
-          const _exhaustiveCheck: never = chunk;
-          break;
-        }
+      // Yield any pending tool results
+      while (pendingToolResults.length > 0) {
+        const tr = pendingToolResults.shift()!;
+        yield { type: 'tool_result', ...tr };
       }
     }
+
+    // Yield any remaining pending tool calls/results after stream ends
+    while (pendingToolCalls.length > 0) {
+      const tc = pendingToolCalls.shift()!;
+      yield { type: 'tool_call', ...tc };
+    }
+    while (pendingToolResults.length > 0) {
+      const tr = pendingToolResults.shift()!;
+      yield { type: 'tool_result', ...tr };
+    }
+
+    // Get the finish reason from the result
+    const finishReason = await result.finishReason;
+    yield { type: 'finish', finishReason: finishReason ?? 'stop' };
   } catch (err) {
     const { title, detail } = classifyStreamError(err);
     yield { type: 'error', title, detail };
