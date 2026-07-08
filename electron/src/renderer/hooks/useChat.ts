@@ -9,7 +9,7 @@
  * - Usage tracking (tokens)
  * - Elapsed time tracking
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import type {
@@ -19,10 +19,16 @@ import type {
   ChatErrorEvent,
   ChatUsageEvent,
 } from '../../shared/types/ipc';
+import {
+  type ContextBreakdown,
+  computeContextBreakdown,
+} from '../components/ContextGrid';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type ChatStatus = 'idle' | 'streaming' | 'error';
+
+export type InterruptState = 'idle' | 'confirmAgent' | 'confirmSubagents';
 
 export interface ChatState {
   /** All messages in the current chain. */
@@ -37,10 +43,18 @@ export interface ChatState {
   error: string | null;
   /** Latest usage data from the stream. */
   usage: Usage | null;
+  /** Context token breakdown by category (computed from messages + usage). */
+  contextBreakdown: ContextBreakdown | null;
   /** Stream start time (ms epoch) for elapsed tracking. */
   streamStartTime: number | null;
   /** Stream elapsed time in seconds. */
   elapsedSeconds: number;
+  /** Current interrupt confirmation phase. */
+  interruptState: InterruptState;
+  /** Cumulative usage summed across all messages in the session. */
+  cumulativeUsage: Usage;
+  /** Current working directory of the main process. */
+  cwd: string;
 }
 
 export interface UseChatReturn extends ChatState {
@@ -68,6 +82,31 @@ export function useChat(): UseChatReturn {
   const [usage, setUsage] = useState<Usage | null>(null);
   const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [interruptState, setInterruptState] = useState<InterruptState>('idle');
+  const [cwd, setCwd] = useState('');
+
+  // Context breakdown from messages + usage
+  const contextBreakdown = useMemo(
+    () => computeContextBreakdown(messages, usage),
+    [messages, usage],
+  );
+
+  // Cumulative usage summed across all messages that carry usage data
+  const cumulativeUsage: Usage = useMemo(() => {
+    let prompt = 0;
+    let completion = 0;
+    let total = 0;
+    let cached = 0;
+    for (const msg of messages) {
+      if (msg.usage) {
+        prompt += msg.usage.prompt_tokens;
+        completion += msg.usage.completion_tokens;
+        total += msg.usage.total_tokens;
+        cached += msg.usage.cached_tokens;
+      }
+    }
+    return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: total, cached_tokens: cached };
+  }, [messages]);
 
   const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const accumulatedContentRef = useRef('');
@@ -114,6 +153,14 @@ export function useChat(): UseChatReturn {
       } else if (event.state === 'idle') {
         setStatus('idle');
       }
+      // Track interrupt confirmation phase from main process
+      if (event.interruptState) {
+        setInterruptState(event.interruptState);
+      }
+      // Track working directory from main process
+      if (event.cwd) {
+        setCwd(event.cwd);
+      }
     });
 
     const unsubDone = window.orchid.chat.onDone((event: ChatDoneEvent) => {
@@ -137,6 +184,7 @@ export function useChat(): UseChatReturn {
       setStreamingThinking('');
       accumulatedContentRef.current = '';
       accumulatedThinkingRef.current = '';
+      setInterruptState('idle');
       setStatus('idle');
     });
 
@@ -145,6 +193,7 @@ export function useChat(): UseChatReturn {
       setStatus('idle');
       setStreamingContent('');
       setStreamingThinking('');
+      setInterruptState('idle');
       accumulatedContentRef.current = '';
       accumulatedThinkingRef.current = '';
     });
@@ -193,6 +242,7 @@ export function useChat(): UseChatReturn {
       usageRef.current = null;
       setStreamStartTime(Date.now());
       setElapsedSeconds(0);
+      setInterruptState('idle');
       accumulatedContentRef.current = '';
       accumulatedThinkingRef.current = '';
       setStatus('streaming');
@@ -210,11 +260,15 @@ export function useChat(): UseChatReturn {
   const cancel = useCallback(async () => {
     if (!window.orchid?.chat) return;
     try {
-      await window.orchid.chat.cancel();
+      const result = await window.orchid.chat.cancel();
+      // First Esc only shows hint — don't append interrupted message yet
+      if (result && (result as { status: string }).status === 'confirming') {
+        return;
+      }
     } catch {
       // Ignore cancel errors
     }
-    // Append interrupted message
+    // Second Esc actually cancels — append interrupted message
     if (accumulatedContentRef.current) {
       const interruptedMessage: Message = {
         id: crypto.randomUUID(),
@@ -235,6 +289,7 @@ export function useChat(): UseChatReturn {
     setStreamingThinking('');
     accumulatedContentRef.current = '';
     accumulatedThinkingRef.current = '';
+    setInterruptState('idle');
     setStatus('idle');
   }, []);
 
@@ -249,8 +304,12 @@ export function useChat(): UseChatReturn {
     streamingThinking,
     error,
     usage,
+    cumulativeUsage,
+    contextBreakdown,
     streamStartTime,
     elapsedSeconds,
+    interruptState,
+    cwd,
     send,
     cancel,
     clearError,

@@ -32,6 +32,7 @@ export function ChatView() {
   const [currentTheme, setCurrentTheme] = useState('default');
   const [currentPersonality, setCurrentPersonality] = useState('default');
   const [currentModel, setCurrentModel] = useState('');
+  const [maxContext, setMaxContext] = useState<number | null>(null);
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => !prev);
@@ -209,6 +210,21 @@ export function ChatView() {
   // Use session model or fall back to config default
   const model = session.activeSession?.model ?? currentModel ?? '';
 
+  // Fetch model metadata for maxContext when model changes
+  useEffect(() => {
+    if (!model || !window.orchid?.config?.modelMetadata) {
+      setMaxContext(null);
+      return;
+    }
+    let cancelled = false;
+    window.orchid.config.modelMetadata(model).then((meta) => {
+      if (!cancelled) setMaxContext(meta?.max_input_tokens ?? null);
+    }).catch(() => {
+      if (!cancelled) setMaxContext(null);
+    });
+    return () => { cancelled = true; };
+  }, [model]);
+
   const sessions =
     session.listState.status === 'ready' || session.listState.status === 'partial'
       ? session.listState.sessions
@@ -272,6 +288,11 @@ export function ChatView() {
         onIndexRAG={handleIndexRAG}
         onIndexAST={handleIndexAST}
         onRefreshIndex={refreshIndex}
+        contextBreakdown={chat.contextBreakdown}
+        usage={chat.usage}
+        cumulativeUsage={chat.cumulativeUsage}
+        maxContext={maxContext}
+        cwd={chat.cwd}
       />
 
       {/* Command Palette */}

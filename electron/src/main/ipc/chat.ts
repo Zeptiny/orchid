@@ -11,6 +11,7 @@ import { ipcMain, type WebContents } from 'electron';
 import { createActor, type ActorRefFrom } from 'xstate';
 import { z } from 'zod';
 import { agentMachine, type AgentContext } from '../agents/xstate/agent-machine';
+import { interruptMachine } from '../agents/xstate/interrupt-machine';
 import type { StreamEvent } from '../llm/orchestrator';
 import type { Agent } from '../../shared/types/agent';
 import type { Config } from '../config/schema';
@@ -42,9 +43,12 @@ const bgCommandSnapshotSchema = z.object({
 
 type ActiveAgent = {
   actor: ActorRefFrom<typeof agentMachine>;
+  interruptActor: ActorRefFrom<typeof interruptMachine>;
   abortController: AbortController;
   messages: Message[];
   unsubscribe: () => void;
+  interruptUnsubscribe: () => void;
+  interruptResetTimer: ReturnType<typeof setTimeout> | null;
 };
 
 const activeAgents = new Map<string, ActiveAgent>();
@@ -53,8 +57,13 @@ const messageHistory = new Map<string, Message[]>();
 function disposeActiveAgent(windowId: string, active: ActiveAgent): void {
   activeAgents.delete(windowId);
   active.unsubscribe();
+  active.interruptUnsubscribe();
+  if (active.interruptResetTimer) {
+    clearTimeout(active.interruptResetTimer);
+  }
   active.abortController.abort();
   active.actor.stop();
+  active.interruptActor.stop();
 }
 
 // ── Stream function (wraps the orchestrator) ─────────────────────────────────
@@ -274,19 +283,62 @@ export function registerChatIPC(): void {
       },
     });
 
+    // Create the interrupt machine actor for two-phase Esc confirmation
+    const interruptActor = createActor(interruptMachine);
+
     // Track response for incremental updates
     let lastSentLength = 0;
     let completed = false;
     let subscription: { unsubscribe: () => void } | null = null;
+    let interruptSubscription: { unsubscribe: () => void } | null = null;
     let lastUsage: import('../../shared/types/message').Usage | null = null;
+    let interruptResetTimer: ReturnType<typeof setTimeout> | null = null;
 
     const activeAgent: ActiveAgent = {
       actor,
+      interruptActor,
       abortController,
       messages,
       unsubscribe: () => subscription?.unsubscribe(),
+      interruptUnsubscribe: () => interruptSubscription?.unsubscribe(),
+      interruptResetTimer: null,
     };
     activeAgents.set(windowId, activeAgent);
+
+    // Track interrupt machine state changes and forward to renderer
+    interruptSubscription = interruptActor.subscribe((interruptSnapshot) => {
+      const interruptState = interruptSnapshot.value as
+        | 'idle'
+        | 'confirmAgent'
+        | 'confirmSubagents';
+
+      // Clear any existing auto-reset timer
+      if (interruptResetTimer) {
+        clearTimeout(interruptResetTimer);
+        interruptResetTimer = null;
+        activeAgent.interruptResetTimer = null;
+      }
+
+      // Auto-reset interrupt to idle after 5s (matching Python timeout)
+      if (interruptState !== 'idle') {
+        interruptResetTimer = setTimeout(() => {
+          interruptActor.send({ type: 'INTERRUPT_TIMEOUT' });
+        }, 5000);
+        activeAgent.interruptResetTimer = interruptResetTimer;
+      }
+
+      // Re-send CHAT_STATE with updated interrupt state
+      const context = actor.getSnapshot().context as AgentContext;
+      if (!webContents.isDestroyed()) {
+        webContents.send(IPC_CHANNELS.CHAT_STATE, {
+          state: actor.getSnapshot().value,
+          response: context.response,
+          error: context.error,
+          interruptState,
+          cwd: process.cwd(),
+        });
+      }
+    });
 
     // Subscribe to state changes and stream chunks to renderer
     subscription = actor.subscribe((snapshot) => {
@@ -302,11 +354,17 @@ export function registerChatIPC(): void {
         });
       }
 
-      // Send state transitions
+      // Send state transitions (includes interrupt machine state)
+      const interruptState = interruptActor.getSnapshot().value as
+        | 'idle'
+        | 'confirmAgent'
+        | 'confirmSubagents';
       webContents.send(IPC_CHANNELS.CHAT_STATE, {
         state: snapshot.value,
         response: context.response,
         error: context.error,
+        interruptState,
+        cwd: process.cwd(),
       });
 
       // Forward usage data to renderer when it changes
@@ -382,21 +440,47 @@ export function registerChatIPC(): void {
 
     // Start the actor and send user input
     actor.start();
+    interruptActor.start();
     actor.send({ type: 'USER_INPUT', message });
 
     return { status: 'started' };
   });
 
-  // chat:cancel — abort the active stream
+  // chat:cancel — two-phase cancel: first Esc shows hint, second Esc cancels
   ipcMain.handle(IPC_CHANNELS.CHAT_CANCEL, async (event) => {
     const webContents: WebContents = event.sender;
     const windowId = String(webContents.id);
     const existing = activeAgents.get(windowId);
 
-    if (existing) {
+    if (!existing) {
+      return { status: 'no_active_stream' };
+    }
+
+    const interruptSnapshot = existing.interruptActor.getSnapshot();
+    const interruptState = interruptSnapshot.value as
+      | 'idle'
+      | 'confirmAgent'
+      | 'confirmSubagents';
+
+    // First Esc while streaming → show interrupt hint (don't cancel yet)
+    if (interruptState === 'idle') {
+      existing.interruptActor.send({ type: 'INTERRUPT' });
+      return { status: 'confirming' };
+    }
+
+    // Second Esc while confirming agent → actually cancel the stream
+    if (interruptState === 'confirmAgent') {
       disposeActiveAgent(windowId, existing);
       return { status: 'cancelled' };
     }
+
+    // Third Esc while confirming subagents → cancel subagents
+    // (future: would cancel subagents via SubagentManager)
+    if (interruptState === 'confirmSubagents') {
+      disposeActiveAgent(windowId, existing);
+      return { status: 'cancelled' };
+    }
+
     return { status: 'no_active_stream' };
   });
 
@@ -430,8 +514,13 @@ export function unregisterChatIPC(): void {
   // Cancel all active agents
   for (const [, agent] of activeAgents) {
     agent.unsubscribe();
+    agent.interruptUnsubscribe();
+    if (agent.interruptResetTimer) {
+      clearTimeout(agent.interruptResetTimer);
+    }
     agent.abortController.abort();
     agent.actor.stop();
+    agent.interruptActor.stop();
   }
   activeAgents.clear();
   messageHistory.clear();

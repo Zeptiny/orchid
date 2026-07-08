@@ -4,15 +4,20 @@
  * Uses DaisyUI components for styling.
  */
 import type { Usage } from '../../shared/types/message';
+import type { InterruptState } from '../hooks/useChat';
 
 interface FooterProps {
   model: string;
   usage: Usage | null;
   elapsedSeconds: number;
   isStreaming: boolean;
+  /** Current interrupt confirmation phase (from two-phase Esc flow). */
+  interruptState?: InterruptState;
 }
 
-export function Footer({ model, usage, elapsedSeconds, isStreaming }: FooterProps) {
+export function Footer({ model, usage, elapsedSeconds, isStreaming, interruptState }: FooterProps) {
+  const showInterruptHint = interruptState && interruptState !== 'idle';
+
   return (
     <div className="btm-nav btm-nav-sm bg-base-200 border-t border-base-300 h-8">
       <div className="flex items-center gap-2 px-4 text-xs">
@@ -29,6 +34,16 @@ export function Footer({ model, usage, elapsedSeconds, isStreaming }: FooterProp
           <>
             <span className="opacity-30">|</span>
             <span className="opacity-70">{formatUsageCompact(usage)}</span>
+          </>
+        )}
+        {showInterruptHint && (
+          <>
+            <span className="opacity-30">|</span>
+            <span className="text-warning font-medium animate-pulse">
+              {interruptState === 'confirmSubagents'
+                ? 'Esc again: cancel subagents'
+                : 'Esc again: cancel agent'}
+            </span>
           </>
         )}
       </div>

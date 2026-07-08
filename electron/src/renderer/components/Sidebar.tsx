@@ -3,6 +3,9 @@
  */
 import { useState, useCallback, useEffect } from 'react';
 import type { SessionSummary, MCPServerStatus, RAGStoreStatus, ASTStoreStatus } from '../../shared/types/ipc-boundary';
+import type { ContextBreakdown } from './ContextGrid';
+import { ContextGrid } from './ContextGrid';
+import type { Usage } from '../../shared/types/message';
 import { TodoStatus } from '../../shared/types/todo';
 import type { SessionListState } from '../hooks/useSession';
 import type { SubagentListState, SubagentDetail } from '../hooks/useSubagents';
@@ -31,6 +34,16 @@ interface SidebarProps {
   onIndexRAG: () => void;
   onIndexAST: () => void;
   onRefreshIndex: () => void;
+  /** Context token breakdown by category (from useChat). */
+  contextBreakdown?: ContextBreakdown | null;
+  /** Latest usage data for the grid. */
+  usage?: Usage | null;
+  /** Cumulative usage across all messages in the current session. */
+  cumulativeUsage?: Usage | null;
+  /** Maximum context window size from model metadata. */
+  maxContext?: number | null;
+  /** Current working directory from the main process. */
+  cwd?: string;
 }
 
 export function Sidebar({
@@ -56,6 +69,11 @@ export function Sidebar({
   onIndexRAG,
   onIndexAST,
   onRefreshIndex,
+  contextBreakdown,
+  usage,
+  cumulativeUsage,
+  maxContext,
+  cwd,
 }: SidebarProps) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -73,7 +91,14 @@ export function Sidebar({
   return (
     <div className="w-80 bg-base-200 border-l border-base-300 flex flex-col h-full">
       <div className="p-4 border-b border-base-300 flex items-center justify-between">
-        <h2 className="text-lg font-bold">Sidebar</h2>
+        <div>
+          <h2 className="text-lg font-bold">Sidebar</h2>
+          {cwd && (
+            <div className="text-[10px] font-mono opacity-50 truncate mt-0.5" title={cwd}>
+              📁 {cwd}
+            </div>
+          )}
+        </div>
         <button className="btn btn-ghost btn-sm btn-circle" onClick={onToggle}>
           ✕
         </button>
@@ -141,6 +166,28 @@ export function Sidebar({
               onIndexAST={onIndexAST}
               onRefresh={onRefreshIndex}
             />
+          </div>
+        </div>
+
+        {/* Context Breakdown Grid */}
+        <div className="collapse collapse-arrow bg-base-100">
+          <input type="checkbox" defaultChecked />
+          <div className="collapse-title text-sm font-medium">Context</div>
+          <div className="collapse-content">
+            <ContextGrid
+              breakdown={contextBreakdown}
+              usage={usage}
+              maxContext={maxContext}
+            />
+          </div>
+        </div>
+
+        {/* Token Usage Totals */}
+        <div className="collapse collapse-arrow bg-base-100">
+          <input type="checkbox" defaultChecked />
+          <div className="collapse-title text-sm font-medium">Usage</div>
+          <div className="collapse-content">
+            <TokenUsageSection cumulativeUsage={cumulativeUsage} maxContext={maxContext} />
           </div>
         </div>
       </div>
@@ -550,4 +597,82 @@ function IndexSection({
       </button>
     </div>
   );
+}
+
+// ── Token Usage Section ─────────────────────────────────────────────────────
+
+interface TokenUsageSectionProps {
+  cumulativeUsage?: Usage | null;
+  maxContext?: number | null;
+}
+
+function TokenUsageSection({ cumulativeUsage, maxContext }: TokenUsageSectionProps) {
+  if (!cumulativeUsage) {
+    return (
+      <div className="text-[11px] opacity-50 text-center py-1">
+        Σ0 · ↑0 ↓0
+      </div>
+    );
+  }
+
+  const { prompt_tokens, completion_tokens, total_tokens, cached_tokens } = cumulativeUsage;
+
+  // All zero → still show zero state
+  if (total_tokens === 0) {
+    return (
+      <div className="text-[11px] opacity-50 text-center py-1">
+        Σ0 · ↑0 ↓0
+      </div>
+    );
+  }
+
+  const promptStr = formatSidebarTokens(prompt_tokens);
+  const completionStr = formatSidebarTokens(completion_tokens);
+  const totalStr = formatSidebarTokens(total_tokens);
+  const cachedStr = formatSidebarTokens(cached_tokens);
+
+  return (
+    <div className="space-y-1.5">
+      {/* Compact one-line format: ΣX · ↑Y (⟲Z) ↓W */}
+      <div className="text-xs font-mono">
+        <span className="font-medium">Σ{totalStr}</span>
+        {maxContext && maxContext > 0 && (
+          <span className="opacity-50"> ({(prompt_tokens / maxContext * 100).toFixed(0)}%)</span>
+        )}
+        <span className="opacity-30"> · </span>
+        <span className="text-info">↑{promptStr}</span>
+        {cached_tokens > 0 && (
+          <span className="opacity-50"> (⟲{cachedStr})</span>
+        )}
+        <span className="opacity-30"> </span>
+        <span className="text-success">↓{completionStr}</span>
+      </div>
+
+      {/* Breakdown rows */}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px]">
+        <div className="opacity-50">Prompt</div>
+        <div className="text-right font-mono">{prompt_tokens.toLocaleString()}</div>
+        {cached_tokens > 0 && (
+          <>
+            <div className="opacity-50">Cached</div>
+            <div className="text-right font-mono">{cached_tokens.toLocaleString()}</div>
+          </>
+        )}
+        <div className="opacity-50">Completion</div>
+        <div className="text-right font-mono">{completion_tokens.toLocaleString()}</div>
+        <div className="opacity-50 border-t border-base-300 pt-0.5">Total</div>
+        <div className="text-right font-mono border-t border-base-300 pt-0.5">{total_tokens.toLocaleString()}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Format token count for compact display (e.g. 12500 → "12.5k").
+ */
+function formatSidebarTokens(n: number): string {
+  if (n >= 1000) {
+    return `${(n / 1000).toFixed(1)}k`;
+  }
+  return String(n);
 }

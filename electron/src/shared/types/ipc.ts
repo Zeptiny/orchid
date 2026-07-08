@@ -58,6 +58,10 @@ export interface ChatStateEvent {
   state: string;
   response: string;
   error: string | null;
+  /** Current interrupt confirmation phase. */
+  interruptState: 'idle' | 'confirmAgent' | 'confirmSubagents';
+  /** Current working directory of the main process. */
+  cwd?: string;
 }
 
 export interface ChatDoneEvent {
