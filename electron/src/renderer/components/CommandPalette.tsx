@@ -25,11 +25,10 @@ import {
   fuzzyMatch,
   highlightMatch,
   type Command,
-  type CommandContext,
   type CommandCategory,
   type PaletteResult,
 } from '../../main/commands/registry';
-import type { SessionSummary } from '../../main/session/storage';
+import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
 
 // ── Props ────────────────────────────────────────────────────────────────────
 

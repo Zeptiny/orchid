@@ -246,15 +246,19 @@ export const sessionMachine = setup({
                 return 'idle' as const;
               },
             }),
-            // Side effects based on interrupt transition
+            // Side effects based on interrupt transition.
+            // At this point context.interruptState holds the NEW state (post-assign).
+            // The mapping from old→new tells us which escalation just happened:
+            //   old 'confirmAgent'    → new 'confirmSubagents' → cancel agent stream
+            //   old 'confirmSubagents' → new 'idle'            → cancel subagents
             ({ context, self }) => {
-              if (context.interruptState === 'confirmAgent') {
-                // Cancel the agent stream
+              if (context.interruptState === 'confirmSubagents') {
+                // Just escalated from confirmAgent → cancel the agent stream
                 if (context.agentRef) {
                   self.send({ type: 'CANCEL' });
                 }
-              } else if (context.interruptState === 'confirmSubagents') {
-                // Cancel all running subagents
+              } else if (context.interruptState === 'idle') {
+                // Just escalated from confirmSubagents → cancel all running subagents
                 for (const [id, entry] of context.subagents) {
                   if (entry.state === 'running' || entry.state === 'pending') {
                     // The subagent actor will be stopped by the machine

@@ -7,6 +7,12 @@
  *
  * Ported from Python `src/orchid/utils.py` lines 105-133
  * and `src/orchid/tools/file_manipulation.py` lines 207-250.
+ *
+ * Security note (P1-2):
+ * This tool operates on arbitrary absolute paths with no restriction to the
+ * project directory. A malicious agent could enumerate sensitive directories
+ * outside the workspace. Path sandboxing is deferred to R20 — the permission
+ * system will enforce directory restrictions.
  */
 import * as fs from 'node:fs';
 import * as pathModule from 'node:path';

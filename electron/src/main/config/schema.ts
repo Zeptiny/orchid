@@ -4,6 +4,9 @@
  * All 22 fields ported from Python `src/orchid/config.py` lines 40–104.
  */
 import { z } from 'zod';
+import type { Config, RAGConfig } from '../../shared/types/ipc-boundary';
+
+export type { Config, RAGConfig } from '../../shared/types/ipc-boundary';
 
 // ---------------------------------------------------------------------------
 // Nested schemas
@@ -19,8 +22,6 @@ export const ragConfigSchema = z.object({
     .min(1)
     .default('fastembed/BAAI/bge-small-en-v1.5'),
 });
-
-export type RAGConfig = z.infer<typeof ragConfigSchema>;
 
 // ---------------------------------------------------------------------------
 // Main config schema
@@ -94,13 +95,6 @@ export const configSchema = z
     background_command_idle_timeout: z.number().positive().default(900.0),
   })
   .strict();
-
-// ---------------------------------------------------------------------------
-// Derived types
-// ---------------------------------------------------------------------------
-
-/** Fully-parsed config with all fields populated (output of `configSchema.parse`). */
-export type Config = z.infer<typeof configSchema>;
 
 /**
  * Deep-partial input type for parsing raw JSON from config files.

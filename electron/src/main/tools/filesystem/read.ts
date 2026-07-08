@@ -7,6 +7,12 @@
  * Binary detection: skips files that contain null bytes.
  *
  * Ported from Python `src/orchid/tools/file_manipulation.py` lines 18-81.
+ *
+ * Security note (P1-2):
+ * This tool operates on arbitrary absolute paths with no restriction to the
+ * project directory. A malicious agent could read sensitive files outside the
+ * workspace (e.g., /etc/passwd, ~/.ssh/id_rsa). Path sandboxing is deferred
+ * to R20 — the permission system will enforce directory restrictions.
  */
 import * as fs from 'node:fs';
 import { z } from 'zod';

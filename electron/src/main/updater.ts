@@ -15,25 +15,9 @@
 import { autoUpdater, UpdateInfo } from 'electron-updater';
 import { app, BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../shared/types/ipc';
+import type { UpdaterState, UpdateStatus } from '../shared/types/ipc-boundary';
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
-export type UpdateStatus =
-  | 'idle'
-  | 'checking'
-  | 'available'
-  | 'downloading'
-  | 'downloaded'
-  | 'not-available'
-  | 'error';
-
-export interface UpdaterState {
-  status: UpdateStatus;
-  version: string | null;
-  releaseNotes: string | null;
-  progress: number | null;
-  error: string | null;
-}
+export type { UpdaterState, UpdateStatus } from '../shared/types/ipc-boundary';
 
 // ── State ────────────────────────────────────────────────────────────────────
 

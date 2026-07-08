@@ -9,7 +9,7 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import type { Session } from '../../shared/types/session';
-import type { SessionSummary } from '../../main/session/storage';
+import type { SessionSummary } from '../../shared/types/ipc-boundary';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -25,8 +25,8 @@ export interface UseSessionReturn {
   activeSession: Session | null;
   /** Session list state with interaction states. */
   listState: SessionListState;
-  /** Load a session by ID. */
-  load: (id: string) => Promise<void>;
+  /** Load a session by ID. Returns the loaded session (or null on failure). */
+  load: (id: string) => Promise<Session | null>;
   /** Create a new session. */
   create: () => Promise<Session>;
   /** Delete a session by ID. */
@@ -70,13 +70,15 @@ export function useSession(): UseSessionReturn {
     refresh();
   }, [refresh]);
 
-  const load = useCallback(async (id: string) => {
+  const load = useCallback(async (id: string): Promise<Session | null> => {
     setIsLoading(true);
     try {
       const session = await window.orchid.session.load({ id });
       setActiveSession(session);
+      return session;
     } catch (err) {
       console.error('Failed to load session:', err);
+      return null;
     } finally {
       setIsLoading(false);
     }

@@ -10,10 +10,7 @@ import { useSession } from '../hooks/useSession';
 import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
 import { useToolRail } from '../hooks/useToolRail';
-import type { MCPServerStatus } from '../../main/mcp/schema';
-import type { StoreStatus as RAGStoreStatus } from '../../main/rag/store';
-import type { StoreStatus as ASTStoreStatus } from '../../main/ast/store';
-import type { CommandContext } from '../../main/commands/registry';
+import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus, CommandContext } from '../../shared/types/ipc-boundary';
 import { ChatStream } from './ChatStream';
 import { InputArea } from './InputArea';
 import { Footer } from './Footer';
@@ -89,11 +86,11 @@ export function ChatView() {
   // ── Session actions ──────────────────────────────────────────────────────
   const handleSessionSelect = useCallback(
     async (id: string) => {
-      await session.load(id);
-      // Load messages from the session's active chain
-      if (session.activeSession) {
-        const activeChain = session.activeSession.chains.find(
-          (c) => c.id === session.activeSession!.activeChainId,
+      const loadedSession = await session.load(id);
+      // Use the returned session directly to avoid stale closure
+      if (loadedSession) {
+        const activeChain = loadedSession.chains.find(
+          (c) => c.id === loadedSession.activeChainId,
         );
         if (activeChain) {
           chat.setMessages([...activeChain.messages]);

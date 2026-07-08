@@ -12,6 +12,10 @@
  * The registry also tracks recently used commands (last 5) in localStorage.
  */
 
+import type { CommandContext } from '../../shared/types/ipc-boundary';
+
+export type { CommandContext } from '../../shared/types/ipc-boundary';
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type CommandCategory = 'commands' | 'sessions' | 'settings' | 'navigation';
@@ -25,39 +29,6 @@ export interface Command {
   readonly category: CommandCategory;
   /** Execute the command. Receives callbacks for actions that need UI coordination. */
   readonly execute: (ctx: CommandContext) => Promise<void>;
-}
-
-export interface CommandContext {
-  /** Create a new session and load it. */
-  onCreateSession: () => Promise<void>;
-  /** Load a session by ID. */
-  onLoadSession: (id: string) => Promise<void>;
-  /** Delete a session by ID. */
-  onDeleteSession: (id: string) => Promise<void>;
-  /** Rename the active session. */
-  onRenameSession: (id: string, name: string) => Promise<void>;
-  /** Get the active session ID (or null). */
-  getActiveSessionId: () => string | null;
-  /** Get the active session name (or null). */
-  getActiveSessionName: () => string | null;
-  /** Set the theme. */
-  onSetTheme: (name: string) => Promise<void>;
-  /** Set the personality. */
-  onSetPersonality: (name: string) => Promise<void>;
-  /** Open settings (emits event for U24 Preferences). */
-  onOpenSettings: () => void;
-  /** Index RAG in background. */
-  onIndexRAG: () => Promise<void>;
-  /** Index AST in background. */
-  onIndexAST: () => Promise<void>;
-  /** Clear RAG index. */
-  onClearRAG: () => Promise<void>;
-  /** Get RAG status. */
-  onGetRAGStatus: () => Promise<{ totalChunks: number; totalFiles: number; lastIndexed: string | null } | null>;
-  /** Show a notification message. */
-  onNotify: (message: string, severity?: 'info' | 'warning' | 'error') => void;
-  /** Close the command palette. */
-  onClose: () => void;
 }
 
 // ── Fuzzy match utilities ────────────────────────────────────────────────────

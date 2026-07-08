@@ -9,6 +9,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
+import type { ASTStoreStatus } from '../../shared/types/ipc-boundary';
+
+export type { ASTStoreStatus } from '../../shared/types/ipc-boundary';
+/** @deprecated Use ASTStoreStatus from shared/types/ipc-boundary */
+export type StoreStatus = ASTStoreStatus;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -79,13 +84,6 @@ export interface SymbolRow {
   charEnd: number;
 }
 
-export interface StoreStatus {
-  totalFiles: number;
-  totalSymbols: number;
-  lastIndexed: string | null;
-  lastIndexDuration: number | null;
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -106,10 +104,28 @@ export class ASTStore {
   readonly astDir: string;
   readonly dbPath: string;
 
+  /** Cached database connection (lazy-opened, reused). */
+  private _db: Database.Database | null = null;
+
   constructor(projectPath: string) {
     this.projectPath = projectPath;
     this.astDir = path.join(projectPath, PROJECT_AST_DIR);
     this.dbPath = path.join(this.astDir, AST_INDEX_DB);
+  }
+
+  /**
+   * Close the cached database connection. Call on shutdown or when the
+   * store is no longer needed.
+   */
+  dispose(): void {
+    if (this._db) {
+      try {
+        this._db.close();
+      } catch {
+        // ignore
+      }
+      this._db = null;
+    }
   }
 
   private ensureDir(): void {
@@ -140,36 +156,39 @@ export class ASTStore {
       db.exec(DB_SCHEMA);
       db.close();
     }
+    // Close any cached connection so getConn() picks up the schema
+    this.dispose();
   }
 
   /**
-   * Get a database connection. Handles corruption recovery.
+   * Get a database connection. Caches the connection for reuse.
+   * Handles corruption recovery.
    */
   private getConn(): Database.Database {
+    if (this._db) return this._db;
     this.ensureDir();
-    let db: Database.Database | null = null;
     try {
-      db = new Database(this.dbPath);
-      db.pragma('journal_mode = WAL');
-      db.pragma('busy_timeout = 5000');
+      this._db = new Database(this.dbPath);
+      this._db.pragma('journal_mode = WAL');
+      this._db.pragma('busy_timeout = 5000');
       // Quick corruption check
-      db.prepare('SELECT 1 FROM files LIMIT 1').get();
-      return db;
+      this._db.prepare('SELECT 1 FROM files LIMIT 1').get();
+      return this._db;
     } catch (err) {
       if (!isCorruptionError(err)) {
-        if (db) db.close();
+        if (this._db) { this._db.close(); this._db = null; }
         throw err;
       }
       console.error(`Corrupted symbols.db, rebuilding: ${err}`);
-      if (db) db.close();
+      if (this._db) { this._db.close(); this._db = null; }
       if (fs.existsSync(this.dbPath)) {
         fs.unlinkSync(this.dbPath);
       }
-      db = new Database(this.dbPath);
-      db.exec(DB_SCHEMA);
-      db.pragma('journal_mode = WAL');
-      db.pragma('busy_timeout = 5000');
-      return db;
+      this._db = new Database(this.dbPath);
+      this._db.exec(DB_SCHEMA);
+      this._db.pragma('journal_mode = WAL');
+      this._db.pragma('busy_timeout = 5000');
+      return this._db;
     }
   }
 
@@ -178,44 +197,40 @@ export class ASTStore {
    */
   upsertFile(filePath: string, fileHash: string, symbols: Symbol[]): void {
     const db = this.getConn();
-    try {
-      // Disable FK checks to allow inserting symbols before the file record
-      // (matches Python behavior where FK enforcement is off by default).
-      db.pragma('foreign_keys = OFF');
+    // Disable FK checks to allow inserting symbols before the file record
+    // (matches Python behavior where FK enforcement is off by default).
+    db.pragma('foreign_keys = OFF');
 
-      const deleteStmt = db.prepare('DELETE FROM symbols WHERE file_path = ?');
-      deleteStmt.run(filePath);
+    const deleteStmt = db.prepare('DELETE FROM symbols WHERE file_path = ?');
+    deleteStmt.run(filePath);
 
-      // Upsert file record before symbols (FK target must exist)
-      const upsertFileStmt = db.prepare(
-        'INSERT OR REPLACE INTO files (file_path, hash, symbol_count) VALUES (?, ?, ?)',
+    // Upsert file record before symbols (FK target must exist)
+    const upsertFileStmt = db.prepare(
+      'INSERT OR REPLACE INTO files (file_path, hash, symbol_count) VALUES (?, ?, ?)',
+    );
+    upsertFileStmt.run(filePath, fileHash, symbols.length);
+
+    if (symbols.length > 0) {
+      const insertStmt = db.prepare(
+        'INSERT INTO symbols ' +
+        '(file_path, name, type, kind, start_line, start_column, ' +
+        'end_line, end_column, char_start, char_end) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       );
-      upsertFileStmt.run(filePath, fileHash, symbols.length);
-
-      if (symbols.length > 0) {
-        const insertStmt = db.prepare(
-          'INSERT INTO symbols ' +
-          '(file_path, name, type, kind, start_line, start_column, ' +
-          'end_line, end_column, char_start, char_end) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        );
-        const insertMany = db.transaction((syms: Symbol[]) => {
-          for (const s of syms) {
-            insertStmt.run(
-              filePath, s.name, s.type, s.kind,
-              s.startLine, s.startColumn,
-              s.endLine, s.endColumn,
-              s.charStart, s.charEnd,
-            );
-          }
-        });
-        insertMany(symbols);
-      }
-
-      db.pragma('foreign_keys = ON');
-    } finally {
-      db.close();
+      const insertMany = db.transaction((syms: Symbol[]) => {
+        for (const s of syms) {
+          insertStmt.run(
+            filePath, s.name, s.type, s.kind,
+            s.startLine, s.startColumn,
+            s.endLine, s.endColumn,
+            s.charStart, s.charEnd,
+          );
+        }
+      });
+      insertMany(symbols);
     }
+
+    db.pragma('foreign_keys = ON');
   }
 
   /**
@@ -223,37 +238,33 @@ export class ASTStore {
    */
   getSymbolsByName(name: string, typeFilter: string = 'both'): SymbolRow[] {
     const db = this.getConn();
-    try {
-      let rows: unknown[];
-      if (typeFilter === 'both') {
-        rows = db.prepare(
-          'SELECT file_path, name, type, kind, start_line, start_column, ' +
-          'end_line, end_column, char_start, char_end ' +
-          'FROM symbols WHERE name = ?',
-        ).all(name) as unknown[];
-      } else {
-        rows = db.prepare(
-          'SELECT file_path, name, type, kind, start_line, start_column, ' +
-          'end_line, end_column, char_start, char_end ' +
-          'FROM symbols WHERE name = ? AND type = ?',
-        ).all(name, typeFilter) as unknown[];
-      }
-
-      return (rows as Array<Record<string, unknown>>).map((row) => ({
-        filePath: row.file_path as string,
-        name: row.name as string,
-        type: row.type as string,
-        kind: row.kind as string,
-        startLine: row.start_line as number,
-        startColumn: row.start_column as number,
-        endLine: row.end_line as number,
-        endColumn: row.end_column as number,
-        charStart: row.char_start as number,
-        charEnd: row.char_end as number,
-      }));
-    } finally {
-      db.close();
+    let rows: unknown[];
+    if (typeFilter === 'both') {
+      rows = db.prepare(
+        'SELECT file_path, name, type, kind, start_line, start_column, ' +
+        'end_line, end_column, char_start, char_end ' +
+        'FROM symbols WHERE name = ?',
+      ).all(name) as unknown[];
+    } else {
+      rows = db.prepare(
+        'SELECT file_path, name, type, kind, start_line, start_column, ' +
+        'end_line, end_column, char_start, char_end ' +
+        'FROM symbols WHERE name = ? AND type = ?',
+      ).all(name, typeFilter) as unknown[];
     }
+
+    return (rows as Array<Record<string, unknown>>).map((row) => ({
+      filePath: row.file_path as string,
+      name: row.name as string,
+      type: row.type as string,
+      kind: row.kind as string,
+      startLine: row.start_line as number,
+      startColumn: row.start_column as number,
+      endLine: row.end_line as number,
+      endColumn: row.end_column as number,
+      charStart: row.char_start as number,
+      charEnd: row.char_end as number,
+    }));
   }
 
   /**
@@ -262,14 +273,10 @@ export class ASTStore {
   getFileHash(filePath: string): string {
     if (!fs.existsSync(this.dbPath)) return '';
     const db = this.getConn();
-    try {
-      const row = db.prepare('SELECT hash FROM files WHERE file_path = ?').get(filePath) as
-        | { hash: string }
-        | undefined;
-      return row?.hash ?? '';
-    } finally {
-      db.close();
-    }
+    const row = db.prepare('SELECT hash FROM files WHERE file_path = ?').get(filePath) as
+      | { hash: string }
+      | undefined;
+    return row?.hash ?? '';
   }
 
   /**
@@ -278,19 +285,15 @@ export class ASTStore {
   getAllFileHashes(): Record<string, string> {
     if (!fs.existsSync(this.dbPath)) return {};
     const db = this.getConn();
-    try {
-      const rows = db.prepare('SELECT file_path, hash FROM files').all() as Array<{
-        file_path: string;
-        hash: string;
-      }>;
-      const result: Record<string, string> = {};
-      for (const row of rows) {
-        result[row.file_path] = row.hash;
-      }
-      return result;
-    } finally {
-      db.close();
+    const rows = db.prepare('SELECT file_path, hash FROM files').all() as Array<{
+      file_path: string;
+      hash: string;
+    }>;
+    const result: Record<string, string> = {};
+    for (const row of rows) {
+      result[row.file_path] = row.hash;
     }
+    return result;
   }
 
   /**
@@ -298,18 +301,15 @@ export class ASTStore {
    */
   deleteByFile(filePath: string): void {
     const db = this.getConn();
-    try {
-      db.prepare('DELETE FROM symbols WHERE file_path = ?').run(filePath);
-      db.prepare('DELETE FROM files WHERE file_path = ?').run(filePath);
-    } finally {
-      db.close();
-    }
+    db.prepare('DELETE FROM symbols WHERE file_path = ?').run(filePath);
+    db.prepare('DELETE FROM files WHERE file_path = ?').run(filePath);
   }
 
   /**
    * Delete the database file entirely.
    */
   clear(): void {
+    this.dispose();
     if (fs.existsSync(this.dbPath)) {
       fs.unlinkSync(this.dbPath);
     }
@@ -320,20 +320,16 @@ export class ASTStore {
    */
   recordIndex(duration?: number): void {
     const db = this.getConn();
-    try {
-      const now = new Date().toISOString();
+    const now = new Date().toISOString();
+    db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(
+      'last_indexed',
+      now,
+    );
+    if (duration !== undefined) {
       db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(
-        'last_indexed',
-        now,
+        'last_index_duration',
+        String(duration),
       );
-      if (duration !== undefined) {
-        db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(
-          'last_index_duration',
-          String(duration),
-        );
-      }
-    } finally {
-      db.close();
     }
   }
 
@@ -345,29 +341,25 @@ export class ASTStore {
       return { totalFiles: 0, totalSymbols: 0, lastIndexed: null, lastIndexDuration: null };
     }
     const db = this.getConn();
-    try {
-      const fileCount = (db.prepare('SELECT COUNT(*) as cnt FROM files').get() as { cnt: number })
-        .cnt;
-      const symbolCount = (
-        db.prepare('SELECT COUNT(*) as cnt FROM symbols').get() as { cnt: number }
-      ).cnt;
-      const lastRow = db.prepare("SELECT value FROM meta WHERE key = 'last_indexed'").get() as
-        | { value: string }
-        | undefined;
-      const lastIndexed = lastRow?.value ?? null;
-      const durRow = db
-        .prepare("SELECT value FROM meta WHERE key = 'last_index_duration'")
-        .get() as { value: string } | undefined;
-      const duration = durRow ? parseFloat(durRow.value) : null;
+    const fileCount = (db.prepare('SELECT COUNT(*) as cnt FROM files').get() as { cnt: number })
+      .cnt;
+    const symbolCount = (
+      db.prepare('SELECT COUNT(*) as cnt FROM symbols').get() as { cnt: number }
+    ).cnt;
+    const lastRow = db.prepare("SELECT value FROM meta WHERE key = 'last_indexed'").get() as
+      | { value: string }
+      | undefined;
+    const lastIndexed = lastRow?.value ?? null;
+    const durRow = db
+      .prepare("SELECT value FROM meta WHERE key = 'last_index_duration'")
+      .get() as { value: string } | undefined;
+    const duration = durRow ? parseFloat(durRow.value) : null;
 
-      return {
-        totalFiles: fileCount,
-        totalSymbols: symbolCount,
-        lastIndexed,
-        lastIndexDuration: duration,
-      };
-    } finally {
-      db.close();
-    }
+    return {
+      totalFiles: fileCount,
+      totalSymbols: symbolCount,
+      lastIndexed,
+      lastIndexDuration: duration,
+    };
   }
 }

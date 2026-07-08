@@ -14,6 +14,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getConfig } from '../config/loader';
 import type { Chunk } from './chunker';
+import type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
+
+export type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
+/** @deprecated Use RAGStoreStatus from shared/types/ipc-boundary */
+export type StoreStatus = RAGStoreStatus;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -56,13 +61,6 @@ export interface SearchResult {
   startLine: number;
   endLine: number;
   score: number;
-}
-
-export interface StoreStatus {
-  totalChunks: number;
-  totalFiles: number;
-  lastIndexed: string | null;
-  lastIndexDuration: number | null;
 }
 
 export interface VectorState {
@@ -212,6 +210,9 @@ export class RAGStore {
   readonly dbPath: string;
   readonly vectorsFile: string;
 
+  /** Cached database connection (lazy-opened, reused). */
+  private _db: BetterSqlite3Database | null = null;
+
   /** Process-level search cache: dbPath -> {vectors, chunks} */
   private static _searchCache = new Map<
     string,
@@ -223,6 +224,21 @@ export class RAGStore {
     this.ragDir = path.join(projectPath, PROJECT_RAG_DIR);
     this.dbPath = path.join(this.ragDir, RAG_INDEX_DB);
     this.vectorsFile = path.join(this.ragDir, RAG_VECTORS_FILE);
+  }
+
+  /**
+   * Close the cached database connection. Call on shutdown or when the
+   * store is no longer needed.
+   */
+  dispose(): void {
+    if (this._db) {
+      try {
+        this._db.close();
+      } catch {
+        // ignore
+      }
+      this._db = null;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -240,6 +256,8 @@ export class RAGStore {
       // Corrupted DB — rebuild
       this._rebuildDb();
     }
+    // Close any cached connection so _getDb() picks up the schema
+    this.dispose();
   }
 
   private _ensureDir(): void {
@@ -247,6 +265,7 @@ export class RAGStore {
   }
 
   private _rebuildDb(): void {
+    this.dispose();
     if (fs.existsSync(this.dbPath)) fs.unlinkSync(this.dbPath);
     this._clearVectorsFile();
     const db = openDatabase(this.dbPath);
@@ -256,15 +275,21 @@ export class RAGStore {
   }
 
   private _getDb(): BetterSqlite3Database {
+    if (this._db) return this._db;
     this._ensureDir();
     try {
-      const db = openDatabase(this.dbPath);
+      this._db = openDatabase(this.dbPath);
       // Quick corruption check
-      db.prepare('SELECT 1 FROM chunks LIMIT 1').get();
-      return db;
+      this._db.prepare('SELECT 1 FROM chunks LIMIT 1').get();
+      return this._db;
     } catch {
+      if (this._db) {
+        try { this._db.close(); } catch { /* ignore */ }
+        this._db = null;
+      }
       this._rebuildDb();
-      return openDatabase(this.dbPath);
+      this._db = openDatabase(this.dbPath);
+      return this._db;
     }
   }
 
@@ -307,42 +332,38 @@ export class RAGStore {
     this._saveVectors(embeddings);
 
     const db = this._getDb();
-    try {
-      db.exec('DELETE FROM chunks');
-      db.exec('DELETE FROM files');
+    db.exec('DELETE FROM chunks');
+    db.exec('DELETE FROM files');
 
-      if (chunks.length > 0) {
-        const insertChunk = db.prepare(
-          'INSERT INTO chunks (file_path, start_line, end_line, content) VALUES (?, ?, ?, ?)',
-        );
-        const insertMany = db.transaction((rows: Chunk[]) => {
-          for (const c of rows) {
-            insertChunk.run(c.filePath, c.startLine, c.endLine, c.content);
-          }
-        });
-        insertMany(chunks);
-
-        // Count chunks per file
-        const fileChunks = new Map<string, number>();
-        for (const c of chunks) {
-          fileChunks.set(c.filePath, (fileChunks.get(c.filePath) ?? 0) + 1);
+    if (chunks.length > 0) {
+      const insertChunk = db.prepare(
+        'INSERT INTO chunks (file_path, start_line, end_line, content) VALUES (?, ?, ?, ?)',
+      );
+      const insertMany = db.transaction((rows: Chunk[]) => {
+        for (const c of rows) {
+          insertChunk.run(c.filePath, c.startLine, c.endLine, c.content);
         }
+      });
+      insertMany(chunks);
 
-        const insertFile = db.prepare(
-          'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) VALUES (?, ?, ?)',
-        );
-        for (const [fp, count] of fileChunks) {
-          insertFile.run(fp, '', count);
-        }
+      // Count chunks per file
+      const fileChunks = new Map<string, number>();
+      for (const c of chunks) {
+        fileChunks.set(c.filePath, (fileChunks.get(c.filePath) ?? 0) + 1);
       }
 
-      const now = new Date().toISOString();
-      db.prepare(
-        'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
-      ).run('last_indexed', now);
-    } finally {
-      db.close();
+      const insertFile = db.prepare(
+        'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) VALUES (?, ?, ?)',
+      );
+      for (const [fp, count] of fileChunks) {
+        insertFile.run(fp, '', count);
+      }
     }
+
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
+    ).run('last_indexed', now);
   }
 
   // -------------------------------------------------------------------------
@@ -376,33 +397,29 @@ export class RAGStore {
     }
 
     const db = this._getDb();
-    try {
-      db.prepare('DELETE FROM chunks WHERE file_path = ?').run(filePath);
-      db.prepare('DELETE FROM files WHERE file_path = ?').run(filePath);
+    db.prepare('DELETE FROM chunks WHERE file_path = ?').run(filePath);
+    db.prepare('DELETE FROM files WHERE file_path = ?').run(filePath);
 
-      if (chunks.length > 0) {
-        const insertChunk = db.prepare(
-          'INSERT INTO chunks (file_path, start_line, end_line, content) VALUES (?, ?, ?, ?)',
-        );
-        for (const c of chunks) {
-          insertChunk.run(c.filePath, c.startLine, c.endLine, c.content);
-        }
-        db.prepare(
-          'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) VALUES (?, ?, ?)',
-        ).run(filePath, '', chunks.length);
-      } else {
-        db.prepare(
-          'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) VALUES (?, ?, ?)',
-        ).run(filePath, '', 0);
+    if (chunks.length > 0) {
+      const insertChunk = db.prepare(
+        'INSERT INTO chunks (file_path, start_line, end_line, content) VALUES (?, ?, ?, ?)',
+      );
+      for (const c of chunks) {
+        insertChunk.run(c.filePath, c.startLine, c.endLine, c.content);
       }
-
-      const now = new Date().toISOString();
       db.prepare(
-        'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
-      ).run('last_indexed', now);
-    } finally {
-      db.close();
+        'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) VALUES (?, ?, ?)',
+      ).run(filePath, '', chunks.length);
+    } else {
+      db.prepare(
+        'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) VALUES (?, ?, ?)',
+      ).run(filePath, '', 0);
     }
+
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
+    ).run('last_indexed', now);
 
     // Rebuild vectors: keep old vectors for surviving chunks, append new
     const fileNewIdSet = new Set(this._chunkIdsForFile(filePath));
@@ -463,40 +480,29 @@ export class RAGStore {
     const oldIds = this._chunkIdsForFile(filePath);
 
     const db = this._getDb();
-    try {
-      db.prepare('DELETE FROM chunks WHERE file_path = ?').run(filePath);
-      db.prepare('DELETE FROM files WHERE file_path = ?').run(filePath);
+    db.prepare('DELETE FROM chunks WHERE file_path = ?').run(filePath);
+    db.prepare('DELETE FROM files WHERE file_path = ?').run(filePath);
 
-      if (chunks.length > 0) {
-        const insertChunk = db.prepare(
-          'INSERT INTO chunks (file_path, start_line, end_line, content) VALUES (?, ?, ?, ?)',
-        );
-        for (const c of chunks) {
-          insertChunk.run(c.filePath, c.startLine, c.endLine, c.content);
-        }
-        db.prepare(
-          'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) VALUES (?, ?, ?)',
-        ).run(filePath, '', chunks.length);
-      } else {
-        db.prepare(
-          'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) VALUES (?, ?, ?)',
-        ).run(filePath, '', 0);
+    if (chunks.length > 0) {
+      const insertChunk = db.prepare(
+        'INSERT INTO chunks (file_path, start_line, end_line, content) VALUES (?, ?, ?, ?)',
+      );
+      for (const c of chunks) {
+        insertChunk.run(c.filePath, c.startLine, c.endLine, c.content);
       }
-
-      const now = new Date().toISOString();
       db.prepare(
-        'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
-      ).run('last_indexed', now);
-
-      // Get new chunk IDs for this file
-      const newIds = chunks.length > 0
-        ? (db.prepare(
-            'SELECT chunk_id FROM chunks WHERE file_path = ? ORDER BY chunk_id',
-          ).all(filePath) as { chunk_id: number }[]).map((r) => r.chunk_id)
-        : [];
-    } finally {
-      db.close();
+        'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) VALUES (?, ?, ?)',
+      ).run(filePath, '', chunks.length);
+    } else {
+      db.prepare(
+        'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) VALUES (?, ?, ?)',
+      ).run(filePath, '', 0);
     }
+
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
+    ).run('last_indexed', now);
 
     // Drop old vectors for this file from state
     const dropIndices = oldIds
@@ -534,12 +540,8 @@ export class RAGStore {
     const oldIds = this._chunkIdsForFile(filePath);
 
     const db = this._getDb();
-    try {
-      db.prepare('DELETE FROM chunks WHERE file_path = ?').run(filePath);
-      db.prepare('DELETE FROM files WHERE file_path = ?').run(filePath);
-    } finally {
-      db.close();
-    }
+    db.prepare('DELETE FROM chunks WHERE file_path = ?').run(filePath);
+    db.prepare('DELETE FROM files WHERE file_path = ?').run(filePath);
 
     const dropIndices = oldIds
       .filter((cid) => state.idToIndex.has(cid))
@@ -578,12 +580,8 @@ export class RAGStore {
     const vectors = this._loadVectorsArray();
 
     const db = this._getDb();
-    try {
-      db.prepare('DELETE FROM chunks WHERE file_path = ?').run(filePath);
-      db.prepare('DELETE FROM files WHERE file_path = ?').run(filePath);
-    } finally {
-      db.close();
-    }
+    db.prepare('DELETE FROM chunks WHERE file_path = ?').run(filePath);
+    db.prepare('DELETE FROM files WHERE file_path = ?').run(filePath);
 
     if (!vectors || vectors.length !== oldIds.length) {
       this._clearVectorsFile();
@@ -637,6 +635,21 @@ export class RAGStore {
 
     if (vecs.length === 0 || queryEmbedding.length === 0) return [];
 
+    // Pre-filter by filePattern before scoring — avoids scoring + sorting
+    // vectors that will be discarded. Compile regex once (P1-3).
+    if (filePattern) {
+      const re = compilePattern(filePattern);
+      const filtered: { vec: number[]; chk: ChunkRow }[] = [];
+      for (let i = 0; i < chks.length; i++) {
+        if (re.test(chks[i]!.file_path)) {
+          filtered.push({ vec: vecs[i]!, chk: chks[i]! });
+        }
+      }
+      if (filtered.length === 0) return [];
+      vecs = filtered.map((f) => f.vec);
+      chks = filtered.map((f) => f.chk);
+    }
+
     // Dimension check
     const dim = vecs[0]!.length;
     if (queryEmbedding.length !== dim) {
@@ -658,7 +671,6 @@ export class RAGStore {
     for (const { score, idx } of indexed) {
       if (results.length >= k) break;
       const chunk = chks[idx]!;
-      if (filePattern && !matchPattern(chunk.file_path, filePattern)) continue;
       results.push({
         filePath: chunk.file_path,
         content: chunk.content,
@@ -681,68 +693,52 @@ export class RAGStore {
     }
 
     const db = this._getDb();
-    try {
-      const chunkCount = (
-        db.prepare('SELECT COUNT(*) as cnt FROM chunks').get() as { cnt: number }
-      ).cnt;
-      const fileCount = (
-        db.prepare('SELECT COUNT(*) as cnt FROM files').get() as { cnt: number }
-      ).cnt;
-      const lastRow = db
-        .prepare('SELECT value FROM meta WHERE key = ?')
-        .get('last_indexed') as { value: string } | undefined;
-      const durationRow = db
-        .prepare('SELECT value FROM meta WHERE key = ?')
-        .get('last_index_duration') as { value: string } | undefined;
+    const chunkCount = (
+      db.prepare('SELECT COUNT(*) as cnt FROM chunks').get() as { cnt: number }
+    ).cnt;
+    const fileCount = (
+      db.prepare('SELECT COUNT(*) as cnt FROM files').get() as { cnt: number }
+    ).cnt;
+    const lastRow = db
+      .prepare('SELECT value FROM meta WHERE key = ?')
+      .get('last_indexed') as { value: string } | undefined;
+    const durationRow = db
+      .prepare('SELECT value FROM meta WHERE key = ?')
+      .get('last_index_duration') as { value: string } | undefined;
 
-      return {
-        totalChunks: chunkCount,
-        totalFiles: fileCount,
-        lastIndexed: lastRow?.value ?? null,
-        lastIndexDuration: durationRow ? parseFloat(durationRow.value) : null,
-      };
-    } finally {
-      db.close();
-    }
+    return {
+      totalChunks: chunkCount,
+      totalFiles: fileCount,
+      lastIndexed: lastRow?.value ?? null,
+      lastIndexDuration: durationRow ? parseFloat(durationRow.value) : null,
+    };
   }
 
   recordIndexDuration(duration: number): void {
     this._invalidateCache();
     const db = this._getDb();
-    try {
-      db.prepare(
-        'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
-      ).run('last_index_duration', String(duration));
-    } finally {
-      db.close();
-    }
+    db.prepare(
+      'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
+    ).run('last_index_duration', String(duration));
   }
 
   touchLastIndexed(): void {
     this._invalidateCache();
     const db = this._getDb();
-    try {
-      db.prepare(
-        'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
-      ).run('last_indexed', new Date().toISOString());
-    } finally {
-      db.close();
-    }
+    db.prepare(
+      'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
+    ).run('last_indexed', new Date().toISOString());
   }
 
   getFileHashes(): Map<string, string> {
     if (!fs.existsSync(this.dbPath)) return new Map();
 
     const db = this._getDb();
-    try {
-      const rows = db.prepare('SELECT file_path, hash FROM files').all() as {
-        file_path: string;
-        hash: string;
-      }[];
-      return new Map(rows.map((r) => [r.file_path, r.hash]));
-    } finally {
-      db.close();
-    }
+    const rows = db.prepare('SELECT file_path, hash FROM files').all() as {
+      file_path: string;
+      hash: string;
+    }[];
+    return new Map(rows.map((r) => [r.file_path, r.hash]));
   }
 
   updateFileHash(filePath: string, hash: string): void {
@@ -753,16 +749,12 @@ export class RAGStore {
     if (hashes.size === 0) return;
     this._invalidateCache();
     const db = this._getDb();
-    try {
-      const stmt = db.prepare(
-        'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) ' +
-          'VALUES (?, ?, COALESCE((SELECT chunk_count FROM files WHERE file_path = ?), 0))',
-      );
-      for (const [fp, h] of hashes) {
-        stmt.run(fp, h, fp);
-      }
-    } finally {
-      db.close();
+    const stmt = db.prepare(
+      'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) ' +
+        'VALUES (?, ?, COALESCE((SELECT chunk_count FROM files WHERE file_path = ?), 0))',
+    );
+    for (const [fp, h] of hashes) {
+      stmt.run(fp, h, fp);
     }
   }
 
@@ -771,6 +763,7 @@ export class RAGStore {
   // -------------------------------------------------------------------------
 
   clear(): void {
+    this.dispose();
     if (fs.existsSync(this.dbPath)) fs.unlinkSync(this.dbPath);
     this._clearVectorsFile();
     this._invalidateCache();
@@ -805,41 +798,29 @@ export class RAGStore {
 
   private _getOrderedChunkIds(): number[] {
     const db = this._getDb();
-    try {
-      const rows = db
-        .prepare('SELECT chunk_id FROM chunks ORDER BY chunk_id')
-        .all() as { chunk_id: number }[];
-      return rows.map((r) => r.chunk_id);
-    } finally {
-      db.close();
-    }
+    const rows = db
+      .prepare('SELECT chunk_id FROM chunks ORDER BY chunk_id')
+      .all() as { chunk_id: number }[];
+    return rows.map((r) => r.chunk_id);
   }
 
   private _chunkIdsForFile(filePath: string): number[] {
     const db = this._getDb();
-    try {
-      const rows = db
-        .prepare(
-          'SELECT chunk_id FROM chunks WHERE file_path = ? ORDER BY chunk_id',
-        )
-        .all(filePath) as { chunk_id: number }[];
-      return rows.map((r) => r.chunk_id);
-    } finally {
-      db.close();
-    }
+    const rows = db
+      .prepare(
+        'SELECT chunk_id FROM chunks WHERE file_path = ? ORDER BY chunk_id',
+      )
+      .all(filePath) as { chunk_id: number }[];
+    return rows.map((r) => r.chunk_id);
   }
 
   private _getAllChunks(): ChunkRow[] {
     const db = this._getDb();
-    try {
-      return db
-        .prepare(
-          'SELECT chunk_id, file_path, start_line, end_line, content FROM chunks ORDER BY chunk_id',
-        )
-        .all() as ChunkRow[];
-    } finally {
-      db.close();
-    }
+    return db
+      .prepare(
+        'SELECT chunk_id, file_path, start_line, end_line, content FROM chunks ORDER BY chunk_id',
+      )
+      .all() as ChunkRow[];
   }
 
   private _loadSearchData(): {
@@ -902,11 +883,17 @@ function cosineSimilarity(query: number[], vectors: number[][]): number[] {
 // Pattern matching
 // ---------------------------------------------------------------------------
 
-function matchPattern(filePath: string, pattern: string): boolean {
-  // Simple glob matching (fnmatch-like)
+/**
+ * Compile a glob pattern to a RegExp. Compile once, reuse for many matches.
+ */
+function compilePattern(pattern: string): RegExp {
   const regexStr = pattern
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*/g, '.*')
     .replace(/\?/g, '.');
-  return new RegExp(`^${regexStr}$`).test(filePath);
+  return new RegExp(`^${regexStr}$`);
+}
+
+function matchPattern(filePath: string, pattern: string): boolean {
+  return compilePattern(pattern).test(filePath);
 }

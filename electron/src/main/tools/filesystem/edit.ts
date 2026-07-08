@@ -9,6 +9,12 @@
  * - Triggers post-write callbacks (RAG, AST re-indexing).
  *
  * Ported from Python `src/orchid/tools/file_manipulation.py` lines 84-204.
+ *
+ * Security note (P1-2):
+ * This tool operates on arbitrary absolute paths with no restriction to the
+ * project directory. A malicious agent could modify sensitive files outside
+ * the workspace. Path sandboxing is deferred to R20 — the permission system
+ * will enforce directory restrictions.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -216,6 +222,13 @@ export const editHandler: ToolHandler = async (input: unknown) => {
     // Read original file mode for preservation after atomic write
     const stat = fs.statSync(file_path);
     const originalMode = stat.mode;
+
+    if (old_string === '') {
+      return {
+        display: 'Invalid old_string',
+        content: 'old_string must not be empty. Provide a non-empty string to match.',
+      };
+    }
 
     if (!content.includes(old_string)) {
       return {

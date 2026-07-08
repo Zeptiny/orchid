@@ -61,6 +61,9 @@ export function useChat(): UseChatReturn {
   const [streamingContent, setStreamingContent] = useState('');
   const [streamingThinking, setStreamingThinking] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // TODO: Wire up usage tracking — no IPC event populates this yet.
+  // The infrastructure (state, Footer display) is ready; needs a
+  // ChatUsageEvent from main→renderer to complete the data path.
   const [usage, setUsage] = useState<Usage | null>(null);
   const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);

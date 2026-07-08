@@ -8,16 +8,28 @@
  */
 
 import type { Session, SessionStorageDict } from './session';
-import type { SessionSummary } from '../../main/session/storage';
-import type { Config } from '../../main/config/schema';
 import type { Agent } from './agent';
-import type { MCPServerStatus } from '../../main/mcp/schema';
-import type { StoreStatus as RAGStoreStatus } from '../../main/rag/store';
-import type { StoreStatus as ASTStoreStatus } from '../../main/ast/store';
-import type { IndexResult as RAGIndexResult } from '../../main/rag/indexer';
-import type { IndexResult as ASTIndexResult } from '../../main/ast/indexer';
-export type { UpdaterState } from '../../main/updater';
-import type { UpdaterState } from '../../main/updater';
+import type {
+  SessionSummary,
+  Config,
+  MCPServerStatus,
+  RAGStoreStatus,
+  ASTStoreStatus,
+  RAGIndexResult,
+  ASTIndexResult,
+  UpdaterState,
+} from './ipc-boundary';
+
+export type {
+  SessionSummary,
+  Config,
+  MCPServerStatus,
+  RAGStoreStatus,
+  ASTStoreStatus,
+  RAGIndexResult,
+  ASTIndexResult,
+  UpdaterState,
+} from './ipc-boundary';
 
 // ── Chat API ─────────────────────────────────────────────────────────────────
 

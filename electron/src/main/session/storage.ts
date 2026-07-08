@@ -15,7 +15,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { Session, SessionStorageDict } from '../../shared/types/session';
 import { sessionToStorageDict, sessionFromStorageDict } from '../../shared/types/session';
+import type { SessionSummary } from '../../shared/types/ipc-boundary';
 import { atomicWriteJson } from '../config/loader';
+
+export type { SessionSummary } from '../../shared/types/ipc-boundary';
 
 // ---------------------------------------------------------------------------
 // Paths — default (production) locations
@@ -45,18 +48,6 @@ function resolveOptions(opts?: StorageOptions) {
     toolOutputCacheDir: opts?.toolOutputCacheDir ?? TOOL_OUTPUT_CACHE_DIR,
     webFetchCacheDir: opts?.webFetchCacheDir ?? WEB_FETCH_CACHE_DIR,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Session summary (for listing)
-// ---------------------------------------------------------------------------
-
-export interface SessionSummary {
-  readonly id: string;
-  readonly name: string;
-  readonly model: string | undefined;
-  readonly chainCount: number;
-  readonly updatedAt: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +85,23 @@ function extractJsonString(text: string, key: string): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * Try to extract the length of the "chains" array from partial JSON text.
+ * Returns the count if the complete array is found, undefined otherwise.
+ */
+function extractChainCount(text: string): number | undefined {
+  // Find the "chains" key and capture everything until the closing ]
+  const chainsPattern = /"chains"\s*:\s*([\s\S]*?\])/;
+  const match = chainsPattern.exec(text);
+  if (!match?.[1]) return undefined;
+  const arrayContent = match[1]!;
+  // Count top-level objects in the array by matching { ... } pairs.
+  // Use a non-greedy match of balanced braces (works for flat objects).
+  const objectPattern = /\{[^{}]*\}/g;
+  const objects = arrayContent.match(objectPattern);
+  return objects?.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,15 +214,31 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
       const model = extractJsonString(head, '"model"');
 
       if (sessionId) {
-        // Partial read succeeded — still need full parse for chain_count
-        const raw = fs.readFileSync(filePath, 'utf-8');
-        const data = JSON.parse(raw) as Record<string, unknown>;
-        const chains = Array.isArray(data.chains) ? data.chains : [];
+        // Try to get chainCount from partial read first (avoids double-read)
+        let chainCount = extractChainCount(head);
+        let parsedName = name ?? 'Unnamed';
+        let parsedModel = model;
+
+        if (chainCount === undefined) {
+          // Chains array extends beyond partial read — full parse needed
+          const raw = fs.readFileSync(filePath, 'utf-8');
+          const data = JSON.parse(raw) as Record<string, unknown>;
+          const chains = Array.isArray(data.chains) ? data.chains : [];
+          chainCount = chains.length;
+          // Also refine name/model from full parse if partial didn't get them
+          if (!parsedName || parsedName === 'Unnamed') {
+            parsedName = typeof data.name === 'string' ? data.name : 'Unnamed';
+          }
+          if (parsedModel === undefined) {
+            parsedModel = typeof data.model === 'string' ? data.model : undefined;
+          }
+        }
+
         sessions.push({
           id: sessionId,
-          name: name ?? 'Unnamed',
-          model,
-          chainCount: chains.length,
+          name: parsedName,
+          model: parsedModel,
+          chainCount,
           updatedAt: mtime,
         });
       } else {

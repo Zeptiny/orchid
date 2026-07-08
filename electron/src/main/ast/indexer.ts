@@ -17,6 +17,11 @@ import * as path from 'node:path';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from './parser';
 import { ASTStore, type Symbol } from './store';
 import { getConfig } from '../config';
+import type { ASTIndexResult } from '../../shared/types/ipc-boundary';
+
+export type { ASTIndexResult } from '../../shared/types/ipc-boundary';
+/** @deprecated Use ASTIndexResult from shared/types/ipc-boundary */
+export type IndexResult = ASTIndexResult;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -46,17 +51,7 @@ export function isIndexing(): boolean {
 // Types
 // ---------------------------------------------------------------------------
 
-export interface IndexResult {
-  filesScanned: number;
-  filesIndexed: number;
-  filesSkipped: number;
-  filesDeleted: number;
-  symbolsExtracted: number;
-  errors: string[];
-  durationSeconds: number;
-}
-
-function makeIndexResult(): IndexResult {
+function makeIndexResult(): ASTIndexResult {
   return {
     filesScanned: 0,
     filesIndexed: 0,
@@ -134,7 +129,7 @@ export async function indexProject(opts: {
   projectPath?: string;
   force?: boolean;
   progressCallback?: (filePath: string, done: number, total: number) => void;
-} = {}): Promise<IndexResult> {
+} = {}): Promise<ASTIndexResult> {
   if (_indexing) {
     console.warn('AST indexing already in progress, skipping');
     return makeIndexResult();
@@ -155,7 +150,7 @@ async function indexProjectImpl(opts: {
   projectPath?: string;
   force?: boolean;
   progressCallback?: (filePath: string, done: number, total: number) => void;
-}): Promise<IndexResult> {
+}): Promise<ASTIndexResult> {
   const { force = false, progressCallback } = opts;
   let { projectPath } = opts;
 

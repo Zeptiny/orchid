@@ -7,6 +7,12 @@
  * - Triggers post-write callbacks (RAG, AST re-indexing).
  *
  * Ported from Python `src/orchid/tools/file_manipulation.py` lines 311-347.
+ *
+ * Security note (P1-2):
+ * This tool operates on arbitrary absolute paths with no restriction to the
+ * project directory. A malicious agent could write to sensitive locations
+ * outside the workspace. Path sandboxing is deferred to R20 — the permission
+ * system will enforce directory restrictions.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';

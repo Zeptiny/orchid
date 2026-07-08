@@ -17,11 +17,8 @@
  * - Partial: truncated content + "show more"
  */
 import { useState, useCallback, useEffect } from 'react';
-import type { SessionSummary } from '../../main/session/storage';
+import type { SessionSummary, MCPServerStatus, RAGStoreStatus, ASTStoreStatus } from '../../shared/types/ipc-boundary';
 import { TodoStatus } from '../../shared/types/todo';
-import type { MCPServerStatus } from '../../main/mcp/schema';
-import type { StoreStatus as RAGStoreStatus } from '../../main/rag/store';
-import type { StoreStatus as ASTStoreStatus } from '../../main/ast/store';
 import type { SessionListState } from '../hooks/useSession';
 import type { SubagentListState } from '../hooks/useSubagents';
 import type { TodoListState } from '../hooks/useTodos';

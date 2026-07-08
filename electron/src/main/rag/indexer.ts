@@ -16,7 +16,12 @@ import { getConfig } from '../config/loader';
 import { chunkFile } from './chunker';
 import { Embedder } from './embedder';
 import { RAGStore } from './store';
-import type { StoreStatus } from './store';
+import type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
+import type { RAGIndexResult } from '../../shared/types/ipc-boundary';
+
+export type { RAGIndexResult } from '../../shared/types/ipc-boundary';
+/** @deprecated Use RAGIndexResult from shared/types/ipc-boundary */
+export type IndexResult = RAGIndexResult;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -37,20 +42,6 @@ const DEFAULT_IGNORED_DIRS = new Set([
   '.orchid', 'dist', 'build',
   '.next', '.cache', 'target',
 ]);
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface IndexResult {
-  filesScanned: number;
-  filesIndexed: number;
-  filesSkipped: number;
-  filesDeleted: number;
-  chunksCreated: number;
-  errors: string[];
-  durationSeconds: number;
-}
 
 // ---------------------------------------------------------------------------
 // Module-level state
@@ -309,7 +300,7 @@ export async function updateFile(
 // Status / clear
 // ---------------------------------------------------------------------------
 
-export function getStatus(projectPath?: string): StoreStatus {
+export function getStatus(projectPath?: string): RAGStoreStatus {
   const root = projectPath ?? process.cwd();
   const store = new RAGStore(root);
   return store.status();

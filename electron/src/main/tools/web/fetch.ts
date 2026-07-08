@@ -9,9 +9,17 @@
  * - Only allow http/https schemes
  * - Maximum response body size cap
  * - Fetch via fetch() with 30s timeout
+ * - Post-redirect URL validation: re-validates the final URL after following
+ *   redirects to prevent SSRF via redirect bypass (e.g., public → 127.0.0.1)
  * - Summarize mode: HTML to markdown, sends to web-fetch agent
  * - Raw mode: markdown; >10K chars → cache file
  * - Title extraction via HTML parsing
+ *
+ * Known limitation (P1-1):
+ * - DNS rebinding TOCTOU: Hostname is validated at check time but resolved at
+ *   fetch time. A DNS rebinding attack could resolve to a private IP between
+ *   validation and fetch. Full mitigation requires pre-resolving via dns.lookup
+ *   and validating the resolved IP, which is deferred.
  */
 import TurndownService from 'turndown';
 import { z } from 'zod';
@@ -366,6 +374,17 @@ export function buildWebFetchTool(
         };
       }
       return { display: 'Fetch failed', content: `Error: ${message}` };
+    }
+
+    // Validate final URL after redirects to prevent SSRF bypass.
+    // An attacker could set up a redirect from a public URL to a private IP.
+    const finalUrlAfterRedirect = response.url || url;
+    const redirectError = validateUrl(finalUrlAfterRedirect);
+    if (redirectError) {
+      return {
+        display: 'Redirect blocked',
+        content: `Error: Redirect to blocked URL (${redirectError})`,
+      };
     }
 
     // Check HTTP status

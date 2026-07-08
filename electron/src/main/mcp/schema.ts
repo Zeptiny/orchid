@@ -14,6 +14,9 @@
  * - "unavailable": overall startup budget exhausted before this server started
  */
 import { z } from 'zod';
+import type { MCPServerStatus, MCPServerStatusValue } from '../../shared/types/ipc-boundary';
+
+export type { MCPServerStatus, MCPServerStatusValue } from '../../shared/types/ipc-boundary';
 
 // ---------------------------------------------------------------------------
 // Server name validation — matches Python `_MCP_SERVER_NAME_RE = r"^[a-z0-9-]+$"`
@@ -53,20 +56,3 @@ export const mcpServerConfigSchema = z
   .passthrough();
 
 export type MCPServerConfig = z.infer<typeof mcpServerConfigSchema>;
-
-// ---------------------------------------------------------------------------
-// MCPServerStatus type
-// ---------------------------------------------------------------------------
-
-export type MCPServerStatusValue = 'starting' | 'connected' | 'failed' | 'unavailable';
-
-export interface MCPServerStatus {
-  /** Server name (key from mcp_servers config). */
-  name: string;
-  /** Current lifecycle state. */
-  status: MCPServerStatusValue;
-  /** Number of tools discovered from this server. */
-  toolCount: number;
-  /** Error message if status is "failed" or "unavailable", null otherwise. */
-  error: string | null;
-}

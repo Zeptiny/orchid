@@ -201,7 +201,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     tools: Object.keys(tools).length > 0 ? tools : undefined,
     maxSteps,
     abortSignal,
-    onStepFinish: async ({ usage }) => {
+    onStepFinish: async ({ usage, toolResults }) => {
       if (usage) {
         totalUsage = {
           prompt_tokens: totalUsage.prompt_tokens + (usage.promptTokens ?? 0),
@@ -209,6 +209,17 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           total_tokens: totalUsage.total_tokens + (usage.totalTokens ?? 0),
           cached_tokens: totalUsage.cached_tokens,
         };
+      }
+      // Capture tool results for yielding to the UI (AI SDK doesn't yield
+      // tool-result in the stream, so we capture them here from the callback).
+      if (toolResults) {
+        for (const tr of toolResults as Array<{ toolCallId: string; result: unknown; isError?: boolean }>) {
+          pendingToolResults.push({
+            toolCallId: tr.toolCallId,
+            content: typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result),
+            isError: tr.isError ?? false,
+          });
+        }
       }
     },
   });
@@ -249,14 +260,6 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             const tr = pendingToolResults.shift()!;
             yield { type: 'tool_result', ...tr };
           }
-          if (chunk.usage) {
-            totalUsage = {
-              prompt_tokens: totalUsage.prompt_tokens + (chunk.usage.promptTokens ?? 0),
-              completion_tokens: totalUsage.completion_tokens + (chunk.usage.completionTokens ?? 0),
-              total_tokens: totalUsage.total_tokens + (chunk.usage.totalTokens ?? 0),
-              cached_tokens: totalUsage.cached_tokens,
-            };
-          }
           yield {
             type: 'step_finish',
             stepIndex: 0,
@@ -270,14 +273,6 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           while (pendingToolResults.length > 0) {
             const tr = pendingToolResults.shift()!;
             yield { type: 'tool_result', ...tr };
-          }
-          if (chunk.usage) {
-            totalUsage = {
-              prompt_tokens: totalUsage.prompt_tokens + (chunk.usage.promptTokens ?? 0),
-              completion_tokens: totalUsage.completion_tokens + (chunk.usage.completionTokens ?? 0),
-              total_tokens: totalUsage.total_tokens + (chunk.usage.totalTokens ?? 0),
-              cached_tokens: totalUsage.cached_tokens,
-            };
           }
           yield { type: 'finish', finishReason: chunk.finishReason };
           break;
