@@ -61,7 +61,7 @@ function createStreamFn(config: Config, messages: Message[]) {
       config.tier_models[params.agent.tier] || config.default_model,
       config,
     );
-    const modelInstance = createProviderModel(modelRef);
+    const modelInstance = await createProviderModel(modelRef);
 
     // Build system prompt context
     const context = {
