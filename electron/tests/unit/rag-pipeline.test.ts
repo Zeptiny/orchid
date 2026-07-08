@@ -390,6 +390,9 @@ describe('Store', () => {
       [[1.0, 0.0]],
     );
 
+    // Close cached connection so corruption is detected on next access
+    store.dispose();
+
     // Corrupt the DB file
     fs.writeFileSync(store.dbPath, 'corrupted data');
 
