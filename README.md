@@ -1,5 +1,7 @@
 # Orchid
 
+> **Desktop App:** Orchid is being migrated from a Python Textual TUI to a standalone TypeScript/Electron desktop app. See [Desktop App Migration](#desktop-app-migration) for details.
+
 ## Sobre o Projeto
 
 **Orchid** é um agente de terminal com arquitetura multiagente, focado em engenharia de software assistida por IA. Ele opera diretamente no terminal do desenvolvedor como um copiloto capaz de explorar código, implementar funcionalidades, revisar alterações, executar comandos, gerenciar tarefas e documentar aprendizado - tudo por meio de uma interface TUI (Textual User Interface).
@@ -762,7 +764,203 @@ Troque com `/theme` (Ctrl+P → `/theme`):
 
 ---
 
-## Estrutura do Projeto
+## Desktop App Migration
+
+Orchid is being migrated from a Python Textual TUI to a standalone **TypeScript/Electron desktop app** for public release on macOS, Windows, and Linux.
+
+### Status
+
+**All 29 implementation units complete.** The migration covers:
+
+| Phase | What | Status |
+|-------|------|--------|
+| **A: Foundation** | Project scaffolding, XState + AI SDK + zod spike (go/no-go gate) | ✅ |
+| **B: Core Infrastructure** | Config (22 fields), domain models, session persistence, agent/skill loading, tool registry | ✅ |
+| **C: LLM & Agents** | AI SDK middleware, stream orchestrator, XState actor hierarchy, subagent tools, MCP client | ✅ |
+| **D: Tool Port** | All 27 tools ported (filesystem, search, process, todo, web, RAG, AST, skill, MCP) | ✅ |
+| **E: UI Shell** | Electron shell, chat + sidebar, command palette, native tool widgets, preferences, onboarding | ✅ |
+| **F: Cross-Platform** | OS keychain, packaging (dmg/nsis/AppImage/deb), auto-update, parity tests, architecture validation | ✅ |
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Main Process (Node.js)                                          │
+│                                                                 │
+│  XState Actors  │  AI SDK Middleware  │  Tool Registry (27)     │
+│  (session/agent │  (retry/throttle/   │  zod → TS types         │
+│   /subagent/    │   error/quirks)     │  zod → JSON Schema      │
+│   interrupt)    │                     │  zod → IPC validation   │
+│                 │                     │                         │
+│  Session Mgr    │  Provider Resolution│  MCP Manager            │
+│  (JSON disk)    │  (openai/anthropic/ │  (@modelcontextprotocol)│
+│                 │   google/groq/xai)  │                         │
+│                 │                     │                         │
+│  RAG Worker     │  AST Worker         │  Background Process     │
+│  (onnxruntime   │  (tree-sitter       │  Store (PTY,            │
+│   + SQLite)     │   + SQLite)         │   HeadTailBuffer)       │
+│                 │                     │                         │
+│  Config         │  OS Keychain        │                         │
+│  (3-layer       │  (safeStorage)      │                         │
+│   deep-merge)   │                     │                         │
+└────────────────────────┬────────────────────────────────────────┘
+                         │ IPC (contextBridge + ipcMain.handle)
+                         │ zod-validated payloads
+┌────────────────────────┴────────────────────────────────────────┐
+│ Renderer Process (Chromium + React)                              │
+│                                                                  │
+│  Chat Stream  │  Sidebar          │  Command Palette (Cmd+K)     │
+│  (messages,   │  (sessions,       │  (fuzzy search, 12 commands) │
+│   streaming)  │   subagents,      │                              │
+│               │   todos, MCP,     │                              │
+│               │   index)          │                              │
+│                                                                  │
+│  Tool Widgets Side Rail (R21)                                    │
+│  Monaco Diff │ xterm.js │ FilePreview │ ResultsTable             │
+│                                                                  │
+│  Preferences (5 tabs) │ Onboarding (6 steps) │ 5 Themes          │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| **Runtime** | Electron + Node.js |
+| **Frontend** | React + TypeScript |
+| **State** | XState v5 (actor hierarchy) |
+| **LLM** | Vercel AI SDK v5 (composable middleware) |
+| **Validation** | Zod v3 (single source of truth) |
+| **MCP** | @modelcontextprotocol/sdk (TypeScript) |
+| **RAG** | onnxruntime-node + better-sqlite3 |
+| **AST** | web-tree-sitter (WASM) |
+| **Editor** | Monaco Editor (diff widget) |
+| **Terminal** | xterm.js |
+| **Build** | Vite + electron-builder |
+| **Tests** | Vitest |
+
+### Key Design Decisions
+
+- **XState actor hierarchy**: Session → Agent → Stream → Tool Executor → Subagent. Hybrid granularity (entity actors + per-operation child actors).
+- **AI SDK middleware**: Composable stack — retry (content-delivered guard), throttle, error classification (13 branches), provider quirks.
+- **Tool schema co-location**: Each tool directory has `schema.ts` (zod), `handler.ts`, `index.ts`. Single source of truth for types, IPC validation, JSON Schema, MCP exposure.
+- **Zod as contract layer**: Zod schemas produce TypeScript types, IPC validation, JSON Schema (via zod-to-json-schema), and MCP tool definitions.
+- **Atomic writes**: All persistence (config, sessions, keychain) uses temp + fsync + replace + chmod 600.
+- **Post-write callbacks**: Edit/write tools trigger RAG and AST re-indexing automatically.
+
+### Deferred Features
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| R19. Agent graph as primary interface | Deferred indefinitely | Interface will change before this can be added |
+| R20. Diff-gated approval / permission system | Deferred | Holistic security design needed |
+| R22. Annotated diff code review | Deferred | See `docs/plans/deferred-features-todo.md` |
+
+### Review Findings
+
+All P0 and P1 findings from the code review have been fixed. P2/P3 findings are documented in:
+- `docs/plans/ts-electron-migration-review-findings-p2-p3.md`
+
+### Desktop App Structure
+
+```
+electron/
+  package.json
+  tsconfig.json
+  vite.config.ts
+  electron-builder.yml
+  src/
+    main/                           # Electron main process
+      index.ts                      # App entry, window management
+      config/                       # Config system (loader, merge, validation, keychain)
+      session/                      # Session persistence (storage, manager)
+      llm/                          # LLM streaming
+        middleware/                  # AI SDK middleware (retry, throttle, error, quirks)
+        stream.ts                   # streamText wrapper
+        providers.ts                # Provider resolution
+        orchestrator.ts             # Main stream orchestrator
+        history.ts                  # History conversion (tool_call/tool_result pairing)
+      agents/                       # Agent system
+        registry.ts                 # AGENT.md loading, tier resolution
+        manager.ts                  # SubagentManager
+        xstate/                     # XState machines
+          session-machine.ts
+          agent-machine.ts
+          interrupt-machine.ts
+          subagent-machine.ts
+      tools/                        # Tool registry + all 27 handlers
+        registry.ts                 # Zod tool registry framework
+        filesystem/                 # read, edit, write, read_directory, glob
+        search/                     # grep
+        process/                    # execute_command, read_output, send_input, terminate_command
+        todo/                       # todo_create, todo_update, todo_list, todo_delete
+        web/                        # web_fetch
+        rag/                        # rag_search, rag_index
+        ast/                        # 5 AST tools
+        subagent/                   # delegate_to_subagent, wait_for_subagent, interrupt_subagents
+        skill/                      # skill (dynamic building, dependency resolution)
+        mcp/                        # read_mcp_resource
+      mcp/                          # MCP client (@modelcontextprotocol/sdk)
+      rag/                          # RAG subsystem (chunker, embedder, indexer, store)
+      ast/                          # AST subsystem (parser, indexer, store, queries/)
+      skills/                       # Skills system (loading, registry)
+      personality/                  # Personality system (loading, registry)
+      commands/                     # Command palette (registry, slash commands)
+    renderer/                       # Electron renderer (React)
+      App.tsx
+      components/
+        ChatStream.tsx
+        Sidebar.tsx
+        MessageWidget.tsx
+        CommandPalette.tsx
+        ToolWidgets/                # R21: Native tool-call widgets
+          DiffWidget.tsx
+          TerminalWidget.tsx
+          FilePreview.tsx
+          ResultsTable.tsx
+        Preferences/
+        Onboarding/
+      hooks/
+        useChat.ts
+        useSession.ts
+        useSubagents.ts
+        useTodos.ts
+        useToolRail.ts
+      themes/                       # 5 CSS themes
+      styles/
+    shared/                         # Shared between main and renderer
+      types/                        # TypeScript type definitions
+        ipc-boundary.ts             # IPC boundary contract types
+    preload/                        # Preload script (contextBridge)
+      index.ts
+  tests/
+    unit/                           # Unit tests per module
+    integration/                    # Integration tests per subsystem
+    parity/                         # Parity tests (one per tool, agent, skill, config field)
+```
+
+### Running the Desktop App
+
+```bash
+cd electron
+npm install
+npm run dev          # Start Electron with Vite dev server
+npm run typecheck    # Type-check (strict mode)
+npm run test         # Run test suite (Vitest)
+npm run build        # Build for production
+npm run package      # Package for current platform
+```
+
+### Environment Variables (Desktop App)
+
+| Variable | Purpose |
+|----------|---------|
+| `LLM_BASE_URL` | LLM provider base URL (for E2E tests) |
+| `LLM_API_KEY` | LLM provider API key (for E2E tests) |
+
+---
+
+## Estrutura do Projeto (Python TUI — Original)
 
 ```
 pyproject.toml
