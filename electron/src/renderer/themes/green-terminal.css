@@ -1,0 +1,113 @@
+/**
+ * Green Terminal theme — matrix-style.
+ *
+ * A retro CRT terminal aesthetic with green phosphor text on black.
+ * For the hacker aesthetic.
+ */
+:root {
+  /* Background colors */
+  --bg-primary: #0a0a0a;
+  --bg-secondary: #0f0f0f;
+  --bg-tertiary: #141414;
+  --bg-surface: #0a0a0a;
+  --bg-surface-raised: #111111;
+  --bg-surface-overlay: #181818;
+
+  /* Text colors */
+  --text-primary: #00ff41;
+  --text-secondary: #00cc33;
+  --text-tertiary: #009926;
+  --text-inverse: #0a0a0a;
+
+  /* Accent colors */
+  --accent-primary: #00ff41;
+  --accent-primary-hover: #33ff66;
+  --accent-secondary: #00ccff;
+  --accent-success: #00ff41;
+  --accent-warning: #ffff00;
+  --accent-error: #ff3333;
+  --accent-info: #00ccff;
+
+  /* Border colors */
+  --border-default: #1a3a1a;
+  --border-subtle: #0f2a0f;
+  --border-strong: #2a5a2a;
+  --border-focus: #00ff41;
+
+  /* Message colors */
+  --msg-user-bg: #0a2a0a;
+  --msg-user-text: #00ff41;
+  --msg-assistant-bg: #0f1f0f;
+  --msg-assistant-text: #00cc33;
+  --msg-system-bg: #0a1a0a;
+  --msg-system-text: #009926;
+  --msg-error-bg: #2a0a0a;
+  --msg-error-text: #ff3333;
+  --msg-thinking-bg: #0a0f1a;
+  --msg-thinking-text: #00ccff;
+
+  /* Input colors */
+  --input-bg: #0f0f0f;
+  --input-border: #1a3a1a;
+  --input-focus-border: #00ff41;
+  --input-text: #00ff41;
+  --input-placeholder: #006616;
+
+  /* Button colors */
+  --btn-primary-bg: #00ff41;
+  --btn-primary-text: #0a0a0a;
+  --btn-primary-hover: #33ff66;
+  --btn-secondary-bg: #1a3a1a;
+  --btn-secondary-text: #00ff41;
+  --btn-secondary-hover: #2a5a2a;
+  --btn-danger-bg: #ff3333;
+  --btn-danger-text: #0a0a0a;
+  --btn-danger-hover: #ff6666;
+
+  /* Sidebar colors */
+  --sidebar-bg: #0f0f0f;
+  --sidebar-border: #1a3a1a;
+  --sidebar-item-hover: #142a14;
+  --sidebar-item-active: #0a2a0a;
+
+  /* Scrollbar */
+  --scrollbar-thumb: #2a5a2a;
+  --scrollbar-track: transparent;
+
+  /* Shadows */
+  --shadow-sm: 0 0 4px rgba(0, 255, 65, 0.1);
+  --shadow-md: 0 0 8px rgba(0, 255, 65, 0.15);
+  --shadow-lg: 0 0 16px rgba(0, 255, 65, 0.2);
+
+  /* Typography */
+  --font-family: 'IBM Plex Mono', 'Fira Code', monospace;
+  --font-mono: 'IBM Plex Mono', 'Fira Code', monospace;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.8125rem;
+  --font-size-base: 0.9375rem;
+  --font-size-lg: 1.0625rem;
+  --font-size-xl: 1.1875rem;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  /* Border radius */
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-full: 0;
+
+  /* Transitions */
+  --transition-fast: 100ms step-end;
+  --transition-normal: 150ms step-end;
+  --transition-slow: 200ms step-end;
+
+  /* CRT scanline effect (applied via pseudo-element) */
+  --crt-scanline-opacity: 0.03;
+  --crt-glow-color: rgba(0, 255, 65, 0.15);
+}

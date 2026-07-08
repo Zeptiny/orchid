@@ -1,0 +1,112 @@
+/**
+ * DiffWidget — Monaco editor in diff mode for edit/write/replace tools.
+ *
+ * Shows before/after diff with syntax highlighting based on file extension.
+ * Read-only (no editing in the widget).
+ *
+ * Supported tools: edit, write, replace_symbol, rename_symbol.
+ */
+import { useMemo } from 'react';
+import { DiffEditor } from '@monaco-editor/react';
+import type { ToolCallEvent, DiffData } from './types';
+import { detectLanguage } from './types';
+
+// ── Props ────────────────────────────────────────────────────────────────────
+
+interface DiffWidgetProps {
+  /** The tool call event. */
+  event: ToolCallEvent;
+}
+
+// ── Extract diff data from tool call ─────────────────────────────────────────
+
+function extractDiffData(event: ToolCallEvent): DiffData {
+  const args = event.args;
+  const filePath = (args.file_path as string) ?? '';
+
+  // For edit/replace_symbol: old_string → new_string
+  if (event.toolName === 'edit' || event.toolName === 'replace_symbol') {
+    const original = (args.old_string as string) ?? '';
+    const modified = (args.new_string as string) ?? '';
+    return {
+      original,
+      modified,
+      filePath,
+      language: detectLanguage(filePath),
+    };
+  }
+
+  // For write: empty → content
+  if (event.toolName === 'write') {
+    const content = (args.content as string) ?? '';
+    return {
+      original: '',
+      modified: content,
+      filePath,
+      language: detectLanguage(filePath),
+    };
+  }
+
+  // For rename_symbol: old name → new name (show as text diff)
+  if (event.toolName === 'rename_symbol') {
+    const oldName = (args.old_name as string) ?? '';
+    const newName = (args.new_name as string) ?? '';
+    return {
+      original: oldName,
+      modified: newName,
+      filePath,
+      language: 'plaintext',
+    };
+  }
+
+  return {
+    original: '',
+    modified: '',
+    filePath,
+    language: 'plaintext',
+  };
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
+
+export function DiffWidget({ event }: DiffWidgetProps) {
+  const diffData = useMemo(() => extractDiffData(event), [event]);
+
+  return (
+    <div className="tool-widget-diff">
+      <div className="tool-widget-diff-header">
+        <span className="tool-widget-diff-label">
+          {event.toolName === 'write' ? 'New File' : 'Diff'}
+        </span>
+        {diffData.filePath && (
+          <span className="tool-widget-diff-path">{diffData.filePath}</span>
+        )}
+      </div>
+      <div className="tool-widget-diff-editor">
+        <DiffEditor
+          height="100%"
+          language={diffData.language}
+          original={diffData.original}
+          modified={diffData.modified}
+          theme="vs-dark"
+          options={{
+            readOnly: true,
+            renderSideBySide: true,
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            wordWrap: 'on',
+            fontSize: 12,
+            lineNumbers: 'on',
+            folding: false,
+            overviewRulerLanes: 0,
+            hideCursorInOverviewRuler: true,
+            scrollbar: {
+              verticalScrollbarSize: 8,
+              horizontalScrollbarSize: 8,
+            },
+          }}
+        />
+      </div>
+    </div>
+  );
+}

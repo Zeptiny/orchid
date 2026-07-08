@@ -1,0 +1,109 @@
+/**
+ * Bluey theme — dark blue/purple.
+ *
+ * A deep blue-purple dark theme with cool tones.
+ * Inspired by cosmic/aurora aesthetics.
+ */
+:root {
+  /* Background colors */
+  --bg-primary: #0d1b2a;
+  --bg-secondary: #1b2838;
+  --bg-tertiary: #253545;
+  --bg-surface: #0d1b2a;
+  --bg-surface-raised: #162636;
+  --bg-surface-overlay: #1e3044;
+
+  /* Text colors */
+  --text-primary: #c9d1d9;
+  --text-secondary: #8b949e;
+  --text-tertiary: #6e7681;
+  --text-inverse: #0d1b2a;
+
+  /* Accent colors */
+  --accent-primary: #58a6ff;
+  --accent-primary-hover: #79b8ff;
+  --accent-secondary: #bc8cff;
+  --accent-success: #56d364;
+  --accent-warning: #e3b341;
+  --accent-error: #f85149;
+  --accent-info: #79c0ff;
+
+  /* Border colors */
+  --border-default: #253545;
+  --border-subtle: #1e3044;
+  --border-strong: #354555;
+  --border-focus: #58a6ff;
+
+  /* Message colors */
+  --msg-user-bg: #1a3a5c;
+  --msg-user-text: #c9d1d9;
+  --msg-assistant-bg: #1e3044;
+  --msg-assistant-text: #c9d1d9;
+  --msg-system-bg: #162636;
+  --msg-system-text: #8b949e;
+  --msg-error-bg: #3d1f28;
+  --msg-error-text: #f85149;
+  --msg-thinking-bg: #1a2636;
+  --msg-thinking-text: #8b949e;
+
+  /* Input colors */
+  --input-bg: #162636;
+  --input-border: #253545;
+  --input-focus-border: #58a6ff;
+  --input-text: #c9d1d9;
+  --input-placeholder: #6e7681;
+
+  /* Button colors */
+  --btn-primary-bg: #58a6ff;
+  --btn-primary-text: #0d1b2a;
+  --btn-primary-hover: #79b8ff;
+  --btn-secondary-bg: #253545;
+  --btn-secondary-text: #c9d1d9;
+  --btn-secondary-hover: #354555;
+  --btn-danger-bg: #f85149;
+  --btn-danger-text: #0d1b2a;
+  --btn-danger-hover: #ff6e6a;
+
+  /* Sidebar colors */
+  --sidebar-bg: #1b2838;
+  --sidebar-border: #253545;
+  --sidebar-item-hover: #253545;
+  --sidebar-item-active: #1a3a5c;
+
+  /* Scrollbar */
+  --scrollbar-thumb: #354555;
+  --scrollbar-track: transparent;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5);
+
+  /* Typography */
+  --font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.25rem;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  /* Border radius */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-full: 9999px;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+}

@@ -1,0 +1,61 @@
+/**
+ * useTodos — subscribes to todo state updates.
+ *
+ * Provides:
+ * - Todo list from active session
+ * - Loading/error states (interaction states)
+ */
+import { useState, useEffect, useCallback } from 'react';
+import type { Todo } from '../../shared/types/todo';
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+export type TodoListState =
+  | { status: 'loading' }
+  | { status: 'empty' }
+  | { status: 'ready'; todos: readonly Todo[] }
+  | { status: 'error'; error: string };
+
+export interface UseTodosReturn {
+  /** Todo list state with interaction states. */
+  state: TodoListState;
+  /** Refresh todo list from active session. */
+  refresh: () => Promise<void>;
+}
+
+// ── Hook ─────────────────────────────────────────────────────────────────────
+
+export function useTodos(activeSessionId: string | null): UseTodosReturn {
+  const [state, setState] = useState<TodoListState>({ status: 'loading' });
+
+  const refresh = useCallback(async () => {
+    if (!activeSessionId) {
+      setState({ status: 'empty' });
+      return;
+    }
+
+    try {
+      const session = await window.orchid.session.load({ id: activeSessionId });
+      if (!session) {
+        setState({ status: 'empty' });
+        return;
+      }
+
+      const todos = session.todoStore.tasks;
+      if (todos.length === 0) {
+        setState({ status: 'empty' });
+      } else {
+        setState({ status: 'ready', todos });
+      }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      setState({ status: 'error', error });
+    }
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  return { state, refresh };
+}

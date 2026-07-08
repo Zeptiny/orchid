@@ -1,0 +1,109 @@
+/**
+ * Solarized Light theme.
+ *
+ * A warm, low-contrast light theme based on the Solarized palette.
+ * Easy on the eyes for daytime use.
+ */
+:root {
+  /* Background colors */
+  --bg-primary: #fdf6e3;
+  --bg-secondary: #eee8d5;
+  --bg-tertiary: #ddd6c1;
+  --bg-surface: #fdf6e3;
+  --bg-surface-raised: #f5efdc;
+  --bg-surface-overlay: #eee8d5;
+
+  /* Text colors */
+  --text-primary: #657b83;
+  --text-secondary: #839496;
+  --text-tertiary: #93a1a1;
+  --text-inverse: #fdf6e3;
+
+  /* Accent colors */
+  --accent-primary: #268bd2;
+  --accent-primary-hover: #1a6fb0;
+  --accent-secondary: #6c71c4;
+  --accent-success: #859900;
+  --accent-warning: #b58900;
+  --accent-error: #dc322f;
+  --accent-info: #2aa198;
+
+  /* Border colors */
+  --border-default: #ddd6c1;
+  --border-subtle: #eee8d5;
+  --border-strong: #93a1a1;
+  --border-focus: #268bd2;
+
+  /* Message colors */
+  --msg-user-bg: #d3e0e8;
+  --msg-user-text: #586e75;
+  --msg-assistant-bg: #eee8d5;
+  --msg-assistant-text: #657b83;
+  --msg-system-bg: #f5efdc;
+  --msg-system-text: #839496;
+  --msg-error-bg: #fce4e4;
+  --msg-error-text: #dc322f;
+  --msg-thinking-bg: #e8e2cf;
+  --msg-thinking-text: #93a1a1;
+
+  /* Input colors */
+  --input-bg: #fdf6e3;
+  --input-border: #ddd6c1;
+  --input-focus-border: #268bd2;
+  --input-text: #657b83;
+  --input-placeholder: #93a1a1;
+
+  /* Button colors */
+  --btn-primary-bg: #268bd2;
+  --btn-primary-text: #fdf6e3;
+  --btn-primary-hover: #1a6fb0;
+  --btn-secondary-bg: #ddd6c1;
+  --btn-secondary-text: #657b83;
+  --btn-secondary-hover: #ccc5af;
+  --btn-danger-bg: #dc322f;
+  --btn-danger-text: #fdf6e3;
+  --btn-danger-hover: #c0292a;
+
+  /* Sidebar colors */
+  --sidebar-bg: #eee8d5;
+  --sidebar-border: #ddd6c1;
+  --sidebar-item-hover: #e0dac7;
+  --sidebar-item-active: #d3e0e8;
+
+  /* Scrollbar */
+  --scrollbar-thumb: #93a1a1;
+  --scrollbar-track: transparent;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.12);
+
+  /* Typography */
+  --font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.25rem;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  /* Border radius */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-full: 9999px;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+}

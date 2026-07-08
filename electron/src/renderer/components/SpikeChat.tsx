@@ -20,17 +20,6 @@ interface Message {
 
 type StreamState = 'idle' | 'streaming' | 'error';
 
-declare global {
-  interface Window {
-    orchid: {
-      ipc: {
-        invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
-        on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
-      };
-    };
-  }
-}
-
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function SpikeChat() {
@@ -49,29 +38,26 @@ export function SpikeChat() {
 
   // Subscribe to IPC events
   useEffect(() => {
-    const unsubChunk = window.orchid.ipc.on('chat:chunk', (...args: unknown[]) => {
-      const data = args[0] as { type: string; data: string };
-      setStreamingContent((prev) => prev + data.data);
+    const unsubChunk = window.orchid.chat.onChunk((event) => {
+      setStreamingContent((prev) => prev + event.data);
     });
 
-    const unsubState = window.orchid.ipc.on('chat:state', (...args: unknown[]) => {
-      const data = args[0] as { state: string; response: string; error: string | null };
-      if (data.state === 'streaming') {
+    const unsubState = window.orchid.chat.onState((event) => {
+      if (event.state === 'streaming') {
         setStreamState('streaming');
-      } else if (data.state === 'error') {
+      } else if (event.state === 'error') {
         setStreamState('error');
-        setError(data.error);
-      } else if (data.state === 'idle') {
+        setError(event.error);
+      } else if (event.state === 'idle') {
         setStreamState('idle');
       }
     });
 
-    const unsubDone = window.orchid.ipc.on('chat:done', (...args: unknown[]) => {
-      const data = args[0] as { type: string; response: string };
-      if (data.response) {
+    const unsubDone = window.orchid.chat.onDone((event) => {
+      if (event.response) {
         setMessages((prev) => [
           ...prev,
-          { role: 'assistant', content: data.response },
+          { role: 'assistant', content: event.response },
         ]);
       }
       setStreamingContent('');
@@ -79,9 +65,8 @@ export function SpikeChat() {
       inputRef.current?.focus();
     });
 
-    const unsubError = window.orchid.ipc.on('chat:error', (...args: unknown[]) => {
-      const data = args[0] as { type: string; error: string };
-      setError(data.error);
+    const unsubError = window.orchid.chat.onError((event) => {
+      setError(event.error);
       setStreamState('idle');
       setStreamingContent('');
       inputRef.current?.focus();
@@ -107,7 +92,7 @@ export function SpikeChat() {
     setStreamState('streaming');
 
     try {
-      await window.orchid.ipc.invoke('chat:send', trimmed);
+      await window.orchid.chat.send({ message: trimmed });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setStreamState('idle');
@@ -116,7 +101,7 @@ export function SpikeChat() {
 
   const handleCancel = useCallback(async () => {
     try {
-      await window.orchid.ipc.invoke('chat:cancel');
+      await window.orchid.chat.cancel();
     } catch {
       // Ignore cancel errors
     }
@@ -226,12 +211,12 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     height: '100vh',
     fontFamily: 'system-ui, -apple-system, sans-serif',
-    backgroundColor: '#1a1a2e',
-    color: '#e0e0e0',
+    backgroundColor: 'var(--bg-primary, #1a1a2e)',
+    color: 'var(--text-primary, #e0e0e0)',
   },
   header: {
     padding: '12px 16px',
-    borderBottom: '1px solid #2a2a4a',
+    borderBottom: '1px solid var(--border-default, #2a2a4a)',
     display: 'flex',
     alignItems: 'baseline',
     gap: '12px',
@@ -243,7 +228,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   subtitle: {
     fontSize: '12px',
-    color: '#888',
+    color: 'var(--text-secondary, #888)',
   },
   messages: {
     flex: 1,
@@ -255,7 +240,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   empty: {
     textAlign: 'center',
-    color: '#666',
+    color: 'var(--text-tertiary, #666)',
     padding: '40px 0',
     fontSize: '14px',
   },
@@ -268,16 +253,16 @@ const styles: Record<string, React.CSSProperties> = {
   },
   userMessage: {
     alignSelf: 'flex-end',
-    backgroundColor: '#2a4a6a',
+    backgroundColor: 'var(--msg-user-bg, #2a4a6a)',
   },
   assistantMessage: {
     alignSelf: 'flex-start',
-    backgroundColor: '#2a2a4a',
+    backgroundColor: 'var(--msg-assistant-bg, #2a2a4a)',
   },
   messageRole: {
     fontSize: '11px',
     fontWeight: 600,
-    color: '#aaa',
+    color: 'var(--text-secondary, #aaa)',
     marginBottom: '4px',
     textTransform: 'uppercase',
     letterSpacing: '0.5px',
@@ -288,18 +273,18 @@ const styles: Record<string, React.CSSProperties> = {
   },
   cursor: {
     animation: 'blink 1s step-end infinite',
-    color: '#4a9eff',
+    color: 'var(--accent-primary, #4a9eff)',
   },
   error: {
     padding: '10px 14px',
     borderRadius: '8px',
-    backgroundColor: '#4a2a2a',
-    color: '#ff6b6b',
+    backgroundColor: 'var(--msg-error-bg, #4a2a2a)',
+    color: 'var(--accent-error, #ff6b6b)',
     fontSize: '13px',
   },
   inputArea: {
     padding: '12px 16px',
-    borderTop: '1px solid #2a2a4a',
+    borderTop: '1px solid var(--border-default, #2a2a4a)',
     display: 'flex',
     gap: '8px',
   },
@@ -307,9 +292,9 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     padding: '10px 14px',
     borderRadius: '6px',
-    border: '1px solid #3a3a5a',
-    backgroundColor: '#2a2a4a',
-    color: '#e0e0e0',
+    border: '1px solid var(--input-border, #3a3a5a)',
+    backgroundColor: 'var(--input-bg, #2a2a4a)',
+    color: 'var(--input-text, #e0e0e0)',
     fontSize: '14px',
     outline: 'none',
   },
@@ -317,8 +302,8 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '10px 20px',
     borderRadius: '6px',
     border: 'none',
-    backgroundColor: '#4a9eff',
-    color: '#fff',
+    backgroundColor: 'var(--btn-primary-bg, #4a9eff)',
+    color: 'var(--btn-primary-text, #fff)',
     fontSize: '14px',
     fontWeight: 600,
     cursor: 'pointer',
@@ -327,8 +312,8 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '10px 20px',
     borderRadius: '6px',
     border: 'none',
-    backgroundColor: '#ff4a4a',
-    color: '#fff',
+    backgroundColor: 'var(--btn-danger-bg, #ff4a4a)',
+    color: 'var(--btn-danger-text, #fff)',
     fontSize: '14px',
     fontWeight: 600,
     cursor: 'pointer',
