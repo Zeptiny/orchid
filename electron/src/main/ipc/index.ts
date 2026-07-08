@@ -11,6 +11,7 @@ import { registerAgentIPC, unregisterAgentIPC } from './agent';
 import { registerMCPIPC, unregisterMCPIPC, setMCPManagerRef } from './mcp';
 import { registerRAGIPC, unregisterRAGIPC } from './rag';
 import { registerASTIPC, unregisterASTIPC } from './ast';
+import { registerUpdaterIPC, unregisterUpdaterIPC } from './updater';
 
 /**
  * Register all IPC handlers.
@@ -25,6 +26,7 @@ export function registerAllIPC(): void {
   registerMCPIPC();
   registerRAGIPC();
   registerASTIPC();
+  registerUpdaterIPC();
 }
 
 /**
@@ -40,6 +42,7 @@ export function unregisterAllIPC(): void {
   unregisterMCPIPC();
   unregisterRAGIPC();
   unregisterASTIPC();
+  unregisterUpdaterIPC();
 }
 
 export { setMCPManagerRef };

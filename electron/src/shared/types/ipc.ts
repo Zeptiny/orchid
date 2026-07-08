@@ -16,6 +16,8 @@ import type { StoreStatus as RAGStoreStatus } from '../../main/rag/store';
 import type { StoreStatus as ASTStoreStatus } from '../../main/ast/store';
 import type { IndexResult as RAGIndexResult } from '../../main/rag/indexer';
 import type { IndexResult as ASTIndexResult } from '../../main/ast/indexer';
+export type { UpdaterState } from '../../main/updater';
+import type { UpdaterState } from '../../main/updater';
 
 // ── Chat API ─────────────────────────────────────────────────────────────────
 
@@ -112,6 +114,19 @@ export interface ASTIndexMessage {
   force?: boolean;
 }
 
+// ── Updater API ──────────────────────────────────────────────────────────────
+
+export interface UpdaterProgress {
+  percent: number;
+  bytesPerSecond: number;
+  transferred: number;
+  total: number;
+}
+
+export interface UpdaterErrorEvent {
+  error: string;
+}
+
 // ── Orchid API (the full contextBridge surface) ──────────────────────────────
 
 export interface OrchidAPI {
@@ -160,6 +175,16 @@ export interface OrchidAPI {
     status: () => Promise<ASTStoreStatus>;
     index: (message?: ASTIndexMessage) => Promise<ASTIndexResult>;
   };
+
+  updater: {
+    check: () => Promise<UpdaterState>;
+    install: () => Promise<{ status: string }>;
+    status: () => Promise<UpdaterState>;
+    download: () => Promise<UpdaterState>;
+    onStatus: (callback: (state: UpdaterState) => void) => () => void;
+    onProgress: (callback: (progress: UpdaterProgress) => void) => () => void;
+    onError: (callback: (event: UpdaterErrorEvent) => void) => () => void;
+  };
 }
 
 // ── IPC Channel names ────────────────────────────────────────────────────────
@@ -202,6 +227,15 @@ export const IPC_CHANNELS = {
   // AST
   AST_STATUS: 'ast:status',
   AST_INDEX: 'ast:index',
+
+  // Updater
+  UPDATER_CHECK: 'updater:check',
+  UPDATER_INSTALL: 'updater:install',
+  UPDATER_STATUS: 'updater:status',
+  UPDATER_DOWNLOAD: 'updater:download',
+  UPDATER_STATUS_UPDATE: 'updater:status_update',
+  UPDATER_PROGRESS: 'updater:progress',
+  UPDATER_ERROR: 'updater:error',
 } as const;
 
 export type IPCChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -227,6 +261,10 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.RAG_CLEAR,
   IPC_CHANNELS.AST_STATUS,
   IPC_CHANNELS.AST_INDEX,
+  IPC_CHANNELS.UPDATER_CHECK,
+  IPC_CHANNELS.UPDATER_INSTALL,
+  IPC_CHANNELS.UPDATER_STATUS,
+  IPC_CHANNELS.UPDATER_DOWNLOAD,
 ];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────
@@ -236,6 +274,9 @@ export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
   IPC_CHANNELS.CHAT_STATE,
   IPC_CHANNELS.CHAT_DONE,
   IPC_CHANNELS.CHAT_ERROR,
+  IPC_CHANNELS.UPDATER_STATUS_UPDATE,
+  IPC_CHANNELS.UPDATER_PROGRESS,
+  IPC_CHANNELS.UPDATER_ERROR,
 ];
 
 // ── Window type augmentation (renderer-side) ─────────────────────────────────

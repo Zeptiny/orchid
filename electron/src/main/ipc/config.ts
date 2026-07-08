@@ -2,12 +2,21 @@
  * Config IPC handlers — config:get, config:save.
  *
  * Wraps ConfigManager from U3 with zod-validated payloads.
+ * Integrates keychain (U25) for API key storage:
+ * - `config:get` returns redacted API keys (last 4 chars).
+ * - `config:save` accepts full keys, stores them in the keychain,
+ *   and persists the config with keys stripped.
  */
 import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { getConfig, ConfigManager, atomicWriteJson, HOME_CONFIG_PATH } from '../config/loader';
 import { configSchema } from '../config/schema';
+import {
+  encryptAndStore,
+  providerKeychainKey,
+  redactConfig,
+} from '../config/keychain';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -15,15 +24,51 @@ const configSaveSchema = z.object({
   updates: configSchema.deepPartial(),
 });
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Extract API keys from providers and store them in the keychain.
+ * Returns a new providers dict with `api_key` fields removed.
+ */
+async function storeProviderKeys(
+  providers: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const result: Record<string, unknown> = {};
+
+  for (const [alias, entry] of Object.entries(providers)) {
+    if (typeof entry !== 'object' || entry === null) {
+      result[alias] = entry;
+      continue;
+    }
+
+    const entryCopy = { ...(entry as Record<string, unknown>) };
+    const apiKey = entryCopy['api_key'];
+
+    if (typeof apiKey === 'string' && apiKey) {
+      // Store in keychain
+      await encryptAndStore(providerKeychainKey(alias), apiKey);
+      // Remove from config (we'll resolve from keychain at runtime)
+      delete entryCopy['api_key'];
+    }
+
+    result[alias] = entryCopy;
+  }
+
+  return result;
+}
+
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerConfigIPC(): void {
-  // config:get — return the current merged config
+  // config:get — return the current merged config with API keys redacted
   ipcMain.handle(IPC_CHANNELS.CONFIG_GET, async () => {
-    return getConfig();
+    const config = getConfig();
+    return redactConfig(config as unknown as Record<string, unknown>);
   });
 
-  // config:save — merge updates into the home config and persist
+  // config:save — merge updates into the home config and persist.
+  // API keys in providers are stored in the keychain and removed from the
+  // config file before persistence.
   ipcMain.handle(IPC_CHANNELS.CONFIG_SAVE, async (_event, payload: unknown) => {
     // Validate input with zod
     const parsed = configSaveSchema.safeParse(payload);
@@ -33,15 +78,20 @@ export function registerConfigIPC(): void {
 
     const { updates } = parsed.data;
 
-    // Load current config, merge updates, save
+    // Load current config, merge updates
     const current = getConfig();
     const merged = { ...current, ...updates };
 
     // Validate the merged result
     const validated = configSchema.parse(merged);
 
-    // Persist to disk
-    atomicWriteJson(HOME_CONFIG_PATH, validated);
+    // Extract API keys from providers and store in keychain
+    const providers = validated.providers as Record<string, unknown>;
+    const providersWithoutKeys = await storeProviderKeys(providers);
+
+    // Persist config with keys stripped
+    const configToSave = { ...validated, providers: providersWithoutKeys };
+    atomicWriteJson(HOME_CONFIG_PATH, configToSave);
 
     // Reset the cached config so next load picks up changes
     ConfigManager.reset();

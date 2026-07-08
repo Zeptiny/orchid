@@ -1,5 +1,9 @@
 /**
  * Config system — public API.
+ *
+ * Note: keychain.ts is intentionally NOT re-exported here because it imports
+ * `electron` (safeStorage) which is unavailable in non-Electron test contexts.
+ * Import directly from `./keychain` when needed.
  */
 export {
   configSchema,

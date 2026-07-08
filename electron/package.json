@@ -13,7 +13,12 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "test": "vitest run",
-    "package": "npm run build && electron-builder --config electron-builder.yml"
+    "rebuild:native": "./scripts/rebuild-native.sh",
+    "package": "npm run build && npm run rebuild:native && electron-builder --config electron-builder.yml",
+    "package:mac": "npm run build && npm run rebuild:native && electron-builder --config electron-builder.yml --mac",
+    "package:win": "npm run build && npm run rebuild:native && electron-builder --config electron-builder.yml --win",
+    "package:linux": "npm run build && npm run rebuild:native && electron-builder --config electron-builder.yml --linux",
+    "package:all": "npm run build && npm run rebuild:native && electron-builder --config electron-builder.yml --mac --win --linux"
   },
   "dependencies": {
     "@ai-sdk/openai": "^1.0.0",

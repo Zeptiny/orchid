@@ -1,0 +1,64 @@
+name: Electron Build & Package
+
+on:
+  push:
+    branches: [feat/ts-electron-migration]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            artifact_ext: dmg
+          - os: windows-latest
+            platform: win
+            artifact_ext: exe
+          - os: ubuntu-latest
+            platform: linux
+            artifact_ext: "AppImage,deb"
+
+    runs-on: ${{ matrix.os }}
+
+    defaults:
+      run:
+        working-directory: electron
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild native modules
+        run: ./scripts/rebuild-native.sh --force
+        shell: bash
+
+      - name: Build (compile TS + bundle renderer)
+        run: npm run build
+
+      - name: Package
+        run: npx electron-builder --config electron-builder.yml --${{ matrix.platform }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: orchid-${{ matrix.platform }}
+          path: |
+            electron/release/*.dmg
+            electron/release/*.exe
+            electron/release/*.AppImage
+            electron/release/*.deb
+          if-no-files-found: warn
+          retention-days: 14

@@ -15,6 +15,7 @@ import { loadConfig, ensureHomeConfig, ConfigManager } from './config/loader';
 import { loadAgents, seedAgentsDir } from './agents/registry';
 import { HOME_AGENTS_DIR } from './config/loader';
 import { MCPManager } from './mcp';
+import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
@@ -86,6 +87,28 @@ app.whenReady().then(async () => {
 
     // 6. Create the main window
     createWindow();
+
+    // 7. Initialize auto-updater (after window is created)
+    if (mainWindow) {
+      // Auto-update is gated to signed releases
+      // For unsigned beta builds, auto-download is disabled but manual check is allowed
+      const isSigned = app.isPackaged && process.platform === 'darwin'
+        ? !!(process.env['CODESIGN_CERT'] || process.env['CSC_NAME'])
+        : app.isPackaged;
+
+      initUpdater({
+        window: mainWindow,
+        signed: isSigned,
+      });
+
+      // Check for updates on startup (non-blocking)
+      // Only in packaged mode — dev mode has no update server
+      if (app.isPackaged) {
+        checkForUpdates().catch((err) => {
+          console.warn('Startup update check failed (non-fatal):', err);
+        });
+      }
+    }
   } catch (err) {
     console.error('Failed to initialize app:', err);
     app.quit();
@@ -121,7 +144,10 @@ app.on('before-quit', async (event) => {
       setMCPManagerRef(null);
     }
 
-    // 3. Reset config manager
+    // 3. Destroy auto-updater
+    destroyUpdater();
+
+    // 4. Reset config manager
     ConfigManager.reset();
 
     // 4. Now actually quit

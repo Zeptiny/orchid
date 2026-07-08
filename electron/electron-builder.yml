@@ -1,16 +1,97 @@
 appId: com.orchid.app
 productName: Orchid
+copyright: Copyright © 2026 Orchid Contributors
+
+# ── Publish ───────────────────────────────────────────────────────────────────
+# GitHub releases for auto-update via electron-updater.
+publish:
+  provider: github
+  owner: orchid
+  repo: orchid
+  releaseType: release
+
+# Generate update metadata files for all channels (stable, beta, alpha)
+generateUpdatesFilesForAllChannels: true
+
+# ── Directories ────────────────────────────────────────────────────────────────
 directories:
   output: release
+  buildResources: build
+
+# ── Files ──────────────────────────────────────────────────────────────────────
+# Include compiled output + package.json; exclude source, tests, configs.
 files:
   - dist/**/*
   - package.json
+  - "!src/**"
+  - "!tests/**"
+  - "!*.ts"
+  - "!*.tsx"
+  - "!tsconfig*.json"
+  - "!vite.config.ts"
+  - "!eslint.config.mjs"
+  - "!.prettierrc"
+  - "!.gitignore"
+
+# ── Native modules ─────────────────────────────────────────────────────────────
+# electron-builder runs @electron/rebuild automatically for dependencies in
+# package.json when npmRebuild is true (default). This ensures better-sqlite3,
+# onnxruntime-node, and node-pty are rebuilt against the Electron ABI.
+npmRebuild: true
+
+# ── macOS ──────────────────────────────────────────────────────────────────────
 mac:
   target: dmg
   category: public.app-category.developer-tools
+  icon: build/icon.icns
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  artifactName: "${productName}-${version}-${arch}.dmg"
+
+dmg:
+  sign: false
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# ── Windows ────────────────────────────────────────────────────────────────────
 win:
   target: nsis
+  icon: build/icon.ico
+  artifactName: "${productName}-${version}-${arch}-Setup.${ext}"
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  artifactName: "${productName}-${version}-${arch}-Setup.${ext}"
+
+# ── Linux ──────────────────────────────────────────────────────────────────────
 linux:
   target:
     - AppImage
     - deb
+  icon: build/icons
+  category: Development
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+
+appImage:
+  artifactName: "${productName}-${version}-${arch}.AppImage"
+
+deb:
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
+  artifactName: "${productName}-${version}-${arch}.deb"
