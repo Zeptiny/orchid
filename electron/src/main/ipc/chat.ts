@@ -171,6 +171,7 @@ export function registerChatIPC(): void {
       type: 'subagent',
       tier: 'bloom',
       description: 'General-purpose agent',
+      system_prompt: 'You are a helpful assistant.',
       allowed_tools: ['*'],
       allowed_skills: ['*'],
     };
@@ -180,7 +181,7 @@ export function registerChatIPC(): void {
     const actor = createActor(agentMachine, {
       input: {
         agent,
-        systemPrompt: 'You are a helpful assistant.',
+        systemPrompt: agent.system_prompt || 'You are a helpful assistant.',
         streamFn: createStreamFn(config, messages),
         executeFn: createExecuteFn(),
       },

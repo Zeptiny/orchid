@@ -124,7 +124,7 @@ export interface MessageStorageDict {
 
 export interface ApiMessage {
   role: string;
-  content: string | null;
+  content: string | Array<{ type: string; text: string }> | null;
   tool_call_id?: string;
   tool_calls?: Array<{
     id: string;

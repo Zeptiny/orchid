@@ -33,6 +33,11 @@ export interface SystemPromptContext {
   backgroundCommands?: BackgroundCommand[];
 }
 
+export interface ToolInfo {
+  name: string;
+  description?: string;
+}
+
 export interface SubagentState {
   id: string;
   name: string;

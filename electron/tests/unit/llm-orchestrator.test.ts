@@ -289,7 +289,7 @@ describe('toApiMessages', () => {
   });
 
   describe('THINKING replay', () => {
-    it('replays THINKING as assistant content', () => {
+    it('replays THINKING as assistant content with reasoning parts', () => {
       const messages = [
         makeUserMessage('Hello'),
         makeThinkingMessage('Let me think about this...'),
@@ -301,10 +301,10 @@ describe('toApiMessages', () => {
       expect(result).toHaveLength(3);
       expect(result[1]).toEqual({
         role: 'assistant',
-        content: 'Let me think about this...',
+        content: [
+          { type: 'reasoning', text: 'Let me think about this...' },
+        ],
       });
-      // Should NOT have a reasoning field
-      expect(result[1]).not.toHaveProperty('reasoning');
     });
 
     it('skips empty THINKING messages', () => {
@@ -318,7 +318,7 @@ describe('toApiMessages', () => {
       expect(result).toHaveLength(2);
     });
 
-    it('preserves THINKING as assistant content without breaking tool pairing', () => {
+    it('preserves THINKING as reasoning content without breaking tool pairing', () => {
       const tc = makeToolCall('tc-1', 'read');
       const messages = [
         makeUserMessage('Read the file'),
@@ -331,10 +331,12 @@ describe('toApiMessages', () => {
       const result = toApiMessages(messages);
 
       expect(result).toHaveLength(5);
-      // Thinking should be replayed as assistant content
+      // Thinking should be replayed as reasoning content
       expect(result[1]).toEqual({
         role: 'assistant',
-        content: 'I need to read this file first',
+        content: [
+          { type: 'reasoning', text: 'I need to read this file first' },
+        ],
       });
       // Tool calls should still be paired
       expect(result[2].tool_calls).toHaveLength(1);

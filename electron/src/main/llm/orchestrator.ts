@@ -41,6 +41,7 @@ import { executeToolCall, type ToolDispatchOptions } from './tool-dispatch';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
 import { importESM } from '../utils/esm-import';
+import { zodToJsonSchema } from 'zod-to-json-schema';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -130,9 +131,21 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       continue;
     }
     if (msg.role === 'assistant') {
+      // Handle content that may be a string or an array with reasoning parts
+      const contentArray = Array.isArray(msg.content)
+        ? msg.content.map((part) => {
+            if (part.type === 'reasoning') {
+              return { type: 'reasoning' as const, text: part.text };
+            }
+            return { type: 'text' as const, text: part.text };
+          })
+        : msg.content
+          ? [{ type: 'text' as const, text: msg.content }]
+          : [];
+
       const content = msg.tool_calls
         ? [
-            ...(msg.content ? [{ type: 'text' as const, text: msg.content }] : []),
+            ...contentArray,
             ...msg.tool_calls.map((tc) => ({
               type: 'tool-call' as const,
               toolCallId: tc.id,
@@ -140,9 +153,19 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               input: JSON.parse(tc.function.arguments),
             })),
           ]
-        : msg.content || '';
-      coreMessages.push({ role: 'assistant', content });
+        : contentArray.length === 1 && contentArray[0].type === 'text'
+          ? contentArray[0].text
+          : contentArray.length > 0
+            ? contentArray
+            : '';
+      coreMessages.push({ role: 'assistant', content: content as any });
     } else if (msg.role === 'tool') {
+      // Extract text content for tool results
+      const textContent = typeof msg.content === 'string'
+        ? msg.content
+        : Array.isArray(msg.content)
+          ? msg.content.filter((p) => p.type === 'text').map((p) => p.text).join('')
+          : '';
       // For tool results, we need the tool name from the original tool call.
       // Since we don't store it on the message, use 'unknown' — AI SDK
       // matches by toolCallId, not toolName.
@@ -153,14 +176,20 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             type: 'tool-result' as const,
             toolCallId: msg.tool_call_id!,
             toolName: 'unknown',
-            output: { type: 'text', value: msg.content ?? '' },
+            output: { type: 'text', value: textContent },
           },
         ],
       });
     } else if (msg.role === 'user') {
+      // Extract text content for user messages
+      const textContent = typeof msg.content === 'string'
+        ? msg.content
+        : Array.isArray(msg.content)
+          ? msg.content.filter((p) => p.type === 'text').map((p) => p.text).join('')
+          : '';
       coreMessages.push({
         role: 'user',
-        content: msg.content || '',
+        content: textContent,
       });
     }
   }
@@ -307,7 +336,9 @@ export function buildToolMap(
   const filtered = registry.filter([...allowedTools]);
 
   for (const { definition } of filtered) {
-    const inputSchema = definition.inputSchema;
+    // Convert Zod schema to JSON Schema for the API
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const inputSchema = zodToJsonSchema(definition.inputSchema as any) as any;
 
     toolMap[definition.name] = {
       description: definition.description,
@@ -343,9 +374,13 @@ export function buildToolMap(
 
       if (!isAllowed) continue;
 
+      // Convert Zod schema to JSON Schema for the API
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const inputSchema = zodToJsonSchema(definition.inputSchema as any) as any;
+
       toolMap[definition.name] = {
         description: definition.description,
-        inputSchema: definition.inputSchema,
+        inputSchema,
         execute: async (args: unknown) => {
           const result = await mcpManager.callTool(definition.name, args);
           return typeof result === 'string' ? result : JSON.stringify(result);

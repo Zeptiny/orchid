@@ -46,6 +46,7 @@ export interface Agent {
   readonly type: AgentType;
   readonly tier: AgentTier;
   readonly description: string;
+  readonly system_prompt: string;
   readonly allowed_tools: readonly string[];
   readonly allowed_skills: readonly string[];
 }
@@ -66,6 +67,7 @@ export const agentSchema = z.object({
   type: agentTypeSchema,
   tier: agentTierSchema.default(AgentTier.BLOOM),
   description: z.string(),
+  system_prompt: z.string().default(''),
   allowed_tools: z.array(z.string()).default([]),
   allowed_skills: z.array(z.string()).default([]),
 });
@@ -77,6 +79,7 @@ export interface AgentStorageDict {
   type: string;
   tier?: string;
   description: string;
+  system_prompt?: string;
   allowed_tools?: string[];
   allowed_skills?: string[];
   [key: string]: unknown;
@@ -90,6 +93,7 @@ export function agentToStorageDict(agent: Agent): AgentStorageDict {
     type: agent.type,
     tier: agent.tier,
     description: agent.description,
+    system_prompt: agent.system_prompt,
     allowed_tools: [...agent.allowed_tools],
     allowed_skills: [...agent.allowed_skills],
   };
@@ -120,6 +124,7 @@ export function agentFromStorageDict(data: unknown): Agent {
     type,
     tier,
     description: typeof raw.description === 'string' ? raw.description : '',
+    system_prompt: typeof raw.system_prompt === 'string' ? raw.system_prompt : '',
     allowed_tools: Array.isArray(raw.allowed_tools)
       ? (raw.allowed_tools as unknown[]).filter((t): t is string => typeof t === 'string')
       : [],

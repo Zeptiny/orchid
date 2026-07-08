@@ -95,6 +95,7 @@ function loadAgentsFromDir(agentsDir: string): Map<string, Agent> {
       type: rawType as AgentType,
       tier: rawTier as AgentTier,
       description,
+      system_prompt: body.trim(),
       allowed_tools: Object.freeze(allowedTools),
       allowed_skills: Object.freeze(allowedSkills),
     };

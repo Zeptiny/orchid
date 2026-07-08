@@ -12,9 +12,8 @@
  *   filtered so we don't send dangling tool_calls, which would 400 on
  *   strict providers).
  *
- * THINKING messages are replayed as assistant content, NOT as `reasoning`
- * field — strict providers (gpt-4o etc.) reject unknown top-level fields
- * with HTTP 400.
+ * THINKING messages are replayed as assistant content with reasoning parts
+ * so reasoning-capable models (GLM, DeepSeek, Qwen) retain prior deliberation.
  */
 import type { Message, ApiMessage } from '../../shared/types/message';
 import { MessageType, MessageRole, messageToApiFormat } from '../../shared/types/message';
@@ -97,11 +96,9 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
       continue;
     }
 
-    // THINKING: replay as plain assistant content so reasoning-capable
-    // models retain prior deliberation. The `reasoning` top-level field
-    // is intentionally NOT emitted here: strict OpenAI Chat Completions
-    // providers reject unknown top-level fields with HTTP 400. The
-    // match-set is NOT reset on THINKING: an intervening THINKING between
+    // THINKING: replay with reasoning content parts so reasoning-capable
+    // models (GLM, DeepSeek, Qwen) retain prior deliberation.
+    // The match-set is NOT reset on THINKING: an intervening THINKING between
     // assistant(tool_calls=[A]) and tool(A) must not cause A to be
     // dropped as orphaned.
     if (msg.type === MessageType.THINKING) {
@@ -110,7 +107,9 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
       }
       apiMessages.push({
         role: 'assistant',
-        content: msg.content,
+        content: [
+          { type: 'reasoning', text: msg.content },
+        ],
       });
       continue;
     }
