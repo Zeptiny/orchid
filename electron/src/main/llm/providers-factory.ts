@@ -5,6 +5,7 @@
  */
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { ResolvedModelRef } from './providers';
+import { importESM } from '../utils/esm-import';
 
 /**
  * Create an AI SDK LanguageModel from a resolved model reference.
@@ -17,7 +18,7 @@ import type { ResolvedModelRef } from './providers';
  */
 export async function createProviderModel(ref: ResolvedModelRef): Promise<LanguageModelV4> {
   if (ref.useCompatible || ref.providerName === 'openai-compatible') {
-    const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible');
+    const { createOpenAICompatible } = await importESM<typeof import('@ai-sdk/openai-compatible')>('@ai-sdk/openai-compatible');
     const provider = createOpenAICompatible({
       name: ref.providerName,
       baseURL: ref.baseUrl ?? 'https://api.openai.com/v1',
@@ -27,7 +28,7 @@ export async function createProviderModel(ref: ResolvedModelRef): Promise<Langua
   }
 
   // Direct OpenAI provider (default)
-  const { createOpenAI } = await import('@ai-sdk/openai');
+  const { createOpenAI } = await importESM<typeof import('@ai-sdk/openai')>('@ai-sdk/openai');
   const provider = createOpenAI({
     apiKey: ref.apiKey ?? '',
     ...(ref.baseUrl && { baseURL: ref.baseUrl }),

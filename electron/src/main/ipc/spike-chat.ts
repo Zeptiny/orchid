@@ -10,6 +10,7 @@
 import { ipcMain, type WebContents } from 'electron';
 import { createActor, type ActorRefFrom } from 'xstate';
 import { spikeAgentMachine, type SpikeAgentContext } from '../agents/xstate/spike-agent-machine';
+import { importESM } from '../utils/esm-import';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ export function registerSpikeChatIPC(): void {
 
     // Create provider and model (dynamic import — @ai-sdk/openai is ESM-only)
     const config = getLLMConfig();
-    const { createOpenAI } = await import('@ai-sdk/openai');
+    const { createOpenAI } = await importESM<typeof import('@ai-sdk/openai')>('@ai-sdk/openai');
     const provider = createOpenAI({
       baseURL: config.baseURL,
       apiKey: config.apiKey,

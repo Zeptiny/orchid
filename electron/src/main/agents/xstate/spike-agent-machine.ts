@@ -20,6 +20,7 @@ import { assign, setup, fromCallback, type ActorRefFrom } from 'xstate';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { listFilesTool } from '../../tools/spike-tool';
 import { createRetryMiddleware } from '../../llm/middleware/retry';
+import { importESM } from '../../utils/esm-import';
 
 // ─── Event types ─────────────────────────────────────────────────────────────
 
@@ -83,7 +84,7 @@ const streamCallback = fromCallback(
     const runStream = async () => {
       try {
         // Dynamic import — `ai` is ESM-only but Electron main compiles to CJS
-        const { streamText, wrapLanguageModel, isStepCount } = await import('ai');
+        const { streamText, wrapLanguageModel, isStepCount } = await importESM<typeof import('ai')>('ai');
 
         // Wrap model with retry middleware
         const wrappedModel = wrapLanguageModel({

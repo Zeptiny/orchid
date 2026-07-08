@@ -40,6 +40,7 @@ import { toApiMessages } from './history';
 import { executeToolCall, type ToolDispatchOptions } from './tool-dispatch';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
+import { importESM } from '../utils/esm-import';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -112,7 +113,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   } = params;
 
   // Dynamic import — `ai` is ESM-only but Electron main compiles to CJS
-  const { streamText, wrapLanguageModel, isStepCount } = await import('ai');
+  const { streamText, wrapLanguageModel, isStepCount } = await importESM<typeof import('ai')>('ai');
 
   // ── Build system prompt ──
   const fullSystemPrompt = buildSystemPrompt(systemPrompt, context);
