@@ -52,6 +52,26 @@ beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
 
+  // Re-apply base implementations — vi.clearAllMocks() clears call history
+  // but not mockImplementation overrides from previous tests (vi.fn, not spyOn).
+  mockSafeStorage.isEncryptionAvailable.mockReturnValue(true);
+  mockSafeStorage.encryptString.mockImplementation((plaintext: string) => {
+    const key = 0x42;
+    const buf = Buffer.from(plaintext, 'utf-8');
+    for (let i = 0; i < buf.length; i++) {
+      buf[i] = buf[i]! ^ key;
+    }
+    return buf;
+  });
+  mockSafeStorage.decryptString.mockImplementation((encrypted: Buffer) => {
+    const key = 0x42;
+    const buf = Buffer.from(encrypted);
+    for (let i = 0; i < buf.length; i++) {
+      buf[i] = buf[i]! ^ key;
+    }
+    return buf.toString('utf-8');
+  });
+
   vi.doMock('electron', () => ({
     safeStorage: mockSafeStorage,
   }));

@@ -30,13 +30,9 @@ vi.mock('onnxruntime-node', () => ({
       }),
     }),
   },
-  Tensor: vi.fn().mockImplementation(
-    (type: string, data: unknown, dims: number[]) => ({
-      type,
-      data,
-      dims,
-    }),
-  ),
+  Tensor: vi.fn().mockImplementation(function (type: string, data: unknown, dims: number[]) {
+    return { type, data, dims };
+  }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -145,6 +141,7 @@ function makeTmpDir(): string {
 }
 
 beforeEach(() => {
+  vi.resetModules();
   tmpDir = makeTmpDir();
   homeModelsDir = path.join(tmpDir, '.orchid', 'models', 'BAAI/bge-small-en-v1.5');
   fs.mkdirSync(homeModelsDir, { recursive: true });
