@@ -92,9 +92,14 @@ jobs:
             rm -rf node_modules/onnxruntime-node/bin/napi-v6/linux node_modules/onnxruntime-node/bin/napi-v6/win32 || true
           elif [ "${{ matrix.platform }}" = "win" ]; then
             rm -rf node_modules/onnxruntime-node/bin/napi-v6/darwin node_modules/onnxruntime-node/bin/napi-v6/linux || true
+            rm -f node_modules/onnxruntime-node/bin/napi-v6/win32/*/DirectML.dll \
+                  node_modules/onnxruntime-node/bin/napi-v6/win32/*/dxcompiler.dll \
+                  node_modules/onnxruntime-node/bin/napi-v6/win32/*/dxil.dll || true
           else
             rm -rf node_modules/onnxruntime-node/bin/napi-v6/darwin node_modules/onnxruntime-node/bin/napi-v6/win32 || true
             rm -rf node_modules/onnxruntime-node/bin/napi-v6/linux/arm64 || true
+            rm -f node_modules/onnxruntime-node/bin/napi-v6/linux/*/libonnxruntime_providers_cuda.so \
+                  node_modules/onnxruntime-node/bin/napi-v6/linux/*/libonnxruntime_providers_tensorrt.so || true
           fi
           echo "After prune: $(du -sh node_modules | cut -f1)"
           du -sh node_modules/onnxruntime-node 2>/dev/null || true
