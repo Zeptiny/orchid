@@ -105,7 +105,10 @@ jobs:
           du -sh node_modules/onnxruntime-node 2>/dev/null || true
 
       - name: Package
-        run: npx electron-builder --config electron-builder.yml --${{ matrix.platform }} --publish=never
+        shell: bash
+        run: |
+          mv package-lock.json package-lock.json.electron-builder
+          npm_config_user_agent=traversal npx electron-builder --config electron-builder.yml --${{ matrix.platform }} --publish=never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_OPTIONS: --max-old-space-size=8192
