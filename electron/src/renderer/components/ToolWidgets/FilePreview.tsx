@@ -58,16 +58,14 @@ function highlightLine(line: string, language: string): React.ReactNode {
       const commentStart = remaining.indexOf('//');
 
       if (commentStart !== -1 && (dqStart === -1 || commentStart < dqStart) && (sqStart === -1 || commentStart < sqStart)) {
-        if (commentStart > 0) parts.push(<span key={key++}>{remaining.slice(0, commentStart)}</span>);
-        parts.push(<span key={key++} className="syntax-comment">{remaining.slice(commentStart)}</span>);
-        remaining = '';
+        if (commentStart > 0) parts.push(<span key={key}>{remaining.slice(0, commentStart)}</span>);
+        parts.push(<span key={key + 1} className="syntax-comment">{remaining.slice(commentStart)}</span>);
         break;
       }
 
       const firstQuote = dqStart !== -1 && (sqStart === -1 || dqStart < sqStart) ? dqStart : sqStart;
       if (firstQuote === -1) {
-        parts.push(<span key={key++}>{remaining}</span>);
-        remaining = '';
+        parts.push(<span key={key}>{remaining}</span>);
         break;
       }
 
@@ -75,9 +73,8 @@ function highlightLine(line: string, language: string): React.ReactNode {
       const closeQuote = remaining.indexOf(quoteChar, firstQuote + 1);
       if (closeQuote === -1) {
         // Unclosed string — rest of line is string
-        parts.push(<span key={key++}>{remaining.slice(0, firstQuote)}</span>);
-        parts.push(<span key={key++} className="syntax-string">{remaining.slice(firstQuote)}</span>);
-        remaining = '';
+        parts.push(<span key={key}>{remaining.slice(0, firstQuote)}</span>);
+        parts.push(<span key={key + 1} className="syntax-string">{remaining.slice(firstQuote)}</span>);
         break;
       }
 

@@ -236,7 +236,7 @@ async function downloadFile(
   try {
     response = await fetch(url);
   } catch (err) {
-    throw new Error(`Network error: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`Network error: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
   }
 
   if (!response.ok) {
