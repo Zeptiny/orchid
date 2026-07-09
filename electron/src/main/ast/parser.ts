@@ -13,9 +13,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-// web-tree-sitter is a CommonJS module with default export
+// web-tree-sitter exports Parser and Language as named exports
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const Parser = require('web-tree-sitter') as typeof import('web-tree-sitter');
+const { Parser, Language } = require('web-tree-sitter') as {
+  Parser: typeof import('web-tree-sitter').Parser;
+  Language: typeof import('web-tree-sitter').Language;
+};
 
 // The runtime types from web-tree-sitter are well-defined but the TS declarations
 // use a namespace pattern that makes direct type aliasing awkward. Use the
@@ -157,7 +160,7 @@ async function loadLanguage(langName: string): Promise<TreeSitterLanguage> {
   await ensureInitialized();
 
   const wasmPath = findGrammarWasm(langName);
-  const language = await Parser.Language.load(wasmPath);
+  const language = await Language.load(wasmPath);
   _languages.set(langName, language);
   return language;
 }
