@@ -73,6 +73,11 @@ const builtinContext: BuiltinToolContext = {
   mcpManager: null,
 };
 
+/** Shared SubagentManager used by delegate/wait/interrupt tools. */
+export function getSubagentManager(): SubagentManager {
+  return builtinContext.subagentManager;
+}
+
 function registerBuiltTool(
   definition: ToolDefinition,
   handler: ToolHandler,

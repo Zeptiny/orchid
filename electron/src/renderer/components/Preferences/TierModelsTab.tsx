@@ -1,10 +1,14 @@
 /**
  * TierModelsTab — map agent tiers to models.
  *
- * 4 tiers: seed, bloom, crown, sprout.
- * Each tier picks a model from available providers.
+ * 4 tiers: seed, sprout, bloom, crown.
+ * Each tier uses the same model dropdown listing as Default Model (General).
  */
-import { useState, useCallback } from 'react';
+import { useMemo } from 'react';
+import {
+  collectModelsFromProviders,
+  withCurrentModelOption,
+} from '../../utils/models';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -45,97 +49,60 @@ const TIERS: TierInfo[] = [
   },
 ];
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-/**
- * Collect all available model IDs from providers config.
- * Returns array of "provider/model" strings.
- */
-function collectModels(providers: Record<string, Record<string, unknown>>): string[] {
-  const models: string[] = [];
-  for (const [providerId, providerData] of Object.entries(providers)) {
-    const providerModels = providerData.models;
-    if (providerModels && typeof providerModels === 'object') {
-      for (const modelId of Object.keys(providerModels as Record<string, unknown>)) {
-        models.push(`${providerId}/${modelId}`);
-      }
-    }
-  }
-  return models.sort();
-}
-
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function TierModelsTab({ tierModels, providers, onChange }: TierModelsTabProps) {
-  const [editingTier, setEditingTier] = useState<string | null>(null);
-
-  const availableModels = collectModels(providers);
-
-  const handleSelect = useCallback(
-    (tierId: string, model: string) => {
-      onChange({ ...tierModels, [tierId]: model });
-      setEditingTier(null);
-    },
-    [tierModels, onChange],
+  const availableModels = useMemo(
+    () => collectModelsFromProviders(providers),
+    [providers],
   );
 
   return (
-    <div className="pref-tab-content">
-      <div className="pref-tab-header">
-        <h3>Tier Models</h3>
-        <p className="pref-tab-description">
-          Assign models to agent tiers. Higher tiers are used for more complex tasks.
-          Models are picked from your configured providers.
-        </p>
-      </div>
+    <div className="config-form">
+      <fieldset className="config-fieldset">
+        <legend className="config-fieldset-legend">Tier Models</legend>
 
-      <div className="pref-tier-list">
-        {TIERS.map((tier) => {
-          const currentModel = tierModels[tier.id] ?? '';
-          const isEditing = editingTier === tier.id;
+        <div className="config-card-list">
+          {TIERS.map((tier) => {
+            const currentModel = tierModels[tier.id] ?? '';
+            const options = withCurrentModelOption(availableModels, currentModel);
 
-          return (
-            <div key={tier.id} className="pref-tier-item">
-              <div className="pref-tier-info">
-                <span className="pref-tier-label">{tier.label}</span>
-                <span className="pref-tier-description">{tier.description}</span>
-              </div>
-              <div className="pref-tier-model">
-                {isEditing ? (
+            return (
+              <div key={tier.id} className="config-card config-card-row">
+                <div className="min-w-0">
+                  <div className="config-card-title">{tier.label}</div>
+                  <p className="config-card-desc">{tier.description}</p>
+                </div>
+                <div className="flex shrink-0 items-center">
                   <select
-                    className="pref-select"
+                    className="select config-control w-[240px]"
                     value={currentModel}
-                    onChange={(e) => handleSelect(tier.id, e.target.value)}
-                    onBlur={() => setEditingTier(null)}
-                    autoFocus
+                    onChange={(e) =>
+                      onChange({ ...tierModels, [tier.id]: e.target.value })
+                    }
+                    aria-label={`${tier.label} model`}
                   >
-                    <option value="">— Select model —</option>
-                    {availableModels.map((model) => (
-                      <option key={model} value={model}>
-                        {model}
+                    {options.length === 0 ? (
+                      <option value={currentModel || ''}>
+                        {currentModel || '— Add providers first —'}
                       </option>
-                    ))}
+                    ) : (
+                      options.map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))
+                    )}
                   </select>
-                ) : (
-                  <button
-                    className="pref-tier-model-btn"
-                    onClick={() => setEditingTier(tier.id)}
-                    title="Click to change model"
-                  >
-                    <span className="pref-tier-model-name">
-                      {currentModel || 'Not set'}
-                    </span>
-                    <span className="pref-tier-model-edit">&#9998;</span>
-                  </button>
-                )}
+                </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      </fieldset>
 
       {availableModels.length === 0 && (
-        <div className="pref-empty-hint">
+        <div className="config-note">
           No models available. Add providers in the Providers tab first.
         </div>
       )}

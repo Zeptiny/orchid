@@ -225,6 +225,7 @@ describe('Agent Machine', () => {
         type: 'tool_call',
         toolCallId: 'tc-1',
         toolName: 'read_file',
+        args: '{"file_path":"README.md"}',
       };
       // After tool call, the stream pauses. Tool executes, result feeds back.
       // In the real flow, AI SDK handles this. For testing, we simulate.
@@ -254,6 +255,50 @@ describe('Agent Machine', () => {
     await waitForState(actor, 'idle');
     expect(actor.getSnapshot().context.response).toContain('Let me check...');
     expect(actor.getSnapshot().context.error).toBeNull();
+  });
+
+  it('tracks streamed tool args and lifecycle updates', async () => {
+    const streamFn = mockStreamFn([
+      { type: 'tool_call_start', toolCallId: 'tc-1', toolName: 'read_file' },
+      { type: 'tool_call_delta', toolCallId: 'tc-1', argsDelta: '{"file_path":' },
+      { type: 'tool_call_delta', toolCallId: 'tc-1', argsDelta: '"README.md"}' },
+      {
+        type: 'tool_call',
+        toolCallId: 'tc-1',
+        toolName: 'read_file',
+        args: '{"file_path":"README.md"}',
+      },
+      {
+        type: 'tool_result',
+        toolCallId: 'tc-1',
+        content: 'file contents',
+        isError: false,
+      },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+
+    const actor = createActor(agentMachine, {
+      input: {
+        agent: mockAgent,
+        systemPrompt: 'You are helpful.',
+        streamFn,
+        executeFn: mockExecuteFn(),
+        interruptResetMs: 100,
+      },
+    });
+
+    actor.start();
+    actor.send({ type: 'USER_INPUT', message: 'Read the file' });
+
+    await waitForState(actor, 'idle');
+    const update = actor.getSnapshot().context.toolLifecycleUpdate;
+    expect(update).toMatchObject({
+      toolCallId: 'tc-1',
+      toolName: 'read_file',
+      status: 'completed',
+      result: 'file contents',
+    });
+    expect(actor.getSnapshot().context.toolUpdateSequence).toBe(2);
   });
 
   it('streaming → CANCEL → interrupted → (manual CANCEL) → idle', async () => {
@@ -340,7 +385,7 @@ describe('Interrupt Machine', () => {
     actor.stop();
   });
 
-  it('CONFIRM_AGENT → INTERRUPT → idle (second Esc cancels)', () => {
+  it('CONFIRM_AGENT → INTERRUPT → CONFIRM_SUBAGENTS', () => {
     const actor = createActor(interruptMachine);
     actor.start();
 
@@ -348,7 +393,7 @@ describe('Interrupt Machine', () => {
     expect(actor.getSnapshot().value).toBe('confirmAgent');
 
     actor.send({ type: 'INTERRUPT' });
-    expect(actor.getSnapshot().value).toBe('idle');
+    expect(actor.getSnapshot().value).toBe('confirmSubagents');
 
     actor.stop();
   });
@@ -375,11 +420,15 @@ describe('Interrupt Machine', () => {
     actor.send({ type: 'INTERRUPT' });
     expect(actor.getSnapshot().value).toBe('confirmAgent');
 
-    // Second Esc → idle (stream cancelled)
+    // Second Esc → confirmSubagents (stream cancelled, subagents pending)
+    actor.send({ type: 'INTERRUPT' });
+    expect(actor.getSnapshot().value).toBe('confirmSubagents');
+
+    // Third Esc → idle
     actor.send({ type: 'INTERRUPT' });
     expect(actor.getSnapshot().value).toBe('idle');
 
-    // Third Esc → confirmAgent again
+    // Fourth Esc → confirmAgent again
     actor.send({ type: 'INTERRUPT' });
     expect(actor.getSnapshot().value).toBe('confirmAgent');
 

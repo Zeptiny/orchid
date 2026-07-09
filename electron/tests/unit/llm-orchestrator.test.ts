@@ -418,6 +418,7 @@ describe('executeToolCall', () => {
     const result = await executeToolCall(toolCall, registry);
 
     expect(result.content).toContain('internal error');
+    expect(result.content.startsWith('Error:')).toBe(true);
   });
 
   describe('timeout', () => {
@@ -441,7 +442,29 @@ describe('executeToolCall', () => {
       });
 
       expect(result.content).toContain('timed out');
+      expect(result.content.startsWith('Error:')).toBe(true);
+      expect(result.content).toContain("Tool 'slow' timed out after");
     }, 10000);
+
+    it('rejects zero/negative timeout immediately', async () => {
+      registry.register(
+        {
+          name: 'instant',
+          description: 'Would run if not timed out',
+          inputSchema: z.object({}),
+          category: 'test',
+        },
+        async () => 'done',
+      );
+
+      const toolCall = makeToolCall('tc-1', 'instant', '{}');
+      const result = await executeToolCall(toolCall, registry, {
+        timeoutSeconds: 0,
+      });
+
+      expect(result.content).toContain('timed out');
+      expect(result.content.startsWith('Error:')).toBe(true);
+    });
 
     it('skips timeout for exempt tools', async () => {
       registry.register(

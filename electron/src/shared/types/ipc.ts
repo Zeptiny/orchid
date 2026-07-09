@@ -54,6 +54,12 @@ export interface ChatChunkEvent {
   data: string;
 }
 
+/** Reasoning/thinking stream delta (models that emit reasoning-delta). */
+export interface ChatThinkingEvent {
+  type: 'thinking';
+  data: string;
+}
+
 export interface ChatStateEvent {
   state: string;
   response: string;
@@ -67,11 +73,26 @@ export interface ChatStateEvent {
 export interface ChatDoneEvent {
   type: 'done';
   response: string;
+  /** True when the turn ended due to user Esc cancellation. */
+  interrupted?: boolean;
+  /** Latest token usage for the completed/interrupted turn. */
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    cached_tokens: number;
+  } | null;
 }
+
+export type ChatErrorKind = 'stream' | 'rate-limit' | 'auth' | 'generic';
 
 export interface ChatErrorEvent {
   type: 'error';
   error: string;
+  /** Short banner title (e.g. "Authentication failed"). */
+  title?: string;
+  /** Classified error kind for banner actions. */
+  kind?: ChatErrorKind;
 }
 
 export interface ChatUsageEvent {
@@ -82,6 +103,28 @@ export interface ChatUsageEvent {
     total_tokens: number;
     cached_tokens: number;
   };
+}
+
+export interface ChatToolCallStartEvent {
+  type: 'tool_call_start';
+  toolCallId: string;
+  toolName: string;
+}
+
+export interface ChatToolCallDeltaEvent {
+  type: 'tool_call_delta';
+  toolCallId: string;
+  argsDelta: string;
+}
+
+export interface ChatToolCallUpdateEvent {
+  type: 'tool_call_update';
+  toolCallId: string;
+  toolName?: string;
+  status: 'running' | 'completed' | 'failed';
+  args?: string;
+  result?: string;
+  error?: string;
 }
 
 // ── Background Command API ────────────────────────────────────────────────
@@ -110,6 +153,12 @@ export interface ConfigSaveMessage {
 
 export interface SessionLoadMessage {
   id: string;
+  /**
+   * When true (default), set the session as active and seed chat history.
+   * When false, read-only peek from disk (todos/subagents refresh) without
+   * changing the active session or chat history.
+   */
+  activate?: boolean;
 }
 
 export interface SessionDeleteMessage {
@@ -124,6 +173,11 @@ export interface SessionRenameMessage {
 export interface SessionRenamedEvent {
   id: string;
   name: string;
+}
+
+export interface SessionChangeModelMessage {
+  id: string;
+  model: string;
 }
 
 // ── Tool API ─────────────────────────────────────────────────────────────────
@@ -185,10 +239,14 @@ export interface OrchidAPI {
     send: (message: ChatSendMessage) => Promise<{ status: string }>;
     cancel: () => Promise<{ status: string }>;
     onChunk: (callback: (event: ChatChunkEvent) => void) => () => void;
+    onThinking: (callback: (event: ChatThinkingEvent) => void) => () => void;
     onState: (callback: (event: ChatStateEvent) => void) => () => void;
     onDone: (callback: (event: ChatDoneEvent) => void) => () => void;
     onError: (callback: (event: ChatErrorEvent) => void) => () => void;
     onUsage: (callback: (event: ChatUsageEvent) => void) => () => void;
+    onToolCallStart: (callback: (event: ChatToolCallStartEvent) => void) => () => void;
+    onToolCallDelta: (callback: (event: ChatToolCallDeltaEvent) => void) => () => void;
+    onToolCallUpdate: (callback: (event: ChatToolCallUpdateEvent) => void) => () => void;
   };
 
   config: {
@@ -196,6 +254,8 @@ export interface OrchidAPI {
     save: (updates: ConfigSaveMessage) => Promise<{ status: string }>;
     modelMetadata: (modelId: string) => Promise<ModelMetadata>;
     discoverModels: (alias: string, force?: boolean) => Promise<DiscoveredModel[]>;
+    /** List personality names loaded from `~/.orchid/personalities/*.md`. */
+    listPersonalities: () => Promise<string[]>;
   };
 
   session: {
@@ -204,7 +264,10 @@ export interface OrchidAPI {
     create: () => Promise<Session>;
     delete: (id: SessionDeleteMessage) => Promise<{ status: string }>;
     rename: (id: string, name: string) => Promise<{ status: string }>;
+    changeModel: (id: string, model: string) => Promise<{ status: string }>;
     onRenamed: (callback: (event: SessionRenamedEvent) => void) => () => void;
+    /** Subagent chains persisted — refresh sidebar / chain-footer usage. */
+    onSubagentsChanged: (callback: () => void) => () => void;
   };
 
   tool: {
@@ -253,16 +316,21 @@ export const IPC_CHANNELS = {
   CHAT_SEND: 'chat:send',
   CHAT_CANCEL: 'chat:cancel',
   CHAT_CHUNK: 'chat:chunk',
+  CHAT_THINKING: 'chat:thinking',
   CHAT_STATE: 'chat:state',
   CHAT_DONE: 'chat:done',
   CHAT_ERROR: 'chat:error',
   CHAT_USAGE: 'chat:usage',
+  CHAT_TOOL_CALL_START: 'chat:tool_call_start',
+  CHAT_TOOL_CALL_DELTA: 'chat:tool_call_delta',
+  CHAT_TOOL_CALL_UPDATE: 'chat:tool_call_update',
 
   // Config
   CONFIG_GET: 'config:get',
   CONFIG_SAVE: 'config:save',
   CONFIG_MODEL_METADATA: 'config:model_metadata',
   CONFIG_DISCOVER_MODELS: 'config:discover_models',
+  CONFIG_LIST_PERSONALITIES: 'config:list_personalities',
 
   // Session
   SESSION_LIST: 'session:list',
@@ -271,6 +339,9 @@ export const IPC_CHANNELS = {
   SESSION_DELETE: 'session:delete',
   SESSION_RENAME: 'session:rename',
   SESSION_RENAMED: 'session:renamed',
+  SESSION_CHANGE_MODEL: 'session:change_model',
+  /** Fired when subagent_chains are persisted (spawn progress / complete). */
+  SESSION_SUBAGENTS_CHANGED: 'session:subagents_changed',
 
   // Tool
   TOOL_EXECUTE: 'tool:execute',
@@ -315,11 +386,13 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.CONFIG_SAVE,
   IPC_CHANNELS.CONFIG_MODEL_METADATA,
   IPC_CHANNELS.CONFIG_DISCOVER_MODELS,
+  IPC_CHANNELS.CONFIG_LIST_PERSONALITIES,
   IPC_CHANNELS.SESSION_LIST,
   IPC_CHANNELS.SESSION_LOAD,
   IPC_CHANNELS.SESSION_CREATE,
   IPC_CHANNELS.SESSION_DELETE,
   IPC_CHANNELS.SESSION_RENAME,
+  IPC_CHANNELS.SESSION_CHANGE_MODEL,
   IPC_CHANNELS.TOOL_EXECUTE,
   IPC_CHANNELS.AGENT_LIST,
   IPC_CHANNELS.AGENT_SPAWN,
@@ -340,11 +413,16 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
 
 export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
   IPC_CHANNELS.CHAT_CHUNK,
+  IPC_CHANNELS.CHAT_THINKING,
   IPC_CHANNELS.CHAT_STATE,
   IPC_CHANNELS.CHAT_DONE,
   IPC_CHANNELS.CHAT_ERROR,
   IPC_CHANNELS.CHAT_USAGE,
+  IPC_CHANNELS.CHAT_TOOL_CALL_START,
+  IPC_CHANNELS.CHAT_TOOL_CALL_DELTA,
+  IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
   IPC_CHANNELS.SESSION_RENAMED,
+  IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED,
   IPC_CHANNELS.UPDATER_STATUS_UPDATE,
   IPC_CHANNELS.UPDATER_PROGRESS,
   IPC_CHANNELS.UPDATER_ERROR,

@@ -163,7 +163,7 @@ export function ensureHomeConfig(): void {
     atomicWriteJson(HOME_CONFIG_PATH, defaultCfg);
   }
 
-  // Seed directories (agents/skills/personalities loading is deferred to U6)
+  // Seed directory structure (agents/skills/personalities content seeded at startup)
   fs.mkdirSync(HOME_AGENTS_DIR, { recursive: true });
   fs.mkdirSync(HOME_SKILLS_DIR, { recursive: true });
   fs.mkdirSync(HOME_PERSONALITIES_DIR, { recursive: true });

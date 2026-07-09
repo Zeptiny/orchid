@@ -3,7 +3,7 @@
  *
  * Manages the Esc → confirm → cancel flow:
  *   IDLE → CONFIRM_AGENT (first Esc: "Cancel agent?")
- *   CONFIRM_AGENT → IDLE (second Esc: cancel stream, resets)
+ *   CONFIRM_AGENT → CONFIRM_SUBAGENTS (second Esc: cancel stream)
  *   CONFIRM_SUBAGENTS → IDLE (third Esc: cancel subagents, resets)
  *
  * Auto-resets after 5 seconds of inactivity.
@@ -29,7 +29,8 @@ export interface InterruptContext {
  * States:
  * - `idle`: No interrupt pending. First Esc → `confirmAgent`.
  * - `confirmAgent`: Agent cancel confirmed. Second Esc → cancels stream.
- *   If subagents are running, transitions to `confirmSubagents`.
+ *   Then transitions to `confirmSubagents` so the UI can offer the
+ *   final subagent-cancel confirmation.
  * - `confirmSubagents`: Subagent cancel confirmed. Third Esc → cancels subagents.
  *
  * Auto-reset: After 5s with no action, returns to `idle`.
@@ -65,9 +66,10 @@ export const interruptMachine = setup({
 
     confirmAgent: {
       on: {
-        // Second Esc while confirming agent → cancel stream, reset
+        // Second Esc while confirming agent → cancel stream, then ask
+        // whether to cancel subagents too.
         INTERRUPT: {
-          target: 'idle',
+          target: 'confirmSubagents',
           actions: assign({
             lastPressTime: () => Date.now(),
           }),

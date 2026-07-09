@@ -158,55 +158,157 @@ export function ProvidersTab({ providers, onChange }: ProvidersTabProps) {
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="pref-tab-content">
-      <div className="pref-tab-header">
-        <h3>Providers</h3>
-        <p className="pref-tab-description">
-          Configure LLM providers. Each provider needs a base URL, provider type, and at least one model.
-        </p>
-      </div>
+    <div className="config-form">
+      <fieldset className="config-fieldset">
+        <legend className="config-fieldset-legend">
+          <span>Providers</span>
+          {!isAdding && (
+            <button
+              className="btn btn-ghost btn-xs font-normal text-primary hover:bg-primary/10"
+              onClick={startAdd}
+              type="button"
+            >
+              + Add Provider
+            </button>
+          )}
+        </legend>
 
-      {/* Provider list */}
-      <div className="pref-provider-list">
-        {providerList.map((p) => (
-          <div key={p.id} className="pref-provider-item">
-            {editingId === p.id && editForm ? (
-              /* Edit form */
-              <div className="pref-provider-edit">
-                <div className="pref-form-row">
+        <div className="config-card-list">
+          {providerList.map((p) => (
+            <div key={p.id} className="config-card">
+              {editingId === p.id && editForm ? (
+                <div className="flex flex-col gap-4">
+                  <div className="config-form-grid">
+                    <div className="config-field">
+                      <label>Provider ID</label>
+                      <input
+                        type="text"
+                        value={editForm.id}
+                        onChange={(e) => setEditForm({ ...editForm, id: e.target.value })}
+                        className="input config-control"
+                      />
+                    </div>
+                    <div className="config-field">
+                      <label>Base URL</label>
+                      <input
+                        type="text"
+                        value={editForm.base_url}
+                        onChange={(e) => setEditForm({ ...editForm, base_url: e.target.value })}
+                        className="input config-control"
+                        placeholder="https://api.openai.com/v1"
+                      />
+                    </div>
+                    <div className="config-field">
+                      <label>Provider Type</label>
+                      <select
+                        value={editForm.litellm_provider}
+                        onChange={(e) => setEditForm({ ...editForm, litellm_provider: e.target.value })}
+                        className="select config-control"
+                      >
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="ollama">Ollama</option>
+                        <option value="gemini">Gemini</option>
+                        <option value="groq">Groq</option>
+                        <option value="mistral">Mistral</option>
+                      </select>
+                    </div>
+                    <div className="config-field config-form-grid-full">
+                      <label className="flex items-center justify-between gap-2">
+                        <span>Models (one per line)</span>
+                        <button
+                          className="btn btn-ghost btn-xs h-6 min-h-6 px-2 text-[10px]"
+                          onClick={handleDiscover}
+                          disabled={discovering || !editForm.base_url}
+                          title="Discover models from endpoint"
+                          type="button"
+                        >
+                          {discovering ? '...' : 'Discover'}
+                        </button>
+                      </label>
+                      <textarea
+                        value={editForm.modelsText}
+                        onChange={(e) => setEditForm({ ...editForm, modelsText: e.target.value })}
+                        className="textarea config-textarea"
+                        rows={4}
+                        placeholder="gpt-4o&#10;gpt-4o-mini"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button className="btn btn-ghost btn-sm" onClick={cancelEdit} type="button">
+                      Cancel
+                    </button>
+                    <button className="btn btn-primary btn-sm" onClick={saveEdit} type="button">
+                      Save
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="config-card-row">
+                  <div className="min-w-0">
+                    <div className="config-card-title">{p.id}</div>
+                    <p className="config-card-desc truncate">{p.base_url}</p>
+                    <div className="mt-2 flex items-center gap-2 text-[11px]">
+                      <span className="rounded bg-base-300 px-1.5 py-0.5 text-base-content/70">
+                        {p.litellm_provider}
+                      </span>
+                      <span className="text-base-content/45">
+                        {Object.keys(p.models).length} model(s)
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => startEdit(p)}
+                      type="button"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-xs text-error hover:bg-error/10"
+                      onClick={() => deleteProvider(p.id)}
+                      type="button"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {isAdding && editForm && (
+            <div className="config-card border-primary/30 bg-primary/5">
+              <div className="config-card-title mb-3 text-primary">New Provider</div>
+              <div className="config-form-grid">
+                <div className="config-field">
                   <label>Provider ID</label>
                   <input
                     type="text"
                     value={editForm.id}
-                    onChange={(e) =>
-                      setEditForm({ ...editForm, id: e.target.value })
-                    }
-                    className="pref-input"
+                    onChange={(e) => setEditForm({ ...editForm, id: e.target.value })}
+                    className="input config-control"
+                    placeholder="my-provider"
                   />
                 </div>
-                <div className="pref-form-row">
+                <div className="config-field">
                   <label>Base URL</label>
                   <input
                     type="text"
                     value={editForm.base_url}
-                    onChange={(e) =>
-                      setEditForm({ ...editForm, base_url: e.target.value })
-                    }
-                    className="pref-input"
+                    onChange={(e) => setEditForm({ ...editForm, base_url: e.target.value })}
+                    className="input config-control"
                     placeholder="https://api.openai.com/v1"
                   />
                 </div>
-                <div className="pref-form-row">
+                <div className="config-field">
                   <label>Provider Type</label>
                   <select
                     value={editForm.litellm_provider}
-                    onChange={(e) =>
-                      setEditForm({
-                        ...editForm,
-                        litellm_provider: e.target.value,
-                      })
-                    }
-                    className="pref-select"
+                    onChange={(e) => setEditForm({ ...editForm, litellm_provider: e.target.value })}
+                    className="select config-control"
                   >
                     <option value="openai">OpenAI</option>
                     <option value="anthropic">Anthropic</option>
@@ -216,160 +318,44 @@ export function ProvidersTab({ providers, onChange }: ProvidersTabProps) {
                     <option value="mistral">Mistral</option>
                   </select>
                 </div>
-                <div className="pref-form-row">
-                  <label>
-                    Models (one per line)
+                <div className="config-field config-form-grid-full">
+                  <label className="flex items-center justify-between gap-2">
+                    <span>Models (one per line)</span>
                     <button
-                      className="btn btn-ghost btn-sm"
+                      className="btn btn-ghost btn-xs h-6 min-h-6 px-2 text-[10px]"
                       onClick={handleDiscover}
                       disabled={discovering || !editForm.base_url}
-                      title="Discover models from endpoint"
+                      type="button"
                     >
                       {discovering ? '...' : 'Discover'}
                     </button>
                   </label>
                   <textarea
                     value={editForm.modelsText}
-                    onChange={(e) =>
-                      setEditForm({ ...editForm, modelsText: e.target.value })
-                    }
-                    className="pref-textarea"
+                    onChange={(e) => setEditForm({ ...editForm, modelsText: e.target.value })}
+                    className="textarea config-textarea"
                     rows={4}
                     placeholder="gpt-4o&#10;gpt-4o-mini"
                   />
                 </div>
-                <div className="pref-form-actions">
-                  <button className="btn btn-primary btn-sm" onClick={saveEdit}>
-                    Save
-                  </button>
-                  <button className="btn btn-ghost btn-sm" onClick={cancelEdit}>
-                    Cancel
-                  </button>
-                </div>
               </div>
-            ) : (
-              /* Display card */
-              <div className="pref-provider-card">
-                <div className="pref-provider-info">
-                  <span className="pref-provider-name">{p.id}</span>
-                  <span className="pref-provider-url">{p.base_url}</span>
-                  <span className="pref-provider-type">{p.litellm_provider}</span>
-                </div>
-                <div className="pref-provider-models">
-                  {Object.keys(p.models).length} model(s):{' '}
-                  {Object.keys(p.models).slice(0, 3).join(', ')}
-                  {Object.keys(p.models).length > 3 && '...'}
-                </div>
-                <div className="pref-provider-actions">
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => startEdit(p)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="btn btn-danger btn-sm"
-                    onClick={() => deleteProvider(p.id)}
-                  >
-                    Delete
-                  </button>
-                </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button className="btn btn-ghost btn-sm" onClick={cancelEdit} type="button">
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={saveEdit}
+                  disabled={!editForm.id}
+                  type="button"
+                >
+                  Add Provider
+                </button>
               </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* Add form (inline) */}
-      {isAdding && editForm && (
-        <div className="pref-provider-add">
-          <h4>Add Provider</h4>
-          <div className="pref-form-row">
-            <label>Provider ID</label>
-            <input
-              type="text"
-              value={editForm.id}
-              onChange={(e) =>
-                setEditForm({ ...editForm, id: e.target.value })
-              }
-              className="pref-input"
-              placeholder="my-provider"
-            />
-          </div>
-          <div className="pref-form-row">
-            <label>Base URL</label>
-            <input
-              type="text"
-              value={editForm.base_url}
-              onChange={(e) =>
-                setEditForm({ ...editForm, base_url: e.target.value })
-              }
-              className="pref-input"
-              placeholder="https://api.openai.com/v1"
-            />
-          </div>
-          <div className="pref-form-row">
-            <label>Provider Type</label>
-            <select
-              value={editForm.litellm_provider}
-              onChange={(e) =>
-                setEditForm({
-                  ...editForm,
-                  litellm_provider: e.target.value,
-                })
-              }
-              className="pref-select"
-            >
-              <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic</option>
-              <option value="ollama">Ollama</option>
-              <option value="gemini">Gemini</option>
-              <option value="groq">Groq</option>
-              <option value="mistral">Mistral</option>
-            </select>
-          </div>
-          <div className="pref-form-row">
-            <label>
-              Models (one per line)
-              <button
-                className="btn btn-ghost btn-sm"
-                onClick={handleDiscover}
-                disabled={discovering || !editForm.base_url}
-              >
-                {discovering ? '...' : 'Discover'}
-              </button>
-            </label>
-            <textarea
-              value={editForm.modelsText}
-              onChange={(e) =>
-                setEditForm({ ...editForm, modelsText: e.target.value })
-              }
-              className="pref-textarea"
-              rows={4}
-              placeholder="gpt-4o&#10;gpt-4o-mini"
-            />
-          </div>
-          <div className="pref-form-actions">
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={saveEdit}
-              disabled={!editForm.id}
-            >
-              Add Provider
-            </button>
-            <button className="btn btn-ghost btn-sm" onClick={cancelEdit}>
-              Cancel
-            </button>
-          </div>
+            </div>
+          )}
         </div>
-      )}
-
-      {/* Add button */}
-      {!isAdding && (
-        <button className="btn btn-secondary" onClick={startAdd}>
-          + Add Provider
-        </button>
-      )}
+      </fieldset>
     </div>
   );
 }

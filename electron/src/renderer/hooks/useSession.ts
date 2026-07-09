@@ -10,6 +10,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { Session } from '../../shared/types/session';
 import type { SessionSummary } from '../../shared/types/ipc-boundary';
+import { ChainStatus } from '../../shared/types/chain';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,8 @@ export interface UseSessionReturn {
   deleteSession: (id: string) => Promise<void>;
   /** Rename a session. */
   rename: (id: string, name: string) => Promise<void>;
+  /** Change the model for a session (active only in main). */
+  changeModel: (id: string, model: string) => Promise<void>;
   /** Refresh the session list. */
   refresh: () => Promise<void>;
   /** Whether a session is currently loading. */
@@ -47,6 +50,11 @@ export function useSession(): UseSessionReturn {
   const [isLoading, setIsLoading] = useState(false);
 
   const refresh = useCallback(async () => {
+    if (!window.orchid?.session?.list) {
+      setListState({ status: 'empty' });
+      return;
+    }
+
     try {
       const sessions = await window.orchid.session.list();
       if (sessions.length === 0) {
@@ -72,6 +80,10 @@ export function useSession(): UseSessionReturn {
 
   // Listen for push rename events from main process (e.g. auto-naming)
   useEffect(() => {
+    if (!window.orchid?.session?.onRenamed) {
+      return undefined;
+    }
+
     const unsubscribe = window.orchid.session.onRenamed((event) => {
       setActiveSession((prev) => {
         if (prev && prev.id === event.id) {
@@ -86,6 +98,10 @@ export function useSession(): UseSessionReturn {
   }, [refresh]);
 
   const load = useCallback(async (id: string): Promise<Session | null> => {
+    if (!window.orchid?.session?.load) {
+      return null;
+    }
+
     setIsLoading(true);
     try {
       const session = await window.orchid.session.load({ id });
@@ -100,6 +116,22 @@ export function useSession(): UseSessionReturn {
   }, []);
 
   const create = useCallback(async () => {
+    if (!window.orchid?.session?.create) {
+      const session = makeLocalSession();
+      setActiveSession(session);
+      setListState({
+        status: 'ready',
+        sessions: [{
+          id: session.id,
+          name: session.name,
+          model: session.model,
+          chainCount: session.chains.length,
+          updatedAt: Date.now(),
+        }],
+      });
+      return session;
+    }
+
     setIsLoading(true);
     try {
       const session = await window.orchid.session.create();
@@ -113,6 +145,14 @@ export function useSession(): UseSessionReturn {
 
   const deleteSession = useCallback(
     async (id: string) => {
+      if (!window.orchid?.session?.delete) {
+        if (activeSession?.id === id) {
+          setActiveSession(null);
+        }
+        setListState({ status: 'empty' });
+        return;
+      }
+
       await window.orchid.session.delete({ id });
       if (activeSession?.id === id) {
         setActiveSession(null);
@@ -124,9 +164,52 @@ export function useSession(): UseSessionReturn {
 
   const rename = useCallback(
     async (id: string, name: string) => {
+      if (!window.orchid?.session?.rename) {
+        if (activeSession?.id === id) {
+          setActiveSession((prev) => (prev ? { ...prev, name } : null));
+        }
+        setListState((prev) => {
+          if (prev.status !== 'ready' && prev.status !== 'partial') return prev;
+          return {
+            ...prev,
+            sessions: prev.sessions.map((session) => (
+              session.id === id ? { ...session, name } : session
+            )),
+          };
+        });
+        return;
+      }
+
       await window.orchid.session.rename(id, name);
       if (activeSession?.id === id) {
         setActiveSession((prev) => (prev ? { ...prev, name } : null));
+      }
+      await refresh();
+    },
+    [activeSession, refresh],
+  );
+
+  const changeModel = useCallback(
+    async (id: string, model: string) => {
+      if (!window.orchid?.session?.changeModel) {
+        if (activeSession?.id === id) {
+          setActiveSession((prev) => (prev ? { ...prev, model } : null));
+        }
+        setListState((prev) => {
+          if (prev.status !== 'ready' && prev.status !== 'partial') return prev;
+          return {
+            ...prev,
+            sessions: prev.sessions.map((s) =>
+              s.id === id ? { ...s, model } : s,
+            ),
+          };
+        });
+        return;
+      }
+
+      await window.orchid.session.changeModel(id, model);
+      if (activeSession?.id === id) {
+        setActiveSession((prev) => (prev ? { ...prev, model } : null));
       }
       await refresh();
     },
@@ -140,7 +223,35 @@ export function useSession(): UseSessionReturn {
     create,
     deleteSession,
     rename,
+    changeModel,
     refresh,
     isLoading,
+  };
+}
+
+function makeLocalSession(): Session {
+  const now = new Date().toISOString();
+  const sessionId = crypto.randomUUID();
+  const chainId = crypto.randomUUID();
+  return {
+    id: sessionId,
+    name: 'Local Session',
+    model: '',
+    chains: [{
+      id: chainId,
+      sessionId,
+      messages: [],
+      status: ChainStatus.ACTIVE,
+      model: '',
+      agentName: 'general',
+      agentType: 'internal',
+      agentTier: 'bloom',
+      subagentRecord: null,
+    }],
+    activeChainId: chainId,
+    createdAt: now,
+    updatedAt: now,
+    subagentChains: [],
+    todoStore: { tasks: [] },
   };
 }

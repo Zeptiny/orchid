@@ -158,12 +158,23 @@ export function messageToApiFormat(msg: Message): ApiMessage {
   return api;
 }
 
+function newMessageId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function messageToStorageDict(msg: Message): MessageStorageDict {
   const d: MessageStorageDict = {
     role: msg.role,
     content: msg.content,
     type: msg.type,
   };
+  // Persist ids so reloads keep stable React keys across session switches.
+  if (msg.id) {
+    d.id = msg.id;
+  }
   if (msg.tool_calls) {
     d.tool_calls = msg.tool_calls.map(toolCallToStorageDict);
   }
@@ -237,8 +248,13 @@ export function messageFromStorageDict(data: unknown): Message {
     toolCalls = raw.tool_calls.map((tc) => toolCallFromStorageDict(tc));
   }
 
+  // Empty/missing ids cause React key collisions when switching sessions
+  // (every loaded message becomes ""), so always assign a real id.
+  const id =
+    typeof raw.id === 'string' && raw.id.length > 0 ? raw.id : newMessageId();
+
   return {
-    id: typeof raw.id === 'string' ? raw.id : '',
+    id,
     role,
     content: typeof raw.content === 'string' ? raw.content : '',
     type,

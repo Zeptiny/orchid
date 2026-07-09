@@ -7,7 +7,7 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { ChatView } from './components/ChatView';
-import { PreferencesWindow } from './components/Preferences/PreferencesWindow';
+import { ConfigView } from './components/ConfigView';
 import { OnboardingScreen } from './components/Onboarding/OnboardingScreen';
 import { applyTheme, THEMES, type ThemeName, THEME_NAMES } from './themes';
 import './styles/chat.css';
@@ -35,7 +35,7 @@ export function useTheme(): ThemeContextValue {
 
 function App() {
   const [theme, setThemeState] = useState<ThemeName>('default');
-  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
 
@@ -88,7 +88,7 @@ function App() {
   // Listen for `orchid:open-settings` event (from /settings command)
   useEffect(() => {
     const handleOpenSettings = () => {
-      setPreferencesOpen(true);
+      setConfigOpen(true);
     };
     window.addEventListener('orchid:open-settings', handleOpenSettings);
     return () => window.removeEventListener('orchid:open-settings', handleOpenSettings);
@@ -107,6 +107,19 @@ function App() {
     }
   }, []);
 
+  // Live theme apply from /theme command (palette or slash menu)
+  useEffect(() => {
+    const handleSetTheme = (event: Event) => {
+      const detail = (event as CustomEvent<{ theme?: string }>).detail;
+      const name = detail?.theme as ThemeName | undefined;
+      if (name && THEME_NAMES.includes(name)) {
+        void setTheme(name);
+      }
+    };
+    window.addEventListener('orchid:set-theme', handleSetTheme);
+    return () => window.removeEventListener('orchid:set-theme', handleSetTheme);
+  }, [setTheme]);
+
   // Update context with the setter
   useEffect(() => {
     themeContext = {
@@ -117,11 +130,11 @@ function App() {
 
   return (
     <div className="app-root" data-theme={theme}>
-      <ChatView />
-      <PreferencesWindow
-        isOpen={preferencesOpen}
-        onClose={() => setPreferencesOpen(false)}
-      />
+      {configOpen ? (
+        <ConfigView onClose={() => setConfigOpen(false)} />
+      ) : (
+        <ChatView />
+      )}
       <OnboardingScreen
         isOpen={onboardingOpen && onboardingChecked}
         onComplete={async (config) => {

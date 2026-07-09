@@ -1,25 +1,21 @@
 /**
- * Sidebar — collapsible right sidebar with DaisyUI components.
+ * Sidebar — right inspector panel (Context, Usage, Subagents, Todos, Index, MCP).
+ * Iteration 012 mock-aligned collapse blocks.
  */
-import { useState, useCallback, useEffect } from 'react';
-import type { SessionSummary, MCPServerStatus, RAGStoreStatus, ASTStoreStatus } from '../../shared/types/ipc-boundary';
-import type { ContextBreakdown } from './ContextGrid';
+import { useState, useEffect, type ReactNode } from 'react';
+import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus } from '../../shared/types/ipc-boundary';
 import { ContextGrid } from './ContextGrid';
-import type { Usage } from '../../shared/types/message';
+import type { Message, Usage } from '../../shared/types/message';
 import { TodoStatus } from '../../shared/types/todo';
-import type { SessionListState } from '../hooks/useSession';
 import type { SubagentListState, SubagentDetail } from '../hooks/useSubagents';
 import type { TodoListState } from '../hooks/useTodos';
+import { Icon } from './Icon';
 
 interface SidebarProps {
   isOpen: boolean;
   onToggle: () => void;
-  sessionListState: SessionListState;
-  activeSessionId: string | null;
-  onSessionSelect: (id: string) => void;
-  onSessionCreate: () => void;
-  onSessionDelete: (id: string) => void;
-  onRefreshSessions: () => void;
+  /** Title shown in the panel header (session name when available). */
+  title?: string;
   subagentState: SubagentListState;
   onRefreshSubagents: () => void;
   selectedSubagentId: string | null;
@@ -29,32 +25,21 @@ interface SidebarProps {
   onRefreshTodos: () => void;
   mcpServers: MCPServerStatus[];
   onRefreshMCP: () => void;
-  ragStatus: RAGStoreStatus | null;
-  astStatus: ASTStoreStatus | null;
-  onIndexRAG: () => void;
-  onIndexAST: () => void;
-  onRefreshIndex: () => void;
-  /** Context token breakdown by category (from useChat). */
-  contextBreakdown?: ContextBreakdown | null;
-  /** Latest usage data for the grid. */
+  ragStatus?: RAGStoreStatus | null;
+  astStatus?: ASTStoreStatus | null;
+  onIndexRAG?: () => void | Promise<void>;
+  onIndexAST?: () => void | Promise<void>;
+  onRefreshIndex?: () => void | Promise<void>;
   usage?: Usage | null;
-  /** Cumulative usage across all messages in the current session. */
   cumulativeUsage?: Usage | null;
-  /** Maximum context window size from model metadata. */
   maxContext?: number | null;
-  /** Current working directory from the main process. */
-  cwd?: string;
+  messages?: readonly Message[];
 }
 
 export function Sidebar({
   isOpen,
   onToggle,
-  sessionListState,
-  activeSessionId,
-  onSessionSelect,
-  onSessionCreate,
-  onSessionDelete,
-  onRefreshSessions,
+  title = 'Orchid',
   subagentState,
   onRefreshSubagents,
   selectedSubagentId,
@@ -64,16 +49,15 @@ export function Sidebar({
   onRefreshTodos,
   mcpServers,
   onRefreshMCP,
-  ragStatus,
-  astStatus,
+  ragStatus = null,
+  astStatus = null,
   onIndexRAG,
   onIndexAST,
   onRefreshIndex,
-  contextBreakdown,
   usage,
   cumulativeUsage,
   maxContext,
-  cwd,
+  messages,
 }: SidebarProps) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -86,189 +70,125 @@ export function Sidebar({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onToggle]);
 
-  if (!isOpen) return null;
+  if (!isOpen) {
+    return (
+      <aside className="right-panel right-panel-collapsed">
+        <button
+          className="btn btn-ghost btn-sm btn-circle"
+          onClick={onToggle}
+          title="Expand inspector"
+          type="button"
+        >
+          <Icon name="chevronLeft" size={14} />
+        </button>
+      </aside>
+    );
+  }
 
   return (
-    <div className="w-80 bg-base-200 border-l border-base-300 flex flex-col h-full">
-      <div className="p-4 border-b border-base-300 flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-bold">Sidebar</h2>
-          {cwd && (
-            <div className="text-[10px] font-mono opacity-50 truncate mt-0.5" title={cwd}>
-              📁 {cwd}
-            </div>
-          )}
-        </div>
-        <button className="btn btn-ghost btn-sm btn-circle" onClick={onToggle}>
-          ✕
+    <aside className="right-panel">
+      <div className="panel-header">
+        <h1 className="title truncate">{title}</h1>
+        <button
+          className="btn btn-ghost btn-sm btn-circle"
+          onClick={onToggle}
+          title="Collapse inspector"
+          type="button"
+        >
+          <Icon name="chevronRight" size={14} />
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-2">
-        {/* Sessions */}
-        <div className="collapse collapse-arrow bg-base-100">
-          <input type="checkbox" defaultChecked />
-          <div className="collapse-title text-sm font-medium">Sessions</div>
-          <div className="collapse-content">
-            <SessionsSection
-              state={sessionListState}
-              activeSessionId={activeSessionId}
-              onSelect={onSessionSelect}
-              onCreate={onSessionCreate}
-              onDelete={onSessionDelete}
-              onRefresh={onRefreshSessions}
-            />
-          </div>
-        </div>
+      <div className="panel-body">
+        <CollapseBlock
+          title="Context"
+          defaultOpen
+          badge={<ContextBadge usage={usage} maxContext={maxContext} />}
+        >
+          <ContextGrid messages={messages} usage={usage} maxContext={maxContext} />
+        </CollapseBlock>
 
-        {/* Subagents */}
-        <div className="collapse collapse-arrow bg-base-100">
-          <input type="checkbox" defaultChecked />
-          <div className="collapse-title text-sm font-medium">Subagents</div>
-          <div className="collapse-content">
-            <SubagentsSection
-              state={subagentState}
-              onRefresh={onRefreshSubagents}
-              selectedId={selectedSubagentId}
-              onSelect={onSelectSubagent}
-              getDetail={getSubagentDetail}
-            />
-          </div>
-        </div>
+        <CollapseBlock title="Usage">
+          <TokenUsageSection cumulativeUsage={cumulativeUsage} maxContext={maxContext} />
+        </CollapseBlock>
 
-        {/* Todos */}
-        <div className="collapse collapse-arrow bg-base-100">
-          <input type="checkbox" defaultChecked />
-          <div className="collapse-title text-sm font-medium">Todos</div>
-          <div className="collapse-content">
-            <TodosSection state={todoState} onRefresh={onRefreshTodos} />
-          </div>
-        </div>
+        <CollapseBlock
+          title="Subagents"
+          badge={
+            subagentState.status === 'ready' && subagentState.subagents.length > 0 ? (
+              <span className="badge badge-xs badge-success">{subagentState.subagents.length}</span>
+            ) : null
+          }
+        >
+          <SubagentsSection
+            state={subagentState}
+            onRefresh={onRefreshSubagents}
+            selectedId={selectedSubagentId}
+            onSelect={onSelectSubagent}
+            getDetail={getSubagentDetail}
+          />
+        </CollapseBlock>
 
-        {/* MCP Servers */}
-        <div className="collapse collapse-arrow bg-base-100">
-          <input type="checkbox" />
-          <div className="collapse-title text-sm font-medium">MCP Servers</div>
-          <div className="collapse-content">
-            <MCPSection servers={mcpServers} onRefresh={onRefreshMCP} />
-          </div>
-        </div>
+        <CollapseBlock title="Todos">
+          <TodosSection state={todoState} onRefresh={onRefreshTodos} />
+        </CollapseBlock>
 
-        {/* Index Status */}
-        <div className="collapse collapse-arrow bg-base-100">
-          <input type="checkbox" />
-          <div className="collapse-title text-sm font-medium">Index Status</div>
-          <div className="collapse-content">
-            <IndexSection
-              ragStatus={ragStatus}
-              astStatus={astStatus}
-              onIndexRAG={onIndexRAG}
-              onIndexAST={onIndexAST}
-              onRefresh={onRefreshIndex}
-            />
-          </div>
-        </div>
+        <CollapseBlock
+          title="Workspace Index"
+          badge={<IndexBadge ragStatus={ragStatus} astStatus={astStatus} />}
+        >
+          <IndexSection
+            ragStatus={ragStatus}
+            astStatus={astStatus}
+            onIndexRAG={onIndexRAG}
+            onIndexAST={onIndexAST}
+            onRefresh={onRefreshIndex}
+          />
+        </CollapseBlock>
 
-        {/* Context Breakdown Grid */}
-        <div className="collapse collapse-arrow bg-base-100">
-          <input type="checkbox" defaultChecked />
-          <div className="collapse-title text-sm font-medium">Context</div>
-          <div className="collapse-content">
-            <ContextGrid
-              breakdown={contextBreakdown}
-              usage={usage}
-              maxContext={maxContext}
-            />
-          </div>
-        </div>
-
-        {/* Token Usage Totals */}
-        <div className="collapse collapse-arrow bg-base-100">
-          <input type="checkbox" defaultChecked />
-          <div className="collapse-title text-sm font-medium">Usage</div>
-          <div className="collapse-content">
-            <TokenUsageSection cumulativeUsage={cumulativeUsage} maxContext={maxContext} />
-          </div>
-        </div>
+        <CollapseBlock title="MCP Servers" defaultOpen>
+          <MCPSection servers={mcpServers} onRefresh={onRefreshMCP} />
+        </CollapseBlock>
       </div>
-    </div>
+
+      <div className="panel-status-footer">
+        <span>orchid</span>
+        <span>-</span>
+        <span>general</span>
+      </div>
+    </aside>
   );
 }
 
-// ── Sessions Section ─────────────────────────────────────────────────────────
+// ── Mock-style Collapse Block ───────────────────────────────────────────────
 
-interface SessionsSectionProps {
-  state: SessionListState;
-  activeSessionId: string | null;
-  onSelect: (id: string) => void;
-  onCreate: () => void;
-  onDelete: (id: string) => void;
-  onRefresh: () => void;
+interface CollapseBlockProps {
+  title: string;
+  defaultOpen?: boolean;
+  badge?: ReactNode;
+  children: ReactNode;
 }
 
-function SessionsSection({
-  state,
-  activeSessionId,
-  onSelect,
-  onCreate,
-  onDelete,
-  onRefresh,
-}: SessionsSectionProps) {
-  if (state.status === 'loading') {
-    return <span className="loading loading-spinner loading-sm" />;
-  }
-
-  if (state.status === 'error') {
-    return (
-      <div className="text-center">
-        <p className="text-error text-xs">{state.error}</p>
-        <button className="btn btn-ghost btn-xs mt-2" onClick={onRefresh}>Retry</button>
-      </div>
-    );
-  }
-
-  if (state.status === 'empty') {
-    return (
-      <div className="text-center">
-        <p className="text-base-content/50 text-xs mb-2">No sessions yet</p>
-        <button className="btn btn-primary btn-xs" onClick={onCreate}>New Session</button>
-      </div>
-    );
-  }
-
-  const sessions = state.status === 'ready' || state.status === 'partial' ? state.sessions : [];
-
+function CollapseBlock({ title, defaultOpen = false, badge, children }: CollapseBlockProps) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="space-y-2">
-      <ul className="menu menu-sm">
-        {sessions.map((session) => (
-          <li key={session.id}>
-            <div
-              className={`flex items-center justify-between cursor-pointer ${session.id === activeSessionId ? 'active' : ''}`}
-              onClick={() => onSelect(session.id)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => { if (e.key === 'Enter') onSelect(session.id); }}
-            >
-              <div className="flex-1 min-w-0">
-                <div className="truncate text-xs">{session.name}</div>
-                {session.model && (
-                  <div className="text-[10px] opacity-50 truncate">{session.model.split('/').pop()}</div>
-                )}
-              </div>
-              <button
-                className="btn btn-ghost btn-xs btn-circle opacity-50 hover:opacity-100"
-                onClick={(e) => { e.stopPropagation(); onDelete(session.id); }}
-              >
-                ✕
-              </button>
-            </div>
-          </li>
-        ))}
-      </ul>
-      <button className="btn btn-ghost btn-xs w-full" onClick={onCreate}>
-        + New Session
+    <div className="mock-collapse">
+      <button
+        className="mock-collapse-title flex w-full items-center justify-between gap-1.5"
+        onClick={() => setOpen(!open)}
+        type="button"
+      >
+        <span className="inline-flex min-w-0 items-center gap-1.5">
+          <span className="truncate">{title}</span>
+          {badge}
+        </span>
+        <Icon
+          name={open ? 'chevronDown' : 'chevronRight'}
+          size={12}
+          className="shrink-0 text-base-content/40"
+        />
       </button>
+      {open && <div className="mock-collapse-content">{children}</div>}
     </div>
   );
 }
@@ -290,150 +210,70 @@ function SubagentsSection({ state, onRefresh, selectedId, onSelect, getDetail }:
 
   if (state.status === 'error') {
     return (
-      <div className="text-center">
+      <div className="inspector-empty">
         <p className="text-error text-xs">{state.error}</p>
-        <button className="btn btn-ghost btn-xs mt-2" onClick={onRefresh}>Retry</button>
+        <button className="btn btn-ghost btn-xs" onClick={onRefresh} type="button">
+          Retry
+        </button>
       </div>
     );
   }
 
   if (state.status === 'empty') {
-    return <p className="text-base-content/50 text-xs text-center">No active subagents</p>;
+    return <p className="inspector-empty">No active subagents</p>;
   }
 
   const agents = state.status === 'ready' ? state.subagents : [];
 
   return (
-    <div className="space-y-1">
+    <div className="inspector-stack">
       {agents.map((agent) => {
         const detail = getDetail(agent.id);
+        // Mock-style compact row: mono name + status badge
+        const name = detail?.name || agent.agent_name || 'Subagent';
+        const agentState = detail?.state || agent.status;
+        const isSelected = selectedId === agent.id;
+        const usage = detail?.usage;
         return (
-          <SubagentPane
-            key={agent.id}
-            detail={detail}
-            agent={agent}
-            isSelected={selectedId === agent.id}
-            onSelect={onSelect}
-          />
+          <div key={agent.id} className="inspector-stack gap-0">
+            <button
+              type="button"
+              className={`inspector-row ${isSelected ? 'inspector-row-active' : ''}`}
+              onClick={() => onSelect(isSelected ? null : agent.id)}
+            >
+              <span className="inspector-row-label mono truncate">{name}</span>
+              <SubagentStateBadge state={agentState} />
+            </button>
+            {isSelected && (
+              <div className="inspector-subagent-detail">
+                {detail?.elapsed && (
+                  <div className="subtle">elapsed {detail.elapsed}</div>
+                )}
+                {usage && (
+                  <div className="subtle mono">
+                    in {fmtTokens(usage.prompt_tokens)} · out {fmtTokens(usage.completion_tokens)}
+                    {usage.cached_tokens > 0
+                      ? ` · cached ${fmtTokens(usage.cached_tokens)}`
+                      : ''}
+                  </div>
+                )}
+                {detail?.task && (
+                  <div className="inspector-subagent-task">{detail.task}</div>
+                )}
+              </div>
+            )}
+          </div>
         );
       })}
-      <button className="btn btn-ghost btn-xs w-full mt-2" onClick={onRefresh}>
-        Refresh
-      </button>
     </div>
   );
 }
 
-// ── Subagent Pane ────────────────────────────────────────────────────────────
-
-interface SubagentPaneProps {
-  detail: SubagentDetail | null;
-  agent: { id: string; agent_name: string; status: string };
-  isSelected: boolean;
-  onSelect: (id: string | null) => void;
+function fmtTokens(n: number): string {
+  if (!n) return '0';
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
 }
-
-function SubagentPane({ detail, agent, isSelected, onSelect }: SubagentPaneProps) {
-  const name = detail?.name || agent.agent_name || 'Subagent';
-  const state = detail?.state || agent.status;
-  const isRunning = state === 'running' || state === 'pending';
-
-  return (
-    <div
-      className={`rounded-lg border transition-colors cursor-pointer ${
-        isSelected
-          ? 'border-primary bg-primary/5'
-          : 'border-base-300 bg-base-100 hover:border-base-content/20'
-      }`}
-      onClick={() => onSelect(agent.id)}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect(agent.id); }}
-    >
-      {/* Header row */}
-      <div className="flex items-center gap-2 px-3 py-2">
-        {/* State indicator */}
-        {isRunning ? (
-          <span className="loading loading-spinner loading-xs text-primary" />
-        ) : state === 'completed' ? (
-          <span className="text-success text-xs">✓</span>
-        ) : state === 'failed' ? (
-          <span className="text-error text-xs">✕</span>
-        ) : (
-          <span className="text-base-content/30 text-xs">○</span>
-        )}
-
-        {/* Name and metadata */}
-        <div className="flex-1 min-w-0">
-          <div className="truncate text-xs font-medium">{name}</div>
-          {detail?.task && (
-            <div className="text-[10px] opacity-50 truncate">{detail.task}</div>
-          )}
-        </div>
-
-        {/* Badges */}
-        <div className="flex items-center gap-1 shrink-0">
-          {detail?.tier && (
-            <span className="badge badge-xs badge-outline">{detail.tier}</span>
-          )}
-          <SubagentStateBadge state={state} />
-        </div>
-      </div>
-
-      {/* Elapsed time */}
-      {detail && (
-        <div className="px-3 pb-1.5">
-          <span className={`text-[10px] ${isRunning ? 'text-primary font-mono' : 'opacity-50'}`}>
-            {isRunning ? '⏱' : '⏱'} {detail.elapsed}
-          </span>
-        </div>
-      )}
-
-      {/* Expanded detail */}
-      {isSelected && detail && (
-        <div className="px-3 pb-2 border-t border-base-300 mt-1 pt-2 space-y-1.5">
-          {/* Type and tier row */}
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] opacity-50">Type:</span>
-            <span className="text-[10px] font-mono">{detail.type}</span>
-          </div>
-
-          {/* Task description */}
-          {detail.task && (
-            <div>
-              <span className="text-[10px] opacity-50 block mb-0.5">Task</span>
-              <p className="text-[10px] leading-relaxed bg-base-200 rounded p-1.5 break-words">
-                {detail.task}
-              </p>
-            </div>
-          )}
-
-          {/* Result */}
-          {detail.result && state === 'completed' && (
-            <div>
-              <span className="text-[10px] opacity-50 block mb-0.5">Result</span>
-              <p className="text-[10px] leading-relaxed bg-success/10 text-success-content rounded p-1.5 break-words max-h-32 overflow-y-auto">
-                {detail.result}
-              </p>
-            </div>
-          )}
-
-          {/* Error */}
-          {detail.error && (state === 'failed' || state === 'interrupted') && (
-            <div>
-              <span className="text-[10px] opacity-50 block mb-0.5">Error</span>
-              <p className="text-[10px] leading-relaxed bg-error/10 text-error-content rounded p-1.5 break-words max-h-32 overflow-y-auto">
-                {detail.error}
-              </p>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Subagent State Badge ─────────────────────────────────────────────────────
 
 function SubagentStateBadge({ state }: { state: string }) {
   const config: Record<string, { cls: string; label: string }> = {
@@ -446,11 +286,7 @@ function SubagentStateBadge({ state }: { state: string }) {
 
   const { cls, label } = config[state] ?? { cls: 'badge-ghost', label: state };
 
-  return (
-    <span className={`badge badge-xs ${cls}`}>
-      {label}
-    </span>
-  );
+  return <span className={`badge badge-xs ${cls}`}>{label}</span>;
 }
 
 // ── Todos Section ────────────────────────────────────────────────────────────
@@ -460,95 +296,55 @@ interface TodosSectionProps {
   onRefresh: () => void;
 }
 
-function TodosSection({ state, onRefresh }: TodosSectionProps) {
+function TodosSection({ state }: TodosSectionProps) {
   if (state.status === 'loading') {
     return <span className="loading loading-spinner loading-sm" />;
   }
 
   if (state.status === 'error') {
-    return (
-      <div className="text-center">
-        <p className="text-error text-xs">{state.error}</p>
-        <button className="btn btn-ghost btn-xs mt-2" onClick={onRefresh}>Retry</button>
-      </div>
-    );
+    return <p className="inspector-empty text-error">{state.error}</p>;
   }
 
   if (state.status === 'empty') {
-    return <p className="text-base-content/50 text-xs text-center">No todos</p>;
+    return <p className="inspector-empty">No todos</p>;
   }
 
   const todos = state.status === 'ready' ? state.todos : [];
 
   return (
-    <ul className="menu menu-sm">
+    <div className="inspector-stack">
       {todos.map((todo) => (
-        <li key={todo.id}>
-          <div className="flex items-center gap-2">
-            <span className={`badge badge-xs ${
-              todo.status === TodoStatus.DONE ? 'badge-success' :
-              todo.status === TodoStatus.IN_PROGRESS ? 'badge-warning' : 'badge-ghost'
-            }`}>
-              {todo.status === TodoStatus.DONE ? '✓' : todo.status === TodoStatus.IN_PROGRESS ? '⟳' : '○'}
-            </span>
-            <span className={`text-xs ${todo.status === TodoStatus.DONE ? 'line-through opacity-50' : ''}`}>
-              {todo.title}
-            </span>
-          </div>
-        </li>
+        <div key={todo.id} className="inspector-row">
+          <span
+            className={`badge badge-xs ${
+              todo.status === TodoStatus.DONE
+                ? 'badge-success'
+                : todo.status === TodoStatus.IN_PROGRESS
+                  ? 'badge-warning'
+                  : 'badge-ghost'
+            }`}
+          />
+          <span
+            className={`inspector-row-label truncate ${
+              todo.status === TodoStatus.DONE ? 'line-through opacity-50' : ''
+            }`}
+          >
+            {todo.title}
+          </span>
+        </div>
       ))}
-    </ul>
-  );
-}
-
-// ── MCP Section ──────────────────────────────────────────────────────────────
-
-interface MCPSectionProps {
-  servers: MCPServerStatus[];
-  onRefresh: () => void;
-}
-
-function MCPSection({ servers, onRefresh }: MCPSectionProps) {
-  if (servers.length === 0) {
-    return <p className="text-base-content/50 text-xs text-center">No MCP servers configured</p>;
-  }
-
-  return (
-    <div className="space-y-2">
-      <ul className="menu menu-sm">
-        {servers.map((server) => (
-          <li key={server.name}>
-            <div className="flex items-center justify-between">
-              <div className="flex-1 min-w-0">
-                <div className="truncate text-xs">{server.name}</div>
-                <div className="text-[10px] opacity-50">{server.toolCount} tools</div>
-              </div>
-              <span className={`badge badge-xs ${
-                server.status === 'connected' ? 'badge-success' :
-                server.status === 'failed' ? 'badge-error' :
-                server.status === 'starting' ? 'badge-warning' : 'badge-ghost'
-              }`}>
-                {server.status}
-              </span>
-            </div>
-          </li>
-        ))}
-      </ul>
-      <button className="btn btn-ghost btn-xs w-full" onClick={onRefresh}>
-        Refresh
-      </button>
     </div>
   );
 }
 
-// ── Index Section ────────────────────────────────────────────────────────────
+// ── Workspace Index (RAG / AST) ──────────────────────────────────────────────
 
 interface IndexSectionProps {
   ragStatus: RAGStoreStatus | null;
   astStatus: ASTStoreStatus | null;
-  onIndexRAG: () => void;
-  onIndexAST: () => void;
-  onRefresh: () => void;
+  onIndexRAG?: () => void | Promise<void>;
+  onIndexAST?: () => void | Promise<void>;
+  onRefresh?: () => void | Promise<void>;
 }
 
 function IndexSection({
@@ -558,45 +354,214 @@ function IndexSection({
   onIndexAST,
   onRefresh,
 }: IndexSectionProps) {
+  const [indexing, setIndexing] = useState<'rag' | 'ast' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const runIndex = async (kind: 'rag' | 'ast') => {
+    const action = kind === 'rag' ? onIndexRAG : onIndexAST;
+    if (!action || indexing) return;
+    setIndexing(kind);
+    setError(null);
+    try {
+      await action();
+      await onRefresh?.();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`${kind.toUpperCase()} index failed: ${msg}`);
+      console.error(`${kind} index failed:`, err);
+    } finally {
+      setIndexing(null);
+    }
+  };
+
   return (
-    <div className="space-y-3">
-      {/* RAG Status */}
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-medium">RAG</span>
-          <button className="btn btn-ghost btn-xs" onClick={onIndexRAG}>Index</button>
-        </div>
-        {ragStatus ? (
-          <div className="text-[10px] opacity-50">
-            {ragStatus.totalFiles} files, {ragStatus.totalChunks} chunks
-            {ragStatus.lastIndexed && <span> · Last: {new Date(ragStatus.lastIndexed).toLocaleDateString()}</span>}
-          </div>
-        ) : (
-          <div className="text-[10px] opacity-50">Not indexed</div>
-        )}
+    <div className="inspector-stack">
+      <div className="inspector-row">
+        <strong>RAG</strong>
+        <span className="subtle text-right">{formatRagStatus(ragStatus)}</span>
       </div>
-
-      {/* AST Status */}
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-medium">AST</span>
-          <button className="btn btn-ghost btn-xs" onClick={onIndexAST}>Index</button>
+      {ragStatus?.lastIndexed && (
+        <div className="inspector-row">
+          <span className="subtle">Last indexed</span>
+          <span className="subtle text-right">
+            {formatRelativeTime(ragStatus.lastIndexed)}
+            {ragStatus.lastIndexDuration != null
+              ? ` · ${ragStatus.lastIndexDuration.toFixed(1)}s`
+              : ''}
+          </span>
         </div>
-        {astStatus ? (
-          <div className="text-[10px] opacity-50">
-            {astStatus.totalFiles} files, {astStatus.totalSymbols} symbols
-            {astStatus.lastIndexed && <span> · Last: {new Date(astStatus.lastIndexed).toLocaleDateString()}</span>}
-          </div>
-        ) : (
-          <div className="text-[10px] opacity-50">Not indexed</div>
-        )}
-      </div>
+      )}
 
-      <button className="btn btn-ghost btn-xs w-full" onClick={onRefresh}>
-        Refresh Status
-      </button>
+      <div className="inspector-row">
+        <strong>AST</strong>
+        <span className="subtle text-right">{formatAstStatus(astStatus)}</span>
+      </div>
+      {astStatus?.lastIndexed && (
+        <div className="inspector-row">
+          <span className="subtle">Last indexed</span>
+          <span className="subtle text-right">
+            {formatRelativeTime(astStatus.lastIndexed)}
+            {astStatus.lastIndexDuration != null
+              ? ` · ${astStatus.lastIndexDuration.toFixed(1)}s`
+              : ''}
+          </span>
+        </div>
+      )}
+
+      <div className="inspector-row inspector-row-actions">
+        <strong>Actions</strong>
+        <span className="inline-flex gap-1">
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            disabled={!onIndexRAG || indexing !== null}
+            onClick={() => void runIndex('rag')}
+            title="Index project for RAG semantic search"
+          >
+            {indexing === 'rag' ? (
+              <span className="loading loading-spinner loading-xs" />
+            ) : (
+              'RAG'
+            )}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            disabled={!onIndexAST || indexing !== null}
+            onClick={() => void runIndex('ast')}
+            title="Re-scan project for AST symbols"
+          >
+            {indexing === 'ast' ? (
+              <span className="loading loading-spinner loading-xs" />
+            ) : (
+              'AST'
+            )}
+          </button>
+          {onRefresh && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs btn-square"
+              disabled={indexing !== null}
+              onClick={() => void onRefresh()}
+              title="Refresh index status"
+            >
+              <Icon name="refresh" size={12} />
+            </button>
+          )}
+        </span>
+      </div>
+      {error && <p className="inspector-empty text-error text-left">{error}</p>}
     </div>
   );
+}
+
+function IndexBadge({
+  ragStatus,
+  astStatus,
+}: {
+  ragStatus: RAGStoreStatus | null;
+  astStatus: ASTStoreStatus | null;
+}) {
+  const hasRag = Boolean(ragStatus && ragStatus.totalChunks > 0);
+  const hasAst = Boolean(astStatus && astStatus.totalSymbols > 0);
+  if (!hasRag && !hasAst) {
+    return <span className="badge badge-xs badge-ghost">empty</span>;
+  }
+  if (hasRag && hasAst) {
+    return <span className="badge badge-xs badge-success">ready</span>;
+  }
+  return <span className="badge badge-xs badge-warning">partial</span>;
+}
+
+function formatRagStatus(status: RAGStoreStatus | null): string {
+  if (!status) return 'Not loaded';
+  if (status.totalFiles === 0 && status.totalChunks === 0) return 'No index';
+  return `${formatCompactCount(status.totalFiles)} files · ${formatCompactCount(status.totalChunks)} chunks`;
+}
+
+function formatAstStatus(status: ASTStoreStatus | null): string {
+  if (!status) return 'Not loaded';
+  if (status.totalFiles === 0 && status.totalSymbols === 0) return 'No index';
+  return `${formatCompactCount(status.totalSymbols)} symbols · ${formatCompactCount(status.totalFiles)} files`;
+}
+
+function formatCompactCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
+function formatRelativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return iso;
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+// ── MCP Section ──────────────────────────────────────────────────────────────
+
+interface MCPSectionProps {
+  servers: MCPServerStatus[];
+  onRefresh: () => void;
+}
+
+function MCPSection({ servers }: MCPSectionProps) {
+  if (servers.length === 0) {
+    return <p className="inspector-empty">No MCP servers configured</p>;
+  }
+
+  return (
+    <div className="inspector-stack">
+      {servers.map((server) => (
+        <div key={server.name} className="inspector-row">
+          <span className="inspector-row-label truncate">{server.name}</span>
+          {server.status === 'connected' ? (
+            <span className="badge badge-xs badge-success shrink-0">
+              {server.toolCount > 0 ? `${server.toolCount} tools` : 'connected'}
+            </span>
+          ) : server.status === 'starting' ? (
+            <span className="badge badge-xs badge-warning shrink-0">starting</span>
+          ) : (
+            <span className="badge badge-xs badge-ghost shrink-0">{server.status}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Context Badge ────────────────────────────────────────────────────────────
+
+interface ContextBadgeProps {
+  usage?: Usage | null;
+  maxContext?: number | null;
+}
+
+function ContextBadge({ usage, maxContext }: ContextBadgeProps) {
+  if (usage && maxContext && maxContext > 0) {
+    const pct = Math.min(100, Math.round((usage.prompt_tokens / maxContext) * 100));
+    return (
+      <span
+        className={`badge badge-xs ${
+          pct >= 85 ? 'badge-error' : pct >= 60 ? 'badge-warning' : pct > 0 ? 'badge-info' : 'badge-ghost'
+        }`}
+      >
+        {pct}%
+      </span>
+    );
+  }
+  // Avoid showing a misleading 0% when we have tokens but no window metadata
+  if (usage && usage.prompt_tokens > 0) {
+    return <span className="badge badge-xs badge-ghost">n/a</span>;
+  }
+  return <span className="badge badge-xs badge-ghost">0%</span>;
 }
 
 // ── Token Usage Section ─────────────────────────────────────────────────────
@@ -606,73 +571,37 @@ interface TokenUsageSectionProps {
   maxContext?: number | null;
 }
 
-function TokenUsageSection({ cumulativeUsage, maxContext }: TokenUsageSectionProps) {
-  if (!cumulativeUsage) {
-    return (
-      <div className="text-[11px] opacity-50 text-center py-1">
-        Σ0 · ↑0 ↓0
-      </div>
-    );
-  }
-
-  const { prompt_tokens, completion_tokens, total_tokens, cached_tokens } = cumulativeUsage;
-
-  // All zero → still show zero state
-  if (total_tokens === 0) {
-    return (
-      <div className="text-[11px] opacity-50 text-center py-1">
-        Σ0 · ↑0 ↓0
-      </div>
-    );
-  }
-
-  const promptStr = formatSidebarTokens(prompt_tokens);
-  const completionStr = formatSidebarTokens(completion_tokens);
-  const totalStr = formatSidebarTokens(total_tokens);
-  const cachedStr = formatSidebarTokens(cached_tokens);
+function TokenUsageSection({ cumulativeUsage }: TokenUsageSectionProps) {
+  const prompt = cumulativeUsage?.prompt_tokens ?? 0;
+  const completion = cumulativeUsage?.completion_tokens ?? 0;
+  const total = cumulativeUsage?.total_tokens ?? 0;
+  const cached = cumulativeUsage?.cached_tokens ?? 0;
 
   return (
-    <div className="space-y-1.5">
-      {/* Compact one-line format: ΣX · ↑Y (⟲Z) ↓W */}
-      <div className="text-xs font-mono">
-        <span className="font-medium">Σ{totalStr}</span>
-        {maxContext && maxContext > 0 && (
-          <span className="opacity-50"> ({(prompt_tokens / maxContext * 100).toFixed(0)}%)</span>
-        )}
-        <span className="opacity-30"> · </span>
-        <span className="text-info">↑{promptStr}</span>
-        {cached_tokens > 0 && (
-          <span className="opacity-50"> (⟲{cachedStr})</span>
-        )}
-        <span className="opacity-30"> </span>
-        <span className="text-success">↓{completionStr}</span>
+    <div className="inspector-stack">
+      <div className="inspector-row">
+        <strong>Prompt</strong>
+        <span className="subtle">{formatTokenCount(prompt)}</span>
       </div>
-
-      {/* Breakdown rows */}
-      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px]">
-        <div className="opacity-50">Prompt</div>
-        <div className="text-right font-mono">{prompt_tokens.toLocaleString()}</div>
-        {cached_tokens > 0 && (
-          <>
-            <div className="opacity-50">Cached</div>
-            <div className="text-right font-mono">{cached_tokens.toLocaleString()}</div>
-          </>
-        )}
-        <div className="opacity-50">Completion</div>
-        <div className="text-right font-mono">{completion_tokens.toLocaleString()}</div>
-        <div className="opacity-50 border-t border-base-300 pt-0.5">Total</div>
-        <div className="text-right font-mono border-t border-base-300 pt-0.5">{total_tokens.toLocaleString()}</div>
+      <div className="inspector-row">
+        <strong>Completion</strong>
+        <span className="subtle">{formatTokenCount(completion)}</span>
+      </div>
+      <div className="inspector-row">
+        <strong>Total</strong>
+        <span className="subtle">{formatTokenCount(total)}</span>
+      </div>
+      <div className="inspector-row">
+        <strong>Cached</strong>
+        <span className="subtle">{formatTokenCount(cached)}</span>
       </div>
     </div>
   );
 }
 
-/**
- * Format token count for compact display (e.g. 12500 → "12.5k").
- */
-function formatSidebarTokens(n: number): string {
-  if (n >= 1000) {
-    return `${(n / 1000).toFixed(1)}k`;
-  }
+/** Same compact formatting as ContextGrid (e.g. 1.2k, 1.5M). */
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
 }

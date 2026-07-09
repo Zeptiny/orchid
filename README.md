@@ -249,7 +249,7 @@ Project → Scanner → Chunker → Embedder → Vector Store → Query
 
 - **Auto-indexing** — files edited/created via `edit`/`write` tools are automatically reindexed
 - **Sidebar status** — shows last index date and duration
-- **Commands** — `/index-rag` to reindex, `/rag status` for status, `/rag clear` to clear
+- **Commands** — `/rag index` to reindex, `/rag clear` to clear
 
 ### Embedding Technology
 
@@ -401,9 +401,8 @@ The desktop app uses Vercel AI SDK with `@ai-sdk/openai` for OpenAI-compatible p
 | `/theme` | Change app theme |
 | `/personality` | Change agent personality |
 | `/settings` | Open preferences (5 tabs) |
-| `/index-rag` | Index project for semantic search |
-| `/index-ast` | Re-scan project for AST index |
-| `/rag status` | RAG index status |
+| `/rag index` | Index project for semantic search |
+| `/ast index` | Re-scan project for AST index |
 | `/rag clear` | Clear RAG index |
 
 ### Keyboard Shortcuts

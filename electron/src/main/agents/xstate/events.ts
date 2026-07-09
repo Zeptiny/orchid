@@ -23,12 +23,32 @@ export interface ChunkEvent {
   data: string;
 }
 
+/** LLM stream emits a reasoning/thinking chunk. */
+export interface ThinkingChunkEvent {
+  type: 'THINKING';
+  data: string;
+}
+
 /** LLM stream requests a tool call. */
 export interface ToolCallEvent {
   type: 'TOOL_CALL';
   toolCallId: string;
   toolName: string;
   args: string;
+}
+
+/** LLM stream starts generating a tool call (tool input streaming). */
+export interface ToolCallStartEvent {
+  type: 'TOOL_CALL_START';
+  toolCallId: string;
+  toolName: string;
+}
+
+/** LLM stream emits a delta for tool call arguments (partial JSON). */
+export interface ToolCallDeltaEvent {
+  type: 'TOOL_CALL_DELTA';
+  toolCallId: string;
+  argsDelta: string;
 }
 
 /** Tool execution produced a result. */
@@ -119,7 +139,10 @@ export interface InterruptTimeoutEvent {
 export type AgentEvent =
   | UserInputEvent
   | ChunkEvent
+  | ThinkingChunkEvent
   | ToolCallEvent
+  | ToolCallStartEvent
+  | ToolCallDeltaEvent
   | ToolResultEvent
   | ToolErrorEvent
   | StreamEndEvent

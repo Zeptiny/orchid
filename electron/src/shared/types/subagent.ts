@@ -38,6 +38,12 @@ export interface SubagentRecord {
   readonly end_time: string | null;
   readonly result: string | null;
   readonly error: string | null;
+  /**
+   * Index of the parent session chain this subagent was spawned from
+   * (Python `parent_chain_index`). Used to attribute sub token usage
+   * to the correct chain footer.
+   */
+  readonly parentChainIndex: number | null;
   /** The full chain associated with this subagent (persisted). */
   readonly chain: Chain;
 }
@@ -81,6 +87,8 @@ export interface SubagentRecordStorageDict {
   end_time?: string | null;
   result?: string | null;
   error?: string | null;
+  parent_chain_index?: number | null;
+  parentChainIndex?: number | null;
   chain?: unknown;
   // Forward-compat: extra keys tolerated on restore
   [key: string]: unknown;
@@ -101,6 +109,7 @@ export function subagentRecordToStorageDict(record: SubagentRecord): SubagentRec
     end_time: record.end_time,
     result: record.result,
     error: record.error,
+    parent_chain_index: record.parentChainIndex,
     chain: chainToStorageDict(record.chain),
   };
 }
@@ -149,6 +158,13 @@ export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
 
   const chainId = typeof raw.chain_id === 'string' ? raw.chain_id : '';
 
+  // parent_chain_index (Python) / parentChainIndex (TS)
+  let parentChainIndex: number | null = null;
+  const rawParent = raw.parent_chain_index ?? raw.parentChainIndex;
+  if (typeof rawParent === 'number' && Number.isFinite(rawParent)) {
+    parentChainIndex = rawParent;
+  }
+
   return {
     id: typeof raw.id === 'string' ? raw.id : '',
     agent_name: typeof raw.agent_name === 'string' ? raw.agent_name : '',
@@ -161,6 +177,7 @@ export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
     end_time: endTime,
     result: typeof raw.result === 'string' ? raw.result : null,
     error: typeof raw.error === 'string' ? raw.error : null,
+    parentChainIndex,
     chain,
   };
 }

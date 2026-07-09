@@ -106,26 +106,26 @@ export async function executeToolCall(
     );
   }
 
-  // Execute with optional timeout
+  // Execute with optional timeout (shared policy with MCP wrappers)
   let result: unknown;
   try {
-    if (TOOLS_WITHOUT_TIMEOUT.has(name) || registered.definition.noTimeout) {
-      result = await registered.handler(args);
-    } else {
-      result = await withTimeout(
-        registered.handler(args),
-        timeoutSeconds * 1000,
-        `Tool '${name}' timed out after ${timeoutSeconds}s.`,
-      );
-    }
+    result = await runWithToolTimeout(
+      () => registered.handler(args),
+      name,
+      {
+        timeoutSeconds,
+        noTimeout: Boolean(registered.definition.noTimeout),
+      },
+    );
   } catch (err) {
     if (err instanceof ToolTimeoutError) {
-      return makeToolResultMessage(toolCall.id, err.message, true);
+      // Prefix Error: so UI / stream classifiers mark the tool as failed.
+      return makeToolResultMessage(toolCall.id, `Error: ${err.message}`, true);
     }
     console.error(`Tool '${name}' raised an exception:`, err);
     return makeToolResultMessage(
       toolCall.id,
-      `Tool '${name}' failed with an internal error.`,
+      `Error: Tool '${name}' failed with an internal error.`,
       true,
     );
   }
@@ -223,8 +223,8 @@ export function maybeOffloadToolOutput(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Custom timeout error. */
-class ToolTimeoutError extends Error {
+/** Custom timeout error — exported so orchestrator/MCP can reuse detection. */
+export class ToolTimeoutError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ToolTimeoutError';
@@ -232,20 +232,77 @@ class ToolTimeoutError extends Error {
 }
 
 /**
- * Race a promise against a timeout.
+ * Race a work function against a timeout.
  * Rejects with `ToolTimeoutError` if the timeout fires first.
+ * Clears the timer on settle and swallows late rejections from the work
+ * promise so a timed-out tool does not surface as an unhandled rejection.
  */
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+export function withTimeout<T>(
+  work: () => Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return Promise.reject(new ToolTimeoutError(message));
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const promise = work();
+
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      reject(new ToolTimeoutError(message));
+    }, ms);
+    // Unref so the timer doesn't keep the process alive in tests/CLI
+    if (typeof timer === 'object' && timer && 'unref' in timer) {
+      (timer as NodeJS.Timeout).unref();
+    }
+  });
+
   return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      const timer = setTimeout(() => reject(new ToolTimeoutError(message)), ms);
-      // Unref so the timer doesn't keep the process alive
-      if (typeof timer === 'object' && 'unref' in timer) {
-        timer.unref();
-      }
-    }),
-  ]);
+    promise.then(
+      (value) => {
+        if (timer !== undefined) clearTimeout(timer);
+        return value;
+      },
+      (err: unknown) => {
+        if (timer !== undefined) clearTimeout(timer);
+        throw err;
+      },
+    ),
+    timeoutPromise,
+  ]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+    // If we already timed out, ignore a late failure/success from work().
+    if (timedOut) {
+      promise.then(
+        () => undefined,
+        () => undefined,
+      );
+    }
+  });
+}
+
+/**
+ * Run an async tool body under the shared tool timeout policy.
+ * Used by registry dispatch and MCP tool wrappers.
+ */
+export async function runWithToolTimeout<T>(
+  work: () => Promise<T>,
+  toolName: string,
+  options: { timeoutSeconds?: number; noTimeout?: boolean } = {},
+): Promise<T> {
+  if (options.noTimeout || TOOLS_WITHOUT_TIMEOUT.has(toolName)) {
+    return work();
+  }
+  const timeoutSeconds = options.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_S;
+  return withTimeout(
+    work,
+    timeoutSeconds * 1000,
+    `Tool '${toolName}' timed out after ${timeoutSeconds}s.`,
+  );
 }
 
 /** Create a TOOL_RESULT message. */

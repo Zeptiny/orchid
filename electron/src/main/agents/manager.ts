@@ -1,27 +1,30 @@
 /**
  * SubagentManager — runtime manager for subagent lifecycle.
  *
- * Provides a promise-based API over XState subagent actors:
- * - spawn(name, task, type, tier): SubagentRecord
- * - wait(subagentIds): Promise<SubagentResult[]>
- * - cancelOne(subagentId)
- * - cancelAll()
- * - cancelRunning()
- * - getStates(): SubagentState[]
- * - allRecords(): SubagentRecord[]
+ * Provides:
+ * - spawn(name, task, agent, options): SubagentRecord (starts run when runner set)
+ * - wait(subagentIds): Promise of terminal records
+ * - cancelOne / cancelAll / cancelRunning
+ * - getStates / allRecords / getRecord
  *
  * Ported from Python `src/orchid/agents/manager.py` (SubagentManager).
  *
- * Key differences from Python:
- * - Uses XState actors instead of asyncio tasks
- * - Uses Map instead of dict for subagent tracking
- * - Completion/failure tracked via actor snapshots and subscriptions
- * - No ContextVar equivalent — session-scoped via instance state
+ * When a stream runner is configured (production), spawn fire-and-forgets an
+ * isolated LLM stream, accumulates messages + token usage on the subagent
+ * chain, and notifies listeners so the session can persist `subagent_chains`.
+ * Tests leave the runner unset and drive completion via markCompleted/markFailed.
  */
 
-import type { ActorRefFrom, AnyActorRef } from 'xstate';
+import { randomUUID } from 'node:crypto';
 import type { Agent } from '../../shared/types/agent';
 import type { Chain } from '../../shared/types/chain';
+import { ChainStatus } from '../../shared/types/chain';
+import type { Message, Usage } from '../../shared/types/message';
+import { MessageRole, MessageType } from '../../shared/types/message';
+import type { StreamEvent } from '../llm/orchestrator';
+import { addUsage, hasUsage } from '../../shared/usage';
+import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
+import { SubagentStatus } from '../../shared/types/subagent';
 
 // ── Enums ───────────────────────────────────────────────────────────────────
 
@@ -41,6 +44,19 @@ const TERMINAL_STATES = new Set<SubagentState>([
   SubagentState.FAILED,
   SubagentState.INTERRUPTED,
 ]);
+
+// ── Stream runner ───────────────────────────────────────────────────────────
+
+/** Production stream driver (wired from subagent-runner.ts). */
+export type SubagentStreamRunner = (params: {
+  task: string;
+  agent: Agent;
+  model: string | null;
+  abortSignal: AbortSignal;
+  sessionId?: string;
+}) => AsyncGenerator<StreamEvent>;
+
+export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
 
 // ── SubagentRecord ──────────────────────────────────────────────────────────
 
@@ -65,14 +81,18 @@ export interface SubagentRecord {
   endTime: number | null;
   /** The chain associated with this subagent (for persistence). */
   chain: Chain | null;
+  /** Aggregate token usage across the subagent's stream (also on messages). */
+  usage: Usage | null;
   /** Model override (null = use default). */
   readonly model: string | null;
   /** Parent chain index (for attribution). */
   readonly parentChainIndex: number | null;
-  /** Reference to the XState actor. */
-  actorRef: AnyActorRef | null;
+  /** Abort controller for the in-flight run. */
+  abortController: AbortController | null;
   /** Pending completion promise resolvers. */
   _resolveWait: Array<(record: SubagentRecord) => void> | null;
+  /** In-flight run promise (for debugging / optional await). */
+  _runPromise: Promise<void> | null;
 }
 
 // ── SubagentResult ──────────────────────────────────────────────────────────
@@ -88,22 +108,34 @@ export interface SubagentResult {
 // ── SubagentManager ─────────────────────────────────────────────────────────
 
 /**
- * SubagentManager — manages the lifecycle of subagent actors.
+ * SubagentManager — manages the lifecycle of subagent runs.
  *
  * Spawn subagents, wait for their completion, cancel them, and query
  * their states. Mirrors Python's SubagentManager API.
  */
 export class SubagentManager {
   private _subagents: Map<string, SubagentRecord> = new Map();
+  private _runner: SubagentStreamRunner | null = null;
+  private _onChange: SubagentChangeListener | null = null;
+
+  /**
+   * Configure the stream runner. When set, spawn() starts a background run.
+   * Leave unset in unit tests that call markCompleted manually.
+   */
+  setRunner(runner: SubagentStreamRunner | null): void {
+    this._runner = runner;
+  }
+
+  /** Register a listener invoked after any state/message change. */
+  setOnChange(listener: SubagentChangeListener | null): void {
+    this._onChange = listener;
+  }
 
   /**
    * Spawn a new subagent.
    *
-   * @param name - Display label for the subagent
-   * @param task - Task description (the prompt given to the subagent)
-   * @param agent - Agent configuration
-   * @param options - Optional overrides (model, parentChainIndex)
-   * @returns The SubagentRecord immediately (before completion)
+   * Returns the record immediately. If a runner is configured, starts the
+   * isolated LLM stream in the background (matching Python asyncio.create_task).
    */
   spawn(
     name: string,
@@ -112,9 +144,13 @@ export class SubagentManager {
     options: {
       model?: string;
       parentChainIndex?: number;
+      sessionId?: string;
     } = {},
   ): SubagentRecord {
     const id = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const userMessage = makeUserMessage(task);
+    const chain = makeEmptyChain(id, options.model ?? '', agent);
 
     const record: SubagentRecord = {
       id,
@@ -126,14 +162,25 @@ export class SubagentManager {
       error: null,
       startTime: Date.now(),
       endTime: null,
-      chain: null,
+      chain: {
+        ...chain,
+        messages: [userMessage],
+      },
+      usage: null,
       model: options.model ?? null,
       parentChainIndex: options.parentChainIndex ?? null,
-      actorRef: null,
+      abortController: null,
       _resolveWait: [],
+      _runPromise: null,
     };
 
     this._subagents.set(id, record);
+    this._notify();
+
+    if (this._runner) {
+      record._runPromise = this._startRun(record, options.sessionId);
+    }
+
     return record;
   }
 
@@ -144,6 +191,7 @@ export class SubagentManager {
     const record = this._subagents.get(subagentId);
     if (record && record.state === SubagentState.PENDING) {
       record.state = SubagentState.RUNNING;
+      this._notify();
     }
   }
 
@@ -158,14 +206,9 @@ export class SubagentManager {
     record.state = SubagentState.COMPLETED;
     record.result = result;
     record.endTime = Date.now();
-
-    // Resolve pending waiters
-    if (record._resolveWait) {
-      for (const resolve of record._resolveWait) {
-        resolve(record);
-      }
-      record._resolveWait = null;
-    }
+    this._finalizeChain(record, ChainStatus.COMPLETED);
+    this._resolveWaiters(record);
+    this._notify();
   }
 
   /**
@@ -179,21 +222,13 @@ export class SubagentManager {
     record.state = SubagentState.FAILED;
     record.error = error;
     record.endTime = Date.now();
-
-    // Resolve pending waiters
-    if (record._resolveWait) {
-      for (const resolve of record._resolveWait) {
-        resolve(record);
-      }
-      record._resolveWait = null;
-    }
+    this._finalizeChain(record, ChainStatus.INTERRUPTED);
+    this._resolveWaiters(record);
+    this._notify();
   }
 
   /**
    * Wait for all specified subagents to reach a terminal state.
-   *
-   * @param subagentIds - List of subagent IDs to wait for
-   * @returns Promise resolving to a map of subagent ID → SubagentRecord
    */
   async wait(subagentIds: string[]): Promise<Map<string, SubagentRecord>> {
     const pending: Promise<void>[] = [];
@@ -202,10 +237,8 @@ export class SubagentManager {
       const record = this._subagents.get(id);
       if (!record) continue;
 
-      // Already terminal
       if (TERMINAL_STATES.has(record.state)) continue;
 
-      // Create a promise that resolves when the subagent completes
       const promise = new Promise<void>((resolve) => {
         if (!record._resolveWait) {
           record._resolveWait = [];
@@ -219,7 +252,6 @@ export class SubagentManager {
       await Promise.all(pending);
     }
 
-    // Collect results
     const results = new Map<string, SubagentRecord>();
     for (const id of subagentIds) {
       const record = this._subagents.get(id);
@@ -232,9 +264,6 @@ export class SubagentManager {
 
   /**
    * Cancel a single subagent by ID.
-   *
-   * @param subagentId - The subagent to cancel
-   * @returns true if the subagent was cancelled, false if not found or already terminal
    */
   cancelOne(subagentId: string): boolean {
     const record = this._subagents.get(subagentId);
@@ -245,31 +274,16 @@ export class SubagentManager {
     record.state = SubagentState.INTERRUPTED;
     record.error = record.error ?? 'Interrupted by user';
     record.endTime = record.endTime ?? Date.now();
-
-    // Stop the actor if we have a reference
-    if (record.actorRef && 'stop' in record.actorRef) {
-      (record.actorRef as { stop: () => void }).stop();
-    }
-
-    // Resolve pending waiters
-    if (record._resolveWait) {
-      for (const resolve of record._resolveWait) {
-        resolve(record);
-      }
-      record._resolveWait = null;
-    }
-
+    record.abortController?.abort();
+    this._finalizeChain(record, ChainStatus.INTERRUPTED);
+    this._resolveWaiters(record);
+    this._notify();
     return true;
   }
 
-  /**
-   * Cancel all subagents (running, pending, or otherwise non-terminal).
-   *
-   * @returns List of cancelled subagent IDs
-   */
   cancelAll(): string[] {
     const cancelled: string[] = [];
-    for (const [id, record] of this._subagents) {
+    for (const [id] of this._subagents) {
       if (this.cancelOne(id)) {
         cancelled.push(id);
       }
@@ -277,11 +291,6 @@ export class SubagentManager {
     return cancelled;
   }
 
-  /**
-   * Cancel only running (non-terminal) subagents.
-   *
-   * @returns List of cancelled subagent IDs
-   */
   cancelRunning(): string[] {
     const cancelled: string[] = [];
     for (const [id, record] of this._subagents) {
@@ -294,22 +303,11 @@ export class SubagentManager {
     return cancelled;
   }
 
-  /**
-   * Flush pending state callbacks — resolves any outstanding `_resolveWait`
-   * promises on all tracked subagents.
-   *
-   * Called by `interrupt_subagents` before cancelling to ensure clean state
-   * transitions and no dangling promises.  Mirrors Python's
-   * `SubagentManager.flush_state_callbacks()`.
-   *
-   * @returns List of subagent IDs whose callbacks were flushed
-   */
   flushStateCallbacks(): string[] {
     const flushed: string[] = [];
 
     for (const record of this._subagents.values()) {
       if (record._resolveWait && record._resolveWait.length > 0) {
-        // Resolve all pending waiters with the current record state
         for (const resolve of record._resolveWait) {
           resolve(record);
         }
@@ -321,11 +319,6 @@ export class SubagentManager {
     return flushed;
   }
 
-  /**
-   * Get state info for all tracked subagents.
-   *
-   * @returns Array of state snapshots
-   */
   getStates(): Array<{
     id: string;
     name: string;
@@ -361,22 +354,334 @@ export class SubagentManager {
     return states;
   }
 
-  /**
-   * Get a single subagent record by ID.
-   *
-   * @param subagentId - The subagent ID to look up
-   * @returns The SubagentRecord, or undefined if not found
-   */
   getRecord(subagentId: string): SubagentRecord | undefined {
     return this._subagents.get(subagentId);
   }
 
-  /**
-   * Get all subagent records.
-   *
-   * @returns Array of all SubagentRecords
-   */
   allRecords(): SubagentRecord[] {
     return Array.from(this._subagents.values());
   }
+
+  /** Convert runtime records to domain SubagentRecords for session storage. */
+  toDomainRecords(): DomainSubagentRecord[] {
+    return this.allRecords().map(runtimeToDomain);
+  }
+
+  // ── Private: run loop ─────────────────────────────────────────────────────
+
+  private async _startRun(record: SubagentRecord, sessionId?: string): Promise<void> {
+    const runner = this._runner;
+    if (!runner) return;
+
+    if (TERMINAL_STATES.has(record.state)) return;
+
+    const abort = new AbortController();
+    record.abortController = abort;
+    this.markRunning(record.id);
+
+    const messages: Message[] = [...(record.chain?.messages ?? [])];
+    let responseText = '';
+    let resultText = '';
+    let accumulatedUsage: Usage | null = null;
+    // Track open tool calls for result pairing in the chain
+    const toolNames = new Map<string, string>();
+
+    try {
+      const stream = runner({
+        task: record.task,
+        agent: record.agent,
+        model: record.model,
+        abortSignal: abort.signal,
+        sessionId,
+      });
+
+      for await (const event of stream) {
+        if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
+          break;
+        }
+
+        switch (event.type) {
+          case 'content': {
+            responseText += event.text;
+            resultText += event.text;
+            break;
+          }
+          case 'usage': {
+            accumulatedUsage = hasUsage(accumulatedUsage)
+              ? addUsage(accumulatedUsage, event.usage)
+              : { ...event.usage };
+            record.usage = accumulatedUsage;
+            break;
+          }
+          case 'tool_call':
+          case 'tool_call_start': {
+            // Flush any assistant text that arrived before this tool
+            if (responseText.trim()) {
+              messages.push(makeAssistantMessage(responseText, null));
+              responseText = '';
+            }
+            const toolCallId =
+              'toolCallId' in event ? event.toolCallId : randomUUID();
+            const toolName =
+              'toolName' in event && event.toolName ? event.toolName : 'unknown';
+            const args =
+              event.type === 'tool_call' && 'args' in event ? event.args : '{}';
+            toolNames.set(toolCallId, toolName);
+            // Only record tool_call once we have args (tool_call event)
+            if (event.type === 'tool_call') {
+              messages.push(makeToolCallMessage(toolCallId, toolName, args));
+              this._setChainMessages(record, messages);
+              this._notify();
+            }
+            break;
+          }
+          case 'tool_result': {
+            const toolName = toolNames.get(event.toolCallId) ?? 'unknown';
+            // Ensure a tool_call exists (start-only path)
+            if (!messages.some(
+              (m) =>
+                m.type === MessageType.TOOL_CALL &&
+                m.tool_call_id === event.toolCallId,
+            )) {
+              messages.push(
+                makeToolCallMessage(event.toolCallId, toolName, '{}'),
+              );
+            }
+            messages.push(
+              makeToolResultMessage(
+                event.toolCallId,
+                toolName,
+                event.content,
+                event.isError,
+              ),
+            );
+            this._setChainMessages(record, messages);
+            this._notify();
+            break;
+          }
+          case 'error': {
+            throw new Error(event.detail || event.title || 'Subagent stream error');
+          }
+          case 'finish':
+          case 'thinking':
+          case 'step_finish':
+          case 'tool_call_delta':
+          default:
+            break;
+        }
+      }
+
+      if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
+        // cancelOne already finalized; just ensure partial text is kept
+        if (responseText.trim() && !TERMINAL_STATES.has(record.state)) {
+          messages.push(makeAssistantMessage(responseText, accumulatedUsage));
+          this._setChainMessages(record, messages);
+        }
+        return;
+      }
+
+      // Final assistant text with usage on the last bubble
+      if (responseText.trim() || accumulatedUsage) {
+        messages.push(
+          makeAssistantMessage(
+            responseText,
+            accumulatedUsage && hasUsage(accumulatedUsage)
+              ? accumulatedUsage
+              : null,
+          ),
+        );
+      }
+
+      record.result = resultText || record.result;
+      record.usage = accumulatedUsage;
+      this._setChainMessages(record, messages);
+      this.markCompleted(record.id, record.result ?? '');
+    } catch (err) {
+      if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
+        return;
+      }
+      // Keep partial content
+      if (responseText.trim()) {
+        messages.push(makeAssistantMessage(responseText, accumulatedUsage));
+        this._setChainMessages(record, messages);
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      record.usage = accumulatedUsage;
+      this.markFailed(record.id, message);
+    } finally {
+      record.abortController = null;
+    }
+  }
+
+  private _setChainMessages(record: SubagentRecord, messages: Message[]): void {
+    if (!record.chain) {
+      record.chain = makeEmptyChain(record.id, record.model ?? '', record.agent);
+    }
+    record.chain = {
+      ...record.chain,
+      messages: [...messages],
+      status: ChainStatus.ACTIVE,
+    };
+  }
+
+  private _finalizeChain(record: SubagentRecord, status: ChainStatus): void {
+    if (!record.chain) {
+      record.chain = makeEmptyChain(record.id, record.model ?? '', record.agent);
+    }
+    record.chain = {
+      ...record.chain,
+      status:
+        status === ChainStatus.INTERRUPTED
+          ? ChainStatus.INTERRUPTED
+          : ChainStatus.COMPLETED,
+    };
+  }
+
+  private _resolveWaiters(record: SubagentRecord): void {
+    if (record._resolveWait) {
+      for (const resolve of record._resolveWait) {
+        resolve(record);
+      }
+      record._resolveWait = null;
+    }
+  }
+
+  private _notify(): void {
+    try {
+      this._onChange?.(this.allRecords());
+    } catch (err) {
+      console.debug('Subagent onChange listener failed (non-fatal):', err);
+    }
+  }
+}
+
+// ── Persistence helpers ─────────────────────────────────────────────────────
+
+/** Map runtime record → domain SubagentRecord for session JSON. */
+export function runtimeToDomain(record: SubagentRecord): DomainSubagentRecord {
+  const statusMap: Record<SubagentState, DomainSubagentRecord['status']> = {
+    [SubagentState.PENDING]: SubagentStatus.PENDING,
+    [SubagentState.RUNNING]: SubagentStatus.RUNNING,
+    [SubagentState.COMPLETED]: SubagentStatus.COMPLETED,
+    [SubagentState.FAILED]: SubagentStatus.FAILED,
+    [SubagentState.INTERRUPTED]: SubagentStatus.INTERRUPTED,
+  };
+
+  const chain =
+    record.chain ??
+    makeEmptyChain(record.id, record.model ?? '', record.agent);
+
+  return {
+    id: record.id,
+    agent_name: record.agent.name || record.label,
+    agent_type: record.agent.type || 'subagent',
+    agent_tier: record.agent.tier || 'bloom',
+    task: record.task,
+    status: statusMap[record.state],
+    chain_id: chain.id,
+    start_time: new Date(record.startTime).toISOString(),
+    end_time: record.endTime ? new Date(record.endTime).toISOString() : null,
+    result: record.result,
+    error: record.error,
+    parentChainIndex: record.parentChainIndex,
+    chain,
+  };
+}
+
+// ── Message / chain factories ───────────────────────────────────────────────
+
+function makeEmptyChain(sessionKey: string, model: string, agent: Agent): Chain {
+  return {
+    id: randomUUID(),
+    sessionId: sessionKey,
+    messages: [],
+    status: ChainStatus.ACTIVE,
+    model,
+    agentName: agent.name,
+    agentType: agent.type,
+    agentTier: agent.tier,
+    subagentRecord: null,
+  };
+}
+
+function makeUserMessage(content: string): Message {
+  return {
+    id: randomUUID(),
+    role: MessageRole.USER,
+    content,
+    type: MessageType.TEXT,
+    tool_calls: null,
+    tool_call_id: null,
+    name: null,
+    thinking: null,
+    timestamp: new Date().toISOString(),
+    usage: null,
+    hidden: false,
+  };
+}
+
+function makeAssistantMessage(content: string, usage: Usage | null): Message {
+  return {
+    id: randomUUID(),
+    role: MessageRole.ASSISTANT,
+    content,
+    type: MessageType.TEXT,
+    tool_calls: null,
+    tool_call_id: null,
+    name: null,
+    thinking: null,
+    timestamp: new Date().toISOString(),
+    usage,
+    hidden: false,
+  };
+}
+
+function makeToolCallMessage(
+  toolCallId: string,
+  toolName: string,
+  args: string,
+): Message {
+  return {
+    id: randomUUID(),
+    role: MessageRole.ASSISTANT,
+    content: '',
+    type: MessageType.TOOL_CALL,
+    tool_calls: [
+      {
+        id: toolCallId,
+        type: 'function',
+        function: { name: toolName, arguments: args || '{}' },
+      },
+    ],
+    tool_call_id: toolCallId,
+    name: toolName,
+    thinking: null,
+    timestamp: new Date().toISOString(),
+    usage: null,
+    hidden: false,
+  };
+}
+
+function makeToolResultMessage(
+  toolCallId: string,
+  toolName: string,
+  content: string,
+  isError: boolean,
+): Message {
+  return {
+    id: randomUUID(),
+    role: MessageRole.TOOL,
+    content:
+      isError && content && !content.startsWith('Error:')
+        ? `Error: ${content}`
+        : content,
+    type: MessageType.TOOL_RESULT,
+    tool_calls: null,
+    tool_call_id: toolCallId,
+    name: toolName,
+    thinking: null,
+    timestamp: new Date().toISOString(),
+    usage: null,
+    hidden: false,
+  };
 }

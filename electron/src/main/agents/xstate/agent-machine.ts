@@ -33,6 +33,8 @@ import type { Usage } from '../../../shared/types/message';
 export interface AgentContext {
   /** Accumulated assistant response text for the current turn. */
   response: string;
+  /** Accumulated reasoning/thinking text for the current turn. */
+  thinking: string;
   /** User input that triggered the current stream. */
   currentInput: string;
   /** Current tool call being executed. */
@@ -41,8 +43,32 @@ export interface AgentContext {
     toolName: string;
     args: string;
   } | null;
+  /** Current tool call being streamed (generating state). */
+  streamingToolCall: {
+    toolCallId: string;
+    toolName: string;
+    partialArgs: string;
+  } | null;
+  /** Tool names keyed by tool call ID, used to enrich result updates. */
+  toolCallNames: Record<string, string>;
+  /** Last tool lifecycle update for IPC subscribers. */
+  toolLifecycleUpdate: {
+    sequence: number;
+    toolCallId: string;
+    toolName?: string;
+    status: 'running' | 'completed' | 'failed';
+    args?: string;
+    result?: string;
+    error?: string;
+  } | null;
+  /** Monotonic sequence number for tool lifecycle updates. */
+  toolUpdateSequence: number;
   /** Error message if in error state. */
   error: string | null;
+  /** Short error title for UI banners (auth/rate-limit/timeout/etc). */
+  errorTitle: string | null;
+  /** Whether the latest turn was interrupted by the user. */
+  wasInterrupted: boolean;
   /** Token usage data from the most recent stream. */
   usage: Usage | null;
   /** The agent configuration. */
@@ -154,12 +180,29 @@ const streamCallback = fromCallback(
             case 'content':
               sendBack({ type: 'CHUNK', data: event.text });
               break;
+            case 'thinking':
+              sendBack({ type: 'THINKING', data: event.text });
+              break;
             case 'tool_call':
               sendBack({
                 type: 'TOOL_CALL',
                 toolCallId: event.toolCallId,
                 toolName: event.toolName,
-                args: '', // args come from the fullStream chunk, not from the event
+                args: event.args,
+              });
+              break;
+            case 'tool_call_start':
+              sendBack({
+                type: 'TOOL_CALL_START',
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+              });
+              break;
+            case 'tool_call_delta':
+              sendBack({
+                type: 'TOOL_CALL_DELTA',
+                toolCallId: event.toolCallId,
+                argsDelta: event.argsDelta,
               });
               break;
             case 'tool_result':
@@ -174,12 +217,16 @@ const streamCallback = fromCallback(
               sendBack({ type: 'STREAM_END', finishReason: event.finishReason });
               break;
             case 'error':
-              sendBack({ type: 'ERROR', error: event.detail, title: event.title });
+              sendBack({
+                type: 'ERROR',
+                error: event.detail,
+                title: event.title,
+              });
               break;
             case 'usage':
               sendBack({ type: 'USAGE', usage: event.usage });
               break;
-            // thinking, step_finish are ignored by the agent machine
+            // step_finish is informational only
             default:
               break;
           }
@@ -262,9 +309,16 @@ export const agentMachine = setup({
   initial: 'idle',
   context: ({ input }) => ({
     response: '',
+    thinking: '',
     currentInput: '',
     currentToolCall: null,
+    streamingToolCall: null,
+    toolCallNames: {},
+    toolLifecycleUpdate: null,
+    toolUpdateSequence: 0,
     error: null,
+    errorTitle: null,
+    wasInterrupted: false,
     usage: null,
     agent: input.agent,
     systemPrompt: input.systemPrompt,
@@ -281,8 +335,15 @@ export const agentMachine = setup({
           actions: assign({
             currentInput: ({ event }) => event.message,
             response: '',
+            thinking: '',
             error: null,
+            errorTitle: null,
+            wasInterrupted: false,
             currentToolCall: null,
+            streamingToolCall: () => null,
+            toolCallNames: () => ({}),
+            toolLifecycleUpdate: () => null,
+            toolUpdateSequence: () => 0,
             usage: () => null,
             abortController: () => new AbortController(),
           }),
@@ -312,19 +373,84 @@ export const agentMachine = setup({
             response: ({ context, event }) => context.response + event.data,
           }),
         },
+        THINKING: {
+          actions: assign({
+            thinking: ({ context, event }) => context.thinking + event.data,
+          }),
+        },
         TOOL_CALL: {
           // Tool calls are handled internally by AI SDK's streamText with maxSteps.
           // This event is informational only (for UI display).
           // No state transition — the stream continues.
+          actions: assign({
+            streamingToolCall: () => null,
+            toolCallNames: ({ context, event }) => ({
+              ...context.toolCallNames,
+              [event.toolCallId]: event.toolName,
+            }),
+            toolUpdateSequence: ({ context }) => context.toolUpdateSequence + 1,
+            toolLifecycleUpdate: ({ context, event }) => {
+              const sequence = context.toolUpdateSequence + 1;
+              return {
+                sequence,
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                status: 'running',
+                args: event.args,
+              };
+            },
+          }),
+        },
+        TOOL_CALL_START: {
+          // Tool call streaming start — track for UI generating state.
+          actions: assign({
+            streamingToolCall: ({ event }) => ({
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              partialArgs: '',
+            }),
+            toolCallNames: ({ context, event }) => ({
+              ...context.toolCallNames,
+              [event.toolCallId]: event.toolName,
+            }),
+          }),
+        },
+        TOOL_CALL_DELTA: {
+          // Tool call args delta — accumulate partial args.
+          actions: assign({
+            streamingToolCall: ({ context, event }) => {
+              if (!context.streamingToolCall) return null;
+              return {
+                ...context.streamingToolCall,
+                partialArgs: context.streamingToolCall.partialArgs + event.argsDelta,
+              };
+            },
+          }),
         },
         TOOL_RESULT: {
           // Tool results are also handled internally by AI SDK.
           // This event is informational only (for UI display).
+          actions: assign({
+            toolUpdateSequence: ({ context }) => context.toolUpdateSequence + 1,
+            toolLifecycleUpdate: ({ context, event }) => {
+              const sequence = context.toolUpdateSequence + 1;
+              const toolName = context.toolCallNames[event.toolCallId];
+              return {
+                sequence,
+                toolCallId: event.toolCallId,
+                toolName,
+                status: event.isError ? 'failed' : 'completed',
+                result: event.isError ? undefined : event.content,
+                error: event.isError ? event.content : undefined,
+              };
+            },
+          }),
         },
         STREAM_END: {
           target: 'idle',
           actions: assign({
             abortController: () => null,
+            streamingToolCall: () => null,
           }),
         },
         USAGE: {
@@ -336,16 +462,20 @@ export const agentMachine = setup({
           target: 'error',
           actions: assign({
             error: ({ event }) => event.error,
+            errorTitle: ({ event }) => event.title ?? 'Stream Error',
             abortController: () => null,
+            streamingToolCall: () => null,
           }),
         },
         CANCEL: {
           target: 'interrupted',
           actions: assign({
+            wasInterrupted: true,
             abortController: ({ context }) => {
               context.abortController?.abort();
               return null;
             },
+            streamingToolCall: () => null,
           }),
         },
       },
@@ -384,48 +514,60 @@ export const agentMachine = setup({
         CANCEL: {
           target: 'interrupted',
           actions: assign({
+            wasInterrupted: true,
             abortController: ({ context }) => {
               context.abortController?.abort();
               return null;
             },
             currentToolCall: () => null,
+            streamingToolCall: () => null,
           }),
         },
       },
     },
 
     interrupted: {
+      // Stay interrupted until chat IPC finalizes the turn and disposes
+      // the actor. Preserve `response` so partial content can be saved.
       after: {
-        // Auto-reset to idle after configurable timeout
         INTERRUPT_RESET: {
           target: 'idle',
           actions: assign({
-            response: '',
+            wasInterrupted: false,
             error: null,
+            errorTitle: null,
             currentToolCall: null,
+            streamingToolCall: () => null,
             abortController: () => null,
           }),
         },
       },
       on: {
-        // User can also explicitly confirm cancellation
         CANCEL: {
           target: 'idle',
           actions: assign({
-            response: '',
+            wasInterrupted: false,
             error: null,
+            errorTitle: null,
             currentToolCall: null,
+            streamingToolCall: () => null,
             abortController: () => null,
           }),
         },
-        // Or provide new input to start fresh
         USER_INPUT: {
           target: 'streaming',
           actions: assign({
             currentInput: ({ event }) => event.message,
             response: '',
+            thinking: '',
             error: null,
+            errorTitle: null,
+            wasInterrupted: false,
             currentToolCall: null,
+            streamingToolCall: () => null,
+            toolCallNames: () => ({}),
+            toolLifecycleUpdate: () => null,
+            toolUpdateSequence: () => 0,
             abortController: () => new AbortController(),
           }),
         },
@@ -439,8 +581,15 @@ export const agentMachine = setup({
           actions: assign({
             currentInput: ({ event }) => event.message,
             response: '',
+            thinking: '',
             error: null,
+            errorTitle: null,
+            wasInterrupted: false,
             currentToolCall: null,
+            streamingToolCall: () => null,
+            toolCallNames: () => ({}),
+            toolLifecycleUpdate: () => null,
+            toolUpdateSequence: () => 0,
             abortController: () => new AbortController(),
           }),
         },

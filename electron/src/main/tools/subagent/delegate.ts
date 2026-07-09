@@ -13,6 +13,7 @@ import { AgentType, AgentTier, TIER_DESCRIPTIONS } from '../../../shared/types/a
 import type { ToolDefinition, ToolHandler } from '../types';
 import type { SubagentManager } from '../../agents/manager';
 import { getModelForTier } from '../../config/loader';
+import { getSessionManager } from '../../ipc/session';
 
 /**
  * Result returned by all subagent tool handlers.
@@ -119,13 +120,28 @@ export function buildDelegateTool(
     // Resolve model from tier via config
     const model = getModelForTier(resolvedTier);
 
-    // Spawn via SubagentManager
-    const record = manager.spawn(name, task, agent, { model });
+    // Attribute usage to the active parent chain when available
+    const session = getSessionManager().getActive();
+    let parentChainIndex: number | undefined;
+    if (session) {
+      const idx = session.activeChainId
+        ? session.chains.findIndex((c) => c.id === session.activeChainId)
+        : -1;
+      parentChainIndex =
+        idx >= 0 ? idx : Math.max(0, session.chains.length - 1);
+    }
+
+    // Spawn + start background run (when runner is configured)
+    const record = manager.spawn(name, task, agent, {
+      model,
+      parentChainIndex,
+      sessionId: session?.id,
+    });
 
     return {
       display: `Subagent '${name}' spawned (id: ${record.id}, tier: ${resolvedTier})`,
       content:
-        `<subagent id="${record.id}" name="${name}" type="${type}" status="pending" tier="${resolvedTier}">\n` +
+        `<subagent id="${record.id}" name="${name}" type="${type}" status="${record.state}" tier="${resolvedTier}">\n` +
         `<task>\n${task}\n</task>\n` +
         `</subagent>`,
     };

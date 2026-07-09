@@ -37,7 +37,12 @@ import type { Config } from '../config/schema';
 import type { ToolRegistry } from '../tools/registry';
 import type { MCPManager } from '../mcp/manager';
 import { toApiMessages } from './history';
-import { executeToolCall, type ToolDispatchOptions } from './tool-dispatch';
+import {
+  executeToolCall,
+  runWithToolTimeout,
+  ToolTimeoutError,
+  type ToolDispatchOptions,
+} from './tool-dispatch';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
 import { importESM } from '../utils/esm-import';
@@ -50,7 +55,9 @@ import { importESM } from '../utils/esm-import';
 export type StreamEvent =
   | { type: 'thinking'; text: string }
   | { type: 'content'; text: string }
-  | { type: 'tool_call'; toolCallId: string; toolName: string }
+  | { type: 'tool_call'; toolCallId: string; toolName: string; args: string }
+  | { type: 'tool_call_start'; toolCallId: string; toolName: string }
+  | { type: 'tool_call_delta'; toolCallId: string; argsDelta: string }
   | { type: 'tool_result'; toolCallId: string; content: string; isError: boolean }
   | { type: 'usage'; usage: Usage }
   | { type: 'error'; title: string; detail: string }
@@ -222,7 +229,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   };
 
   // ── Track tool calls and results for yielding ──
-  const pendingToolCalls: Array<{ toolCallId: string; toolName: string }> = [];
+  const pendingToolCalls: Array<{ toolCallId: string; toolName: string; args: string }> = [];
   const pendingToolResults: Array<{ toolCallId: string; content: string; isError: boolean }> = [];
 
   // ── Call streamText ──
@@ -244,45 +251,216 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       }
       // Capture tool calls for yielding to the UI
       if (toolCalls) {
-        for (const tc of toolCalls as Array<{ toolCallId: string; toolName: string }>) {
+        for (const tc of toolCalls as Array<{ toolCallId: string; toolName: string; input?: unknown }>) {
           pendingToolCalls.push({
             toolCallId: tc.toolCallId,
             toolName: tc.toolName,
+            args: stringifyToolInput(tc.input),
           });
         }
       }
       // Capture tool results for yielding to the UI
       if (toolResults) {
-        for (const tr of toolResults as Array<{ toolCallId: string; output: unknown }>) {
+        for (const tr of toolResults as Array<{
+          toolCallId: string;
+          output?: unknown;
+          result?: unknown;
+          isError?: boolean;
+          error?: unknown;
+        }>) {
+          const raw = tr.output ?? tr.result ?? '';
+          const content = typeof raw === 'string' ? raw : stringifyToolInput(raw);
+          const isError =
+            Boolean(tr.isError) ||
+            tr.error != null ||
+            isToolResultErrorContent(content);
           pendingToolResults.push({
             toolCallId: tr.toolCallId,
-            content: typeof tr.output === 'string' ? tr.output : JSON.stringify(tr.output),
-            isError: false,
+            content,
+            isError,
           });
         }
       }
     },
   });
 
-  // ── Process the text stream ──
+  // ── Process the stream ──
+  // AI SDK 7 fullStream tool parts use:
+  //   tool-input-start  → toolCallId, toolName
+  //   tool-input-delta  → toolCallId, inputTextDelta
+  //   tool-input-available → toolCallId, toolName, input  (args complete / running)
+  //   tool-output-available → toolCallId, output          (completed)
+  //   tool-output-error → toolCallId, errorText           (failed)
+  // Older aliases (tool-call / tool-result / id / delta) are kept as fallbacks.
   try {
-    // Use textStream to avoid AI SDK's chunk type issues with fullStream.
-    // Tool calls and results are captured via onStepFinish callback.
-    for await (const textDelta of result.textStream) {
-      if (textDelta) {
-        yield { type: 'content', text: textDelta };
-      }
+    let usedFullStream = false;
+    try {
+      for await (const chunk of result.fullStream) {
+        usedFullStream = true;
+        const part = chunk as Record<string, unknown>;
+        const partType = String(part.type ?? '');
 
-      // Yield any pending tool calls
-      while (pendingToolCalls.length > 0) {
-        const tc = pendingToolCalls.shift()!;
-        yield { type: 'tool_call', ...tc };
-      }
+        switch (partType) {
+          case 'text-delta': {
+            const text =
+              typeof part.text === 'string'
+                ? part.text
+                : typeof part.textDelta === 'string'
+                  ? part.textDelta
+                  : '';
+            if (text) yield { type: 'content', text };
+            break;
+          }
 
-      // Yield any pending tool results
-      while (pendingToolResults.length > 0) {
-        const tr = pendingToolResults.shift()!;
-        yield { type: 'tool_result', ...tr };
+          case 'tool-input-start': {
+            const toolCallId = streamToolCallId(part);
+            const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+            if (toolCallId) {
+              yield { type: 'tool_call_start', toolCallId, toolName };
+            }
+            break;
+          }
+
+          case 'tool-input-delta': {
+            const toolCallId = streamToolCallId(part);
+            const argsDelta =
+              typeof part.inputTextDelta === 'string'
+                ? part.inputTextDelta
+                : typeof part.delta === 'string'
+                  ? part.delta
+                  : '';
+            if (toolCallId && argsDelta) {
+              yield { type: 'tool_call_delta', toolCallId, argsDelta };
+            }
+            break;
+          }
+
+          // Args complete → tool is about to / is executing (running phase)
+          case 'tool-input-available':
+          case 'tool-call': {
+            const toolCallId = streamToolCallId(part);
+            const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+            const args = stringifyToolInput(part.input ?? part.args);
+            if (toolCallId) {
+              yield { type: 'tool_call', toolCallId, toolName, args };
+            }
+            break;
+          }
+
+          // Tool finished — may still be an error if the tool returned an
+          // Error: / timeout string (executeToolCall soft-fails timeouts).
+          case 'tool-output-available':
+          case 'tool-result': {
+            const toolCallId = streamToolCallId(part);
+            const raw = part.output ?? part.result ?? '';
+            const content = typeof raw === 'string' ? raw : stringifyToolInput(raw);
+            if (toolCallId) {
+              yield {
+                type: 'tool_result',
+                toolCallId,
+                content,
+                isError: isToolResultErrorContent(content),
+              };
+            }
+            break;
+          }
+
+          // Tool failed
+          case 'tool-output-error':
+          case 'tool-error': {
+            const toolCallId = streamToolCallId(part);
+            const content =
+              typeof part.errorText === 'string'
+                ? part.errorText
+                : typeof part.error === 'string'
+                  ? part.error
+                  : stringifyToolInput(part.errorText ?? part.error ?? 'Tool failed');
+            if (toolCallId) {
+              yield { type: 'tool_result', toolCallId, content, isError: true };
+            }
+            break;
+          }
+
+          case 'tool-input-error': {
+            const toolCallId = streamToolCallId(part);
+            const content =
+              typeof part.errorText === 'string'
+                ? part.errorText
+                : 'Invalid tool input';
+            // Surface as a failed tool block when args never became valid
+            if (toolCallId) {
+              const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+              yield {
+                type: 'tool_call',
+                toolCallId,
+                toolName,
+                args: stringifyToolInput(part.input),
+              };
+              yield { type: 'tool_result', toolCallId, content, isError: true };
+            }
+            break;
+          }
+
+          case 'reasoning-delta':
+          case 'reasoning': {
+            const text =
+              typeof part.text === 'string'
+                ? part.text
+                : typeof part.delta === 'string'
+                  ? part.delta
+                  : '';
+            if (text) yield { type: 'thinking', text };
+            break;
+          }
+
+          case 'error': {
+            const err = part.error ?? part.errorText ?? chunk;
+            const { title, detail } = classifyStreamError(err);
+            yield { type: 'error', title, detail };
+            break;
+          }
+
+          // step-start/finish, start, finish, tool-input-end, etc.
+          default:
+            break;
+        }
+
+        // Yield any pending tool calls (from onStepFinish callback)
+        while (pendingToolCalls.length > 0) {
+          const tc = pendingToolCalls.shift()!;
+          yield { type: 'tool_call', ...tc };
+        }
+
+        // Yield any pending tool results
+        while (pendingToolResults.length > 0) {
+          const tr = pendingToolResults.shift()!;
+          yield { type: 'tool_result', ...tr };
+        }
+      }
+    } catch (fullStreamErr) {
+      // If fullStream fails (e.g. provider doesn't support it),
+      // fall back to textStream
+      if (!usedFullStream) {
+        console.warn('[orchestrator] fullStream failed, falling back to textStream:', fullStreamErr);
+        for await (const textDelta of result.textStream) {
+          if (textDelta) {
+            yield { type: 'content', text: textDelta };
+          }
+
+          // Yield any pending tool calls
+          while (pendingToolCalls.length > 0) {
+            const tc = pendingToolCalls.shift()!;
+            yield { type: 'tool_call', ...tc };
+          }
+
+          // Yield any pending tool results
+          while (pendingToolResults.length > 0) {
+            const tr = pendingToolResults.shift()!;
+            yield { type: 'tool_result', ...tr };
+          }
+        }
+      } else {
+        throw fullStreamErr;
       }
     }
 
@@ -381,14 +559,35 @@ export function buildToolMap(
         description: definition.description,
         inputSchema: definition.inputSchema,
         execute: async (args: unknown) => {
-          const result = await mcpManager.callTool(definition.name, args);
-          return typeof result === 'string' ? result : JSON.stringify(result);
+          try {
+            const result = await runWithToolTimeout(
+              () => mcpManager.callTool(definition.name, args),
+              definition.name,
+              { timeoutSeconds: dispatchOptions.timeoutSeconds },
+            );
+            return typeof result === 'string' ? result : JSON.stringify(result);
+          } catch (err) {
+            if (err instanceof ToolTimeoutError) {
+              return `Error: ${err.message}`;
+            }
+            throw err;
+          }
         },
       };
     }
   }
 
   return toolMap as Record<string, Tool>;
+}
+
+/** Detect soft-failed tool payloads (timeout / Error: prefix) for UI status. */
+function isToolResultErrorContent(content: string): boolean {
+  if (!content) return false;
+  return (
+    content.startsWith('Error:') ||
+    content.startsWith('Tool execution failed') ||
+    /timed out after\s+\d/i.test(content)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -428,4 +627,21 @@ function classifyStreamError(err: unknown): { title: string; detail: string } {
     return { title: 'Stream Error', detail };
   }
   return { title: 'Unexpected Error', detail };
+}
+
+function stringifyToolInput(input: unknown): string {
+  if (input == null) return '';
+  if (typeof input === 'string') return input;
+  try {
+    return JSON.stringify(input);
+  } catch {
+    return String(input);
+  }
+}
+
+/** Extract toolCallId from AI SDK 7 stream parts (and legacy `id` aliases). */
+function streamToolCallId(part: Record<string, unknown>): string {
+  if (typeof part.toolCallId === 'string' && part.toolCallId) return part.toolCallId;
+  if (typeof part.id === 'string' && part.id) return part.id;
+  return '';
 }

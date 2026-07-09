@@ -19,10 +19,14 @@ import type {
   OrchidAPI,
   ChatSendMessage,
   ChatChunkEvent,
+  ChatThinkingEvent,
   ChatStateEvent,
   ChatDoneEvent,
   ChatErrorEvent,
   ChatUsageEvent,
+  ChatToolCallStartEvent,
+  ChatToolCallDeltaEvent,
+  ChatToolCallUpdateEvent,
   ConfigSaveMessage,
   SessionLoadMessage,
   SessionDeleteMessage,
@@ -83,6 +87,9 @@ const orchidAPI: OrchidAPI = {
     onChunk: (callback: (event: ChatChunkEvent) => void) =>
       on(IPC_CHANNELS.CHAT_CHUNK, (...args) => callback(args[0] as ChatChunkEvent)),
 
+    onThinking: (callback: (event: ChatThinkingEvent) => void) =>
+      on(IPC_CHANNELS.CHAT_THINKING, (...args) => callback(args[0] as ChatThinkingEvent)),
+
     onState: (callback: (event: ChatStateEvent) => void) =>
       on(IPC_CHANNELS.CHAT_STATE, (...args) => callback(args[0] as ChatStateEvent)),
 
@@ -94,6 +101,15 @@ const orchidAPI: OrchidAPI = {
 
     onUsage: (callback: (event: ChatUsageEvent) => void) =>
       on(IPC_CHANNELS.CHAT_USAGE, (...args) => callback(args[0] as ChatUsageEvent)),
+
+    onToolCallStart: (callback: (event: ChatToolCallStartEvent) => void) =>
+      on(IPC_CHANNELS.CHAT_TOOL_CALL_START, (...args) => callback(args[0] as ChatToolCallStartEvent)),
+
+    onToolCallDelta: (callback: (event: ChatToolCallDeltaEvent) => void) =>
+      on(IPC_CHANNELS.CHAT_TOOL_CALL_DELTA, (...args) => callback(args[0] as ChatToolCallDeltaEvent)),
+
+    onToolCallUpdate: (callback: (event: ChatToolCallUpdateEvent) => void) =>
+      on(IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, (...args) => callback(args[0] as ChatToolCallUpdateEvent)),
   },
 
   config: {
@@ -108,6 +124,9 @@ const orchidAPI: OrchidAPI = {
 
     discoverModels: (alias: string, force?: boolean) =>
       invoke(IPC_CHANNELS.CONFIG_DISCOVER_MODELS, alias, force),
+
+    listPersonalities: () =>
+      invoke(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES),
   },
 
   session: {
@@ -126,8 +145,14 @@ const orchidAPI: OrchidAPI = {
     rename: (id: string, name: string) =>
       invoke(IPC_CHANNELS.SESSION_RENAME, { id, name }),
 
+    changeModel: (id: string, model: string) =>
+      invoke(IPC_CHANNELS.SESSION_CHANGE_MODEL, { id, model }),
+
     onRenamed: (callback: (event: SessionRenamedEvent) => void) =>
       on(IPC_CHANNELS.SESSION_RENAMED, (...args) => callback(args[0] as SessionRenamedEvent)),
+
+    onSubagentsChanged: (callback: () => void) =>
+      on(IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED, () => callback()),
   },
 
   tool: {

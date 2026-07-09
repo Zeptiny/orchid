@@ -163,208 +163,190 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="pref-tab-content">
-      <div className="pref-tab-header">
-        <h3>MCP Servers</h3>
-        <p className="pref-tab-description">
-          Configure Model Context Protocol tool servers. Changes require an app restart.
-        </p>
-      </div>
+    <div className="config-form">
+      <fieldset className="config-fieldset">
+        <legend className="config-fieldset-legend">
+          <span>MCP Servers</span>
+          {!isAdding && (
+            <button
+              className="btn btn-ghost btn-xs font-normal text-primary hover:bg-primary/10"
+              onClick={startAdd}
+              type="button"
+            >
+              + Add Server
+            </button>
+          )}
+        </legend>
 
-      {/* Server list */}
-      <div className="pref-server-list">
-        {serverList.map((s) => (
-          <div key={s.id} className="pref-server-item">
-            {editingId === s.id && editForm ? (
-              /* Edit form */
-              <div className="pref-server-edit">
-                <div className="pref-form-row">
+        <div className="config-card-list">
+          {serverList.map((s) => (
+            <div key={s.id} className="config-card">
+              {editingId === s.id && editForm ? (
+                <div className="flex flex-col gap-4">
+                  <div className="config-form-grid">
+                    <div className="config-field">
+                      <label>Server ID</label>
+                      <input
+                        type="text"
+                        value={editForm.id}
+                        onChange={(e) => setEditForm({ ...editForm, id: e.target.value })}
+                        className="input config-control"
+                      />
+                    </div>
+                    <div className="config-field">
+                      <label>Command</label>
+                      <input
+                        type="text"
+                        value={editForm.command}
+                        onChange={(e) => setEditForm({ ...editForm, command: e.target.value })}
+                        className="input config-control"
+                        placeholder="npx"
+                      />
+                    </div>
+                    <div className="config-field">
+                      <label>URL (for SSE servers)</label>
+                      <input
+                        type="text"
+                        value={editForm.url}
+                        onChange={(e) => setEditForm({ ...editForm, url: e.target.value })}
+                        className="input config-control"
+                        placeholder="http://localhost:3000"
+                      />
+                    </div>
+                    <div className="config-field">
+                      <label>Arguments (space-separated)</label>
+                      <input
+                        type="text"
+                        value={editForm.argsText}
+                        onChange={(e) => setEditForm({ ...editForm, argsText: e.target.value })}
+                        className="input config-control"
+                        placeholder="-y @upstash/context7-mcp"
+                      />
+                    </div>
+                    <div className="config-field config-form-grid-full">
+                      <label>Environment Variables (KEY=VALUE per line)</label>
+                      <textarea
+                        value={editForm.envText}
+                        onChange={(e) => setEditForm({ ...editForm, envText: e.target.value })}
+                        className="textarea config-textarea"
+                        rows={3}
+                        placeholder="API_KEY=sk-..."
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button className="btn btn-ghost btn-sm" onClick={cancelEdit} type="button">
+                      Cancel
+                    </button>
+                    <button className="btn btn-primary btn-sm" onClick={saveEdit} type="button">
+                      Save
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="config-card-row">
+                  <div className="min-w-0">
+                    <div className="config-card-title">{s.id}</div>
+                    <p className="config-card-desc truncate">
+                      {s.command ?? s.url ?? '(no command/url)'}
+                    </p>
+                    {s.args.length > 0 && (
+                      <p className="config-card-desc mt-1 font-mono truncate">{s.args.join(' ')}</p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => startEdit(s)}
+                      type="button"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-xs text-error hover:bg-error/10"
+                      onClick={() => deleteServer(s.id)}
+                      type="button"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {isAdding && editForm && (
+            <div className="config-card border-primary/30 bg-primary/5">
+              <div className="config-card-title mb-3 text-primary">New Server</div>
+              <div className="config-form-grid">
+                <div className="config-field">
                   <label>Server ID</label>
                   <input
                     type="text"
                     value={editForm.id}
-                    onChange={(e) =>
-                      setEditForm({ ...editForm, id: e.target.value })
-                    }
-                    className="pref-input"
+                    onChange={(e) => setEditForm({ ...editForm, id: e.target.value })}
+                    className="input config-control"
+                    placeholder="my-mcp-server"
                   />
                 </div>
-                <div className="pref-form-row">
+                <div className="config-field">
                   <label>Command</label>
                   <input
                     type="text"
                     value={editForm.command}
-                    onChange={(e) =>
-                      setEditForm({ ...editForm, command: e.target.value })
-                    }
-                    className="pref-input"
+                    onChange={(e) => setEditForm({ ...editForm, command: e.target.value })}
+                    className="input config-control"
                     placeholder="npx"
                   />
                 </div>
-                <div className="pref-form-row">
+                <div className="config-field">
                   <label>URL (for SSE servers)</label>
                   <input
                     type="text"
                     value={editForm.url}
-                    onChange={(e) =>
-                      setEditForm({ ...editForm, url: e.target.value })
-                    }
-                    className="pref-input"
+                    onChange={(e) => setEditForm({ ...editForm, url: e.target.value })}
+                    className="input config-control"
                     placeholder="http://localhost:3000"
                   />
                 </div>
-                <div className="pref-form-row">
+                <div className="config-field">
                   <label>Arguments (space-separated)</label>
                   <input
                     type="text"
                     value={editForm.argsText}
-                    onChange={(e) =>
-                      setEditForm({ ...editForm, argsText: e.target.value })
-                    }
-                    className="pref-input"
+                    onChange={(e) => setEditForm({ ...editForm, argsText: e.target.value })}
+                    className="input config-control"
                     placeholder="-y @upstash/context7-mcp"
                   />
                 </div>
-                <div className="pref-form-row">
+                <div className="config-field config-form-grid-full">
                   <label>Environment Variables (KEY=VALUE per line)</label>
                   <textarea
                     value={editForm.envText}
-                    onChange={(e) =>
-                      setEditForm({ ...editForm, envText: e.target.value })
-                    }
-                    className="pref-textarea"
+                    onChange={(e) => setEditForm({ ...editForm, envText: e.target.value })}
+                    className="textarea config-textarea"
                     rows={3}
                     placeholder="API_KEY=sk-..."
                   />
                 </div>
-                <div className="pref-form-actions">
-                  <button className="btn btn-primary btn-sm" onClick={saveEdit}>
-                    Save
-                  </button>
-                  <button className="btn btn-ghost btn-sm" onClick={cancelEdit}>
-                    Cancel
-                  </button>
-                </div>
               </div>
-            ) : (
-              /* Display card */
-              <div className="pref-server-card">
-                <div className="pref-server-info">
-                  <span className="pref-server-name">{s.id}</span>
-                  <span className="pref-server-command">
-                    {s.command ?? s.url ?? '(no command/url)'}
-                  </span>
-                  {s.args.length > 0 && (
-                    <span className="pref-server-args">
-                      {s.args.join(' ')}
-                    </span>
-                  )}
-                </div>
-                <div className="pref-server-actions">
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => startEdit(s)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="btn btn-danger btn-sm"
-                    onClick={() => deleteServer(s.id)}
-                  >
-                    Delete
-                  </button>
-                </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button className="btn btn-ghost btn-sm" onClick={cancelEdit} type="button">
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={saveEdit}
+                  disabled={!editForm.id}
+                  type="button"
+                >
+                  Add Server
+                </button>
               </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* Add form (inline) */}
-      {isAdding && editForm && (
-        <div className="pref-server-add">
-          <h4>Add MCP Server</h4>
-          <div className="pref-form-row">
-            <label>Server ID</label>
-            <input
-              type="text"
-              value={editForm.id}
-              onChange={(e) =>
-                setEditForm({ ...editForm, id: e.target.value })
-              }
-              className="pref-input"
-              placeholder="my-mcp-server"
-            />
-          </div>
-          <div className="pref-form-row">
-            <label>Command</label>
-            <input
-              type="text"
-              value={editForm.command}
-              onChange={(e) =>
-                setEditForm({ ...editForm, command: e.target.value })
-              }
-              className="pref-input"
-              placeholder="npx"
-            />
-          </div>
-          <div className="pref-form-row">
-            <label>URL (for SSE servers)</label>
-            <input
-              type="text"
-              value={editForm.url}
-              onChange={(e) =>
-                setEditForm({ ...editForm, url: e.target.value })
-              }
-              className="pref-input"
-              placeholder="http://localhost:3000"
-            />
-          </div>
-          <div className="pref-form-row">
-            <label>Arguments (space-separated)</label>
-            <input
-              type="text"
-              value={editForm.argsText}
-              onChange={(e) =>
-                setEditForm({ ...editForm, argsText: e.target.value })
-              }
-              className="pref-input"
-              placeholder="-y @upstash/context7-mcp"
-            />
-          </div>
-          <div className="pref-form-row">
-            <label>Environment Variables (KEY=VALUE per line)</label>
-            <textarea
-              value={editForm.envText}
-              onChange={(e) =>
-                setEditForm({ ...editForm, envText: e.target.value })
-              }
-              className="pref-textarea"
-              rows={3}
-              placeholder="API_KEY=sk-..."
-            />
-          </div>
-          <div className="pref-form-actions">
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={saveEdit}
-              disabled={!editForm.id}
-            >
-              Add Server
-            </button>
-            <button className="btn btn-ghost btn-sm" onClick={cancelEdit}>
-              Cancel
-            </button>
-          </div>
+            </div>
+          )}
         </div>
-      )}
-
-      {/* Add button */}
-      {!isAdding && (
-        <button className="btn btn-secondary" onClick={startAdd}>
-          + Add MCP Server
-        </button>
-      )}
+      </fieldset>
     </div>
   );
 }

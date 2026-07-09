@@ -9,8 +9,8 @@
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import type { SubagentManager } from '../../agents/manager';
-import { SubagentState } from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
+import { getSessionManager } from '../../ipc/session';
 
 /**
  * Build the wait_for_subagent tool.
@@ -49,6 +49,13 @@ export function buildWaitTool(
     // Wait for all specified subagents to reach terminal state
     const records = await manager.wait(subagent_ids);
 
+    // Persist latest subagent chains (usage + messages) onto the active session
+    try {
+      getSessionManager().syncSubagentChains(manager.toDomainRecords());
+    } catch {
+      // Non-fatal — UI can still read in-memory state on next refresh
+    }
+
     // No records found at all
     if (records.size === 0) {
       return {
@@ -66,10 +73,16 @@ export function buildWaitTool(
           ? Date.now() - record.startTime
           : null;
 
+      const usage = record.usage;
+      const usageAttr = usage
+        ? ` prompt_tokens="${usage.prompt_tokens}" completion_tokens="${usage.completion_tokens}" cached_tokens="${usage.cached_tokens}"`
+        : '';
+
       const attrs =
         `id="${sid}" name="${record.label}" type="${record.agent.type}" ` +
         `status="${record.state}"` +
-        (elapsed !== null ? ` elapsed="${elapsed}"` : '');
+        (elapsed !== null ? ` elapsed="${elapsed}"` : '') +
+        usageAttr;
 
       const taskBlock = record.task
         ? `<task>\n${record.task}\n</task>`

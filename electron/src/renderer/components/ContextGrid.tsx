@@ -1,36 +1,25 @@
 /**
- * ContextGrid — 8×8 colored block grid representing context token distribution.
+ * ContextGrid — 8×3 colored block grid + category token rows.
  *
- * Ported from Python's sidebar.py:410-591.
- * Categories:
- *   - free      (#3f7f57 green)  — unused context window capacity
- *   - system    (#4c6f91 blue)   — system prompt + tools JSON overhead
- *   - tools     (#9a5f87 purple) — (reserved, merged with system in renderer)
- *   - tool_use  (#a98232 amber)  — tool_call + tool_result messages
- *   - messages  (#6f5f9a violet) — user + assistant text messages
+ * Categories (mock colors):
+ *   system #54789c, tool #b08642, user #7e88ff, assistant #68d38f, free #303848
  *
- * When system prompt and tools JSON sizes aren't available (renderer-side),
- * we estimate them as the residual: prompt_tokens minus what we can account
- * for from message character ratios.
+ * Color swatches sit in front of each category row (no separate legend footer).
+ * Uses real usage / maxContext only — no placeholder mock token counts.
  */
 import { useMemo } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const GRID_ROWS = 8;
 const GRID_COLS = 8;
-const GRID_TOTAL = GRID_ROWS * GRID_COLS; // 64 blocks
+const GRID_ROWS = 3;
+const GRID_TOTAL = GRID_COLS * GRID_ROWS;
 
-const COLOR_FREE = '#3f7f57';
-const COLOR_SYSTEM = '#4c6f91';
-const COLOR_TOOLS = '#9a5f87';
-const COLOR_TOOL_USE = '#a98232';
-const COLOR_MESSAGES = '#6f5f9a';
-const COLOR_EMPTY = '#2a2a2e'; // gray for no-data
-
-// ── Types ────────────────────────────────────────────────────────────────────
+const COLOR_FREE = '#303848';
+const COLOR_SYSTEM = '#54789c';
+const COLOR_TOOL = '#b08642';
+const COLOR_USER = '#7e88ff';
+const COLOR_ASSISTANT = '#68d38f';
 
 export interface ContextBreakdown {
   free: number;
@@ -38,20 +27,25 @@ export interface ContextBreakdown {
   tools: number;
   tool_use: number;
   messages: number;
+  percentUsed?: number;
 }
 
 interface ContextGridProps {
-  /** Latest usage data (prompt_tokens drives the distribution). */
   usage?: Usage | null;
-  /** All messages in the current session. */
   messages?: readonly Message[];
-  /** Optional max context window size (from model metadata). */
   maxContext?: number | null;
-  /** Pre-computed breakdown (skips recomputation). */
   breakdown?: ContextBreakdown | null;
 }
 
-// ── Formatting helpers ───────────────────────────────────────────────────────
+interface TokenBreakdown {
+  system: number;
+  tool: number;
+  user: number;
+  assistant: number;
+  free: number;
+  total: number;
+  maxContext: number;
+}
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -59,277 +53,173 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-// ── Computation ──────────────────────────────────────────────────────────────
-
-/**
- * Estimate per-category token counts from message character ratios.
- *
- * Mirrors Python's `_compute_context_tokens()`. Since the renderer doesn't
- * have direct access to the system prompt or tools JSON, we:
- * 1. Compute character counts for tool_use and messages from the messages array.
- * 2. Allocate prompt_tokens to those categories proportionally.
- * 3. Assign the residual to the system/tools bucket (prompt overhead).
- */
-export function computeContextBreakdown(
+function computeBreakdown(
   messages: readonly Message[],
   usage: Usage | null,
   maxContext?: number | null,
-): ContextBreakdown | null {
-  if (!usage || usage.prompt_tokens <= 0) return null;
+): TokenBreakdown {
+  const mc = maxContext && maxContext > 0 ? maxContext : 0;
+
+  if (!usage || usage.prompt_tokens <= 0) {
+    // Zero state — all free when we know the window, else zeros.
+    return {
+      system: 0,
+      tool: 0,
+      user: 0,
+      assistant: 0,
+      free: mc,
+      total: mc,
+      maxContext: mc,
+    };
+  }
 
   const promptTokens = usage.prompt_tokens;
+  const completionTokens = usage.completion_tokens ?? 0;
 
-  // Character counts from messages
-  const toolUseChars = messages
-    .filter(
-      (m) =>
-        m.type === MessageType.TOOL_CALL ||
-        m.type === MessageType.TOOL_RESULT ||
-        m.role === MessageRole.TOOL,
-    )
+  let toolTokens = 0;
+  let userTokens = 0;
+
+  const toolChars = messages
+    .filter((m) => m.type === MessageType.TOOL_CALL || m.type === MessageType.TOOL_RESULT)
+    .reduce((sum, m) => sum + m.content.length, 0);
+  const userChars = messages
+    .filter((m) => m.role === MessageRole.USER && !m.hidden)
+    .reduce((sum, m) => sum + m.content.length, 0);
+  const asstChars = messages
+    .filter((m) => m.role === MessageRole.ASSISTANT && !m.hidden)
     .reduce((sum, m) => sum + m.content.length, 0);
 
-  const messageChars = messages
-    .filter(
-      (m) =>
-        (m.role === MessageRole.USER || m.role === MessageRole.ASSISTANT) &&
-        !m.hidden &&
-        m.type === MessageType.TEXT,
-    )
-    .reduce((sum, m) => sum + m.content.length, 0);
-
-  const totalKnownChars = toolUseChars + messageChars;
-
-  let toolUseTokens: number;
-  let messageTokens: number;
-  let systemTokens: number;
-
-  if (totalKnownChars > 0) {
-    // Allocate proportionally
-    toolUseTokens = Math.round((toolUseChars / totalKnownChars) * promptTokens);
-    messageTokens = Math.round((messageChars / totalKnownChars) * promptTokens);
-    // Residual goes to system/tools overhead
-    systemTokens = promptTokens - toolUseTokens - messageTokens;
-  } else {
-    // No message content — everything is system overhead
-    toolUseTokens = 0;
-    messageTokens = 0;
-    systemTokens = promptTokens;
+  const totalChars = toolChars + userChars + asstChars;
+  if (totalChars > 0) {
+    toolTokens = Math.round((toolChars / totalChars) * promptTokens);
+    userTokens = Math.round((userChars / totalChars) * promptTokens);
   }
 
-  // Clamp negatives
-  if (systemTokens < 0) {
-    // Redistribute: bump the largest of tool_use / messages
-    if (toolUseTokens >= messageTokens) {
-      toolUseTokens += systemTokens;
-    } else {
-      messageTokens += systemTokens;
-    }
-    systemTokens = 0;
-  }
-
-  const freeTokens =
-    maxContext && maxContext > 0
-      ? Math.max(0, maxContext - promptTokens)
-      : 0;
+  const systemTokens = Math.max(0, promptTokens - toolTokens - userTokens);
+  const assistantTokens = completionTokens;
+  const freeTokens = mc > 0 ? Math.max(0, mc - promptTokens - assistantTokens) : 0;
 
   return {
-    free: freeTokens,
     system: systemTokens,
-    tools: 0, // merged into system in renderer
-    tool_use: toolUseTokens,
-    messages: messageTokens,
+    tool: toolTokens,
+    user: userTokens,
+    assistant: assistantTokens,
+    free: freeTokens,
+    total: mc > 0 ? mc : promptTokens + assistantTokens,
+    maxContext: mc,
   };
 }
 
-// ── Grid rendering ───────────────────────────────────────────────────────────
-
-function buildBlockList(breakdown: ContextBreakdown): string[] {
-  const { free, system, tools, tool_use, messages } = breakdown;
-  const totalDisplayTokens = free + system + tools + tool_use + messages;
-  if (totalDisplayTokens === 0) return Array(GRID_TOTAL).fill(COLOR_EMPTY);
-
-  const tokensPerBlock = totalDisplayTokens / GRID_TOTAL;
-
-  let systemBlocks = Math.round(system / tokensPerBlock);
-  let toolsBlocks = Math.round(tools / tokensPerBlock);
-  let toolUseBlocks = Math.round(tool_use / tokensPerBlock);
-  let msgBlocks = Math.round(messages / tokensPerBlock);
-  let freeBlocks = GRID_TOTAL - systemBlocks - toolsBlocks - toolUseBlocks - msgBlocks;
-
-  // Normalize: ensure exactly 64 blocks
-  const totalBlocks = systemBlocks + toolsBlocks + toolUseBlocks + msgBlocks + freeBlocks;
-  if (totalBlocks !== GRID_TOTAL) {
-    const diff = GRID_TOTAL - totalBlocks;
-    const largest = Math.max(systemBlocks, toolsBlocks, toolUseBlocks, msgBlocks, freeBlocks);
-    if (largest === systemBlocks) systemBlocks += diff;
-    else if (largest === toolsBlocks) toolsBlocks += diff;
-    else if (largest === toolUseBlocks) toolUseBlocks += diff;
-    else if (largest === msgBlocks) msgBlocks += diff;
-    else freeBlocks += diff;
+function buildBlockList(b: TokenBreakdown): string[] {
+  const { free, system, tool, user, assistant } = b;
+  const total = free + system + tool + user + assistant;
+  if (total === 0 || (system === 0 && tool === 0 && user === 0 && assistant === 0)) {
+    return Array(GRID_TOTAL).fill(COLOR_FREE);
   }
 
-  // Build ordered block list (matching Python order)
+  const perBlock = total / GRID_TOTAL;
+  let sBlocks = Math.round(system / perBlock);
+  let tBlocks = Math.round(tool / perBlock);
+  let uBlocks = Math.round(user / perBlock);
+  let aBlocks = Math.round(assistant / perBlock);
+  let fBlocks = GRID_TOTAL - sBlocks - tBlocks - uBlocks - aBlocks;
+
+  const totalBlocks = sBlocks + tBlocks + uBlocks + aBlocks + fBlocks;
+  if (totalBlocks !== GRID_TOTAL) {
+    fBlocks += GRID_TOTAL - totalBlocks;
+    if (fBlocks < 0) fBlocks = 0;
+  }
+
   const blocks: string[] = [];
-  for (let i = 0; i < systemBlocks; i++) blocks.push(COLOR_SYSTEM);
-  for (let i = 0; i < toolsBlocks; i++) blocks.push(COLOR_TOOLS);
-  for (let i = 0; i < toolUseBlocks; i++) blocks.push(COLOR_TOOL_USE);
-  for (let i = 0; i < msgBlocks; i++) blocks.push(COLOR_MESSAGES);
-  for (let i = 0; i < freeBlocks; i++) blocks.push(COLOR_FREE);
-
-  // Pad if rounding left us short (shouldn't happen after normalization)
-  while (blocks.length < GRID_TOTAL) blocks.push(COLOR_EMPTY);
-
+  for (let i = 0; i < sBlocks; i++) blocks.push(COLOR_SYSTEM);
+  for (let i = 0; i < tBlocks; i++) blocks.push(COLOR_TOOL);
+  for (let i = 0; i < uBlocks; i++) blocks.push(COLOR_USER);
+  for (let i = 0; i < aBlocks; i++) blocks.push(COLOR_ASSISTANT);
+  for (let i = 0; i < fBlocks; i++) blocks.push(COLOR_FREE);
+  while (blocks.length < GRID_TOTAL) blocks.push(COLOR_FREE);
   return blocks.slice(0, GRID_TOTAL);
 }
-
-// ── Legend entry ─────────────────────────────────────────────────────────────
 
 interface LegendEntry {
   color: string;
   label: string;
   tokens: number;
-  pct: number | null;
+  pct: number;
 }
 
-function buildLegendEntries(
-  breakdown: ContextBreakdown,
-  maxContext?: number | null,
-): LegendEntry[] {
-  const { free, system, tools, tool_use, messages } = breakdown;
-
-  const entries: LegendEntry[] = [];
-
-  if (maxContext && maxContext > 0) {
-    entries.push({
+function buildLegend(b: TokenBreakdown): LegendEntry[] {
+  const mc = b.maxContext > 0 ? b.maxContext : Math.max(b.total, 1);
+  const pct = (v: number) => (b.maxContext > 0 || b.total > 0 ? Math.round((v / mc) * 100) : 0);
+  return [
+    { color: COLOR_SYSTEM, label: 'System', tokens: b.system, pct: pct(b.system) },
+    { color: COLOR_TOOL, label: 'Tools', tokens: b.tool, pct: pct(b.tool) },
+    { color: COLOR_USER, label: 'User', tokens: b.user, pct: pct(b.user) },
+    { color: COLOR_ASSISTANT, label: 'Assistant', tokens: b.assistant, pct: pct(b.assistant) },
+    {
       color: COLOR_FREE,
       label: 'Free',
-      tokens: free,
-      pct: (free / maxContext) * 100,
-    });
-  }
-
-  entries.push({
-    color: COLOR_SYSTEM,
-    label: 'System',
-    tokens: system,
-    pct: maxContext && maxContext > 0 ? (system / maxContext) * 100 : null,
-  });
-
-  // Only show "Tools" row if there are separate tool tokens
-  if (tools > 0) {
-    entries.push({
-      color: COLOR_TOOLS,
-      label: 'Tools',
-      tokens: tools,
-      pct: maxContext && maxContext > 0 ? (tools / maxContext) * 100 : null,
-    });
-  }
-
-  entries.push({
-    color: COLOR_TOOL_USE,
-    label: 'Tool use',
-    tokens: tool_use,
-    pct: maxContext && maxContext > 0 ? (tool_use / maxContext) * 100 : null,
-  });
-
-  entries.push({
-    color: COLOR_MESSAGES,
-    label: 'Messages',
-    tokens: messages,
-    pct: maxContext && maxContext > 0 ? (messages / maxContext) * 100 : null,
-  });
-
-  return entries;
+      tokens: b.free,
+      pct: b.maxContext > 0 ? pct(b.free) : b.total === 0 ? 100 : 0,
+    },
+  ];
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
-
-export function ContextGrid({ usage, messages, maxContext, breakdown: propBreakdown }: ContextGridProps) {
-  const computedBreakdown = useMemo(
-    () => (propBreakdown ? null : computeContextBreakdown(messages ?? [], usage ?? null, maxContext)),
-    [messages, usage, maxContext, propBreakdown],
+export function ContextGrid({ usage, messages, maxContext }: ContextGridProps) {
+  const breakdown = useMemo(
+    () => computeBreakdown(messages ?? [], usage ?? null, maxContext),
+    [messages, usage, maxContext],
   );
 
-  const breakdown = propBreakdown ?? computedBreakdown;
-
-  const blocks = useMemo(() => (breakdown ? buildBlockList(breakdown) : []), [breakdown]);
-  const legendEntries = useMemo(
-    () => (breakdown ? buildLegendEntries(breakdown, maxContext) : []),
-    [breakdown, maxContext],
-  );
-
-  // No data → show gray grid placeholder
-  if (!breakdown) {
-    return (
-      <div className="flex gap-3 items-start">
-        {/* Empty grid */}
-        <div
-          className="grid shrink-0"
-          style={{
-            gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`,
-            gap: '2px',
-            width: '64px',
-          }}
-        >
-          {Array.from({ length: GRID_TOTAL }).map((_, i) => (
-            <div
-              key={i}
-              className="rounded-[1px]"
-              style={{
-                backgroundColor: COLOR_EMPTY,
-                aspectRatio: '1',
-              }}
-            />
-          ))}
-        </div>
-        {/* Empty legend */}
-        <div className="text-[10px] opacity-40 leading-relaxed self-center">
-          No usage data
-        </div>
-      </div>
-    );
-  }
+  const blocks = useMemo(() => buildBlockList(breakdown), [breakdown]);
+  const legend = useMemo(() => buildLegend(breakdown), [breakdown]);
 
   return (
-    <div className="flex gap-3 items-start">
-      {/* 8×8 grid */}
+    <div>
       <div
-        className="grid shrink-0"
-        style={{
-          gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`,
-          gap: '2px',
-          width: '64px',
-        }}
+        className="grid"
+        style={{ gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`, gap: '2px', margin: '4px 0 8px' }}
       >
         {blocks.map((color, i) => (
-          <div
-            key={i}
-            className="rounded-[1px]"
-            style={{
-              backgroundColor: color,
-              aspectRatio: '1',
-            }}
-          />
+          <div key={i} className="aspect-square rounded-[2px]" style={{ backgroundColor: color }} />
         ))}
       </div>
 
-      {/* Legend */}
-      <div className="text-[10px] leading-relaxed space-y-0.5 min-w-0">
-        {legendEntries.map((entry) => (
-          <div key={entry.label} className="flex items-center gap-1.5">
-            <span
-              className="inline-block w-2.5 h-2.5 rounded-[1px] shrink-0"
-              style={{ backgroundColor: entry.color }}
-            />
-            <span className="opacity-70">{entry.label}:</span>
-            <span className="font-mono">{formatTokens(entry.tokens)}</span>
-            {entry.pct !== null && (
-              <span className="opacity-50">({entry.pct.toFixed(1)}%)</span>
-            )}
+      <div className="inspector-stack">
+        {legend.map((entry) => (
+          <div key={entry.label} className="inspector-row">
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <span
+                className="inline-block h-2 w-2 shrink-0 rounded-[2px]"
+                style={{ backgroundColor: entry.color }}
+                aria-hidden
+              />
+              <strong className="font-semibold">{entry.label}</strong>
+            </span>
+            <span className="subtle shrink-0">
+              {formatTokens(entry.tokens)} ({entry.pct}%)
+            </span>
           </div>
         ))}
       </div>
     </div>
   );
+}
+
+export function computeContextBreakdown(
+  messages: readonly Message[],
+  usage: Usage | null,
+  maxContext?: number | null,
+): ContextBreakdown | null {
+  const mb = computeBreakdown(messages, usage, maxContext);
+  const promptTokens = usage?.prompt_tokens ?? 0;
+  const percentUsed =
+    mb.maxContext > 0 ? Math.min(100, Math.round((promptTokens / mb.maxContext) * 100)) : undefined;
+  return {
+    free: mb.free,
+    system: mb.system,
+    tools: 0,
+    tool_use: mb.tool,
+    messages: mb.user + mb.assistant,
+    percentUsed,
+  };
 }

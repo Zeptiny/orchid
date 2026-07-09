@@ -1,27 +1,75 @@
 /**
  * ChatStream — scrollable message stream with smart auto-scroll.
  *
- * Uses DaisyUI components for styling.
+ * Display order is chronological (call/send order), not a fixed
+ * tools-then-assistant layout. A single turn may interleave freely:
+ *   user → tool → message → tool → tool → message → …
+ *
+ * Chain footers still appear once per completed user turn.
+ * Live stream segments (while streaming) continue that same order.
  */
-import { useRef, useEffect, useCallback, useState } from 'react';
-import type { Message } from '../../shared/types/message';
-import type { ChatStatus } from '../hooks/useChat';
+import { useRef, useEffect, useCallback, useState, useMemo, type ReactNode } from 'react';
+import type { Chain } from '../../shared/types/chain';
+import type { Message, Usage } from '../../shared/types/message';
+import { MessageRole, MessageType } from '../../shared/types/message';
+import type { SubagentRecord } from '../../shared/types/subagent';
+import { sumSubagentsUsage, subUsageByParentChain } from '../../shared/usage';
+import type { ChatStatus, StreamSegment, ToolBlock } from '../hooks/useChat';
 import { MessageWidget } from './MessageWidget';
+import { ChainFooter } from './ChainFooter';
+import { ErrorBanner } from './ErrorBanner';
+import { ToolCallBlock } from './ToolCallBlock';
 
 interface ChatStreamProps {
   messages: Message[];
   streamingContent: string;
+  toolBlocks: ToolBlock[];
+  /** Chronological live segments for the in-flight turn (tool/text/thinking). */
+  streamSegments?: readonly StreamSegment[];
   status: ChatStatus;
   error: string | null;
+  usage: Usage | null;
+  /**
+   * Subagents for the active session — their chain message usage feeds the
+   * footer `sub:` line (attributed via parentChainIndex when possible).
+   */
+  subagents?: readonly SubagentRecord[];
+  /** Session chains (same order as storage) for parent_chain_index attribution. */
+  sessionChains?: readonly Chain[];
   onClearError: () => void;
+  onOpenSettings?: () => void;
+  onRetry?: () => void;
+  elapsedSeconds?: number;
+  interrupted?: boolean;
 }
+
+type StreamItem =
+  | { kind: 'message'; key: string; message: Message; isStreaming?: boolean }
+  | { kind: 'tool'; key: string; block: ToolBlock }
+  | {
+      kind: 'footer';
+      key: string;
+      usage: Usage | null;
+      subUsage: Usage | null;
+      elapsedSeconds?: number;
+      interrupted?: boolean;
+    };
 
 export function ChatStream({
   messages,
   streamingContent,
+  toolBlocks,
+  streamSegments = [],
   status,
   error,
   onClearError,
+  onOpenSettings,
+  onRetry,
+  usage,
+  subagents = [],
+  sessionChains = [],
+  elapsedSeconds,
+  interrupted,
 }: ChatStreamProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -49,7 +97,7 @@ export function ChatStream({
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages.length, streamingContent, scrollToBottom]);
+  }, [messages.length, streamingContent, toolBlocks, streamSegments, scrollToBottom]);
 
   useEffect(() => {
     if (status === 'streaming') {
@@ -58,44 +106,462 @@ export function ChatStream({
     }
   }, [status]);
 
-  if (messages.length === 0 && !streamingContent && status === 'idle') {
+  const items = useMemo(
+    () =>
+      buildStreamItems({
+        messages,
+        toolBlocks,
+        streamSegments,
+        streamingContent: status === 'streaming' ? streamingContent : '',
+        status,
+        liveUsage: usage,
+        subagents,
+        sessionChains,
+        elapsedSeconds,
+        interrupted: Boolean(interrupted),
+      }),
+    [
+      messages,
+      toolBlocks,
+      streamSegments,
+      streamingContent,
+      status,
+      usage,
+      subagents,
+      sessionChains,
+      elapsedSeconds,
+      interrupted,
+    ],
+  );
+
+  if (
+    messages.length === 0 &&
+    !streamingContent &&
+    toolBlocks.length === 0 &&
+    streamSegments.length === 0 &&
+    status === 'idle' &&
+    !error
+  ) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center p-8">
-          <div className="text-6xl mb-4">🌸</div>
-          <h2 className="text-2xl font-bold mb-2">Welcome to Orchid</h2>
-          <p className="text-base-content/60">
+      <div className="chat-scroll flex min-h-0 flex-1 items-center justify-center">
+        <div className="empty-state">
+          <div className="empty-state-icon" aria-hidden>
+            🌺
+          </div>
+          <div className="empty-state-title">Welcome to Orchid</div>
+          <div className="empty-state-desc">
             Start a conversation by typing a message below.
-            <br />
-            Press Enter or Ctrl+S to send, Esc to cancel.
-          </p>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 space-y-4" ref={containerRef}>
+    <div className="chat-scroll" ref={containerRef}>
       {error && (
-        <div className="alert alert-error">
-          <span>{error}</span>
-          <button className="btn btn-ghost btn-sm" onClick={onClearError}>
-            Dismiss
-          </button>
+        <div className="error-banner-slot">
+          <ErrorBanner
+            message={error}
+            onDismiss={onClearError}
+            onOpenSettings={onOpenSettings}
+            onRetry={onRetry}
+          />
         </div>
       )}
 
-      {messages.map((msg) => (
-        <MessageWidget key={msg.id} message={msg} />
-      ))}
+      {items.map((item) => renderStreamItem(item))}
 
-      {streamingContent && status === 'streaming' && (
-        <MessageWidget
-          message={{
+      <div ref={messagesEndRef} />
+    </div>
+  );
+}
+
+function renderStreamItem(item: StreamItem): ReactNode {
+  if (item.kind === 'tool') {
+    return <ToolCallBlock key={item.key} block={item.block} />;
+  }
+  if (item.kind === 'footer') {
+    return (
+      <ChainFooter
+        key={item.key}
+        usage={item.usage}
+        subUsage={item.subUsage}
+        elapsedSeconds={item.elapsedSeconds}
+        interrupted={item.interrupted}
+      />
+    );
+  }
+  return (
+    <MessageWidget
+      key={item.key}
+      message={item.message}
+      isStreaming={item.isStreaming}
+    />
+  );
+}
+
+// ── Chronological stream builder ─────────────────────────────────────────────
+
+function buildStreamItems(opts: {
+  messages: Message[];
+  toolBlocks: ToolBlock[];
+  streamSegments: readonly StreamSegment[];
+  streamingContent: string;
+  status: ChatStatus;
+  liveUsage: Usage | null;
+  subagents: readonly SubagentRecord[];
+  sessionChains: readonly Chain[];
+  elapsedSeconds?: number;
+  interrupted: boolean;
+}): StreamItem[] {
+  const {
+    messages,
+    toolBlocks,
+    streamSegments,
+    streamingContent,
+    status,
+    liveUsage,
+    subagents,
+    sessionChains,
+    elapsedSeconds,
+    interrupted,
+  } = opts;
+
+  // Precompute subagent usage attribution (parent_chain_index → Usage).
+  const subByParent = subUsageByParentChain(subagents);
+  const subTotal = sumSubagentsUsage(subagents);
+  // Ordered user-turn fingerprints → session chain index (ids often missing on restore).
+  const userTurnChainQueue = buildUserTurnChainQueue(sessionChains);
+  let userTurnMatchCursor = 0;
+
+  const visible = messages.filter((m) => !m.hidden);
+  const liveById = new Map(toolBlocks.map((b) => [b.id, b]));
+  const resultByCallId = new Map<string, Message>();
+  for (const m of visible) {
+    if (m.type === MessageType.TOOL_RESULT && m.tool_call_id) {
+      resultByCallId.set(m.tool_call_id, m);
+    }
+  }
+
+  const items: StreamItem[] = [];
+  const consumedResults = new Set<string>();
+  const emittedToolIds = new Set<string>();
+  const liveStreaming = status === 'streaming';
+
+  // Track per-turn metadata for footers (still one footer per user turn).
+  let turnIndex = -1;
+  let turnUserId: string | null = null;
+  let turnChainIndex: number | null = null;
+  let turnHasBody = false;
+  let turnLastAssistantUsage: Usage | null = null;
+  let turnItemCountAtStart = 0;
+  /** Chain indexes that already showed their subagent usage on a footer. */
+  const subUsageShownForChain = new Set<number>();
+
+  const keyFor = (msg: Message, kind: string, idx: number) =>
+    msg.id && msg.id.length > 0 ? msg.id : `t${turnIndex}-${kind}-${idx}`;
+
+  const resolveSubUsage = (
+    isLastTurn: boolean,
+    isLastTurnOfParentChain: boolean,
+  ): Usage | null => {
+    // Show sub usage once on the last footer of the parent chain that spawned them.
+    if (
+      isLastTurnOfParentChain &&
+      turnChainIndex != null &&
+      subByParent.has(turnChainIndex) &&
+      !subUsageShownForChain.has(turnChainIndex)
+    ) {
+      return subByParent.get(turnChainIndex) ?? null;
+    }
+    if (isLastTurn) {
+      // Unattributed subagents, or totals not yet shown.
+      const unattributed = subByParent.get(-1) ?? null;
+      if (unattributed) return unattributed;
+      if (subByParent.size === 0) return subTotal;
+      let leftover: Usage | null = null;
+      for (const [idx, u] of subByParent) {
+        if (idx === -1) continue;
+        if (subUsageShownForChain.has(idx)) continue;
+        // Don't double-count the current chain if we're attaching it now
+        if (idx === turnChainIndex && isLastTurnOfParentChain) continue;
+        leftover = leftover
+          ? {
+              prompt_tokens: leftover.prompt_tokens + u.prompt_tokens,
+              completion_tokens: leftover.completion_tokens + u.completion_tokens,
+              total_tokens: leftover.total_tokens + u.total_tokens,
+              cached_tokens: leftover.cached_tokens + u.cached_tokens,
+            }
+          : u;
+      }
+      // Current chain's usage on last turn overall
+      if (
+        turnChainIndex != null &&
+        subByParent.has(turnChainIndex) &&
+        !subUsageShownForChain.has(turnChainIndex)
+      ) {
+        const cur = subByParent.get(turnChainIndex)!;
+        leftover = leftover
+          ? {
+              prompt_tokens: leftover.prompt_tokens + cur.prompt_tokens,
+              completion_tokens: leftover.completion_tokens + cur.completion_tokens,
+              total_tokens: leftover.total_tokens + cur.total_tokens,
+              cached_tokens: leftover.cached_tokens + cur.cached_tokens,
+            }
+          : cur;
+      }
+      return leftover;
+    }
+    return null;
+  };
+
+  const flushFooter = (isLastTurn: boolean, isLastTurnOfParentChain: boolean) => {
+    if (!turnHasBody) return;
+    // While the active turn is still streaming, omit its footer.
+    if (isLastTurn && liveStreaming) return;
+
+    const turnUsage =
+      isLastTurn && (status === 'idle' || status === 'error' || interrupted)
+        ? liveUsage ?? turnLastAssistantUsage
+        : turnLastAssistantUsage;
+
+    const subUsage = resolveSubUsage(isLastTurn, isLastTurnOfParentChain);
+    if (subUsage && turnChainIndex != null) {
+      subUsageShownForChain.add(turnChainIndex);
+    }
+
+    items.push({
+      kind: 'footer',
+      key: `footer-${turnUserId || turnIndex}`,
+      usage: turnUsage,
+      subUsage,
+      elapsedSeconds: isLastTurn ? elapsedSeconds : undefined,
+      interrupted: isLastTurn ? interrupted : false,
+    });
+  };
+
+  const startTurn = (user: Message | null) => {
+    const nextChainIndex = user
+      ? matchUserTurnChain(user, userTurnChainQueue, userTurnMatchCursor)
+      : null;
+
+    // Close previous turn footer if any content was emitted.
+    if (turnIndex >= 0) {
+      // Attach sub usage when leaving a parent chain (or when no next turn).
+      const isLastOfChain =
+        nextChainIndex == null || nextChainIndex !== turnChainIndex;
+      flushFooter(false, isLastOfChain);
+    }
+    turnIndex += 1;
+    turnUserId = user?.id ?? null;
+    turnChainIndex = nextChainIndex;
+    if (turnChainIndex != null) {
+      // Advance cursor past this match so multi-turn chains stay ordered.
+      while (
+        userTurnMatchCursor < userTurnChainQueue.length &&
+        userTurnChainQueue[userTurnMatchCursor].chainIndex !== turnChainIndex
+      ) {
+        userTurnMatchCursor += 1;
+      }
+      if (
+        userTurnMatchCursor < userTurnChainQueue.length &&
+        userTurnChainQueue[userTurnMatchCursor].chainIndex === turnChainIndex
+      ) {
+        userTurnMatchCursor += 1;
+      }
+    }
+    turnHasBody = false;
+    turnLastAssistantUsage = null;
+    turnItemCountAtStart = items.length;
+
+    if (user) {
+      items.push({
+        kind: 'message',
+        key: keyFor(user, 'user', 0),
+        message: user,
+      });
+    }
+  };
+
+  // Ensure we have a turn context even when history starts with non-user msgs.
+  const ensureTurn = () => {
+    if (turnIndex < 0) startTurn(null);
+  };
+
+  const pushTool = (block: ToolBlock, keyPrefix = 'tool') => {
+    if (emittedToolIds.has(block.id)) return;
+    emittedToolIds.add(block.id);
+    ensureTurn();
+    turnHasBody = true;
+    items.push({
+      kind: 'tool',
+      key: block.id || `${keyPrefix}-${turnIndex}-${emittedToolIds.size}`,
+      block,
+    });
+  };
+
+  const pushMessage = (msg: Message, kind: string, idx: number, isStreaming = false) => {
+    ensureTurn();
+    turnHasBody = true;
+    if (msg.role === MessageRole.ASSISTANT && msg.type === MessageType.TEXT && msg.usage) {
+      turnLastAssistantUsage = msg.usage;
+    }
+    items.push({
+      kind: 'message',
+      key: isStreaming ? 'streaming' : keyFor(msg, kind, idx),
+      message: msg,
+      isStreaming,
+    });
+  };
+
+  // ── Walk committed history in call/send order ────────────────────────────
+  let msgIdx = 0;
+  for (const m of visible) {
+    if (m.role === MessageRole.USER && m.type === MessageType.TEXT) {
+      startTurn(m);
+      msgIdx += 1;
+      continue;
+    }
+
+    if (m.type === MessageType.THINKING) {
+      pushMessage(m, 'thought', msgIdx++);
+      continue;
+    }
+
+    if (m.type === MessageType.TOOL_CALL) {
+      const callId = m.tool_call_id ?? m.tool_calls?.[0]?.id ?? m.id;
+      const result = resultByCallId.get(callId);
+      if (result) consumedResults.add(callId);
+      // Prefer live block when present (richer generating/running status)
+      // without changing chronological position.
+      const live = liveById.get(callId);
+      pushTool(live ?? messagePairToToolBlock(m, result ?? null));
+      msgIdx += 1;
+      continue;
+    }
+
+    if (m.type === MessageType.TOOL_RESULT) {
+      const callId = m.tool_call_id ?? m.id;
+      if (consumedResults.has(callId)) {
+        msgIdx += 1;
+        continue;
+      }
+      const live = liveById.get(callId);
+      pushTool(live ?? resultOnlyToToolBlock(m));
+      msgIdx += 1;
+      continue;
+    }
+
+    if (m.role === MessageRole.ASSISTANT && m.type === MessageType.TEXT) {
+      if (!m.content?.trim()) {
+        msgIdx += 1;
+        continue;
+      }
+      pushMessage(m, 'asst', msgIdx++);
+      continue;
+    }
+
+    if (m.type === MessageType.ERROR || m.role === MessageRole.SYSTEM) {
+      pushMessage(m, 'other', msgIdx++);
+      continue;
+    }
+
+    if (m.content?.trim()) {
+      pushMessage(m, 'other', msgIdx++);
+    } else {
+      msgIdx += 1;
+    }
+  }
+
+  // ── Live in-flight turn: continue chronological stream segments ──────────
+  if (liveStreaming || streamSegments.length > 0) {
+    ensureTurn();
+
+    if (streamSegments.length > 0) {
+      let lastTextSegIndex = -1;
+      for (let i = streamSegments.length - 1; i >= 0; i--) {
+        if (streamSegments[i].kind === 'text') {
+          lastTextSegIndex = i;
+          break;
+        }
+      }
+      let segTextIdx = 0;
+      streamSegments.forEach((seg, segIndex) => {
+        if (seg.kind === 'tool') {
+          const block = liveById.get(seg.toolCallId);
+          if (block) {
+            pushTool(block, 'live');
+          }
+          return;
+        }
+        if (seg.kind === 'text' && seg.content) {
+          // Only the last text segment streams; earlier ones are frozen mid-turn.
+          const stillStreaming = liveStreaming && segIndex === lastTextSegIndex;
+          pushMessage(
+            {
+              id: seg.id,
+              role: MessageRole.ASSISTANT,
+              content: seg.content,
+              type: MessageType.TEXT,
+              tool_calls: null,
+              tool_call_id: null,
+              name: null,
+              thinking: null,
+              timestamp: new Date().toISOString(),
+              usage: null,
+              hidden: false,
+            },
+            'seg-text',
+            segTextIdx++,
+            stillStreaming,
+          );
+          return;
+        }
+        if (seg.kind === 'thinking' && seg.content) {
+          // Mark the latest thinking segment as streaming so Thought UI stays open
+          // while reasoning is still arriving.
+          let lastThinkIndex = -1;
+          for (let i = streamSegments.length - 1; i >= 0; i--) {
+            if (streamSegments[i].kind === 'thinking') {
+              lastThinkIndex = i;
+              break;
+            }
+          }
+          const stillStreamingThink = liveStreaming && segIndex === lastThinkIndex;
+          pushMessage(
+            {
+              id: seg.id,
+              role: MessageRole.ASSISTANT,
+              content: seg.content,
+              type: MessageType.THINKING,
+              tool_calls: null,
+              tool_call_id: null,
+              name: null,
+              thinking: seg.content,
+              timestamp: new Date().toISOString(),
+              usage: null,
+              hidden: false,
+            },
+            'seg-think',
+            segTextIdx++,
+            stillStreamingThink,
+          );
+        }
+      });
+    } else {
+      // Fallback when segments are empty but we still have live tools/text
+      // (e.g. mid-wire of older event paths).
+      for (const block of toolBlocks) {
+        pushTool(block, 'live');
+      }
+      if (streamingContent) {
+        pushMessage(
+          {
             id: 'streaming',
-            role: 'assistant',
+            role: MessageRole.ASSISTANT,
             content: streamingContent,
-            type: 'text',
+            type: MessageType.TEXT,
             tool_calls: null,
             tool_call_id: null,
             name: null,
@@ -103,12 +569,128 @@ export function ChatStream({
             timestamp: new Date().toISOString(),
             usage: null,
             hidden: false,
-          }}
-          isStreaming
-        />
-      )}
+          },
+          'stream',
+          0,
+          true,
+        );
+      }
+    }
+  } else if (toolBlocks.length > 0) {
+    // Idle but leftover live blocks not yet in history — append in order.
+    for (const block of toolBlocks) {
+      if (!emittedToolIds.has(block.id)) {
+        pushTool(block, 'live');
+      }
+    }
+  }
 
-      <div ref={messagesEndRef} />
-    </div>
-  );
+  // Footer for the final turn (if complete / not streaming).
+  if (turnIndex >= 0) {
+    // turnHasBody may be true only for user; require assistant/tools for footer
+    const bodyBeyondUser = items.length > turnItemCountAtStart + (turnUserId ? 1 : 0);
+    if (bodyBeyondUser || turnHasBody) {
+      // Recompute: footer if we had tools or assistant content
+      const hasRenderableBody = items
+        .slice(turnItemCountAtStart)
+        .some((it) => it.kind === 'tool' || (it.kind === 'message' && it.message.role !== MessageRole.USER));
+      if (hasRenderableBody) {
+        turnHasBody = true;
+        flushFooter(true, true);
+      }
+    }
+  }
+
+  return items;
+}
+
+interface UserTurnFingerprint {
+  content: string;
+  timestamp: string;
+  chainIndex: number;
+}
+
+/** Ordered user turns across session chains for parent_chain_index attribution. */
+function buildUserTurnChainQueue(chains: readonly Chain[]): UserTurnFingerprint[] {
+  const out: UserTurnFingerprint[] = [];
+  chains.forEach((chain, chainIndex) => {
+    for (const m of chain.messages) {
+      if (m.role === MessageRole.USER && m.type === MessageType.TEXT) {
+        out.push({
+          content: m.content ?? '',
+          timestamp: m.timestamp ?? '',
+          chainIndex,
+        });
+      }
+    }
+  });
+  return out;
+}
+
+/**
+ * Match a rendered user message to a session chain index.
+ * Prefers content+timestamp; falls back to content-only; then sequential order.
+ */
+function matchUserTurnChain(
+  user: Message,
+  queue: UserTurnFingerprint[],
+  from: number,
+): number | null {
+  if (queue.length === 0) return null;
+  const content = user.content ?? '';
+  const timestamp = user.timestamp ?? '';
+
+  for (let i = from; i < queue.length; i++) {
+    if (queue[i].content === content && queue[i].timestamp === timestamp) {
+      return queue[i].chainIndex;
+    }
+  }
+  for (let i = from; i < queue.length; i++) {
+    if (queue[i].content === content) {
+      return queue[i].chainIndex;
+    }
+  }
+  // Sequential fallback — user turns appear in chain order after flatten.
+  if (from < queue.length) return queue[from].chainIndex;
+  return null;
+}
+
+function messagePairToToolBlock(call: Message, result: Message | null): ToolBlock {
+  const toolName =
+    call.tool_calls?.[0]?.function?.name ?? call.name ?? result?.name ?? 'unknown';
+  const args = call.tool_calls?.[0]?.function?.arguments ?? call.content ?? '';
+  const callId = call.tool_call_id ?? call.tool_calls?.[0]?.id ?? call.id;
+  const isError =
+    Boolean(result?.content?.startsWith('Error:')) ||
+    Boolean(result?.content?.toLowerCase().includes('error:'));
+
+  return {
+    id: callId,
+    toolName,
+    status: result ? (isError ? 'failed' : 'completed') : 'completed',
+    partialArgs: '',
+    args,
+    result: result && !isError ? result.content : null,
+    error: result && isError ? result.content : null,
+    startedAt: call.timestamp,
+    finishedAt: result?.timestamp ?? call.timestamp,
+  };
+}
+
+function resultOnlyToToolBlock(result: Message): ToolBlock {
+  const isError =
+    Boolean(result.content?.startsWith('Error:')) ||
+    Boolean(result.content?.toLowerCase().includes('error:'));
+
+  return {
+    id: result.tool_call_id ?? result.id,
+    toolName: result.name ?? 'tool',
+    status: isError ? 'failed' : 'completed',
+    partialArgs: '',
+    args: '',
+    result: isError ? null : result.content,
+    error: isError ? result.content : null,
+    startedAt: result.timestamp,
+    finishedAt: result.timestamp,
+  };
 }

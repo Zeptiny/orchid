@@ -6,72 +6,72 @@
  */
 :root {
   /* Background colors */
-  --bg-primary: #1a1a2e;
-  --bg-secondary: #16213e;
-  --bg-tertiary: #0f3460;
-  --bg-surface: #1a1a2e;
-  --bg-surface-raised: #222244;
-  --bg-surface-overlay: #2a2a4a;
+  --bg-primary: #0b0f14;
+  --bg-secondary: #151a21;
+  --bg-tertiary: #26303d;
+  --bg-surface: #0b0f14;
+  --bg-surface-raised: #151a21;
+  --bg-surface-overlay: #26303d;
 
   /* Text colors */
-  --text-primary: #e0e0e0;
-  --text-secondary: #a0a0b0;
-  --text-tertiary: #707080;
-  --text-inverse: #1a1a2e;
+  --text-primary: #eef3f8;
+  --text-secondary: #98a5b5;
+  --text-tertiary: #6b7785;
+  --text-inverse: #0b0f14;
 
   /* Accent colors */
-  --accent-primary: #4a9eff;
-  --accent-primary-hover: #6ab4ff;
-  --accent-secondary: #7c5cbf;
-  --accent-success: #4ade80;
-  --accent-warning: #fbbf24;
-  --accent-error: #ef4444;
-  --accent-info: #38bdf8;
+  --accent-primary: #7e88ff;
+  --accent-primary-hover: #9aa1ff;
+  --accent-secondary: #72a8be;
+  --accent-success: #68d38f;
+  --accent-warning: #f2c665;
+  --accent-error: #ef8383;
+  --accent-info: #76baff;
 
   /* Border colors */
-  --border-default: #2a2a4a;
-  --border-subtle: #1e1e3e;
-  --border-strong: #3a3a5a;
-  --border-focus: #4a9eff;
+  --border-default: #26303d;
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-strong: #3a4658;
+  --border-focus: #7e88ff;
 
   /* Message colors */
-  --msg-user-bg: #2a4a6a;
-  --msg-user-text: #e0e0e0;
-  --msg-assistant-bg: #2a2a4a;
-  --msg-assistant-text: #e0e0e0;
-  --msg-system-bg: #1e1e3e;
-  --msg-system-text: #a0a0b0;
-  --msg-error-bg: #4a2a2a;
-  --msg-error-text: #ef4444;
-  --msg-thinking-bg: #2a2a3a;
-  --msg-thinking-text: #a0a0c0;
+  --msg-user-bg: #5964d8;
+  --msg-user-text: #eef3f8;
+  --msg-assistant-bg: transparent;
+  --msg-assistant-text: #eef3f8;
+  --msg-system-bg: #151a21;
+  --msg-system-text: #98a5b5;
+  --msg-error-bg: #2a1a1e;
+  --msg-error-text: #ef8383;
+  --msg-thinking-bg: rgba(244, 197, 66, 0.06);
+  --msg-thinking-text: #f4c542;
 
   /* Input colors */
-  --input-bg: #2a2a4a;
-  --input-border: #3a3a5a;
-  --input-focus-border: #4a9eff;
-  --input-text: #e0e0e0;
-  --input-placeholder: #606070;
+  --input-bg: #090e15;
+  --input-border: #26303d;
+  --input-focus-border: #7e88ff;
+  --input-text: #eef3f8;
+  --input-placeholder: #98a5b5;
 
   /* Button colors */
-  --btn-primary-bg: #4a9eff;
+  --btn-primary-bg: #7e88ff;
   --btn-primary-text: #ffffff;
-  --btn-primary-hover: #6ab4ff;
-  --btn-secondary-bg: #3a3a5a;
-  --btn-secondary-text: #e0e0e0;
-  --btn-secondary-hover: #4a4a6a;
-  --btn-danger-bg: #ef4444;
+  --btn-primary-hover: #9aa1ff;
+  --btn-secondary-bg: #26303d;
+  --btn-secondary-text: #eef3f8;
+  --btn-secondary-hover: #3a4658;
+  --btn-danger-bg: #ef8383;
   --btn-danger-text: #ffffff;
-  --btn-danger-hover: #f87171;
+  --btn-danger-hover: #f4a0a0;
 
   /* Sidebar colors */
-  --sidebar-bg: #16213e;
-  --sidebar-border: #2a2a4a;
-  --sidebar-item-hover: #1e2d4e;
-  --sidebar-item-active: #2a4a6a;
+  --sidebar-bg: #151a21;
+  --sidebar-border: #26303d;
+  --sidebar-item-hover: rgba(126, 136, 255, 0.12);
+  --sidebar-item-active: rgba(126, 136, 255, 0.18);
 
   /* Scrollbar */
-  --scrollbar-thumb: #3a3a5a;
+  --scrollbar-thumb: #26303d;
   --scrollbar-track: transparent;
 
   /* Shadows */
@@ -80,13 +80,13 @@
   --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.4);
 
   /* Typography */
-  --font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
-  --font-size-xs: 0.75rem;
-  --font-size-sm: 0.875rem;
-  --font-size-base: 1rem;
-  --font-size-lg: 1.125rem;
-  --font-size-xl: 1.25rem;
+  --font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-size-xs: 0.69rem;    /* ~9px */
+  --font-size-sm: 0.77rem;    /* ~10px */
+  --font-size-base: 0.8125rem;/* ~13px */
+  --font-size-lg: 0.875rem;   /* ~14px */
+  --font-size-xl: 1rem;       /* 16px */
 
   /* Spacing */
   --space-1: 0.25rem;

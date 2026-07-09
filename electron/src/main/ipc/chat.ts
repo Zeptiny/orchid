@@ -18,15 +18,24 @@ import type { Config } from '../config/schema';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { getConfig } from '../config/loader';
 import { listAgents } from '../agents/registry';
+import { appendPersonality } from '../personality/registry';
 import { resolveModelRef } from '../llm/providers';
 import { createProviderModel } from '../llm/providers-factory';
 import { MessageRole, MessageType } from '../../shared/types/message';
-import type { Message } from '../../shared/types/message';
+import type { Message, Usage } from '../../shared/types/message';
+import { ChainStatus } from '../../shared/types/chain';
 import type { GenerateTitleCallback } from '../session/manager';
 import { getSessionManager } from './session';
 import { importESM } from '../utils/esm-import';
 import { getBackgroundStore } from '../tools/process/background-store';
 import { getMCPManagerRef } from './mcp';
+import { getSubagentManager } from '../tools';
+import type { ChatErrorKind } from '../../shared/types/ipc';
+import {
+  clearAllChatHistory,
+  getChatHistory,
+  setChatHistory,
+} from './chat-history';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -46,14 +55,23 @@ type ActiveAgent = {
   actor: ActorRefFrom<typeof agentMachine>;
   interruptActor: ActorRefFrom<typeof interruptMachine>;
   abortController: AbortController;
+  /** Full conversation history at the start of this turn (includes prior turns). */
   messages: Message[];
+  /** Messages produced during this turn (tool calls/results + assistant). */
+  turnMessages: Message[];
+  /** Length of context.response already snapshotted into turnMessages as text. */
+  responseCommittedLength: number;
+  /** Length of context.thinking already snapshotted into turnMessages. */
+  thinkingCommittedLength: number;
+  agent: Agent;
+  agentCancelled: boolean;
+  finalized: boolean;
   unsubscribe: () => void;
   interruptUnsubscribe: () => void;
   interruptResetTimer: ReturnType<typeof setTimeout> | null;
 };
 
 const activeAgents = new Map<string, ActiveAgent>();
-const messageHistory = new Map<string, Message[]>();
 
 function disposeActiveAgent(windowId: string, active: ActiveAgent): void {
   activeAgents.delete(windowId);
@@ -67,8 +85,169 @@ function disposeActiveAgent(windowId: string, active: ActiveAgent): void {
   active.interruptActor.stop();
 }
 
+/**
+ * Silently abort any in-flight chat for a window (e.g. on session switch).
+ * Does not emit CHAT_DONE — the renderer is about to replace its message list.
+ * Dispose is deferred to a microtask so the subscription callback can read
+ * the agentCancelled/finalized flags before teardown.
+ */
+export function forceAbortChat(windowId: string): void {
+  const existing = activeAgents.get(windowId);
+  if (!existing) return;
+  existing.agentCancelled = true;
+  existing.finalized = true;
+  // Abort the stream immediately
+  existing.abortController.abort();
+  // Defer dispose so the subscription callback sees the flags
+  queueMicrotask(() => {
+    if (activeAgents.get(windowId) === existing) {
+      disposeActiveAgent(windowId, existing);
+    }
+  });
+}
+
 function canSend(webContents: WebContents): boolean {
   return typeof webContents.isDestroyed !== 'function' || !webContents.isDestroyed();
+}
+
+function makeToolCallMessage(
+  toolCallId: string,
+  toolName: string,
+  args: string,
+): Message {
+  return {
+    id: crypto.randomUUID(),
+    role: MessageRole.ASSISTANT,
+    content: '',
+    type: MessageType.TOOL_CALL,
+    tool_calls: [
+      {
+        id: toolCallId,
+        type: 'function',
+        function: { name: toolName, arguments: args || '{}' },
+      },
+    ],
+    tool_call_id: toolCallId,
+    name: toolName,
+    thinking: null,
+    timestamp: new Date().toISOString(),
+    usage: null,
+    hidden: false,
+  };
+}
+
+function makeToolResultMessage(
+  toolCallId: string,
+  toolName: string,
+  content: string,
+  isError: boolean,
+): Message {
+  return {
+    id: crypto.randomUUID(),
+    role: MessageRole.TOOL,
+    // Keep TOOL_RESULT type for chain reconciliation pairing; prefix errors.
+    content: isError && !content.startsWith('Error:') ? `Error: ${content}` : content,
+    type: MessageType.TOOL_RESULT,
+    tool_calls: null,
+    tool_call_id: toolCallId,
+    name: toolName,
+    thinking: null,
+    timestamp: new Date().toISOString(),
+    usage: null,
+    hidden: false,
+  };
+}
+
+function makeAssistantMessage(content: string, usage: Usage | null): Message {
+  return {
+    id: crypto.randomUUID(),
+    role: MessageRole.ASSISTANT,
+    content,
+    type: MessageType.TEXT,
+    tool_calls: null,
+    tool_call_id: null,
+    name: null,
+    thinking: null,
+    timestamp: new Date().toISOString(),
+    usage,
+    hidden: false,
+  };
+}
+
+function makeThinkingMessage(content: string): Message {
+  return {
+    id: crypto.randomUUID(),
+    role: MessageRole.ASSISTANT,
+    content,
+    type: MessageType.THINKING,
+    tool_calls: null,
+    tool_call_id: null,
+    name: null,
+    thinking: content,
+    timestamp: new Date().toISOString(),
+    usage: null,
+    hidden: false,
+  };
+}
+
+function classifyErrorKind(title: string | null | undefined, detail: string): ChatErrorKind {
+  const haystack = `${title ?? ''} ${detail}`.toLowerCase();
+  if (haystack.includes('rate limit') || haystack.includes('429') || haystack.includes('usage limit')) {
+    return 'rate-limit';
+  }
+  if (
+    haystack.includes('auth') ||
+    haystack.includes('401') ||
+    haystack.includes('403') ||
+    haystack.includes('api key')
+  ) {
+    return 'auth';
+  }
+  if (
+    haystack.includes('timeout') ||
+    haystack.includes('timed out') ||
+    haystack.includes('network') ||
+    haystack.includes('connection')
+  ) {
+    return 'stream';
+  }
+  return 'generic';
+}
+
+function persistConversation(
+  windowId: string,
+  messages: Message[],
+  status: ChainStatus,
+  agent: Agent,
+  model?: string,
+): void {
+  setChatHistory(windowId, messages);
+  try {
+    const sessionManager = getSessionManager();
+    sessionManager.syncActiveChain({
+      messages,
+      status,
+      model,
+      agentName: agent.name,
+      agentType: agent.type,
+      agentTier: agent.tier,
+    });
+  } catch (err) {
+    console.debug('Failed to persist chat chain (non-fatal):', err);
+  }
+}
+
+function historyFromActiveSession(): Message[] {
+  try {
+    const session = getSessionManager().getActive();
+    if (!session) return [];
+    const chain =
+      session.chains.find((c) => c.id === session.activeChainId) ??
+      session.chains[session.chains.length - 1];
+    return chain ? [...chain.messages] : [];
+  } catch {
+    return [];
+  }
 }
 
 // ── Stream function (wraps the orchestrator) ─────────────────────────────────
@@ -87,9 +266,13 @@ function createStreamFn(config: Config, messages: Message[]) {
     // Dynamic import to avoid circular dependency issues
     const { streamChat } = await import('../llm/orchestrator');
 
-    // Resolve the model for this agent
+    // Resolve the model for this agent:
+    // session model (from /model) → tier model → global default.
+    const sessionModel = getSessionManager().getActive()?.model;
     const modelRef = resolveModelRef(
-      config.tier_models[params.agent.tier] || config.default_model,
+      sessionModel ||
+        config.tier_models[params.agent.tier] ||
+        config.default_model,
       config,
     );
     const modelInstance = await createProviderModel(modelRef);
@@ -189,15 +372,13 @@ function createGenerateTitleCallback(
       // Use AI SDK generateText for a simple one-shot title
       const { generateText } = await importESM<typeof import('ai')>('ai');
 
+      // AI SDK 7: system text must use `instructions` (not role:'system' in messages)
       const result = await generateText({
         model: modelInstance,
+        instructions:
+          'Generate a short, descriptive title (3-6 words) for this conversation. ' +
+          'Only output the title, nothing else. No quotes, no punctuation at the end.',
         messages: [
-          {
-            role: 'system',
-            content:
-              'Generate a short, descriptive title (3-6 words) for this conversation. ' +
-              'Only output the title, nothing else. No quotes, no punctuation at the end.',
-          },
           {
             role: 'user',
             content:
@@ -241,10 +422,21 @@ export function registerChatIPC(): void {
     // Cancel any existing actor for this window
     const windowId = String(webContents.id);
     const existing = activeAgents.get(windowId);
-    let existingMessages: Message[] = messageHistory.get(windowId) ?? [];
+
+    // Prefer live window history; fall back to active session chain on cold start.
+    let existingMessages: Message[] =
+      getChatHistory(windowId) ?? historyFromActiveSession();
 
     if (existing) {
-      existingMessages = existing.messages;
+      // Keep prior completed turns only (drop in-progress turn state)
+      existingMessages =
+        getChatHistory(windowId) ??
+        existing.messages.filter(
+          (m) =>
+            m.role === MessageRole.USER ||
+            m.role === MessageRole.ASSISTANT ||
+            m.role === MessageRole.TOOL,
+        );
       disposeActiveAgent(windowId, existing);
     }
 
@@ -269,20 +461,22 @@ export function registerChatIPC(): void {
     const agents = listAgents();
     const agent = agents.find((a) => a.name === 'general') ?? agents[0] ?? {
       name: 'general',
-      type: 'subagent',
-      tier: 'bloom',
+      type: 'subagent' as const,
+      tier: 'bloom' as const,
       description: 'General-purpose agent',
       system_prompt: 'You are a helpful assistant.',
       allowed_tools: ['*'],
       allowed_skills: ['*'],
     };
 
-    // Create the agent actor with message history
+    // Create the agent actor with message history.
+    // Append the configured personality (from ~/.orchid/personalities/) like Python.
     const abortController = new AbortController();
+    const baseSystemPrompt = agent.system_prompt || 'You are a helpful assistant.';
     const actor = createActor(agentMachine, {
       input: {
         agent,
-        systemPrompt: agent.system_prompt || 'You are a helpful assistant.',
+        systemPrompt: appendPersonality(baseSystemPrompt, config.personality),
         streamFn: createStreamFn(config, messages),
         executeFn: createExecuteFn(),
       },
@@ -293,22 +487,129 @@ export function registerChatIPC(): void {
 
     // Track response for incremental updates
     let lastSentLength = 0;
+    let lastThinkingLength = 0;
     let completed = false;
     let subscription: { unsubscribe: () => void } | null = null;
     let interruptSubscription: { unsubscribe: () => void } | null = null;
     let lastUsage: import('../../shared/types/message').Usage | null = null;
     let interruptResetTimer: ReturnType<typeof setTimeout> | null = null;
-
+    let lastStreamingToolCallId: string | null = null;
+    const lastStreamingToolArgLength = new Map<string, number>();
+    let lastToolUpdateSequence = 0;
     const activeAgent: ActiveAgent = {
       actor,
       interruptActor,
       abortController,
       messages,
+      turnMessages: [],
+      // How much of context.response has already been snapshotted into turnMessages
+      // as intermediate assistant text (so tools can interleave: text → tool → text).
+      responseCommittedLength: 0,
+      thinkingCommittedLength: 0,
+      agent,
+      agentCancelled: false,
+      finalized: false,
       unsubscribe: () => subscription?.unsubscribe(),
       interruptUnsubscribe: () => interruptSubscription?.unsubscribe(),
       interruptResetTimer: null,
     };
     activeAgents.set(windowId, activeAgent);
+
+    /** Snapshot any response text that arrived before the next tool into turnMessages. */
+    const flushResponseSegment = (fullResponse: string, attachUsage: Usage | null = null) => {
+      if (fullResponse.length <= activeAgent.responseCommittedLength) return;
+      const segment = fullResponse.slice(activeAgent.responseCommittedLength);
+      activeAgent.responseCommittedLength = fullResponse.length;
+      if (!segment.trim() && !attachUsage) return;
+      activeAgent.turnMessages.push(makeAssistantMessage(segment, attachUsage));
+    };
+
+    /** Snapshot reasoning/thinking text into turnMessages (before tools / final text). */
+    const flushThinkingSegment = (fullThinking: string) => {
+      if (fullThinking.length <= activeAgent.thinkingCommittedLength) return;
+      const segment = fullThinking.slice(activeAgent.thinkingCommittedLength);
+      activeAgent.thinkingCommittedLength = fullThinking.length;
+      if (!segment.trim()) return;
+      activeAgent.turnMessages.push(makeThinkingMessage(segment));
+    };
+
+    const finalizeTurn = (opts: {
+      response: string;
+      usage: Usage | null;
+      interrupted: boolean;
+      sendDone: boolean;
+    }) => {
+      if (activeAgent.finalized) return;
+      activeAgent.finalized = true;
+      completed = true;
+
+      // Flush any remaining thinking before the final assistant bubble.
+      const ctxThinking =
+        (activeAgent.actor.getSnapshot().context as AgentContext).thinking ?? '';
+      flushThinkingSegment(ctxThinking);
+
+      // Remaining text after the last tool (or the whole response if no tools).
+      const remaining = opts.response.slice(activeAgent.responseCommittedLength);
+      if (remaining || (opts.interrupted && activeAgent.responseCommittedLength === 0 && !opts.response)) {
+        // Attach usage to the final assistant bubble when present.
+        if (remaining || opts.interrupted) {
+          activeAgent.turnMessages.push(
+            makeAssistantMessage(remaining || opts.response || '', opts.usage),
+          );
+          activeAgent.responseCommittedLength = opts.response.length;
+        }
+      } else if (opts.usage) {
+        // No remaining text — attach usage to the last assistant message if any.
+        const last = activeAgent.turnMessages[activeAgent.turnMessages.length - 1];
+        if (last && last.role === MessageRole.ASSISTANT && last.type === MessageType.TEXT) {
+          activeAgent.turnMessages[activeAgent.turnMessages.length - 1] = {
+            ...last,
+            usage: opts.usage,
+          };
+        } else if (opts.interrupted) {
+          activeAgent.turnMessages.push(makeAssistantMessage('', opts.usage));
+        }
+      }
+
+      const turnExtras = [...activeAgent.turnMessages];
+      const fullHistory = [...messages, ...turnExtras];
+      persistConversation(
+        windowId,
+        fullHistory,
+        opts.interrupted ? ChainStatus.INTERRUPTED : ChainStatus.COMPLETED,
+        agent,
+        config.default_model,
+      );
+      activeAgent.messages = fullHistory;
+
+      if (opts.sendDone && canSend(webContents)) {
+        webContents.send(IPC_CHANNELS.CHAT_DONE, {
+          type: 'done',
+          response: opts.response,
+          interrupted: opts.interrupted,
+          usage: opts.usage,
+        });
+      }
+
+      if (!opts.interrupted) {
+        // Auto-name after first successful exchange (non-blocking)
+        const sessionManager = getSessionManager();
+        const generateTitle = createGenerateTitleCallback(config, fullHistory);
+        sessionManager
+          .autoNameActive(generateTitle)
+          .then((updated) => {
+            if (updated && canSend(webContents)) {
+              webContents.send(IPC_CHANNELS.SESSION_RENAMED, {
+                id: updated.id,
+                name: updated.name,
+              });
+            }
+          })
+          .catch((err) => {
+            console.debug('Auto-naming failed (non-fatal):', err);
+          });
+      }
+    };
 
     // Track interrupt machine state changes and forward to renderer
     interruptSubscription = interruptActor.subscribe((interruptSnapshot) => {
@@ -330,6 +631,12 @@ export function registerChatIPC(): void {
           interruptActor.send({ type: 'INTERRUPT_TIMEOUT' });
         }, 5000);
         activeAgent.interruptResetTimer = interruptResetTimer;
+      } else if (activeAgent.agentCancelled) {
+        queueMicrotask(() => {
+          if (activeAgents.get(windowId) === activeAgent) {
+            disposeActiveAgent(windowId, activeAgent);
+          }
+        });
       }
 
       // Re-send CHAT_STATE with updated interrupt state
@@ -353,10 +660,25 @@ export function registerChatIPC(): void {
       if (context.response.length > lastSentLength) {
         const newContent = context.response.slice(lastSentLength);
         lastSentLength = context.response.length;
-        webContents.send(IPC_CHANNELS.CHAT_CHUNK, {
-          type: 'chunk',
-          data: newContent,
-        });
+        if (canSend(webContents)) {
+          webContents.send(IPC_CHANNELS.CHAT_CHUNK, {
+            type: 'chunk',
+            data: newContent,
+          });
+        }
+      }
+
+      // Send incremental reasoning/thinking updates → Thought widgets
+      const thinking = context.thinking ?? '';
+      if (thinking.length > lastThinkingLength) {
+        const newThinking = thinking.slice(lastThinkingLength);
+        lastThinkingLength = thinking.length;
+        if (canSend(webContents)) {
+          webContents.send(IPC_CHANNELS.CHAT_THINKING, {
+            type: 'thinking',
+            data: newThinking,
+          });
+        }
       }
 
       // Send state transitions (includes interrupt machine state)
@@ -364,81 +686,178 @@ export function registerChatIPC(): void {
         | 'idle'
         | 'confirmAgent'
         | 'confirmSubagents';
-      webContents.send(IPC_CHANNELS.CHAT_STATE, {
-        state: snapshot.value,
-        response: context.response,
-        error: context.error,
-        interruptState,
-        cwd: process.cwd(),
-      });
+      if (canSend(webContents)) {
+        webContents.send(IPC_CHANNELS.CHAT_STATE, {
+          state: snapshot.value,
+          response: context.response,
+          error: context.error,
+          interruptState,
+          cwd: process.cwd(),
+        });
+      }
 
       // Forward usage data to renderer when it changes
       if (context.usage && context.usage !== lastUsage) {
         lastUsage = context.usage;
-        webContents.send(IPC_CHANNELS.CHAT_USAGE, {
-          type: 'usage',
-          usage: context.usage,
-        });
+        if (canSend(webContents)) {
+          webContents.send(IPC_CHANNELS.CHAT_USAGE, {
+            type: 'usage',
+            usage: context.usage,
+          });
+        }
       }
 
-      // Clean up on terminal states
-      if (snapshot.value === 'idle' && lastSentLength > 0 && !completed) {
-        completed = true;
-        // Add assistant response to message history
-        const assistantMessage: Message = {
-          id: crypto.randomUUID(),
-          role: MessageRole.ASSISTANT,
-          content: context.response,
-          type: MessageType.TEXT,
-          tool_calls: null,
-          tool_call_id: null,
-          name: null,
-          thinking: null,
-          timestamp: new Date().toISOString(),
-          usage: context.usage ?? null,
-          hidden: false,
-        };
-
-        messageHistory.set(windowId, [...messages, assistantMessage]);
-        activeAgents.delete(windowId);
-
-        webContents.send(IPC_CHANNELS.CHAT_DONE, {
-          type: 'done',
-          response: context.response,
-        });
-
-        // Auto-name session after first exchange (non-blocking, non-fatal)
-        const allMessages = [...messages, assistantMessage];
-        const sessionManager = getSessionManager();
-        const generateTitle = createGenerateTitleCallback(config, allMessages);
-        sessionManager.autoNameActive(generateTitle).then((updated) => {
-          if (updated && updated.name !== messages[0]?.content?.slice(0, 20) && canSend(webContents)) {
-            // Notify renderer of the rename so sidebar updates
-            webContents.send(IPC_CHANNELS.SESSION_RENAMED, {
-              id: updated.id,
-              name: updated.name,
+      // Forward tool call streaming events to renderer
+      if (context.streamingToolCall) {
+        const stc = context.streamingToolCall;
+        if (stc.toolCallId !== lastStreamingToolCallId) {
+          // New tool call started streaming
+          lastStreamingToolCallId = stc.toolCallId;
+          lastStreamingToolArgLength.set(stc.toolCallId, 0);
+          if (canSend(webContents)) {
+            webContents.send(IPC_CHANNELS.CHAT_TOOL_CALL_START, {
+              type: 'tool_call_start',
+              toolCallId: stc.toolCallId,
+              toolName: stc.toolName,
             });
           }
-        }).catch((err) => {
-          console.debug('Auto-naming failed (non-fatal):', err);
-        });
+        }
+        // Send only the new delta. The machine stores accumulated args.
+        const previousLength = lastStreamingToolArgLength.get(stc.toolCallId) ?? 0;
+        const argsDelta = stc.partialArgs.slice(previousLength);
+        if (argsDelta && canSend(webContents)) {
+          lastStreamingToolArgLength.set(stc.toolCallId, stc.partialArgs.length);
+          webContents.send(IPC_CHANNELS.CHAT_TOOL_CALL_DELTA, {
+            type: 'tool_call_delta',
+            toolCallId: stc.toolCallId,
+            argsDelta,
+          });
+        }
+      } else if (lastStreamingToolCallId) {
+        // Tool call streaming ended (transitioned to executing or completed)
+        lastStreamingToolCallId = null;
+      }
 
+      // Forward tool lifecycle status updates to renderer + persist tool messages
+      if (
+        context.toolLifecycleUpdate &&
+        context.toolLifecycleUpdate.sequence !== lastToolUpdateSequence
+      ) {
+        const update = context.toolLifecycleUpdate;
+        lastToolUpdateSequence = update.sequence;
+
+        if (canSend(webContents)) {
+          webContents.send(IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, {
+            type: 'tool_call_update',
+            toolCallId: update.toolCallId,
+            toolName: update.toolName,
+            status: update.status,
+            args: update.args,
+            result: update.result,
+            error: update.error,
+          });
+        }
+
+        // Record tool call/result messages once per lifecycle event.
+        // Flush any assistant text that streamed *before* this tool so history
+        // stays chronological: text → tool → text → tool → …
+        if (update.status === 'running' && update.args != null) {
+          const already = activeAgent.turnMessages.some(
+            (m) =>
+              m.type === MessageType.TOOL_CALL &&
+              m.tool_call_id === update.toolCallId,
+          );
+          if (!already) {
+            flushThinkingSegment(context.thinking ?? '');
+            flushResponseSegment(context.response);
+            activeAgent.turnMessages.push(
+              makeToolCallMessage(
+                update.toolCallId,
+                update.toolName ?? 'unknown',
+                update.args,
+              ),
+            );
+          }
+        }
+
+        if (update.status === 'completed' || update.status === 'failed') {
+          // Ensure tool-call message exists (fallback path without streaming start)
+          const hasCall = activeAgent.turnMessages.some(
+            (m) =>
+              m.type === MessageType.TOOL_CALL &&
+              m.tool_call_id === update.toolCallId,
+          );
+          if (!hasCall) {
+            flushThinkingSegment(context.thinking ?? '');
+            flushResponseSegment(context.response);
+            activeAgent.turnMessages.push(
+              makeToolCallMessage(
+                update.toolCallId,
+                update.toolName ?? 'unknown',
+                update.args ?? '{}',
+              ),
+            );
+          }
+
+          const hasResult = activeAgent.turnMessages.some(
+            (m) =>
+              m.type === MessageType.TOOL_RESULT &&
+              m.tool_call_id === update.toolCallId,
+          );
+          if (!hasResult) {
+            activeAgent.turnMessages.push(
+              makeToolResultMessage(
+                update.toolCallId,
+                update.toolName ?? 'unknown',
+                update.status === 'failed'
+                  ? (update.error ?? 'Tool failed')
+                  : (update.result ?? ''),
+                update.status === 'failed',
+              ),
+            );
+          }
+        }
+      }
+
+      // Clean up on successful terminal idle
+      if (
+        snapshot.value === 'idle' &&
+        context.currentInput &&
+        !completed &&
+        !activeAgent.agentCancelled
+      ) {
+        finalizeTurn({
+          response: context.response,
+          usage: context.usage ?? null,
+          interrupted: false,
+          sendDone: true,
+        });
         queueMicrotask(() => {
-          subscription?.unsubscribe();
-          actor.stop();
+          disposeActiveAgent(windowId, activeAgent);
         });
       }
 
       if (snapshot.value === 'error') {
         completed = true;
-        webContents.send(IPC_CHANNELS.CHAT_ERROR, {
-          type: 'error',
-          error: context.error ?? 'Unknown error',
-        });
-        activeAgents.delete(windowId);
+        activeAgent.finalized = true;
+        const detail = context.error ?? 'Unknown error';
+        const title = context.errorTitle ?? 'Stream Error';
+        if (canSend(webContents)) {
+          webContents.send(IPC_CHANNELS.CHAT_ERROR, {
+            type: 'error',
+            error: detail,
+            title,
+            kind: classifyErrorKind(title, detail),
+          });
+        }
+        // Persist conversation so far (user + tools) without a partial assistant if empty
+        const fullHistory = [...messages, ...activeAgent.turnMessages];
+        if (context.response) {
+          fullHistory.push(makeAssistantMessage(context.response, context.usage ?? null));
+        }
+        persistConversation(windowId, fullHistory, ChainStatus.COMPLETED, agent, config.default_model);
         queueMicrotask(() => {
-          subscription?.unsubscribe();
-          actor.stop();
+          disposeActiveAgent(windowId, activeAgent);
         });
       }
     });
@@ -446,12 +865,24 @@ export function registerChatIPC(): void {
     // Start the actor and send user input
     actor.start();
     interruptActor.start();
+
+    // Immediate state so the renderer gets cwd/model chrome before first chunk
+    if (canSend(webContents)) {
+      webContents.send(IPC_CHANNELS.CHAT_STATE, {
+        state: 'streaming',
+        response: '',
+        error: null,
+        interruptState: 'idle',
+        cwd: process.cwd(),
+      });
+    }
+
     actor.send({ type: 'USER_INPUT', message });
 
     return { status: 'started' };
   });
 
-  // chat:cancel — two-phase cancel: first Esc shows hint, second Esc cancels
+  // chat:cancel — three-phase Esc: hint → cancel agent → cancel subagents
   ipcMain.handle(IPC_CHANNELS.CHAT_CANCEL, async (event) => {
     const webContents: WebContents = event.sender;
     const windowId = String(webContents.id);
@@ -473,16 +904,91 @@ export function registerChatIPC(): void {
       return { status: 'confirming' };
     }
 
-    // Second Esc while confirming agent → actually cancel the stream
+    // Second Esc while confirming agent → cancel the stream and persist partial.
     if (interruptState === 'confirmAgent') {
-      disposeActiveAgent(windowId, existing);
-      return { status: 'cancelled' };
+      existing.agentCancelled = true;
+      const context = existing.actor.getSnapshot().context as AgentContext;
+      existing.actor.send({ type: 'CANCEL' });
+
+      // Finalize immediately with partial content (no "[Interrupted by user]" suffix).
+      // Only append text not already flushed into turnMessages before tools.
+      if (!existing.finalized) {
+        existing.finalized = true;
+        const partial = context.response ?? '';
+        const thinking = context.thinking ?? '';
+        const usage = context.usage ?? null;
+        // Flush reasoning before final text
+        if (thinking.length > existing.thinkingCommittedLength) {
+          const thinkSeg = thinking.slice(existing.thinkingCommittedLength);
+          existing.thinkingCommittedLength = thinking.length;
+          if (thinkSeg.trim()) {
+            existing.turnMessages.push(makeThinkingMessage(thinkSeg));
+          }
+        }
+        const remaining = partial.slice(existing.responseCommittedLength);
+        if (remaining || existing.turnMessages.length === 0) {
+          existing.turnMessages.push(
+            makeAssistantMessage(remaining || partial, usage),
+          );
+          existing.responseCommittedLength = partial.length;
+        } else if (usage) {
+          const last = existing.turnMessages[existing.turnMessages.length - 1];
+          if (last && last.role === MessageRole.ASSISTANT && last.type === MessageType.TEXT) {
+            existing.turnMessages[existing.turnMessages.length - 1] = {
+              ...last,
+              usage,
+            };
+          }
+        }
+        // existing.messages already includes the user message for this turn
+        const fullHistory = [...existing.messages, ...existing.turnMessages];
+        persistConversation(
+          windowId,
+          fullHistory,
+          ChainStatus.INTERRUPTED,
+          existing.agent,
+        );
+
+        if (canSend(webContents)) {
+          webContents.send(IPC_CHANNELS.CHAT_DONE, {
+            type: 'done',
+            response: partial,
+            interrupted: true,
+            usage,
+          });
+          webContents.send(IPC_CHANNELS.CHAT_STATE, {
+            state: 'idle',
+            response: partial,
+            error: null,
+            interruptState: 'confirmSubagents',
+            cwd: process.cwd(),
+          });
+        }
+      }
+
+      // Future: detect running subagents. For now always expose the phase briefly
+      // then allow a third Esc (or timeout dispose) to finish cleanup.
+      existing.interruptActor.send({ type: 'INTERRUPT' });
+
+      // If no subagents are tracked, complete cancel immediately so the
+      // renderer gets a clean `cancelled` status after confirming_subagents.
+      // Keep the actor briefly so the interrupt UI can show the third phase.
+      return { status: 'confirming_subagents' };
     }
 
-    // Third Esc while confirming subagents → cancel subagents
-    // (future: would cancel subagents via SubagentManager)
+    // Third Esc while confirming subagents → cancel subagents and dispose
     if (interruptState === 'confirmSubagents') {
+      getSubagentManager().cancelRunning();
       disposeActiveAgent(windowId, existing);
+      if (canSend(webContents)) {
+        webContents.send(IPC_CHANNELS.CHAT_STATE, {
+          state: 'idle',
+          response: '',
+          error: null,
+          interruptState: 'idle',
+          cwd: process.cwd(),
+        });
+      }
       return { status: 'cancelled' };
     }
 
@@ -528,5 +1034,5 @@ export function unregisterChatIPC(): void {
     agent.interruptActor.stop();
   }
   activeAgents.clear();
-  messageHistory.clear();
+  clearAllChatHistory();
 }

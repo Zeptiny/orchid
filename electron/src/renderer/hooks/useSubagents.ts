@@ -3,12 +3,19 @@
  *
  * Provides:
  * - Subagent list from active session
+ * - Aggregated token usage for chain footers
  * - Loading/error states (interaction states)
  * - Per-subagent detail with live elapsed time tracking
  * - Expand/collapse selection state
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import type { Usage } from '../../shared/types/message';
 import type { SubagentRecord } from '../../shared/types/subagent';
+import {
+  sumSubagentUsage,
+  sumSubagentsUsage,
+  subUsageByParentChain,
+} from '../../shared/usage';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -34,11 +41,22 @@ export interface SubagentDetail {
   readonly result: string | null;
   /** Error text on failure, null if not failed. */
   readonly error: string | null;
+  /** Token usage summed from this subagent's chain messages. */
+  readonly usage: Usage | null;
 }
 
 export interface UseSubagentsReturn {
   /** Subagent list state with interaction states. */
   state: SubagentListState;
+  /** Flat list of loaded subagents (empty when none). */
+  subagents: readonly SubagentRecord[];
+  /** Sum of all subagent token usage in the active session (null if none). */
+  totalUsage: Usage | null;
+  /**
+   * Usage keyed by parent session chain index (`parent_chain_index`).
+   * Key -1 holds subagents with no parent index.
+   */
+  usageByParentChain: ReadonlyMap<number, Usage>;
   /** Refresh subagent list from active session. */
   refresh: () => Promise<void>;
   /** Currently expanded subagent ID (null = none expanded). */
@@ -81,6 +99,7 @@ function buildDetail(record: SubagentRecord, now: number): SubagentDetail {
     isRunning,
     result: record.result,
     error: record.error,
+    usage: sumSubagentUsage(record),
   };
 }
 
@@ -93,16 +112,21 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!activeSessionId) {
+    if (!activeSessionId || !window.orchid?.session?.load) {
       setState({ status: 'empty' });
+      setSelectedId(null);
       return;
     }
 
     try {
-      // Load the session to get subagent data
-      const session = await window.orchid.session.load({ id: activeSessionId });
+      // Peek only — do not switch active session or reseed chat history.
+      const session = await window.orchid.session.load({
+        id: activeSessionId,
+        activate: false,
+      });
       if (!session) {
         setState({ status: 'empty' });
+        setSelectedId(null);
         return;
       }
 
@@ -118,8 +142,21 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
     }
   }, [activeSessionId]);
 
+  // Clear selection when the active session changes so detail from the
+  // previous session cannot linger in the right sidebar.
   useEffect(() => {
-    refresh();
+    setSelectedId(null);
+    void refresh();
+  }, [refresh]);
+
+  // Live updates when main process persists subagent_chains (spawn/wait/complete).
+  useEffect(() => {
+    if (!window.orchid?.session?.onSubagentsChanged) {
+      return undefined;
+    }
+    return window.orchid.session.onSubagentsChanged(() => {
+      void refresh();
+    });
   }, [refresh]);
 
   // Live elapsed time ticker: update every second while any subagent is running
@@ -155,6 +192,19 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
     setSelectedId((prev) => (prev === id ? null : id));
   }, []);
 
+  const subagents: readonly SubagentRecord[] =
+    state.status === 'ready' ? state.subagents : [];
+
+  const totalUsage = useMemo(
+    () => sumSubagentsUsage(subagents),
+    [subagents],
+  );
+
+  const usageByParentChain = useMemo(
+    () => subUsageByParentChain(subagents),
+    [subagents],
+  );
+
   const getDetail = useCallback(
     (id: string): SubagentDetail | null => {
       if (state.status !== 'ready') return null;
@@ -167,5 +217,14 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
     [state, tick],
   );
 
-  return { state, refresh, selectedId, select, getDetail };
+  return {
+    state,
+    subagents,
+    totalUsage,
+    usageByParentChain,
+    refresh,
+    selectedId,
+    select,
+    getDetail,
+  };
 }

@@ -309,6 +309,7 @@ describe('Domain Models: SubagentRecord restore migration', () => {
       end_time: null,
       result: null,
       error: null,
+      parentChainIndex: 0,
       chain: makeChain({ id: 'chain-2', sessionId: 'session-1' }),
     };
 
@@ -335,6 +336,7 @@ describe('Domain Models: SubagentRecord restore migration', () => {
       end_time: endTime,
       result: null,
       error: null,
+      parentChainIndex: 1,
       chain: makeChain({ id: 'chain-3', sessionId: 'session-1' }),
     };
 
@@ -360,6 +362,7 @@ describe('Domain Models: SubagentRecord restore migration', () => {
       end_time: now,
       result: 'Found 10 files',
       error: null,
+      parentChainIndex: 4,
       chain: makeChain({ id: 'chain-4', sessionId: 'session-1' }),
     };
 
@@ -368,6 +371,23 @@ describe('Domain Models: SubagentRecord restore migration', () => {
 
     expect(restored.status).toBe(SubagentStatus.COMPLETED);
     expect(restored.result).toBe('Found 10 files');
+    expect(restored.parentChainIndex).toBe(4);
+    expect(dict.parent_chain_index).toBe(4);
+  });
+
+  it('restores parent_chain_index from Python-shaped storage', () => {
+    const restored = subagentRecordFromStorageDict({
+      id: 'sub-py',
+      agent_name: 'Explorer',
+      agent_type: 'subagent',
+      state: 'completed',
+      task: 't',
+      start_time: new Date().toISOString(),
+      end_time: new Date().toISOString(),
+      parent_chain_index: 2,
+      chain: { messages: [], status: 'completed' },
+    });
+    expect(restored.parentChainIndex).toBe(2);
   });
 });
 

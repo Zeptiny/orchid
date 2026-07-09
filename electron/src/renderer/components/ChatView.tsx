@@ -1,57 +1,74 @@
 /**
  * ChatView — main chat layout combining ChatStream, InputArea, Footer, Sidebar.
  *
- * Uses DaisyUI components for styling.
+ * Iteration 012 three-panel shell: left sessions | center chat | right inspector.
  */
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useChat } from '../hooks/useChat';
 import { useSession } from '../hooks/useSession';
 import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
-import { useToolRail } from '../hooks/useToolRail';
+import type { Message } from '../../shared/types/message';
+import type { Session } from '../../shared/types/session';
 import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus, CommandContext } from '../../shared/types/ipc-boundary';
 import { ChatStream } from './ChatStream';
 import { InputArea } from './InputArea';
 import { Footer } from './Footer';
 import { Sidebar } from './Sidebar';
+import { LeftSidebar } from './LeftSidebar';
 import { CommandPalette } from './CommandPalette';
-import { ToolRail } from './ToolWidgets';
+
+/** Flatten every chain's messages for the center pane (chronological). */
+function messagesFromSession(loaded: Session): Message[] {
+  return loaded.chains.flatMap((chain) => [...chain.messages]);
+}
+
+type ToastSeverity = 'info' | 'warning' | 'error';
+interface Toast {
+  message: string;
+  severity: ToastSeverity;
+}
 
 export function ChatView() {
   const chat = useChat();
   const session = useSession();
   const subagents = useSubagents(session.activeSession?.id ?? null);
   const todos = useTodos(session.activeSession?.id ?? null);
-  const toolRail = useToolRail();
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
   const [ragStatus, setRagStatus] = useState<RAGStoreStatus | null>(null);
   const [astStatus, setAstStatus] = useState<ASTStoreStatus | null>(null);
   const [currentTheme, setCurrentTheme] = useState('default');
   const [currentPersonality, setCurrentPersonality] = useState('default');
+  const [personalityNames, setPersonalityNames] = useState<string[]>([]);
   const [currentModel, setCurrentModel] = useState('');
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [maxContext, setMaxContext] = useState<number | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Guards against out-of-order session:load responses overwriting a newer pick.
+  const sessionSwitchGen = useRef(0);
+  const didAutoSelect = useRef(false);
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => !prev);
+  }, []);
+
+  const toggleLeftSidebar = useCallback(() => {
+    setLeftSidebarCollapsed((prev) => !prev);
   }, []);
 
   const togglePalette = useCallback(() => {
     setPaletteOpen((prev) => !prev);
   }, []);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        togglePalette();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePalette]);
+  const openSettings = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('orchid:open-settings'));
+  }, []);
 
   useEffect(() => {
     async function loadConfig() {
@@ -61,6 +78,17 @@ export function ChatView() {
           if (config.theme) setCurrentTheme(config.theme);
           if (config.personality) setCurrentPersonality(config.personality);
           if (config.default_model) setCurrentModel(config.default_model);
+          // Same model list as config dropdowns (General / Tier Models)
+          const { collectModelsFromProviders } = await import('../utils/models');
+          setAvailableModels(
+            collectModelsFromProviders(
+              config.providers as Record<string, Record<string, unknown>>,
+            ),
+          );
+        }
+        if (window.orchid?.config?.listPersonalities) {
+          const names = await window.orchid.config.listPersonalities();
+          setPersonalityNames(names);
         }
       } catch {
         // Non-fatal
@@ -69,26 +97,170 @@ export function ChatView() {
     loadConfig();
   }, []);
 
+  // Keep composer model label in sync when switching sessions
+  useEffect(() => {
+    if (session.activeSession?.model) {
+      setCurrentModel(session.activeSession.model);
+    }
+  }, [session.activeSession?.id, session.activeSession?.model]);
+
+  // Refresh personality list + models when the palette opens
+  useEffect(() => {
+    if (!paletteOpen) return;
+    let cancelled = false;
+    if (window.orchid?.config?.listPersonalities) {
+      window.orchid.config.listPersonalities().then((names) => {
+        if (!cancelled) setPersonalityNames(names);
+      }).catch(() => { /* non-fatal */ });
+    }
+    if (window.orchid?.config?.get) {
+      window.orchid.config.get().then((config) => {
+        if (cancelled) return;
+        void import('../utils/models').then(({ collectModelsFromProviders }) => {
+          if (cancelled) return;
+          setAvailableModels(
+            collectModelsFromProviders(
+              config.providers as Record<string, Record<string, unknown>>,
+            ),
+          );
+        });
+      }).catch(() => { /* non-fatal */ });
+    }
+    return () => { cancelled = true; };
+  }, [paletteOpen]);
+
+  const applySessionMessages = useCallback(
+    (loadedSession: Session | null) => {
+      if (!loadedSession) {
+        chat.setMessages([]);
+        return;
+      }
+      chat.setMessages(messagesFromSession(loadedSession));
+    },
+    [chat],
+  );
+
   const handleSessionSelect = useCallback(
     async (id: string) => {
+      // Skip no-op re-select of the already active session (still allow
+      // re-click to refresh if desired — always reload for correctness).
+      const gen = ++sessionSwitchGen.current;
+
+      // Optimistically clear the pane so stale messages never linger while
+      // the next session loads (or if load fails).
+      chat.setMessages([]);
+
       const loadedSession = await session.load(id);
-      if (loadedSession) {
-        const activeChain = loadedSession.chains.find(
-          (c) => c.id === loadedSession.activeChainId,
-        );
-        if (activeChain) {
-          chat.setMessages([...activeChain.messages]);
-        }
+      // A newer click/create won the race — drop this result.
+      if (gen !== sessionSwitchGen.current) {
+        return;
       }
+      if (!loadedSession) {
+        console.error('Failed to load session:', id);
+        return;
+      }
+      applySessionMessages(loadedSession);
     },
-    [session, chat],
+    [session, chat, applySessionMessages],
   );
 
   const handleSessionCreate = useCallback(async () => {
-    const newSession = await session.create();
+    const gen = ++sessionSwitchGen.current;
     chat.setMessages([]);
-    await session.load(newSession.id);
-  }, [session, chat]);
+    const newSession = await session.create();
+    if (gen !== sessionSwitchGen.current) {
+      return;
+    }
+    // create() already activates; clear UI for the empty new session.
+    applySessionMessages(newSession);
+  }, [session, chat, applySessionMessages]);
+
+  // Auto-select the most recent session on first list load so the UI isn't
+  // stuck with an empty pane while sessions exist in the sidebar.
+  useEffect(() => {
+    if (didAutoSelect.current) return;
+    if (session.activeSession) {
+      didAutoSelect.current = true;
+      return;
+    }
+    if (session.listState.status !== 'ready' && session.listState.status !== 'partial') {
+      return;
+    }
+    const first = session.listState.sessions[0];
+    if (!first) {
+      didAutoSelect.current = true;
+      return;
+    }
+    didAutoSelect.current = true;
+    void handleSessionSelect(first.id);
+  }, [session.listState, session.activeSession, handleSessionSelect]);
+
+  // When the active session is deleted, clear the chat pane and open another.
+  const handleSessionDelete = useCallback(
+    async (id: string) => {
+      const wasActive = session.activeSession?.id === id;
+      await session.deleteSession(id);
+      if (!wasActive) return;
+
+      const gen = ++sessionSwitchGen.current;
+      chat.setMessages([]);
+
+      // Re-fetch the list after delete (closure listState may be stale).
+      try {
+        const remaining = window.orchid?.session?.list
+          ? await window.orchid.session.list()
+          : [];
+        if (gen !== sessionSwitchGen.current) return;
+        if (remaining[0]) {
+          void handleSessionSelect(remaining[0].id);
+        }
+      } catch {
+        // Non-fatal — pane already cleared
+      }
+    },
+    [session, chat, handleSessionSelect],
+  );
+
+  const handleRetry = useCallback(async () => {
+    // Re-send the last user message after an error
+    const lastUser = [...chat.messages]
+      .reverse()
+      .find((m) => m.role === 'user' && !m.hidden && Boolean(m.content?.trim()));
+    if (!lastUser?.content) return;
+    chat.clearError();
+    await chat.send(lastUser.content);
+  }, [chat]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        togglePalette();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+        e.preventDefault();
+        handleSessionCreate();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+        e.preventDefault();
+        openSettings();
+      }
+      // Ctrl/Cmd+[1-9] — switch to session N (mock notes)
+      if ((e.ctrlKey || e.metaKey) && e.key >= '1' && e.key <= '9') {
+        const list =
+          session.listState.status === 'ready' || session.listState.status === 'partial'
+            ? session.listState.sessions
+            : [];
+        const idx = parseInt(e.key, 10) - 1;
+        if (list[idx]) {
+          e.preventDefault();
+          void handleSessionSelect(list[idx].id);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [togglePalette, handleSessionCreate, openSettings, session.listState, handleSessionSelect]);
 
   const refreshMCP = useCallback(async () => {
     try {
@@ -117,24 +289,25 @@ export function ChatView() {
   }, []);
 
   const handleIndexRAG = useCallback(async () => {
-    try {
-      if (window.orchid?.rag?.index) {
-        await window.orchid.rag.index();
-        await refreshIndex();
-      }
-    } catch (err) {
-      console.error('RAG index failed:', err);
+    if (!window.orchid?.rag?.index) {
+      throw new Error('RAG IPC is not available');
+    }
+    const result = await window.orchid.rag.index();
+    await refreshIndex();
+    // Surface indexer-reported failures (still a resolved IPC result)
+    if (result?.errors && result.errors.length > 0) {
+      throw new Error(result.errors[0] ?? 'RAG indexing reported errors');
     }
   }, [refreshIndex]);
 
   const handleIndexAST = useCallback(async () => {
-    try {
-      if (window.orchid?.ast?.index) {
-        await window.orchid.ast.index();
-        await refreshIndex();
-      }
-    } catch (err) {
-      console.error('AST index failed:', err);
+    if (!window.orchid?.ast?.index) {
+      throw new Error('AST IPC is not available');
+    }
+    const result = await window.orchid.ast.index();
+    await refreshIndex();
+    if (result?.errors && result.errors.length > 0) {
+      throw new Error(result.errors[0] ?? 'AST indexing reported errors');
     }
   }, [refreshIndex]);
 
@@ -143,11 +316,28 @@ export function ChatView() {
     refreshIndex();
   }, [refreshMCP, refreshIndex]);
 
-  const notify = useCallback((message: string, severity: 'info' | 'warning' | 'error' = 'info') => {
+  // After a turn completes (or session switches), refresh subagents so chain
+  // footers pick up token usage written into subagent_chains.
+  useEffect(() => {
+    if (chat.status !== 'idle') return;
+    if (!session.activeSession?.id) return;
+    void subagents.refresh();
+  }, [chat.status, chat.messages.length, session.activeSession?.id, subagents.refresh]);
+
+  const notify = useCallback((message: string, severity: ToastSeverity = 'info') => {
     console.log(`[${severity.toUpperCase()}] ${message}`);
     if (severity === 'error') {
       console.error(message);
     }
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ message, severity });
+    toastTimer.current = setTimeout(() => setToast(null), 4500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
   }, []);
 
   const commandContext: CommandContext = {
@@ -159,13 +349,10 @@ export function ChatView() {
     getActiveSessionName: () => session.activeSession?.name ?? null,
     onSetTheme: async (name: string) => {
       setCurrentTheme(name);
-      try {
-        if (window.orchid?.config?.save) {
-          await window.orchid.config.save({ updates: { theme: name } });
-        }
-      } catch {
-        // Non-fatal
-      }
+      // Live apply in App (applyTheme + persist). Avoid importing App here (circular).
+      window.dispatchEvent(
+        new CustomEvent('orchid:set-theme', { detail: { theme: name } }),
+      );
     },
     onSetPersonality: async (name: string) => {
       setCurrentPersonality(name);
@@ -177,9 +364,35 @@ export function ChatView() {
         // Non-fatal
       }
     },
+    onSetModel: async (model: string) => {
+      setCurrentModel(model);
+      const sessionId = session.activeSession?.id;
+      if (sessionId) {
+        try {
+          await session.changeModel(sessionId, model);
+        } catch (err) {
+          console.error('Failed to change session model:', err);
+          notify(
+            err instanceof Error ? err.message : 'Failed to change model',
+            'error',
+          );
+        }
+      } else {
+        // No session yet — persist as default model for next session
+        try {
+          if (window.orchid?.config?.save) {
+            await window.orchid.config.save({ updates: { default_model: model } });
+          }
+        } catch {
+          // Non-fatal
+        }
+      }
+    },
+    getAvailableModels: () => availableModels,
+    getCurrentModel: () =>
+      session.activeSession?.model || currentModel || '',
     onOpenSettings: () => {
-      window.dispatchEvent(new CustomEvent('orchid:open-settings'));
-      notify('Settings: preferences window coming in U24.', 'info');
+      openSettings();
     },
     onIndexRAG: handleIndexRAG,
     onIndexAST: handleIndexAST,
@@ -191,26 +404,15 @@ export function ChatView() {
         }
       } catch (err) {
         console.error('RAG clear failed:', err);
-      }
-    },
-    onGetRAGStatus: async () => {
-      try {
-        if (window.orchid?.rag?.status) {
-          return await window.orchid.rag.status();
-        }
-        return null;
-      } catch {
-        return null;
+        throw err;
       }
     },
     onNotify: notify,
     onClose: () => setPaletteOpen(false),
   };
 
-  // Use session model or fall back to config default
   const model = session.activeSession?.model ?? currentModel ?? '';
 
-  // Fetch model metadata for maxContext when model changes
   useEffect(() => {
     if (!model || !window.orchid?.config?.modelMetadata) {
       setMaxContext(null);
@@ -230,50 +432,85 @@ export function ChatView() {
       ? session.listState.sessions
       : [];
 
+  const leftCol = leftSidebarCollapsed ? '56px' : '260px';
+  const rightCol = sidebarOpen ? '300px' : '48px';
+
   return (
-    <div className="flex h-screen overflow-hidden bg-base-100">
-      {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col min-w-0">
+    <div
+      className="app-frame grid h-screen min-h-0 overflow-hidden bg-[#080c12] text-base-content"
+      style={{ gridTemplateColumns: `${leftCol} minmax(460px, 1fr) ${rightCol}` }}
+    >
+      <LeftSidebar
+        activeSessionId={session.activeSession?.id ?? null}
+        isCollapsed={leftSidebarCollapsed}
+        onOpenSettings={openSettings}
+        onRefreshSessions={session.refresh}
+        onSessionCreate={handleSessionCreate}
+        onSessionDelete={handleSessionDelete}
+        onSessionSelect={handleSessionSelect}
+        onToggle={toggleLeftSidebar}
+        sessionListState={session.listState}
+      />
+
+      <main className="main-pane min-h-0 min-w-0 overflow-hidden">
+        {toast && (
+          <div
+            className={`command-toast command-toast-${toast.severity}`}
+            role="status"
+            aria-live="polite"
+          >
+            <span className="command-toast-message">{toast.message}</span>
+            <button
+              type="button"
+              className="command-toast-dismiss"
+              onClick={() => setToast(null)}
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        )}
         <ChatStream
           messages={chat.messages}
           streamingContent={chat.streamingContent}
+          toolBlocks={chat.toolBlocks}
+          streamSegments={chat.streamSegments}
           status={chat.status}
           error={chat.error}
+          usage={chat.usage}
+          subagents={subagents.subagents}
+          sessionChains={session.activeSession?.chains ?? []}
           onClearError={chat.clearError}
+          onOpenSettings={openSettings}
+          onRetry={handleRetry}
+          elapsedSeconds={chat.elapsedSeconds}
+          interrupted={chat.interrupted}
         />
         <InputArea
           status={chat.status}
           model={model}
+          cwd={chat.cwd}
+          usage={chat.usage}
+          maxContext={maxContext}
           onSend={chat.send}
           onCancel={chat.cancel}
+          commandContext={commandContext}
+          sessions={sessions}
+          currentTheme={currentTheme}
+          currentPersonality={currentPersonality}
+          personalityNames={personalityNames}
         />
         <Footer
-          model={model}
-          usage={chat.usage}
           elapsedSeconds={chat.elapsedSeconds}
           isStreaming={chat.status === 'streaming'}
+          interruptState={chat.interruptState}
         />
-      </div>
+      </main>
 
-      {/* Tool Rail */}
-      <ToolRail
-        events={toolRail.events}
-        isOpen={toolRail.isOpen}
-        onOpen={toolRail.open}
-        onClose={toolRail.close}
-        onNavigate={toolRail.onNavigate}
-      />
-
-      {/* Sidebar */}
       <Sidebar
         isOpen={sidebarOpen}
         onToggle={toggleSidebar}
-        sessionListState={session.listState}
-        activeSessionId={session.activeSession?.id ?? null}
-        onSessionSelect={handleSessionSelect}
-        onSessionCreate={handleSessionCreate}
-        onSessionDelete={session.deleteSession}
-        onRefreshSessions={session.refresh}
+        title={session.activeSession?.name ?? 'Orchid'}
         subagentState={subagents.state}
         onRefreshSubagents={subagents.refresh}
         selectedSubagentId={subagents.selectedId}
@@ -288,14 +525,12 @@ export function ChatView() {
         onIndexRAG={handleIndexRAG}
         onIndexAST={handleIndexAST}
         onRefreshIndex={refreshIndex}
-        contextBreakdown={chat.contextBreakdown}
         usage={chat.usage}
         cumulativeUsage={chat.cumulativeUsage}
         maxContext={maxContext}
-        cwd={chat.cwd}
+        messages={chat.messages}
       />
 
-      {/* Command Palette */}
       <CommandPalette
         isOpen={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -303,6 +538,7 @@ export function ChatView() {
         sessions={sessions}
         currentTheme={currentTheme}
         currentPersonality={currentPersonality}
+        personalityNames={personalityNames}
       />
     </div>
   );

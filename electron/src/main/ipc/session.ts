@@ -7,13 +7,28 @@
 import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
+import type { Message } from '../../shared/types/message';
+import type { Session } from '../../shared/types/session';
 import { SessionManager } from '../session/manager';
 import { getConfig } from '../config/loader';
+import { clearChatHistory, seedChatHistory } from './chat-history';
+
+/**
+ * Lazily resolve forceAbortChat to avoid a circular init dependency:
+ * chat.ts → getSessionManager (session.ts) → forceAbortChat (chat.ts).
+ */
+function abortChatForWindow(windowId: string): void {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { forceAbortChat } = require('./chat') as typeof import('./chat');
+  forceAbortChat(windowId);
+}
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
 const sessionLoadSchema = z.object({
   id: z.string().min(1),
+  /** When false, peek from disk without activating or seeding chat history. */
+  activate: z.boolean().optional().default(true),
 });
 
 const sessionDeleteSchema = z.object({
@@ -23,6 +38,11 @@ const sessionDeleteSchema = z.object({
 const sessionRenameSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
+});
+
+const sessionChangeModelSchema = z.object({
+  id: z.string().min(1),
+  model: z.string().min(1),
 });
 
 // ── Singleton session manager ────────────────────────────────────────────────
@@ -42,6 +62,11 @@ export function getSessionManager(): SessionManager {
   return sessionManager;
 }
 
+/** Flatten all chain messages for UI + continue-chat history (chronological). */
+export function flattenSessionMessages(session: Session): Message[] {
+  return session.chains.flatMap((chain) => [...chain.messages]);
+}
+
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerSessionIPC(): void {
@@ -51,33 +76,65 @@ export function registerSessionIPC(): void {
     return manager.listSaved();
   });
 
-  // session:load — load a session by ID and set as active
-  ipcMain.handle(IPC_CHANNELS.SESSION_LOAD, async (_event, payload: unknown) => {
+  // session:load — load a session by ID; optionally set as active + seed history
+  ipcMain.handle(IPC_CHANNELS.SESSION_LOAD, async (event, payload: unknown) => {
     const parsed = sessionLoadSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid session:load payload: ${parsed.error.message}`);
     }
 
     const manager = getSessionManager();
-    return manager.switchTo(parsed.data.id);
+    const { id, activate } = parsed.data;
+    const windowId = String(event.sender.id);
+
+    // Read-only peek (todos / subagents refresh) — do not switch or reseed.
+    if (!activate) {
+      return manager.load(id);
+    }
+
+    // Drop any in-flight stream so chunks from the previous session cannot
+    // leak into the newly selected session's UI.
+    abortChatForWindow(windowId);
+
+    const session = manager.switchTo(id);
+
+    // Seed history with ALL chains (matches renderer flatten) so the next
+    // chat:send continues the full conversation, not only the active chain.
+    if (session) {
+      seedChatHistory(windowId, flattenSessionMessages(session));
+    } else {
+      clearChatHistory(windowId);
+    }
+
+    return session;
   });
 
   // session:create — create a new session
-  ipcMain.handle(IPC_CHANNELS.SESSION_CREATE, async () => {
+  ipcMain.handle(IPC_CHANNELS.SESSION_CREATE, async (event) => {
     const config = getConfig();
     const manager = getSessionManager();
-    return manager.create(config.default_model);
+    const windowId = String(event.sender.id);
+    abortChatForWindow(windowId);
+    const session = manager.create(config.default_model);
+    clearChatHistory(windowId);
+    return session;
   });
 
   // session:delete — delete a session
-  ipcMain.handle(IPC_CHANNELS.SESSION_DELETE, async (_event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.SESSION_DELETE, async (event, payload: unknown) => {
     const parsed = sessionDeleteSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid session:delete payload: ${parsed.error.message}`);
     }
 
     const manager = getSessionManager();
+    const wasActive = manager.getActive()?.id === parsed.data.id;
     const deleted = manager.delete(parsed.data.id);
+    if (deleted && wasActive) {
+      const windowId = String(event.sender.id);
+      abortChatForWindow(windowId);
+      clearChatHistory(windowId);
+    }
     return { status: deleted ? 'deleted' : 'not_found' };
   });
 
@@ -99,6 +156,22 @@ export function registerSessionIPC(): void {
 
     return { status: 'renamed' };
   });
+
+  // session:change_model — update model on the active session
+  ipcMain.handle(IPC_CHANNELS.SESSION_CHANGE_MODEL, async (_event, payload: unknown) => {
+    const parsed = sessionChangeModelSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid session:change_model payload: ${parsed.error.message}`);
+    }
+
+    const manager = getSessionManager();
+    manager.changeModel(parsed.data.id, parsed.data.model);
+    const active = manager.getActive();
+    if (!active || active.id !== parsed.data.id) {
+      return { status: 'not_active' };
+    }
+    return { status: 'changed', model: active.model };
+  });
 }
 
 /**
@@ -110,4 +183,5 @@ export function unregisterSessionIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CREATE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_DELETE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_RENAME);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_CHANGE_MODEL);
 }

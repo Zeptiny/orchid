@@ -125,6 +125,9 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
   // Original config from disk (for dirty checking)
   const [originalConfig, setOriginalConfig] = useState<Config | null>(null);
 
+  // Personality names from ~/.orchid/personalities/
+  const [personalities, setPersonalities] = useState<string[]>([]);
+
   // Working copy of config changes
   const [draft, setDraft] = useState<Record<string, unknown>>({});
 
@@ -161,8 +164,13 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
       try {
         if (window.orchid?.config?.get) {
           const config = await window.orchid.config.get();
+          let names: string[] = [];
+          if (window.orchid?.config?.listPersonalities) {
+            names = await window.orchid.config.listPersonalities();
+          }
           if (!cancelled) {
             setOriginalConfig(config);
+            setPersonalities(names);
             setLoading(false);
           }
         }
@@ -347,10 +355,14 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
             defaultModel={currentConfig.default_model}
             theme={currentConfig.theme}
             personality={currentConfig.personality}
+            personalities={personalities}
+            providers={currentConfig.providers as Record<string, Record<string, unknown>>}
+            ignoredDirs={currentConfig.ignored_dirs}
             commandTimeout={currentConfig.command_timeout}
             readLineLimit={currentConfig.read_line_limit}
             grepMaxResults={currentConfig.grep_max_results}
             directoryTreeDepth={currentConfig.directory_tree_depth}
+            astMaxFileSize={currentConfig.ast_max_file_size}
             llmStreamIdleTimeout={currentConfig.llm_stream_idle_timeout}
             llmStreamRetries={currentConfig.llm_stream_retries}
             backgroundCommandIdleTimeout={currentConfig.background_command_idle_timeout}

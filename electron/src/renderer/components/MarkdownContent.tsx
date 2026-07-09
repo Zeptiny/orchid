@@ -198,10 +198,14 @@ function renderInline(text: string): React.ReactNode {
   let key = 0;
 
   while (remaining) {
-    // Inline code
+    // Inline code — mock .code-token styling
     const codeMatch = remaining.match(/^`([^`]+)`/);
     if (codeMatch) {
-      parts.push(<code key={key++}>{codeMatch[1]}</code>);
+      parts.push(
+        <code key={key++} className="code-token">
+          {codeMatch[1]}
+        </code>,
+      );
       remaining = remaining.slice(codeMatch[0].length);
       continue;
     }

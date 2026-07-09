@@ -29,13 +29,17 @@ export function useTodos(activeSessionId: string | null): UseTodosReturn {
   const [state, setState] = useState<TodoListState>({ status: 'loading' });
 
   const refresh = useCallback(async () => {
-    if (!activeSessionId) {
+    if (!activeSessionId || !window.orchid?.session?.load) {
       setState({ status: 'empty' });
       return;
     }
 
     try {
-      const session = await window.orchid.session.load({ id: activeSessionId });
+      // Peek only — do not switch active session or reseed chat history.
+      const session = await window.orchid.session.load({
+        id: activeSessionId,
+        activate: false,
+      });
       if (!session) {
         setState({ status: 'empty' });
         return;

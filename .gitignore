@@ -3,6 +3,10 @@ __pycache__/
 *.egg-info/
 .orchid/rag/
 .orchid/ast/
+.agents/
+node_modules/
+.playwright-mcp/
+ce-brainstorm-visual/
 build/
 # Electron build resources (icons) are tracked
 !electron/build/

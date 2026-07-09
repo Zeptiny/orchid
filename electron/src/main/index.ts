@@ -14,11 +14,13 @@ import { registerAllIPC, unregisterAllIPC, setMCPManagerRef } from './ipc';
 import { ensureHomeConfig, ConfigManager } from './config/loader';
 import { loadAgents, seedAgentsDir } from './agents/registry';
 import { loadSkills, seedSkillsDir } from './skills/registry';
-import { HOME_AGENTS_DIR, HOME_SKILLS_DIR } from './config/loader';
+import { loadPersonalities, seedPersonalitiesDir } from './personality/registry';
+import { HOME_AGENTS_DIR, HOME_SKILLS_DIR, HOME_PERSONALITIES_DIR } from './config/loader';
 import { MCPManager } from './mcp';
 import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
 import { initFileLogging, closeFileLogging } from './logging';
 import { registerBuiltinTools } from './tools';
+import { wireSubagentRuntime } from './agents/wire-subagents';
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
@@ -70,16 +72,20 @@ app.whenReady().then(async () => {
     // 2. Load config
     const config = ConfigManager.load();
 
-    // 3. Seed and load agents/skills
+    // 3. Seed and load agents/skills/personalities
     seedAgentsDir(HOME_AGENTS_DIR);
     const agents = loadAgents();
     seedSkillsDir(HOME_SKILLS_DIR);
     const skills = loadSkills();
+    seedPersonalitiesDir(HOME_PERSONALITIES_DIR);
+    loadPersonalities();
 
     // 4. Initialize MCP servers (async, non-blocking for window)
     mcpManager = new MCPManager();
     setMCPManagerRef(mcpManager);
     registerBuiltinTools({ agents, skills, mcpManager });
+    // Start subagent stream runner + session persistence for token usage
+    wireSubagentRuntime();
 
     // 5. Register all IPC handlers (before creating window)
     registerAllIPC();

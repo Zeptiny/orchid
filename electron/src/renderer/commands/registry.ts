@@ -10,7 +10,6 @@ import type { Command, PaletteResult, CommandCategory } from '../../shared/comma
 import {
   THEME_NAMES,
   THEME_LABELS,
-  PERSONALITY_NAMES,
 } from '../../shared/commands';
 
 export type { Command, PaletteResult, CommandCategory } from '../../shared/commands';
@@ -64,7 +63,7 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
     description: 'Load a saved session',
     category: 'commands',
     execute: async (_ctx) => {
-      // Sub-picker handled by CommandPalette
+      // Sub-picker handled by CommandPalette / SlashCommandMenu
     },
   },
   {
@@ -73,18 +72,23 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
     category: 'commands',
     execute: async (ctx) => {
       const sessionId = ctx.getActiveSessionId();
-      const currentName = ctx.getActiveSessionName();
+      const currentName = ctx.getActiveSessionName() ?? '';
       if (!sessionId) {
         ctx.onNotify('No active session to rename.', 'warning');
         ctx.onClose();
         return;
       }
       ctx.onClose();
-      window.dispatchEvent(
-        new CustomEvent('orchid:rename-session', {
-          detail: { sessionId, currentName },
-        }),
-      );
+      const next = window.prompt('Rename session', currentName);
+      if (next === null) return; // cancelled
+      const trimmed = next.trim();
+      if (!trimmed) {
+        ctx.onNotify('Session name cannot be empty.', 'warning');
+        return;
+      }
+      if (trimmed === currentName) return;
+      await ctx.onRenameSession(sessionId, trimmed);
+      ctx.onNotify(`Session renamed to “${trimmed}”.`, 'info');
     },
   },
   {
@@ -93,14 +97,17 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
     category: 'commands',
     execute: async (ctx) => {
       const sessionId = ctx.getActiveSessionId();
+      const name = ctx.getActiveSessionName() ?? 'this session';
       if (!sessionId) {
         ctx.onNotify('No active session to delete.', 'warning');
         ctx.onClose();
         return;
       }
+      ctx.onClose();
+      const ok = window.confirm(`Delete session “${name}”? This cannot be undone.`);
+      if (!ok) return;
       await ctx.onDeleteSession(sessionId);
       ctx.onNotify('Session deleted.', 'info');
-      ctx.onClose();
     },
   },
   {
@@ -108,7 +115,7 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
     description: 'Change the model for the current session',
     category: 'commands',
     execute: async (_ctx) => {
-      // Sub-picker handled by CommandPalette
+      // Sub-picker handled by CommandPalette / SlashCommandMenu
     },
   },
   {
@@ -116,7 +123,7 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
     description: 'Switch the application theme',
     category: 'commands',
     execute: async (_ctx) => {
-      // Sub-picker handled by CommandPalette
+      // Sub-picker handled by CommandPalette / SlashCommandMenu
     },
   },
   {
@@ -124,7 +131,7 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
     description: 'Switch the agent personality',
     category: 'commands',
     execute: async (_ctx) => {
-      // Sub-picker handled by CommandPalette
+      // Sub-picker handled by CommandPalette / SlashCommandMenu
     },
   },
   {
@@ -137,40 +144,35 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
     },
   },
   {
-    name: '/index-rag',
+    name: '/rag index',
     description: 'Index the project for RAG semantic search',
     category: 'commands',
     execute: async (ctx) => {
       ctx.onNotify('Indexing project for RAG...', 'info');
       ctx.onClose();
-      await ctx.onIndexRAG();
+      try {
+        await ctx.onIndexRAG();
+        ctx.onNotify('RAG indexing complete.', 'info');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.onNotify(`RAG indexing failed: ${msg}`, 'error');
+      }
     },
   },
   {
-    name: '/index-ast',
+    name: '/ast index',
     description: 'Re-scan the project for AST symbol indexing',
     category: 'commands',
     execute: async (ctx) => {
       ctx.onNotify('Re-scanning project for AST symbols...', 'info');
       ctx.onClose();
-      await ctx.onIndexAST();
-    },
-  },
-  {
-    name: '/rag status',
-    description: 'Show RAG index status',
-    category: 'commands',
-    execute: async (ctx) => {
-      const status = await ctx.onGetRAGStatus();
-      if (!status || (status.lastIndexed === null && status.totalChunks === 0)) {
-        ctx.onNotify('No RAG index exists. Run /index-rag to create one.', 'info');
-      } else {
-        ctx.onNotify(
-          `RAG: ${status.totalFiles} files, ${status.totalChunks} chunks, indexed: ${status.lastIndexed || 'never'}`,
-          'info',
-        );
+      try {
+        await ctx.onIndexAST();
+        ctx.onNotify('AST indexing complete.', 'info');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.onNotify(`AST indexing failed: ${msg}`, 'error');
       }
-      ctx.onClose();
     },
   },
   {
@@ -214,8 +216,16 @@ export function buildThemeResults(currentTheme: string): PaletteResult[] {
   }));
 }
 
-export function buildPersonalityResults(currentPersonality: string): PaletteResult[] {
-  return PERSONALITY_NAMES.map((name) => ({
+/**
+ * Build personality picker results for palette display.
+ * @param currentPersonality  Currently selected personality name
+ * @param names  Personality names loaded from disk (`~/.orchid/personalities/`)
+ */
+export function buildPersonalityResults(
+  currentPersonality: string,
+  names: readonly string[] = [],
+): PaletteResult[] {
+  return names.map((name) => ({
     id: `personality:${name}`,
     label: name,
     description: name === currentPersonality ? 'Current personality' : `Switch to ${name}`,
@@ -224,5 +234,68 @@ export function buildPersonalityResults(currentPersonality: string): PaletteResu
     commandName: '/personality',
     action: 'personality' as const,
     value: name,
+  }));
+}
+
+/**
+ * Build model picker results for `/model`.
+ * @param currentModel  Active session / default model id
+ * @param models  `provider/model` ids from config providers
+ */
+export function buildModelResults(
+  currentModel: string,
+  models: readonly string[] = [],
+): PaletteResult[] {
+  if (models.length === 0) {
+    return [
+      {
+        id: 'model:empty',
+        label: 'No models configured',
+        description: 'Add providers in Settings → Providers first',
+        category: 'commands' as CommandCategory,
+        icon: 'alertCircle',
+        commandName: '/model',
+      },
+    ];
+  }
+
+  return models.map((model) => ({
+    id: `model:${model}`,
+    label: model,
+    description: model === currentModel ? 'Current model' : `Switch to ${model}`,
+    category: 'commands' as CommandCategory,
+    icon: model === currentModel ? '\u25cf' : '\u25cb',
+    commandName: '/model',
+    action: 'model' as const,
+    value: model,
+  }));
+}
+
+/** Build session list for `/sessions` sub-picker. */
+export function buildSessionResults(
+  sessions: readonly { id: string; name: string; model?: string }[],
+): PaletteResult[] {
+  if (sessions.length === 0) {
+    return [
+      {
+        id: 'session:empty',
+        label: 'No sessions yet',
+        description: 'Create one with /new',
+        category: 'sessions' as CommandCategory,
+        icon: 'messageSquare',
+        commandName: '/sessions',
+      },
+    ];
+  }
+
+  return sessions.map((s) => ({
+    id: `session:${s.id}`,
+    label: s.name,
+    description: s.model ? `Model: ${s.model}` : undefined,
+    category: 'sessions' as CommandCategory,
+    icon: 'messageSquare',
+    commandName: '/sessions',
+    action: 'session' as const,
+    value: s.id,
   }));
 }

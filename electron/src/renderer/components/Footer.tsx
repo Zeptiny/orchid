@@ -1,88 +1,62 @@
 /**
- * Footer — status bar at the bottom of the chat.
+ * Footer — chat footer at the bottom of the center pane.
  *
- * Uses DaisyUI components for styling.
+ * Idle: keyboard shortcuts. Streaming / interrupt: agent status + Esc hints.
  */
-import type { Usage } from '../../shared/types/message';
 import type { InterruptState } from '../hooks/useChat';
+import { Icon } from './Icon';
 
 interface FooterProps {
-  model: string;
-  usage: Usage | null;
   elapsedSeconds: number;
   isStreaming: boolean;
-  /** Current interrupt confirmation phase (from two-phase Esc flow). */
+  /** Current interrupt confirmation phase (from staged Esc flow). */
   interruptState?: InterruptState;
 }
 
-export function Footer({ model, usage, elapsedSeconds, isStreaming, interruptState }: FooterProps) {
-  const showInterruptHint = interruptState && interruptState !== 'idle';
+export function Footer({ elapsedSeconds, isStreaming, interruptState }: FooterProps) {
+  const confirming = interruptState && interruptState !== 'idle';
+
+  if (isStreaming || confirming) {
+    return (
+      <div className="chat-footer">
+        {confirming ? (
+          <span className="interrupt-hint inline-flex items-center gap-1 font-medium text-warning">
+            <Icon name="alert" size={12} />
+            {interruptState === 'confirmSubagents'
+              ? 'Esc again: cancel subagents'
+              : 'Esc again: cancel agent'}
+          </span>
+        ) : (
+          <span className="agent-status inline-flex items-center gap-1 text-success">
+            <Icon name="loader" size={12} className="animate-spin" />
+            Running
+          </span>
+        )}
+        <span>-</span>
+        <span>elapsed {formatElapsed(elapsedSeconds)}</span>
+        <span>-</span>
+        <span>
+          <kbd className="kbd">Esc</kbd> to {confirming ? 'confirm' : 'interrupt'}
+        </span>
+      </div>
+    );
+  }
 
   return (
-    <div className="btm-nav btm-nav-sm bg-base-200 border-t border-base-300 h-8">
-      <div className="flex items-center gap-2 px-4 text-xs">
-        <span className="font-medium">Model:</span>
-        <span className="opacity-70">{model || '—'}</span>
-        {isStreaming && (
-          <>
-            <span className="opacity-30">|</span>
-            <span className="font-medium">Elapsed:</span>
-            <span className="opacity-70">{formatElapsed(elapsedSeconds)}</span>
-          </>
-        )}
-        {!isStreaming && usage && (
-          <>
-            <span className="opacity-30">|</span>
-            <span className="opacity-70">{formatUsageCompact(usage)}</span>
-          </>
-        )}
-        {showInterruptHint && (
-          <>
-            <span className="opacity-30">|</span>
-            <span className="text-warning font-medium animate-pulse">
-              {interruptState === 'confirmSubagents'
-                ? 'Esc again: cancel subagents'
-                : 'Esc again: cancel agent'}
-            </span>
-          </>
-        )}
-      </div>
-      <div className="flex items-center justify-end px-4 text-xs opacity-50">
-        Ctrl+K: Command Palette · Ctrl+B: Sidebar · Esc: Cancel
-      </div>
+    <div className="chat-footer">
+      <span>
+        <kbd className="kbd">Ctrl K</kbd> commands
+      </span>
+      <span>-</span>
+      <span>
+        <kbd className="kbd">Ctrl B</kbd> inspector
+      </span>
+      <span>-</span>
+      <span>
+        <kbd className="kbd">Ctrl N</kbd> new session
+      </span>
     </div>
   );
-}
-
-/**
- * Compact usage format: ΣX · ↑Y (⟲Z) ↓W
- *
- * - ΣX = total tokens
- * - ↑Y = prompt tokens
- * - (⟲Z) = cached tokens (only shown if > 0)
- * - ↓W = completion tokens
- */
-function formatUsageCompact(usage: Usage): string {
-  const total = formatTokens(usage.total_tokens);
-  const prompt = formatTokens(usage.prompt_tokens);
-  const completion = formatTokens(usage.completion_tokens);
-
-  let result = `Σ${total} · ↑${prompt}`;
-
-  if (usage.cached_tokens > 0) {
-    const cached = formatTokens(usage.cached_tokens);
-    result += ` (⟲${cached})`;
-  }
-
-  result += ` ↓${completion}`;
-  return result;
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1000) {
-    return `${(n / 1000).toFixed(1)}k`;
-  }
-  return String(n);
 }
 
 function formatElapsed(seconds: number): string {

@@ -10,6 +10,8 @@ import {
   trackRecentCommand,
   buildThemeResults,
   buildPersonalityResults,
+  buildModelResults,
+  buildSessionResults,
   fuzzyMatch,
   highlightMatch,
   type Command,
@@ -17,6 +19,7 @@ import {
   type PaletteResult,
 } from '../commands/registry';
 import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
+import { Icon, type IconName } from './Icon';
 
 export interface CommandPaletteProps {
   isOpen: boolean;
@@ -25,6 +28,8 @@ export interface CommandPaletteProps {
   sessions: SessionSummary[];
   currentTheme: string;
   currentPersonality: string;
+  /** Personality names loaded from disk. */
+  personalityNames?: readonly string[];
 }
 
 const CATEGORY_LABELS: Record<CommandCategory, string> = {
@@ -36,6 +41,13 @@ const CATEGORY_LABELS: Record<CommandCategory, string> = {
 
 const CATEGORY_ORDER: CommandCategory[] = ['commands', 'sessions', 'settings', 'navigation'];
 
+const CATEGORY_ICONS: Record<CommandCategory, IconName> = {
+  commands: 'command',
+  sessions: 'messageSquare',
+  settings: 'settings',
+  navigation: 'arrowRight',
+};
+
 export function CommandPalette({
   isOpen,
   onClose,
@@ -43,6 +55,7 @@ export function CommandPalette({
   sessions,
   currentTheme,
   currentPersonality,
+  personalityNames = [],
 }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -52,10 +65,25 @@ export function CommandPalette({
 
   const results = useMemo<PaletteResult[]>(() => {
     if (subPicker === '/theme') {
-      return buildThemeResults(currentTheme);
+      return filterSubResults(buildThemeResults(currentTheme), query);
     }
     if (subPicker === '/personality') {
-      return buildPersonalityResults(currentPersonality);
+      return filterSubResults(
+        buildPersonalityResults(currentPersonality, personalityNames),
+        query,
+      );
+    }
+    if (subPicker === '/model') {
+      return filterSubResults(
+        buildModelResults(
+          context.getCurrentModel(),
+          context.getAvailableModels(),
+        ),
+        query,
+      );
+    }
+    if (subPicker === '/sessions') {
+      return filterSubResults(buildSessionResults(sessions), query);
     }
 
     const items: PaletteResult[] = [];
@@ -72,7 +100,7 @@ export function CommandPalette({
           label: cmd.name,
           description: cmd.description,
           category: 'commands',
-          icon: '⏱',
+          icon: 'clock',
           commandName: cmd.name,
         });
       }
@@ -85,7 +113,7 @@ export function CommandPalette({
             label: cmd.name,
             description: cmd.description,
             category: 'commands',
-            icon: '❯',
+            icon: 'command',
             commandName: cmd.name,
           });
         }
@@ -105,7 +133,7 @@ export function CommandPalette({
               label: cmd.name,
               description: cmd.description,
               category: 'commands',
-              icon: '❯',
+              icon: 'command',
               commandName: cmd.name,
             },
             score,
@@ -122,7 +150,7 @@ export function CommandPalette({
               label: session.name,
               description: session.model ? `Model: ${session.model}` : undefined,
               category: 'sessions',
-              icon: '▣',
+              icon: 'messageSquare',
               action: 'session',
               value: session.id,
             },
@@ -150,7 +178,7 @@ export function CommandPalette({
               label: item.name,
               description: item.desc,
               category: 'settings',
-              icon: '⚙',
+              icon: 'settings',
               action: 'settings',
               value: item.name.toLowerCase().replace(' ', '-'),
             },
@@ -178,7 +206,7 @@ export function CommandPalette({
               label: item.name,
               description: item.desc,
               category: 'navigation',
-              icon: '→',
+              icon: 'arrowRight',
               action: 'navigation',
               value: item.name.toLowerCase().replace(' ', '-'),
             },
@@ -192,7 +220,15 @@ export function CommandPalette({
     }
 
     return items;
-  }, [query, sessions, subPicker, currentTheme, currentPersonality]);
+  }, [
+    query,
+    sessions,
+    subPicker,
+    currentTheme,
+    currentPersonality,
+    personalityNames,
+    context,
+  ]);
 
   const groupedResults = useMemo(() => {
     const groups: Array<{ category: CommandCategory; label: string; items: PaletteResult[] }> = [];
@@ -258,6 +294,13 @@ export function CommandPalette({
         return;
       }
 
+      if (result.action === 'model' && result.value) {
+        await context.onSetModel(result.value);
+        context.onNotify(`Model changed to ${result.label}`, 'info');
+        onClose();
+        return;
+      }
+
       if (result.action === 'session' && result.value) {
         await context.onLoadSession(result.value);
         context.onNotify(`Loaded session: ${result.label}`, 'info');
@@ -295,8 +338,15 @@ export function CommandPalette({
             return;
           }
           if (command.name === '/model') {
-            context.onNotify('Model picker: configure providers in settings first.', 'info');
-            onClose();
+            setSubPicker('/model');
+            setQuery('');
+            setSelectedIndex(0);
+            return;
+          }
+          if (command.name === '/sessions') {
+            setSubPicker('/sessions');
+            setQuery('');
+            setSelectedIndex(0);
             return;
           }
 
@@ -366,84 +416,140 @@ export function CommandPalette({
 
   if (!isOpen) return null;
 
-  const subPickerTitle = subPicker
-    ? subPicker === '/theme'
+  const subPickerTitle =
+    subPicker === '/theme'
       ? 'Switch Theme'
       : subPicker === '/personality'
         ? 'Switch Personality'
-        : null
-    : null;
+        : subPicker === '/model'
+          ? 'Select Model'
+          : subPicker === '/sessions'
+            ? 'Load Session'
+            : null;
 
   return (
-    <dialog className="modal modal-open" onClose={onClose}>
-      <div className="modal-box max-w-2xl p-0" onKeyDown={handleKeyDown}>
-        {/* Header */}
-        <div className="p-4 border-b border-base-300">
-          <div className="flex items-center gap-2">
-            {subPicker && (
-              <button
-                className="btn btn-ghost btn-sm btn-circle"
-                onClick={() => {
-                  setSubPicker(null);
-                  setQuery('');
-                  setSelectedIndex(0);
-                }}
-              >
-                ←
-              </button>
-            )}
-            <input
-              ref={inputRef}
-              className="input input-bordered flex-1"
-              type="text"
-              placeholder={subPickerTitle ?? 'Search commands, sessions, settings...'}
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
+    <div
+      className="command-palette-overlay fixed inset-0 z-[1000] flex justify-center bg-black/55"
+      style={{ paddingTop: '80px' }}
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
+    >
+      <div
+        className="command-palette flex max-h-[420px] w-[min(520px,90%)] flex-col overflow-hidden rounded-[10px] border border-base-300 bg-base-200 shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={handleKeyDown}
+      >
+        {/* Header / input */}
+        <div className="flex items-center gap-2 border-b border-base-300 px-3 py-2.5">
+          {subPicker && (
+            <button
+              className="btn btn-ghost btn-sm btn-circle"
+              onClick={() => {
+                setSubPicker(null);
+                setQuery('');
                 setSelectedIndex(0);
               }}
-              autoFocus
-            />
-            <kbd className="kbd kbd-sm">⌘K</kbd>
-          </div>
+              title="Back"
+            >
+              <Icon name="arrowLeft" size={16} />
+            </button>
+          )}
+          <Icon name="search" size={14} className="text-base-content/40" />
+          <input
+            ref={inputRef}
+            className="min-w-0 flex-1 border-none bg-transparent text-sm outline-none placeholder:text-base-content/40"
+            type="text"
+            placeholder={subPicker ? subPickerTitle ?? 'Type a command or search...' : 'Type a command or search...'}
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSelectedIndex(0);
+            }}
+            autoFocus
+          />
         </div>
 
-        {/* Results */}
-        <div className="max-h-[60vh] overflow-y-auto p-2" ref={listRef}>
-          {flatResults.length === 0 && (
-            <div className="text-center py-8 text-base-content/50">
+        {/* Results or sub-picker */}
+        <div className="command-palette-results min-h-0 flex-1 overflow-y-auto p-1" ref={listRef}>
+          {flatResults.length === 0 && !subPicker && (
+            <div className="py-8 text-center text-sm text-base-content/50">
               {query ? 'No results found' : 'Type to search...'}
             </div>
           )}
 
-          {groupedResults.map((group) => {
-            let localIndex = 0;
-            for (const g of groupedResults) {
-              if (g.category === group.category) break;
-              localIndex += g.items.length;
-            }
+          {subPicker && flatResults.length === 0 && (
+            <div className="py-8 text-center text-sm text-base-content/50">
+              {subPickerTitle}
+            </div>
+          )}
 
-            return (
-              <div key={group.category} className="mb-2">
-                <div className="text-xs font-semibold text-base-content/50 px-2 py-1 uppercase">
-                  {group.label}
-                </div>
-                <ul className="menu menu-sm">
-                  {group.items.map((item) => {
-                    const globalIndex = localIndex++;
-                    const isSelected = globalIndex === selectedIndex;
+          {subPicker && flatResults.length > 0 ? (
+            <div className="p-1">
+              <div className="mb-0.5 px-2 py-1 text-[9px] uppercase text-base-content/50">
+                {subPickerTitle ?? 'Select'}
+              </div>
+              <div className="flex flex-col gap-[1px]">
+                {flatResults.map((item, i) => {
+                  const isSelected = i === selectedIndex;
+                  return (
+                    <button
+                      key={item.id}
+                      className={`flex min-h-[30px] w-full items-center gap-2 rounded-[5px] px-2 py-[5px] text-left text-[12px] ${
+                        isSelected ? 'bg-primary/15' : 'hover:bg-base-content/5'
+                      }`}
+                      onClick={() => handleSelect(item)}
+                      onMouseEnter={() => setSelectedIndex(i)}
+                      data-selected={isSelected}
+                    >
+                      {subPicker === '/theme' && (
+                        <span
+                          className="inline-block h-3.5 w-3.5 shrink-0 rounded-[3px] border border-base-300"
+                          style={{ background: THEME_SWATCHES[item.value ?? ''] ?? 'transparent' }}
+                        />
+                      )}
+                      <span>{item.label}</span>
+                      {item.description?.toLowerCase().includes('current') && (
+                        <span className="ml-auto text-[10px] text-base-content/50">current</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : !subPicker ? (
+            groupedResults.map((group) => {
+              let localIndex = 0;
+              for (const g of groupedResults) {
+                if (g.category === group.category) break;
+                localIndex += g.items.length;
+              }
 
-                    return (
-                      <li key={item.id}>
+              return (
+                <div key={group.category} className="command-palette-group mb-1">
+                  <div className="flex items-center gap-1.5 px-2 py-1 text-[9px] uppercase text-base-content/50">
+                    <Icon name={CATEGORY_ICONS[group.category]} size={12} />
+                    {group.label}
+                  </div>
+                  <div className="flex flex-col gap-[1px]">
+                    {group.items.map((item) => {
+                      const globalIndex = localIndex++;
+                      const isSelected = globalIndex === selectedIndex;
+
+                      return (
                         <button
-                          className={`flex items-start gap-2 ${isSelected ? 'active' : ''}`}
+                          key={item.id}
+                          className={`command-palette-item flex min-h-[32px] w-full items-center gap-2 rounded-[5px] px-2 py-[5px] text-left text-[12px] ${
+                            isSelected ? 'bg-primary/15' : 'hover:bg-base-content/5'
+                          }`}
                           data-selected={isSelected}
                           onClick={() => handleSelect(item)}
                           onMouseEnter={() => setSelectedIndex(globalIndex)}
                         >
-                          {item.icon && <span className="text-lg">{item.icon}</span>}
+                          <Icon name={iconForResult(item)} size={14} className="shrink-0 text-base-content/55" />
                           <div className="flex-1 min-w-0">
-                            <div className="font-medium">
+                            <div className="font-medium leading-tight">
                               {query ? (
                                 <HighlightedText query={query} text={item.label} />
                               ) : (
@@ -451,33 +557,32 @@ export function CommandPalette({
                               )}
                             </div>
                             {item.description && (
-                              <div className="text-xs opacity-50 truncate">{item.description}</div>
+                              <div className="mt-0.5 truncate text-[11px] leading-tight text-base-content/50">
+                                {item.description}
+                              </div>
                             )}
                           </div>
                           {item.category === 'commands' && (
                             <kbd className="kbd kbd-xs">Enter</kbd>
                           )}
                         </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            );
-          })}
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })
+          ) : null}
         </div>
 
         {/* Footer */}
-        <div className="p-2 border-t border-base-300 flex gap-4 text-xs text-base-content/50">
-          <span><kbd className="kbd kbd-xs">↑↓</kbd> navigate</span>
-          <span><kbd className="kbd kbd-xs">↵</kbd> select</span>
-          <span><kbd className="kbd kbd-xs">esc</kbd> close</span>
+        <div className="command-palette-footer flex gap-3 border-t border-base-300 px-2.5 py-1.5 text-[9px] text-base-content/50">
+          <span><kbd className="kbd kbd-xs">up/down</kbd> navigate</span>
+          <span><kbd className="kbd kbd-xs">Enter</kbd> select</span>
+          <span><kbd className="kbd kbd-xs">Esc</kbd> close</span>
         </div>
       </div>
-      <form method="dialog" className="modal-backdrop">
-        <button onClick={onClose}>close</button>
-      </form>
-    </dialog>
+    </div>
   );
 }
 
@@ -487,11 +592,45 @@ function HighlightedText({ query, text }: { query: string; text: string }) {
     <>
       {segments.map((seg, i) =>
         seg.highlighted ? (
-          <mark key={i} className="bg-primary/30">{seg.text}</mark>
+          <mark key={i} className="command-palette-highlight bg-primary/30">{seg.text}</mark>
         ) : (
           <span key={i}>{seg.text}</span>
         ),
       )}
     </>
   );
+}
+
+const THEME_SWATCHES: Record<string, string> = {
+  default: '#1a1b26',
+  'solarized-light': '#fdf6e3',
+  bluey: '#2e3440',
+  'windows-xp': '#3a6ea5',
+  'green-terminal': '#002b36',
+};
+
+function iconForResult(item: PaletteResult): IconName {
+  if (item.action === 'theme') return 'sliders';
+  if (item.action === 'personality') return 'user';
+  if (item.action === 'model') return 'cpu';
+  if (item.action === 'session') return 'messageSquare';
+  if (item.action === 'settings') return 'settings';
+  if (item.action === 'navigation') return 'arrowRight';
+  return CATEGORY_ICONS[item.category];
+}
+
+function filterSubResults(items: PaletteResult[], query: string): PaletteResult[] {
+  const q = query.trim();
+  if (!q) return items;
+  const scored = items
+    .map((item) => ({
+      item,
+      score: Math.max(
+        fuzzyMatch(q, item.label),
+        item.description ? fuzzyMatch(q, item.description) : -1,
+      ),
+    }))
+    .filter((s) => s.score > 0);
+  scored.sort((a, b) => b.score - a.score);
+  return scored.map((s) => s.item);
 }

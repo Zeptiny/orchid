@@ -169,6 +169,15 @@ export interface CommandContext {
   onSetTheme: (name: string) => Promise<void>;
   /** Set the personality. */
   onSetPersonality: (name: string) => Promise<void>;
+  /**
+   * Set the model for the active session (and local UI chrome).
+   * `model` is a `provider/model` id from the providers config.
+   */
+  onSetModel: (model: string) => Promise<void>;
+  /** Models available for /model picker (`provider/model` ids). */
+  getAvailableModels: () => string[];
+  /** Current model shown in the UI (session model or default). */
+  getCurrentModel: () => string;
   /** Open settings (emits event for U24 Preferences). */
   onOpenSettings: () => void;
   /** Index RAG in background. */
@@ -177,8 +186,6 @@ export interface CommandContext {
   onIndexAST: () => Promise<void>;
   /** Clear RAG index. */
   onClearRAG: () => Promise<void>;
-  /** Get RAG status. */
-  onGetRAGStatus: () => Promise<{ totalChunks: number; totalFiles: number; lastIndexed: string | null } | null>;
   /** Show a notification message. */
   onNotify: (message: string, severity?: 'info' | 'warning' | 'error') => void;
   /** Close the command palette. */

@@ -154,14 +154,6 @@ const THEME_LABELS: Record<string, string> = {
   'green-terminal': 'Green Terminal',
 };
 
-const PERSONALITY_NAMES = [
-  'default',
-  'concise',
-  'verbose',
-  'creative',
-  'technical',
-  'friendly',
-] as const;
 
 // ── Command definitions ──────────────────────────────────────────────────────
 
@@ -191,21 +183,27 @@ export const COMMANDS: Command[] = [
     category: 'commands',
     execute: async (ctx) => {
       const sessionId = ctx.getActiveSessionId();
-      const currentName = ctx.getActiveSessionName();
+      const currentName = ctx.getActiveSessionName() ?? '';
       if (!sessionId) {
         ctx.onNotify('No active session to rename.', 'warning');
         ctx.onClose();
         return;
       }
-      // Trigger rename via a prompt-like flow; for now, use a simple approach
-      // The palette will handle showing the rename input
       ctx.onClose();
-      // Emit a custom event that the app can listen to for showing a rename dialog
-      window.dispatchEvent(
-        new CustomEvent('orchid:rename-session', {
-          detail: { sessionId, currentName },
-        }),
-      );
+      // Renderer provides a prompt; main registry mirrors for parity tests.
+      const next =
+        typeof window !== 'undefined'
+          ? window.prompt('Rename session', currentName)
+          : null;
+      if (next === null) return;
+      const trimmed = next.trim();
+      if (!trimmed) {
+        ctx.onNotify('Session name cannot be empty.', 'warning');
+        return;
+      }
+      if (trimmed === currentName) return;
+      await ctx.onRenameSession(sessionId, trimmed);
+      ctx.onNotify(`Session renamed to "${trimmed}".`, 'info');
     },
   },
   {
@@ -214,14 +212,20 @@ export const COMMANDS: Command[] = [
     category: 'commands',
     execute: async (ctx) => {
       const sessionId = ctx.getActiveSessionId();
+      const name = ctx.getActiveSessionName() ?? 'this session';
       if (!sessionId) {
         ctx.onNotify('No active session to delete.', 'warning');
         ctx.onClose();
         return;
       }
+      ctx.onClose();
+      const ok =
+        typeof window !== 'undefined'
+          ? window.confirm(`Delete session "${name}"? This cannot be undone.`)
+          : true;
+      if (!ok) return;
       await ctx.onDeleteSession(sessionId);
       ctx.onNotify('Session deleted.', 'info');
-      ctx.onClose();
     },
   },
   {
@@ -259,40 +263,35 @@ export const COMMANDS: Command[] = [
     },
   },
   {
-    name: '/index-rag',
+    name: '/rag index',
     description: 'Index the project for RAG semantic search',
     category: 'commands',
     execute: async (ctx) => {
       ctx.onNotify('Indexing project for RAG...', 'info');
       ctx.onClose();
-      await ctx.onIndexRAG();
+      try {
+        await ctx.onIndexRAG();
+        ctx.onNotify('RAG indexing complete.', 'info');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.onNotify(`RAG indexing failed: ${msg}`, 'error');
+      }
     },
   },
   {
-    name: '/index-ast',
+    name: '/ast index',
     description: 'Re-scan the project for AST symbol indexing',
     category: 'commands',
     execute: async (ctx) => {
       ctx.onNotify('Re-scanning project for AST symbols...', 'info');
       ctx.onClose();
-      await ctx.onIndexAST();
-    },
-  },
-  {
-    name: '/rag status',
-    description: 'Show RAG index status',
-    category: 'commands',
-    execute: async (ctx) => {
-      const status = await ctx.onGetRAGStatus();
-      if (!status || (status.lastIndexed === null && status.totalChunks === 0)) {
-        ctx.onNotify('No RAG index exists. Run /index-rag to create one.', 'info');
-      } else {
-        ctx.onNotify(
-          `RAG: ${status.totalFiles} files, ${status.totalChunks} chunks, indexed: ${status.lastIndexed || 'never'}`,
-          'info',
-        );
+      try {
+        await ctx.onIndexAST();
+        ctx.onNotify('AST indexing complete.', 'info');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.onNotify(`AST indexing failed: ${msg}`, 'error');
       }
-      ctx.onClose();
     },
   },
   {
@@ -341,8 +340,11 @@ export function buildThemeResults(currentTheme: string): PaletteResult[] {
 }
 
 /** Build personality picker results for palette display. */
-export function buildPersonalityResults(currentPersonality: string): PaletteResult[] {
-  return PERSONALITY_NAMES.map((name) => ({
+export function buildPersonalityResults(
+  currentPersonality: string,
+  names: readonly string[] = [],
+): PaletteResult[] {
+  return names.map((name) => ({
     id: `personality:${name}`,
     label: name,
     description: name === currentPersonality ? 'Current personality' : `Switch to ${name}`,

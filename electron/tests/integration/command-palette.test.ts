@@ -98,8 +98,8 @@ afterEach(() => {
 // ─── Command Registry ────────────────────────────────────────────────────────
 
 describe('Command Registry', () => {
-  it('all 12 commands are registered', () => {
-    expect(COMMANDS).toHaveLength(12);
+  it('all 11 commands are registered', () => {
+    expect(COMMANDS).toHaveLength(11);
   });
 
   it('all command names are defined', () => {
@@ -112,10 +112,12 @@ describe('Command Registry', () => {
     expect(names).toContain('/theme');
     expect(names).toContain('/personality');
     expect(names).toContain('/settings');
-    expect(names).toContain('/index-rag');
-    expect(names).toContain('/index-ast');
-    expect(names).toContain('/rag status');
+    expect(names).toContain('/rag index');
+    expect(names).toContain('/ast index');
     expect(names).toContain('/rag clear');
+    expect(names).not.toContain('/rag status');
+    expect(names).not.toContain('/index-rag');
+    expect(names).not.toContain('/index-ast');
   });
 
   it('getCommand returns command by name', () => {
@@ -134,12 +136,14 @@ describe('Command Registry', () => {
   it('isCommand returns true for known commands', () => {
     expect(isCommand('/new')).toBe(true);
     expect(isCommand('/model')).toBe(true);
-    expect(isCommand('/rag status')).toBe(true);
+    expect(isCommand('/rag index')).toBe(true);
+    expect(isCommand('/ast index')).toBe(true);
   });
 
   it('isCommand returns false for unknown commands', () => {
     expect(isCommand('/unknown')).toBe(false);
     expect(isCommand('hello')).toBe(false);
+    expect(isCommand('/rag status')).toBe(false);
   });
 
   it('all commands have required fields', () => {
@@ -196,13 +200,13 @@ describe('Fuzzy Search', () => {
     expect(score).toBeGreaterThan(0);
   });
 
-  it('fuzzy match: "idx" matches "/index-rag"', () => {
-    const score = fuzzyMatch('idx', '/index-rag');
+  it('fuzzy match: "rag" matches "/rag index"', () => {
+    const score = fuzzyMatch('rag', '/rag index');
     expect(score).toBeGreaterThan(0);
   });
 
-  it('fuzzy match: "rag" matches "/rag status"', () => {
-    const score = fuzzyMatch('rag', '/rag status');
+  it('fuzzy match: "ast" matches "/ast index"', () => {
+    const score = fuzzyMatch('ast', '/ast index');
     expect(score).toBeGreaterThan(0);
   });
 
@@ -317,22 +321,30 @@ describe('Theme Results', () => {
 
 // ─── Personality Results ─────────────────────────────────────────────────────
 
+const DISK_PERSONALITIES = ['default', 'meow', 'pirate', 'socrates', 'stupid', 'zen'];
+
 describe('Personality Results', () => {
-  it('buildPersonalityResults returns all 6 personalities', () => {
-    const results = buildPersonalityResults('default');
+  it('buildPersonalityResults returns personalities from the provided list', () => {
+    const results = buildPersonalityResults('default', DISK_PERSONALITIES);
     expect(results).toHaveLength(6);
+    expect(results.map((r) => r.value)).toEqual(DISK_PERSONALITIES);
+  });
+
+  it('buildPersonalityResults returns empty when no names provided', () => {
+    const results = buildPersonalityResults('default');
+    expect(results).toHaveLength(0);
   });
 
   it('buildPersonalityResults marks current personality with filled circle', () => {
-    const results = buildPersonalityResults('creative');
-    const creative = results.find((r) => r.value === 'creative');
-    expect(creative?.icon).toBe('\u25cf');
+    const results = buildPersonalityResults('meow', DISK_PERSONALITIES);
+    const meow = results.find((r) => r.value === 'meow');
+    expect(meow?.icon).toBe('\u25cf');
     const other = results.find((r) => r.value === 'default');
     expect(other?.icon).toBe('\u25cb');
   });
 
   it('buildPersonalityResults has correct action type', () => {
-    const results = buildPersonalityResults('default');
+    const results = buildPersonalityResults('default', DISK_PERSONALITIES);
     for (const result of results) {
       expect(result.action).toBe('personality');
       expect(result.commandName).toBe('/personality');
@@ -356,14 +368,24 @@ describe('Command Execution', () => {
       getActiveSessionName: vi.fn().mockReturnValue('Test Session'),
       onSetTheme: vi.fn().mockResolvedValue(undefined),
       onSetPersonality: vi.fn().mockResolvedValue(undefined),
+      onSetModel: vi.fn().mockResolvedValue(undefined),
+      getAvailableModels: vi.fn().mockReturnValue(['test/model']),
+      getCurrentModel: vi.fn().mockReturnValue('test/model'),
       onOpenSettings: vi.fn(),
       onIndexRAG: vi.fn().mockResolvedValue(undefined),
       onIndexAST: vi.fn().mockResolvedValue(undefined),
       onClearRAG: vi.fn().mockResolvedValue(undefined),
-      onGetRAGStatus: vi.fn().mockResolvedValue(null),
       onNotify: vi.fn(),
       onClose: vi.fn(),
     };
+
+    // /delete and /rename use browser dialogs on window
+    (window as unknown as { confirm: typeof confirm }).confirm = vi
+      .fn()
+      .mockReturnValue(true);
+    (window as unknown as { prompt: typeof prompt }).prompt = vi
+      .fn()
+      .mockReturnValue('Renamed Session');
   });
 
   it('/new creates a new session and closes palette', async () => {
@@ -374,12 +396,21 @@ describe('Command Execution', () => {
     expect(mockContext.onClose).toHaveBeenCalled();
   });
 
-  it('/delete deletes the active session', async () => {
+  it('/delete deletes the active session after confirm', async () => {
     const cmd = getCommand('/delete');
     expect(cmd).toBeDefined();
     await cmd!.execute(mockContext);
     expect(mockContext.onDeleteSession).toHaveBeenCalledWith('session-1');
-    expect(mockContext.onClose).toHaveBeenCalled();
+    expect(mockContext.onNotify).toHaveBeenCalledWith('Session deleted.', 'info');
+  });
+
+  it('/delete cancels when user declines confirm', async () => {
+    (window as unknown as { confirm: typeof confirm }).confirm = vi
+      .fn()
+      .mockReturnValue(false);
+    const cmd = getCommand('/delete');
+    await cmd!.execute(mockContext);
+    expect(mockContext.onDeleteSession).not.toHaveBeenCalled();
   });
 
   it('/delete notifies when no active session', async () => {
@@ -390,6 +421,26 @@ describe('Command Execution', () => {
     expect(mockContext.onClose).toHaveBeenCalled();
   });
 
+  it('/rename renames the active session', async () => {
+    const cmd = getCommand('/rename');
+    expect(cmd).toBeDefined();
+    await cmd!.execute(mockContext);
+    expect(mockContext.onRenameSession).toHaveBeenCalledWith('session-1', 'Renamed Session');
+    expect(mockContext.onNotify).toHaveBeenCalledWith(
+      expect.stringContaining('Renamed Session'),
+      'info',
+    );
+  });
+
+  it('/rename cancels when prompt is dismissed', async () => {
+    (window as unknown as { prompt: typeof prompt }).prompt = vi
+      .fn()
+      .mockReturnValue(null);
+    const cmd = getCommand('/rename');
+    await cmd!.execute(mockContext);
+    expect(mockContext.onRenameSession).not.toHaveBeenCalled();
+  });
+
   it('/settings opens settings and closes palette', async () => {
     const cmd = getCommand('/settings');
     expect(cmd).toBeDefined();
@@ -398,45 +449,22 @@ describe('Command Execution', () => {
     expect(mockContext.onClose).toHaveBeenCalled();
   });
 
-  it('/index-rag triggers RAG indexing', async () => {
-    const cmd = getCommand('/index-rag');
+  it('/rag index triggers RAG indexing', async () => {
+    const cmd = getCommand('/rag index');
     expect(cmd).toBeDefined();
     await cmd!.execute(mockContext);
     expect(mockContext.onIndexRAG).toHaveBeenCalled();
     expect(mockContext.onClose).toHaveBeenCalled();
+    expect(mockContext.onNotify).toHaveBeenCalledWith('RAG indexing complete.', 'info');
   });
 
-  it('/index-ast triggers AST indexing', async () => {
-    const cmd = getCommand('/index-ast');
+  it('/ast index triggers AST indexing', async () => {
+    const cmd = getCommand('/ast index');
     expect(cmd).toBeDefined();
     await cmd!.execute(mockContext);
     expect(mockContext.onIndexAST).toHaveBeenCalled();
     expect(mockContext.onClose).toHaveBeenCalled();
-  });
-
-  it('/rag status shows status when index exists', async () => {
-    mockContext.onGetRAGStatus = vi.fn().mockResolvedValue({
-      totalChunks: 100,
-      totalFiles: 50,
-      lastIndexed: '2026-07-08T00:00:00Z',
-    });
-    const cmd = getCommand('/rag status');
-    await cmd!.execute(mockContext);
-    expect(mockContext.onNotify).toHaveBeenCalledWith(
-      expect.stringContaining('50 files'),
-      'info',
-    );
-    expect(mockContext.onClose).toHaveBeenCalled();
-  });
-
-  it('/rag status shows "no index" when no index exists', async () => {
-    mockContext.onGetRAGStatus = vi.fn().mockResolvedValue(null);
-    const cmd = getCommand('/rag status');
-    await cmd!.execute(mockContext);
-    expect(mockContext.onNotify).toHaveBeenCalledWith(
-      expect.stringContaining('No RAG index'),
-      'info',
-    );
+    expect(mockContext.onNotify).toHaveBeenCalledWith('AST indexing complete.', 'info');
   });
 
   it('/rag clear clears the RAG index', async () => {

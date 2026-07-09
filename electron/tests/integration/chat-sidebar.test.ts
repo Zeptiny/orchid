@@ -26,6 +26,10 @@ const mockOrchid = {
     onState: vi.fn().mockReturnValue(() => {}),
     onDone: vi.fn().mockReturnValue(() => {}),
     onError: vi.fn().mockReturnValue(() => {}),
+    onUsage: vi.fn().mockReturnValue(() => {}),
+    onToolCallStart: vi.fn().mockReturnValue(() => {}),
+    onToolCallDelta: vi.fn().mockReturnValue(() => {}),
+    onToolCallUpdate: vi.fn().mockReturnValue(() => {}),
   },
   config: {
     get: vi.fn().mockResolvedValue({ theme: 'default', default_model: 'test/model' }),
@@ -522,10 +526,11 @@ describe('Interrupt Flow', () => {
     expect(mockOrchid.chat.cancel).toHaveBeenCalled();
   });
 
-  it('interrupted message contains "[Interrupted by user]"', () => {
+  it('interrupted message preserves partial content without adding a suffix', () => {
     const content = 'Partial response...';
-    const interruptedContent = content + '\n\n[Interrupted by user]';
-    expect(interruptedContent).toContain('[Interrupted by user]');
+    const interruptedContent = content;
+    expect(interruptedContent).toBe(content);
+    expect(interruptedContent).not.toContain('[Interrupted by user]');
   });
 });
 
@@ -658,6 +663,18 @@ describe('Component File Structure', () => {
 
   it('Sidebar component exists', () => {
     expect(fs.existsSync(path.join(componentsDir, 'Sidebar.tsx'))).toBe(true);
+  });
+
+  it('LeftSidebar component exists', () => {
+    expect(fs.existsSync(path.join(componentsDir, 'LeftSidebar.tsx'))).toBe(true);
+  });
+
+  it('ToolCallBlock component exists', () => {
+    expect(fs.existsSync(path.join(componentsDir, 'ToolCallBlock.tsx'))).toBe(true);
+  });
+
+  it('ConfigView component exists', () => {
+    expect(fs.existsSync(path.join(componentsDir, 'ConfigView.tsx'))).toBe(true);
   });
 
   it('InputArea component exists', () => {

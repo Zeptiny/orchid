@@ -50,4 +50,5 @@ export function unregisterAllIPC(): void {
   unregisterUpdaterIPC();
 }
 
-export { setMCPManagerRef, getMCPManagerRef };
+export { setMCPManagerRef };
+export { getMCPManagerRef };

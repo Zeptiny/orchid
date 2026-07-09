@@ -1,13 +1,18 @@
 /**
  * MessageWidget — renders a single message based on its role/type.
  *
- * Uses DaisyUI components for styling.
+ * Iteration 012 mock-aligned: flat chat (no daisyUI bubbles), thought blocks.
+ * Tool call/result messages fall back to ToolCallBlock for edge cases;
+ * ChatStream normally converts them into ToolBlocks for consistent ordering.
  */
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import type { Message } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import { MarkdownContent } from './MarkdownContent';
 import { LiveCommandInline } from './ToolWidgets/LiveCommandInline';
+import { Icon } from './Icon';
+import type { ToolBlock } from '../hooks/useChat';
+import { ToolCallBlock } from './ToolCallBlock';
 
 interface MessageWidgetProps {
   message: Message;
@@ -15,7 +20,6 @@ interface MessageWidgetProps {
 }
 
 // Regex matching Python's _BACKGROUND_CMD_RE for background command tool results.
-// Parses: <background_command id="N" command="..." description="..." />
 const BG_CMD_RE =
   /<background_command\s+id="(\d+)"[^>]*command="([^"]*)"[^>]*description="([^"]*)"[^>]*\/>/;
 
@@ -40,7 +44,7 @@ export function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
     case MessageType.ERROR:
       return <ErrorMessage message={message} />;
     case MessageType.THINKING:
-      return <ThinkingMessage message={message} />;
+      return <ThinkingMessage message={message} isStreaming={isStreaming} />;
     case MessageType.TOOL_CALL:
       return <ToolCallMessage message={message} />;
     case MessageType.TOOL_RESULT:
@@ -62,17 +66,7 @@ export function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
 }
 
 function UserMessage({ message }: { message: Message }) {
-  return (
-    <div className="chat chat-end">
-      <div className="chat-header">
-        You
-        <time className="text-xs opacity-50 ml-1">
-          {new Date(message.timestamp).toLocaleTimeString()}
-        </time>
-      </div>
-      <div className="chat-bubble chat-bubble-primary">{message.content}</div>
-    </div>
-  );
+  return <div className="msg msg-user">{message.content}</div>;
 }
 
 function AssistantMessage({
@@ -82,72 +76,116 @@ function AssistantMessage({
   message: Message;
   isStreaming?: boolean;
 }) {
+  if (!message.content && !isStreaming) return null;
   return (
-    <div className="chat chat-start">
-      <div className="chat-header">
-        Assistant
-        <time className="text-xs opacity-50 ml-1">
-          {new Date(message.timestamp).toLocaleTimeString()}
-        </time>
-      </div>
-      <div className="chat-bubble chat-bubble-secondary">
-        <MarkdownContent content={message.content} />
-        {isStreaming && <span className="loading loading-dots loading-xs ml-1" />}
-      </div>
+    <div className="msg msg-assistant">
+      {message.content ? <MarkdownContent content={message.content} /> : null}
+      {isStreaming && <span className="streaming-cursor" />}
     </div>
   );
 }
 
-function ThinkingMessage({ message }: { message: Message }) {
+function ThinkingMessage({
+  message,
+  isStreaming,
+}: {
+  message: Message;
+  isStreaming?: boolean;
+}) {
+  // Stay open while reasoning streams; user can still toggle.
+  const [expanded, setExpanded] = useState(Boolean(isStreaming));
+  const [userToggled, setUserToggled] = useState(false);
+  const toggle = useCallback(() => {
+    setUserToggled(true);
+    setExpanded((prev) => !prev);
+  }, []);
+  const content = message.content || (message.thinking ?? '');
+  // Mock shows "Thought 936ms" — estimate from content length when no duration field
+  const durationLabel = useMemo(
+    () => (isStreaming ? null : estimateThoughtMs(content)),
+    [content, isStreaming],
+  );
+
+  useEffect(() => {
+    if (isStreaming && !userToggled) {
+      setExpanded(true);
+    }
+  }, [isStreaming, userToggled]);
+
   return (
-    <div className="chat chat-start">
-      <div className="chat-header">Thinking</div>
-      <div className="chat-bubble chat-bubble-accent opacity-70 italic">{message.content}</div>
+    <div className={`thought-block ${isStreaming ? 'thought-block-streaming' : ''}`}>
+      <button type="button" className="thought-block-title" onClick={toggle}>
+        <span className="inline-flex items-center gap-1.5">
+          {isStreaming ? (
+            <Icon name="loader" size={12} className="animate-spin" />
+          ) : (
+            <Icon name="alertCircle" size={12} />
+          )}
+          {isStreaming ? 'Thinking…' : `Thought${durationLabel ? ` ${durationLabel}` : ''}`}
+        </span>
+        <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
+      </button>
+      {expanded && (
+        <div className="thought-block-content">
+          {content}
+          {isStreaming && <span className="streaming-cursor" />}
+        </div>
+      )}
     </div>
   );
+}
+
+/** Rough duration label for thought blocks (mock: "Thought 936ms"). */
+function estimateThoughtMs(content: string): string | null {
+  if (!content) return null;
+  // Heuristic: ~4 chars/ms thinking display; clamp to sensible range
+  const ms = Math.max(40, Math.min(8000, Math.round(content.length * 3.5)));
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${ms}ms`;
 }
 
 function ToolCallMessage({ message }: { message: Message }) {
-  const [expanded, setExpanded] = useState(false);
+  const block = useMemo((): ToolBlock => {
+    const toolName = message.tool_calls?.[0]?.function?.name ?? message.name ?? 'unknown';
+    const args = message.tool_calls?.[0]?.function?.arguments ?? message.content ?? '';
+    return {
+      id: message.tool_call_id ?? message.id,
+      toolName,
+      status: 'completed',
+      partialArgs: '',
+      args,
+      result: null,
+      error: null,
+      startedAt: message.timestamp,
+      finishedAt: message.timestamp,
+    };
+  }, [message]);
 
-  const toggle = useCallback(() => {
-    setExpanded((prev) => !prev);
-  }, []);
-
-  const toolCalls = message.tool_calls ?? [];
-  const toolName = toolCalls[0]?.function?.name ?? message.name ?? 'unknown';
-  const toolArgs = toolCalls[0]?.function?.arguments ?? message.content;
-
-  let formattedArgs: string;
-  try {
-    formattedArgs = JSON.stringify(JSON.parse(toolArgs), null, 2);
-  } catch {
-    formattedArgs = toolArgs;
-  }
-
-  return (
-    <div className="collapse collapse-arrow bg-base-200">
-      <input type="checkbox" checked={expanded} onChange={toggle} />
-      <div className="collapse-title text-sm font-medium">
-        ⚙️ {toolName}
-      </div>
-      <div className="collapse-content">
-        <pre className="text-xs overflow-x-auto p-2 bg-base-300 rounded">{formattedArgs}</pre>
-      </div>
-    </div>
-  );
+  return <ToolCallBlock block={block} />;
 }
 
 function ToolResultMessage({ message }: { message: Message }) {
-  const [expanded, setExpanded] = useState(false);
-  const [showAll, setShowAll] = useState(false);
+  const bgCmd = useMemo(
+    () => parseBackgroundCommand(message.content),
+    [message.content],
+  );
 
-  const toggle = useCallback(() => {
-    setExpanded((prev) => !prev);
-  }, []);
-
-  // Check if this tool result is a background command
-  const bgCmd = useMemo(() => parseBackgroundCommand(message.content), [message.content]);
+  const block = useMemo((): ToolBlock => {
+    const isError =
+      message.content.startsWith('Error:') ||
+      message.content.toLowerCase().includes('error:');
+    return {
+      id: message.tool_call_id ?? message.id,
+      toolName: message.name ?? 'tool',
+      status: isError ? 'failed' : 'completed',
+      partialArgs: '',
+      args: '',
+      result: isError ? null : message.content,
+      error: isError ? message.content : null,
+      startedAt: message.timestamp,
+      finishedAt: message.timestamp,
+    };
+  }, [message]);
 
   if (bgCmd) {
     return (
@@ -159,51 +197,25 @@ function ToolResultMessage({ message }: { message: Message }) {
     );
   }
 
-  const content = message.content;
-  const isLong = content.length > 500;
-  const displayContent = isLong && !showAll ? content.slice(0, 500) + '...' : content;
-
-  return (
-    <div className="collapse collapse-arrow bg-base-200">
-      <input type="checkbox" checked={expanded} onChange={toggle} />
-      <div className="collapse-title text-sm font-medium">
-        Tool Result
-      </div>
-      <div className="collapse-content">
-        <pre className="text-xs overflow-x-auto p-2 bg-base-300 rounded whitespace-pre-wrap">{displayContent}</pre>
-        {isLong && !showAll && (
-          <button className="btn btn-link btn-xs mt-2" onClick={(e) => { e.stopPropagation(); setShowAll(true); }}>
-            Show more
-          </button>
-        )}
-      </div>
-    </div>
-  );
+  return <ToolCallBlock block={block} />;
 }
 
 function ErrorMessage({ message }: { message: Message }) {
   return (
-    <div className="chat chat-start">
-      <div className="chat-header">Error</div>
-      <div className="chat-bubble chat-bubble-error">
-        ⚠️ {message.content}
+    <div className="error-banner-inline">
+      <Icon name="alertCircle" size={16} className="shrink-0 text-error" />
+      <div className="min-w-0 flex-1">
+        <div className="error-banner-title">Error</div>
+        <div className="error-banner-message">{message.content}</div>
       </div>
     </div>
   );
 }
 
 function SystemMessage({ message }: { message: Message }) {
-  return (
-    <div className="text-center text-xs opacity-50 my-2">
-      {message.content}
-    </div>
-  );
+  return <div className="msg-system">{message.content}</div>;
 }
 
 function DefaultMessage({ message }: { message: Message }) {
-  return (
-    <div className="chat chat-start">
-      <div className="chat-bubble">{message.content}</div>
-    </div>
-  );
+  return <div className="msg msg-assistant">{message.content}</div>;
 }

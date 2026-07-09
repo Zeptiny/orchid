@@ -112,9 +112,14 @@ describe('IPC Security', () => {
   it('allowed event channels list matches IPC_CHANNELS', () => {
     const eventChannels = [
       IPC_CHANNELS.CHAT_CHUNK,
+      IPC_CHANNELS.CHAT_THINKING,
       IPC_CHANNELS.CHAT_STATE,
       IPC_CHANNELS.CHAT_DONE,
       IPC_CHANNELS.CHAT_ERROR,
+      IPC_CHANNELS.CHAT_USAGE,
+      IPC_CHANNELS.CHAT_TOOL_CALL_START,
+      IPC_CHANNELS.CHAT_TOOL_CALL_DELTA,
+      IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
     ];
 
     for (const channel of eventChannels) {
@@ -213,8 +218,20 @@ describe('OrchidAPI Type Surface', () => {
     type ChatAPI = OrchidAPI['chat'];
     type ChatMethods = keyof ChatAPI;
 
-    const chatMethods: ChatMethods[] = ['send', 'cancel', 'onChunk', 'onState', 'onDone', 'onError'];
-    expect(chatMethods).toHaveLength(6);
+    const chatMethods: ChatMethods[] = [
+      'send',
+      'cancel',
+      'onChunk',
+      'onThinking',
+      'onState',
+      'onDone',
+      'onError',
+      'onUsage',
+      'onToolCallStart',
+      'onToolCallDelta',
+      'onToolCallUpdate',
+    ];
+    expect(chatMethods).toHaveLength(11);
   });
 
   it('OrchidAPI type has all required config methods (compile-time)', () => {

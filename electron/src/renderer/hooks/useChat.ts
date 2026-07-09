@@ -14,10 +14,14 @@ import type { Message, Usage } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import type {
   ChatChunkEvent,
+  ChatThinkingEvent,
   ChatStateEvent,
   ChatDoneEvent,
   ChatErrorEvent,
   ChatUsageEvent,
+  ChatToolCallDeltaEvent,
+  ChatToolCallStartEvent,
+  ChatToolCallUpdateEvent,
 } from '../../shared/types/ipc';
 import {
   type ContextBreakdown,
@@ -30,6 +34,29 @@ export type ChatStatus = 'idle' | 'streaming' | 'error';
 
 export type InterruptState = 'idle' | 'confirmAgent' | 'confirmSubagents';
 
+export type ToolBlockStatus = 'generating' | 'running' | 'completed' | 'failed';
+
+export interface ToolBlock {
+  id: string;
+  toolName: string;
+  status: ToolBlockStatus;
+  partialArgs: string;
+  args: string;
+  result: string | null;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+/**
+ * Chronological segments for the in-flight turn.
+ * Preserves call order: tool → text → tool → text → …
+ */
+export type StreamSegment =
+  | { kind: 'tool'; toolCallId: string }
+  | { kind: 'text'; id: string; content: string }
+  | { kind: 'thinking'; id: string; content: string };
+
 export interface ChatState {
   /** All messages in the current chain. */
   messages: Message[];
@@ -39,6 +66,13 @@ export interface ChatState {
   streamingContent: string;
   /** Thinking content being streamed. */
   streamingThinking: string;
+  /** Tool calls generated or run during the current turn. */
+  toolBlocks: ToolBlock[];
+  /**
+   * Ordered live segments for the current stream (tools + text in call order).
+   * Empty when idle / after commit.
+   */
+  streamSegments: StreamSegment[];
   /** Error message if status is 'error'. */
   error: string | null;
   /** Latest usage data from the stream. */
@@ -51,6 +85,8 @@ export interface ChatState {
   elapsedSeconds: number;
   /** Current interrupt confirmation phase. */
   interruptState: InterruptState;
+  /** Whether the last completed chain was interrupted by the user. */
+  interrupted: boolean;
   /** Cumulative usage summed across all messages in the session. */
   cumulativeUsage: Usage;
   /** Current working directory of the main process. */
@@ -64,7 +100,10 @@ export interface UseChatReturn extends ChatState {
   cancel: () => Promise<void>;
   /** Clear the error state. */
   clearError: () => void;
-  /** Manually set messages (for session loading). */
+  /**
+   * Replace messages and wipe all live/stale chat UI state (session switch /
+   * new session). Clears tools, streaming, usage, errors, interrupt flags.
+   */
   setMessages: (messages: Message[]) => void;
 }
 
@@ -75,6 +114,8 @@ export function useChat(): UseChatReturn {
   const [status, setStatus] = useState<ChatStatus>('idle');
   const [streamingContent, setStreamingContent] = useState('');
   const [streamingThinking, setStreamingThinking] = useState('');
+  const [toolBlocks, setToolBlocks] = useState<ToolBlock[]>([]);
+  const [streamSegments, setStreamSegments] = useState<StreamSegment[]>([]);
   const [error, setError] = useState<string | null>(null);
   // TODO: Wire up usage tracking — no IPC event populates this yet.
   // The infrastructure (state, Footer display) is ready; needs a
@@ -83,6 +124,7 @@ export function useChat(): UseChatReturn {
   const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [interruptState, setInterruptState] = useState<InterruptState>('idle');
+  const [interrupted, setInterrupted] = useState(false);
   const [cwd, setCwd] = useState('');
 
   // Context breakdown from messages + usage
@@ -112,6 +154,17 @@ export function useChat(): UseChatReturn {
   const accumulatedContentRef = useRef('');
   const accumulatedThinkingRef = useRef('');
   const usageRef = useRef<Usage | null>(null);
+  const toolBlocksRef = useRef<ToolBlock[]>([]);
+  const streamSegmentsRef = useRef<StreamSegment[]>([]);
+
+  // Keep refs in sync so onDone can commit tools/segments into message history
+  useEffect(() => {
+    toolBlocksRef.current = toolBlocks;
+  }, [toolBlocks]);
+
+  useEffect(() => {
+    streamSegmentsRef.current = streamSegments;
+  }, [streamSegments]);
 
   // Elapsed time ticker
   useEffect(() => {
@@ -142,7 +195,49 @@ export function useChat(): UseChatReturn {
     const unsubChunk = window.orchid.chat.onChunk((event: ChatChunkEvent) => {
       accumulatedContentRef.current += event.data;
       setStreamingContent(accumulatedContentRef.current);
+      // Append to last text segment, or open a new one (preserves tool→text→tool order).
+      setStreamSegments((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.kind === 'text') {
+          const next = [
+            ...prev.slice(0, -1),
+            { ...last, content: last.content + event.data },
+          ];
+          streamSegmentsRef.current = next;
+          return next;
+        }
+        const next: StreamSegment[] = [
+          ...prev,
+          { kind: 'text', id: crypto.randomUUID(), content: event.data },
+        ];
+        streamSegmentsRef.current = next;
+        return next;
+      });
     });
+
+    const unsubThinking =
+      window.orchid.chat.onThinking?.((event: ChatThinkingEvent) => {
+        accumulatedThinkingRef.current += event.data;
+        setStreamingThinking(accumulatedThinkingRef.current);
+        // Chronological thinking segments → Thought widgets in ChatStream
+        setStreamSegments((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.kind === 'thinking') {
+            const next = [
+              ...prev.slice(0, -1),
+              { ...last, content: last.content + event.data },
+            ];
+            streamSegmentsRef.current = next;
+            return next;
+          }
+          const next: StreamSegment[] = [
+            ...prev,
+            { kind: 'thinking', id: crypto.randomUUID(), content: event.data },
+          ];
+          streamSegmentsRef.current = next;
+          return next;
+        });
+      }) ?? (() => {});
 
     const unsubState = window.orchid.chat.onState((event: ChatStateEvent) => {
       if (event.state === 'streaming') {
@@ -164,24 +259,70 @@ export function useChat(): UseChatReturn {
     });
 
     const unsubDone = window.orchid.chat.onDone((event: ChatDoneEvent) => {
-      if (event.response) {
-        const newMessage: Message = {
-          id: crypto.randomUUID(),
-          role: MessageRole.ASSISTANT,
-          content: event.response,
-          type: MessageType.TEXT,
-          tool_calls: null,
-          tool_call_id: null,
-          name: null,
-          thinking: accumulatedThinkingRef.current || null,
-          timestamp: new Date().toISOString(),
-          usage: usageRef.current,
-          hidden: false,
-        };
-        setMessages((prev) => [...prev, newMessage]);
+      if (event.usage) {
+        setUsage(event.usage);
+        usageRef.current = event.usage;
       }
+
+      const liveTools = toolBlocksRef.current;
+      const segments = streamSegmentsRef.current;
+      const usageForCommit = event.usage ?? usageRef.current;
+
+      // Build commit messages in chronological segment order (tool → text → …).
+      // Fall back to tools-then-response only when no segments were recorded.
+      const committed = commitSegmentsToMessages({
+        segments,
+        liveTools,
+        fallbackResponse: event.response ?? accumulatedContentRef.current,
+        interrupted: Boolean(event.interrupted),
+        usage: usageForCommit,
+        thinking: accumulatedThinkingRef.current || null,
+      });
+
+      if (committed.length > 0) {
+        setMessages((prev) => {
+          const liveIds = new Set(liveTools.map((b) => b.id));
+          // Drop any in-flight tool msgs already present (reload / double-done races)
+          const next = prev.filter(
+            (m) =>
+              !(
+                (m.type === MessageType.TOOL_CALL || m.type === MessageType.TOOL_RESULT) &&
+                m.tool_call_id &&
+                liveIds.has(m.tool_call_id)
+              ),
+          );
+
+          // Avoid double-append of identical trailing assistant text
+          const lastCommitted = committed[committed.length - 1];
+          const lastPrev = next[next.length - 1];
+          if (
+            lastCommitted &&
+            lastPrev &&
+            lastCommitted.role === MessageRole.ASSISTANT &&
+            lastPrev.role === MessageRole.ASSISTANT &&
+            lastCommitted.type === MessageType.TEXT &&
+            lastPrev.type === MessageType.TEXT &&
+            lastCommitted.content === lastPrev.content
+          ) {
+            const withoutDupAssistant = committed.slice(0, -1);
+            if (withoutDupAssistant.length === 0) return next;
+            return [...next, ...withoutDupAssistant];
+          }
+
+          return [...next, ...committed];
+        });
+      }
+
+      if (event.interrupted) {
+        setInterrupted(true);
+      }
+
       setStreamingContent('');
       setStreamingThinking('');
+      setStreamSegments([]);
+      streamSegmentsRef.current = [];
+      // Keep toolBlocks until next send so the last turn still renders them live;
+      // messages now also contain them for multi-turn history.
       accumulatedContentRef.current = '';
       accumulatedThinkingRef.current = '';
       setInterruptState('idle');
@@ -189,10 +330,17 @@ export function useChat(): UseChatReturn {
     });
 
     const unsubError = window.orchid.chat.onError((event: ChatErrorEvent) => {
-      setError(event.error);
+      // Prefer title + detail for banner classification when available
+      const display =
+        event.title && event.error && !event.error.startsWith(event.title)
+          ? `${event.title}: ${event.error}`
+          : event.error;
+      setError(display);
       setStatus('idle');
       setStreamingContent('');
       setStreamingThinking('');
+      setStreamSegments([]);
+      streamSegmentsRef.current = [];
       setInterruptState('idle');
       accumulatedContentRef.current = '';
       accumulatedThinkingRef.current = '';
@@ -203,12 +351,87 @@ export function useChat(): UseChatReturn {
       usageRef.current = event.usage;
     });
 
+    const unsubToolStart = window.orchid.chat.onToolCallStart?.((event: ChatToolCallStartEvent) => {
+      setToolBlocks((prev) => upsertToolBlock(prev, {
+        id: event.toolCallId,
+        toolName: event.toolName,
+        status: 'generating',
+        partialArgs: '',
+        args: '',
+        result: null,
+        error: null,
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
+      }));
+      // Record tool position in the chronological segment timeline.
+      setStreamSegments((prev) => {
+        if (prev.some((s) => s.kind === 'tool' && s.toolCallId === event.toolCallId)) {
+          return prev;
+        }
+        const next: StreamSegment[] = [
+          ...prev,
+          { kind: 'tool', toolCallId: event.toolCallId },
+        ];
+        streamSegmentsRef.current = next;
+        return next;
+      });
+    }) ?? (() => {});
+
+    const unsubToolDelta = window.orchid.chat.onToolCallDelta?.((event: ChatToolCallDeltaEvent) => {
+      setToolBlocks((prev) => prev.map((block) => {
+        if (block.id !== event.toolCallId) return block;
+        return {
+          ...block,
+          partialArgs: block.partialArgs + event.argsDelta,
+          status: block.status === 'completed' || block.status === 'failed'
+            ? block.status
+            : 'generating',
+        };
+      }));
+    }) ?? (() => {});
+
+    const unsubToolUpdate = window.orchid.chat.onToolCallUpdate?.((event: ChatToolCallUpdateEvent) => {
+      setToolBlocks((prev) => upsertToolBlock(prev, {
+        id: event.toolCallId,
+        toolName: event.toolName ?? 'unknown',
+        status: event.status === 'failed'
+          ? 'failed'
+          : event.status === 'completed'
+            ? 'completed'
+            : 'running',
+        partialArgs: '',
+        args: event.args ?? '',
+        result: event.result ?? null,
+        error: event.error ?? null,
+        startedAt: new Date().toISOString(),
+        finishedAt: event.status === 'completed' || event.status === 'failed'
+          ? new Date().toISOString()
+          : null,
+      }, true));
+      // Ensure tools that skip start events still appear in order.
+      setStreamSegments((prev) => {
+        if (prev.some((s) => s.kind === 'tool' && s.toolCallId === event.toolCallId)) {
+          return prev;
+        }
+        const next: StreamSegment[] = [
+          ...prev,
+          { kind: 'tool', toolCallId: event.toolCallId },
+        ];
+        streamSegmentsRef.current = next;
+        return next;
+      });
+    }) ?? (() => {});
+
     return () => {
       unsubChunk();
+      unsubThinking();
       unsubState();
       unsubDone();
       unsubError();
       unsubUsage();
+      unsubToolStart();
+      unsubToolDelta();
+      unsubToolUpdate();
     };
   }, []);
 
@@ -220,10 +443,11 @@ export function useChat(): UseChatReturn {
         return;
       }
 
+      const trimmed = message.trim();
       const userMessage: Message = {
         id: crypto.randomUUID(),
         role: MessageRole.USER,
-        content: message.trim(),
+        content: trimmed,
         type: MessageType.TEXT,
         tool_calls: null,
         tool_call_id: null,
@@ -234,11 +458,28 @@ export function useChat(): UseChatReturn {
         hidden: false,
       };
 
-      setMessages((prev) => [...prev, userMessage]);
+      // On retry after error, the last user message is already in the list —
+      // don't append a duplicate bubble (mock Retry action).
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (
+          error &&
+          last &&
+          last.role === MessageRole.USER &&
+          last.content === trimmed
+        ) {
+          return prev;
+        }
+        return [...prev, userMessage];
+      });
       setError(null);
       setStreamingContent('');
       setStreamingThinking('');
+      setToolBlocks([]);
+      setStreamSegments([]);
+      streamSegmentsRef.current = [];
       setUsage(null);
+      setInterrupted(false);
       usageRef.current = null;
       setStreamStartTime(Date.now());
       setElapsedSeconds(0);
@@ -248,53 +489,103 @@ export function useChat(): UseChatReturn {
       setStatus('streaming');
 
       try {
-        await window.orchid.chat.send({ message: message.trim() });
+        await window.orchid.chat.send({ message: trimmed });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         setStatus('idle');
       }
     },
-    [status],
+    [status, error],
   );
 
   const cancel = useCallback(async () => {
     if (!window.orchid?.chat) return;
     try {
       const result = await window.orchid.chat.cancel();
-      // First Esc only shows hint — don't append interrupted message yet
-      if (result && (result as { status: string }).status === 'confirming') {
+      const status = result && (result as { status: string }).status;
+
+      // First Esc only shows confirmAgent hint
+      if (status === 'confirming') {
+        setInterruptState('confirmAgent');
+        return;
+      }
+
+      // Second Esc cancels the agent. Main process emits CHAT_DONE with
+      // interrupted=true (partial content, no suffix). Stay in subagent phase
+      // if applicable; mark in-flight tool blocks as failed.
+      // Don't set status='idle' here — let onDone handle finalization to
+      // avoid double-committing segments.
+      if (status === 'confirming_subagents') {
+        setInterruptState('confirmSubagents');
+        setInterrupted(true);
+        setToolBlocks((prev) =>
+          prev.map((block) =>
+            block.status === 'generating' || block.status === 'running'
+              ? {
+                  ...block,
+                  status: 'failed' as const,
+                  error: 'Interrupted by user',
+                  finishedAt: new Date().toISOString(),
+                }
+              : block,
+          ),
+        );
+        return;
+      }
+
+      // Third Esc (or full cancel with no subagents)
+      if (status === 'cancelled') {
+        setInterruptState('idle');
+        setInterrupted(true);
+        setToolBlocks((prev) =>
+          prev.map((block) =>
+            block.status === 'generating' || block.status === 'running'
+              ? {
+                  ...block,
+                  status: 'failed' as const,
+                  error: 'Interrupted by user',
+                  finishedAt: new Date().toISOString(),
+                }
+              : block,
+          ),
+        );
+        setStreamingContent('');
+        setStreamingThinking('');
+        accumulatedContentRef.current = '';
+        accumulatedThinkingRef.current = '';
+        setStatus('idle');
         return;
       }
     } catch {
       // Ignore cancel errors
     }
-    // Second Esc actually cancels — append interrupted message
-    if (accumulatedContentRef.current) {
-      const interruptedMessage: Message = {
-        id: crypto.randomUUID(),
-        role: MessageRole.ASSISTANT,
-        content: accumulatedContentRef.current + '\n\n[Interrupted by user]',
-        type: MessageType.TEXT,
-        tool_calls: null,
-        tool_call_id: null,
-        name: null,
-        thinking: accumulatedThinkingRef.current || null,
-        timestamp: new Date().toISOString(),
-        usage: null,
-        hidden: false,
-      };
-      setMessages((prev) => [...prev, interruptedMessage]);
-    }
-    setStreamingContent('');
-    setStreamingThinking('');
-    accumulatedContentRef.current = '';
-    accumulatedThinkingRef.current = '';
-    setInterruptState('idle');
-    setStatus('idle');
   }, []);
 
   const clearError = useCallback(() => {
     setError(null);
+  }, []);
+
+  /**
+   * Replace messages (session load / new session) and drop all live/stale UI
+   * state so nothing from the previous session remains (tools, stream, usage).
+   */
+  const replaceMessages = useCallback((next: Message[]) => {
+    setMessages(next);
+    setToolBlocks([]);
+    setStreamSegments([]);
+    streamSegmentsRef.current = [];
+    setStreamingContent('');
+    setStreamingThinking('');
+    setError(null);
+    setInterrupted(false);
+    setInterruptState('idle');
+    setStatus('idle');
+    setUsage(null);
+    usageRef.current = null;
+    setStreamStartTime(null);
+    setElapsedSeconds(0);
+    accumulatedContentRef.current = '';
+    accumulatedThinkingRef.current = '';
   }, []);
 
   return {
@@ -302,6 +593,8 @@ export function useChat(): UseChatReturn {
     status,
     streamingContent,
     streamingThinking,
+    toolBlocks,
+    streamSegments,
     error,
     usage,
     cumulativeUsage,
@@ -309,10 +602,180 @@ export function useChat(): UseChatReturn {
     streamStartTime,
     elapsedSeconds,
     interruptState,
+    interrupted,
     cwd,
     send,
     cancel,
     clearError,
-    setMessages,
+    setMessages: replaceMessages,
   };
+}
+
+/**
+ * Convert chronological stream segments into persisted messages.
+ * Order matches call order: tool pair(s) and text segments interleaved.
+ */
+function commitSegmentsToMessages(opts: {
+  segments: readonly StreamSegment[];
+  liveTools: readonly ToolBlock[];
+  fallbackResponse: string;
+  interrupted: boolean;
+  usage: Usage | null;
+  thinking: string | null;
+}): Message[] {
+  const { segments, liveTools, fallbackResponse, interrupted, usage, thinking } = opts;
+  const toolsById = new Map(liveTools.map((b) => [b.id, b]));
+  const out: Message[] = [];
+  const usedToolIds = new Set<string>();
+
+  if (segments.length > 0) {
+    // Find last text segment so usage lands on the final assistant bubble.
+    let lastTextIndex = -1;
+    for (let i = segments.length - 1; i >= 0; i--) {
+      if (segments[i].kind === 'text') {
+        lastTextIndex = i;
+        break;
+      }
+    }
+
+    segments.forEach((seg, index) => {
+      if (seg.kind === 'tool') {
+        const block = toolsById.get(seg.toolCallId);
+        if (block) {
+          usedToolIds.add(block.id);
+          out.push(...toolBlockToMessages(block));
+        }
+        return;
+      }
+      if (seg.kind === 'text') {
+        if (!seg.content && !(interrupted && index === lastTextIndex)) return;
+        out.push({
+          id: seg.id || crypto.randomUUID(),
+          role: MessageRole.ASSISTANT,
+          content: seg.content,
+          type: MessageType.TEXT,
+          tool_calls: null,
+          tool_call_id: null,
+          name: null,
+          thinking: index === lastTextIndex ? thinking : null,
+          timestamp: new Date().toISOString(),
+          usage: index === lastTextIndex ? usage : null,
+          hidden: false,
+        });
+        return;
+      }
+      if (seg.kind === 'thinking' && seg.content) {
+        out.push({
+          id: seg.id || crypto.randomUUID(),
+          role: MessageRole.ASSISTANT,
+          content: seg.content,
+          type: MessageType.THINKING,
+          tool_calls: null,
+          tool_call_id: null,
+          name: null,
+          thinking: seg.content,
+          timestamp: new Date().toISOString(),
+          usage: null,
+          hidden: false,
+        });
+      }
+    });
+
+    // Any tools that never got a segment entry (should be rare) — append in start order.
+    for (const block of liveTools) {
+      if (!usedToolIds.has(block.id)) {
+        out.push(...toolBlockToMessages(block));
+      }
+    }
+    return out;
+  }
+
+  // Fallback: no segment timeline (older paths) — tools then single assistant.
+  for (const block of liveTools) {
+    out.push(...toolBlockToMessages(block));
+  }
+  if (fallbackResponse || interrupted) {
+    out.push({
+      id: crypto.randomUUID(),
+      role: MessageRole.ASSISTANT,
+      content: fallbackResponse ?? '',
+      type: MessageType.TEXT,
+      tool_calls: null,
+      tool_call_id: null,
+      name: null,
+      thinking,
+      timestamp: new Date().toISOString(),
+      usage,
+      hidden: false,
+    });
+  }
+  return out;
+}
+
+/** Convert a live ToolBlock into persisted tool_call + tool_result messages. */
+function toolBlockToMessages(block: ToolBlock): Message[] {
+  const callId = block.id;
+  const toolName = block.toolName || 'unknown';
+  const args = block.args || block.partialArgs || '{}';
+  const call: Message = {
+    id: crypto.randomUUID(),
+    role: MessageRole.ASSISTANT,
+    content: '',
+    type: MessageType.TOOL_CALL,
+    tool_calls: [
+      {
+        id: callId,
+        type: 'function',
+        function: { name: toolName, arguments: args },
+      },
+    ],
+    tool_call_id: callId,
+    name: toolName,
+    thinking: null,
+    timestamp: block.startedAt,
+    usage: null,
+    hidden: false,
+  };
+
+  const resultContent =
+    block.status === 'failed'
+      ? block.error ?? 'Tool failed'
+      : block.result ?? '';
+
+  const result: Message = {
+    id: crypto.randomUUID(),
+    role: MessageRole.TOOL,
+    content: resultContent,
+    type: MessageType.TOOL_RESULT,
+    tool_calls: null,
+    tool_call_id: callId,
+    name: toolName,
+    thinking: null,
+    timestamp: block.finishedAt ?? block.startedAt,
+    usage: null,
+    hidden: false,
+  };
+
+  return [call, result];
+}
+
+function upsertToolBlock(blocks: ToolBlock[], next: ToolBlock, merge = false): ToolBlock[] {
+  const existing = blocks.find((block) => block.id === next.id);
+  if (!existing) return [...blocks, next];
+
+  return blocks.map((block) => {
+    if (block.id !== next.id) return block;
+    return merge
+      ? {
+          ...block,
+          toolName: next.toolName === 'unknown' ? block.toolName : next.toolName,
+          status: next.status,
+          partialArgs: next.partialArgs || block.partialArgs,
+          args: next.args || block.args || block.partialArgs,
+          result: next.result ?? block.result,
+          error: next.error ?? block.error,
+          finishedAt: next.finishedAt ?? block.finishedAt,
+        }
+      : { ...block, ...next };
+  });
 }

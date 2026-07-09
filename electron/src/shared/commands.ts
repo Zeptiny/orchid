@@ -120,11 +120,3 @@ export const THEME_LABELS: Record<string, string> = {
   'green-terminal': 'Green Terminal',
 };
 
-export const PERSONALITY_NAMES = [
-  'default',
-  'concise',
-  'verbose',
-  'creative',
-  'technical',
-  'friendly',
-] as const;

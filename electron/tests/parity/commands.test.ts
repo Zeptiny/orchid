@@ -1,7 +1,7 @@
 /**
  * Command Parity Tests — U28.
  *
- * Verifies that all 12 commands from the Python TUI are ported to the TS/Electron app.
+ * Verifies that all commands are registered with correct metadata.
  * Tests STRUCTURE (all commands registered, correct metadata), not behavior.
  */
 import { describe, it, expect } from 'vitest';
@@ -12,7 +12,7 @@ import {
   isCommand,
 } from '../../src/main/commands/registry';
 
-// ── Expected commands (12 total) ───────────────────────────────────────────
+// ── Expected commands (11 total) ───────────────────────────────────────────
 
 const EXPECTED_COMMANDS = [
   { name: '/new', category: 'commands' },
@@ -23,23 +23,29 @@ const EXPECTED_COMMANDS = [
   { name: '/theme', category: 'commands' },
   { name: '/personality', category: 'commands' },
   { name: '/settings', category: 'commands' },
-  { name: '/index-rag', category: 'commands' },
-  { name: '/index-ast', category: 'commands' },
-  { name: '/rag status', category: 'commands' },
+  { name: '/rag index', category: 'commands' },
+  { name: '/ast index', category: 'commands' },
   { name: '/rag clear', category: 'commands' },
 ];
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('Command Parity', () => {
-  it('all 12 commands are registered', () => {
-    expect(COMMANDS).toHaveLength(12);
+  it('all 11 commands are registered', () => {
+    expect(COMMANDS).toHaveLength(11);
   });
 
   it('all expected command names are present', () => {
     const names = getCommandNames().sort();
     const expectedNames = EXPECTED_COMMANDS.map((c) => c.name).sort();
     expect(names).toEqual(expectedNames);
+  });
+
+  it('does not include removed or old command names', () => {
+    const names = getCommandNames();
+    expect(names).not.toContain('/rag status');
+    expect(names).not.toContain('/index-rag');
+    expect(names).not.toContain('/index-ast');
   });
 
   it('each command has name, description, and category', () => {
@@ -82,11 +88,14 @@ describe('Command Parity', () => {
     expect(isCommand('/new')).toBe(true);
     expect(isCommand('/sessions')).toBe(true);
     expect(isCommand('/theme')).toBe(true);
+    expect(isCommand('/rag index')).toBe(true);
+    expect(isCommand('/ast index')).toBe(true);
   });
 
-  it('isCommand() returns false for unknown commands', () => {
+  it('isCommand() returns false for unknown command', () => {
     expect(isCommand('/unknown')).toBe(false);
     expect(isCommand('not-a-command')).toBe(false);
+    expect(isCommand('/rag status')).toBe(false);
   });
 
   it('command names are unique', () => {

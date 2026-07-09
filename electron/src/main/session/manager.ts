@@ -21,6 +21,8 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Session } from '../../shared/types/session';
+import type { Message } from '../../shared/types/message';
+import { ChainStatus, type Chain } from '../../shared/types/chain';
 import {
   saveSession as storageSaveSession,
   loadSession as storageLoadSession,
@@ -189,6 +191,88 @@ export class SessionManager {
    */
   listSaved(): SessionSummary[] {
     return storageListSavedSessions(this._storageOpts);
+  }
+
+  /**
+   * Replace (or create) the active chain message list and persist.
+   *
+   * Used by chat IPC after each completed or interrupted turn so session
+   * reload can replay user/assistant/tool messages.
+   */
+  syncActiveChain(params: {
+    messages: readonly Message[];
+    status?: ChainStatus;
+    model?: string;
+    agentName?: string;
+    agentType?: string;
+    agentTier?: string;
+  }): Session | null {
+    if (!this._active) {
+      return null;
+    }
+
+    const now = new Date().toISOString();
+    const status = params.status ?? ChainStatus.COMPLETED;
+    const existing =
+      this._active.chains.find((c) => c.id === this._active!.activeChainId) ??
+      this._active.chains[this._active.chains.length - 1] ??
+      null;
+
+    const chain: Chain = existing
+      ? {
+          ...existing,
+          messages: [...params.messages],
+          status,
+          model: params.model ?? existing.model ?? this._active.model,
+          agentName: params.agentName ?? existing.agentName,
+          agentType: params.agentType ?? existing.agentType,
+          agentTier: params.agentTier ?? existing.agentTier,
+        }
+      : {
+          id: randomUUID(),
+          sessionId: this._active.id,
+          messages: [...params.messages],
+          status,
+          model: params.model ?? this._active.model,
+          agentName: params.agentName ?? 'general',
+          agentType: params.agentType ?? 'subagent',
+          agentTier: params.agentTier ?? 'bloom',
+          subagentRecord: null,
+        };
+
+    const chains = existing
+      ? this._active.chains.map((c) => (c.id === chain.id ? chain : c))
+      : [...this._active.chains, chain];
+
+    this._active = {
+      ...this._active,
+      chains,
+      activeChainId: chain.id,
+      updatedAt: now,
+    };
+    storageSaveSession(this._active, this._storageOpts);
+    return this._active;
+  }
+
+  /**
+   * Replace subagent_chains on the active session and persist.
+   *
+   * Used when subagents complete so chain-footer token usage and the
+   * right-rail subagent list can reload real data from disk.
+   */
+  syncSubagentChains(
+    subagentChains: Session['subagentChains'],
+  ): Session | null {
+    if (!this._active) {
+      return null;
+    }
+    this._active = {
+      ...this._active,
+      subagentChains: [...subagentChains],
+      updatedAt: new Date().toISOString(),
+    };
+    storageSaveSession(this._active, this._storageOpts);
+    return this._active;
   }
 
   /**

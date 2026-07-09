@@ -15,6 +15,10 @@ import { configSchema } from '../config/schema';
 import { resolveModelMetadata } from '../llm/model-metadata';
 import { discoverModelsAsync } from '../llm/providers';
 import {
+  listPersonalityNames,
+  loadPersonalities,
+} from '../personality/registry';
+import {
   encryptAndStore,
   providerKeychainKey,
   redactConfig,
@@ -86,6 +90,13 @@ export function registerConfigIPC(): void {
     return discoverModelsAsync(alias, config, force === true);
   });
 
+  // config:list_personalities — names from ~/.orchid/personalities/*.md
+  ipcMain.handle(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES, async () => {
+    // Reload so newly-added files appear without restarting the app
+    loadPersonalities();
+    return listPersonalityNames();
+  });
+
   // config:save — merge updates into the home config and persist.
   // API keys in providers are stored in the keychain and removed from the
   // config file before persistence.
@@ -128,4 +139,5 @@ export function unregisterConfigIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_SAVE);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_MODEL_METADATA);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_DISCOVER_MODELS);
+  ipcMain.removeHandler(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES);
 }

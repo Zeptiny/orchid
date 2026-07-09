@@ -1,7 +1,7 @@
 ---
 title: "fix: Migration Regressions Batch 1 — Token Usage, Logging, RAG Embedder, Tools, UI"
 type: fix
-status: active
+status: completed
 date: 2026-07-08
 origin: docs/code-review-reports/migration-review-python-to-electron.md
 ---
@@ -10,7 +10,7 @@ origin: docs/code-review-reports/migration-review-python-to-electron.md
 
 ## Summary
 
-Fix 22 regression items from the Python→Electron migration review, plus all critical items. The work spans 6 areas: token usage data path, session auto-naming, persistent logging, RAG embedder quality, tool enhancements (shell=false, file_pattern, validation, concurrency guards), and UI features (context grid, token sidebar, working directory, live command widgets, interrupt indicators, footer format, subagent tabs, personality system).
+Fix 19 regression items from the Python→Electron migration review. The work spans 6 areas: token usage data path, session auto-naming, persistent logging, RAG embedder quality, tool enhancements (shell=false, file_pattern, validation, concurrency guards, interrupt_subagents callback flushing), and UI features (context grid, token sidebar, working directory, live command widgets, interrupt indicators, footer format, subagent tabs).
 
 ---
 
@@ -38,12 +38,9 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 - R14. Interrupt two-phase confirmation wired in renderer
 - R15. Footer usage breakdown in compact ΣX · ↑Y format
 - R16. Subagent tab panes in sidebar
-- R17. Personality system ported
-- R18. Per-chunk usage streaming (not just final emission)
-- R19. Model metadata (max_input_tokens, supports_vision)
-- R20. Model endpoint discovery in LLM pipeline
-- R21. Skill tool builder filtering by allowed_skills (already done — verify)
-- R22. Stream termination diagnostics
+- R17. Model metadata (max_input_tokens, supports_vision)
+- R18. Model endpoint discovery in LLM pipeline
+- R19. Stream termination diagnostics
 
 ---
 
@@ -60,6 +57,9 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 - Full `/model` command with tabular display and vision indicators
 - Streaming message test suite (3,284 lines of Python tests)
 - Background commands & PTY test suite (1,859 lines)
+- Personality system: port registry + 6 default personality files
+- Per-chunk usage streaming: yield usage after each step, not just at stream end
+- Skill tool filtering verification: confirm existing implementation matches Python behavior
 
 ---
 
@@ -90,13 +90,13 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 
 ## Key Technical Decisions
 
-- **Tokenizer**: Use `@huggingface/tokenizers` npm package for proper BPE tokenization matching the BGE-small model vocabulary. This is the official HuggingFace tokenizer library with Node.js bindings.
-- **IPC pattern for usage**: Add `CHAT_USAGE` event channel alongside existing `CHAT_CHUNK`/`CHAT_DONE`. Forward usage from `onStepFinish` callback through the agent machine to IPC.
-- **Auto-naming trigger**: Call `sessionManager.autoNameActive()` in the chat IPC handler after `CHAT_DONE` is sent, using the existing `GenerateTitleCallback` pattern.
-- **File logging**: Use a simple `fs.appendFileSync`-based logger writing to `~/.orchid/logs/orchid.log`, matching Python's `FileHandler` pattern. No external dependency needed.
-- **shell=false**: When `shell=false`, use `command.split(/\s+/)` for argument splitting (simpler than shlex, adequate for Node.js).
+- **Tokenizer**: Use `@huggingface/tokenizers` npm package for proper BPE tokenization matching the BGE-small model vocabulary. Run `npx electron-rebuild` after install for Electron ABI compatibility. If native module fails to load, fall back to `js-tiktoken` (pure WASM) before falling back to `simpleTokenize()`.
+- **IPC pattern for usage**: Add `CHAT_USAGE` event channel alongside existing `CHAT_CHUNK`/`CHAT_DONE`. Forward usage from `onStepFinish` callback through the agent machine to IPC. Yield `{ type: 'usage' }` before `{ type: 'finish' }` in the orchestrator so the agent machine receives it before transitioning to idle.
+- **Auto-naming trigger**: Call `sessionManager.autoNameActive()` in the chat IPC handler after `CHAT_DONE` is sent, using the existing `GenerateTitleCallback` pattern. No dependency on usage data — triggers on idle state only.
+- **File logging**: Use `fs.createWriteStream` with auto-flush for async file writing to `~/.orchid/logs/orchid.log`, avoiding synchronous I/O that would block the Electron main process event loop.
+- **shell=false**: Use `shell-quote` npm package for proper shlex-compatible argument parsing. Falls back to simple whitespace split only for single-word commands without special characters.
 - **Context grid**: Port Python's 8x8 colored block grid using CSS grid with colored divs, computing token distribution across categories.
-- **Personality system**: Port as a simple registry loading `.md` files from `~/.orchid/personalities/`, integrated into `system-prompt.ts`.
+- **Personality system**: Deferred to separate enhancements batch.
 
 ---
 
@@ -113,18 +113,21 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 **Files:**
 - Modify: `electron/src/shared/types/ipc.ts` — add `ChatUsageEvent` interface, `CHAT_USAGE` channel
 - Modify: `electron/src/preload/index.ts` — add `CHAT_USAGE` to allowed event channels, add `onUsage` listener
+- Modify: `electron/src/main/agents/xstate/events.ts` — add `UsageEvent` to `AgentEvent` union
 - Modify: `electron/src/main/ipc/chat.ts` — forward usage events from agent machine context to renderer
-- Modify: `electron/src/main/agents/xstate/agent-machine.ts` — track usage in context, emit USAGE event
+- Modify: `electron/src/main/agents/xstate/agent-machine.ts` — track usage in context, emit USAGE event (handle in idle state too since usage arrives after STREAM_END)
 - Modify: `electron/src/renderer/hooks/useChat.ts` — listen for `onUsage`, populate `usage` state, set on assistant message
-- Modify: `electron/src/renderer/components/Footer.tsx` — enhance with compact ΣX · ↑Y format (merge with U15)
+- Modify: `electron/src/renderer/components/Footer.tsx` — enhance with compact ΣX · ↑Y format
 
 **Approach:**
 - Agent machine context gains `usage: Usage | null` field
+- Orchestrator reorders: yield `{ type: 'usage' }` BEFORE `{ type: 'finish' }` so the machine receives usage while still in streaming state
 - Stream callback receives `{ type: 'usage' }` events and sends `USAGE` XState event
-- On `USAGE` event, agent machine assigns usage to context
+- On `USAGE` event, agent machine assigns usage to context (handler in both streaming and idle states)
 - Chat IPC subscribes to context changes, sends `CHAT_USAGE` event when usage changes
 - `useChat.ts` listens via `onUsage`, updates `usage` state and sets it on the final assistant message
-- Footer receives usage and renders compact format
+- Footer renders compact format: `Σ12.5k (45%) · ↑8.2k (⟲1.0k) ↓4.3k`
+- Footer shows elapsed time during streaming, usage after stream ends
 
 **Test scenarios:**
 - Happy path: Send a message, verify Footer shows prompt/cached/completion tokens after stream ends
@@ -143,7 +146,7 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 
 **Requirements:** R2
 
-**Dependencies:** U1 (usage must flow for clean stream completion)
+**Dependencies:** None
 
 **Files:**
 - Modify: `electron/src/main/ipc/chat.ts` — call `autoNameActive()` after `CHAT_DONE` event
@@ -178,16 +181,16 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 **Dependencies:** None
 
 **Files:**
-- Create: `electron/src/main/logging.ts` — file logger with rotation
+- Create: `electron/src/main/logging.ts` — file logger
 - Modify: `electron/src/main/index.ts` — initialize logging at startup
 - Test: `electron/tests/unit/file-logging.test.ts`
 
 **Approach:**
 - Create a `FileLogger` class that wraps `console.*` methods
+- Uses `fs.createWriteStream` with auto-flush for async file writing (avoids blocking the event loop)
 - Writes to `~/.orchid/logs/orchid.log` with append
 - Format: `YYYY-MM-DD HH:mm:ss LEVEL message`
 - Log level controlled by `ORCHID_LOG_LEVEL` env var (default: INFO)
-- Rotate when file exceeds 10MB (keep 1 backup)
 - Override `console.log`, `console.warn`, `console.error`, `console.debug` to also write to file
 
 **Test scenarios:**
@@ -216,9 +219,10 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 
 **Approach:**
 - Install `@huggingface/tokenizers` npm package
+- Run `npx electron-rebuild` to compile native module for Electron's Node.js ABI
 - Load the BGE-small tokenizer from the model's `tokenizer.json` file (downloaded alongside the ONNX model)
 - Replace `simpleTokenize()` with `tokenizer.encode(text)` which returns proper BPE token IDs
-- Fall back to `simpleTokenize()` if tokenizer file is not found (graceful degradation)
+- Fall back to `simpleTokenize()` if tokenizer file is not found or native module fails to load (catch `MODULE_NOT_FOUND`)
 - Cache the tokenizer instance for reuse
 
 **Test scenarios:**
@@ -246,7 +250,8 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 - Modify: `electron/src/main/tools/process/execute-command.ts` — add shell=false path using `spawn` with args array
 
 **Approach:**
-- When `shell=false`, split command on whitespace (`command.split(/\s+/)`) and use `spawn(args[0], args.slice(1), ...)` instead of `spawn('/bin/sh', ['-c', command], ...)`
+- When `shell=false`, use `shell-quote` npm package to parse the command string into an args array (handles quoted args, escaped spaces, glob patterns)
+- Use `spawn(args[0], args.slice(1), ...)` instead of `spawn('/bin/sh', ['-c', command], ...)`
 - Reject `shell=false` with `background=true` (matching Python constraint)
 - Keep existing `shell=true` path unchanged
 
@@ -271,14 +276,13 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 **Dependencies:** None
 
 **Files:**
-- Modify: `electron/src/main/tools/rag/search.ts` — add `file_pattern` to schema and handler
-- Modify: `electron/src/main/rag/store.ts` — add file_pattern filter to `search()` method
+- Modify: `electron/src/main/tools/rag/search.ts` — add `file_pattern` to schema, pass to store.search()
+- Note: `electron/src/main/rag/store.ts` already implements `filePattern` filtering in `search()` method — no changes needed there
 
 **Approach:**
-- Add `file_pattern: z.string().optional()` to `ragSearchSchema`
-- Pass `file_pattern` to `store.search()` 
-- In `RAGStore.search()`, filter results using `minimatch` on `filePath` before returning
-- Use `minimatch` (already a dependency in the project) for glob matching
+- Add `file_pattern: z.string().min(1).optional()` to `ragSearchSchema` (min(1) rejects empty strings)
+- Pass `file_pattern` to `store.search()` which already has `filePattern` parameter and `compilePattern` filtering
+- Use existing `compilePattern` in store.ts for glob matching (not minimatch)
 
 **Test scenarios:**
 - Happy path: `file_pattern: "*.py"` returns only Python files
@@ -529,31 +533,6 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 
 ---
 
-- U15. **Enhance Footer with compact usage format**
-
-**Goal:** Footer shows ΣX · ↑Y (⟲Z) ↓W format matching Python.
-
-**Requirements:** R15
-
-**Dependencies:** U1
-
-**Files:**
-- Modify: `electron/src/renderer/components/Footer.tsx` — compact format
-
-**Approach:**
-- Replace current label:value format with Python's compact `Σ12.5k (45%) · ↑8.2k (⟲1.0k) ↓4.3k`
-- Include context percentage when `max_context` is available
-- Keep elapsed time display during streaming
-
-**Test scenarios:**
-- Happy path: Footer shows `Σ12.5k · ↑8.2k (⟲1.0k) ↓4.3k`
-- Edge case: No usage → shows only model name and elapsed
-
-**Verification:**
-- Footer format matches Python's `_format_footer_usage_label()` output
-
----
-
 - U16. **Add subagent tab panes to sidebar**
 
 **Goal:** Sidebar has dedicated subagent tab with live status for each subagent.
@@ -585,73 +564,11 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 
 ---
 
-- U17. **Port personality system**
-
-**Goal:** Personality system loads markdown files and appends to system prompt.
-
-**Requirements:** R17
-
-**Dependencies:** None
-
-**Files:**
-- Create: `electron/src/main/personality/registry.ts` — personality registry
-- Create: `electron/src/main/personality/defaults/` — default personality files (default.md, meow.md, pirate.md, socrates.md, stupid.md, zen.md)
-- Modify: `electron/src/main/llm/system-prompt.ts` — integrate personality into prompt
-- Modify: `electron/src/main/ipc/chat.ts` — pass personality to system prompt builder
-- Modify: `electron/src/renderer/components/CommandPalette.tsx` — add /personality command
-- Test: `electron/tests/unit/personality.test.ts`
-
-**Approach:**
-- Load `.md` files from `~/.orchid/personalities/` (seed defaults on first run)
-- `PersonalityRegistry` class with `load()`, `get()`, `list()`, `appendPersonality(prompt)` methods
-- `appendPersonality()` appends `\n\n## Personality\n\n{text}\n` to system prompt
-- `/personality` command in palette lets users switch active personality
-- Config stores `personality` field (already exists in schema)
-
-**Test scenarios:**
-- Happy path: Default personality loaded, appended to system prompt
-- Edge case: Custom personality file added → appears in list
-- Error path: Personality file corrupt → falls back to default
-- Integration: `/personality pirate` → system prompt includes pirate personality
-
-**Verification:**
-- `PersonalityRegistry` loads defaults and custom personalities
-- System prompt includes personality text when configured
-
----
-
-- U18. **Stream per-chunk usage events**
-
-**Goal:** Usage is forwarded per-step, not just at stream end.
-
-**Requirements:** R18
-
-**Dependencies:** U1
-
-**Files:**
-- Modify: `electron/src/main/llm/orchestrator.ts` — yield usage per step
-- Modify: `electron/src/main/agents/xstate/agent-machine.ts` — handle per-step usage
-
-**Approach:**
-- In `onStepFinish` callback, yield `{ type: 'usage', usage: stepUsage }` after each step (not just at end)
-- Agent machine receives USAGE event per step, updates context
-- IPC forwards each usage update to renderer
-- Renderer accumulates and displays running total
-
-**Test scenarios:**
-- Happy path: Multi-step tool call → usage updates after each step
-- Integration: Footer shows increasing token counts during multi-step execution
-
-**Verification:**
-- `CHAT_USAGE` events fire after each step, not just at stream end
-
----
-
-- U19. **Add model metadata resolution**
+- U17. **Add model metadata resolution**
 
 **Goal:** Model metadata (max_input_tokens, supports_vision) available for UI display.
 
-**Requirements:** R19
+**Requirements:** R17
 
 **Dependencies:** None
 
@@ -678,13 +595,13 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 
 ---
 
-- U20. **Add model endpoint discovery to LLM pipeline**
+- U18. **Add model endpoint discovery to LLM pipeline**
 
 **Goal:** Model discovery available in the LLM pipeline, not just onboarding.
 
-**Requirements:** R20
+**Requirements:** R18
 
-**Dependencies:** U19
+**Dependencies:** U17
 
 **Files:**
 - Modify: `electron/src/main/llm/providers.ts` — add `discoverModels()` function
@@ -708,38 +625,11 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 
 ---
 
-- U21. **Verify skill tool builder filtering**
-
-**Goal:** Confirm skill tool builder correctly filters by agent's allowed_skills.
-
-**Requirements:** R21
-
-**Dependencies:** None
-
-**Files:**
-- Verify: `electron/src/main/tools/skill/skill.ts` — already implements filtering
-- Test: `electron/tests/unit/skill-tool-filtering.test.ts`
-
-**Approach:**
-- Verify existing implementation matches Python's `build_skill_tool(allowed_skills)` behavior
-- If gaps found, fix them
-- Add test coverage for filtering with glob patterns
-
-**Test scenarios:**
-- Happy path: Agent with `allowed_skills: ["debug", "commit"]` → skill tool lists only those
-- Edge case: `allowed_skills: ["*"]` → all skills listed
-- Integration: Different agents see different skill lists
-
-**Verification:**
-- Skill tool filtering works correctly per agent configuration
-
----
-
-- U22. **Add stream termination diagnostics**
+- U19. **Add stream termination diagnostics**
 
 **Goal:** Log warnings when stream terminates abnormally (finish_reason='length', etc.).
 
-**Requirements:** R22
+**Requirements:** R19
 
 **Dependencies:** U3
 
@@ -764,12 +654,12 @@ The Electron migration ported all 27 tools and core infrastructure, but left sev
 
 ## System-Wide Impact
 
-- **Interaction graph:** U1 (usage) feeds U10 (context grid), U11 (token sidebar), U15 (footer format), U18 (per-chunk usage). U3 (logging) feeds U22 (diagnostics). U4 (embedder) is isolated.
+- **Interaction graph:** U1 (usage) feeds U10 (context grid), U11 (token sidebar), U14 (interrupt hints). U3 (logging) feeds U19 (diagnostics). U4 (embedder) is isolated.
 - **Error propagation:** IPC validation errors surface as `CHAT_ERROR` events. Tool validation errors return `isError: true` to the LLM.
 - **State lifecycle risks:** Usage state must not leak across sessions. Auto-naming must not fire if session was already named. Indexing guards must reset on failure.
 - **API surface parity:** New IPC channels (`CHAT_USAGE`) must be added to allowlists in preload.
 - **Integration coverage:** Token usage flow spans orchestrator → agent machine → IPC → renderer — needs integration test.
-- **Unchanged invariants:** All 27 tool definitions and handlers remain unchanged (except execute-command shell=false enhancement and rag_search file_pattern addition).
+- **Unchanged invariants:** All 27 tool definitions and handlers remain unchanged (except execute-command shell=false enhancement, rag_search file_pattern addition, and interrupt_subagents callback flushing).
 
 ---
 
