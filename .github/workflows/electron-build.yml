@@ -74,11 +74,24 @@ jobs:
         run: ./scripts/rebuild-native.sh --force
         shell: bash
 
+      - name: Prune onnxruntime binaries for target platform
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = "mac" ]; then
+            rm -rf node_modules/onnxruntime-node/bin/napi-v6/linux node_modules/onnxruntime-node/bin/napi-v6/win32 || true
+          elif [ "${{ matrix.platform }}" = "win" ]; then
+            rm -rf node_modules/onnxruntime-node/bin/napi-v6/darwin node_modules/onnxruntime-node/bin/napi-v6/linux || true
+          else
+            rm -rf node_modules/onnxruntime-node/bin/napi-v6/darwin node_modules/onnxruntime-node/bin/napi-v6/win32 || true
+            rm -rf node_modules/onnxruntime-node/bin/napi-v6/linux/arm64 || true
+          fi
+          du -sh node_modules/onnxruntime-node || true
+
       - name: Build (compile TS + bundle renderer)
         run: npm run build
 
       - name: Package
-        run: npx electron-builder --config electron-builder.yml --${{ matrix.platform }}
+        run: npx electron-builder --config electron-builder.yml --${{ matrix.platform }} --publish=never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_OPTIONS: --max-old-space-size=8192

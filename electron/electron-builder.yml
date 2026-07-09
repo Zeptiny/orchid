@@ -4,22 +4,13 @@ copyright: Copyright © 2026 Orchid Contributors
 
 # ── Publish ───────────────────────────────────────────────────────────────────
 # GitHub releases for auto-update via electron-updater.
-publish:
-  provider: github
-  owner: orchid
-  repo: orchid
-  releaseType: release
+publish: null
+generateUpdatesFilesForAllChannels: false
 
-# Generate update metadata files for all channels (stable, beta, alpha)
-generateUpdatesFilesForAllChannels: true
-
-# ── Directories ────────────────────────────────────────────────────────────────
 directories:
   output: release
   buildResources: build
 
-# ── Files ──────────────────────────────────────────────────────────────────────
-# Include compiled output + package.json; exclude source, tests, configs.
 asar: true
 asarUnpack:
   - "**/node_modules/better-sqlite3/**/*"
@@ -29,19 +20,35 @@ asarUnpack:
 files:
   - dist/**/*
   - package.json
-  - "!src/**"
-  - "!tests/**"
   - "!**/*.ts"
   - "!**/*.tsx"
+  - "!**/*.map"
   - "!**/tsconfig*.json"
   - "!**/vite.config.ts"
   - "!**/eslint.config.mjs"
   - "!**/.prettierrc"
   - "!**/.gitignore"
   - "!**/.npmrc"
-  - "!**/docs/**"
   - "!**/.github/**"
+  - "!**/.coderabbit.yaml"
+  - "!**/docs/**"
+  - "!**/CONTRIBUTING.md"
+  - "!**/CODE-REVIEW*.md"
+  - "!**/PYTHON-ELECTRON*.md"
   - "!**/node_modules/.cache/**"
+  - "!**/node_modules/**/test/**"
+  - "!**/node_modules/**/tests/**"
+  - "!**/node_modules/**/__tests__/**"
+  - "!**/node_modules/**/docs/**"
+  - "!**/node_modules/**/example/**"
+  - "!**/node_modules/**/examples/**"
+  - "!**/node_modules/**/.github/**"
+  - "!**/electron/dist/**"
+  - "!**/electron/build/**"
+  - "!**/electron/scripts/**"
+  - "!**/electron/src/**"
+  - "!**/electron/tests/**"
+  - "!**/electron/release/**"
 
 npmRebuild: false
 
