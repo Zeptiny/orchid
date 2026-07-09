@@ -77,29 +77,17 @@ jobs:
       - name: Build (compile TS + bundle renderer)
         run: npm run build
 
-      - name: Prune build artifacts for lean packaging
+      - name: Prune for lean packaging
         shell: bash
         run: |
           echo "Before prune: $(du -sh node_modules | cut -f1)"
-          rm -rf node_modules/.cache || true
-          rm -rf node_modules/typescript || true
-          rm -rf node_modules/@types || true
-          rm -rf node_modules/vitest || true
-          rm -rf node_modules/vite || true
-          rm -rf node_modules/@vitejs || true
-          rm -rf node_modules/esbuild || true
-          rm -rf node_modules/electron || true
-          rm -rf node_modules/electron-builder || true
-          rm -rf node_modules/@electron || true
-          rm -rf node_modules/tailwindcss || true
-          rm -rf node_modules/@tailwindcss || true
-          rm -rf node_modules/daisyui || true
-          rm -rf node_modules/eslint* || true
-          rm -rf node_modules/typescript-eslint || true
-          rm -rf node_modules/prettier || true
-          rm -rf node_modules/concurrently || true
-          rm -rf node_modules/wait-on || true
-          rm -rf node_modules/@eslint || true
+          rm -rf node_modules/.cache \
+                 node_modules/typescript node_modules/@types \
+                 node_modules/vitest node_modules/vite node_modules/@vitejs \
+                 node_modules/esbuild \
+                 node_modules/tailwindcss node_modules/@tailwindcss node_modules/daisyui \
+                 node_modules/eslint* node_modules/typescript-eslint node_modules/@eslint \
+                 node_modules/prettier node_modules/concurrently node_modules/wait-on || true
           if [ "${{ matrix.platform }}" = "mac" ]; then
             rm -rf node_modules/onnxruntime-node/bin/napi-v6/linux node_modules/onnxruntime-node/bin/napi-v6/win32 || true
           elif [ "${{ matrix.platform }}" = "win" ]; then
