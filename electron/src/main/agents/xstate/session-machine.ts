@@ -259,7 +259,7 @@ export const sessionMachine = setup({
                 }
               } else if (context.interruptState === 'idle') {
                 // Just escalated from confirmSubagents → cancel all running subagents
-                for (const [id, entry] of context.subagents) {
+                for (const [_id, entry] of context.subagents) {
                   if (entry.state === 'running' || entry.state === 'pending') {
                     // The subagent actor will be stopped by the machine
                     // We update the entry state directly

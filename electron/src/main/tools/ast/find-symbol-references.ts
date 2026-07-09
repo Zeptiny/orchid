@@ -6,7 +6,6 @@
  *
  * Ported from Python `src/orchid/tools/ast.py` execute_find_symbol_references.
  */
-import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { ensureIndexed } from '../../ast/indexer';

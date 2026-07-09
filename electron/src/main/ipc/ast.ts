@@ -9,7 +9,6 @@ import { IPC_CHANNELS } from '../../shared/types/ipc';
 import {
   indexProject,
   isIndexing,
-  ensureIndexed,
 } from '../ast/indexer';
 import { ASTStore } from '../ast/store';
 

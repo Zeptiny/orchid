@@ -7,7 +7,7 @@
  * The renderer accesses this API via `window.orchid.*`.
  */
 
-import type { Session, SessionStorageDict } from './session';
+import type { Session } from './session';
 import type { Agent } from './agent';
 import type {
   SessionSummary,

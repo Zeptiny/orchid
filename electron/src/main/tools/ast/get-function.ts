@@ -123,7 +123,7 @@ export const getFunctionHandler: ToolHandler = async (input: unknown) => {
           if (r.text !== targetName) continue;
 
           // Find the function/method definition node
-          let funcNode = findDefinitionNode(r.node);
+          const funcNode = findDefinitionNode(r.node);
           if (!funcNode) continue;
 
           // Get class context
@@ -233,6 +233,7 @@ const DEFINITION_TYPES = new Set([
   'method_definition',
 ]);
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function findDefinitionNode(node: any): any {
   // Check if the node itself is a definition
   if (DEFINITION_TYPES.has(node.type)) return node;

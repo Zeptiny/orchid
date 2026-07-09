@@ -53,7 +53,7 @@ const IDENT_CHARS = new Set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXY
 // ---------------------------------------------------------------------------
 
 export const renameSymbolHandler: ToolHandler = async (input: unknown) => {
-  const { file_path, old_name, new_name } = input as RenameSymbolInput;
+  const { old_name, new_name } = input as RenameSymbolInput;
 
   try {
     if (!old_name || !old_name.trim()) {

@@ -167,7 +167,7 @@ function loadNpy(filePath: string): number[][] | null {
     }
 
     return vectors;
-  } catch (err) {
+  } catch {
     // Corrupted vectors — caller should clear
     return null;
   }
@@ -252,7 +252,7 @@ export class RAGStore {
       const db = openDatabase(this.dbPath);
       db.exec(DB_SCHEMA);
       db.close();
-    } catch (err) {
+    } catch {
       // Corrupted DB — rebuild
       this._rebuildDb();
     }
@@ -894,6 +894,6 @@ function compilePattern(pattern: string): RegExp {
   return new RegExp(`^${regexStr}$`);
 }
 
-function matchPattern(filePath: string, pattern: string): boolean {
+function _matchPattern(filePath: string, pattern: string): boolean {
   return compilePattern(pattern).test(filePath);
 }

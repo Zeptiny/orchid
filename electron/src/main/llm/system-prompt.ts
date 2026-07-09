@@ -9,8 +9,6 @@
  * Dynamic: time, cwd, directory tree, subagent states, todos, background commands.
  */
 import * as os from 'node:os';
-import * as path from 'node:path';
-import type { Config } from '../config/schema';
 
 // ---------------------------------------------------------------------------
 // Types

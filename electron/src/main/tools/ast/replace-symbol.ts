@@ -12,7 +12,6 @@ import type { ToolDefinition, ToolHandler } from '../types';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from '../../ast/parser';
 import { triggerPostWriteCallbacks } from '../filesystem/callbacks';
 import {
-  xmlAttr,
   generateDiff,
   countDiffChanges,
   atomicWrite,
@@ -277,6 +276,7 @@ const DEFINITION_TYPES = new Set([
   'class_declaration',
 ]);
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function findDefinitionNode(node: any): any {
   if (DEFINITION_TYPES.has(node.type)) return node;
   if (node.parent && DEFINITION_TYPES.has(node.parent.type)) return node.parent;

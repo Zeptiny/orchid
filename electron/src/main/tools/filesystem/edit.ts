@@ -17,7 +17,6 @@
  * will enforce directory restrictions.
  */
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
@@ -101,7 +100,7 @@ function unifiedDiff(oldContent: string, newContent: string, filePath: string): 
 
   // Use a basic Myers-like approach for small files,
   // or fall back to line-level diff for larger ones
-  const maxLen = Math.max(oldLines.length, newLines.length);
+  const _maxLen = Math.max(oldLines.length, newLines.length);
   let hunkOldStart = 0;
   let hunkNewStart = 0;
   let hunkOldCount = 0;
@@ -248,7 +247,7 @@ export const editHandler: ToolHandler = async (input: unknown) => {
       };
     }
 
-    const replacements = replace_all ? matchCount : 1;
+    const _replacements = replace_all ? matchCount : 1;
     let newContent: string;
     if (replace_all) {
       newContent = content.replaceAll(old_string, new_string);

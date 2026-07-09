@@ -4,7 +4,6 @@
  * Ported from Python `src/orchid/tools/_xml_utils.py` and `ast.py`.
  */
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
 // ---------------------------------------------------------------------------

@@ -20,8 +20,8 @@ import * as path from 'node:path';
 export const LOG_DIR = path.join(os.homedir(), '.orchid', 'logs');
 export const LOG_FILE = path.join(LOG_DIR, 'orchid.log');
 
-const LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'] as const;
-type Level = (typeof LEVELS)[number];
+const _LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'] as const;
+type Level = (typeof _LEVELS)[number];
 
 const LEVEL_RANK: Record<Level, number> = {
   DEBUG: 0,
@@ -110,26 +110,24 @@ export class FileLogger {
 
   /** Install console.* overrides. Call once at startup. */
   install(): void {
-    const self = this;
-
     console.log = (...args: unknown[]) => {
-      self.origLog(...args);
-      self.write('INFO', args);
+      this.origLog(...args);
+      this.write('INFO', args);
     };
 
     console.warn = (...args: unknown[]) => {
-      self.origWarn(...args);
-      self.write('WARN', args);
+      this.origWarn(...args);
+      this.write('WARN', args);
     };
 
     console.error = (...args: unknown[]) => {
-      self.origError(...args);
-      self.write('ERROR', args);
+      this.origError(...args);
+      this.write('ERROR', args);
     };
 
     console.debug = (...args: unknown[]) => {
-      self.origDebug(...args);
-      self.write('DEBUG', args);
+      this.origDebug(...args);
+      this.write('DEBUG', args);
     };
   }
 

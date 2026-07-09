@@ -11,7 +11,7 @@
  * these functions operate on the persisted Message arrays directly.
  */
 import type { Message } from '../../shared/types/message';
-import { MessageType, MessageRole } from '../../shared/types/message';
+import { MessageRole } from '../../shared/types/message';
 
 // ---------------------------------------------------------------------------
 // Orphan cleanup

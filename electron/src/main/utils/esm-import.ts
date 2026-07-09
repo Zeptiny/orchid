@@ -5,9 +5,8 @@
  * `"module": "CommonJS"` — this helper uses `new Function` to preserve
  * the native dynamic `import()` so ESM-only packages can be loaded at runtime.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const _dynamicImport: (specifier: string) => Promise<any> =
-  new Function('specifier', 'return import(specifier)') as any;
+const _dynamicImport: (specifier: string) => Promise<any> = // eslint-disable-line @typescript-eslint/no-explicit-any
+  new Function('specifier', 'return import(specifier)') as any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 /**
  * Dynamically import an ESM-only package from CommonJS code.

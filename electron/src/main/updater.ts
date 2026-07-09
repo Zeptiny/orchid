@@ -15,7 +15,7 @@
 import { autoUpdater, UpdateInfo } from 'electron-updater';
 import { app, BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../shared/types/ipc';
-import type { UpdaterState, UpdateStatus } from '../shared/types/ipc-boundary';
+import type { UpdaterState } from '../shared/types/ipc-boundary';
 
 export type { UpdaterState, UpdateStatus } from '../shared/types/ipc-boundary';
 

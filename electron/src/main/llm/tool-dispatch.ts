@@ -16,7 +16,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import type { Message } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
-import type { ToolCall, ToolResult } from '../../shared/types/tool';
+import type { ToolCall } from '../../shared/types/tool';
 import type { ToolRegistry } from '../tools/registry';
 import {
   TOOL_OUTPUT_INLINE_THRESHOLD,
@@ -309,7 +309,7 @@ export async function runWithToolTimeout<T>(
 function makeToolResultMessage(
   toolCallId: string,
   content: string,
-  isError: boolean,
+  _isError: boolean,
 ): Message {
   return {
     id: crypto.randomUUID(),

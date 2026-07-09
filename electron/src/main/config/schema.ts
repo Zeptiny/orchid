@@ -4,7 +4,7 @@
  * All 22 fields ported from Python `src/orchid/config.py` lines 40–104.
  */
 import { z } from 'zod';
-import type { Config, RAGConfig } from '../../shared/types/ipc-boundary';
+import type { Config } from '../../shared/types/ipc-boundary';
 
 export type { Config, RAGConfig, ModelMetadata } from '../../shared/types/ipc-boundary';
 

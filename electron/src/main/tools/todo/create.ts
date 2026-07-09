@@ -10,7 +10,6 @@
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import type { TodoStore } from './store';
-import { TodoStatus } from '../../../shared/types/todo';
 
 /**
  * Result returned by all todo tool handlers.

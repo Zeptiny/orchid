@@ -352,7 +352,7 @@ export function redactSensitiveStrings(text: string): string {
 
   // Pattern 2: Bearer tokens in headers
   result = result.replace(
-    /Bearer\s+[a-zA-Z0-9_\-\.]{20,}/gi,
+    /Bearer\s+[a-zA-Z0-9_\-.]{20,}/gi,
     (match) => {
       const parts = match.split(/\s+/);
       return `${parts[0]} ${redactApiKey(parts[1] ?? '')}`;
@@ -361,7 +361,7 @@ export function redactSensitiveStrings(text: string): string {
 
   // Pattern 3: api_key=... in URLs or env vars
   result = result.replace(
-    /api_key[=:]["']?([a-zA-Z0-9_\-]{8,})["']?/gi,
+    /api_key[=:]["']?([a-zA-Z0-9_-]{8,})["']?/gi,
     (match, key: string) => match.replace(key, redactApiKey(key)),
   );
 

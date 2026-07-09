@@ -118,10 +118,10 @@ function buildBlockList(b: TokenBreakdown): string[] {
   }
 
   const perBlock = total / GRID_TOTAL;
-  let sBlocks = Math.round(system / perBlock);
-  let tBlocks = Math.round(tool / perBlock);
-  let uBlocks = Math.round(user / perBlock);
-  let aBlocks = Math.round(assistant / perBlock);
+  const sBlocks = Math.round(system / perBlock);
+  const tBlocks = Math.round(tool / perBlock);
+  const uBlocks = Math.round(user / perBlock);
+  const aBlocks = Math.round(assistant / perBlock);
   let fBlocks = GRID_TOTAL - sBlocks - tBlocks - uBlocks - aBlocks;
 
   const totalBlocks = sBlocks + tBlocks + uBlocks + aBlocks + fBlocks;

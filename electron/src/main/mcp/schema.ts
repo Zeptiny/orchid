@@ -14,7 +14,6 @@
  * - "unavailable": overall startup budget exhausted before this server started
  */
 import { z } from 'zod';
-import type { MCPServerStatus, MCPServerStatusValue } from '../../shared/types/ipc-boundary';
 
 export type { MCPServerStatus, MCPServerStatusValue } from '../../shared/types/ipc-boundary';
 

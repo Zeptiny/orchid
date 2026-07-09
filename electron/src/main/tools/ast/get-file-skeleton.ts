@@ -63,8 +63,7 @@ export const getFileSkeletonHandler: ToolHandler = async (input: unknown) => {
     try {
       const captures = await runQuery(tree, langName, queryText, content);
 
-      const contentBytes = content;
-      const definitions: Array<{ lineNum: number; name: string; parentNode: any }> = [];
+      const definitions: Array<{ lineNum: number; name: string; parentNode: any }> = []; // eslint-disable-line @typescript-eslint/no-explicit-any
 
       for (const [capName, results] of Object.entries(captures)) {
         if (capName.startsWith('name.definition.')) {
@@ -162,14 +161,14 @@ export const getFileSkeletonHandler: ToolHandler = async (input: unknown) => {
 interface DefinitionInfo {
   lineNum: number;
   name: string;
-  parentNode: any;
+  parentNode: any; // eslint-disable-line @typescript-eslint/no-explicit-any
   parentEndLine?: number;
 }
 
 function resolveParentNodes(
-  tree: any,
+  tree: any, // eslint-disable-line @typescript-eslint/no-explicit-any
   content: string,
-  captures: Record<string, any[]>,
+  captures: Record<string, any[]>, // eslint-disable-line @typescript-eslint/no-explicit-any
 ): DefinitionInfo[] {
   const definitions: DefinitionInfo[] = [];
 
@@ -192,6 +191,7 @@ function resolveParentNodes(
   return definitions;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function findDefinitionParent(node: any): any {
   const DEFINITION_TYPES = new Set([
     'function_definition',

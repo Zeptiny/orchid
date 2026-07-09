@@ -49,7 +49,7 @@ export const listFilesTool = {
  */
 export function validateJsonSchema(): { valid: boolean; schema: unknown } {
   try {
-    const jsonSchema = zodToJsonSchema(listFilesSchema as any);
+    const jsonSchema = zodToJsonSchema(listFilesSchema as any); // eslint-disable-line @typescript-eslint/no-explicit-any
     return { valid: true, schema: jsonSchema };
   } catch {
     return { valid: false, schema: null };

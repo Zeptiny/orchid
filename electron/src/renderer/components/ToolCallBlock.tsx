@@ -146,7 +146,7 @@ function resultSummary(
 
   if (display) {
     // "Found 1 matches for *.ts" — keep human phrasing; token may still show
-    let text = display.replace(/\s+/g, ' ').trim();
+    const text = display.replace(/\s+/g, ' ').trim();
     if (primary && text.includes(primary)) {
       // Leave as-is so mock-style "Found N matches for pattern" stays intact
     }

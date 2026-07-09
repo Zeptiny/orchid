@@ -7,7 +7,7 @@ import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { listAgents, getAgent } from '../agents/registry';
-import { getConfig } from '../config/loader';
+
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -32,7 +32,7 @@ export function registerAgentIPC(): void {
       throw new Error(`Invalid agent:spawn payload: ${parsed.error.message}`);
     }
 
-    const { name, task, tier } = parsed.data;
+    const { name, tier } = parsed.data;
 
     // Look up the agent by name
     const agent = getAgent(name);
