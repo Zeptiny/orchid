@@ -20,30 +20,36 @@ directories:
 
 # ── Files ──────────────────────────────────────────────────────────────────────
 # Include compiled output + package.json; exclude source, tests, configs.
+asar: true
+asarUnpack:
+  - "**/node_modules/better-sqlite3/**/*"
+  - "**/node_modules/node-pty/**/*"
+  - "**/node_modules/onnxruntime-node/**/*"
+
 files:
   - dist/**/*
   - package.json
   - "!src/**"
   - "!tests/**"
-  - "!*.ts"
-  - "!*.tsx"
-  - "!tsconfig*.json"
-  - "!vite.config.ts"
-  - "!eslint.config.mjs"
-  - "!.prettierrc"
-  - "!.gitignore"
+  - "!**/*.ts"
+  - "!**/*.tsx"
+  - "!**/tsconfig*.json"
+  - "!**/vite.config.ts"
+  - "!**/eslint.config.mjs"
+  - "!**/.prettierrc"
+  - "!**/.gitignore"
+  - "!**/.npmrc"
+  - "!**/docs/**"
+  - "!**/.github/**"
+  - "!**/node_modules/.cache/**"
 
-# ── Native modules ─────────────────────────────────────────────────────────────
-# electron-builder runs @electron/rebuild automatically for dependencies in
-# package.json when npmRebuild is true (default). This ensures better-sqlite3,
-# onnxruntime-node, and node-pty are rebuilt against the Electron ABI.
-npmRebuild: true
+npmRebuild: false
 
 # ── macOS ──────────────────────────────────────────────────────────────────────
 mac:
   target: dmg
   category: public.app-category.developer-tools
-  icon: build/icon.icns
+  icon: build/icon.png
   hardenedRuntime: false
   gatekeeperAssess: false
   artifactName: "${productName}-${version}-${arch}.dmg"
@@ -61,14 +67,14 @@ dmg:
 # ── Windows ────────────────────────────────────────────────────────────────────
 win:
   target: nsis
-  icon: build/icon.ico
+  icon: build/icon.png
   artifactName: "${productName}-${version}-${arch}-Setup.${ext}"
 
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  installerIcon: build/icon.ico
-  uninstallerIcon: build/icon.ico
+  installerIcon: build/icon.png
+  uninstallerIcon: build/icon.png
   artifactName: "${productName}-${version}-${arch}-Setup.${ext}"
 
 # ── Linux ──────────────────────────────────────────────────────────────────────
