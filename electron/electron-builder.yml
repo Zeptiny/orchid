@@ -74,14 +74,14 @@ dmg:
 # ── Windows ────────────────────────────────────────────────────────────────────
 win:
   target: nsis
-  icon: build/icon.png
+  icon: build/icon.ico
   artifactName: "${productName}-${version}-${arch}-Setup.${ext}"
 
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  installerIcon: build/icon.png
-  uninstallerIcon: build/icon.png
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
   artifactName: "${productName}-${version}-${arch}-Setup.${ext}"
 
 # ── Linux ──────────────────────────────────────────────────────────────────────
