@@ -47,6 +47,7 @@ import {
 import { parseToolExecuteOutput } from '../tools/result';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
+import { buildContextSnapshot } from './context-snapshot';
 import { importESM } from '../utils/esm-import';
 
 // ---------------------------------------------------------------------------
@@ -88,6 +89,12 @@ export interface StreamChatParams {
   abortSignal?: AbortSignal;
   /** The AI SDK model instance to use for streaming. */
   modelInstance: LanguageModelV4;
+}
+
+interface LatestContextUsage {
+  messages: readonly ModelMessage[];
+  inputTokens: number | undefined;
+  outputTokens: number | undefined;
 }
 
 /** Pending tool call captured from onStepFinish (textStream fallback / safety net). */
@@ -272,6 +279,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     total_tokens: 0,
     cached_tokens: 0,
   };
+  let latestContextUsage: LatestContextUsage | null = null;
 
   // ── Track tool calls and results for yielding ──
   // Pending arrays are filled by onStepFinish for the textStream fallback path
@@ -290,13 +298,19 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     tools: Object.keys(tools).length > 0 ? tools : undefined,
     stopWhen: isStepCount(maxSteps),
     abortSignal,
-    onStepFinish: async ({ usage, toolCalls, toolResults }) => {
+    onStepFinish: async ({ usage, request, toolCalls, toolResults }) => {
       if (usage) {
+        const cachedTokens = usage.inputTokenDetails?.cacheReadTokens ?? 0;
         totalUsage = {
           prompt_tokens: totalUsage.prompt_tokens + (usage.inputTokens ?? 0),
           completion_tokens: totalUsage.completion_tokens + (usage.outputTokens ?? 0),
           total_tokens: totalUsage.total_tokens + (usage.totalTokens ?? 0),
-          cached_tokens: totalUsage.cached_tokens,
+          cached_tokens: totalUsage.cached_tokens + cachedTokens,
+        };
+        latestContextUsage = {
+          messages: request?.messages ?? coreMessages,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
         };
       }
       // Capture tool calls for textStream fallback / safety net (deduped on drain)
@@ -528,7 +542,22 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
     // Yield usage BEFORE finish so the agent machine receives it while
     // still in streaming state (not yet transitioned to idle).
-    yield { type: 'usage', usage: totalUsage };
+    // onStepFinish mutates this from an SDK callback, which TypeScript's
+    // control-flow analysis cannot observe across the awaited stream.
+    const contextUsage = latestContextUsage as LatestContextUsage | null;
+    const context = contextUsage
+      ? buildContextSnapshot({
+          systemPrompt: fullSystemPrompt,
+          tools,
+          messages: contextUsage.messages,
+          inputTokens: contextUsage.inputTokens,
+          outputTokens: contextUsage.outputTokens,
+        })
+      : undefined;
+    yield {
+      type: 'usage',
+      usage: context ? { ...totalUsage, context } : totalUsage,
+    };
     yield { type: 'finish', finishReason: finishReason ?? 'stop' };
 
     // Stream termination diagnostics (R19)

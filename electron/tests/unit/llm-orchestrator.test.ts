@@ -911,6 +911,24 @@ describe('toApiMessages edge cases', () => {
 
 type FullStreamPart = Record<string, unknown>;
 
+type MockStepFinish = {
+  usage?: {
+    inputTokens?: number;
+    inputTokenDetails?: { cacheReadTokens?: number };
+    outputTokens?: number;
+    totalTokens?: number;
+  };
+  request?: { messages?: unknown[] };
+  toolCalls?: Array<{ toolCallId: string; toolName: string; input?: unknown }>;
+  toolResults?: Array<{
+    toolCallId: string;
+    output?: unknown;
+    result?: unknown;
+    isError?: boolean;
+    error?: unknown;
+  }>;
+};
+
 type MockStreamTextOptions = {
   fullStreamParts?: FullStreamPart[];
   /** If set, fullStream throws before yielding any parts (triggers textStream fallback). */
@@ -918,18 +936,8 @@ type MockStreamTextOptions = {
   /** textStream deltas used when fullStream fails early. */
   textStreamParts?: string[];
   finishReason?: string;
-  /** Invoke onStepFinish with this payload once when streamText is called. */
-  stepFinish?: {
-    usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
-    toolCalls?: Array<{ toolCallId: string; toolName: string; input?: unknown }>;
-    toolResults?: Array<{
-      toolCallId: string;
-      output?: unknown;
-      result?: unknown;
-      isError?: boolean;
-      error?: unknown;
-    }>;
-  };
+  /** Invoke onStepFinish with one or more payloads when streamText is called. */
+  stepFinish?: MockStepFinish | MockStepFinish[];
 };
 
 function createAsyncIterable<T>(items: T[], error?: Error): AsyncIterable<T> {
@@ -991,14 +999,15 @@ function makeStreamChatParams(
 
 function setupStreamText(options: MockStreamTextOptions = {}) {
   aiSdkMocks.streamText.mockImplementation((params: {
-    onStepFinish?: (step: {
-      usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
-      toolCalls?: unknown;
-      toolResults?: unknown;
-    }) => void | Promise<void>;
+    onStepFinish?: (step: MockStepFinish) => void | Promise<void>;
   }) => {
     if (options.stepFinish && params.onStepFinish) {
-      void params.onStepFinish(options.stepFinish);
+      const steps = Array.isArray(options.stepFinish)
+        ? options.stepFinish
+        : [options.stepFinish];
+      for (const step of steps) {
+        void params.onStepFinish(step);
+      }
     }
     return mockStreamTextResult(options);
   });
@@ -1284,13 +1293,18 @@ describe('streamChat', () => {
     const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
 
     const usageEvent = events.find((e) => e.type === 'usage');
-    expect(usageEvent).toEqual({
+    expect(usageEvent).toMatchObject({
       type: 'usage',
       usage: {
         prompt_tokens: 100,
         completion_tokens: 40,
         total_tokens: 140,
         cached_tokens: 0,
+        context: {
+          input_tokens: 100,
+          output_tokens: 40,
+          used_tokens: 140,
+        },
       },
     });
     expect(events[events.length - 1]).toEqual({ type: 'finish', finishReason: 'length' });
@@ -1302,6 +1316,71 @@ describe('streamChat', () => {
       expect.stringContaining('max token limit'),
     );
     warnSpy.mockRestore();
+  });
+
+  it('captures provider cache reads and the latest request context snapshot', async () => {
+    setupStreamText({
+      fullStreamParts: [{ type: 'text-delta', text: 'answer' }],
+      stepFinish: [
+        {
+          usage: {
+            inputTokens: 100,
+            inputTokenDetails: { cacheReadTokens: 35 },
+            outputTokens: 20,
+            totalTokens: 120,
+          },
+          request: {
+            messages: [{ role: 'user', content: 'question' }],
+          },
+        },
+        {
+          usage: {
+            inputTokens: 180,
+            inputTokenDetails: { cacheReadTokens: 80 },
+            outputTokens: 30,
+            totalTokens: 210,
+          },
+          request: {
+            messages: [
+              { role: 'user', content: 'question' },
+              { role: 'assistant', content: 'prior answer' },
+            ],
+          },
+        },
+      ],
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+    const usageEvent = events.find((event) => event.type === 'usage');
+
+    expect(usageEvent).toMatchObject({
+      type: 'usage',
+      usage: {
+        prompt_tokens: 280,
+        completion_tokens: 50,
+        total_tokens: 330,
+        cached_tokens: 115,
+        context: {
+          input_tokens: 180,
+          output_tokens: 30,
+          used_tokens: 210,
+        },
+      },
+    });
+
+    if (usageEvent?.type !== 'usage' || !usageEvent.usage.context) {
+      throw new Error('Expected a context snapshot');
+    }
+    const context = usageEvent.usage.context;
+    expect(
+      context.system_tokens +
+        context.tools_tokens +
+        context.tool_use_tokens +
+        context.user_tokens +
+        context.assistant_tokens,
+    ).toBe(context.used_tokens);
+    expect(context.user_tokens).toBeGreaterThan(0);
+    expect(context.assistant_tokens).toBeGreaterThanOrEqual(30);
   });
 
   it('yields pending tool calls/results captured via onStepFinish', async () => {

@@ -10,6 +10,7 @@
 import { useMemo } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
+import { contextUsedTokens } from '../../shared/usage';
 
 const GRID_COLS = 8;
 const GRID_ROWS = 3;
@@ -59,6 +60,19 @@ function computeBreakdown(
   maxContext?: number | null,
 ): TokenBreakdown {
   const mc = maxContext && maxContext > 0 ? maxContext : 0;
+
+  if (usage?.context) {
+    const context = usage.context;
+    return {
+      system: context.system_tokens,
+      tool: context.tools_tokens + context.tool_use_tokens,
+      user: context.user_tokens,
+      assistant: context.assistant_tokens,
+      free: mc > 0 ? Math.max(0, mc - context.used_tokens) : 0,
+      total: mc > 0 ? mc : context.used_tokens,
+      maxContext: mc,
+    };
+  }
 
   if (!usage || usage.prompt_tokens <= 0) {
     // Zero state — all free when we know the window, else zeros.
@@ -271,9 +285,19 @@ export function computeContextBreakdown(
   maxContext?: number | null,
 ): ContextBreakdown | null {
   const mb = computeBreakdown(messages, usage, maxContext);
-  const promptTokens = usage?.prompt_tokens ?? 0;
+  const usedTokens = contextUsedTokens(usage);
   const percentUsed =
-    mb.maxContext > 0 ? Math.min(100, Math.round((promptTokens / mb.maxContext) * 100)) : undefined;
+    mb.maxContext > 0 ? Math.min(100, Math.round((usedTokens / mb.maxContext) * 100)) : undefined;
+  if (usage?.context) {
+    return {
+      free: mb.free,
+      system: usage.context.system_tokens,
+      tools: usage.context.tools_tokens,
+      tool_use: usage.context.tool_use_tokens,
+      messages: usage.context.user_tokens + usage.context.assistant_tokens,
+      percentUsed,
+    };
+  }
   return {
     free: mb.free,
     system: mb.system,

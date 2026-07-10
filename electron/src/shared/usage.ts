@@ -21,6 +21,12 @@ export function hasUsage(usage: Usage | null | undefined): boolean {
   );
 }
 
+/** Latest projected context occupancy, with a legacy per-turn fallback. */
+export function contextUsedTokens(usage: Usage | null | undefined): number {
+  return usage?.context?.used_tokens ??
+    (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0);
+}
+
 /** Add two usage records (null treated as zero). */
 export function addUsage(a: Usage | null | undefined, b: Usage | null | undefined): Usage {
   return {

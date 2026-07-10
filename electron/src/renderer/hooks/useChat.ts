@@ -505,8 +505,9 @@ export function useChat(): UseChatReturn {
       setStreamingThinking('');
       applyToolBlocks([]);
       applyStreamSegments([]);
-      setUsage(null);
       setInterrupted(false);
+      // Keep the last completed snapshot visible while this turn streams, but
+      // do not let it attach to the new assistant message if no usage arrives.
       usageRef.current = null;
       setStreamStartTime(Date.now());
       setElapsedSeconds(0);

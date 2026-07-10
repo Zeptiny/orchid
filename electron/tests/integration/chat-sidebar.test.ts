@@ -762,6 +762,16 @@ describe('Component File Structure', () => {
     expect(fs.existsSync(path.join(hooksDir, 'useChat.ts'))).toBe(true);
   });
 
+  it('keeps the previous context preview visible while a new turn starts', () => {
+    const source = fs.readFileSync(path.join(hooksDir, 'useChat.ts'), 'utf-8');
+    const sendStart = source.indexOf('const send = useCallback');
+    const sendEnd = source.indexOf('const cancel = useCallback', sendStart);
+    const sendSource = source.slice(sendStart, sendEnd);
+
+    expect(sendSource).not.toContain('setUsage(null)');
+    expect(sendSource).toContain('usageRef.current = null');
+  });
+
   it('useSession hook exists', () => {
     expect(fs.existsSync(path.join(hooksDir, 'useSession.ts'))).toBe(true);
   });

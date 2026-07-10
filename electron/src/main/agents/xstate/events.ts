@@ -8,6 +8,7 @@
  */
 
 import type { StreamEvent } from '../../llm/orchestrator';
+import type { Usage } from '../../../shared/types/message';
 
 // ── Agent events ────────────────────────────────────────────────────────────
 
@@ -87,12 +88,7 @@ export interface ErrorEvent {
 /** LLM stream emitted token usage data. */
 export interface UsageEvent {
   type: 'USAGE';
-  usage: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-    cached_tokens: number;
-  };
+  usage: Usage;
 }
 
 // ── Subagent events ─────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@
 
 import type { Session } from './session';
 import type { Agent } from './agent';
+import type { Usage } from './message';
 import type {
   SessionSummary,
   Config,
@@ -87,12 +88,7 @@ export interface ChatDoneEvent {
   /** True when the turn ended due to user Esc cancellation. */
   interrupted?: boolean;
   /** Latest token usage for the completed/interrupted turn. */
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-    cached_tokens: number;
-  } | null;
+  usage?: Usage | null;
 }
 
 export type ChatErrorKind = 'stream' | 'rate-limit' | 'auth' | 'generic';
@@ -108,12 +104,7 @@ export interface ChatErrorEvent {
 
 export interface ChatUsageEvent {
   type: 'usage';
-  usage: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-    cached_tokens: number;
-  };
+  usage: Usage;
 }
 
 export interface ChatToolCallStartEvent {

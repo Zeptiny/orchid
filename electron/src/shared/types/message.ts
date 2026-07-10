@@ -42,13 +42,39 @@ export interface Usage {
   readonly completion_tokens: number;
   readonly total_tokens: number;
   readonly cached_tokens: number;
+  /** Latest-step projected context after including the current output. */
+  readonly context?: ContextSnapshot;
 }
+
+export interface ContextSnapshot {
+  /** Provider-reported aggregate counts; category counts below are estimates. */
+  readonly input_tokens: number;
+  readonly output_tokens: number;
+  readonly used_tokens: number;
+  readonly system_tokens: number;
+  readonly tools_tokens: number;
+  readonly tool_use_tokens: number;
+  readonly user_tokens: number;
+  readonly assistant_tokens: number;
+}
+
+export const contextSnapshotSchema = z.object({
+  input_tokens: z.number().nonnegative(),
+  output_tokens: z.number().nonnegative(),
+  used_tokens: z.number().nonnegative(),
+  system_tokens: z.number().nonnegative(),
+  tools_tokens: z.number().nonnegative(),
+  tool_use_tokens: z.number().nonnegative(),
+  user_tokens: z.number().nonnegative(),
+  assistant_tokens: z.number().nonnegative(),
+});
 
 export const usageSchema = z.object({
   prompt_tokens: z.number().default(0),
   completion_tokens: z.number().default(0),
   total_tokens: z.number().default(0),
   cached_tokens: z.number().default(0),
+  context: contextSnapshotSchema.optional(),
 });
 
 // ── Message ─────────────────────────────────────────────────────────────────
@@ -121,6 +147,7 @@ export interface MessageStorageDict {
     completion_tokens?: number;
     total_tokens?: number;
     cached_tokens?: number;
+    context?: ContextSnapshot;
   };
   hidden?: boolean;
   /** Explicit tool failure; only meaningful for tool_result messages. */
@@ -205,6 +232,7 @@ export function messageToStorageDict(msg: Message): MessageStorageDict {
       completion_tokens: msg.usage.completion_tokens,
       total_tokens: msg.usage.total_tokens,
       cached_tokens: msg.usage.cached_tokens,
+      ...(msg.usage.context ? { context: msg.usage.context } : {}),
     };
   }
   if (msg.hidden) {
@@ -246,11 +274,13 @@ export function messageFromStorageDict(data: unknown): Message {
   let usage: Usage | null = null;
   if (raw.usage != null && typeof raw.usage === 'object') {
     const u = raw.usage as Record<string, unknown>;
+    const parsedContext = contextSnapshotSchema.safeParse(u.context);
     usage = {
       prompt_tokens: typeof u.prompt_tokens === 'number' ? u.prompt_tokens : 0,
       completion_tokens: typeof u.completion_tokens === 'number' ? u.completion_tokens : 0,
       total_tokens: typeof u.total_tokens === 'number' ? u.total_tokens : 0,
       cached_tokens: typeof u.cached_tokens === 'number' ? u.cached_tokens : 0,
+      context: parsedContext.success ? parsedContext.data : undefined,
     };
   }
 

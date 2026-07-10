@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addUsage,
+  contextUsedTokens,
   hasUsage,
   latestUsageFromMessages,
   sumMessageUsages,
@@ -172,5 +173,33 @@ describe('usage helpers', () => {
         }),
       ]),
     ).toBeNull();
+  });
+
+  it('uses a context snapshot for preview occupancy without changing cumulative usage', () => {
+    const usage = {
+      prompt_tokens: 300,
+      completion_tokens: 50,
+      total_tokens: 350,
+      cached_tokens: 100,
+      context: {
+        input_tokens: 200,
+        output_tokens: 50,
+        used_tokens: 250,
+        system_tokens: 50,
+        tools_tokens: 25,
+        tool_use_tokens: 25,
+        user_tokens: 75,
+        assistant_tokens: 75,
+      },
+    };
+
+    expect(contextUsedTokens(usage)).toBe(250);
+    expect(contextUsedTokens({ ...usage, context: undefined })).toBe(350);
+    expect(addUsage(usage, usage)).toEqual({
+      prompt_tokens: 600,
+      completion_tokens: 100,
+      total_tokens: 700,
+      cached_tokens: 200,
+    });
   });
 });

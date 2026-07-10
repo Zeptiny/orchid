@@ -87,7 +87,22 @@ describe('Domain Models: Session round-trip', () => {
         content: 'I will read the file.',
         tool_calls: [toolCall],
         timestamp: now,
-        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cached_tokens: 2 },
+        usage: {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+          cached_tokens: 2,
+          context: {
+            input_tokens: 10,
+            output_tokens: 5,
+            used_tokens: 15,
+            system_tokens: 3,
+            tools_tokens: 2,
+            tool_use_tokens: 1,
+            user_tokens: 4,
+            assistant_tokens: 5,
+          },
+        },
       }),
       makeMessage({
         id: 'msg-3',
@@ -169,6 +184,16 @@ describe('Domain Models: Session round-trip', () => {
     expect(usage.completion_tokens).toBe(5);
     expect(usage.total_tokens).toBe(15);
     expect(usage.cached_tokens).toBe(2);
+    expect(usage.context).toEqual({
+      input_tokens: 10,
+      output_tokens: 5,
+      used_tokens: 15,
+      system_tokens: 3,
+      tools_tokens: 2,
+      tool_use_tokens: 1,
+      user_tokens: 4,
+      assistant_tokens: 5,
+    });
   });
 
   it('Message.toApiFormat produces OpenAI-shaped messages', () => {

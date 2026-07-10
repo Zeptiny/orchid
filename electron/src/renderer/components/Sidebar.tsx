@@ -12,6 +12,7 @@ import type {
   ASTIndexProgress,
 } from '../../shared/types/ipc-boundary';
 import { ContextGrid } from './ContextGrid';
+import { contextUsedTokens } from '../../shared/usage';
 import type { Message, Usage } from '../../shared/types/message';
 import { TodoStatus } from '../../shared/types/todo';
 import type { SubagentListState, SubagentDetail } from '../hooks/useSubagents';
@@ -790,7 +791,7 @@ interface ContextBadgeProps {
 
 function ContextBadge({ usage, maxContext }: ContextBadgeProps) {
   if (usage && maxContext && maxContext > 0) {
-    const pct = Math.min(100, Math.round((usage.prompt_tokens / maxContext) * 100));
+    const pct = Math.min(100, Math.round((contextUsedTokens(usage) / maxContext) * 100));
     return (
       <span
         className={`badge badge-xs ${

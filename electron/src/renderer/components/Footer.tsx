@@ -10,6 +10,7 @@ import type { Message, Usage } from '../../shared/types/message';
 import type { InterruptState } from '../hooks/useChat';
 import { FOOTER_SHORTCUT_IDS, getShortcut } from '../keyboard';
 import { ContextLegend } from './ContextGrid';
+import { contextUsedTokens } from '../../shared/usage';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
 
@@ -37,7 +38,7 @@ export function Footer({
 
   const contextPercent =
     usage && maxContext && maxContext > 0
-      ? Math.min(100, Math.round((usage.prompt_tokens / maxContext) * 100))
+      ? Math.min(100, Math.round((contextUsedTokens(usage) / maxContext) * 100))
       : 0;
 
   const radialTone =
