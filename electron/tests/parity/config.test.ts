@@ -35,6 +35,8 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
   { field: 'llm_stream_idle_timeout', type: 'number', defaultValue: 300.0, envOverride: 'ORCHID_LLM_STREAM_IDLE_TIMEOUT' },
   { field: 'llm_stream_retries', type: 'number', defaultValue: 3, envOverride: 'ORCHID_LLM_STREAM_RETRIES' },
   { field: 'background_command_idle_timeout', type: 'number', defaultValue: 900.0, envOverride: 'ORCHID_BG_CMD_IDLE_TIMEOUT' },
+  // Electron-only UI preference (not in Python TUI)
+  { field: 'always_expand_tool_groups', type: 'boolean', defaultValue: false },
 ];
 
 const EXPECTED_RAG_FIELDS = [
@@ -74,6 +76,7 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('llm_stream_retries');
       expect(cfg).toHaveProperty('background_command_idle_timeout');
       expect(cfg).toHaveProperty('default_project_dir');
+      expect(cfg).toHaveProperty('always_expand_tool_groups');
 
       // RAG nested fields (5)
       expect(cfg.rag).toHaveProperty('chunk_size');
@@ -83,11 +86,11 @@ describe('Config Parity', () => {
       expect(cfg.rag).toHaveProperty('embedding_model');
     });
 
-    it('top-level field count matches expected (19 top-level + 8 rag nested fields)', () => {
+    it('top-level field count matches expected (20 top-level + 8 rag nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(19); // 19 top-level fields (rag is nested)
+      expect(topLevelKeys).toHaveLength(20); // 20 top-level fields (rag is nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);

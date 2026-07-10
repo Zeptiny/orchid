@@ -2983,6 +2983,80 @@
   font-weight: 500;
 }
 
+/* Thought activity group — compact summary over consecutive thoughts */
+.thought-activity-group {
+  align-self: flex-start;
+  max-width: 100%;
+  width: 100%;
+  margin-bottom: 2px;
+  border-radius: 5px;
+  overflow: hidden;
+}
+.thought-activity-group-title {
+  min-height: 28px;
+  padding: 5px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--msg-thinking-text);
+  border: none;
+  border-left: 2px solid color-mix(in srgb, var(--msg-thinking-text) 55%, transparent);
+  border-radius: 0 4px 4px 0;
+  background: transparent;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+  line-height: 1.35;
+  font-weight: 500;
+}
+.thought-activity-group-title:hover {
+  filter: brightness(1.08);
+  background: color-mix(in srgb, var(--msg-thinking-text) 5%, transparent);
+}
+.thought-activity-group-title-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.thought-activity-group-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thought-activity-group-count {
+  opacity: 0.7;
+  font-weight: 500;
+}
+.thought-activity-group.streaming > .thought-activity-group-title {
+  opacity: 1;
+}
+.thought-activity-group-body {
+  padding: 2px 0 2px 6px;
+}
+.thought-activity-group-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.thought-activity-group-children-scroll {
+  max-height: calc(12 * 34px);
+  overflow-y: auto;
+}
+.thought-activity-group-children .thought-block {
+  margin-bottom: 0;
+}
+.thought-activity-group-overflow {
+  padding: 4px 8px 2px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 /* Thought block (mock .thought-block) */
 .thought-block {
   align-self: flex-start;
@@ -3022,6 +3096,93 @@
   border-left: 2px solid var(--msg-thinking-text);
   font-size: 12px;
   line-height: 1.45;
+}
+
+/* Tool activity group — compact summary over consecutive explore tools */
+.tool-activity-group {
+  align-self: flex-start;
+  max-width: 100%;
+  width: 100%;
+  margin-bottom: 2px;
+  border-radius: 5px;
+  overflow: hidden;
+}
+.tool-activity-group-title {
+  min-height: 28px;
+  padding: 5px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  border: none;
+  border-left: 2px solid color-mix(in srgb, var(--accent-secondary) 55%, transparent);
+  border-radius: 0 4px 4px 0;
+  background: transparent;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+  line-height: 1.35;
+}
+.tool-activity-group-title:hover {
+  color: var(--accent-secondary);
+  background: color-mix(in srgb, var(--accent-secondary) 5%, transparent);
+}
+.tool-activity-group-title-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.tool-activity-group-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.tool-activity-group-title-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+.tool-activity-group-count {
+  opacity: 0.7;
+  font-weight: 500;
+}
+.tool-activity-group.running > .tool-activity-group-title {
+  color: var(--accent-warning);
+  border-left-color: var(--accent-warning);
+}
+.tool-activity-group.failed > .tool-activity-group-title {
+  color: var(--accent-error);
+  border-left-color: var(--accent-error);
+}
+.tool-activity-group-body {
+  padding: 2px 0 2px 6px;
+}
+.tool-activity-group-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tool-activity-group-children-scroll {
+  max-height: calc(12 * 34px);
+  overflow-y: auto;
+}
+.tool-activity-group-children .tool-block,
+.tool-activity-group-children .thought-block {
+  margin-bottom: 0;
+}
+.tool-activity-group-overflow {
+  padding: 4px 8px 2px;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 
 /* Tool block (mock .tool-block) */
@@ -4477,6 +4638,16 @@ button.inspector-row:hover {
   opacity: 0.85;
   line-height: 1.4;
   margin-top: 2px;
+}
+.config-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  line-height: 1.35;
 }
 
 .config-field .input,

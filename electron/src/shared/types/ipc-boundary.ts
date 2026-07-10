@@ -99,6 +99,11 @@ export interface Config {
    * Absolute path when set; `null` when unbound (never invented from process.cwd()).
    */
   default_project_dir: string | null;
+  /**
+   * When true, compact tool-activity groups in the chat stream start expanded
+   * (showing individual tool rows). Default false — groups stay collapsed.
+   */
+  always_expand_tool_groups: boolean;
 }
 
 // ── MCP ─────────────────────────────────────────────────────────────────────

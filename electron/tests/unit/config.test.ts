@@ -109,6 +109,8 @@ describe('schema & defaults', () => {
     expect(cfg.background_command_idle_timeout).toBe(900.0);
     // Sticky project default: unbound until the user intentionally picks a folder
     expect(cfg.default_project_dir).toBeNull();
+    // Tool activity groups stay collapsed unless the user opts in
+    expect(cfg.always_expand_tool_groups).toBe(false);
 
     // tier_models
     expect(cfg.tier_models).toEqual({
@@ -1120,7 +1122,18 @@ describe('config save IPC schema validation', () => {
     expect(knownKeys).toContain('personality');
     expect(knownKeys).toContain('command_timeout');
     expect(knownKeys).toContain('default_project_dir');
+    expect(knownKeys).toContain('always_expand_tool_groups');
     expect(knownKeys).not.toContain('typo_key');
     expect(knownKeys).not.toContain('providres');
+  });
+
+  it('defaults always_expand_tool_groups to false', () => {
+    const parsed = configSchema.parse({});
+    expect(parsed.always_expand_tool_groups).toBe(false);
+  });
+
+  it('accepts always_expand_tool_groups true', () => {
+    const parsed = configSchema.parse({ always_expand_tool_groups: true });
+    expect(parsed.always_expand_tool_groups).toBe(true);
   });
 });

@@ -128,6 +128,9 @@ export function ConfigView({ onClose }: ConfigViewProps) {
       if (window.orchid?.config?.get) {
         const fresh = await window.orchid.config.get();
         setOriginalConfig(fresh);
+        window.dispatchEvent(
+          new CustomEvent('orchid:config-updated', { detail: fresh }),
+        );
       }
       setDraft({});
       setProviderRenames([]);
@@ -346,6 +349,7 @@ function renderTab(
           providers={config.providers as Record<string, Record<string, unknown>>}
           readLineLimit={config.read_line_limit}
           theme={config.theme}
+          alwaysExpandToolGroups={config.always_expand_tool_groups}
           onChange={updateDraft}
         />
       );

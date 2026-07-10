@@ -82,6 +82,7 @@ describe('createProviderModel', () => {
       name: 'openai-compatible',
       baseURL: 'https://api.example.com/v1',
       apiKey: 'compat-key',
+      fetch: expect.any(Function),
     });
     expect(mockCompatibleProvider).toHaveBeenCalledWith('llama-3');
     expect(model).toBe(mockCompatibleModel);
@@ -105,6 +106,7 @@ describe('createProviderModel', () => {
       name: 'openai-compatible',
       baseURL: 'http://localhost:8080/v1',
       apiKey: 'sk-test',
+      fetch: expect.any(Function),
     });
     expect(mockCompatibleProvider).toHaveBeenCalledWith('custom-model');
     expect(model).toBe(mockCompatibleModel);
@@ -127,6 +129,7 @@ describe('createProviderModel', () => {
       name: 'my-local',
       baseURL: 'https://api.openai.com/v1',
       apiKey: '',
+      fetch: expect.any(Function),
     });
   });
 

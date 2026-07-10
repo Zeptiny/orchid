@@ -15,10 +15,18 @@ import { MessageRole, MessageType } from '../../shared/types/message';
 import type { SubagentRecord } from '../../shared/types/subagent';
 import { sumSubagentsUsage, subUsageByParentChain } from '../../shared/usage';
 import type { ChatStatus, StreamSegment, ToolBlock } from '../hooks/useChat';
+import {
+  foldActivityRuns,
+  isGroupableTool,
+} from '../utils/tool-grouping';
 import { MessageWidget } from './MessageWidget';
 import { ChainFooter } from './ChainFooter';
 import { ErrorBanner } from './ErrorBanner';
 import { ToolCallBlock } from './ToolCallBlock';
+import {
+  ToolActivityGroup,
+  type ActivityChild,
+} from './ToolActivityGroup';
 import { Icon } from './Icon';
 import orchidIcon from '../assets/orchid-icon.svg';
 
@@ -46,11 +54,18 @@ interface ChatStreamProps {
   onRetry?: () => void;
   elapsedSeconds?: number;
   interrupted?: boolean;
+  /**
+   * When true, tool-activity groups start expanded (Settings → Always expand
+   * tool groups). Default false.
+   */
+  alwaysExpandToolGroups?: boolean;
 }
 
 type StreamItem =
   | { kind: 'message'; key: string; message: Message; isStreaming?: boolean }
   | { kind: 'tool'; key: string; block: ToolBlock }
+  /** Explore activity: tools ± thoughts, title is tool-only summary. */
+  | { kind: 'tool-group'; key: string; children: ActivityChild[] }
   | {
       kind: 'footer';
       key: string;
@@ -98,6 +113,7 @@ export function ChatStream({
   sessionChains = [],
   elapsedSeconds,
   interrupted,
+  alwaysExpandToolGroups = false,
 }: ChatStreamProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -174,6 +190,16 @@ export function ChatStream({
     [toolBlocks, streamSegments, streamingContent, status, history.emittedToolIds],
   );
 
+  // Fold consecutive thoughts + explore tools into tool-only-titled activity groups.
+  const historyItems = useMemo(
+    () => foldStreamActivityGroups(history.items),
+    [history.items],
+  );
+  const liveGroupedItems = useMemo(
+    () => foldStreamActivityGroups(liveItems),
+    [liveItems],
+  );
+
   if (
     messages.length === 0 &&
     !streamingContent &&
@@ -232,17 +258,33 @@ export function ChatStream({
         </div>
       )}
 
-      {history.items.map((item) => renderStreamItem(item))}
-      {liveItems.map((item) => renderStreamItem(item))}
+      {historyItems.map((item) =>
+        renderStreamItem(item, alwaysExpandToolGroups),
+      )}
+      {liveGroupedItems.map((item) =>
+        renderStreamItem(item, alwaysExpandToolGroups),
+      )}
 
       <div ref={messagesEndRef} />
     </div>
   );
 }
 
-function renderStreamItem(item: StreamItem): ReactNode {
+function renderStreamItem(
+  item: StreamItem,
+  alwaysExpandToolGroups: boolean,
+): ReactNode {
   if (item.kind === 'tool') {
     return <ToolCallBlock key={item.key} block={item.block} />;
+  }
+  if (item.kind === 'tool-group') {
+    return (
+      <ToolActivityGroup
+        key={item.key}
+        items={item.children}
+        alwaysExpand={alwaysExpandToolGroups}
+      />
+    );
   }
   if (item.kind === 'footer') {
     return (
@@ -262,6 +304,62 @@ function renderStreamItem(item: StreamItem): ReactNode {
       isStreaming={item.isStreaming}
     />
   );
+}
+
+/**
+ * Collapse consecutive **settled** thoughts + groupable tools into one group.
+ * Streaming thoughts and generating/running tools stay solo so live work is visible.
+ * Title is tool-only; expanded body keeps chronological thought/tool order.
+ */
+function foldStreamActivityGroups(items: readonly StreamItem[]): StreamItem[] {
+  return foldActivityRuns(items, {
+    classify: (item) => {
+      if (item.kind === 'tool' && isGroupableTool(item.block.toolName)) {
+        // generating / running / pending → always visible as own row
+        if (
+          item.block.status === 'generating' ||
+          item.block.status === 'running' ||
+          item.block.status === 'pending'
+        ) {
+          return 'active';
+        }
+        // completed | failed
+        return 'settled-tool';
+      }
+      if (
+        item.kind === 'message' &&
+        item.message.type === MessageType.THINKING
+      ) {
+        // Live reasoning stays solo; finished thoughts may fold with tools
+        return item.isStreaming ? 'active' : 'settled-thought';
+      }
+      return 'break';
+    },
+    makeGroup: (sources) => {
+      const children: ActivityChild[] = [];
+      for (const s of sources) {
+        if (s.kind === 'tool') {
+          children.push({ kind: 'tool', block: s.block });
+        } else if (s.kind === 'message') {
+          children.push({
+            kind: 'thought',
+            message: s.message,
+            isStreaming: s.isStreaming,
+          });
+        }
+      }
+      const firstTool = children.find((c) => c.kind === 'tool');
+      const firstId =
+        firstTool && firstTool.kind === 'tool'
+          ? firstTool.block.id
+          : sources[0]?.key ?? 'empty';
+      return {
+        kind: 'tool-group',
+        key: `tool-group-${firstId}`,
+        children,
+      };
+    },
+  });
 }
 
 // ── Chronological stream builders ────────────────────────────────────────────
@@ -563,7 +661,12 @@ function buildHistoryStreamItems(opts: {
       // Recompute: footer if we had tools or assistant content
       const hasRenderableBody = items
         .slice(turnItemCountAtStart)
-        .some((it) => it.kind === 'tool' || (it.kind === 'message' && it.message.role !== MessageRole.USER));
+        .some(
+          (it) =>
+            it.kind === 'tool' ||
+            it.kind === 'tool-group' ||
+            (it.kind === 'message' && it.message.role !== MessageRole.USER),
+        );
       if (hasRenderableBody) {
         turnHasBody = true;
         flushFooter(true, true);
@@ -615,14 +718,10 @@ function buildLiveTailItems(opts: {
   };
 
   if (streamSegments.length > 0) {
-    let lastTextSegIndex = -1;
-    let lastThinkIndex = -1;
-    for (let i = streamSegments.length - 1; i >= 0; i--) {
-      const kind = streamSegments[i].kind;
-      if (lastTextSegIndex < 0 && kind === 'text') lastTextSegIndex = i;
-      if (lastThinkIndex < 0 && kind === 'thinking') lastThinkIndex = i;
-      if (lastTextSegIndex >= 0 && lastThinkIndex >= 0) break;
-    }
+    // Only the trailing segment can still be "live". Once a tool (or later
+    // text/thinking) is appended after a thought, that thought is settled —
+    // even while the overall turn is still streaming.
+    const lastSegIndex = streamSegments.length - 1;
 
     // Stable timestamp for the live rebuild so message objects differ only by content.
     const ts = new Date().toISOString();
@@ -634,8 +733,8 @@ function buildLiveTailItems(opts: {
         return;
       }
       if (seg.kind === 'text' && seg.content) {
-        // Only the last text segment streams; earlier ones are frozen mid-turn.
-        const stillStreaming = liveStreaming && segIndex === lastTextSegIndex;
+        const stillStreaming =
+          liveStreaming && segIndex === lastSegIndex;
         pushMessage(
           {
             id: seg.id,
@@ -656,9 +755,9 @@ function buildLiveTailItems(opts: {
         return;
       }
       if (seg.kind === 'thinking' && seg.content) {
-        // Mark the latest thinking segment as streaming so Thought UI stays open
-        // while reasoning is still arriving.
-        const stillStreamingThink = liveStreaming && segIndex === lastThinkIndex;
+        // Finished as soon as anything follows this segment (tool/text/new thought).
+        const stillStreamingThink =
+          liveStreaming && segIndex === lastSegIndex;
         pushMessage(
           {
             id: seg.id,

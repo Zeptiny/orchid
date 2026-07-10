@@ -6,12 +6,17 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { ResolvedModelRef } from './providers';
 import { importESM } from '../utils/esm-import';
+import { createUnwrappingFetch } from './response-unwrap';
 
 /**
  * Create an AI SDK LanguageModel from a resolved model reference.
  *
  * Uses dynamic import() because @ai-sdk/openai and @ai-sdk/openai-compatible
  * v4+ are ESM-only, but Electron main compiles to CommonJS.
+ *
+ * OpenAI-compatible providers use a custom fetch that unwraps gateway envelopes
+ * like `{ data: { choices: [...] }, success: true }` (e.g. Cline Pass) so
+ * generateText/doGenerate (auto-naming) can parse the response.
  *
  * @param ref - Resolved model reference from resolveModelRef()
  * @returns LanguageModelV4 instance for use with streamText/generateText
@@ -23,6 +28,7 @@ export async function createProviderModel(ref: ResolvedModelRef): Promise<Langua
       name: ref.providerName,
       baseURL: ref.baseUrl ?? 'https://api.openai.com/v1',
       apiKey: ref.apiKey ?? '',
+      fetch: createUnwrappingFetch(),
     });
     return provider(ref.modelId);
   }

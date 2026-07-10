@@ -49,6 +49,7 @@ export function ChatView() {
   const [currentModel, setCurrentModel] = useState('');
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [maxContext, setMaxContext] = useState<number | null>(null);
+  const [alwaysExpandToolGroups, setAlwaysExpandToolGroups] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -87,6 +88,7 @@ export function ChatView() {
           if (config.theme) setCurrentTheme(config.theme);
           if (config.personality) setCurrentPersonality(config.personality);
           if (config.default_model) setCurrentModel(config.default_model);
+          setAlwaysExpandToolGroups(Boolean(config.always_expand_tool_groups));
           // Same model list as config dropdowns (General / Tier Models)
           const { collectModelsFromProviders } = await import('../utils/models');
           setAvailableModels(
@@ -104,6 +106,18 @@ export function ChatView() {
       }
     }
     loadConfig();
+  }, []);
+
+  // Prefer live config updates after Settings save (tool-group expand pref).
+  useEffect(() => {
+    const onConfigUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail;
+      if (detail && typeof detail.always_expand_tool_groups === 'boolean') {
+        setAlwaysExpandToolGroups(detail.always_expand_tool_groups);
+      }
+    };
+    window.addEventListener('orchid:config-updated', onConfigUpdated);
+    return () => window.removeEventListener('orchid:config-updated', onConfigUpdated);
   }, []);
 
   // Keep composer model label in sync when switching sessions
@@ -587,6 +601,7 @@ export function ChatView() {
           onRetry={handleRetry}
           elapsedSeconds={chat.elapsedSeconds}
           interrupted={chat.interrupted}
+          alwaysExpandToolGroups={alwaysExpandToolGroups}
         />
         <InputArea
           status={chat.status}

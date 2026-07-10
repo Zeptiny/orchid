@@ -31,6 +31,8 @@ export interface GeneralTabProps {
   llmStreamIdleTimeout: number;
   llmStreamRetries: number;
   backgroundCommandIdleTimeout: number;
+  /** When true, compact tool-activity groups start expanded. */
+  alwaysExpandToolGroups: boolean;
   onChange: (updates: Record<string, unknown>) => void;
 }
 
@@ -51,6 +53,7 @@ export function GeneralTab({
   llmStreamIdleTimeout,
   llmStreamRetries,
   backgroundCommandIdleTimeout,
+  alwaysExpandToolGroups,
   onChange,
 }: GeneralTabProps) {
   // Ensure the currently selected value is always in the list (e.g. if file was removed)
@@ -219,6 +222,30 @@ export function GeneralTab({
               className="input config-control"
               min={1}
             />
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset className="config-fieldset">
+        <legend className="config-fieldset-legend">Chat display</legend>
+        <div className="config-form-grid">
+          <div className="config-field config-form-grid-full">
+            <label className="config-checkbox-label" htmlFor="general-expand-tool-groups">
+              <input
+                id="general-expand-tool-groups"
+                type="checkbox"
+                className="checkbox checkbox-sm"
+                checked={alwaysExpandToolGroups}
+                onChange={(e) =>
+                  onChange({ always_expand_tool_groups: e.target.checked })
+                }
+              />
+              <span>Always expand tool groups</span>
+            </label>
+            <span className="config-field-hint">
+              Show individual tool rows under explore summaries (Searched N · Read M)
+              by default. When off, groups stay collapsed until you click them.
+            </span>
           </div>
         </div>
       </fieldset>

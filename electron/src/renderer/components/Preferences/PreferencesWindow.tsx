@@ -238,6 +238,9 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
       if (window.orchid?.config?.get) {
         const fresh = await window.orchid.config.get();
         setOriginalConfig(fresh);
+        window.dispatchEvent(
+          new CustomEvent('orchid:config-updated', { detail: fresh }),
+        );
       }
       setDraft({});
       setProviderRenames([]);
@@ -390,6 +393,7 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
             llmStreamIdleTimeout={currentConfig.llm_stream_idle_timeout}
             llmStreamRetries={currentConfig.llm_stream_retries}
             backgroundCommandIdleTimeout={currentConfig.background_command_idle_timeout}
+            alwaysExpandToolGroups={currentConfig.always_expand_tool_groups}
             onChange={updateDraft}
           />
         );

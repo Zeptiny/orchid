@@ -1,8 +1,8 @@
 /**
  * Config schema — single source of truth for types, defaults, and validation.
  *
- * 22 fields ported from Python `src/orchid/config.py` lines 40–104, plus
- * Electron-only `default_project_dir` for sticky session workspace default.
+ * Fields ported from Python `src/orchid/config.py`, plus Electron-only
+ * `default_project_dir` and UI prefs such as `always_expand_tool_groups`.
  */
 import * as path from 'node:path';
 import { z } from 'zod';
@@ -131,6 +131,11 @@ export const configSchema = z
           message: 'default_project_dir must be an absolute path when set',
         }),
     ),
+    /**
+     * When true, chat tool-activity groups open by default (list individual
+     * tool rows). When false (default), groups stay collapsed until clicked.
+     */
+    always_expand_tool_groups: z.boolean().default(false),
   })
   .strict();
 

@@ -8,10 +8,14 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import type { Message } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
+import {
+  estimateThoughtDurationMs,
+  formatDurationMs,
+} from '../utils/thought-grouping';
+import type { ToolBlock } from '../hooks/useChat';
 import { MarkdownContent } from './MarkdownContent';
 import { LiveCommandInline } from './ToolWidgets/LiveCommandInline';
 import { Icon } from './Icon';
-import type { ToolBlock } from '../hooks/useChat';
 import { ToolCallBlock } from './ToolCallBlock';
 
 interface MessageWidgetProps {
@@ -101,10 +105,11 @@ function ThinkingMessage({
   }, []);
   const content = message.content || (message.thinking ?? '');
   // Mock shows "Thought 936ms" — estimate from content length when no duration field
-  const durationLabel = useMemo(
-    () => (isStreaming ? null : estimateThoughtMs(content)),
-    [content, isStreaming],
-  );
+  const durationLabel = useMemo(() => {
+    if (isStreaming) return null;
+    const ms = estimateThoughtDurationMs(content);
+    return ms != null ? formatDurationMs(ms) : null;
+  }, [content, isStreaming]);
 
   useEffect(() => {
     if (isStreaming && !userToggled) {
@@ -133,15 +138,6 @@ function ThinkingMessage({
       )}
     </div>
   );
-}
-
-/** Rough duration label for thought blocks (mock: "Thought 936ms"). */
-function estimateThoughtMs(content: string): string | null {
-  if (!content) return null;
-  // Heuristic: ~4 chars/ms thinking display; clamp to sensible range
-  const ms = Math.max(40, Math.min(8000, Math.round(content.length * 3.5)));
-  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${ms}ms`;
 }
 
 function ToolCallMessage({ message }: { message: Message }) {
