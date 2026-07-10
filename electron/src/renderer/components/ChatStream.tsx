@@ -19,6 +19,7 @@ import { MessageWidget } from './MessageWidget';
 import { ChainFooter } from './ChainFooter';
 import { ErrorBanner } from './ErrorBanner';
 import { ToolCallBlock } from './ToolCallBlock';
+import { Icon } from './Icon';
 import orchidIcon from '../assets/orchid-icon.svg';
 
 interface ChatStreamProps {
@@ -39,6 +40,9 @@ interface ChatStreamProps {
   sessionChains?: readonly Chain[];
   onClearError: () => void;
   onOpenSettings?: () => void;
+  /** When true, empty state prompts for a project folder (R3). */
+  workspaceUnbound?: boolean;
+  onPickProjectDir?: () => void;
   onRetry?: () => void;
   elapsedSeconds?: number;
   interrupted?: boolean;
@@ -86,6 +90,8 @@ export function ChatStream({
   error,
   onClearError,
   onOpenSettings,
+  workspaceUnbound = false,
+  onPickProjectDir,
   onRetry,
   usage,
   subagents = [],
@@ -182,10 +188,32 @@ export function ChatStream({
           <div className="empty-state-icon" aria-hidden>
             <img src={orchidIcon} alt="" width={96} height={96} />
           </div>
-          <div className="empty-state-title">Welcome to Orchid</div>
-          <div className="empty-state-desc">
-            Start a conversation by typing a message below.
-          </div>
+          {workspaceUnbound ? (
+            <>
+              <div className="empty-state-title">Choose a project folder</div>
+              <div className="empty-state-desc">
+                Orchid needs a working directory before the agent can run tools
+                or create sessions.
+              </div>
+              {onPickProjectDir && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm mt-3"
+                  onClick={onPickProjectDir}
+                >
+                  <Icon name="folder" size={14} />
+                  Open folder
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="empty-state-title">Welcome to Orchid</div>
+              <div className="empty-state-desc">
+                Start a conversation by typing a message below.
+              </div>
+            </>
+          )}
         </div>
       </div>
     );

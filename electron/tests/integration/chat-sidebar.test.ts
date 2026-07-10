@@ -187,6 +187,30 @@ describe('Session Management', () => {
     expect(result[0].name).toBe('Session 1');
   });
 
+  it('session summaries include cwd for project-scoped sidebar', async () => {
+    const sessions: SessionSummary[] = [
+      {
+        id: 's1',
+        name: 'Alpha',
+        model: 'test/model',
+        cwd: '/proj/alpha',
+        chainCount: 1,
+        updatedAt: Date.now(),
+      },
+      {
+        id: 's2',
+        name: 'Beta',
+        model: 'test/model',
+        cwd: '/proj/beta',
+        chainCount: 1,
+        updatedAt: Date.now(),
+      },
+    ];
+    mockOrchid.session.list.mockResolvedValueOnce(sessions);
+    const result = await mockOrchid.session.list();
+    expect(result.map((s) => s.cwd)).toEqual(['/proj/alpha', '/proj/beta']);
+  });
+
   it('session.load loads a session by ID', async () => {
     const session = { id: 's1', name: 'Test', model: 'test/model', chains: [] };
     mockOrchid.session.load.mockResolvedValueOnce(session);

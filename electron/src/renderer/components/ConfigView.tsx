@@ -155,12 +155,16 @@ export function ConfigView({ onClose }: ConfigViewProps) {
         activeSessionId={session.activeSession?.id ?? null}
         isCollapsed={leftCollapsed}
         onOpenSettings={() => {}}
+        onPickProjectDir={() => {
+          void session.pickProjectDir();
+        }}
         onRefreshSessions={session.refresh}
         onSessionCreate={handleSessionCreate}
         onSessionDelete={session.deleteSession}
         onSessionSelect={handleSessionSelect}
         onToggle={() => setLeftCollapsed((prev) => !prev)}
         sessionListState={session.listState}
+        workspace={session.workspace}
       />
 
       <main className="flex min-h-0 min-w-0 flex-col bg-base-100">

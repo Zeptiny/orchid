@@ -3836,6 +3836,107 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+/* Workspace chip (U6) — current project path + change action */
+.workspace-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  margin-bottom: 6px;
+  padding: 4px 6px;
+  border: 1px solid #26303d;
+  border-radius: 5px;
+  background: #090e15;
+  min-width: 0;
+}
+.workspace-chip-icon {
+  flex-shrink: 0;
+  opacity: 0.55;
+  color: #98a5b5;
+}
+.workspace-chip-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10px;
+  color: #c5d0dc;
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-chip-change {
+  flex-shrink: 0;
+  min-height: 20px !important;
+  height: 20px !important;
+  padding: 0 6px !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  color: #a8b4ff !important;
+}
+.workspace-unbound-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.session-item-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-start;
+}
+.session-item-path {
+  font-size: 9px;
+  color: #98a5b5;
+  max-width: 100%;
+  line-height: 1.2;
+}
+.session-other-projects {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.session-other-toggle {
+  justify-content: flex-start !important;
+  gap: 4px !important;
+  width: 100%;
+  min-height: 26px !important;
+  height: auto !important;
+  padding: 4px 6px !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  color: #98a5b5 !important;
+  text-transform: none;
+}
+.session-project-title {
+  color: #c5d0dc !important;
+  text-transform: none !important;
+  font-size: 10px !important;
+  letter-spacing: 0 !important;
+}
+.session-date-sub {
+  padding-top: 2px !important;
+  opacity: 0.85;
+}
+.composer-workspace-gate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 12px 6px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, #f0c674 35%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, #f0c674 10%, transparent);
+  color: #e8d5a3;
+  font-size: 11px;
+}
+
 /* Session search — mock: relative, margin-bottom 6px, icon left 6px */
 .session-search {
   position: relative;

@@ -222,13 +222,57 @@ export function ChatView() {
     [session, chat, handleSessionSelect],
   );
 
+  const notify = useCallback((message: string, severity: ToastSeverity = 'info') => {
+    console.log(`[${severity.toUpperCase()}] ${message}`);
+    if (severity === 'error') {
+      console.error(message);
+    }
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ message, severity });
+    toastTimer.current = setTimeout(() => setToast(null), 4500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
+  }, []);
+
+  // null workspace = still loading; allow send (main process still gates).
+  // unbound/missing = block in UI (R3).
+  const workspaceBound =
+    session.workspace == null || session.workspace.status === 'valid';
+
+  const handlePickProjectDir = useCallback(async () => {
+    const info = await session.pickProjectDir();
+    if (info?.status === 'valid' && info.cwd) {
+      notify(`Project folder: ${info.cwd}`, 'info');
+    }
+  }, [session, notify]);
+
   const handleSend = useCallback(
     async (message: string) => {
+      // UI gate (R3): reinforce main-process unbound_workspace rejection.
+      if (!workspaceBound) {
+        notify(
+          'Choose a project folder before sending a message.',
+          'warning',
+        );
+        void handlePickProjectDir();
+        return;
+      }
       const preferredModel =
         session.activeSession?.model || currentModel || undefined;
       await chat.send(message, preferredModel ? { model: preferredModel } : undefined);
     },
-    [chat, session.activeSession?.model, currentModel],
+    [
+      chat,
+      session.activeSession?.model,
+      currentModel,
+      workspaceBound,
+      notify,
+      handlePickProjectDir,
+    ],
   );
 
   const handleRetry = useCallback(async () => {
@@ -334,22 +378,6 @@ export function ChatView() {
     void subagents.refresh();
   }, [chat.status, chat.messages.length, session.activeSession?.id, subagents.refresh]);
 
-  const notify = useCallback((message: string, severity: ToastSeverity = 'info') => {
-    console.log(`[${severity.toUpperCase()}] ${message}`);
-    if (severity === 'error') {
-      console.error(message);
-    }
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    setToast({ message, severity });
-    toastTimer.current = setTimeout(() => setToast(null), 4500);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (toastTimer.current) clearTimeout(toastTimer.current);
-    };
-  }, []);
-
   const commandContext: CommandContext = {
     onCreateSession: handleSessionCreate,
     onLoadSession: handleSessionSelect,
@@ -404,6 +432,7 @@ export function ChatView() {
     onOpenSettings: () => {
       openSettings();
     },
+    onPickProjectDir: handlePickProjectDir,
     onIndexRAG: handleIndexRAG,
     onIndexAST: handleIndexAST,
     onClearRAG: async () => {
@@ -454,12 +483,16 @@ export function ChatView() {
         activeSessionId={session.activeSession?.id ?? null}
         isCollapsed={leftSidebarCollapsed}
         onOpenSettings={openSettings}
+        onPickProjectDir={() => {
+          void handlePickProjectDir();
+        }}
         onRefreshSessions={session.refresh}
         onSessionCreate={handleSessionCreate}
         onSessionDelete={handleSessionDelete}
         onSessionSelect={handleSessionSelect}
         onToggle={toggleLeftSidebar}
         sessionListState={session.listState}
+        workspace={session.workspace}
       />
 
       <main className="main-pane min-h-0 min-w-0 overflow-hidden">
@@ -492,6 +525,14 @@ export function ChatView() {
           sessionChains={session.activeSession?.chains ?? []}
           onClearError={chat.clearError}
           onOpenSettings={openSettings}
+          onPickProjectDir={
+            workspaceBound
+              ? undefined
+              : () => {
+                  void handlePickProjectDir();
+                }
+          }
+          workspaceUnbound={!workspaceBound}
           onRetry={handleRetry}
           elapsedSeconds={chat.elapsedSeconds}
           interrupted={chat.interrupted}
@@ -507,6 +548,10 @@ export function ChatView() {
           currentTheme={currentTheme}
           currentPersonality={currentPersonality}
           personalityNames={personalityNames}
+          workspaceBound={workspaceBound}
+          onPickProjectDir={() => {
+            void handlePickProjectDir();
+          }}
         />
         <Footer
           elapsedSeconds={chat.elapsedSeconds}
@@ -540,7 +585,7 @@ export function ChatView() {
         cumulativeUsage={chat.cumulativeUsage}
         maxContext={maxContext}
         messages={chat.messages}
-        cwd={chat.cwd}
+        cwd={session.workspace?.cwd ?? chat.cwd}
       />
 
       <CommandPalette

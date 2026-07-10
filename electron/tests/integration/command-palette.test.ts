@@ -98,8 +98,8 @@ afterEach(() => {
 // ─── Command Registry ────────────────────────────────────────────────────────
 
 describe('Command Registry', () => {
-  it('all 11 commands are registered', () => {
-    expect(COMMANDS).toHaveLength(11);
+  it('all 12 commands are registered', () => {
+    expect(COMMANDS).toHaveLength(12);
   });
 
   it('all command names are defined', () => {
@@ -112,6 +112,7 @@ describe('Command Registry', () => {
     expect(names).toContain('/theme');
     expect(names).toContain('/personality');
     expect(names).toContain('/settings');
+    expect(names).toContain('/cd');
     expect(names).toContain('/rag index');
     expect(names).toContain('/ast index');
     expect(names).toContain('/rag clear');
@@ -372,6 +373,7 @@ describe('Command Execution', () => {
       getAvailableModels: vi.fn().mockReturnValue(['test/model']),
       getCurrentModel: vi.fn().mockReturnValue('test/model'),
       onOpenSettings: vi.fn(),
+      onPickProjectDir: vi.fn().mockResolvedValue(undefined),
       onIndexRAG: vi.fn().mockResolvedValue(undefined),
       onIndexAST: vi.fn().mockResolvedValue(undefined),
       onClearRAG: vi.fn().mockResolvedValue(undefined),
@@ -446,6 +448,18 @@ describe('Command Execution', () => {
     expect(cmd).toBeDefined();
     await cmd!.execute(mockContext);
     expect(mockContext.onOpenSettings).toHaveBeenCalled();
+    expect(mockContext.onClose).toHaveBeenCalled();
+  });
+
+  it('/cd opens the project folder picker', async () => {
+    const cmd = getCommand('/cd');
+    expect(cmd).toBeDefined();
+    await cmd!.execute(mockContext);
+    expect(mockContext.onPickProjectDir).toHaveBeenCalled();
+    expect(mockContext.onNotify).toHaveBeenCalledWith(
+      'Project folder updated.',
+      'info',
+    );
     expect(mockContext.onClose).toHaveBeenCalled();
   });
 

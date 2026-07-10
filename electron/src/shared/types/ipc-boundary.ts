@@ -190,6 +190,11 @@ export interface CommandContext {
   getCurrentModel: () => string;
   /** Open settings (emits event for U24 Preferences). */
   onOpenSettings: () => void;
+  /**
+   * Open the project folder picker (binds draft/session + sticky default).
+   * Used by `/cd` and workspace chrome.
+   */
+  onPickProjectDir?: () => Promise<void>;
   /** Index RAG in background. */
   onIndexRAG: () => Promise<void>;
   /** Index AST in background. */
