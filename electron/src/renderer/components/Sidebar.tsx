@@ -25,7 +25,6 @@ interface SidebarProps {
   todoState: TodoListState;
   onRefreshTodos: () => void;
   mcpServers: MCPServerStatus[];
-  onRefreshMCP: () => void;
   ragStatus?: RAGStoreStatus | null;
   astStatus?: ASTStoreStatus | null;
   onIndexRAG?: () => void | Promise<void>;
@@ -51,7 +50,6 @@ export function Sidebar({
   todoState,
   onRefreshTodos,
   mcpServers,
-  onRefreshMCP,
   ragStatus = null,
   astStatus = null,
   onIndexRAG,
@@ -142,7 +140,7 @@ export function Sidebar({
         </CollapseBlock>
 
         <CollapseBlock title="MCP Servers" defaultOpen>
-          <MCPSection servers={mcpServers} onRefresh={onRefreshMCP} />
+          <MCPSection servers={mcpServers} />
         </CollapseBlock>
       </div>
 
@@ -513,7 +511,6 @@ function formatRelativeTime(iso: string): string {
 
 interface MCPSectionProps {
   servers: MCPServerStatus[];
-  onRefresh: () => void;
 }
 
 function MCPSection({ servers }: MCPSectionProps) {
@@ -524,16 +521,25 @@ function MCPSection({ servers }: MCPSectionProps) {
   return (
     <div className="inspector-stack">
       {servers.map((server) => (
-        <div key={server.name} className="inspector-row">
-          <span className="inspector-row-label truncate">{server.name}</span>
-          {server.status === 'connected' ? (
-            <span className="badge badge-xs badge-success shrink-0">
-              {server.toolCount > 0 ? `${server.toolCount} tools` : 'connected'}
-            </span>
-          ) : server.status === 'starting' ? (
-            <span className="badge badge-xs badge-warning shrink-0">starting</span>
-          ) : (
-            <span className="badge badge-xs badge-ghost shrink-0">{server.status}</span>
+        <div key={server.name} className="inspector-stack gap-0">
+          <div className="inspector-row">
+            <span className="inspector-row-label truncate">{server.name}</span>
+            {server.status === 'connected' ? (
+              <span className="badge badge-xs badge-success shrink-0">
+                {server.toolCount > 0 ? `${server.toolCount} tools` : 'connected'}
+              </span>
+            ) : server.status === 'starting' ? (
+              <span className="badge badge-xs badge-warning shrink-0">starting</span>
+            ) : server.status === 'failed' ? (
+              <span className="badge badge-xs badge-error shrink-0">failed</span>
+            ) : (
+              <span className="badge badge-xs badge-ghost shrink-0">{server.status}</span>
+            )}
+          </div>
+          {server.error && (
+            <div className="subtle text-error truncate" title={server.error}>
+              {server.error}
+            </div>
           )}
         </div>
       ))}

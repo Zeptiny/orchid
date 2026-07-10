@@ -402,6 +402,18 @@ export function ChatView() {
     refreshIndex();
   }, [refreshMCP, refreshIndex]);
 
+  // MCP starts in the background after the window opens, so the first status
+  // snapshot often lands on "starting". Poll until every server leaves that
+  // state (connected / failed / unavailable) so the right sidebar updates.
+  useEffect(() => {
+    const stillStarting = mcpServers.some((s) => s.status === 'starting');
+    if (!stillStarting) return;
+    const id = setInterval(() => {
+      void refreshMCP();
+    }, 1500);
+    return () => clearInterval(id);
+  }, [mcpServers, refreshMCP]);
+
   // After a turn completes (or session switches), refresh subagents so chain
   // footers pick up token usage written into subagent_chains.
   useEffect(() => {
@@ -607,7 +619,6 @@ export function ChatView() {
         todoState={todos.state}
         onRefreshTodos={todos.refresh}
         mcpServers={mcpServers}
-        onRefreshMCP={refreshMCP}
         ragStatus={ragStatus}
         astStatus={astStatus}
         onIndexRAG={handleIndexRAG}
