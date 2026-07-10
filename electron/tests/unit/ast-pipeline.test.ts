@@ -585,7 +585,7 @@ describe('get_file_skeleton', () => {
     const filePath = path.join(tmpDir, 'test.py');
     fs.writeFileSync(filePath, SAMPLE_PYTHON);
     const { getFileSkeletonHandler } = await import('../../src/main/tools/ast/get-file-skeleton');
-    const result = await getFileSkeletonHandler({ file_path: filePath }) as any;
+    const result = await getFileSkeletonHandler({ file_path: filePath }, { cwd: tmpDir }) as any;
     expect(result.display).toContain('Skeleton');
     expect(result.content).toContain('greet');
     expect(result.content).toContain('Calculator');
@@ -595,7 +595,7 @@ describe('get_file_skeleton', () => {
 
   it('should return error for non-existent file', async () => {
     const { getFileSkeletonHandler } = await import('../../src/main/tools/ast/get-file-skeleton');
-    const result = await getFileSkeletonHandler({ file_path: '/nonexistent.py' }) as any;
+    const result = await getFileSkeletonHandler({ file_path: '/nonexistent.py' }, { cwd: tmpDir }) as any;
     expect(result.display).toContain('File not found');
     expect(result.content).toContain('ast_error');
   });
@@ -604,7 +604,7 @@ describe('get_file_skeleton', () => {
     const filePath = path.join(tmpDir, 'test.rb');
     fs.writeFileSync(filePath, 'puts "hello"');
     const { getFileSkeletonHandler } = await import('../../src/main/tools/ast/get-file-skeleton');
-    const result = await getFileSkeletonHandler({ file_path: filePath }) as any;
+    const result = await getFileSkeletonHandler({ file_path: filePath }, { cwd: tmpDir }) as any;
     expect(result.display).toContain('Unsupported');
   });
 
@@ -612,7 +612,7 @@ describe('get_file_skeleton', () => {
     const filePath = path.join(tmpDir, 'test.py');
     fs.writeFileSync(filePath, 'def foo():\n    pass\n\ndef bar():\n    pass\n');
     const { getFileSkeletonHandler } = await import('../../src/main/tools/ast/get-file-skeleton');
-    const result = await getFileSkeletonHandler({ file_path: filePath }) as any;
+    const result = await getFileSkeletonHandler({ file_path: filePath }, { cwd: tmpDir }) as any;
     expect(result.content).toContain('|----');
   });
 });
@@ -624,7 +624,7 @@ describe('get_function', () => {
     const filePath = path.join(tmpDir, 'test.py');
     fs.writeFileSync(filePath, SAMPLE_PYTHON);
     const { getFunctionHandler } = await import('../../src/main/tools/ast/get-function');
-    const result = await getFunctionHandler({ file_path: filePath, function_name: 'add' }) as any;
+    const result = await getFunctionHandler({ file_path: filePath, function_name: 'add' }, { cwd: tmpDir }) as any;
     expect(result.content).toContain('add');
     expect(result.content).toContain('Calculator');
     expect(result.content).toContain('import');
@@ -635,10 +635,10 @@ describe('get_function', () => {
     fs.writeFileSync(filePath, SAMPLE_PYTHON);
     const { getFunctionHandler, clearFunctionHashes } = await import('../../src/main/tools/ast/get-function');
     clearFunctionHashes();
-    const r1 = await getFunctionHandler({ file_path: filePath, function_name: 'greet' }) as any;
+    const r1 = await getFunctionHandler({ file_path: filePath, function_name: 'greet' }, { cwd: tmpDir }) as any;
     expect(r1.content).toContain('greet');
     expect(r1.content).not.toContain('No changes');
-    const r2 = await getFunctionHandler({ file_path: filePath, function_name: 'greet' }) as any;
+    const r2 = await getFunctionHandler({ file_path: filePath, function_name: 'greet' }, { cwd: tmpDir }) as any;
     expect(r2.content).toContain('No changes');
   });
 
@@ -647,9 +647,9 @@ describe('get_function', () => {
     fs.writeFileSync(filePath, SAMPLE_PYTHON);
     const { getFunctionHandler, clearFunctionHashes } = await import('../../src/main/tools/ast/get-function');
     clearFunctionHashes();
-    await getFunctionHandler({ file_path: filePath, function_name: 'greet' });
+    await getFunctionHandler({ file_path: filePath, function_name: 'greet' }, { cwd: tmpDir });
     fs.writeFileSync(filePath, SAMPLE_PYTHON.replace('def greet(name):', 'def greet(name, greeting="Hello"):'));
-    const result = await getFunctionHandler({ file_path: filePath, function_name: 'greet' }) as any;
+    const result = await getFunctionHandler({ file_path: filePath, function_name: 'greet' }, { cwd: tmpDir }) as any;
     expect(result.content).not.toContain('No changes');
   });
 
@@ -657,7 +657,7 @@ describe('get_function', () => {
     const filePath = path.join(tmpDir, 'test.py');
     fs.writeFileSync(filePath, SAMPLE_PYTHON);
     const { getFunctionHandler } = await import('../../src/main/tools/ast/get-function');
-    const result = await getFunctionHandler({ file_path: filePath, function_name: 'nonexistent' }) as any;
+    const result = await getFunctionHandler({ file_path: filePath, function_name: 'nonexistent' }, { cwd: tmpDir }) as any;
     expect(result.content).toContain('not_found');
   });
 });
@@ -676,7 +676,7 @@ describe('find_symbol_references', () => {
       resetSession();
       await indexProject({ projectPath: projectDir });
       const { findSymbolReferencesHandler } = await import('../../src/main/tools/ast/find-symbol-references');
-      const result = await findSymbolReferencesHandler({ symbol_name: 'greet' }) as any;
+      const result = await findSymbolReferencesHandler({ symbol_name: 'greet' }, { cwd: projectDir }) as any;
       expect(result.content).toContain('symbol_references');
       expect(result.content).toContain('test.py');
     } finally { process.cwd = origCwd; }
@@ -693,14 +693,14 @@ describe('find_symbol_references', () => {
       resetSession();
       await indexProject({ projectPath: projectDir });
       const { findSymbolReferencesHandler } = await import('../../src/main/tools/ast/find-symbol-references');
-      const result = await findSymbolReferencesHandler({ symbol_name: 'nonexistent' }) as any;
+      const result = await findSymbolReferencesHandler({ symbol_name: 'nonexistent' }, { cwd: projectDir }) as any;
       expect(result.content).toContain('count="0"');
     } finally { process.cwd = origCwd; }
   });
 
   it('should return error for empty symbol name', async () => {
     const { findSymbolReferencesHandler } = await import('../../src/main/tools/ast/find-symbol-references');
-    const result = await findSymbolReferencesHandler({ symbol_name: '' }) as any;
+    const result = await findSymbolReferencesHandler({ symbol_name: '' }, { cwd: tmpDir }) as any;
     expect(result.content).toContain('ast_error');
   });
 });
@@ -715,7 +715,7 @@ describe('replace_symbol', () => {
     const result = await replaceSymbolHandler({
       file_path: filePath, symbol_name: 'greet',
       new_source: 'def greet(name):\n    """Custom greeting."""\n    return f"Hi, {name}!"',
-    }) as any;
+    }, { cwd: tmpDir }) as any;
     expect(result.display).toContain('Replaced');
     expect(result.content).toContain('success="true"');
     expect(fs.readFileSync(filePath, 'utf-8')).toContain('Hi,');
@@ -727,7 +727,7 @@ describe('replace_symbol', () => {
     const { replaceSymbolHandler } = await import('../../src/main/tools/ast/replace-symbol');
     const result = await replaceSymbolHandler({
       file_path: filePath, symbol_name: 'greet', new_source: 'def greet(name):\n    return "hi"',
-    }) as any;
+    }, { cwd: tmpDir }) as any;
     expect(result.content).toContain('diff format="unified"');
   });
 
@@ -739,7 +739,7 @@ describe('replace_symbol', () => {
     registerPostWriteCallback(cb);
     try {
       const { replaceSymbolHandler } = await import('../../src/main/tools/ast/replace-symbol');
-      await replaceSymbolHandler({ file_path: filePath, symbol_name: 'greet', new_source: 'def greet(name):\n    return "hi"' });
+      await replaceSymbolHandler({ file_path: filePath, symbol_name: 'greet', new_source: 'def greet(name):\n    return "hi"' }, { cwd: tmpDir });
       expect(cb).toHaveBeenCalledWith(filePath);
     } finally { clearPostWriteCallbacks(); }
   });
@@ -751,7 +751,7 @@ describe('replace_symbol', () => {
     const { replaceSymbolHandler } = await import('../../src/main/tools/ast/replace-symbol');
     const result = await replaceSymbolHandler({
       file_path: filePath, symbol_name: 'process', new_source: 'def process(self):\n    return True',
-    }) as any;
+    }, { cwd: tmpDir }) as any;
     expect(result.content).toContain('ambiguous_symbol');
   });
 
@@ -761,7 +761,7 @@ describe('replace_symbol', () => {
     const { replaceSymbolHandler } = await import('../../src/main/tools/ast/replace-symbol');
     const result = await replaceSymbolHandler({
       file_path: filePath, symbol_name: 'nonexistent', new_source: 'pass',
-    }) as any;
+    }, { cwd: tmpDir }) as any;
     expect(result.content).toContain('symbol_not_found');
   });
 });
@@ -780,7 +780,7 @@ describe('rename_symbol', () => {
       resetSession();
       await indexProject({ projectPath: projectDir });
       const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
-      const result = await renameSymbolHandler({ old_name: 'greet_helper', new_name: 'format_greeting' }) as any;
+      const result = await renameSymbolHandler({ old_name: 'greet_helper', new_name: 'format_greeting' }, { cwd: projectDir }) as any;
       expect(result.display).toContain('Renamed');
       const newContent = fs.readFileSync(path.join(projectDir, 'test.py'), 'utf-8');
       expect(newContent).toContain('format_greeting');
@@ -799,7 +799,7 @@ describe('rename_symbol', () => {
       resetSession();
       await indexProject({ projectPath: projectDir });
       const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
-      await renameSymbolHandler({ old_name: 'greet', new_name: 'say_hello' });
+      await renameSymbolHandler({ old_name: 'greet', new_name: 'say_hello' }, { cwd: projectDir });
       const newContent = fs.readFileSync(path.join(projectDir, 'test.py'), 'utf-8');
       expect(newContent).toContain('def say_hello(');
       expect(newContent).toContain('greeting');
@@ -808,13 +808,13 @@ describe('rename_symbol', () => {
 
   it('should return error for empty symbol name', async () => {
     const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
-    const result = await renameSymbolHandler({ old_name: '', new_name: 'x' }) as any;
+    const result = await renameSymbolHandler({ old_name: '', new_name: 'x' }, { cwd: tmpDir }) as any;
     expect(result.content).toContain('ast_error');
   });
 
   it('should return error for empty new name', async () => {
     const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
-    const result = await renameSymbolHandler({ old_name: 'x', new_name: '' }) as any;
+    const result = await renameSymbolHandler({ old_name: 'x', new_name: '' }, { cwd: tmpDir }) as any;
     expect(result.content).toContain('ast_error');
   });
 });

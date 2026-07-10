@@ -381,6 +381,8 @@ describe('toApiMessages', () => {
 // Tool dispatch tests
 // ---------------------------------------------------------------------------
 
+const TEST_TOOL_CWD = '/tmp/orchid-tool-test-cwd';
+
 describe('executeToolCall', () => {
   let registry: ToolRegistry;
 
@@ -403,7 +405,7 @@ describe('executeToolCall', () => {
     );
 
     const toolCall = makeToolCall('tc-1', 'echo', '{"text":"hello"}');
-    const result = await executeToolCall(toolCall, registry);
+    const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.role).toBe(MessageRole.TOOL);
     expect(result.type).toBe(MessageType.TOOL_RESULT);
@@ -413,21 +415,21 @@ describe('executeToolCall', () => {
 
   it('handles invalid JSON arguments', async () => {
     const toolCall = makeToolCall('tc-1', 'echo', 'not-json');
-    const result = await executeToolCall(toolCall, registry);
+    const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.content).toContain('invalid JSON');
   });
 
   it('handles non-object arguments', async () => {
     const toolCall = makeToolCall('tc-1', 'echo', '"just a string"');
-    const result = await executeToolCall(toolCall, registry);
+    const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.content).toContain('must be a JSON object');
   });
 
   it('handles unknown tool', async () => {
     const toolCall = makeToolCall('tc-1', 'nonexistent', '{}');
-    const result = await executeToolCall(toolCall, registry);
+    const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.content).toContain("does not exist");
   });
@@ -446,7 +448,7 @@ describe('executeToolCall', () => {
     );
 
     const toolCall = makeToolCall('tc-1', 'fail', '{}');
-    const result = await executeToolCall(toolCall, registry);
+    const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.content).toContain('internal error');
     expect(result.is_error).toBe(true);
@@ -468,7 +470,7 @@ describe('executeToolCall', () => {
       );
 
       const toolCall = makeToolCall('tc-1', 'slow', '{}');
-      const result = await executeToolCall(toolCall, registry, {
+      const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD, 
         timeoutSeconds: 0.1, // 100ms timeout
       });
 
@@ -489,7 +491,7 @@ describe('executeToolCall', () => {
       );
 
       const toolCall = makeToolCall('tc-1', 'instant', '{}');
-      const result = await executeToolCall(toolCall, registry, {
+      const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD, 
         timeoutSeconds: 0,
       });
 
@@ -510,7 +512,7 @@ describe('executeToolCall', () => {
       );
 
       const toolCall = makeToolCall('tc-1', 'wait_for_subagent', '{}');
-      const result = await executeToolCall(toolCall, registry, {
+      const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD, 
         timeoutSeconds: 0.001, // Would timeout if not exempt
       });
 
@@ -529,7 +531,7 @@ describe('executeToolCall', () => {
       );
 
       const toolCall = makeToolCall('tc-1', 'read_output', '{}');
-      const result = await executeToolCall(toolCall, registry, {
+      const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD, 
         timeoutSeconds: 0.001,
       });
 
@@ -799,9 +801,9 @@ describe('ToolRegistry integration with dispatch', () => {
     );
 
     const toolCall = makeToolCall('tc-1', 'test_tool', '{"query":"hello"}');
-    await executeToolCall(toolCall, registry);
+    await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
-    expect(handler).toHaveBeenCalledWith({ query: 'hello' });
+    expect(handler).toHaveBeenCalledWith({ query: 'hello' }, expect.objectContaining({ cwd: TEST_TOOL_CWD }));
   });
 
   it('returns error for unregistered tool', async () => {
@@ -816,7 +818,7 @@ describe('ToolRegistry integration with dispatch', () => {
     );
 
     const toolCall = makeToolCall('tc-1', 'nonexistent', '{}');
-    const result = await executeToolCall(toolCall, registry);
+    const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.content).toContain('does not exist');
     expect(result.content).toContain('existing');

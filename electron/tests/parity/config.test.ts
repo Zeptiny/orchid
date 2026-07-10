@@ -49,7 +49,7 @@ const EXPECTED_RAG_FIELDS = [
 
 describe('Config Parity', () => {
   describe('schema completeness', () => {
-    it('all 22 top-level fields exist in schema', () => {
+    it('all top-level fields exist in schema', () => {
       const cfg = defaults();
 
       // Top-level scalar fields (13)
@@ -71,6 +71,7 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('llm_stream_idle_timeout');
       expect(cfg).toHaveProperty('llm_stream_retries');
       expect(cfg).toHaveProperty('background_command_idle_timeout');
+      expect(cfg).toHaveProperty('default_project_dir');
 
       // RAG nested fields (5)
       expect(cfg.rag).toHaveProperty('chunk_size');
@@ -80,11 +81,11 @@ describe('Config Parity', () => {
       expect(cfg.rag).toHaveProperty('embedding_model');
     });
 
-    it('top-level field count matches expected (18 top-level + 5 rag = 23 fields)', () => {
+    it('top-level field count matches expected (19 top-level + 5 rag = 24 fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(18); // 18 top-level fields (rag is nested)
+      expect(topLevelKeys).toHaveLength(19); // 19 top-level fields (rag is nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);
