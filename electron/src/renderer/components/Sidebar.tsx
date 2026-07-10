@@ -2,8 +2,14 @@
  * Sidebar — right inspector panel (Context, Usage, Subagents, Todos, Index, MCP).
  * Iteration 012 mock-aligned collapse blocks.
  */
-import { useState, type ReactNode } from 'react';
-import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus } from '../../shared/types/ipc-boundary';
+import { useEffect, useState, type ReactNode } from 'react';
+import type {
+  MCPServerStatus,
+  RAGStoreStatus,
+  ASTStoreStatus,
+  RAGIndexProgress,
+  ASTIndexProgress,
+} from '../../shared/types/ipc-boundary';
 import { ContextGrid } from './ContextGrid';
 import type { Message, Usage } from '../../shared/types/message';
 import { TodoStatus } from '../../shared/types/todo';
@@ -29,6 +35,7 @@ interface SidebarProps {
   astStatus?: ASTStoreStatus | null;
   onIndexRAG?: () => void | Promise<void>;
   onIndexAST?: () => void | Promise<void>;
+  /** Refresh RAG/AST store status (after a run completes, including late-join). */
   onRefreshIndex?: () => void | Promise<void>;
   usage?: Usage | null;
   cumulativeUsage?: Usage | null;
@@ -135,7 +142,7 @@ export function Sidebar({
             astStatus={astStatus}
             onIndexRAG={onIndexRAG}
             onIndexAST={onIndexAST}
-            onRefresh={onRefreshIndex}
+            onRefreshIndex={onRefreshIndex}
           />
         </CollapseBlock>
 
@@ -346,7 +353,7 @@ interface IndexSectionProps {
   astStatus: ASTStoreStatus | null;
   onIndexRAG?: () => void | Promise<void>;
   onIndexAST?: () => void | Promise<void>;
-  onRefresh?: () => void | Promise<void>;
+  onRefreshIndex?: () => void | Promise<void>;
 }
 
 function IndexSection({
@@ -354,25 +361,124 @@ function IndexSection({
   astStatus,
   onIndexRAG,
   onIndexAST,
-  onRefresh,
+  onRefreshIndex,
 }: IndexSectionProps) {
-  const [indexing, setIndexing] = useState<'rag' | 'ast' | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Track each indexer independently so RAG and AST can run in parallel.
+  // Busy state can also be restored from main-process indexState (tab remount).
+  const [indexingRag, setIndexingRag] = useState(false);
+  const [indexingAst, setIndexingAst] = useState(false);
+  const [ragError, setRagError] = useState<string | null>(null);
+  const [astError, setAstError] = useState<string | null>(null);
+  const [ragProgress, setRagProgress] = useState<RAGIndexProgress | null>(null);
+  const [astProgress, setAstProgress] = useState<ASTIndexProgress | null>(null);
+  // Restore in-flight state when remounting (e.g. user switched tabs).
+  useEffect(() => {
+    let cancelled = false;
+    const restore = async () => {
+      try {
+        const [rag, ast] = await Promise.all([
+          window.orchid?.rag?.indexState?.(),
+          window.orchid?.ast?.indexState?.(),
+        ]);
+        if (cancelled) return;
+        if (rag?.indexing) {
+          setIndexingRag(true);
+          setRagProgress(rag.progress);
+        }
+        if (ast?.indexing) {
+          setIndexingAst(true);
+          setAstProgress(ast.progress);
+        }
+      } catch {
+        // Non-fatal
+      }
+    };
+    void restore();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Live progress — also flips busy UI for late subscribers (not only the starter).
+  useEffect(() => {
+    const unsubRag = window.orchid?.rag?.onProgress?.((p) => {
+      setRagProgress(p);
+      if (p.phase === 'done') {
+        setIndexingRag(false);
+        setRagProgress(null);
+        // If we didn't start this run, still refresh store counts.
+        void onRefreshIndex?.();
+      } else {
+        setIndexingRag(true);
+      }
+    });
+    const unsubAst = window.orchid?.ast?.onProgress?.((p) => {
+      setAstProgress(p);
+      if (p.phase === 'done') {
+        setIndexingAst(false);
+        setAstProgress(null);
+        void onRefreshIndex?.();
+      } else {
+        setIndexingAst(true);
+      }
+    });
+    return () => {
+      unsubRag?.();
+      unsubAst?.();
+    };
+  }, [onRefreshIndex]);
 
   const runIndex = async (kind: 'rag' | 'ast') => {
     const action = kind === 'rag' ? onIndexRAG : onIndexAST;
-    if (!action || indexing) return;
-    setIndexing(kind);
-    setError(null);
+    const busy = kind === 'rag' ? indexingRag : indexingAst;
+    if (!action || busy) return;
+
+    if (kind === 'rag') {
+      setIndexingRag(true);
+      setRagError(null);
+      setRagProgress({
+        phase: 'discovering',
+        done: 0,
+        total: 0,
+        filesIndexed: 0,
+        filesSkipped: 0,
+        chunksCreated: 0,
+        filesDeleted: 0,
+        elapsedSeconds: 0,
+      });
+    } else {
+      setIndexingAst(true);
+      setAstError(null);
+      setAstProgress({
+        phase: 'discovering',
+        done: 0,
+        total: 0,
+        filesIndexed: 0,
+        filesSkipped: 0,
+        symbolsExtracted: 0,
+        filesDeleted: 0,
+        elapsedSeconds: 0,
+      });
+    }
+
     try {
+      // Handlers refresh status on success; progress events also refresh late-joiners.
       await action();
-      await onRefresh?.();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setError(`${kind.toUpperCase()} index failed: ${msg}`);
+      const line = `${kind.toUpperCase()} index failed: ${msg}`;
+      if (kind === 'rag') setRagError(line);
+      else setAstError(line);
       console.error(`${kind} index failed:`, err);
     } finally {
-      setIndexing(null);
+      if (kind === 'rag') {
+        // Progress 'done' may have already cleared; keep teardown idempotent.
+        setIndexingRag(false);
+        setRagProgress(null);
+      } else {
+        setIndexingAst(false);
+        setAstProgress(null);
+      }
     }
   };
 
@@ -380,9 +486,21 @@ function IndexSection({
     <div className="inspector-stack">
       <div className="inspector-row">
         <strong>RAG</strong>
-        <span className="subtle text-right">{formatRagStatus(ragStatus)}</span>
+        <span className="subtle text-right">
+          {indexingRag ? formatIndexProgressLabel(ragProgress) : formatRagStatus(ragStatus)}
+        </span>
       </div>
-      {ragStatus?.lastIndexed && (
+      {indexingRag && (
+        <IndexProgressPanel
+          progress={ragProgress}
+          detail={
+            ragProgress
+              ? `${ragProgress.filesIndexed} indexed · ${ragProgress.filesSkipped} skipped · ${ragProgress.chunksCreated} chunks`
+              : undefined
+          }
+        />
+      )}
+      {ragStatus?.lastIndexed && !indexingRag && (
         <div className="inspector-row">
           <span className="subtle">Last indexed</span>
           <span className="subtle text-right">
@@ -396,9 +514,21 @@ function IndexSection({
 
       <div className="inspector-row">
         <strong>AST</strong>
-        <span className="subtle text-right">{formatAstStatus(astStatus)}</span>
+        <span className="subtle text-right">
+          {indexingAst ? formatIndexProgressLabel(astProgress) : formatAstStatus(astStatus)}
+        </span>
       </div>
-      {astStatus?.lastIndexed && (
+      {indexingAst && (
+        <IndexProgressPanel
+          progress={astProgress}
+          detail={
+            astProgress
+              ? `${astProgress.filesIndexed} indexed · ${astProgress.filesSkipped} skipped · ${astProgress.symbolsExtracted} symbols`
+              : undefined
+          }
+        />
+      )}
+      {astStatus?.lastIndexed && !indexingAst && (
         <div className="inspector-row">
           <span className="subtle">Last indexed</span>
           <span className="subtle text-right">
@@ -416,11 +546,11 @@ function IndexSection({
           <button
             type="button"
             className="btn btn-ghost btn-xs"
-            disabled={!onIndexRAG || indexing !== null}
+            disabled={!onIndexRAG || indexingRag}
             onClick={() => void runIndex('rag')}
             title="Index project for RAG semantic search"
           >
-            {indexing === 'rag' ? (
+            {indexingRag ? (
               <span className="loading loading-spinner loading-xs" />
             ) : (
               'RAG'
@@ -429,30 +559,86 @@ function IndexSection({
           <button
             type="button"
             className="btn btn-ghost btn-xs"
-            disabled={!onIndexAST || indexing !== null}
+            disabled={!onIndexAST || indexingAst}
             onClick={() => void runIndex('ast')}
             title="Re-scan project for AST symbols"
           >
-            {indexing === 'ast' ? (
+            {indexingAst ? (
               <span className="loading loading-spinner loading-xs" />
             ) : (
               'AST'
             )}
           </button>
-          {onRefresh && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs btn-square"
-              disabled={indexing !== null}
-              onClick={() => void onRefresh()}
-              title="Refresh index status"
-            >
-              <Icon name="refresh" size={12} />
-            </button>
-          )}
         </span>
       </div>
-      {error && <p className="inspector-empty text-error text-left">{error}</p>}
+      {ragError && <p className="inspector-empty text-error text-left">{ragError}</p>}
+      {astError && <p className="inspector-empty text-error text-left">{astError}</p>}
+    </div>
+  );
+}
+
+type IndexProgressLike = {
+  phase: 'discovering' | 'indexing' | 'finalizing' | 'done';
+  done: number;
+  total: number;
+  currentFile?: string;
+  elapsedSeconds: number;
+} | null;
+
+function formatIndexProgressLabel(p: IndexProgressLike): string {
+  if (!p) return 'indexing…';
+  if (p.phase === 'discovering') return 'scanning…';
+  if (p.phase === 'finalizing') return 'finalizing…';
+  if (p.phase === 'done') return 'done';
+  if (p.total <= 0) return 'indexing…';
+  const pct = Math.min(100, Math.round((p.done / p.total) * 100));
+  return `${p.done}/${p.total} · ${pct}%`;
+}
+
+function IndexProgressPanel({
+  progress,
+  detail,
+}: {
+  progress: IndexProgressLike;
+  detail?: string;
+}) {
+  if (!progress) {
+    return <div className="subtle">Indexing…</div>;
+  }
+  if (progress.total === 0) {
+    return (
+      <div className="subtle">
+        {progress.phase === 'discovering' ? 'Scanning project…' : 'Indexing…'}
+      </div>
+    );
+  }
+  return (
+    <div className="inspector-stack gap-0">
+      <progress
+        className="progress progress-primary h-1 w-full"
+        value={progress.done}
+        max={Math.max(1, progress.total)}
+      />
+      <div className="inspector-row">
+        <span className="subtle truncate" title={progress.currentFile}>
+          {progress.phase === 'discovering'
+            ? 'Scanning files…'
+            : progress.phase === 'finalizing'
+              ? 'Writing index…'
+              : progress.currentFile
+                ? progress.currentFile
+                : 'Indexing…'}
+        </span>
+        <span className="subtle shrink-0 mono">
+          {progress.done}/{progress.total}
+        </span>
+      </div>
+      {detail && (
+        <div className="subtle">
+          {detail}
+          {progress.elapsedSeconds > 0 ? ` · ${progress.elapsedSeconds.toFixed(1)}s` : ''}
+        </div>
+      )}
     </div>
   );
 }

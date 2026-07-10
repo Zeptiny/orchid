@@ -520,7 +520,7 @@ describe('Indexer', () => {
     try {
       const { indexProject, resetSession } = await import('../../src/main/ast/indexer');
       resetSession();
-      const result = await indexProject({ projectPath: projectDir });
+      const result = await indexProject({ projectPath: projectDir, inline: true });
       expect(result.filesScanned).toBe(1);
       expect(result.filesIndexed).toBe(1);
       expect(result.symbolsExtracted).toBeGreaterThan(0);
@@ -539,8 +539,8 @@ describe('Indexer', () => {
     try {
       const { indexProject, resetSession } = await import('../../src/main/ast/indexer');
       resetSession();
-      expect((await indexProject({ projectPath: projectDir })).filesIndexed).toBe(1);
-      expect((await indexProject({ projectPath: projectDir })).filesSkipped).toBe(1);
+      expect((await indexProject({ projectPath: projectDir, inline: true })).filesIndexed).toBe(1);
+      expect((await indexProject({ projectPath: projectDir, inline: true })).filesSkipped).toBe(1);
     } finally { process.cwd = origCwd; }
   });
 
@@ -553,10 +553,10 @@ describe('Indexer', () => {
     try {
       const { indexProject, resetSession } = await import('../../src/main/ast/indexer');
       resetSession();
-      await indexProject({ projectPath: projectDir });
+      await indexProject({ projectPath: projectDir, inline: true });
       fs.unlinkSync(path.join(projectDir, 'test.py'));
       resetSession();
-      expect((await indexProject({ projectPath: projectDir })).filesDeleted).toBe(1);
+      expect((await indexProject({ projectPath: projectDir, inline: true })).filesDeleted).toBe(1);
     } finally { process.cwd = origCwd; }
   });
 
@@ -569,7 +569,7 @@ describe('Indexer', () => {
     try {
       const { indexProject, updateFile, resetSession } = await import('../../src/main/ast/indexer');
       resetSession();
-      await indexProject({ projectPath: projectDir });
+      await indexProject({ projectPath: projectDir, inline: true });
       fs.writeFileSync(path.join(projectDir, 'test.py'), SAMPLE_PYTHON + '\ndef new_func():\n    pass\n');
       await updateFile('test.py', projectDir);
       const { ASTStore } = await import('../../src/main/ast/store');
@@ -674,7 +674,7 @@ describe('find_symbol_references', () => {
     try {
       const { indexProject, resetSession } = await import('../../src/main/ast/indexer');
       resetSession();
-      await indexProject({ projectPath: projectDir });
+      await indexProject({ projectPath: projectDir, inline: true });
       const { findSymbolReferencesHandler } = await import('../../src/main/tools/ast/find-symbol-references');
       const result = await findSymbolReferencesHandler({ symbol_name: 'greet' }, { cwd: projectDir }) as any;
       expect(result.content).toContain('symbol_references');
@@ -691,7 +691,7 @@ describe('find_symbol_references', () => {
     try {
       const { indexProject, resetSession } = await import('../../src/main/ast/indexer');
       resetSession();
-      await indexProject({ projectPath: projectDir });
+      await indexProject({ projectPath: projectDir, inline: true });
       const { findSymbolReferencesHandler } = await import('../../src/main/tools/ast/find-symbol-references');
       const result = await findSymbolReferencesHandler({ symbol_name: 'nonexistent' }, { cwd: projectDir }) as any;
       expect(result.content).toContain('count="0"');
@@ -778,7 +778,7 @@ describe('rename_symbol', () => {
     try {
       const { indexProject, resetSession } = await import('../../src/main/ast/indexer');
       resetSession();
-      await indexProject({ projectPath: projectDir });
+      await indexProject({ projectPath: projectDir, inline: true });
       const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
       const result = await renameSymbolHandler({ old_name: 'greet_helper', new_name: 'format_greeting' }, { cwd: projectDir }) as any;
       expect(result.display).toContain('Renamed');
@@ -797,7 +797,7 @@ describe('rename_symbol', () => {
     try {
       const { indexProject, resetSession } = await import('../../src/main/ast/indexer');
       resetSession();
-      await indexProject({ projectPath: projectDir });
+      await indexProject({ projectPath: projectDir, inline: true });
       const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
       await renameSymbolHandler({ old_name: 'greet', new_name: 'say_hello' }, { cwd: projectDir });
       const newContent = fs.readFileSync(path.join(projectDir, 'test.py'), 'utf-8');

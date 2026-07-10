@@ -1,17 +1,19 @@
 /**
- * RAG IPC handlers — rag:status, rag:index, rag:clear.
+ * RAG IPC handlers — rag:status, rag:index, rag:clear, rag:index_state, rag:progress.
  *
- * Wraps RAG indexer from U16 with zod-validated payloads.
- * Uses active workspace cwd (session → sticky), not process.cwd().
+ * Full indexes run in a worker thread; progress is broadcast to all windows so
+ * late UI subscribers (tab switches / remounts) keep seeing updates.
  */
-import { ipcMain } from 'electron';
+import { BrowserWindow, ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
+import type { RAGIndexProgress } from '../../shared/types/ipc-boundary';
 import {
   indexProject,
   getStatus,
   clearIndex,
   isIndexing,
+  getIndexState,
 } from '../rag/indexer';
 import { resolveWindowWorkspace } from './session';
 import { isWorkspaceBound } from '../project/workspace';
@@ -39,6 +41,13 @@ function resolveRagProjectPath(windowId?: string): string | null {
   return null;
 }
 
+function broadcastProgress(progress: RAGIndexProgress): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
+    win.webContents.send(IPC_CHANNELS.RAG_PROGRESS, progress);
+  }
+}
+
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerRAGIPC(): void {
@@ -56,9 +65,11 @@ export function registerRAGIPC(): void {
     return getStatus(projectPath);
   });
 
-  // rag:index — trigger RAG indexing
+  // rag:index_state — in-flight run snapshot for remounting UIs
+  ipcMain.handle(IPC_CHANNELS.RAG_INDEX_STATE, async () => getIndexState());
+
+  // rag:index — trigger RAG indexing in a worker; stream progress to all windows
   ipcMain.handle(IPC_CHANNELS.RAG_INDEX, async (event, payload: unknown) => {
-    // Validate input with zod (payload is optional)
     const parsed = ragIndexSchema.safeParse(payload ?? {});
     if (!parsed.success) {
       throw new Error(`Invalid rag:index payload: ${parsed.error.message}`);
@@ -91,7 +102,7 @@ export function registerRAGIPC(): void {
       };
     }
 
-    return indexProject(projectPath, undefined, force);
+    return indexProject(projectPath, undefined, force, undefined, broadcastProgress);
   });
 
   // rag:clear — clear the RAG index
@@ -111,4 +122,5 @@ export function unregisterRAGIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.RAG_STATUS);
   ipcMain.removeHandler(IPC_CHANNELS.RAG_INDEX);
   ipcMain.removeHandler(IPC_CHANNELS.RAG_CLEAR);
+  ipcMain.removeHandler(IPC_CHANNELS.RAG_INDEX_STATE);
 }

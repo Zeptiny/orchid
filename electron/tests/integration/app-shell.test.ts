@@ -281,16 +281,16 @@ describe('OrchidAPI Type Surface', () => {
     type RagAPI = OrchidAPI['rag'];
     type RagMethods = keyof RagAPI;
 
-    const ragMethods: RagMethods[] = ['status', 'index', 'clear'];
-    expect(ragMethods).toHaveLength(3);
+    const ragMethods: RagMethods[] = ['status', 'index', 'clear', 'indexState', 'onProgress'];
+    expect(ragMethods).toHaveLength(5);
   });
 
   it('OrchidAPI type has all required ast methods (compile-time)', () => {
     type AstAPI = OrchidAPI['ast'];
     type AstMethods = keyof AstAPI;
 
-    const astMethods: AstMethods[] = ['status', 'index'];
-    expect(astMethods).toHaveLength(2);
+    const astMethods: AstMethods[] = ['status', 'index', 'indexState', 'onProgress'];
+    expect(astMethods).toHaveLength(4);
   });
 });
 

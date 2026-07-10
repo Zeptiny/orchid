@@ -130,6 +130,8 @@ describe('schema & defaults', () => {
     expect(cfg.rag.top_k).toBe(5);
     expect(cfg.rag.max_file_size).toBe(512000);
     expect(cfg.rag.embedding_model).toBe('fastembed/BAAI/bge-small-en-v1.5');
+    expect(cfg.rag.embedding_threads).toBe(2);
+    expect(cfg.rag.embedding_batch_size).toBe(16);
 
     // mcp_servers
     expect(cfg.mcp_servers).toHaveProperty('context7');

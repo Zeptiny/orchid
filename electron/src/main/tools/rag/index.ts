@@ -6,8 +6,6 @@
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { indexProject, getStatus, clearIndex } from '../../rag/indexer';
-import { Embedder } from '../../rag/embedder';
-import { getConfig } from '../../config/loader';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -58,9 +56,8 @@ export const ragIndexHandler: ToolHandler = async (
     }
 
     case 'index': {
-      const cfg = getConfig();
-      const embedder = new Embedder(cfg.rag.embedding_model);
-      const result = await indexProject(projectPath, undefined, undefined, embedder);
+      // Run via worker (no custom embedder) so indexing leaves the main thread free.
+      const result = await indexProject(projectPath, undefined, false);
       const lines = [
         'RAG Index Complete:',
         `  Files scanned: ${result.filesScanned}`,

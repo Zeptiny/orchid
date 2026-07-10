@@ -58,10 +58,14 @@ const mockOrchid = {
     status: vi.fn().mockResolvedValue(null),
     index: vi.fn().mockResolvedValue({}),
     clear: vi.fn().mockResolvedValue({ status: 'ok' }),
+    indexState: vi.fn().mockResolvedValue({ indexing: false, progress: null }),
+    onProgress: vi.fn().mockReturnValue(() => {}),
   },
   ast: {
     status: vi.fn().mockResolvedValue(null),
     index: vi.fn().mockResolvedValue({}),
+    indexState: vi.fn().mockResolvedValue({ indexing: false, progress: null }),
+    onProgress: vi.fn().mockReturnValue(() => {}),
   },
 };
 

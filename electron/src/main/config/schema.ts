@@ -23,6 +23,10 @@ export const ragConfigSchema = z.object({
     .string()
     .min(1)
     .default('fastembed/BAAI/bge-small-en-v1.5'),
+  // Resource caps for local ONNX embeddings (indexing + search).
+  // Defaults keep RAG from saturating all cores / huge tensors.
+  embedding_threads: z.number().int().min(1).max(64).default(2),
+  embedding_batch_size: z.number().int().min(1).max(256).default(16),
 });
 
 /**

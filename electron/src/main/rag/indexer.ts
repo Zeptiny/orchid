@@ -1,26 +1,41 @@
 /**
  * RAG Indexer — file discovery → chunking → embedding → vector store.
  *
- * Ported from Python `src/orchid/rag/indexer.py`.
+ * Full project indexes run in a dedicated `worker_threads` worker so ONNX +
+ * SQLite work does not block the Electron main process. Single-file
+ * `updateFile` stays on the caller thread (post-write path).
  *
- * - Full project index with MD5 hash change detection
- * - updateFile() for single-file re-index (post-write callback)
- * - File discovery: 25 extensions, ignored_dirs from config
- * - Auto re-index: post-write callback registered on module import
+ * Ported from Python `src/orchid/rag/indexer.py`.
  */
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { getConfig } from '../config/loader';
 import { chunkFile } from './chunker';
 import { Embedder } from './embedder';
 import { RAGStore } from './store';
 import type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
-import type { RAGIndexResult } from '../../shared/types/ipc-boundary';
+import type { RAGIndexResult, RAGIndexProgress } from '../../shared/types/ipc-boundary';
 
-export type { RAGIndexResult } from '../../shared/types/ipc-boundary';
+export type { RAGIndexResult, RAGIndexProgress } from '../../shared/types/ipc-boundary';
 /** @deprecated Use RAGIndexResult from shared/types/ipc-boundary */
 export type IndexResult = RAGIndexResult;
+
+export type RAGIndexProgressCallback = (progress: RAGIndexProgress) => void;
+
+/** Payload passed to the index worker via workerData. */
+export interface RagWorkerStartData {
+  projectPath: string;
+  force?: boolean;
+  paths?: string[];
+}
+
+/** Messages the index worker posts back to the parent. */
+export type RagWorkerOutbound =
+  | { type: 'progress'; progress: RAGIndexProgress }
+  | { type: 'result'; result: RAGIndexResult }
+  | { type: 'error'; error: string };
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -47,51 +62,113 @@ const DEFAULT_IGNORED_DIRS = new Set([
 // ---------------------------------------------------------------------------
 
 let _indexing = false;
+/** Latest progress while a run is active (for late UI subscribers / tab switches). */
+let _lastProgress: RAGIndexProgress | null = null;
 
 export function isIndexing(): boolean {
   return _indexing;
+}
+
+/** Snapshot for remounting UIs mid-index. */
+export function getIndexState(): {
+  indexing: boolean;
+  progress: RAGIndexProgress | null;
+} {
+  return {
+    indexing: _indexing,
+    progress: _indexing ? _lastProgress : null,
+  };
+}
+
+function noteProgress(progress: RAGIndexProgress): void {
+  _lastProgress = progress;
 }
 
 // ---------------------------------------------------------------------------
 // Index project
 // ---------------------------------------------------------------------------
 
+export interface IndexProjectOptions {
+  /**
+   * Force the index to run on the current thread (used by the worker itself,
+   * tests, or when a custom Embedder instance is supplied).
+   */
+  inline?: boolean;
+}
+
 /**
  * Run the full RAG indexing pipeline.
  *
- * @param projectPath - Root directory of the project. Uses cwd if undefined.
- * @param paths - Specific files/dirs to index. undefined = entire project.
- * @param force - If true, re-index everything regardless of hash.
- * @param embedder - Embedder instance. Creates one with defaults if undefined.
- * @param progressCallback - Optional (filePath, done, total) callback.
+ * By default runs in a worker thread. Pass `embedder` or `{ inline: true }`
+ * to execute on the current thread (required inside the worker).
  */
 export async function indexProject(
   projectPath?: string,
   paths?: string[],
   force?: boolean,
   embedder?: Embedder,
-  progressCallback?: (filePath: string, done: number, total: number) => void,
+  progressCallback?: RAGIndexProgressCallback,
+  options?: IndexProjectOptions,
 ): Promise<IndexResult> {
   if (_indexing) {
     return {
       filesScanned: 0, filesIndexed: 0, filesSkipped: 0,
-      filesDeleted: 0, chunksCreated: 0, errors: [], durationSeconds: 0,
+      filesDeleted: 0, chunksCreated: 0, errors: ['Indexing already in progress'],
+      durationSeconds: 0,
     };
   }
   _indexing = true;
+  _lastProgress = {
+    phase: 'discovering',
+    done: 0,
+    total: 0,
+    filesIndexed: 0,
+    filesSkipped: 0,
+    chunksCreated: 0,
+    filesDeleted: 0,
+    elapsedSeconds: 0,
+  };
+  const trackProgress: RAGIndexProgressCallback = (progress) => {
+    noteProgress(progress);
+    try {
+      progressCallback?.(progress);
+    } catch {
+      // ignore
+    }
+  };
   try {
-    return await _indexProjectImpl(projectPath, paths, force, embedder, progressCallback);
+    // Custom embedder cannot be serialized into a worker — run inline.
+    if (options?.inline || embedder) {
+      return await runIndexProjectImpl(
+        projectPath,
+        paths,
+        force,
+        embedder,
+        trackProgress,
+      );
+    }
+    if (!projectPath) {
+      throw new Error('projectPath is required; pass the active workspace cwd');
+    }
+    return await runIndexInWorker(projectPath, paths, force, trackProgress);
   } finally {
     _indexing = false;
+    _lastProgress = null;
   }
 }
 
-async function _indexProjectImpl(
+/**
+ * Core indexing implementation (runs on whatever thread calls it).
+ *
+ * Exported so the worker entry can invoke it without re-entering the
+ * worker-spawning path on `indexProject`.
+ */
+export async function runIndexProjectImpl(
   projectPath?: string,
   paths?: string[],
   force?: boolean,
   embedder?: Embedder,
-  progressCallback?: (filePath: string, done: number, total: number) => void,
+  progressCallback?: RAGIndexProgressCallback,
 ): Promise<IndexResult> {
   const cfg = getConfig();
   if (!projectPath) {
@@ -99,6 +176,29 @@ async function _indexProjectImpl(
   }
   const root = projectPath;
   const t0 = Date.now();
+  const elapsed = () => (Date.now() - t0) / 1000;
+
+  const emit = (partial: Omit<RAGIndexProgress, 'elapsedSeconds'> & { elapsedSeconds?: number }) => {
+    if (!progressCallback) return;
+    try {
+      progressCallback({
+        ...partial,
+        elapsedSeconds: partial.elapsedSeconds ?? elapsed(),
+      });
+    } catch {
+      // ignore callback errors
+    }
+  };
+
+  emit({
+    phase: 'discovering',
+    done: 0,
+    total: 0,
+    filesIndexed: 0,
+    filesSkipped: 0,
+    chunksCreated: 0,
+    filesDeleted: 0,
+  });
 
   // File discovery
   const files = await discoverFiles(root, paths, cfg.ignored_dirs);
@@ -112,11 +212,31 @@ async function _indexProjectImpl(
     durationSeconds: 0,
   };
 
+  emit({
+    phase: files.length === 0 ? 'finalizing' : 'indexing',
+    done: 0,
+    total: files.length,
+    filesIndexed: 0,
+    filesSkipped: 0,
+    chunksCreated: 0,
+    filesDeleted: 0,
+  });
+
   if (files.length === 0) {
     const store = new RAGStore(root);
     store.initDb();
     store.touchLastIndexed();
-    stats.durationSeconds = (Date.now() - t0) / 1000;
+    stats.durationSeconds = elapsed();
+    emit({
+      phase: 'done',
+      done: 0,
+      total: 0,
+      filesIndexed: 0,
+      filesSkipped: 0,
+      chunksCreated: 0,
+      filesDeleted: 0,
+      elapsedSeconds: stats.durationSeconds,
+    });
     return stats;
   }
 
@@ -124,7 +244,11 @@ async function _indexProjectImpl(
   store.initDb();
 
   if (!embedder) {
-    embedder = new Embedder(cfg.rag.embedding_model);
+    embedder = new Embedder({
+      model: cfg.rag.embedding_model,
+      threads: cfg.rag.embedding_threads,
+      batchSize: cfg.rag.embedding_batch_size,
+    });
   }
 
   const existingHashes = store.getFileHashes();
@@ -149,13 +273,16 @@ async function _indexProjectImpl(
       continue;
     }
 
-    if (progressCallback) {
-      try {
-        progressCallback(rel, i, files.length);
-      } catch {
-        // ignore callback errors
-      }
-    }
+    emit({
+      phase: 'indexing',
+      done: i,
+      total: files.length,
+      currentFile: rel,
+      filesIndexed: stats.filesIndexed,
+      filesSkipped: stats.filesSkipped,
+      chunksCreated: stats.chunksCreated,
+      filesDeleted: stats.filesDeleted,
+    });
 
     try {
       // Read + hash
@@ -164,43 +291,65 @@ async function _indexProjectImpl(
         if (existingHashes.has(rel)) {
           store.deleteByFileBatch(vectorState, rel);
         }
-        continue;
-      }
+        // count as processed
+      } else {
+        const { content, hash } = result;
 
-      const { content, hash } = result;
+        // Skip unchanged
+        if (!force && existingHashes.get(rel) === hash) {
+          stats.filesSkipped++;
+          indexedFiles.add(rel);
+        } else {
+          // Chunk
+          const chunks = chunkFile(rel, content, cfg.rag.chunk_size, cfg.rag.chunk_overlap);
+          if (chunks.length === 0) {
+            if (existingHashes.has(rel)) {
+              store.deleteByFileBatch(vectorState, rel);
+            }
+            indexedFiles.add(rel);
+          } else {
+            // Embed (CPU/memory capped by embedder threads + batch size)
+            const texts = chunks.map((c) => c.content);
+            const embeddingsFloat = await embedder.embed(texts);
+            const embeddings = embeddingsFloat.map((e) => Array.from(e));
 
-      // Skip unchanged
-      if (!force && existingHashes.get(rel) === hash) {
-        stats.filesSkipped++;
-        indexedFiles.add(rel);
-        continue;
-      }
-
-      // Chunk
-      const chunks = chunkFile(rel, content, cfg.rag.chunk_size, cfg.rag.chunk_overlap);
-      if (chunks.length === 0) {
-        if (existingHashes.has(rel)) {
-          store.deleteByFileBatch(vectorState, rel);
+            store.upsertFileBatch(vectorState, rel, chunks, embeddings);
+            stats.filesIndexed++;
+            stats.chunksCreated += chunks.length;
+            indexedFiles.add(rel);
+            if (hash) fileHashes.set(rel, hash);
+          }
         }
-        indexedFiles.add(rel);
-        continue;
       }
-
-      // Embed
-      const texts = chunks.map((c) => c.content);
-      const embeddingsFloat = await embedder.embed(texts);
-      const embeddings = embeddingsFloat.map((e) => Array.from(e));
-
-      store.upsertFileBatch(vectorState, rel, chunks, embeddings);
-      stats.filesIndexed++;
-      stats.chunksCreated += chunks.length;
-      indexedFiles.add(rel);
-      if (hash) fileHashes.set(rel, hash);
     } catch (err) {
       const msg = `${rel}: ${err instanceof Error ? err.message : String(err)}`;
       stats.errors.push(msg);
     }
+
+    emit({
+      phase: 'indexing',
+      done: i + 1,
+      total: files.length,
+      currentFile: rel,
+      filesIndexed: stats.filesIndexed,
+      filesSkipped: stats.filesSkipped,
+      chunksCreated: stats.chunksCreated,
+      filesDeleted: stats.filesDeleted,
+    });
+
+    // Yield so the worker event loop can flush progress messages promptly
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
+
+  emit({
+    phase: 'finalizing',
+    done: files.length,
+    total: files.length,
+    filesIndexed: stats.filesIndexed,
+    filesSkipped: stats.filesSkipped,
+    chunksCreated: stats.chunksCreated,
+    filesDeleted: stats.filesDeleted,
+  });
 
   // Batch hash updates
   const hashesToUpdate = new Map<string, string>();
@@ -233,10 +382,98 @@ async function _indexProjectImpl(
 
   store.flushVectorState(vectorState);
 
-  stats.durationSeconds = (Date.now() - t0) / 1000;
+  stats.durationSeconds = elapsed();
   store.recordIndexDuration(stats.durationSeconds);
 
+  emit({
+    phase: 'done',
+    done: files.length,
+    total: files.length,
+    filesIndexed: stats.filesIndexed,
+    filesSkipped: stats.filesSkipped,
+    chunksCreated: stats.chunksCreated,
+    filesDeleted: stats.filesDeleted,
+    elapsedSeconds: stats.durationSeconds,
+  });
+
   return stats;
+}
+
+// ---------------------------------------------------------------------------
+// Worker runner (main process)
+// ---------------------------------------------------------------------------
+
+async function runIndexInWorker(
+  projectPath: string,
+  paths: string[] | undefined,
+  force: boolean | undefined,
+  progressCallback?: RAGIndexProgressCallback,
+): Promise<IndexResult> {
+  const workerPath = path.join(__dirname, 'index-worker.js');
+  if (!fs.existsSync(workerPath)) {
+    // Dev fallback if worker bundle is missing — still produce a usable index.
+    console.warn(
+      `RAG worker not found at ${workerPath}; running index inline on the main thread`,
+    );
+    return runIndexProjectImpl(projectPath, paths, force, undefined, progressCallback);
+  }
+
+  const startData: RagWorkerStartData = {
+    projectPath,
+    force: force === true,
+    paths,
+  };
+
+  return new Promise<IndexResult>((resolve, reject) => {
+    let settled = false;
+    const worker = new Worker(workerPath, {
+      workerData: startData,
+      // Inherit env so native module resolution matches the main process
+      env: process.env,
+    });
+
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+
+    worker.on('message', (msg: RagWorkerOutbound) => {
+      if (!msg || typeof msg !== 'object' || !('type' in msg)) return;
+      if (msg.type === 'progress') {
+        try {
+          progressCallback?.(msg.progress);
+        } catch {
+          // ignore
+        }
+        return;
+      }
+      if (msg.type === 'result') {
+        finish(() => {
+          void worker.terminate();
+          resolve(msg.result);
+        });
+        return;
+      }
+      if (msg.type === 'error') {
+        finish(() => {
+          void worker.terminate();
+          reject(new Error(msg.error));
+        });
+      }
+    });
+
+    worker.on('error', (err) => {
+      finish(() => reject(err));
+    });
+
+    worker.on('exit', (code) => {
+      if (settled) return;
+      finish(() => {
+        reject(new Error(`RAG index worker exited unexpectedly with code ${code}`));
+      });
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +523,11 @@ export async function updateFile(
   }
 
   try {
-    const embedder = new Embedder(cfg.rag.embedding_model);
+    const embedder = new Embedder({
+      model: cfg.rag.embedding_model,
+      threads: cfg.rag.embedding_threads,
+      batchSize: cfg.rag.embedding_batch_size,
+    });
     const texts = chunks.map((c) => c.content);
     const embeddingsFloat = await embedder.embed(texts);
     const embeddings = embeddingsFloat.map((e) => Array.from(e));

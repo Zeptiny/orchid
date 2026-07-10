@@ -56,6 +56,16 @@ export interface RAGConfig {
   top_k: number;
   max_file_size: number;
   embedding_model: string;
+  /**
+   * ONNX Runtime intra/inter-op thread count for embedding inference.
+   * Caps CPU use during RAG indexing / search (default 2).
+   */
+  embedding_threads: number;
+  /**
+   * Max texts embedded in one ONNX forward pass (memory + peak CPU).
+   * Default 16 (was a hard-coded 100).
+   */
+  embedding_batch_size: number;
 }
 
 export interface Config {
@@ -129,6 +139,31 @@ export interface RAGIndexResult {
   durationSeconds: number;
 }
 
+/** Queryable snapshot of an in-flight (or idle) index run. */
+export interface IndexRunState<TProgress> {
+  indexing: boolean;
+  progress: TProgress | null;
+}
+
+/**
+ * Live progress while a RAG index run is in flight (worker → main → renderer).
+ */
+export interface RAGIndexProgress {
+  phase: 'discovering' | 'indexing' | 'finalizing' | 'done';
+  /** Files processed so far (0 … total). */
+  done: number;
+  /** Total project files discovered for this run. */
+  total: number;
+  /** Relative path of the file currently being processed (if any). */
+  currentFile?: string;
+  filesIndexed: number;
+  filesSkipped: number;
+  chunksCreated: number;
+  filesDeleted: number;
+  /** Wall time so far in seconds (best-effort). */
+  elapsedSeconds: number;
+}
+
 // ── AST Indexer ─────────────────────────────────────────────────────────────
 
 export interface ASTIndexResult {
@@ -139,6 +174,25 @@ export interface ASTIndexResult {
   symbolsExtracted: number;
   errors: string[];
   durationSeconds: number;
+}
+
+/**
+ * Live progress while an AST index run is in flight (worker → main → renderer).
+ */
+export interface ASTIndexProgress {
+  phase: 'discovering' | 'indexing' | 'finalizing' | 'done';
+  /** Files processed so far (0 … total). */
+  done: number;
+  /** Total source files discovered for this run. */
+  total: number;
+  /** Relative path of the file currently being processed (if any). */
+  currentFile?: string;
+  filesIndexed: number;
+  filesSkipped: number;
+  symbolsExtracted: number;
+  filesDeleted: number;
+  /** Wall time so far in seconds (best-effort). */
+  elapsedSeconds: number;
 }
 
 // ── Updater ─────────────────────────────────────────────────────────────────

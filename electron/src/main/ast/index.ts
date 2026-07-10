@@ -25,7 +25,9 @@ export {
   ensureIndexed,
   updateFile,
   indexProject,
+  runIndexProjectImpl,
   isIndexing,
   resetSession,
   type IndexResult,
+  type ASTIndexProgressCallback,
 } from './indexer';

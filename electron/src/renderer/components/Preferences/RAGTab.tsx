@@ -1,7 +1,7 @@
 /**
  * RAGTab — RAG (Retrieval-Augmented Generation) configuration.
  *
- * Controls: chunk_size, chunk_overlap, top_k, max_file_size, embedding_model.
+ * Controls: chunking, retrieval, embedding model, and resource caps.
  */
 import { useCallback } from 'react';
 
@@ -13,6 +13,8 @@ export interface RAGConfig {
   top_k: number;
   max_file_size: number;
   embedding_model: string;
+  embedding_threads: number;
+  embedding_batch_size: number;
 }
 
 export interface RAGTabProps {
@@ -20,16 +22,14 @@ export interface RAGTabProps {
   onChange: (rag: RAGConfig) => void;
 }
 
-// ── Known embedding models ───────────────────────────────────────────────────
+// ── Known local ONNX embedding models (auto-download from Hugging Face) ─────
+// Keep in sync with BUILTIN_LOCAL_EMBEDDING_MODELS in main/rag/embedder.ts
 
 const EMBEDDING_MODELS = [
   'fastembed/BAAI/bge-small-en-v1.5',
   'fastembed/BAAI/bge-base-en-v1.5',
   'fastembed/BAAI/bge-large-en-v1.5',
   'fastembed/sentence-transformers/all-MiniLM-L6-v2',
-  'openai/text-embedding-3-small',
-  'openai/text-embedding-3-large',
-  'openai/text-embedding-ada-002',
 ];
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -126,6 +126,43 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
                 <option value={rag.embedding_model}>{rag.embedding_model}</option>
               )}
             </select>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset className="config-fieldset">
+        <legend className="config-fieldset-legend">Resource Limits</legend>
+        <p className="config-help text-sm opacity-70 mb-2">
+          Caps local ONNX embedding CPU and peak memory during indexing and search.
+          Restart is not required for new index runs; lower values keep the app more responsive.
+        </p>
+        <div className="config-form-grid">
+          <div className="config-field">
+            <label htmlFor="rag-embedding-threads">Embedding Threads</label>
+            <input
+              id="rag-embedding-threads"
+              type="number"
+              value={rag.embedding_threads ?? 2}
+              onChange={(e) => handleNumberChange('embedding_threads', e.target.value)}
+              className="input config-control"
+              min={1}
+              max={64}
+              title="ONNX Runtime CPU threads (intra-op). Default 2."
+            />
+          </div>
+
+          <div className="config-field">
+            <label htmlFor="rag-embedding-batch-size">Embedding Batch Size</label>
+            <input
+              id="rag-embedding-batch-size"
+              type="number"
+              value={rag.embedding_batch_size ?? 16}
+              onChange={(e) => handleNumberChange('embedding_batch_size', e.target.value)}
+              className="input config-control"
+              min={1}
+              max={256}
+              title="Texts per ONNX forward pass. Lower = less peak RAM/CPU."
+            />
           </div>
         </div>
       </fieldset>

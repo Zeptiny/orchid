@@ -39,7 +39,9 @@ import type {
   ToolExecuteMessage,
   AgentSpawnMessage,
   RAGIndexMessage,
+  RAGIndexProgress,
   ASTIndexMessage,
+  ASTIndexProgress,
   BgCommandSnapshotRequest,
   UpdaterProgress,
   UpdaterErrorEvent,
@@ -210,6 +212,12 @@ const orchidAPI: OrchidAPI = {
 
     clear: () =>
       invoke(IPC_CHANNELS.RAG_CLEAR),
+
+    indexState: () =>
+      invoke(IPC_CHANNELS.RAG_INDEX_STATE),
+
+    onProgress: (callback: (progress: RAGIndexProgress) => void) =>
+      on(IPC_CHANNELS.RAG_PROGRESS, (...args) => callback(args[0] as RAGIndexProgress)),
   },
 
   ast: {
@@ -218,6 +226,12 @@ const orchidAPI: OrchidAPI = {
 
     index: (message?: ASTIndexMessage) =>
       invoke(IPC_CHANNELS.AST_INDEX, message),
+
+    indexState: () =>
+      invoke(IPC_CHANNELS.AST_INDEX_STATE),
+
+    onProgress: (callback: (progress: ASTIndexProgress) => void) =>
+      on(IPC_CHANNELS.AST_PROGRESS, (...args) => callback(args[0] as ASTIndexProgress)),
   },
 
   bgCmd: {

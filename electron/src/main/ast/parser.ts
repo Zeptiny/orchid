@@ -12,12 +12,19 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createRequire } from 'node:module';
 
-// web-tree-sitter exports Parser and Language as named exports
+// Resolve package dirs relative to this file (works under dist/ and src/).
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { Parser, Language } = require('web-tree-sitter') as {
+const requireFromHere = createRequire(__filename);
+
+// web-tree-sitter exports Parser, Language, and Query as named exports.
+// In 0.25+, queries are `new Query(language, source)` — not language.query().
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { Parser, Language, Query } = require('web-tree-sitter') as {
   Parser: typeof import('web-tree-sitter').Parser;
   Language: typeof import('web-tree-sitter').Language;
+  Query: typeof import('web-tree-sitter').Query;
 };
 
 // The runtime types from web-tree-sitter are well-defined but the TS declarations
@@ -76,14 +83,8 @@ const LANG_TO_QUERY_LANG: Record<string, string> = {
   tsx: 'typescript',
 };
 
-// WASM grammar file locations (in order of preference)
-const GRAMMAR_SEARCH_PATHS = [
-  // tree-sitter-wasms package (npm)
-  path.join(__dirname, '..', '..', '..', 'node_modules', 'tree-sitter-wasms', 'out'),
-  path.join(__dirname, '..', '..', '..', '..', 'node_modules', 'tree-sitter-wasms', 'out'),
-  // Local grammars directory
-  path.join(__dirname, 'grammars'),
-];
+/** Filenames web-tree-sitter may request via locateFile (package renamed over versions). */
+const RUNTIME_WASM_NAMES = ['web-tree-sitter.wasm', 'tree-sitter.wasm'] as const;
 
 // ---------------------------------------------------------------------------
 // Initialization
@@ -95,34 +96,120 @@ const GRAMMAR_SEARCH_PATHS = [
 async function ensureInitialized(): Promise<void> {
   if (_parserInitialized) return;
 
-  // Locate the tree-sitter WASM binary
+  // Locate the runtime WASM (web-tree-sitter.wasm in current package).
   const wasmDir = findWasmDir();
   await Parser.init({
     locateFile(scriptName: string) {
-      return path.join(wasmDir, scriptName);
+      // Prefer the exact name requested; fall back to known package filenames.
+      const preferred = path.join(wasmDir, scriptName);
+      if (fs.existsSync(preferred)) return preferred;
+      for (const name of RUNTIME_WASM_NAMES) {
+        const candidate = path.join(wasmDir, name);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+      return preferred;
     },
   });
   _parserInitialized = true;
 }
 
 /**
- * Find the directory containing tree-sitter.wasm.
+ * Resolve a package's install directory via require.resolve, with path fallbacks.
  */
-function findWasmDir(): string {
-  // Check node_modules first (most reliable)
-  const candidates = [
-    path.join(__dirname, '..', '..', '..', 'node_modules', 'web-tree-sitter'),
-    path.join(__dirname, '..', '..', '..', '..', 'node_modules', 'web-tree-sitter'),
-  ];
-
-  for (const dir of candidates) {
-    if (fs.existsSync(path.join(dir, 'tree-sitter.wasm'))) {
-      return dir;
+function resolvePackageDir(packageName: string, markerFile?: string): string | null {
+  try {
+    const pkgJson = requireFromHere.resolve(`${packageName}/package.json`);
+    return path.dirname(pkgJson);
+  } catch {
+    // package.json may not be in exports; try main entry
+    try {
+      const entry = requireFromHere.resolve(packageName);
+      let dir = path.dirname(entry);
+      // Walk up a couple levels looking for package.json / marker
+      for (let i = 0; i < 4; i++) {
+        if (fs.existsSync(path.join(dir, 'package.json'))) return dir;
+        if (markerFile && fs.existsSync(path.join(dir, markerFile))) return dir;
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+      }
+      return path.dirname(entry);
+    } catch {
+      // fall through to path candidates
     }
   }
 
-  // Fallback: let web-tree-sitter try to find it
-  return __dirname;
+  const pathCandidates = [
+    path.join(__dirname, '..', '..', '..', 'node_modules', packageName),
+    path.join(__dirname, '..', '..', '..', '..', 'node_modules', packageName),
+  ];
+  for (const dir of pathCandidates) {
+    if (fs.existsSync(dir)) return dir;
+  }
+  return null;
+}
+
+/**
+ * Find the directory containing the web-tree-sitter runtime WASM.
+ *
+ * Current packages ship `web-tree-sitter.wasm` (not the older `tree-sitter.wasm`
+ * name). Falling back to __dirname caused ENOENT under dist/main/ast/.
+ */
+function findWasmDir(): string {
+  // Prefer the package export when available (web-tree-sitter ≥0.25).
+  try {
+    const wasmFile = requireFromHere.resolve('web-tree-sitter/web-tree-sitter.wasm');
+    if (fs.existsSync(wasmFile)) {
+      return path.dirname(wasmFile);
+    }
+  } catch {
+    // fall through
+  }
+
+  const pkgDir = resolvePackageDir('web-tree-sitter', 'web-tree-sitter.wasm');
+  const candidates = [
+    pkgDir,
+    path.join(__dirname, '..', '..', '..', 'node_modules', 'web-tree-sitter'),
+    path.join(__dirname, '..', '..', '..', '..', 'node_modules', 'web-tree-sitter'),
+  ].filter((d): d is string => Boolean(d));
+
+  for (const dir of candidates) {
+    for (const name of RUNTIME_WASM_NAMES) {
+      if (fs.existsSync(path.join(dir, name))) {
+        return dir;
+      }
+    }
+  }
+
+  throw new Error(
+    `Could not find web-tree-sitter WASM runtime. Searched: ${candidates.join(', ')}. ` +
+      `Install the 'web-tree-sitter' package.`,
+  );
+}
+
+/**
+ * Directories that may contain language grammar WASM files.
+ *
+ * Prefer `@vscode/tree-sitter-wasm` (built for tree-sitter 0.25+, `dylink.0`)
+ * over older packages that ship `dylink`-only modules web-tree-sitter 0.26 rejects.
+ */
+function grammarSearchPaths(): string[] {
+  const paths: string[] = [];
+  const vscodeWasms = resolvePackageDir('@vscode/tree-sitter-wasm');
+  if (vscodeWasms) {
+    paths.push(path.join(vscodeWasms, 'wasm'));
+  }
+  // Legacy fallback (older dylink format — may fail on web-tree-sitter ≥0.25)
+  const legacyWasms = resolvePackageDir('tree-sitter-wasms');
+  if (legacyWasms) {
+    paths.push(path.join(legacyWasms, 'out'));
+  }
+  paths.push(
+    path.join(__dirname, '..', '..', '..', 'node_modules', '@vscode', 'tree-sitter-wasm', 'wasm'),
+    path.join(__dirname, '..', '..', '..', 'node_modules', 'tree-sitter-wasms', 'out'),
+    path.join(__dirname, 'grammars'),
+  );
+  return paths;
 }
 
 /**
@@ -130,8 +217,9 @@ function findWasmDir(): string {
  */
 function findGrammarWasm(langName: string): string {
   const fileName = `tree-sitter-${langName}.wasm`;
+  const searchPaths = grammarSearchPaths();
 
-  for (const searchPath of GRAMMAR_SEARCH_PATHS) {
+  for (const searchPath of searchPaths) {
     const candidate = path.join(searchPath, fileName);
     if (fs.existsSync(candidate)) {
       return candidate;
@@ -140,8 +228,8 @@ function findGrammarWasm(langName: string): string {
 
   throw new Error(
     `Could not find WASM grammar for '${langName}'. ` +
-    `Searched: ${GRAMMAR_SEARCH_PATHS.join(', ')}. ` +
-    `Install 'tree-sitter-wasms' or place ${fileName} in ast/grammars/.`,
+      `Searched: ${searchPaths.join(', ')}. ` +
+      `Install '@vscode/tree-sitter-wasm' or place ${fileName} in ast/grammars/.`,
   );
 }
 
@@ -294,7 +382,7 @@ async function compileQuery(
   }
 
   const language = await loadLanguage(langName);
-  const query = language.query(queryText);
+  const query = new Query(language, queryText);
   _compiledQueries.set(key, query);
   return query;
 }

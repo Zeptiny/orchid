@@ -302,6 +302,8 @@ const RAG_ENV_MAP: EnvMapping[] = [
   { envKey: 'ORCHID_RAG_TOP_K', configPath: ['rag', 'top_k'], type: 'int' },
   { envKey: 'ORCHID_RAG_MAX_FILE_SIZE', configPath: ['rag', 'max_file_size'], type: 'int' },
   { envKey: 'ORCHID_RAG_EMBEDDING_MODEL', configPath: ['rag', 'embedding_model'], type: 'string' },
+  { envKey: 'ORCHID_RAG_EMBEDDING_THREADS', configPath: ['rag', 'embedding_threads'], type: 'int' },
+  { envKey: 'ORCHID_RAG_EMBEDDING_BATCH_SIZE', configPath: ['rag', 'embedding_batch_size'], type: 'int' },
 ];
 
 /** Cast a string env value to the target type. */

@@ -69,8 +69,12 @@ export const ragSearchHandler: ToolHandler = async (
     return { display: 'No RAG index', content: 'No RAG index found. Run `rag_index` with action "index" first.' };
   }
 
-  // Generate query embedding
-  const embedder = new Embedder(cfg.rag.embedding_model);
+  // Generate query embedding (same thread/batch caps as indexing)
+  const embedder = new Embedder({
+    model: cfg.rag.embedding_model,
+    threads: cfg.rag.embedding_threads,
+    batchSize: cfg.rag.embedding_batch_size,
+  });
   let queryEmbedding: Float32Array;
   try {
     queryEmbedding = await embedder.embedSingle(query);

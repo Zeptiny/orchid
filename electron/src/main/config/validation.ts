@@ -134,6 +134,8 @@ export function validateConfig(cfg: Config): string[] {
     }
     checkPositiveInt(rag, 'top_k', errors, 'rag');
     checkPositiveInt(rag, 'max_file_size', errors, 'rag');
+    checkPositiveInt(rag, 'embedding_threads', errors, 'rag');
+    checkPositiveInt(rag, 'embedding_batch_size', errors, 'rag');
     if (!rag['embedding_model'] || typeof rag['embedding_model'] !== 'string') {
       errors.push("'rag.embedding_model' must be a non-empty string");
     }

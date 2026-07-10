@@ -1,13 +1,14 @@
 /**
- * Embedder — generates embeddings using onnxruntime-node with BGE-small model.
+ * Embedder — generates embeddings using onnxruntime-node (local ONNX models).
  *
  * Ported from Python `src/orchid/rag/embedder.py`.
  *
  * - Uses onnxruntime-node for local ONNX inference
- * - Runs in a worker_threads worker to avoid blocking the main process
- * - Batch size 100, retries 3
+ * - CPU/memory limited via SessionOptions (threads) + batch size from config
+ * - Retries 3 (skipped for permanent feed/model errors)
  * - Warmup on first call (throwaway run)
- * - ONNX model downloaded on first RAG index (not bundled)
+ * - ONNX + tokenizer auto-downloaded from Hugging Face on first use
+ * - Supports `fastembed/<hub-id>` config ids and bare hub ids
  * - Graceful failure if native module unavailable
  */
 
@@ -33,35 +34,103 @@ export type DownloadProgressCallback = (info: {
 // Constants
 // ---------------------------------------------------------------------------
 
-const BATCH_SIZE = 100;
+/** Fallback if config is unavailable (tests / early boot). */
+const DEFAULT_BATCH_SIZE = 16;
+const DEFAULT_THREADS = 2;
 const MAX_RETRIES = 3;
+
+/** Errors that will not recover by retrying (bad feeds, missing model, etc.). */
+function isPermanentEmbeddingError(err: Error): boolean {
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes("missing in 'feeds'") ||
+    msg.includes('missing in feeds') ||
+    msg.includes('invalid rank') ||
+    msg.includes('invalid dimensions') ||
+    msg.includes('not found at') ||
+    msg.includes('is not available') ||
+    msg.includes('place the model manually')
+  );
+}
 
 /** Default ONNX model for local embeddings (BGE-small) */
 const DEFAULT_ONNX_MODEL = 'BAAI/bge-small-en-v1.5';
 
-/** Files to download for the BGE-small ONNX model. */
-const MODEL_FILES: Array<{ relativePath: string; url: string; required: boolean }> = [
-  {
-    relativePath: 'model.onnx',
-    url: 'https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/onnx/model.onnx',
-    required: true,
-  },
-  {
-    relativePath: 'tokenizer.json',
-    url: 'https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/tokenizer.json',
-    required: false,
-  },
+/**
+ * Models shown in Preferences and guaranteed to use the standard HF layout:
+ *   onnx/model.onnx + tokenizer.json (+ optional config files).
+ *
+ * Any other `org/name` (or `fastembed/org/name`) is attempted with the same
+ * generic layout so future models can work without a code change.
+ */
+export const BUILTIN_LOCAL_EMBEDDING_MODELS = [
+  'fastembed/BAAI/bge-small-en-v1.5',
+  'fastembed/BAAI/bge-base-en-v1.5',
+  'fastembed/BAAI/bge-large-en-v1.5',
+  'fastembed/sentence-transformers/all-MiniLM-L6-v2',
+] as const;
+
+/** Max sequence length for current local embedding models (BGE / MiniLM). */
+const DEFAULT_MAX_SEQ_LENGTH = 512;
+
+interface ModelFileSpec {
+  /** Path under ~/.orchid/models/<storageId>/ */
+  relativePath: string;
+  /** Path under the Hugging Face repo (after /resolve/main/). */
+  hubPath: string;
+  required: boolean;
+}
+
+/** Standard HF ONNX export layout used by BGE and MiniLM repos. */
+const STANDARD_ONNX_FILES: ModelFileSpec[] = [
+  { relativePath: 'model.onnx', hubPath: 'onnx/model.onnx', required: true },
+  { relativePath: 'tokenizer.json', hubPath: 'tokenizer.json', required: false },
   {
     relativePath: 'tokenizer_config.json',
-    url: 'https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/tokenizer_config.json',
+    hubPath: 'tokenizer_config.json',
     required: false,
   },
-  {
-    relativePath: 'config.json',
-    url: 'https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/config.json',
-    required: false,
-  },
+  { relativePath: 'config.json', hubPath: 'config.json', required: false },
 ];
+
+/**
+ * Normalize a config embedding id to storage + Hugging Face hub ids.
+ *
+ * - `fastembed/BAAI/bge-small-en-v1.5` → hub `BAAI/bge-small-en-v1.5`, storage keeps full id
+ * - `BAAI/bge-small-en-v1.5` → same hub, storage is the bare id
+ */
+export function resolveEmbeddingModelIds(modelName: string): {
+  /** Directory name under ~/.orchid/models/ (preserves config id). */
+  storageId: string;
+  /** Hugging Face repo id used for downloads. */
+  hubId: string;
+} {
+  const trimmed = modelName.trim();
+  if (!trimmed) {
+    return { storageId: DEFAULT_ONNX_MODEL, hubId: DEFAULT_ONNX_MODEL };
+  }
+  // Strip known local-provider prefix used in config / Python parity.
+  const hubId = trimmed.startsWith('fastembed/')
+    ? trimmed.slice('fastembed/'.length)
+    : trimmed;
+  return { storageId: trimmed, hubId: hubId || DEFAULT_ONNX_MODEL };
+}
+
+function hfUrl(hubId: string, hubPath: string): string {
+  return `https://huggingface.co/${hubId}/resolve/main/${hubPath}`;
+}
+
+function modelFilesForHub(hubId: string): Array<{
+  relativePath: string;
+  url: string;
+  required: boolean;
+}> {
+  return STANDARD_ONNX_FILES.map((f) => ({
+    relativePath: f.relativePath,
+    url: hfUrl(hubId, f.hubPath),
+    required: f.required,
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // Embedder
@@ -73,18 +142,55 @@ const MODEL_FILES: Array<{ relativePath: string; url: string; required: boolean 
  * The first call triggers a warmup (throwaway inference) to avoid slow
  * first-real-request latency from ONNX runtime initialization.
  */
+export interface EmbedderOptions {
+  /** Override model id (else config / DEFAULT_ONNX_MODEL). */
+  model?: string;
+  /** ONNX intra/inter-op threads (default from config, else 2). */
+  threads?: number;
+  /** Texts per ONNX forward pass (default from config, else 16). */
+  batchSize?: number;
+}
+
 export class Embedder {
   private warmedUp = false;
   private modelName: string;
+  private threads: number;
+  private batchSize: number;
 
-  constructor(model?: string) {
-    this.modelName = model ?? DEFAULT_ONNX_MODEL;
+  constructor(modelOrOptions?: string | EmbedderOptions) {
+    const opts: EmbedderOptions =
+      typeof modelOrOptions === 'string'
+        ? { model: modelOrOptions }
+        : (modelOrOptions ?? {});
+
+    let cfgThreads = DEFAULT_THREADS;
+    let cfgBatch = DEFAULT_BATCH_SIZE;
+    let cfgModel: string | undefined;
+    try {
+      // Lazy require avoids circular init with config loader in tests
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { getConfig } = require('../config/loader') as typeof import('../config/loader');
+      const rag = getConfig().rag;
+      cfgModel = rag.embedding_model;
+      if (typeof rag.embedding_threads === 'number' && rag.embedding_threads > 0) {
+        cfgThreads = rag.embedding_threads;
+      }
+      if (typeof rag.embedding_batch_size === 'number' && rag.embedding_batch_size > 0) {
+        cfgBatch = rag.embedding_batch_size;
+      }
+    } catch {
+      // config unavailable — use hard defaults
+    }
+
+    this.modelName = opts.model ?? cfgModel ?? DEFAULT_ONNX_MODEL;
+    this.threads = Math.max(1, Math.min(64, opts.threads ?? cfgThreads));
+    this.batchSize = Math.max(1, Math.min(256, opts.batchSize ?? cfgBatch));
   }
 
   /**
    * Generate embeddings for a list of texts.
    *
-   * Splits into batches of BATCH_SIZE and retries each batch up to MAX_RETRIES.
+   * Splits into batches of `batchSize` and retries each batch up to MAX_RETRIES.
    *
    * @returns Array of Float32Arrays, one per input text
    * @throws EmbeddingError if inference fails after retries
@@ -99,11 +205,17 @@ export class Embedder {
     }
 
     const allEmbeddings: Float32Array[] = [];
+    const batchSize = this.batchSize;
 
-    for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-      const batch = texts.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < texts.length; i += batchSize) {
+      const batch = texts.slice(i, i + batchSize);
       const embeddings = await this._embedBatchWithRetry(batch);
       allEmbeddings.push(...embeddings);
+      // Yield between batches so the Electron main process stays responsive
+      // and we don't pin a full core continuously across huge files.
+      if (i + batchSize < texts.length) {
+        await yieldEventLoop();
+      }
     }
 
     return allEmbeddings;
@@ -140,6 +252,11 @@ export class Embedder {
         return await this._embedBatch(texts);
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
+        // Permanent config / input-shape errors will never succeed on retry —
+        // fail immediately instead of sleeping (looks like a hung, idle index).
+        if (isPermanentEmbeddingError(lastError)) {
+          break;
+        }
         if (attempt < MAX_RETRIES - 1) {
           const wait = 2 ** attempt * 1000;
           await new Promise((resolve) => setTimeout(resolve, wait));
@@ -157,7 +274,7 @@ export class Embedder {
    */
   private async _embedBatch(texts: string[]): Promise<Float32Array[]> {
     try {
-      return await runOnnxEmbedding(texts, this.modelName);
+      return await runOnnxEmbedding(texts, this.modelName, this.threads);
     } catch (err) {
       if (err instanceof EmbeddingError) throw err;
       throw new EmbeddingError(
@@ -167,6 +284,11 @@ export class Embedder {
   }
 }
 
+/** Cooperative yield so long indexing doesn't starve IPC / UI. */
+function yieldEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 // ---------------------------------------------------------------------------
 // Model download
 // ---------------------------------------------------------------------------
@@ -174,10 +296,11 @@ export class Embedder {
 /**
  * Download all model files for the given model name.
  *
- * Downloads to ~/.orchid/models/<modelName>/, writing to a temp file first
- * then renaming atomically. Skips files that already exist with correct size.
+ * Downloads to ~/.orchid/models/<storageId>/ (config id, including optional
+ * `fastembed/` prefix), writing to a temp file first then renaming atomically.
+ * Skips files that already exist.
  *
- * @param modelName - Hugging Face model identifier (e.g. "BAAI/bge-small-en-v1.5")
+ * @param modelName - Config or HF id (e.g. "fastembed/BAAI/bge-base-en-v1.5")
  * @param onProgress - Optional callback for download progress
  * @throws EmbeddingError if a required download fails
  */
@@ -189,12 +312,14 @@ export async function downloadModel(
   const path = await import('node:path');
   const os = await import('node:os');
 
-  const modelDir = path.join(os.homedir(), '.orchid', 'models', modelName);
+  const { storageId, hubId } = resolveEmbeddingModelIds(modelName);
+  const modelDir = path.join(os.homedir(), '.orchid', 'models', storageId);
+  const files = modelFilesForHub(hubId);
 
   // Ensure parent directories exist
   await fs.promises.mkdir(modelDir, { recursive: true });
 
-  for (const file of MODEL_FILES) {
+  for (const file of files) {
     const destPath = path.join(modelDir, file.relativePath);
 
     // Skip if already downloaded
@@ -205,8 +330,8 @@ export async function downloadModel(
     } catch (err) {
       if (file.required) {
         throw new EmbeddingError(
-          `RAG embeddings require the BGE model. Download failed: ${err instanceof Error ? err.message : String(err)}. ` +
-            `Place the model manually at ${destPath}`,
+          `RAG embedding model '${hubId}' download failed: ${err instanceof Error ? err.message : String(err)}. ` +
+            `Place model.onnx (and tokenizer.json if available) manually at ${modelDir}/`,
         );
       }
       // Non-required files: log but don't fail
@@ -320,8 +445,14 @@ export async function isModelAvailable(modelName: string = DEFAULT_ONNX_MODEL): 
   const path = await import('node:path');
   const os = await import('node:os');
 
-  const modelPath = path.join(os.homedir(), '.orchid', 'models', modelName, 'model.onnx');
-  return fs.existsSync(modelPath);
+  const { storageId, hubId } = resolveEmbeddingModelIds(modelName);
+  const candidates = [
+    path.join(os.homedir(), '.orchid', 'models', storageId, 'model.onnx'),
+  ];
+  if (storageId !== hubId) {
+    candidates.push(path.join(os.homedir(), '.orchid', 'models', hubId, 'model.onnx'));
+  }
+  return candidates.some((p) => fs.existsSync(p));
 }
 
 /**
@@ -330,7 +461,8 @@ export async function isModelAvailable(modelName: string = DEFAULT_ONNX_MODEL): 
 export async function getModelDir(modelName: string = DEFAULT_ONNX_MODEL): Promise<string> {
   const path = await import('node:path');
   const os = await import('node:os');
-  return path.join(os.homedir(), '.orchid', 'models', modelName);
+  const { storageId } = resolveEmbeddingModelIds(modelName);
+  return path.join(os.homedir(), '.orchid', 'models', storageId);
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +479,7 @@ export async function getModelDir(modelName: string = DEFAULT_ONNX_MODEL): Promi
 async function runOnnxEmbedding(
   texts: string[],
   modelName: string,
+  threads: number,
 ): Promise<Float32Array[]> {
   // Dynamic import — onnxruntime-node is an optional native dependency
   let ort: typeof import('onnxruntime-node');
@@ -358,13 +491,12 @@ async function runOnnxEmbedding(
     );
   }
 
-  // For now, run inference inline. A full worker_threads implementation
-  // would use a dedicated worker pool, but the inline approach works
-  // and keeps the implementation simpler. The embedder is already async.
-  const session = await getOrCreateSession(ort, modelName);
+  // Inference runs inline with a hard-capped thread pool (see SessionOptions).
+  const session = await getOrCreateSession(ort, modelName, threads);
 
-  // Tokenize using proper BPE tokenizer, falling back to simpleTokenize
-  const maxLength = 512;
+  // Tokenize using proper BPE tokenizer, falling back to simpleTokenize.
+  // Current local models (BGE / MiniLM) all use a 512-token window.
+  const maxLength = DEFAULT_MAX_SEQ_LENGTH;
   const inputIds: number[][] = [];
   const attentionMask: number[][] = [];
 
@@ -393,23 +525,49 @@ async function runOnnxEmbedding(
 
   const batchSize = texts.length;
   const seqLen = maxLength;
+  const shape: number[] = [batchSize, seqLen];
 
-  // Create tensors
-  const idsTensor = new ort.Tensor(
-    'int64',
-    new BigInt64Array(inputIds.flat().map(BigInt)),
-    [batchSize, seqLen],
-  );
-  const maskTensor = new ort.Tensor(
-    'int64',
-    new BigInt64Array(attentionMask.flat().map(BigInt)),
-    [batchSize, seqLen],
-  );
+  // Build feeds from the session's declared inputs. BGE / BERT-style ONNX
+  // models typically require token_type_ids (all zeros for single-segment
+  // text); omitting it fails every batch and the retry backoff looks idle.
+  const flatIds = inputIds.flat();
+  const flatMask = attentionMask.flat();
+  const feeds: Record<string, InstanceType<typeof ort.Tensor>> = {};
+  const requiredInputs = session.inputNames.length > 0
+    ? session.inputNames
+    : ['input_ids', 'attention_mask', 'token_type_ids'];
 
-  const results = await session.run({
-    input_ids: idsTensor,
-    attention_mask: maskTensor,
-  });
+  for (const name of requiredInputs) {
+    if (name === 'input_ids') {
+      feeds[name] = new ort.Tensor(
+        'int64',
+        new BigInt64Array(flatIds.map(BigInt)),
+        shape,
+      );
+    } else if (name === 'attention_mask') {
+      feeds[name] = new ort.Tensor(
+        'int64',
+        new BigInt64Array(flatMask.map(BigInt)),
+        shape,
+      );
+    } else if (name === 'token_type_ids') {
+      // Single-segment encoding — segment id 0 for every token
+      feeds[name] = new ort.Tensor(
+        'int64',
+        new BigInt64Array(batchSize * seqLen),
+        shape,
+      );
+    } else {
+      // Unknown optional input: zeros of the common [batch, seq] shape
+      feeds[name] = new ort.Tensor(
+        'int64',
+        new BigInt64Array(batchSize * seqLen),
+        shape,
+      );
+    }
+  }
+
+  const results = await session.run(feeds);
 
   // Extract embeddings — output key varies by model, try common ones
   const outputTensor =
@@ -472,45 +630,69 @@ const sessionCache = new Map<string, import('onnxruntime-node').InferenceSession
 async function getOrCreateSession(
   ort: typeof import('onnxruntime-node'),
   modelName: string,
+  threads: number,
 ): Promise<import('onnxruntime-node').InferenceSession> {
-  if (sessionCache.has(modelName)) {
-    return sessionCache.get(modelName)!;
+  // Cache key includes thread count so changing config takes effect after restart
+  // (or after the cache entry is recreated on next process boot).
+  const cacheKey = `${modelName}::t${threads}`;
+  if (sessionCache.has(cacheKey)) {
+    return sessionCache.get(cacheKey)!;
   }
 
-  // Look for ONNX model in common locations
   const modelPath = await resolveModelPath(modelName);
-  const session = await ort.InferenceSession.create(modelPath);
-  sessionCache.set(modelName, session);
+  // Limit CPU: ORT defaults to "all physical cores" when threads are unset.
+  // sequential executionMode avoids extra inter-op fan-out across graph nodes.
+  const session = await ort.InferenceSession.create(modelPath, {
+    executionProviders: ['cpu'],
+    intraOpNumThreads: threads,
+    interOpNumThreads: 1,
+    executionMode: 'sequential',
+    enableCpuMemArena: true,
+    graphOptimizationLevel: 'all',
+  });
+  sessionCache.set(cacheKey, session);
   return session;
 }
 
 /**
  * Resolve the ONNX model path. Checks:
- * 1. ~/.orchid/models/<modelName>/model.onnx
+ * 1. ~/.orchid/models/<storageId>/model.onnx  (storageId = full config id)
+ * 2. ~/.orchid/models/<hubId>/model.onnx      (legacy bare hub path)
  *
- * If not found, auto-downloads the model files from Hugging Face.
+ * If not found, auto-downloads the model files from Hugging Face into storageId.
  */
 async function resolveModelPath(modelName: string): Promise<string> {
   const fs = await import('node:fs');
   const path = await import('node:path');
   const os = await import('node:os');
 
-  const homeModels = path.join(os.homedir(), '.orchid', 'models', modelName, 'model.onnx');
-  if (fs.existsSync(homeModels)) {
-    return homeModels;
+  const { storageId, hubId } = resolveEmbeddingModelIds(modelName);
+  const candidates = [
+    path.join(os.homedir(), '.orchid', 'models', storageId, 'model.onnx'),
+  ];
+  // Prefer storageId path; also accept bare hub layout for older installs.
+  if (storageId !== hubId) {
+    candidates.push(path.join(os.homedir(), '.orchid', 'models', hubId, 'model.onnx'));
   }
 
-  // Auto-download on first use
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Auto-download on first use into the storageId directory
   await downloadModel(modelName);
 
-  if (fs.existsSync(homeModels)) {
-    return homeModels;
+  const primary = candidates[0]!;
+  if (fs.existsSync(primary)) {
+    return primary;
   }
 
-  // Download completed but file still not present — shouldn't happen but guard
   throw new EmbeddingError(
-    `ONNX model not found at ${homeModels} after download attempt. ` +
-      `Place the model manually at ~/.orchid/models/${modelName}/model.onnx`,
+    `ONNX model not found at ${primary} after download attempt. ` +
+      `Place the model manually at ~/.orchid/models/${storageId}/model.onnx ` +
+      `(Hugging Face hub id: ${hubId})`,
   );
 }
 
@@ -540,12 +722,28 @@ async function getTokenizer(
     const path = await import('node:path');
     const os = await import('node:os');
 
-    const modelDir = path.join(os.homedir(), '.orchid', 'models', modelName);
-    const tokenizerPath = path.join(modelDir, 'tokenizer.json');
+    const { storageId, hubId } = resolveEmbeddingModelIds(modelName);
+    const modelDirs = [
+      path.join(os.homedir(), '.orchid', 'models', storageId),
+    ];
+    if (storageId !== hubId) {
+      modelDirs.push(path.join(os.homedir(), '.orchid', 'models', hubId));
+    }
 
-    if (!fs.existsSync(tokenizerPath)) {
+    let modelDir: string | null = null;
+    let tokenizerPath: string | null = null;
+    for (const dir of modelDirs) {
+      const candidate = path.join(dir, 'tokenizer.json');
+      if (fs.existsSync(candidate)) {
+        modelDir = dir;
+        tokenizerPath = candidate;
+        break;
+      }
+    }
+
+    if (!modelDir || !tokenizerPath) {
       console.warn(
-        `BPE tokenizer file not found at ${tokenizerPath}, falling back to simpleTokenize`,
+        `BPE tokenizer file not found for '${modelName}', falling back to simpleTokenize`,
       );
       tokenizerCache.set(modelName, null);
       return null;

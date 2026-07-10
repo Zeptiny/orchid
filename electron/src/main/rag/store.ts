@@ -249,9 +249,20 @@ function openDatabase(dbPath: string): BetterSqlite3Database {
     const db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
     return db;
-  } catch {
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    // npm install alone builds against system Node; Electron needs a separate ABI rebuild.
+    const abiMismatch =
+      /NODE_MODULE_VERSION|did not self-register|was compiled against a different/i.test(detail);
+    if (abiMismatch) {
+      throw new Error(
+        `better-sqlite3 native module is not compatible with this Electron runtime. ` +
+          `From electron/, run: npm run rebuild:native\n\nUnderlying error: ${detail}`,
+      );
+    }
     throw new Error(
-      'better-sqlite3 is not available. Install it with: npm install better-sqlite3',
+      `better-sqlite3 is not available (${detail}). ` +
+        `Install optional deps, then rebuild for Electron: npm install && npm run rebuild:native`,
     );
   }
 }

@@ -43,6 +43,8 @@ const EXPECTED_RAG_FIELDS = [
   { field: 'top_k', type: 'number', defaultValue: 5, envOverride: 'ORCHID_RAG_TOP_K' },
   { field: 'max_file_size', type: 'number', defaultValue: 512000, envOverride: 'ORCHID_RAG_MAX_FILE_SIZE' },
   { field: 'embedding_model', type: 'string', defaultValue: 'fastembed/BAAI/bge-small-en-v1.5', envOverride: 'ORCHID_RAG_EMBEDDING_MODEL' },
+  { field: 'embedding_threads', type: 'number', defaultValue: 2, envOverride: 'ORCHID_RAG_EMBEDDING_THREADS' },
+  { field: 'embedding_batch_size', type: 'number', defaultValue: 16, envOverride: 'ORCHID_RAG_EMBEDDING_BATCH_SIZE' },
 ];
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -81,7 +83,7 @@ describe('Config Parity', () => {
       expect(cfg.rag).toHaveProperty('embedding_model');
     });
 
-    it('top-level field count matches expected (19 top-level + 5 rag = 24 fields)', () => {
+    it('top-level field count matches expected (19 top-level + 7 rag nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
@@ -89,7 +91,7 @@ describe('Config Parity', () => {
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);
-      expect(ragKeys).toHaveLength(5);
+      expect(ragKeys).toHaveLength(7);
     });
   });
 

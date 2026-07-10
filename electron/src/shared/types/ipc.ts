@@ -18,7 +18,10 @@ import type {
   RAGStoreStatus,
   ASTStoreStatus,
   RAGIndexResult,
+  RAGIndexProgress,
   ASTIndexResult,
+  ASTIndexProgress,
+  IndexRunState,
   UpdaterState,
 } from './ipc-boundary';
 
@@ -31,7 +34,10 @@ export type {
   RAGStoreStatus,
   ASTStoreStatus,
   RAGIndexResult,
+  RAGIndexProgress,
   ASTIndexResult,
+  ASTIndexProgress,
+  IndexRunState,
   UpdaterState,
 } from './ipc-boundary';
 
@@ -360,11 +366,19 @@ export interface OrchidAPI {
     status: () => Promise<RAGStoreStatus>;
     index: (message?: RAGIndexMessage) => Promise<RAGIndexResult>;
     clear: () => Promise<{ status: string }>;
+    /** Whether a run is active + last progress (for tab remount / late join). */
+    indexState: () => Promise<IndexRunState<RAGIndexProgress>>;
+    /** Subscribe to live index progress (worker → main → renderer). */
+    onProgress: (callback: (progress: RAGIndexProgress) => void) => () => void;
   };
 
   ast: {
     status: () => Promise<ASTStoreStatus>;
     index: (message?: ASTIndexMessage) => Promise<ASTIndexResult>;
+    /** Whether a run is active + last progress (for tab remount / late join). */
+    indexState: () => Promise<IndexRunState<ASTIndexProgress>>;
+    /** Subscribe to live index progress (worker → main → renderer). */
+    onProgress: (callback: (progress: ASTIndexProgress) => void) => () => void;
   };
 
   bgCmd: {
@@ -444,10 +458,16 @@ export const IPC_CHANNELS = {
   RAG_STATUS: 'rag:status',
   RAG_INDEX: 'rag:index',
   RAG_CLEAR: 'rag:clear',
+  RAG_INDEX_STATE: 'rag:index_state',
+  /** Push event: live RAG index progress from worker. */
+  RAG_PROGRESS: 'rag:progress',
 
   // AST
   AST_STATUS: 'ast:status',
   AST_INDEX: 'ast:index',
+  AST_INDEX_STATE: 'ast:index_state',
+  /** Push event: live AST index progress from worker. */
+  AST_PROGRESS: 'ast:progress',
 
   // Background Commands
   BG_CMD_SNAPSHOT: 'bgcmd:snapshot',
@@ -492,8 +512,10 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.RAG_STATUS,
   IPC_CHANNELS.RAG_INDEX,
   IPC_CHANNELS.RAG_CLEAR,
+  IPC_CHANNELS.RAG_INDEX_STATE,
   IPC_CHANNELS.AST_STATUS,
   IPC_CHANNELS.AST_INDEX,
+  IPC_CHANNELS.AST_INDEX_STATE,
   IPC_CHANNELS.BG_CMD_SNAPSHOT,
   IPC_CHANNELS.UPDATER_CHECK,
   IPC_CHANNELS.UPDATER_INSTALL,
@@ -517,6 +539,8 @@ export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
   IPC_CHANNELS.SESSION_CREATED,
   IPC_CHANNELS.SESSION_WORKSPACE_CHANGED,
   IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED,
+  IPC_CHANNELS.RAG_PROGRESS,
+  IPC_CHANNELS.AST_PROGRESS,
   IPC_CHANNELS.UPDATER_STATUS_UPDATE,
   IPC_CHANNELS.UPDATER_PROGRESS,
   IPC_CHANNELS.UPDATER_ERROR,

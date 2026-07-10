@@ -1,27 +1,38 @@
 /**
  * AST Indexer — project-wide symbol indexing with hash change detection.
  *
- * Walks the project directory, parses supported files, extracts symbols
- * via tree-sitter queries, and stores them in the SQLite symbol store.
- *
- * Features:
- * - Hash change detection (only re-parses modified files)
- * - Single-file update (for post-write callbacks)
- * - Lazy initialization (ensureIndexed)
+ * Full project indexes run in a dedicated `worker_threads` worker so
+ * tree-sitter WASM + SQLite work does not block the Electron main process.
+ * Single-file `updateFile` stays on the caller thread (post-write path).
  *
  * Ported from Python `src/orchid/ast/indexer.py`.
  */
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from './parser';
 import { ASTStore, type Symbol } from './store';
 import { getConfig } from '../config';
-import type { ASTIndexResult } from '../../shared/types/ipc-boundary';
+import type { ASTIndexResult, ASTIndexProgress } from '../../shared/types/ipc-boundary';
 
-export type { ASTIndexResult } from '../../shared/types/ipc-boundary';
+export type { ASTIndexResult, ASTIndexProgress } from '../../shared/types/ipc-boundary';
 /** @deprecated Use ASTIndexResult from shared/types/ipc-boundary */
 export type IndexResult = ASTIndexResult;
+
+export type ASTIndexProgressCallback = (progress: ASTIndexProgress) => void;
+
+/** Payload passed to the AST index worker via workerData. */
+export interface AstWorkerStartData {
+  projectPath: string;
+  force?: boolean;
+}
+
+/** Messages the AST index worker posts back to the parent. */
+export type AstWorkerOutbound =
+  | { type: 'progress'; progress: ASTIndexProgress }
+  | { type: 'result'; result: ASTIndexResult }
+  | { type: 'error'; error: string };
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -42,9 +53,26 @@ const SKIP_DIRS = new Set([
 
 let _sessionInitialized = false;
 let _indexing = false;
+/** Latest progress while a run is active (for late UI subscribers / tab switches). */
+let _lastProgress: ASTIndexProgress | null = null;
 
 export function isIndexing(): boolean {
   return _indexing;
+}
+
+/** Snapshot for remounting UIs mid-index. */
+export function getIndexState(): {
+  indexing: boolean;
+  progress: ASTIndexProgress | null;
+} {
+  return {
+    indexing: _indexing,
+    progress: _indexing ? _lastProgress : null,
+  };
+}
+
+function noteProgress(progress: ASTIndexProgress): void {
+  _lastProgress = progress;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,37 +150,91 @@ export async function updateFile(
   store.upsertFile(rel, hash, symbols);
 }
 
-/**
- * Run a full AST indexing scan of the project.
- */
-export async function indexProject(opts: {
+export interface IndexProjectOptions {
   projectPath?: string;
   force?: boolean;
-  progressCallback?: (filePath: string, done: number, total: number) => void;
-} = {}): Promise<ASTIndexResult> {
+  progressCallback?: ASTIndexProgressCallback;
+  /**
+   * Force the index to run on the current thread (used by the worker itself
+   * and tests that need a synchronous-style progress callback).
+   */
+  inline?: boolean;
+}
+
+/**
+ * Run a full AST indexing scan of the project.
+ *
+ * By default runs in a worker thread. Pass `{ inline: true }` to execute on
+ * the current thread (required inside the worker).
+ */
+export async function indexProject(
+  opts: IndexProjectOptions = {},
+): Promise<ASTIndexResult> {
   if (_indexing) {
     console.warn('AST indexing already in progress, skipping');
-    return makeIndexResult();
+    const empty = makeIndexResult();
+    empty.errors = ['Indexing already in progress'];
+    return empty;
   }
   _indexing = true;
+  _lastProgress = {
+    phase: 'discovering',
+    done: 0,
+    total: 0,
+    filesIndexed: 0,
+    filesSkipped: 0,
+    symbolsExtracted: 0,
+    filesDeleted: 0,
+    elapsedSeconds: 0,
+  };
+  const trackProgress: ASTIndexProgressCallback = (progress) => {
+    noteProgress(progress);
+    try {
+      opts.progressCallback?.(progress);
+    } catch {
+      // ignore
+    }
+  };
   try {
-    return await indexProjectImpl(opts);
+    if (opts.inline) {
+      const result = await runIndexProjectImpl({
+        ...opts,
+        progressCallback: trackProgress,
+      });
+      _sessionInitialized = true;
+      return result;
+    }
+    if (!opts.projectPath) {
+      throw new Error('projectPath is required; pass the active workspace cwd');
+    }
+    const result = await runIndexInWorker(
+      opts.projectPath,
+      opts.force === true,
+      trackProgress,
+    );
+    // Worker set its own session flag; mark main-process session as ready too
+    // so ensureIndexed() short-circuits after a successful run.
+    _sessionInitialized = true;
+    return result;
   } finally {
     _indexing = false;
+    _lastProgress = null;
   }
 }
 
-// ---------------------------------------------------------------------------
-// Internal implementation
-// ---------------------------------------------------------------------------
-
-async function indexProjectImpl(opts: {
+/**
+ * Core indexing implementation (runs on whatever thread calls it).
+ *
+ * Exported so the worker entry can invoke it without re-entering the
+ * worker-spawning path on `indexProject`.
+ */
+export async function runIndexProjectImpl(opts: {
   projectPath?: string;
   force?: boolean;
-  progressCallback?: (filePath: string, done: number, total: number) => void;
+  progressCallback?: ASTIndexProgressCallback;
 }): Promise<ASTIndexResult> {
   const { force = false, progressCallback } = opts;
-  let { projectPath } = opts;
+  const { projectPath } = opts;
 
   const cfg = getConfig();
   if (!projectPath) {
@@ -160,10 +242,45 @@ async function indexProjectImpl(opts: {
   }
 
   const t0 = Date.now();
+  const elapsed = () => (Date.now() - t0) / 1000;
+
+  const emit = (
+    partial: Omit<ASTIndexProgress, 'elapsedSeconds'> & { elapsedSeconds?: number },
+  ) => {
+    if (!progressCallback) return;
+    try {
+      progressCallback({
+        ...partial,
+        elapsedSeconds: partial.elapsedSeconds ?? elapsed(),
+      });
+    } catch {
+      // ignore callback errors
+    }
+  };
+
+  emit({
+    phase: 'discovering',
+    done: 0,
+    total: 0,
+    filesIndexed: 0,
+    filesSkipped: 0,
+    symbolsExtracted: 0,
+    filesDeleted: 0,
+  });
 
   const files = await discoverFiles(projectPath, cfg.ignored_dirs);
   const result = makeIndexResult();
   result.filesScanned = files.length;
+
+  emit({
+    phase: files.length === 0 ? 'finalizing' : 'indexing',
+    done: 0,
+    total: files.length,
+    filesIndexed: 0,
+    filesSkipped: 0,
+    symbolsExtracted: 0,
+    filesDeleted: 0,
+  });
 
   const store = new ASTStore(projectPath);
   store.initDb();
@@ -172,7 +289,7 @@ async function indexProjectImpl(opts: {
   const indexedFiles = new Set<string>();
 
   for (let i = 0; i < files.length; i++) {
-    const filepath = files[i];
+    const filepath = files[i]!;
     let rel: string;
     try {
       rel = path.relative(projectPath, filepath);
@@ -180,13 +297,16 @@ async function indexProjectImpl(opts: {
       continue;
     }
 
-    if (progressCallback) {
-      try {
-        progressCallback(rel, i, files.length);
-      } catch {
-        // ignore callback errors
-      }
-    }
+    emit({
+      phase: 'indexing',
+      done: i,
+      total: files.length,
+      currentFile: rel,
+      filesIndexed: result.filesIndexed,
+      filesSkipped: result.filesSkipped,
+      symbolsExtracted: result.symbolsExtracted,
+      filesDeleted: result.filesDeleted,
+    });
 
     try {
       const readResult = await readAndHash(filepath);
@@ -195,28 +315,50 @@ async function indexProjectImpl(opts: {
         if (existingHashes[rel]) {
           store.deleteByFile(rel);
         }
-        continue;
+      } else {
+        const { content, hash } = readResult;
+
+        if (!force && existingHashes[rel] === hash) {
+          result.filesSkipped++;
+          indexedFiles.add(rel);
+        } else {
+          const symbols = await extractSymbols(rel, content);
+          store.upsertFile(rel, hash, symbols);
+          result.filesIndexed++;
+          result.symbolsExtracted += symbols.length;
+          indexedFiles.add(rel);
+        }
       }
-
-      const { content, hash } = readResult;
-
-      if (!force && existingHashes[rel] === hash) {
-        result.filesSkipped++;
-        indexedFiles.add(rel);
-        continue;
-      }
-
-      const symbols = await extractSymbols(rel, content);
-      store.upsertFile(rel, hash, symbols);
-      result.filesIndexed++;
-      result.symbolsExtracted += symbols.length;
-      indexedFiles.add(rel);
     } catch (err) {
       const msg = `${rel}: ${err instanceof Error ? err.message : String(err)}`;
       console.warn(`AST indexing error: ${msg}`);
       result.errors.push(msg);
     }
+
+    emit({
+      phase: 'indexing',
+      done: i + 1,
+      total: files.length,
+      currentFile: rel,
+      filesIndexed: result.filesIndexed,
+      filesSkipped: result.filesSkipped,
+      symbolsExtracted: result.symbolsExtracted,
+      filesDeleted: result.filesDeleted,
+    });
+
+    // Yield so the worker event loop can flush progress messages promptly
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
+
+  emit({
+    phase: 'finalizing',
+    done: files.length,
+    total: files.length,
+    filesIndexed: result.filesIndexed,
+    filesSkipped: result.filesSkipped,
+    symbolsExtracted: result.symbolsExtracted,
+    filesDeleted: result.filesDeleted,
+  });
 
   // Remove deleted files from the index
   for (const storedPath of Object.keys(existingHashes)) {
@@ -226,18 +368,103 @@ async function indexProjectImpl(opts: {
     }
   }
 
-  result.durationSeconds = (Date.now() - t0) / 1000;
+  result.durationSeconds = elapsed();
+  // Only meaningful when running inline on main; worker path sets this on parent.
   _sessionInitialized = true;
 
   store.recordIndex(result.durationSeconds);
 
   console.log(
     `AST index complete: ${result.filesIndexed} indexed, ` +
-    `${result.filesSkipped} skipped, ${result.filesDeleted} deleted, ` +
-    `${result.symbolsExtracted} symbols in ${result.durationSeconds.toFixed(1)}s`,
+      `${result.filesSkipped} skipped, ${result.filesDeleted} deleted, ` +
+      `${result.symbolsExtracted} symbols in ${result.durationSeconds.toFixed(1)}s`,
   );
 
+  emit({
+    phase: 'done',
+    done: files.length,
+    total: files.length,
+    filesIndexed: result.filesIndexed,
+    filesSkipped: result.filesSkipped,
+    symbolsExtracted: result.symbolsExtracted,
+    filesDeleted: result.filesDeleted,
+    elapsedSeconds: result.durationSeconds,
+  });
+
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Worker runner (main process)
+// ---------------------------------------------------------------------------
+
+async function runIndexInWorker(
+  projectPath: string,
+  force: boolean,
+  progressCallback?: ASTIndexProgressCallback,
+): Promise<ASTIndexResult> {
+  const workerPath = path.join(__dirname, 'index-worker.js');
+  if (!fs.existsSync(workerPath)) {
+    console.warn(
+      `AST worker not found at ${workerPath}; running index inline on the main thread`,
+    );
+    return runIndexProjectImpl({ projectPath, force, progressCallback });
+  }
+
+  const startData: AstWorkerStartData = {
+    projectPath,
+    force,
+  };
+
+  return new Promise<ASTIndexResult>((resolve, reject) => {
+    let settled = false;
+    const worker = new Worker(workerPath, {
+      workerData: startData,
+      env: process.env,
+    });
+
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+
+    worker.on('message', (msg: AstWorkerOutbound) => {
+      if (!msg || typeof msg !== 'object' || !('type' in msg)) return;
+      if (msg.type === 'progress') {
+        try {
+          progressCallback?.(msg.progress);
+        } catch {
+          // ignore
+        }
+        return;
+      }
+      if (msg.type === 'result') {
+        finish(() => {
+          void worker.terminate();
+          resolve(msg.result);
+        });
+        return;
+      }
+      if (msg.type === 'error') {
+        finish(() => {
+          void worker.terminate();
+          reject(new Error(msg.error));
+        });
+      }
+    });
+
+    worker.on('error', (err) => {
+      finish(() => reject(err));
+    });
+
+    worker.on('exit', (code) => {
+      if (settled) return;
+      finish(() => {
+        reject(new Error(`AST index worker exited unexpectedly with code ${code}`));
+      });
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------

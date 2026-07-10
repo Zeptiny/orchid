@@ -402,6 +402,13 @@ export function ChatView() {
     refreshIndex();
   }, [refreshMCP, refreshIndex]);
 
+  // Re-fetch RAG/AST status when the active workspace changes (counts are
+  // project-scoped; no manual reload control in the inspector).
+  const workspaceCwd = session.activeSession?.cwd ?? null;
+  useEffect(() => {
+    void refreshIndex();
+  }, [workspaceCwd, refreshIndex]);
+
   // MCP starts in the background after the window opens, so the first status
   // snapshot often lands on "starting". Poll until every server leaves that
   // state (connected / failed / unavailable) so the right sidebar updates.

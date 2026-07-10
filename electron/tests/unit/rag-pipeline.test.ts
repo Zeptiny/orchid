@@ -845,7 +845,7 @@ describe('Model Download', () => {
       EmbeddingError,
     );
     await expect(downloadModel('nonexistent/model')).rejects.toThrow(
-      /RAG embeddings require the BGE model/,
+      /download failed/i,
     );
     fetchSpy.mockRestore();
   });
@@ -860,7 +860,7 @@ describe('Model Download', () => {
       expect.fail('Should have thrown');
     } catch (err) {
       expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).toContain('Place the model manually at');
+      expect((err as Error).message).toMatch(/Place model\.onnx|Place the model manually/i);
       expect((err as Error).message).toContain('model.onnx');
     }
     fetchSpy.mockRestore();
@@ -881,7 +881,7 @@ describe('Model Download', () => {
       EmbeddingError,
     );
     await expect(downloadModel('BAAI/bge-small-en-v1.5')).rejects.toThrow(
-      /Download failed/,
+      /download failed/i,
     );
     fetchSpy.mockRestore();
   });

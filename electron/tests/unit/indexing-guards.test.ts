@@ -78,6 +78,8 @@ const mockConfig = {
     chunk_size: 500,
     chunk_overlap: 50,
     max_file_size: 1_000_000,
+    embedding_threads: 2,
+    embedding_batch_size: 16,
   },
   ast_max_file_size: 1_000_000,
   ignored_dirs: [] as string[],
@@ -260,7 +262,7 @@ describe('AST indexing concurrency guard', () => {
     writeFile(tmpDir, 'test.ts', 'const x = 1;\n');
 
     expect(astIsIndexing()).toBe(false);
-    const result = await astIndexProject({ projectPath: tmpDir });
+    const result = await astIndexProject({ projectPath: tmpDir, inline: true });
     expect(result).toBeDefined();
     expect(result.filesScanned).toBeGreaterThanOrEqual(0);
     expect(astIsIndexing()).toBe(false);
@@ -270,9 +272,7 @@ describe('AST indexing concurrency guard', () => {
     writeFile(tmpDir, 'test.ts', 'const x = 1;\n');
 
     let isIndexingDuringExecution = false;
-    const promise = astIndexProject({
-      projectPath: tmpDir,
-      progressCallback: () => {
+    const promise = astIndexProject({ projectPath: tmpDir, inline: true, progressCallback: () => {
         isIndexingDuringExecution = astIsIndexing();
       },
     });
@@ -287,10 +287,10 @@ describe('AST indexing concurrency guard', () => {
     writeFile(tmpDir, 'test2.ts', 'const y = 2;\n');
 
     // Start first indexing
-    const firstPromise = astIndexProject({ projectPath: tmpDir });
+    const firstPromise = astIndexProject({ projectPath: tmpDir, inline: true });
 
     // Immediately try a second call — should be rejected by the internal guard
-    const secondResult = await astIndexProject({ projectPath: tmpDir });
+    const secondResult = await astIndexProject({ projectPath: tmpDir, inline: true });
     expect(secondResult.filesScanned).toBe(0);
     expect(secondResult.filesIndexed).toBe(0);
     expect(secondResult.symbolsExtracted).toBe(0);
@@ -305,18 +305,18 @@ describe('AST indexing concurrency guard', () => {
     writeFile(tmpDir, 'test.ts', 'const x = 1;\n');
 
     expect(astIsIndexing()).toBe(false);
-    await astIndexProject({ projectPath: tmpDir });
+    await astIndexProject({ projectPath: tmpDir, inline: true });
     expect(astIsIndexing()).toBe(false);
 
     // Can index again
-    const result = await astIndexProject({ projectPath: tmpDir });
+    const result = await astIndexProject({ projectPath: tmpDir, inline: true });
     expect(result).toBeDefined();
     expect(astIsIndexing()).toBe(false);
   });
 
   it('flag resets when indexProject completes (finally block)', async () => {
     expect(astIsIndexing()).toBe(false);
-    await astIndexProject({ projectPath: tmpDir });
+    await astIndexProject({ projectPath: tmpDir, inline: true });
     expect(astIsIndexing()).toBe(false);
   });
 });
@@ -351,7 +351,7 @@ describe('RAG and AST indexing independence', () => {
     expect(astIsIndexing()).toBe(false);
 
     // Start AST indexing
-    const astPromise = astIndexProject({ projectPath: tmpDir });
+    const astPromise = astIndexProject({ projectPath: tmpDir, inline: true });
     await astPromise;
     expect(ragIsIndexing()).toBe(false);
     expect(astIsIndexing()).toBe(false);
@@ -361,7 +361,7 @@ describe('RAG and AST indexing independence', () => {
     writeFile(tmpDir, 'test.ts', 'const x = 1;\n');
 
     const ragResult = await ragIndexProject(tmpDir);
-    const astResult = await astIndexProject({ projectPath: tmpDir });
+    const astResult = await astIndexProject({ projectPath: tmpDir, inline: true });
 
     expect(ragResult).toBeDefined();
     expect(astResult).toBeDefined();

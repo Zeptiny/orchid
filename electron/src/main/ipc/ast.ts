@@ -1,15 +1,17 @@
 /**
- * AST IPC handlers — ast:status, ast:index.
+ * AST IPC handlers — ast:status, ast:index, ast:index_state, ast:progress.
  *
- * Wraps AST indexer from U17 with zod-validated payloads.
- * Uses active workspace cwd (session → sticky), not process.cwd().
+ * Full indexes run in a worker thread; progress is broadcast to all windows so
+ * late UI subscribers (tab switches / remounts) keep seeing updates.
  */
-import { ipcMain } from 'electron';
+import { BrowserWindow, ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
+import type { ASTIndexProgress } from '../../shared/types/ipc-boundary';
 import {
   indexProject,
   isIndexing,
+  getIndexState,
 } from '../ast/indexer';
 import { ASTStore } from '../ast/store';
 import { resolveWindowWorkspace } from './session';
@@ -38,6 +40,13 @@ function resolveAstProjectPath(windowId?: string): string | null {
   return null;
 }
 
+function broadcastProgress(progress: ASTIndexProgress): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
+    win.webContents.send(IPC_CHANNELS.AST_PROGRESS, progress);
+  }
+}
+
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerASTIPC(): void {
@@ -56,9 +65,11 @@ export function registerASTIPC(): void {
     return store.status();
   });
 
-  // ast:index — trigger AST indexing
+  // ast:index_state — in-flight run snapshot for remounting UIs
+  ipcMain.handle(IPC_CHANNELS.AST_INDEX_STATE, async () => getIndexState());
+
+  // ast:index — trigger AST indexing in a worker; stream progress to all windows
   ipcMain.handle(IPC_CHANNELS.AST_INDEX, async (event, payload: unknown) => {
-    // Validate input with zod (payload is optional)
     const parsed = astIndexSchema.safeParse(payload ?? {});
     if (!parsed.success) {
       throw new Error(`Invalid ast:index payload: ${parsed.error.message}`);
@@ -91,7 +102,11 @@ export function registerASTIPC(): void {
       };
     }
 
-    return indexProject({ force, projectPath });
+    return indexProject({
+      force,
+      projectPath,
+      progressCallback: broadcastProgress,
+    });
   });
 }
 
@@ -101,4 +116,5 @@ export function registerASTIPC(): void {
 export function unregisterASTIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.AST_STATUS);
   ipcMain.removeHandler(IPC_CHANNELS.AST_INDEX);
+  ipcMain.removeHandler(IPC_CHANNELS.AST_INDEX_STATE);
 }
