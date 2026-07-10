@@ -15,7 +15,6 @@ import * as path from 'node:path';
 import { createRequire } from 'node:module';
 
 // Resolve package dirs relative to this file (works under dist/ and src/).
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const requireFromHere = createRequire(__filename);
 
 // web-tree-sitter exports Parser, Language, and Query as named exports.

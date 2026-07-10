@@ -478,10 +478,12 @@ export class MCPManager {
       try {
         await transport.close();
       } catch {
+        // cleanup best-effort
       }
       try {
         await client.close();
       } catch {
+        // cleanup best-effort
       }
       throw err;
     }

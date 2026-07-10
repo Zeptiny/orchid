@@ -258,11 +258,13 @@ function openDatabase(dbPath: string): BetterSqlite3Database {
       throw new Error(
         `better-sqlite3 native module is not compatible with this Electron runtime. ` +
           `From electron/, run: npm run rebuild:native\n\nUnderlying error: ${detail}`,
+        { cause: err },
       );
     }
     throw new Error(
       `better-sqlite3 is not available (${detail}). ` +
         `Install optional deps, then rebuild for Electron: npm install && npm run rebuild:native`,
+      { cause: err },
     );
   }
 }
