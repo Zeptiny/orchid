@@ -153,6 +153,25 @@ export function useSession(): UseSessionReturn {
     return unsubscribe;
   }, [refresh, getWorkspace]);
 
+  // Multi-chain turn lifecycle: start/finish updates chains on the active session.
+  useEffect(() => {
+    if (!window.orchid?.session?.onUpdated) {
+      return undefined;
+    }
+
+    const unsubscribe = window.orchid.session.onUpdated((event) => {
+      setActiveSession((prev) => {
+        // Only update when the same session is still active. Never resurrect
+        // a session after New Chat/draft (prev === null) from a late event.
+        if (prev?.id === event.session.id) {
+          return event.session;
+        }
+        return prev;
+      });
+    });
+    return unsubscribe;
+  }, []);
+
   // Workspace changes (pick / change_cwd / load / clear)
   useEffect(() => {
     if (!window.orchid?.session?.onWorkspaceChanged) {
@@ -389,6 +408,8 @@ function makeLocalSession(): Session {
       agentType: 'internal',
       agentTier: 'bloom',
       subagentRecord: null,
+      startTime: now,
+      endTime: null,
     }],
     activeChainId: chainId,
     createdAt: now,

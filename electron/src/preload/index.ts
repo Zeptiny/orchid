@@ -32,6 +32,7 @@ import type {
   SessionDeleteMessage,
   SessionRenamedEvent,
   SessionCreatedEvent,
+  SessionUpdatedEvent,
   SessionChangeCwdMessage,
   SessionSetWorkspaceMessage,
   SessionWorkspaceChangedEvent,
@@ -181,6 +182,9 @@ const orchidAPI: OrchidAPI = {
 
     onCreated: (callback: (event: SessionCreatedEvent) => void) =>
       on(IPC_CHANNELS.SESSION_CREATED, (...args) => callback(args[0] as SessionCreatedEvent)),
+
+    onUpdated: (callback: (event: SessionUpdatedEvent) => void) =>
+      on(IPC_CHANNELS.SESSION_UPDATED, (...args) => callback(args[0] as SessionUpdatedEvent)),
 
     onWorkspaceChanged: (callback: (event: SessionWorkspaceChangedEvent) => void) =>
       on(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, (...args) =>

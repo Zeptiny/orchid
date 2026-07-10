@@ -55,6 +55,8 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     sessionId?: string;
     /** Frozen parent-turn workspace cwd. */
     cwd?: string;
+    /** This subagent's scope id (record.id) for todos / bg / prompt isolation. */
+    agentScopeId: string;
   }): AsyncGenerator<StreamEvent> {
     const config = await getRuntimeConfig();
     const { streamChat } = await import('../llm/orchestrator');

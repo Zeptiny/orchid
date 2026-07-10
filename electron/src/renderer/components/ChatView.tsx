@@ -588,6 +588,7 @@ export function ChatView() {
           usage={chat.usage}
           subagents={subagents.subagents}
           sessionChains={session.activeSession?.chains ?? []}
+          sessionId={session.activeSession?.id ?? null}
           onClearError={chat.clearError}
           onOpenSettings={openSettings}
           onPickProjectDir={

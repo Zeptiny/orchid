@@ -364,6 +364,34 @@ export function useChat(): UseChatReturn {
           ? `${event.title}: ${event.error}`
           : event.error;
       setError(display);
+
+      // Commit live tools/segments into flat messages so multi-chain UI length
+      // stays aligned with session chain.messages after FAILED persist.
+      const liveTools = toolBlocksRef.current;
+      const usageForCommit = usageRef.current;
+      const committed = commitSegmentsToMessages({
+        segments: streamSegmentsRef.current,
+        liveTools,
+        fallbackResponse: accumulatedContentRef.current,
+        interrupted: false,
+        usage: usageForCommit,
+        thinking: accumulatedThinkingRef.current || null,
+      });
+      if (committed.length > 0) {
+        setMessages((prev) => {
+          const liveIds = new Set(liveTools.map((b) => b.id));
+          const next = prev.filter(
+            (m) =>
+              !(
+                (m.type === MessageType.TOOL_CALL || m.type === MessageType.TOOL_RESULT) &&
+                m.tool_call_id &&
+                liveIds.has(m.tool_call_id)
+              ),
+          );
+          return [...next, ...committed];
+        });
+      }
+
       setStatus('idle');
       isSendingRef.current = false;
       setStreamingContent('');

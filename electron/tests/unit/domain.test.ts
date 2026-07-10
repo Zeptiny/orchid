@@ -12,6 +12,9 @@ import {
   type Chain,
   chainToStorageDict,
   chainFromStorageDict,
+  isLegacyMegaChain,
+  sumChainUsage,
+  chainElapsedSeconds,
 } from '../../src/shared/types/chain';
 import {
   SubagentStatus,
@@ -59,6 +62,7 @@ function makeMessage(overrides: Partial<Message> & { role: MessageRole }): Messa
 }
 
 function makeChain(overrides: Partial<Chain> = {}): Chain {
+  const now = new Date().toISOString();
   return {
     id: overrides.id ?? `chain-${Math.random().toString(36).slice(2, 8)}`,
     sessionId: overrides.sessionId ?? 'session-1',
@@ -69,6 +73,13 @@ function makeChain(overrides: Partial<Chain> = {}): Chain {
     agentType: overrides.agentType ?? 'internal',
     agentTier: overrides.agentTier ?? 'bloom',
     subagentRecord: overrides.subagentRecord ?? null,
+    startTime: overrides.startTime ?? now,
+    endTime:
+      overrides.endTime !== undefined
+        ? overrides.endTime
+        : overrides.status === ChainStatus.ACTIVE
+          ? null
+          : now,
   };
 }
 
@@ -696,5 +707,88 @@ describe('Domain Models: Tool storage dict', () => {
     expect(restored.messages[0].tool_calls![0].function.name).toBe('read');
     expect(restored.messages[0].tool_calls![1].id).toBe('tc-2');
     expect(restored.messages[0].tool_calls![1].function.name).toBe('grep');
+  });
+});
+
+// ── Multi-chain helpers ─────────────────────────────────────────────────────
+
+describe('Domain Models: multi-chain helpers', () => {
+  it('accepts Python running status as ACTIVE and serializes FAILED', () => {
+    const restored = chainFromStorageDict({
+      id: 'c1',
+      status: 'running',
+      messages: [],
+      model: 'm',
+    });
+    expect(restored.status).toBe(ChainStatus.ACTIVE);
+
+    const failed = makeChain({ status: ChainStatus.FAILED });
+    const dict = chainToStorageDict(failed);
+    expect(dict.status).toBe('failed');
+    expect(chainFromStorageDict(dict).status).toBe(ChainStatus.FAILED);
+  });
+
+  it('round-trips startTime / endTime', () => {
+    const chain = makeChain({
+      startTime: '2026-07-10T12:00:00.000Z',
+      endTime: '2026-07-10T12:00:05.000Z',
+    });
+    const restored = chainFromStorageDict(chainToStorageDict(chain));
+    expect(restored.startTime).toBe('2026-07-10T12:00:00.000Z');
+    expect(restored.endTime).toBe('2026-07-10T12:00:05.000Z');
+    expect(chainElapsedSeconds(restored)).toBeCloseTo(5, 1);
+  });
+
+  it('sumChainUsage aggregates message usage', () => {
+    const chain = makeChain({
+      messages: [
+        makeMessage({
+          usage: {
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            total_tokens: 15,
+            cached_tokens: 2,
+          },
+        }),
+        makeMessage({
+          role: MessageRole.ASSISTANT,
+          usage: {
+            prompt_tokens: 20,
+            completion_tokens: 8,
+            total_tokens: 28,
+            cached_tokens: 0,
+          },
+        }),
+      ],
+    });
+    expect(sumChainUsage(chain)).toEqual({
+      prompt_tokens: 30,
+      completion_tokens: 13,
+      total_tokens: 43,
+      cached_tokens: 2,
+    });
+  });
+
+  it('isLegacyMegaChain detects single chain with multiple user turns', () => {
+    const mega = [
+      makeChain({
+        messages: [
+          makeMessage({ role: MessageRole.USER, content: 'a' }),
+          makeMessage({ role: MessageRole.ASSISTANT, content: 'b' }),
+          makeMessage({ role: MessageRole.USER, content: 'c' }),
+        ],
+      }),
+    ];
+    expect(isLegacyMegaChain(mega)).toBe(true);
+
+    const multi = [
+      makeChain({
+        messages: [makeMessage({ role: MessageRole.USER, content: 'a' })],
+      }),
+      makeChain({
+        messages: [makeMessage({ role: MessageRole.USER, content: 'b' })],
+      }),
+    ];
+    expect(isLegacyMegaChain(multi)).toBe(false);
   });
 });

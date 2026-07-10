@@ -89,6 +89,7 @@ function makeChain(
   sessionId: string,
   overrides: Partial<Chain> = {},
 ): Chain {
+  const now = new Date().toISOString();
   return {
     id: overrides.id ?? `chain-${Math.random().toString(36).slice(2, 10)}`,
     sessionId,
@@ -99,6 +100,13 @@ function makeChain(
     agentType: overrides.agentType ?? 'internal',
     agentTier: overrides.agentTier ?? 'bloom',
     subagentRecord: overrides.subagentRecord ?? null,
+    startTime: overrides.startTime ?? now,
+    endTime:
+      overrides.endTime !== undefined
+        ? overrides.endTime
+        : overrides.status === ChainStatus.ACTIVE
+          ? null
+          : now,
   };
 }
 
@@ -1075,242 +1083,277 @@ describe('SessionManager switching', () => {
 });
 
 // ===========================================================================
-// syncActiveChain — replace/create active chain + persist
+// Multi-chain lifecycle — startChain / update / finish / persistTurn
 // ===========================================================================
 
-describe('SessionManager.syncActiveChain', () => {
-  it('returns null when no active session', () => {
+describe('SessionManager multi-chain lifecycle', () => {
+  it('returns null from startChain / persistTurn when no active session', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const result = manager.syncActiveChain({
-      messages: [makeMessage({ content: 'orphan' })],
-    });
-    expect(result).toBeNull();
+    expect(manager.startChain()).toBeNull();
+    expect(
+      manager.persistTurn({ messages: [makeMessage({ content: 'orphan' })] }),
+    ).toBeNull();
   });
 
-  it('creates a new chain when session has no chains / no activeChainId', () => {
+  it('startChain appends an ACTIVE chain and sets activeChainId', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create('gpt-4o');
-    expect(session.chains).toEqual([]);
-    expect(session.activeChainId).toBeNull();
+    const user = makeMessage({ id: 'u1', role: 'user', content: 'Hello' });
+    const chain = manager.startChain({
+      messages: [user],
+      agentName: 'general',
+    });
 
+    expect(chain).not.toBeNull();
+    expect(chain!.status).toBe(ChainStatus.ACTIVE);
+    expect(chain!.messages).toHaveLength(1);
+    expect(chain!.startTime).toBeTruthy();
+    expect(chain!.endTime).toBeNull();
+    const active = manager.getActive()!;
+    expect(active.chains).toHaveLength(1);
+    expect(active.activeChainId).toBe(chain!.id);
+    expect(active.chains[0].sessionId).toBe(session.id);
+  });
+
+  it('N user turns → N chains with turn-local messages only', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    manager.create('gpt-4o');
+
+    for (let i = 1; i <= 3; i++) {
+      manager.startChain({
+        messages: [makeMessage({ id: `u${i}`, role: 'user', content: `Q${i}` })],
+      });
+      manager.persistTurn({
+        messages: [
+          makeMessage({ id: `u${i}`, role: 'user', content: `Q${i}` }),
+          makeMessage({ id: `a${i}`, role: 'assistant', content: `A${i}` }),
+        ],
+        status: ChainStatus.COMPLETED,
+      });
+    }
+
+    const session = manager.getActive()!;
+    expect(session.chains).toHaveLength(3);
+    expect(session.activeChainId).toBeNull();
+    for (let i = 0; i < 3; i++) {
+      expect(session.chains[i].messages).toHaveLength(2);
+      expect(session.chains[i].messages[0].content).toBe(`Q${i + 1}`);
+      expect(session.chains[i].messages[1].content).toBe(`A${i + 1}`);
+      expect(session.chains[i].status).toBe(ChainStatus.COMPLETED);
+      expect(session.chains[i].endTime).toBeTruthy();
+    }
+
+    // Flatten is full conversation (LLM history)
+    const flat = session.chains.flatMap((c) => c.messages);
+    expect(flat).toHaveLength(6);
+  });
+
+  it('updateActiveChainMessages writes turn-local only (not full history)', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    manager.create('gpt-4o');
+    manager.startChain({
+      messages: [makeMessage({ content: 'turn1 user' })],
+    });
+    manager.persistTurn({
+      messages: [
+        makeMessage({ content: 'turn1 user' }),
+        makeMessage({ role: 'assistant', content: 'turn1 asst' }),
+      ],
+    });
+
+    manager.startChain({
+      messages: [makeMessage({ content: 'turn2 user' })],
+    });
+    const mid = manager.updateActiveChainMessages([
+      makeMessage({ content: 'turn2 user' }),
+      makeMessage({ role: 'assistant', content: 'partial' }),
+    ]);
+    expect(mid!.chains).toHaveLength(2);
+    expect(mid!.chains[0].messages).toHaveLength(2);
+    expect(mid!.chains[1].messages).toHaveLength(2);
+    expect(mid!.chains[1].messages[1].content).toBe('partial');
+    expect(mid!.chains[1].status).toBe(ChainStatus.ACTIVE);
+    expect(mid!.activeChainId).toBe(mid!.chains[1].id);
+  });
+
+  it('finishActiveChain freezes status and clears activeChainId', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    manager.create('gpt-4o');
+    manager.startChain({ messages: [makeMessage({ content: 'x' })] });
+    const finished = manager.finishActiveChain(ChainStatus.INTERRUPTED);
+    expect(finished!.chains[0].status).toBe(ChainStatus.INTERRUPTED);
+    expect(finished!.chains[0].endTime).toBeTruthy();
+    expect(finished!.activeChainId).toBeNull();
+  });
+
+  it('startChain freezes a leftover ACTIVE chain as INTERRUPTED', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    manager.create('gpt-4o');
+    const first = manager.startChain({
+      messages: [makeMessage({ content: 'stuck' })],
+    })!;
+    const second = manager.startChain({
+      messages: [makeMessage({ content: 'next' })],
+    })!;
+    const session = manager.getActive()!;
+    expect(session.chains).toHaveLength(2);
+    expect(session.chains[0].id).toBe(first.id);
+    expect(session.chains[0].status).toBe(ChainStatus.INTERRUPTED);
+    expect(session.chains[1].id).toBe(second.id);
+    expect(session.chains[1].status).toBe(ChainStatus.ACTIVE);
+  });
+
+  it('persistTurn without prior startChain creates and freezes one chain', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create('gpt-4o');
     const messages = [
       makeMessage({ id: 'u1', role: 'user', content: 'Hello' }),
       makeMessage({ id: 'a1', role: 'assistant', content: 'Hi' }),
     ];
-    const result = manager.syncActiveChain({ messages });
+    const result = manager.persistTurn({ messages });
 
-    expect(result).not.toBeNull();
     expect(result!.chains).toHaveLength(1);
     const chain = result!.chains[0];
-    expect(chain.id).toBeTruthy();
-    expect(chain.sessionId).toBe(session.id);
     expect(chain.messages).toHaveLength(2);
-    expect(chain.messages[0].content).toBe('Hello');
-    expect(chain.messages[1].content).toBe('Hi');
     expect(chain.status).toBe(ChainStatus.COMPLETED);
-    expect(chain.model).toBe('gpt-4o'); // falls back to session.model
+    expect(chain.model).toBe('gpt-4o');
     expect(chain.agentName).toBe('general');
-    expect(chain.agentType).toBe('subagent');
-    expect(chain.agentTier).toBe('bloom');
-    expect(chain.subagentRecord).toBeNull();
-    expect(result!.activeChainId).toBe(chain.id);
+    // Finished turns clear activeChainId (Python freeze)
+    expect(result!.activeChainId).toBeNull();
+    expect(chain.sessionId).toBe(session.id);
   });
 
-  it('updates the existing chain matching activeChainId', () => {
+  it('syncActiveChain (wrapper) never rewrites prior chains with full history', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
-    const existing = makeChain(session.id, {
-      id: 'chain-existing',
-      messages: [makeMessage({ id: 'old', content: 'old msg' })],
-      status: ChainStatus.ACTIVE,
+    manager.create('gpt-4o');
+
+    manager.syncActiveChain({
+      messages: [
+        makeMessage({ content: 'Q1' }),
+        makeMessage({ role: 'assistant', content: 'A1' }),
+      ],
+    });
+    manager.syncActiveChain({
+      messages: [
+        makeMessage({ content: 'Q2' }),
+        makeMessage({ role: 'assistant', content: 'A2' }),
+      ],
+    });
+
+    const session = manager.getActive()!;
+    expect(session.chains).toHaveLength(2);
+    expect(session.chains[0].messages.map((m) => m.content)).toEqual(['Q1', 'A1']);
+    expect(session.chains[1].messages.map((m) => m.content)).toEqual(['Q2', 'A2']);
+  });
+
+  it('updates ACTIVE chain messages and agent metadata via persistTurn', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    manager.create('gpt-4o');
+    manager.startChain({
       model: 'old-model',
       agentName: 'General',
       agentType: 'internal',
       agentTier: 'bloom',
+      messages: [makeMessage({ content: 'old' })],
     });
-    // Seed chain via save + switch so active has the chain
-    saveSession(
-      {
-        ...session,
-        chains: [existing],
-        activeChainId: existing.id,
-        updatedAt: new Date().toISOString(),
-      },
-      storageOpts,
-    );
-    manager.switchTo(session.id);
 
-    const newMessages = [
-      makeMessage({ id: 'u2', role: 'user', content: 'Updated' }),
-      makeMessage({ id: 'a2', role: 'assistant', content: 'Reply' }),
-    ];
-    const result = manager.syncActiveChain({
-      messages: newMessages,
+    const result = manager.persistTurn({
+      messages: [
+        makeMessage({ content: 'Updated' }),
+        makeMessage({ role: 'assistant', content: 'Reply' }),
+      ],
       status: ChainStatus.COMPLETED,
+      agentName: 'coder',
     });
 
-    expect(result).not.toBeNull();
     expect(result!.chains).toHaveLength(1);
-    expect(result!.chains[0].id).toBe('chain-existing');
-    expect(result!.chains[0].messages).toHaveLength(2);
     expect(result!.chains[0].messages[0].content).toBe('Updated');
     expect(result!.chains[0].status).toBe(ChainStatus.COMPLETED);
-    // model falls back to existing when not provided
     expect(result!.chains[0].model).toBe('old-model');
-    // agent metadata preserved from existing when not overridden
-    expect(result!.chains[0].agentName).toBe('General');
+    expect(result!.chains[0].agentName).toBe('coder');
     expect(result!.chains[0].agentType).toBe('internal');
-    expect(result!.activeChainId).toBe('chain-existing');
+    expect(result!.activeChainId).toBeNull();
   });
 
-  it('falls back to last chain when activeChainId is missing/mismatched', () => {
-    const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
-    const chain1 = makeChain(session.id, { id: 'chain-1', model: 'm1' });
-    const chain2 = makeChain(session.id, {
-      id: 'chain-2',
-      model: 'm2',
-      messages: [makeMessage({ content: 'last chain old' })],
-    });
-    saveSession(
-      {
-        ...session,
-        chains: [chain1, chain2],
-        activeChainId: 'does-not-exist',
-        updatedAt: new Date().toISOString(),
-      },
-      storageOpts,
-    );
-    manager.switchTo(session.id);
-
-    const result = manager.syncActiveChain({
-      messages: [makeMessage({ content: 'patched last' })],
-    });
-
-    expect(result).not.toBeNull();
-    expect(result!.chains).toHaveLength(2);
-    // Last chain updated in place; first untouched
-    expect(result!.chains[0].id).toBe('chain-1');
-    expect(result!.chains[1].id).toBe('chain-2');
-    expect(result!.chains[1].messages[0].content).toBe('patched last');
-    expect(result!.activeChainId).toBe('chain-2');
-  });
-
-  it('applies status override (INTERRUPTED) and defaults to COMPLETED', () => {
+  it('applies INTERRUPTED and FAILED terminal statuses', () => {
     const manager = new SessionManager({ storage: storageOpts });
     manager.create('gpt-4o');
 
-    const interrupted = manager.syncActiveChain({
+    const interrupted = manager.persistTurn({
       messages: [makeMessage({ content: 'stop' })],
       status: ChainStatus.INTERRUPTED,
     });
     expect(interrupted!.chains[0].status).toBe(ChainStatus.INTERRUPTED);
 
-    // Subsequent sync without status should default to COMPLETED (update path)
-    const completed = manager.syncActiveChain({
-      messages: [
-        makeMessage({ content: 'stop' }),
-        makeMessage({ role: 'assistant', content: 'ok' }),
-      ],
+    const failed = manager.persistTurn({
+      messages: [makeMessage({ content: 'boom' })],
+      status: ChainStatus.FAILED,
     });
-    expect(completed!.chains[0].status).toBe(ChainStatus.COMPLETED);
+    expect(failed!.chains).toHaveLength(2);
+    expect(failed!.chains[1].status).toBe(ChainStatus.FAILED);
   });
 
   it('model fallback: params.model → existing.model → session.model', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('session-model');
+    manager.create('session-model');
 
-    // New chain: no params.model → session.model
-    const created = manager.syncActiveChain({
+    const created = manager.persistTurn({
       messages: [makeMessage({ content: 'a' })],
     });
     expect(created!.chains[0].model).toBe('session-model');
 
-    // Existing chain: params.model wins
-    const withParam = manager.syncActiveChain({
+    manager.startChain({ model: 'session-model' });
+    const withParam = manager.persistTurn({
       messages: [makeMessage({ content: 'b' })],
       model: 'param-model',
     });
-    expect(withParam!.chains[0].model).toBe('param-model');
-
-    // Existing chain: omit model → keep existing.model (not re-read session)
-    const keepExisting = manager.syncActiveChain({
-      messages: [makeMessage({ content: 'c' })],
-    });
-    expect(keepExisting!.chains[0].model).toBe('param-model');
+    expect(withParam!.chains[1].model).toBe('param-model');
   });
 
-  it('agent metadata: params override, else existing (update) or defaults (create)', () => {
-    const manager = new SessionManager({ storage: storageOpts });
-    manager.create('gpt-4o');
-
-    // Create with explicit agent metadata
-    const created = manager.syncActiveChain({
-      messages: [makeMessage({ content: 'q' })],
-      agentName: 'coder',
-      agentType: 'internal',
-      agentTier: 'bloom',
-    });
-    expect(created!.chains[0].agentName).toBe('coder');
-    expect(created!.chains[0].agentType).toBe('internal');
-    expect(created!.chains[0].agentTier).toBe('bloom');
-
-    // Update without agent fields → preserve existing
-    const preserved = manager.syncActiveChain({
-      messages: [makeMessage({ content: 'q2' })],
-    });
-    expect(preserved!.chains[0].agentName).toBe('coder');
-    expect(preserved!.chains[0].agentType).toBe('internal');
-    expect(preserved!.chains[0].agentTier).toBe('bloom');
-
-    // Update with overrides
-    const overridden = manager.syncActiveChain({
-      messages: [makeMessage({ content: 'q3' })],
-      agentName: 'explorer',
-      agentTier: 'seed',
-    });
-    expect(overridden!.chains[0].agentName).toBe('explorer');
-    expect(overridden!.chains[0].agentType).toBe('internal'); // preserved
-    expect(overridden!.chains[0].agentTier).toBe('seed');
-  });
-
-  it('persists chain to disk and reloads via loadSession', () => {
+  it('persists multi-chain to disk and reloads', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create('gpt-4o');
-    const messages = [
-      makeMessage({ id: 'persist-u', role: 'user', content: 'persist me' }),
-      makeMessage({
-        id: 'persist-a',
-        role: 'assistant',
-        content: 'persisted',
-        usage: {
-          prompt_tokens: 3,
-          completion_tokens: 2,
-          total_tokens: 5,
-          cached_tokens: 0,
-        },
-      }),
-    ];
 
-    const result = manager.syncActiveChain({
-      messages,
+    manager.startChain();
+    manager.persistTurn({
+      messages: [
+        makeMessage({ id: 'persist-u', role: 'user', content: 'persist me' }),
+        makeMessage({
+          id: 'persist-a',
+          role: 'assistant',
+          content: 'persisted',
+          usage: {
+            prompt_tokens: 3,
+            completion_tokens: 2,
+            total_tokens: 5,
+            cached_tokens: 0,
+          },
+        }),
+      ],
       status: ChainStatus.COMPLETED,
       model: 'gpt-4o',
       agentName: 'general',
       agentType: 'internal',
       agentTier: 'bloom',
     });
-    expect(result).not.toBeNull();
+    manager.startChain();
+    manager.persistTurn({
+      messages: [
+        makeMessage({ id: 'u2', role: 'user', content: 'second' }),
+        makeMessage({ id: 'a2', role: 'assistant', content: 'ok' }),
+      ],
+    });
 
     const loaded = loadSession(session.id, storageOpts);
     expect(loaded).not.toBeNull();
-    expect(loaded!.chains).toHaveLength(1);
-    expect(loaded!.activeChainId).toBe(result!.activeChainId);
-    expect(loaded!.chains[0].messages).toHaveLength(2);
+    expect(loaded!.chains).toHaveLength(2);
+    expect(loaded!.activeChainId).toBeNull();
     expect(loaded!.chains[0].messages[0].content).toBe('persist me');
     expect(loaded!.chains[0].messages[1].usage!.total_tokens).toBe(5);
     expect(loaded!.chains[0].status).toBe(ChainStatus.COMPLETED);
-    expect(loaded!.chains[0].agentName).toBe('general');
+    expect(loaded!.chains[1].messages[0].content).toBe('second');
+    expect(loaded!.chains[0].startTime).toBeTruthy();
+    expect(loaded!.chains[0].endTime).toBeTruthy();
   });
 
   it('copies messages array (does not retain caller reference)', () => {
@@ -1318,8 +1361,7 @@ describe('SessionManager.syncActiveChain', () => {
     manager.create('gpt-4o');
     const messages = [makeMessage({ content: 'mutable' })];
 
-    const result = manager.syncActiveChain({ messages });
-    // Mutate caller array after sync
+    const result = manager.persistTurn({ messages });
     (messages as Message[]).push(makeMessage({ content: 'extra' }));
 
     expect(result!.chains[0].messages).toHaveLength(1);
@@ -1331,13 +1373,12 @@ describe('SessionManager.syncActiveChain', () => {
     const session = manager.create('gpt-4o');
     const before = session.updatedAt;
 
-    // Ensure timestamp advances
     const start = Date.now();
     while (Date.now() - start < 5) {
       // busy wait
     }
 
-    const result = manager.syncActiveChain({
+    const result = manager.persistTurn({
       messages: [makeMessage({ content: 'tick' })],
     });
     expect(result!.updatedAt >= before).toBe(true);

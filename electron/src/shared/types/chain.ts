@@ -3,18 +3,25 @@
  *
  * Ported from src/orchid/domain/chain.py.
  *
+ * Multi-chain model (matching Python):
+ * - One Chain per user turn (append-only session.chains)
+ * - LLM history is flatten(session.chains); storage keeps turns separate
+ * - status ACTIVE while streaming; COMPLETED / INTERRUPTED / FAILED when frozen
+ *
  * Key restore behavior (matching Python):
  * - fromStorageDict() runs orphan tool result reconciliation:
  *   TOOL_RESULT with no preceding assistant tool_calls → dropped
  */
 
 import { z } from 'zod';
-import type { Message } from './message';
+import type { Message, Usage } from './message';
 import {
   messageFromStorageDict,
   messageToStorageDict,
   MessageRole,
+  MessageType,
 } from './message';
+import { sumMessageUsages } from '../usage';
 import type { SubagentRecord } from './subagent';
 import {
   subagentRecordFromStorageDict,
@@ -23,13 +30,30 @@ import {
 
 // ── Enums as const objects ──────────────────────────────────────────────────
 
+/**
+ * Chain lifecycle status.
+ * `active` corresponds to Python's RUNNING; `failed` matches Python FAILED.
+ * On restore, Python's `running` is accepted as an alias for `active`.
+ */
 export const ChainStatus = {
   ACTIVE: 'active',
   COMPLETED: 'completed',
   INTERRUPTED: 'interrupted',
+  FAILED: 'failed',
 } as const;
 
 export type ChainStatus = (typeof ChainStatus)[keyof typeof ChainStatus];
+
+/** Terminal statuses — chain is frozen and no longer the live write target. */
+export const TERMINAL_CHAIN_STATUSES: ReadonlySet<ChainStatus> = new Set([
+  ChainStatus.COMPLETED,
+  ChainStatus.INTERRUPTED,
+  ChainStatus.FAILED,
+]);
+
+export function isTerminalChainStatus(status: ChainStatus): boolean {
+  return TERMINAL_CHAIN_STATUSES.has(status);
+}
 
 // ── Chain ───────────────────────────────────────────────────────────────────
 
@@ -43,6 +67,15 @@ export interface Chain {
   readonly agentType: string;
   readonly agentTier: string;
   readonly subagentRecord: SubagentRecord | null;
+  /**
+   * ISO timestamp when the chain started (user submit).
+   * Null when unknown (legacy sessions).
+   */
+  readonly startTime: string | null;
+  /**
+   * ISO timestamp when the chain finished, or null while ACTIVE / unknown.
+   */
+  readonly endTime: string | null;
 }
 
 // ── Zod schemas ─────────────────────────────────────────────────────────────
@@ -51,6 +84,7 @@ export const chainStatusSchema = z.enum([
   ChainStatus.ACTIVE,
   ChainStatus.COMPLETED,
   ChainStatus.INTERRUPTED,
+  ChainStatus.FAILED,
 ]);
 
 // Lazy schemas to handle circular dependency between Chain ↔ SubagentRecord
@@ -65,6 +99,8 @@ export const chainSchema: z.ZodType<Chain> = z.lazy(() =>
     agentType: z.string(),
     agentTier: z.string(),
     subagentRecord: z.nullable(z.object({}).passthrough()),
+    startTime: z.string().nullable(),
+    endTime: z.string().nullable(),
   }) as unknown as z.ZodType<Chain>,
 );
 
@@ -85,8 +121,45 @@ export interface ChainStorageDict {
   agent_tier?: string;
   subagentRecord?: unknown;
   subagent_record?: unknown;
+  startTime?: string;
+  start_time?: string | number;
+  endTime?: string | null;
+  end_time?: string | number | null;
   // Forward-compat: extra keys tolerated on restore
   [key: string]: unknown;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Elapsed seconds for a chain (wall clock from startTime → endTime or now). */
+export function chainElapsedSeconds(chain: Chain, nowMs: number = Date.now()): number {
+  if (!chain.startTime) return 0;
+  const start = Date.parse(chain.startTime);
+  if (Number.isNaN(start)) return 0;
+  const end = chain.endTime ? Date.parse(chain.endTime) : nowMs;
+  if (Number.isNaN(end)) return 0;
+  return Math.max(0, (end - start) / 1000);
+}
+
+/** Sum message.usage across a chain (matches Python ChainFooterWidget). */
+export function sumChainUsage(chain: Pick<Chain, 'messages'>): Usage | null {
+  return sumMessageUsages(chain.messages);
+}
+
+/**
+ * True when a session looks like a pre-multi-chain mega-chain:
+ * a single chain holding multiple user turns.
+ */
+export function isLegacyMegaChain(chains: readonly Chain[]): boolean {
+  if (chains.length !== 1) return false;
+  let userTurns = 0;
+  for (const m of chains[0].messages) {
+    if (m.role === MessageRole.USER && m.type === MessageType.TEXT) {
+      userTurns += 1;
+      if (userTurns > 1) return true;
+    }
+  }
+  return false;
 }
 
 // ── Orphan tool result reconciliation ───────────────────────────────────────
@@ -149,7 +222,32 @@ export function chainToStorageDict(chain: Chain): ChainStorageDict {
   if (chain.subagentRecord) {
     dict.subagentRecord = subagentRecordToStorageDict(chain.subagentRecord);
   }
+  if (chain.startTime) dict.startTime = chain.startTime;
+  if (chain.endTime != null) dict.endTime = chain.endTime;
   return dict;
+}
+
+function parseChainStatus(raw: unknown): ChainStatus {
+  if (typeof raw !== 'string') return ChainStatus.COMPLETED;
+  // Python RUNNING → ACTIVE
+  if (raw === 'running' || raw === 'active') return ChainStatus.ACTIVE;
+  if (raw === 'completed') return ChainStatus.COMPLETED;
+  if (raw === 'interrupted') return ChainStatus.INTERRUPTED;
+  if (raw === 'failed') return ChainStatus.FAILED;
+  return ChainStatus.COMPLETED;
+}
+
+/** Normalize start timestamps from ISO strings or Python monotonic floats. */
+function parseTimeField(raw: unknown): string | null {
+  if (typeof raw === 'string' && raw.length > 0) return raw;
+  // Monotonic floats from Python cannot be converted to wall clock — drop.
+  return null;
+}
+
+function parseEndTime(raw: unknown): string | null {
+  if (raw == null) return null;
+  if (typeof raw === 'string') return raw.length > 0 ? raw : null;
+  return null;
 }
 
 export function chainFromStorageDict(data: unknown): Chain {
@@ -160,22 +258,20 @@ export function chainFromStorageDict(data: unknown): Chain {
   let messages = rawMessages.map((m) => messageFromStorageDict(m));
   messages = reconcileOrphanToolResults(messages);
 
-  // Parse status with fallback
-  let status: ChainStatus = ChainStatus.COMPLETED;
-  const rawStatus = raw.status;
-  if (
-    typeof rawStatus === 'string' &&
-    (rawStatus === 'active' || rawStatus === 'completed' ||
-      rawStatus === 'interrupted')
-  ) {
-    status = rawStatus;
-  }
+  const status = parseChainStatus(raw.status);
 
   // Parse subagentRecord if present
   let subagentRecord: SubagentRecord | null = null;
   const srData = raw.subagentRecord ?? raw.subagent_record;
   if (srData && typeof srData === 'object') {
     subagentRecord = subagentRecordFromStorageDict(srData);
+  }
+
+  const startTime = parseTimeField(raw.startTime ?? raw.start_time);
+  let endTime = parseEndTime(raw.endTime ?? raw.end_time);
+  // Terminal chains without endTime stay null; ACTIVE must not claim endTime.
+  if (status === ChainStatus.ACTIVE) {
+    endTime = null;
   }
 
   return {
@@ -208,5 +304,7 @@ export function chainFromStorageDict(data: unknown): Chain {
           ? raw.agent_tier
           : '',
     subagentRecord,
+    startTime,
+    endTime,
   };
 }

@@ -7,7 +7,7 @@
  * The chat handler manages an active agent actor per session and
  * forwards StreamEvents as IPC events to the renderer.
  */
-import { ipcMain, type WebContents } from 'electron';
+import { ipcMain, webContents as electronWebContents, type WebContents } from 'electron';
 import { createActor, type ActorRefFrom } from 'xstate';
 import { z } from 'zod';
 import { agentMachine, type AgentContext } from '../agents/xstate/agent-machine';
@@ -26,7 +26,11 @@ import { MessageRole, MessageType } from '../../shared/types/message';
 import type { Message, Usage } from '../../shared/types/message';
 import { ChainStatus } from '../../shared/types/chain';
 import type { GenerateTitleCallback } from '../session/manager';
-import { getSessionManager, resolveWindowWorkspace } from './session';
+import {
+  flattenSessionMessages,
+  getSessionManager,
+  resolveWindowWorkspace,
+} from './session';
 import { importESM } from '../utils/esm-import';
 import { getBackgroundStore } from '../tools/process/background-store';
 import { getMCPManagerRef } from './mcp';
@@ -68,8 +72,16 @@ type ActiveAgent = {
   actor: ActorRefFrom<typeof agentMachine>;
   interruptActor: ActorRefFrom<typeof interruptMachine>;
   abortController: AbortController;
-  /** Full conversation history at the start of this turn (includes prior turns). */
+  /**
+   * Full conversation history for the LLM at the start of this turn
+   * (prior turns flattened + current user message).
+   */
   messages: Message[];
+  /**
+   * Count of messages from prior turns only (before this turn's user message).
+   * Turn-local chain messages = messages.slice(priorMessageCount) + turnMessages.
+   */
+  priorMessageCount: number;
   /** Messages produced during this turn (tool calls/results + assistant). */
   turnMessages: Message[];
   /** Length of context.response already snapshotted into turnMessages as text. */
@@ -77,6 +89,8 @@ type ActiveAgent = {
   /** Length of context.thinking already snapshotted into turnMessages. */
   thinkingCommittedLength: number;
   agent: Agent;
+  /** Model id frozen for this turn's chain footer / storage. */
+  model: string;
   agentCancelled: boolean;
   finalized: boolean;
   /** Monotonic generation for this window; stale agents must not emit IPC. */
@@ -139,6 +153,57 @@ function isCurrentAgent(windowId: string, active: ActiveAgent): boolean {
 }
 
 /**
+ * Flush partial stream content into turnMessages (thinking + uncommitted
+ * assistant text). Shared by forceAbort, replace-on-send, and error paths.
+ */
+function flushPartialTurnContent(agent: ActiveAgent, context: AgentContext | undefined): void {
+  const partialResponse = context?.response ?? '';
+  const thinking = context?.thinking ?? '';
+  const usage = (context?.usage as Usage | null) ?? null;
+
+  if (thinking && thinking.length > agent.thinkingCommittedLength) {
+    const seg = thinking.slice(agent.thinkingCommittedLength);
+    if (seg.trim()) {
+      agent.turnMessages.push(makeThinkingMessage(seg));
+    }
+    agent.thinkingCommittedLength = thinking.length;
+  }
+
+  const remaining = partialResponse.slice(agent.responseCommittedLength);
+  if (remaining) {
+    agent.turnMessages.push(makeAssistantMessage(remaining, usage));
+    agent.responseCommittedLength = partialResponse.length;
+  } else if (usage && agent.turnMessages.length > 0) {
+    const last = agent.turnMessages[agent.turnMessages.length - 1];
+    if (
+      last &&
+      last.role === MessageRole.ASSISTANT &&
+      last.type === MessageType.TEXT
+    ) {
+      agent.turnMessages[agent.turnMessages.length - 1] = {
+        ...last,
+        usage,
+      };
+    }
+  }
+}
+
+/** Resolve WebContents for a window id (forceAbort / SESSION_UPDATED). */
+function webContentsForWindowId(windowId: string): WebContents | null {
+  try {
+    const id = Number(windowId);
+    if (!Number.isFinite(id)) return null;
+    const wc = electronWebContents.fromId(id);
+    if (!wc || (typeof wc.isDestroyed === 'function' && wc.isDestroyed())) {
+      return null;
+    }
+    return wc;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Silently abort any in-flight chat for a window (e.g. on session switch).
  * Does not emit CHAT_DONE — the renderer is about to replace its message list.
  *
@@ -150,6 +215,9 @@ function isCurrentAgent(windowId: string, active: ActiveAgent): boolean {
  * Before discarding, we attempt to persist any partial turn (user message +
  * tool calls + assistant text produced so far) as INTERRUPTED so the user does
  * not lose context when switching sessions mid-stream (P2-9).
+ *
+ * If the agent already finalized (persist completed), only dispose — never
+ * mint a duplicate INTERRUPTED chain.
  */
 export function forceAbortChat(windowId: string): void {
   // Multi-cwd safety: cancel all non-terminal subagents so they cannot keep
@@ -169,61 +237,38 @@ export function forceAbortChat(windowId: string): void {
   const existing = activeAgents.get(windowId);
   if (!existing) return;
 
+  // Already finalized (done/error/cancel) — only dispose; do not re-persist.
+  if (existing.finalized) {
+    existing.agentCancelled = true;
+    nextAgentGeneration(windowId);
+    disposeActiveAgent(windowId, existing);
+    return;
+  }
+
   try {
     const snapshot = existing.actor.getSnapshot();
     const context = snapshot?.context as AgentContext | undefined;
-    const partialResponse = context?.response ?? '';
-    const thinking = context?.thinking ?? '';
-    const usage = (context?.usage as Usage | null) ?? null;
-
-    if (thinking && thinking.length > existing.thinkingCommittedLength) {
-      const seg = thinking.slice(existing.thinkingCommittedLength);
-      if (seg.trim()) {
-        existing.turnMessages.push(makeThinkingMessage(seg));
-      }
-      existing.thinkingCommittedLength = thinking.length;
-    }
-
-    const remaining = partialResponse.slice(existing.responseCommittedLength);
-    if (remaining) {
-      existing.turnMessages.push(makeAssistantMessage(remaining, usage));
-      existing.responseCommittedLength = partialResponse.length;
-    } else if (usage && existing.turnMessages.length > 0) {
-      const last = existing.turnMessages[existing.turnMessages.length - 1];
-      if (
-        last &&
-        last.role === MessageRole.ASSISTANT &&
-        last.type === MessageType.TEXT
-      ) {
-        existing.turnMessages[existing.turnMessages.length - 1] = {
-          ...last,
-          usage,
-        };
-      }
-    }
+    flushPartialTurnContent(existing, context);
 
     if (existing.messages.length > 0 || existing.turnMessages.length > 0) {
       const fullHistory = [...existing.messages, ...existing.turnMessages];
       if (fullHistory.length > 0) {
         try {
-          const sessionManager = getSessionManager();
-          sessionManager.syncActiveChain({
-            messages: fullHistory,
-            status: ChainStatus.INTERRUPTED,
-            agentName: existing.agent.name,
-            agentType: existing.agent.type,
-            agentTier: existing.agent.tier,
-          });
+          const wc = webContentsForWindowId(windowId);
+          persistTurnConversation(
+            windowId,
+            fullHistory,
+            turnMessagesFromAgent(existing),
+            ChainStatus.INTERRUPTED,
+            existing.agent,
+            existing.model,
+            wc ?? undefined,
+          );
         } catch (err) {
           console.debug(
             'Failed to persist partial chat on forceAbort (non-fatal):',
             err,
           );
-        }
-        try {
-          setChatHistory(windowId, fullHistory);
-        } catch {
-          // ignore
         }
       }
     }
@@ -326,39 +371,71 @@ function classifyErrorKind(title: string | null | undefined, detail: string): Ch
   return 'generic';
 }
 
-function persistConversation(
+/**
+ * Build turn-local messages for multi-chain storage:
+ * current user message (+ any pre-turn messages after priorMessageCount) +
+ * tool/assistant messages produced during the turn.
+ */
+function turnMessagesFromAgent(agent: ActiveAgent): Message[] {
+  const turnBase = agent.messages.slice(agent.priorMessageCount);
+  return [...turnBase, ...agent.turnMessages];
+}
+
+/**
+ * Persist flat LLM history + turn-local multi-chain write.
+ *
+ * - Window chatHistory keeps the full flattened conversation for the next send.
+ * - Session storage writes only `turnMessages` onto the ACTIVE chain (or
+ *   creates one via persistTurn when startChain was skipped).
+ */
+function persistTurnConversation(
   windowId: string,
-  messages: Message[],
+  fullHistory: Message[],
+  turnMessages: Message[],
   status: ChainStatus,
   agent: Agent,
   model?: string,
+  webContents?: WebContents,
 ): void {
-  setChatHistory(windowId, messages);
+  setChatHistory(windowId, fullHistory);
   try {
     const sessionManager = getSessionManager();
-    sessionManager.syncActiveChain({
-      messages,
+    const updated = sessionManager.persistTurn({
+      messages: turnMessages,
       status,
       model,
       agentName: agent.name,
       agentType: agent.type,
       agentTier: agent.tier,
     });
+    if (updated && webContents && canSend(webContents)) {
+      webContents.send(IPC_CHANNELS.SESSION_UPDATED, { session: updated });
+    }
   } catch (err) {
     console.debug('Failed to persist chat chain (non-fatal):', err);
   }
 }
 
+/** Flatten all session chains — never only the active/last chain. */
 function historyFromActiveSession(): Message[] {
   try {
     const session = getSessionManager().getActive();
     if (!session) return [];
-    const chain =
-      session.chains.find((c) => c.id === session.activeChainId) ??
-      session.chains[session.chains.length - 1];
-    return chain ? [...chain.messages] : [];
+    return flattenSessionMessages(session);
   } catch {
     return [];
+  }
+}
+
+/** Notify renderer of live session (multi-chain) state after startChain. */
+function emitSessionUpdated(webContents: WebContents): void {
+  try {
+    const session = getSessionManager().getActive();
+    if (session && canSend(webContents)) {
+      webContents.send(IPC_CHANNELS.SESSION_UPDATED, { session });
+    }
+  } catch {
+    // non-fatal
   }
 }
 
@@ -570,26 +647,19 @@ export function registerChatIPC(): void {
     // Capture config after ensureActiveSession (layers may have reloaded it).
     const config = await getRuntimeConfig();
 
-    // Prefer live window history; fall back to active session chain on cold start.
-    let existingMessages: Message[] =
-      getChatHistory(windowId) ?? historyFromActiveSession();
-
+    // Prefer live window history; fall back to flattened session chains.
+    // If a prior agent is still streaming, forceAbort persists its partial
+    // turn as INTERRUPTED (turn-local) before we open a new chain — never
+    // dispose without persist (multi-chain orphan user-only INTERRUPTED).
     if (existing) {
-      // Keep prior completed turns only (drop in-progress turn state)
-      existingMessages =
-        getChatHistory(windowId) ??
-        existing.messages.filter(
-          (m) =>
-            m.role === MessageRole.USER ||
-            m.role === MessageRole.ASSISTANT ||
-            m.role === MessageRole.TOOL,
-        );
-      disposeActiveAgent(windowId, existing);
+      forceAbortChat(windowId);
     }
+    const existingMessages: Message[] =
+      getChatHistory(windowId) ?? historyFromActiveSession();
 
     // Build message history: existing messages + new user message
     const userMessage = makeUserMessage(message);
-
+    const priorMessageCount = existingMessages.length;
     const messages = [...existingMessages, userMessage];
 
     // Get or create agent (default to "general" agent)
@@ -606,13 +676,30 @@ export function registerChatIPC(): void {
 
     // Freeze turn tool/prompt context + model at send time (R6): mid-turn
     // session switch must not rebind tools, model, or working_directory.
-    const activeSession = getSessionManager().getActive();
+    const sessionManager = getSessionManager();
+    const activeSession = sessionManager.getActive();
     const turnCtx: ToolExecutionContext = {
       cwd: sessionGate.cwd,
       sessionId: activeSession?.id,
       agentScopeId: 'main',
     };
-    const turnModel = activeSession?.model ?? null;
+    const turnModel = activeSession?.model ?? config.default_model ?? null;
+    const turnModelId = turnModel ?? config.default_model ?? '';
+
+    // Multi-chain: open a new ACTIVE chain for this user turn (Python `_start_chain`).
+    // Subagent parent_chain_index attributes to this chain while it is active.
+    try {
+      sessionManager.startChain({
+        model: turnModelId,
+        agentName: agent.name,
+        agentType: agent.type,
+        agentTier: agent.tier,
+        messages: [userMessage],
+      });
+      emitSessionUpdated(webContents);
+    } catch (err) {
+      console.debug('startChain failed (non-fatal):', err);
+    }
 
     // Create the agent actor with message history.
     // Append the configured personality (from ~/.orchid/personalities/) like Python.
@@ -647,12 +734,14 @@ export function registerChatIPC(): void {
       interruptActor,
       abortController,
       messages,
+      priorMessageCount,
       turnMessages: [],
       // How much of context.response has already been snapshotted into turnMessages
       // as intermediate assistant text (so tools can interleave: text → tool → text).
       responseCommittedLength: 0,
       thinkingCommittedLength: 0,
       agent,
+      model: turnModelId,
       agentCancelled: false,
       finalized: false,
       generation,
@@ -720,12 +809,14 @@ export function registerChatIPC(): void {
 
       const turnExtras = [...activeAgent.turnMessages];
       const fullHistory = [...messages, ...turnExtras];
-      persistConversation(
+      persistTurnConversation(
         windowId,
         fullHistory,
+        turnMessagesFromAgent(activeAgent),
         opts.interrupted ? ChainStatus.INTERRUPTED : ChainStatus.COMPLETED,
         agent,
-        config.default_model,
+        activeAgent.model || config.default_model,
+        webContents,
       );
       activeAgent.messages = fullHistory;
 
@@ -1008,12 +1099,18 @@ export function registerChatIPC(): void {
             kind: classifyErrorKind(title, detail),
           });
         }
-        // Persist conversation so far (user + tools) without a partial assistant if empty
+        // Persist turn so far: only uncommitted assistant text (same as cancel/finalize).
+        flushPartialTurnContent(activeAgent, context);
         const fullHistory = [...messages, ...activeAgent.turnMessages];
-        if (context.response) {
-          fullHistory.push(makeAssistantMessage(context.response, context.usage ?? null));
-        }
-        persistConversation(windowId, fullHistory, ChainStatus.COMPLETED, agent, config.default_model);
+        persistTurnConversation(
+          windowId,
+          fullHistory,
+          turnMessagesFromAgent(activeAgent),
+          ChainStatus.FAILED,
+          agent,
+          activeAgent.model || config.default_model,
+          webContents,
+        );
         queueMicrotask(() => {
           disposeActiveAgent(windowId, activeAgent);
         });
@@ -1100,11 +1197,14 @@ export function registerChatIPC(): void {
         }
         // existing.messages already includes the user message for this turn
         const fullHistory = [...existing.messages, ...existing.turnMessages];
-        persistConversation(
+        persistTurnConversation(
           windowId,
           fullHistory,
+          turnMessagesFromAgent(existing),
           ChainStatus.INTERRUPTED,
           existing.agent,
+          existing.model,
+          webContents,
         );
 
         if (canSend(webContents)) {

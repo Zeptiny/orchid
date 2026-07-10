@@ -49,26 +49,75 @@ const mocks = vi.hoisted(() => {
       activeSession = { ...activeSession, cwd };
       return activeSession;
     }),
-    syncActiveChain: vi.fn((params: { messages: unknown[] }) => {
+    startChain: vi.fn((params?: { messages?: unknown[] }) => {
       if (!activeSession) return null;
+      const chain = {
+        id: `chain-${activeSession.chains.length + 1}`,
+        sessionId: activeSession.id,
+        messages: params?.messages ?? [],
+        status: 'active',
+        model: activeSession.model,
+        agentName: 'general',
+        agentType: 'subagent',
+        agentTier: 'bloom',
+        subagentRecord: null,
+        startTime: new Date().toISOString(),
+        endTime: null,
+      };
       activeSession = {
         ...activeSession,
-        chains: [
-          {
-            id: 'chain-1',
-            sessionId: activeSession.id,
-            messages: params.messages,
-            status: 'completed',
-            model: activeSession.model,
-            agentName: 'general',
-            agentType: 'subagent',
-            agentTier: 'bloom',
-            subagentRecord: null,
-          },
-        ],
-        activeChainId: 'chain-1',
+        chains: [...activeSession.chains, chain],
+        activeChainId: chain.id,
       };
+      return chain;
+    }),
+    persistTurn: vi.fn((params: { messages: unknown[]; status?: string }) => {
+      if (!activeSession) return null;
+      const status = params.status ?? 'completed';
+      const activeId = activeSession.activeChainId;
+      const idx = activeId
+        ? activeSession.chains.findIndex((c: { id: string }) => c.id === activeId)
+        : -1;
+      if (idx >= 0) {
+        const chains = activeSession.chains.map((c: { id: string }, i: number) =>
+          i === idx
+            ? {
+                ...c,
+                messages: params.messages,
+                status,
+                endTime: new Date().toISOString(),
+              }
+            : c,
+        );
+        activeSession = {
+          ...activeSession,
+          chains,
+          activeChainId: null,
+        };
+      } else {
+        const chain = {
+          id: `chain-${activeSession.chains.length + 1}`,
+          sessionId: activeSession.id,
+          messages: params.messages,
+          status,
+          model: activeSession.model,
+          agentName: 'general',
+          agentType: 'subagent',
+          agentTier: 'bloom',
+          subagentRecord: null,
+          startTime: new Date().toISOString(),
+          endTime: new Date().toISOString(),
+        };
+        activeSession = {
+          ...activeSession,
+          chains: [...activeSession.chains, chain],
+          activeChainId: null,
+        };
+      }
       return activeSession;
+    }),
+    syncActiveChain: vi.fn((params: { messages: unknown[]; status?: string }) => {
+      return sessionManager.persistTurn(params);
     }),
     autoNameActive: vi.fn(async () => activeSession),
     /** Test helper: reset between cases */
@@ -79,6 +128,8 @@ const mocks = vi.hoisted(() => {
       sessionManager.create.mockClear();
       sessionManager.changeCwd.mockClear();
       sessionManager.clearActive.mockClear();
+      sessionManager.startChain.mockClear();
+      sessionManager.persistTurn.mockClear();
       sessionManager.syncActiveChain.mockClear();
       sessionManager.autoNameActive.mockClear();
     },
@@ -162,6 +213,9 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('electron', () => ({
   ipcMain: mocks.ipcMain,
+  webContents: {
+    fromId: vi.fn(() => null),
+  },
 }));
 
 vi.mock('../../src/main/config/loader', () => ({
@@ -758,5 +812,108 @@ describe('chat IPC', () => {
 
     const responses = doneEvents(send).map(([, p]) => (p as { response: string }).response);
     expect(responses).toEqual(['NEW-TURN']);
+  });
+
+  it('multi-chain: startChain + persistTurn turn-local + SESSION_UPDATED on each send', async () => {
+    mocks.streamResponses.push('Answer one', 'Answer two');
+    mocks.sessionManager._setActive({
+      id: 'multi-chain-session',
+      name: 'Multi',
+      model: 'test/model',
+      cwd: mocks.workspace._testProjectDir,
+      chains: [],
+      activeChainId: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      subagentChains: [],
+      todoStore: { tasks: [] },
+    });
+
+    const send = vi.fn();
+    const webContents = { id: 201, send };
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+
+    await chatSend!({ sender: webContents }, { message: 'Q1' });
+    await waitForDoneCount(send, 1);
+
+    expect(mocks.sessionManager.startChain).toHaveBeenCalled();
+    const start1 = mocks.sessionManager.startChain.mock.calls[0]?.[0] as {
+      messages?: Array<{ content: string }>;
+    };
+    expect(start1?.messages?.[0]?.content).toBe('Q1');
+
+    expect(mocks.sessionManager.persistTurn).toHaveBeenCalled();
+    const persist1 = mocks.sessionManager.persistTurn.mock.calls[0]?.[0] as {
+      messages: Array<{ content: string; role?: string }>;
+      status?: string;
+    };
+    // Turn-local: user + assistant only for this turn (not full cumulative history blob alone)
+    expect(persist1.messages.some((m) => m.content === 'Q1')).toBe(true);
+    expect(persist1.status).toBe('completed');
+
+    const updated = channelEvents(send, IPC_CHANNELS.SESSION_UPDATED);
+    expect(updated.length).toBeGreaterThanOrEqual(1);
+
+    await chatSend!({ sender: webContents }, { message: 'Q2' });
+    await waitForDoneCount(send, 2);
+
+    expect(mocks.sessionManager.startChain.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const start2 = mocks.sessionManager.startChain.mock.calls.at(-1)?.[0] as {
+      messages?: Array<{ content: string }>;
+    };
+    expect(start2?.messages?.[0]?.content).toBe('Q2');
+
+    const lastPersist = mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0] as {
+      messages: Array<{ content: string }>;
+    };
+    // Second turn must not rewrite first-turn-only messages into one mega-chain call
+    expect(lastPersist.messages.some((m) => m.content === 'Q2')).toBe(true);
+    expect(lastPersist.messages.every((m) => m.content !== 'Q1')).toBe(true);
+  });
+
+  it('multi-chain: stream error persists FAILED via persistTurn', async () => {
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'partial' };
+      yield {
+        type: 'error',
+        title: 'Stream Error',
+        detail: 'boom',
+      };
+    });
+    mocks.sessionManager._setActive({
+      id: 'fail-session',
+      name: 'Fail',
+      model: 'test/model',
+      cwd: mocks.workspace._testProjectDir,
+      chains: [],
+      activeChainId: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      subagentChains: [],
+      todoStore: { tasks: [] },
+    });
+
+    const send = vi.fn();
+    const webContents = { id: 202, send };
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+
+    await chatSend!({ sender: webContents }, { message: 'Will fail' });
+
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline) {
+      if (mocks.sessionManager.persistTurn.mock.calls.some(
+        (c) => (c[0] as { status?: string }).status === 'failed',
+      )) {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 5));
+    }
+
+    const failed = mocks.sessionManager.persistTurn.mock.calls.find(
+      (c) => (c[0] as { status?: string }).status === 'failed',
+    );
+    expect(failed).toBeDefined();
+    const payload = failed![0] as { messages: Array<{ content: string }> };
+    expect(payload.messages.some((m) => m.content === 'Will fail')).toBe(true);
   });
 });

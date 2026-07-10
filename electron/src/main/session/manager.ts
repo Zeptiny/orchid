@@ -321,12 +321,160 @@ export class SessionManager {
   }
 
   /**
-   * Replace (or create) the active chain message list and persist.
-   *
-   * Used by chat IPC after each completed or interrupted turn so session
-   * reload can replay user/assistant/tool messages.
+   * Resolve the chain currently open for writes.
+   * Prefer activeChainId when it points at an ACTIVE chain; else first ACTIVE.
    */
-  syncActiveChain(params: {
+  private findActiveChain(): Chain | null {
+    if (!this._active) return null;
+    const activeId = this._active.activeChainId;
+    if (activeId) {
+      const byId = this._active.chains.find(
+        (c) => c.id === activeId && c.status === ChainStatus.ACTIVE,
+      );
+      if (byId) return byId;
+    }
+    return (
+      this._active.chains.find((c) => c.status === ChainStatus.ACTIVE) ?? null
+    );
+  }
+
+  /**
+   * Start a new chain for the next user turn (Python `_start_chain`).
+   *
+   * Append-only: previous ACTIVE chain (if any) is frozen as INTERRUPTED so
+   * multi-chain never rewrites older turns. Sets `activeChainId` to the new
+   * chain so subagent spawn can attribute `parent_chain_index`.
+   */
+  startChain(params?: {
+    model?: string;
+    agentName?: string;
+    agentType?: string;
+    agentTier?: string;
+    messages?: readonly Message[];
+  }): Chain | null {
+    if (!this._active) {
+      return null;
+    }
+
+    const now = new Date().toISOString();
+    // Freeze any leftover ACTIVE chain before opening a new one.
+    let chains = this._active.chains.map((c) => {
+      if (c.status !== ChainStatus.ACTIVE) return c;
+      return {
+        ...c,
+        status: ChainStatus.INTERRUPTED,
+        endTime: c.endTime ?? now,
+      };
+    });
+
+    const chain: Chain = {
+      id: randomUUID(),
+      sessionId: this._active.id,
+      messages: params?.messages ? [...params.messages] : [],
+      status: ChainStatus.ACTIVE,
+      model: params?.model ?? this._active.model,
+      agentName: params?.agentName ?? 'general',
+      agentType: params?.agentType ?? 'subagent',
+      agentTier: params?.agentTier ?? 'bloom',
+      subagentRecord: null,
+      startTime: now,
+      endTime: null,
+    };
+    chains = [...chains, chain];
+
+    this._active = {
+      ...this._active,
+      chains,
+      activeChainId: chain.id,
+      todoStore: this._activeTodoStore.toData(),
+      updatedAt: now,
+    };
+    storageSaveSession(this._active, this._storageOpts);
+    return chain;
+  }
+
+  /**
+   * Replace messages on the current ACTIVE chain only (turn-local write).
+   * Does not create chains and does not finish the chain.
+   */
+  updateActiveChainMessages(messages: readonly Message[]): Session | null {
+    if (!this._active) {
+      return null;
+    }
+
+    const existing = this.findActiveChain();
+    if (!existing) {
+      return null;
+    }
+
+    const now = new Date().toISOString();
+    const chain: Chain = {
+      ...existing,
+      messages: [...messages],
+    };
+    const chains = this._active.chains.map((c) =>
+      c.id === chain.id ? chain : c,
+    );
+
+    this._active = {
+      ...this._active,
+      chains,
+      activeChainId: chain.id,
+      todoStore: this._activeTodoStore.toData(),
+      updatedAt: now,
+    };
+    storageSaveSession(this._active, this._storageOpts);
+    return this._active;
+  }
+
+  /**
+   * Freeze the active chain with a terminal status (Python `_freeze_chain`).
+   * Clears `activeChainId` so the next turn must call `startChain`.
+   */
+  finishActiveChain(
+    status: ChainStatus = ChainStatus.COMPLETED,
+  ): Session | null {
+    if (!this._active) {
+      return null;
+    }
+
+    const terminal =
+      status === ChainStatus.ACTIVE ? ChainStatus.COMPLETED : status;
+    const existing = this.findActiveChain();
+
+    if (!existing) {
+      return this._active;
+    }
+
+    const now = new Date().toISOString();
+    const chain: Chain = {
+      ...existing,
+      status: terminal,
+      endTime: now,
+    };
+    const chains = this._active.chains.map((c) =>
+      c.id === chain.id ? chain : c,
+    );
+
+    this._active = {
+      ...this._active,
+      chains,
+      activeChainId: null,
+      todoStore: this._activeTodoStore.toData(),
+      updatedAt: now,
+    };
+    storageSaveSession(this._active, this._storageOpts);
+    return this._active;
+  }
+
+  /**
+   * Persist a completed/interrupted turn onto the active multi-chain session.
+   *
+   * Prefer `startChain` at send-time + this at finalize. If no ACTIVE chain
+   * exists (legacy / force-abort edge), creates and freezes one chain for the
+   * turn messages only — never rewrites prior chains with full history.
+   */
+  persistTurn(params: {
     messages: readonly Message[];
     status?: ChainStatus;
     model?: string;
@@ -338,48 +486,62 @@ export class SessionManager {
       return null;
     }
 
-    const now = new Date().toISOString();
     const status = params.status ?? ChainStatus.COMPLETED;
-    const existing =
-      this._active.chains.find((c) => c.id === this._active!.activeChainId) ??
-      this._active.chains[this._active.chains.length - 1] ??
-      null;
+    const active = this.findActiveChain();
 
-    const chain: Chain = existing
-      ? {
-          ...existing,
-          messages: [...params.messages],
-          status,
-          model: params.model ?? existing.model ?? this._active.model,
-          agentName: params.agentName ?? existing.agentName,
-          agentType: params.agentType ?? existing.agentType,
-          agentTier: params.agentTier ?? existing.agentTier,
-        }
-      : {
-          id: randomUUID(),
-          sessionId: this._active.id,
-          messages: [...params.messages],
-          status,
-          model: params.model ?? this._active.model,
-          agentName: params.agentName ?? 'general',
-          agentType: params.agentType ?? 'subagent',
-          agentTier: params.agentTier ?? 'bloom',
-          subagentRecord: null,
+    if (!active) {
+      this.startChain({
+        model: params.model,
+        agentName: params.agentName,
+        agentType: params.agentType,
+        agentTier: params.agentTier,
+        messages: params.messages,
+      });
+    } else {
+      if (params.model || params.agentName || params.agentType || params.agentTier) {
+        const activeId = active.id;
+        const now = new Date().toISOString();
+        this._active = {
+          ...this._active,
+          chains: this._active.chains.map((c) =>
+            c.id === activeId
+              ? {
+                  ...c,
+                  model: params.model ?? c.model,
+                  agentName: params.agentName ?? c.agentName,
+                  agentType: params.agentType ?? c.agentType,
+                  agentTier: params.agentTier ?? c.agentTier,
+                }
+              : c,
+          ),
+          updatedAt: now,
         };
+      }
+      this.updateActiveChainMessages(params.messages);
+    }
 
-    const chains = existing
-      ? this._active.chains.map((c) => (c.id === chain.id ? chain : c))
-      : [...this._active.chains, chain];
+    if (status === ChainStatus.ACTIVE) {
+      return this._active;
+    }
+    return this.finishActiveChain(status);
+  }
 
-    this._active = {
-      ...this._active,
-      chains,
-      activeChainId: chain.id,
-      todoStore: this._activeTodoStore.toData(),
-      updatedAt: now,
-    };
-    storageSaveSession(this._active, this._storageOpts);
-    return this._active;
+  /**
+   * @deprecated Prefer startChain / updateActiveChainMessages / finishActiveChain
+   * or persistTurn. Kept as a thin multi-chain-aware wrapper for older callers.
+   *
+   * Writes **turn-local** messages onto the active chain (or creates one).
+   * Never replaces prior chains with a cumulative full-history blob.
+   */
+  syncActiveChain(params: {
+    messages: readonly Message[];
+    status?: ChainStatus;
+    model?: string;
+    agentName?: string;
+    agentType?: string;
+    agentTier?: string;
+  }): Session | null {
+    return this.persistTurn(params);
   }
 
   /**

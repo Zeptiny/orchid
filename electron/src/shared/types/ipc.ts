@@ -218,6 +218,12 @@ export interface SessionCreatedEvent {
   session: Session;
 }
 
+/**
+ * Fired when the active session's multi-chain state changes (start/finish turn).
+ * Same payload shape as SessionCreatedEvent so the renderer can refresh chains.
+ */
+export type SessionUpdatedEvent = SessionCreatedEvent;
+
 export interface SessionChangeModelMessage {
   id: string;
   model: string;
@@ -370,6 +376,8 @@ export interface OrchidAPI {
     onRenamed: (callback: (event: SessionRenamedEvent) => void) => () => void;
     /** Session auto-created on first message from draft mode. */
     onCreated: (callback: (event: SessionCreatedEvent) => void) => () => void;
+    /** Active session chains/todos mutated mid-chat (multi-chain turn lifecycle). */
+    onUpdated: (callback: (event: SessionUpdatedEvent) => void) => () => void;
     /** Workspace draft/session/default changed. */
     onWorkspaceChanged: (callback: (event: SessionWorkspaceChangedEvent) => void) => () => void;
     /** Subagent chains persisted — refresh sidebar / chain-footer usage. */
@@ -482,6 +490,8 @@ export const IPC_CHANNELS = {
   SESSION_RENAMED: 'session:renamed',
   /** Fired when a session is created (eager create or first-message lazy create). */
   SESSION_CREATED: 'session:created',
+  /** Fired when multi-chain state is updated (start/persist/finish turn). */
+  SESSION_UPDATED: 'session:updated',
   SESSION_CHANGE_MODEL: 'session:change_model',
   /** Resolve current workspace (draft / session / sticky / unbound). */
   SESSION_GET_WORKSPACE: 'session:get_workspace',
@@ -609,6 +619,7 @@ export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
   IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
   IPC_CHANNELS.SESSION_RENAMED,
   IPC_CHANNELS.SESSION_CREATED,
+  IPC_CHANNELS.SESSION_UPDATED,
   IPC_CHANNELS.SESSION_WORKSPACE_CHANGED,
   IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED,
   IPC_CHANNELS.SESSION_TODOS_CHANGED,

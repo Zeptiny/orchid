@@ -241,7 +241,7 @@ export class SubagentManager {
     record.state = SubagentState.FAILED;
     record.error = error;
     record.endTime = Date.now();
-    this._finalizeChain(record, ChainStatus.INTERRUPTED);
+    this._finalizeChain(record, ChainStatus.FAILED);
     this._resolveWaiters(record);
     this._notify();
   }
@@ -569,12 +569,16 @@ export class SubagentManager {
     if (!record.chain) {
       record.chain = makeEmptyChain(record.id, record.model ?? '', record.agent);
     }
+    const terminal =
+      status === ChainStatus.INTERRUPTED
+        ? ChainStatus.INTERRUPTED
+        : status === ChainStatus.FAILED
+          ? ChainStatus.FAILED
+          : ChainStatus.COMPLETED;
     record.chain = {
       ...record.chain,
-      status:
-        status === ChainStatus.INTERRUPTED
-          ? ChainStatus.INTERRUPTED
-          : ChainStatus.COMPLETED,
+      status: terminal,
+      endTime: new Date().toISOString(),
     };
   }
 
@@ -642,6 +646,8 @@ function makeEmptyChain(sessionKey: string, model: string, agent: Agent): Chain 
     agentType: agent.type,
     agentTier: agent.tier,
     subagentRecord: null,
+    startTime: new Date().toISOString(),
+    endTime: null,
   };
 }
 

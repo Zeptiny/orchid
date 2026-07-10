@@ -47,6 +47,11 @@ export {
 // Chain types
 export {
   ChainStatus,
+  TERMINAL_CHAIN_STATUSES,
+  isTerminalChainStatus,
+  isLegacyMegaChain,
+  chainElapsedSeconds,
+  sumChainUsage,
   type Chain,
   type ChainStorageDict,
   chainStatusSchema,

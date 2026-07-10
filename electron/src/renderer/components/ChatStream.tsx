@@ -5,11 +5,19 @@
  * tools-then-assistant layout. A single turn may interleave freely:
  *   user → tool → message → tool → tool → message → …
  *
- * Chain footers still appear once per completed user turn.
- * Live stream segments (while streaming) continue that same order.
+ * Multi-chain: one footer per session chain (model · usage · elapsed).
+ * Legacy mega-chains (single chain, many user turns) keep per-user footers.
+ * Live stream segments (while streaming) continue after committed history.
  */
 import { useRef, useEffect, useCallback, useState, useMemo, type ReactNode } from 'react';
 import type { Chain } from '../../shared/types/chain';
+import {
+  ChainStatus,
+  chainElapsedSeconds,
+  isLegacyMegaChain,
+  isTerminalChainStatus,
+  sumChainUsage,
+} from '../../shared/types/chain';
 import type { Message, Usage } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import type { SubagentRecord } from '../../shared/types/subagent';
@@ -17,10 +25,12 @@ import { sumSubagentsUsage, subUsageByParentChain } from '../../shared/usage';
 import type { ChatStatus, StreamSegment, ToolBlock } from '../hooks/useChat';
 import {
   foldActivityRuns,
+  isActiveToolStatus,
   isGroupableTool,
 } from '../utils/tool-grouping';
 import { MessageWidget } from './MessageWidget';
 import { ChainFooter } from './ChainFooter';
+import { CollapsedChainStub } from './CollapsedChainStub';
 import { ErrorBanner } from './ErrorBanner';
 import { ToolCallBlock } from './ToolCallBlock';
 import {
@@ -29,6 +39,9 @@ import {
 } from './ToolActivityGroup';
 import { Icon } from './Icon';
 import orchidIcon from '../assets/orchid-icon.svg';
+
+/** Maximum fully-mounted chains; older ones collapse to stubs (Python parity). */
+export const CHAIN_COLLAPSE_THRESHOLD = 20;
 
 interface ChatStreamProps {
   messages: Message[];
@@ -46,6 +59,8 @@ interface ChatStreamProps {
   subagents?: readonly SubagentRecord[];
   /** Session chains (same order as storage) for parent_chain_index attribution. */
   sessionChains?: readonly Chain[];
+  /** Active session id — used to reset collapse expansion only on session switch. */
+  sessionId?: string | null;
   onClearError: () => void;
   onOpenSettings?: () => void;
   /** When true, empty state prompts for a project folder (R3). */
@@ -71,8 +86,16 @@ type StreamItem =
       key: string;
       usage: Usage | null;
       subUsage: Usage | null;
+      model?: string | null;
       elapsedSeconds?: number;
       interrupted?: boolean;
+      failed?: boolean;
+    }
+  | {
+      kind: 'collapsed-stub';
+      key: string;
+      chain: Chain;
+      chainIndex: number;
     };
 
 export const AUTO_SCROLL_THRESHOLD_PX = 100;
@@ -111,6 +134,7 @@ export function ChatStream({
   usage,
   subagents = [],
   sessionChains = [],
+  sessionId = null,
   elapsedSeconds,
   interrupted,
   alwaysExpandToolGroups = false,
@@ -118,6 +142,19 @@ export function ChatStream({
   const containerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
+  /** Chain indexes the user expanded from a collapsed stub. */
+  const [expandedChainIndexes, setExpandedChainIndexes] = useState<Set<number>>(
+    () => new Set(),
+  );
+
+  const expandChain = useCallback((chainIndex: number) => {
+    setExpandedChainIndexes((prev) => {
+      if (prev.has(chainIndex)) return prev;
+      const next = new Set(prev);
+      next.add(chainIndex);
+      return next;
+    });
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     if (shouldAutoScroll(isUserScrolledUp)) {
@@ -151,6 +188,11 @@ export function ChatStream({
     }
   }, [status]);
 
+  // Reset expanded stubs only when the session is replaced (not every new turn).
+  useEffect(() => {
+    setExpandedChainIndexes(new Set());
+  }, [sessionId]);
+
   // Committed history is independent of per-token stream text. Keep it stable
   // so long sessions do not rebuild O(n) lists on every chunk.
   const history = useMemo(
@@ -164,6 +206,7 @@ export function ChatStream({
         sessionChains,
         elapsedSeconds,
         interrupted: Boolean(interrupted),
+        expandedChainIndexes,
       }),
     [
       messages,
@@ -174,6 +217,7 @@ export function ChatStream({
       sessionChains,
       elapsedSeconds,
       interrupted,
+      expandedChainIndexes,
     ],
   );
 
@@ -259,10 +303,10 @@ export function ChatStream({
       )}
 
       {historyItems.map((item) =>
-        renderStreamItem(item, alwaysExpandToolGroups),
+        renderStreamItem(item, alwaysExpandToolGroups, expandChain),
       )}
       {liveGroupedItems.map((item) =>
-        renderStreamItem(item, alwaysExpandToolGroups),
+        renderStreamItem(item, alwaysExpandToolGroups, expandChain),
       )}
 
       <div ref={messagesEndRef} />
@@ -273,6 +317,7 @@ export function ChatStream({
 function renderStreamItem(
   item: StreamItem,
   alwaysExpandToolGroups: boolean,
+  onExpandChain: (chainIndex: number) => void,
 ): ReactNode {
   if (item.kind === 'tool') {
     return <ToolCallBlock key={item.key} block={item.block} />;
@@ -286,14 +331,26 @@ function renderStreamItem(
       />
     );
   }
+  if (item.kind === 'collapsed-stub') {
+    return (
+      <CollapsedChainStub
+        key={item.key}
+        chain={item.chain}
+        chainIndex={item.chainIndex}
+        onExpand={onExpandChain}
+      />
+    );
+  }
   if (item.kind === 'footer') {
     return (
       <ChainFooter
         key={item.key}
         usage={item.usage}
         subUsage={item.subUsage}
+        model={item.model}
         elapsedSeconds={item.elapsedSeconds}
         interrupted={item.interrupted}
+        failed={item.failed}
       />
     );
   }
@@ -316,11 +373,7 @@ function foldStreamActivityGroups(items: readonly StreamItem[]): StreamItem[] {
     classify: (item) => {
       if (item.kind === 'tool' && isGroupableTool(item.block.toolName)) {
         // generating / running / pending → always visible as own row
-        if (
-          item.block.status === 'generating' ||
-          item.block.status === 'running' ||
-          item.block.status === 'pending'
-        ) {
+        if (isActiveToolStatus(item.block.status)) {
           return 'active';
         }
         // completed | failed
@@ -386,6 +439,289 @@ function buildHistoryStreamItems(opts: {
   sessionChains: readonly Chain[];
   elapsedSeconds?: number;
   interrupted: boolean;
+  expandedChainIndexes: ReadonlySet<number>;
+}): HistoryBuildResult {
+  const { sessionChains } = opts;
+  // True multi-chain sessions: one storage chain per user turn.
+  // Legacy mega-chains keep the old per-user-turn footer heuristics.
+  if (
+    sessionChains.length > 0 &&
+    !isLegacyMegaChain(sessionChains)
+  ) {
+    return buildMultiChainHistoryStreamItems(opts);
+  }
+  return buildLegacyPerUserTurnHistory(opts);
+}
+
+/**
+ * Multi-chain layout: walk each session chain, collapse old ones, one footer
+ * per finished chain with model + cumulative usage + sub attribution.
+ */
+function buildMultiChainHistoryStreamItems(opts: {
+  messages: Message[];
+  toolBlocks: ToolBlock[];
+  status: ChatStatus;
+  liveUsage: Usage | null;
+  subagents: readonly SubagentRecord[];
+  sessionChains: readonly Chain[];
+  elapsedSeconds?: number;
+  interrupted: boolean;
+  expandedChainIndexes: ReadonlySet<number>;
+}): HistoryBuildResult {
+  const {
+    messages,
+    toolBlocks,
+    status,
+    liveUsage,
+    subagents,
+    sessionChains,
+    elapsedSeconds,
+    interrupted,
+    expandedChainIndexes,
+  } = opts;
+
+  const subByParent = subUsageByParentChain(subagents);
+  const subTotal = sumSubagentsUsage(subagents);
+  const liveStreaming = status === 'streaming';
+  const collapseCount = Math.max(
+    0,
+    sessionChains.length - CHAIN_COLLAPSE_THRESHOLD,
+  );
+
+  const items: StreamItem[] = [];
+  const emittedToolIds = new Set<string>();
+  const liveById = new Map(toolBlocks.map((b) => [b.id, b]));
+
+  // Slice flat messages into per-chain ranges. Terminal chains use stored
+  // lengths; the last ACTIVE (or sole live) chain consumes the remainder so
+  // in-flight tool/assistant messages appear before finalize.
+  for (let chainIndex = 0; chainIndex < sessionChains.length; chainIndex++) {
+    const chain = sessionChains[chainIndex];
+    const isLastChain = chainIndex === sessionChains.length - 1;
+    const isActive =
+      chain.status === ChainStatus.ACTIVE ||
+      (isLastChain && liveStreaming);
+    const terminal =
+      isTerminalChainStatus(chain.status) ||
+      (isLastChain && (interrupted || status === 'error'));
+
+    if (
+      chainIndex < collapseCount &&
+      !expandedChainIndexes.has(chainIndex) &&
+      !isActive
+    ) {
+      items.push({
+        kind: 'collapsed-stub',
+        key: `stub-${chain.id || chainIndex}`,
+        chain,
+        chainIndex,
+      });
+      continue;
+    }
+
+    // Authoritative storage for each chain body — avoids flat-messages length
+    // desync after FAILED/INTERRUPTED when the renderer lags or only partially commits.
+    // Live tools/text for the active turn still render via buildLiveTailItems.
+    const chainItems = walkMessagesToItems(chain.messages, {
+      toolBlocks,
+      liveById,
+      emittedToolIds,
+      keyPrefix: `c${chainIndex}`,
+    });
+    items.push(...chainItems.items);
+
+    // Footer for finished chains; omit while the active chain is still streaming.
+    if (isActive && liveStreaming) {
+      continue;
+    }
+
+    const chainUsage = sumChainUsage(chain);
+    const turnUsage =
+      isLastChain && (status === 'idle' || status === 'error' || interrupted)
+        ? liveUsage ?? chainUsage
+        : chainUsage;
+
+    let subUsage: Usage | null = subByParent.get(chainIndex) ?? null;
+    if (isLastChain && !subUsage) {
+      subUsage = subByParent.get(-1) ?? (subByParent.size === 0 ? subTotal : null);
+    }
+
+    const elapsed =
+      isLastChain && liveStreaming
+        ? elapsedSeconds
+        : chain.startTime
+          ? chainElapsedSeconds(chain)
+          : isLastChain
+            ? elapsedSeconds
+            : undefined;
+
+    const hasBody = chainItems.items.some(
+      (it) =>
+        it.kind === 'tool' ||
+        it.kind === 'tool-group' ||
+        (it.kind === 'message' && it.message.role !== MessageRole.USER),
+    );
+    const hasUser = chain.messages.some(
+      (m) => m.role === MessageRole.USER && m.type === MessageType.TEXT,
+    );
+    // Terminal chains always get a footer (Interrupted/Failed badges) even if
+    // the turn was user-only (cancel/error before any model output).
+    if (terminal || hasBody || hasUser) {
+      items.push({
+        kind: 'footer',
+        key: `footer-chain-${chain.id || chainIndex}`,
+        usage: turnUsage,
+        subUsage,
+        model: chain.model || null,
+        elapsedSeconds: elapsed,
+        interrupted:
+          chain.status === ChainStatus.INTERRUPTED ||
+          (isLastChain && interrupted),
+        failed: chain.status === ChainStatus.FAILED,
+      });
+    }
+  }
+
+  // Idle leftover live tool blocks not already emitted.
+  if (!liveStreaming && toolBlocks.length > 0) {
+    for (const block of toolBlocks) {
+      if (!emittedToolIds.has(block.id)) {
+        emittedToolIds.add(block.id);
+        items.push({
+          kind: 'tool',
+          key: block.id || `live-${emittedToolIds.size}`,
+          block,
+        });
+      }
+    }
+  }
+
+  return { items, emittedToolIds };
+}
+
+/** Walk a message slice into stream items (multi-chain + shared helpers). */
+function walkMessagesToItems(
+  visibleSource: readonly Message[],
+  opts: {
+    toolBlocks: ToolBlock[];
+    liveById: Map<string, ToolBlock>;
+    emittedToolIds: Set<string>;
+    keyPrefix: string;
+  },
+): { items: StreamItem[]; lastAssistantUsage: Usage | null } {
+  const { liveById, emittedToolIds, keyPrefix } = opts;
+  const visible = visibleSource.filter((m) => !m.hidden);
+  const resultByCallId = new Map<string, Message>();
+  for (const m of visible) {
+    if (m.type === MessageType.TOOL_RESULT && m.tool_call_id) {
+      resultByCallId.set(m.tool_call_id, m);
+    }
+  }
+
+  const items: StreamItem[] = [];
+  const consumedResults = new Set<string>();
+  let lastAssistantUsage: Usage | null = null;
+  let msgIdx = 0;
+
+  const keyFor = (msg: Message, kind: string, idx: number) =>
+    msg.id && msg.id.length > 0 ? msg.id : `${keyPrefix}-${kind}-${idx}`;
+
+  const pushTool = (block: ToolBlock) => {
+    if (emittedToolIds.has(block.id)) return;
+    emittedToolIds.add(block.id);
+    items.push({
+      kind: 'tool',
+      key: block.id || `${keyPrefix}-tool-${emittedToolIds.size}`,
+      block,
+    });
+  };
+
+  const pushMessage = (msg: Message, kind: string, idx: number) => {
+    if (msg.role === MessageRole.ASSISTANT && msg.type === MessageType.TEXT && msg.usage) {
+      lastAssistantUsage = msg.usage;
+    }
+    items.push({
+      kind: 'message',
+      key: keyFor(msg, kind, idx),
+      message: msg,
+    });
+  };
+
+  for (const m of visible) {
+    if (m.role === MessageRole.USER && m.type === MessageType.TEXT) {
+      items.push({
+        kind: 'message',
+        key: keyFor(m, 'user', msgIdx++),
+        message: m,
+      });
+      continue;
+    }
+
+    if (m.type === MessageType.THINKING) {
+      pushMessage(m, 'thought', msgIdx++);
+      continue;
+    }
+
+    if (m.type === MessageType.TOOL_CALL) {
+      const callId = m.tool_call_id ?? m.tool_calls?.[0]?.id ?? m.id;
+      const result = resultByCallId.get(callId);
+      if (result) consumedResults.add(callId);
+      const live = liveById.get(callId);
+      pushTool(live ?? messagePairToToolBlock(m, result ?? null));
+      msgIdx += 1;
+      continue;
+    }
+
+    if (m.type === MessageType.TOOL_RESULT) {
+      const callId = m.tool_call_id ?? m.id;
+      if (consumedResults.has(callId)) {
+        msgIdx += 1;
+        continue;
+      }
+      const live = liveById.get(callId);
+      pushTool(live ?? resultOnlyToToolBlock(m));
+      msgIdx += 1;
+      continue;
+    }
+
+    if (m.role === MessageRole.ASSISTANT && m.type === MessageType.TEXT) {
+      if (!m.content?.trim()) {
+        msgIdx += 1;
+        continue;
+      }
+      pushMessage(m, 'asst', msgIdx++);
+      continue;
+    }
+
+    if (m.type === MessageType.ERROR || m.role === MessageRole.SYSTEM) {
+      pushMessage(m, 'other', msgIdx++);
+      continue;
+    }
+
+    if (m.content?.trim()) {
+      pushMessage(m, 'other', msgIdx++);
+    } else {
+      msgIdx += 1;
+    }
+  }
+
+  return { items, lastAssistantUsage };
+}
+
+/**
+ * Legacy mega-chain / no-chain fallback: one footer per user turn via
+ * content fingerprint matching against sessionChains when available.
+ */
+function buildLegacyPerUserTurnHistory(opts: {
+  messages: Message[];
+  toolBlocks: ToolBlock[];
+  status: ChatStatus;
+  liveUsage: Usage | null;
+  subagents: readonly SubagentRecord[];
+  sessionChains: readonly Chain[];
+  elapsedSeconds?: number;
+  interrupted: boolean;
+  expandedChainIndexes?: ReadonlySet<number>;
 }): HistoryBuildResult {
   const {
     messages,

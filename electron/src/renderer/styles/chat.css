@@ -3389,6 +3389,32 @@
   align-items: center;
   gap: 4px;
 }
+.chain-footer-model {
+  font-weight: 500;
+  color: var(--text-primary);
+  opacity: 0.75;
+}
+
+/* Collapsed historical chain stub (Python CollapsedChainStub) */
+.collapsed-chain-stub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 6px 0;
+  padding: 6px 10px;
+  border: 1px dashed color-mix(in srgb, var(--text-primary) 14%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.collapsed-chain-stub:hover {
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  color: var(--text-primary);
+}
 
 /* Command toast (slash / palette feedback) */
 .command-toast {
