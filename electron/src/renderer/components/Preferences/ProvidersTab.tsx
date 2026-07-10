@@ -15,6 +15,8 @@
  */
 import { useState, useCallback } from 'react';
 import type { ModelMetadata } from '../../../shared/types/ipc-boundary';
+import { Icon } from '../Icon';
+import { DefinitionActions } from './DefinitionActions';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -491,11 +493,13 @@ export function ProvidersTab({ providers, onChange, onRename }: ProvidersTabProp
                   Confirm
                 </button>
                 <button
-                  className="btn btn-ghost btn-sm text-error hover:bg-error/10"
+                  className="btn btn-ghost btn-square btn-xs h-7 w-7 min-h-7 text-error hover:bg-error/10"
                   onClick={() => removeModel(idx)}
                   type="button"
+                  title="Remove"
+                  aria-label="Remove"
                 >
-                  Remove
+                  <Icon name="trash" size={13} />
                 </button>
               </div>
             ) : (
@@ -516,21 +520,25 @@ export function ProvidersTab({ providers, onChange, onRename }: ProvidersTabProp
                     </span>
                   )}
                   <button
-                    className="btn btn-ghost btn-sm"
+                    className="btn btn-ghost btn-square btn-xs h-7 w-7 min-h-7"
                     onClick={() => {
                       toggleModelExpanded(m.id);
                       fetchResolvedMetadata(m.id);
                     }}
                     type="button"
+                    title={m.expanded ? 'Collapse' : 'Configure'}
+                    aria-label={m.expanded ? 'Collapse' : 'Configure'}
                   >
-                    {m.expanded ? 'Collapse' : 'Configure'}
+                    <Icon name={m.expanded ? 'chevronUp' : 'settings'} size={13} />
                   </button>
                   <button
-                    className="btn btn-ghost btn-sm text-error hover:bg-error/10"
+                    className="btn btn-ghost btn-square btn-xs h-7 w-7 min-h-7 text-error hover:bg-error/10"
                     onClick={() => removeModel(idx)}
                     type="button"
+                    title="Remove"
+                    aria-label="Remove"
                   >
-                    Remove
+                    <Icon name="trash" size={13} />
                   </button>
                 </div>
                 {m.expanded && (
@@ -794,22 +802,10 @@ export function ProvidersTab({ providers, onChange, onRename }: ProvidersTabProp
                       </span>
                     </div>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => startEdit(p)}
-                      type="button"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      className="btn btn-ghost btn-sm text-error hover:bg-error/10"
-                      onClick={() => deleteProvider(p.id)}
-                      type="button"
-                    >
-                      Delete
-                    </button>
-                  </div>
+                  <DefinitionActions
+                    onEdit={() => startEdit(p)}
+                    onDelete={() => deleteProvider(p.id)}
+                  />
                 </div>
               )}
             </div>

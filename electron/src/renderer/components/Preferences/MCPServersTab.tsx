@@ -5,6 +5,7 @@
  * Changes to MCP servers trigger a restart prompt.
  */
 import { useState, useCallback } from 'react';
+import { DefinitionActions } from './DefinitionActions';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -254,22 +255,10 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
                       <p className="config-card-desc mt-1 font-mono truncate">{s.args.join(' ')}</p>
                     )}
                   </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <button
-                      className="btn btn-ghost btn-xs"
-                      onClick={() => startEdit(s)}
-                      type="button"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      className="btn btn-ghost btn-xs text-error hover:bg-error/10"
-                      onClick={() => deleteServer(s.id)}
-                      type="button"
-                    >
-                      Delete
-                    </button>
-                  </div>
+                  <DefinitionActions
+                    onEdit={() => startEdit(s)}
+                    onDelete={() => deleteServer(s.id)}
+                  />
                 </div>
               )}
             </div>
