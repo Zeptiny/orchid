@@ -45,6 +45,7 @@ import { buildWaitTool } from './subagent/wait';
 import { buildInterruptTool } from './subagent/interrupt';
 import { SubagentManager } from '../agents/manager';
 import { getModelForTier } from '../config/loader';
+import { IPC_CHANNELS } from '../../shared/types/ipc';
 
 /** Singleton registry instance for the main process */
 export const toolRegistry = new ToolRegistry();
@@ -77,6 +78,62 @@ const builtinContext: BuiltinToolContext = {
 /** Shared SubagentManager used by delegate/wait/interrupt tools. */
 export function getSubagentManager(): SubagentManager {
   return builtinContext.subagentManager;
+}
+
+/** Skill registry used to rebuild the skill tool per-agent allowlist. */
+export function getSkillsRegistry(): Map<string, Skill> {
+  return builtinContext.skills;
+}
+
+/**
+ * Resolve the session-scoped TodoStore.
+ * Falls back to the process-local store when session manager is unavailable
+ * (isolated unit tests).
+ */
+function resolveActiveTodoStore(): TodoStore {
+  try {
+    // Lazy require avoids circular init: tools ↔ session IPC.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createRequire } = require('node:module') as typeof import('node:module');
+    const req = createRequire(__filename);
+    const session = req('../ipc/session') as typeof import('../ipc/session');
+    return session.getSessionManager().getActiveTodoStore();
+  } catch (err) {
+    // Expected in isolated unit tests without session IPC; log otherwise.
+    if (process.env.NODE_ENV !== 'test' && process.env.VITEST === undefined) {
+      console.warn(
+        '[tools] resolveActiveTodoStore fell back to process-local store:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+    return builtinContext.todoStore;
+  }
+}
+
+function notifyTodosChanged(): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createRequire } = require('node:module') as typeof import('node:module');
+    const req = createRequire(__filename);
+    const session = req('../ipc/session') as typeof import('../ipc/session');
+    const manager = session.getSessionManager();
+    manager.persistActiveTodos();
+    const sessionId = manager.getActive()?.id ?? null;
+    // Dynamic require so unit tests that import tools without Electron still load.
+    const { BrowserWindow } = req('electron') as typeof import('electron');
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(IPC_CHANNELS.SESSION_TODOS_CHANGED, { sessionId });
+      }
+    }
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test' && process.env.VITEST === undefined) {
+      console.warn(
+        '[tools] notifyTodosChanged failed (session/UI update skipped):',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
 }
 
 function registerBuiltTool(
@@ -163,13 +220,15 @@ export function registerBuiltinTools(options: BuiltinToolOptions = {}): void {
   registerBuiltTool(terminateCommandToolDefinition, terminateCommandHandler);
   registerAstTools(toolRegistry);
 
-  const todoCreate = buildCreateTool(builtinContext.todoStore);
+  // Session-scoped store via getter (Python ContextVar parity). notifyChanged
+  // snapshots into the session file and pushes SESSION_TODOS_CHANGED to the UI.
+  const todoCreate = buildCreateTool(resolveActiveTodoStore, notifyTodosChanged);
   registerBuiltTool(todoCreate.definition, todoCreate.handler);
-  const todoUpdate = buildUpdateTool(builtinContext.todoStore);
+  const todoUpdate = buildUpdateTool(resolveActiveTodoStore, notifyTodosChanged);
   registerBuiltTool(todoUpdate.definition, todoUpdate.handler);
-  const todoList = buildListTool(builtinContext.todoStore);
+  const todoList = buildListTool(resolveActiveTodoStore);
   registerBuiltTool(todoList.definition, todoList.handler);
-  const todoDelete = buildDeleteTool(builtinContext.todoStore);
+  const todoDelete = buildDeleteTool(resolveActiveTodoStore, notifyTodosChanged);
   registerBuiltTool(todoDelete.definition, todoDelete.handler);
 
   const webFetch = buildWebFetchTool({

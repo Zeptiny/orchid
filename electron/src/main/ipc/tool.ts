@@ -57,6 +57,7 @@ function resolveToolExecuteContext(windowId: string): ToolExecutionContext | nul
     return {
       cwd: info.cwd,
       sessionId: active?.id,
+      agentScopeId: 'main',
     };
   } catch {
     return null;

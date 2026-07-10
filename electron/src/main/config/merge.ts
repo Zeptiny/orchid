@@ -293,6 +293,7 @@ const ENV_MAP: EnvMapping[] = [
   { envKey: 'ORCHID_MCP_STARTUP_TIMEOUT', configPath: ['mcp_startup_timeout'], type: 'float' },
   { envKey: 'ORCHID_MCP_PER_SERVER_TIMEOUT', configPath: ['mcp_per_server_timeout'], type: 'float' },
   { envKey: 'ORCHID_BG_CMD_IDLE_TIMEOUT', configPath: ['background_command_idle_timeout'], type: 'float' },
+  { envKey: 'ORCHID_MAX_TOOL_STEPS', configPath: ['max_tool_steps'], type: 'int' },
 ];
 
 /** Nested RAG env mappings — matches Python `config.py:136-142`. */

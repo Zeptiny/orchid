@@ -392,6 +392,7 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
             astMaxFileSize={currentConfig.ast_max_file_size}
             llmStreamIdleTimeout={currentConfig.llm_stream_idle_timeout}
             llmStreamRetries={currentConfig.llm_stream_retries}
+            maxToolSteps={currentConfig.max_tool_steps}
             backgroundCommandIdleTimeout={currentConfig.background_command_idle_timeout}
             alwaysExpandToolGroups={currentConfig.always_expand_tool_groups}
             onChange={updateDraft}

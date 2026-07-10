@@ -27,10 +27,11 @@ export type TerminateCommandInput = z.infer<typeof terminateCommandInputSchema>;
 export async function executeTerminateCommand(
   id: number,
   sessionId?: string | null,
+  agentScopeId?: string | null,
 ): Promise<{ display: string; content: string; isError?: boolean }> {
   const store = getBackgroundStore();
-  // Visibility check with sessionId; terminate itself only needs the id.
-  const entry = store.getVisible(id, sessionId ?? null);
+  // Visibility: session + agent scope (peer agents cannot terminate each other).
+  const entry = store.getVisible(id, sessionId ?? null, agentScopeId ?? 'main');
   if (!entry) {
     return {
       display: `Background command ${id} not found`,
@@ -75,5 +76,9 @@ export const terminateCommandToolDefinition: ToolDefinition = {
 
 export const terminateCommandHandler: ToolHandler = async (input: unknown, ctx) => {
   const { id } = input as TerminateCommandInput;
-  return executeTerminateCommand(id, ctx.sessionId ?? null);
+  return executeTerminateCommand(
+    id,
+    ctx.sessionId ?? null,
+    ctx.agentScopeId ?? 'main',
+  );
 };

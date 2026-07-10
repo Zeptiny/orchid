@@ -95,6 +95,11 @@ export interface Config {
   llm_stream_retries: number;
   background_command_idle_timeout: number;
   /**
+   * Max multi-step tool-loop iterations per LLM stream (AI SDK stopWhen).
+   * Default 100 — high enough for real agent workloads, not unbounded.
+   */
+  max_tool_steps: number;
+  /**
    * Sticky default project directory for new sessions / draft workspace.
    * Absolute path when set; `null` when unbound (never invented from process.cwd()).
    */

@@ -56,6 +56,11 @@ export interface ToolExecutionContext {
   cwd: string;
   /** Session id when available (bg process ownership, output offload). */
   sessionId?: string;
+  /**
+   * Agent scope within the session (`"main"` or subagent id).
+   * Isolates todos and background commands so peer agents cannot see each other.
+   */
+  agentScopeId?: string;
 }
 
 /**

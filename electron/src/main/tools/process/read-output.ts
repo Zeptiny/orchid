@@ -37,11 +37,13 @@ export async function executeReadOutput(
   lastN?: number,
   waitMs?: number,
   sessionId?: string | null,
+  agentScopeId?: string | null,
 ): Promise<{ display: string; content: string; isError?: boolean }> {
   const store = getBackgroundStore();
   const scopeSessionId = sessionId ?? null;
-  // Visibility is session-scoped; wait_for_progress uses get() after this check.
-  const entry = store.getVisible(id, scopeSessionId);
+  const scopeAgent = agentScopeId ?? 'main';
+  // Visibility is session + agent scoped (peer agents cannot read each other).
+  const entry = store.getVisible(id, scopeSessionId, scopeAgent);
   if (!entry) {
     return {
       display: `Background command ${id} not found`,
@@ -56,7 +58,7 @@ export async function executeReadOutput(
     await store.wait_for_progress(id, bounded);
   }
 
-  const result = store.snapshotVisible(id, lastN, scopeSessionId);
+  const result = store.snapshotVisible(id, lastN, scopeSessionId, scopeAgent);
   if (!result) {
     return {
       display: `Background command ${id} not found`,
@@ -96,5 +98,11 @@ export const readOutputToolDefinition: ToolDefinition = {
 
 export const readOutputHandler: ToolHandler = async (input: unknown, ctx) => {
   const { id, last_n, wait_ms } = input as ReadOutputInput;
-  return executeReadOutput(id, last_n, wait_ms, ctx.sessionId ?? null);
+  return executeReadOutput(
+    id,
+    last_n,
+    wait_ms,
+    ctx.sessionId ?? null,
+    ctx.agentScopeId ?? 'main',
+  );
 };

@@ -31,6 +31,11 @@ export interface GeneralTabProps {
   llmStreamIdleTimeout: number;
   llmStreamRetries: number;
   backgroundCommandIdleTimeout: number;
+  /**
+   * Max multi-step tool-loop iterations per LLM stream (AI SDK stopWhen).
+   * Default 100.
+   */
+  maxToolSteps: number;
   /** When true, compact tool-activity groups start expanded. */
   alwaysExpandToolGroups: boolean;
   onChange: (updates: Record<string, unknown>) => void;
@@ -53,6 +58,7 @@ export function GeneralTab({
   llmStreamIdleTimeout,
   llmStreamRetries,
   backgroundCommandIdleTimeout,
+  maxToolSteps,
   alwaysExpandToolGroups,
   onChange,
 }: GeneralTabProps) {
@@ -68,6 +74,19 @@ export function GeneralTab({
     (field: string, value: string) => {
       const num = parseFloat(value);
       if (!isNaN(num) && num > 0) {
+        onChange({ [field]: num });
+      }
+    },
+    [onChange],
+  );
+
+  /** Integer config fields (schema `.int()`) — reject non-integers like 12.5. */
+  const handleIntChange = useCallback(
+    (field: string, value: string) => {
+      const trimmed = value.trim();
+      if (!/^\d+$/.test(trimmed)) return;
+      const num = Number(trimmed);
+      if (num > 0) {
         onChange({ [field]: num });
       }
     },
@@ -276,6 +295,23 @@ export function GeneralTab({
               min={0}
               max={10}
             />
+          </div>
+          <div className="config-field">
+            <label htmlFor="general-max-tool-steps">Max Tool Steps</label>
+            <input
+              id="general-max-tool-steps"
+              type="number"
+              value={maxToolSteps}
+              onChange={(e) => handleIntChange('max_tool_steps', e.target.value)}
+              className="input config-control"
+              min={1}
+              max={1000}
+              step={1}
+            />
+            <span className="config-field-hint">
+              Max tool-loop iterations per agent turn (default 100). Higher values
+              allow longer multi-step plans; lower values stop runaway loops sooner.
+            </span>
           </div>
           <div className="config-field">
             <label htmlFor="general-bg-idle">BG Command Idle Timeout (s)</label>

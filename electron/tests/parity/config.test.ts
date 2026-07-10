@@ -35,6 +35,8 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
   { field: 'llm_stream_idle_timeout', type: 'number', defaultValue: 300.0, envOverride: 'ORCHID_LLM_STREAM_IDLE_TIMEOUT' },
   { field: 'llm_stream_retries', type: 'number', defaultValue: 3, envOverride: 'ORCHID_LLM_STREAM_RETRIES' },
   { field: 'background_command_idle_timeout', type: 'number', defaultValue: 900.0, envOverride: 'ORCHID_BG_CMD_IDLE_TIMEOUT' },
+  // Electron-only: AI SDK tool-loop cap (Python is unbounded)
+  { field: 'max_tool_steps', type: 'number', defaultValue: 100, envOverride: 'ORCHID_MAX_TOOL_STEPS' },
   // Electron-only UI preference (not in Python TUI)
   { field: 'always_expand_tool_groups', type: 'boolean', defaultValue: false },
 ];
@@ -75,6 +77,7 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('llm_stream_idle_timeout');
       expect(cfg).toHaveProperty('llm_stream_retries');
       expect(cfg).toHaveProperty('background_command_idle_timeout');
+      expect(cfg).toHaveProperty('max_tool_steps');
       expect(cfg).toHaveProperty('default_project_dir');
       expect(cfg).toHaveProperty('always_expand_tool_groups');
 
@@ -90,7 +93,7 @@ describe('Config Parity', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(20); // 20 top-level fields (rag is nested)
+      expect(topLevelKeys).toHaveLength(21); // 21 top-level fields (rag is nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);

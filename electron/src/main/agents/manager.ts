@@ -62,6 +62,8 @@ export type SubagentStreamRunner = (params: {
   sessionId?: string;
   /** Frozen parent-turn workspace cwd (do not re-resolve live session). */
   cwd?: string;
+  /** This subagent's scope id (record.id) for todos / bg / prompt isolation. */
+  agentScopeId: string;
 }) => AsyncGenerator<StreamEvent>;
 
 export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
@@ -431,6 +433,7 @@ export class SubagentManager {
         abortSignal: abort.signal,
         sessionId: record.sessionId ?? undefined,
         cwd,
+        agentScopeId: record.id,
       });
 
       for await (const event of stream) {

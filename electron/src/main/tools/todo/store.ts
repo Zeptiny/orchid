@@ -151,7 +151,13 @@ export class TodoStore {
       ...task,
       title: updates.title ?? task.title,
       status: updates.status ?? task.status,
-      subagent_id: updates.subagent_id !== undefined ? updates.subagent_id : task.subagent_id,
+      // Empty string reassigns ownership to main (null).
+      subagent_id:
+        updates.subagent_id !== undefined
+          ? updates.subagent_id.trim() === ''
+            ? null
+            : updates.subagent_id
+          : task.subagent_id,
       updated_at: now,
     };
 

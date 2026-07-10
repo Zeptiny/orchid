@@ -35,6 +35,7 @@ import type {
   SessionChangeCwdMessage,
   SessionSetWorkspaceMessage,
   SessionWorkspaceChangedEvent,
+  SessionTodosChangedEvent,
   WorkspaceInfo,
   ToolExecuteMessage,
   AgentSpawnMessage,
@@ -188,6 +189,11 @@ const orchidAPI: OrchidAPI = {
 
     onSubagentsChanged: (callback: () => void) =>
       on(IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED, () => callback()),
+
+    onTodosChanged: (callback: (event: SessionTodosChangedEvent) => void) =>
+      on(IPC_CHANNELS.SESSION_TODOS_CHANGED, (...args) =>
+        callback(args[0] as SessionTodosChangedEvent),
+      ),
   },
 
   tool: {

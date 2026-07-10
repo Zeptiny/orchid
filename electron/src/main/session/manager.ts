@@ -29,6 +29,7 @@ import {
   canonicalizeProjectDirectory,
   inspectProjectDirectory,
 } from '../project/path';
+import { TodoStore } from '../tools/todo/store';
 import {
   saveSession as storageSaveSession,
   loadSession as storageLoadSession,
@@ -82,6 +83,8 @@ export interface SessionManagerOptions {
 
 export class SessionManager {
   private _active: Session | null = null;
+  /** Live todo store for the active session (source of truth between saves). */
+  private _activeTodoStore: TodoStore = new TodoStore();
   private _generateTitle: GenerateTitleCallback | null = null;
   private _storageOpts: StorageOptions | undefined;
 
@@ -102,6 +105,44 @@ export class SessionManager {
   }
 
   /**
+   * Live TodoStore for the active session.
+   *
+   * Always returns a store (empty when no session is active) so tool handlers
+   * can resolve without null checks. Mutations must call persistActiveTodos()
+   * (or saveActive()) so the snapshot lands on the session file.
+   */
+  getActiveTodoStore(): TodoStore {
+    return this._activeTodoStore;
+  }
+
+  /**
+   * Snapshot the live todo store into the active session and save to disk.
+   * No-op when there is no active session.
+   */
+  persistActiveTodos(): void {
+    if (!this._active) {
+      return;
+    }
+    this._active = {
+      ...this._active,
+      todoStore: this._activeTodoStore.toData(),
+      updatedAt: new Date().toISOString(),
+    };
+    storageSaveSession(this._active, this._storageOpts);
+  }
+
+  /** Embed live todos into the active session object before any save. */
+  private flushTodosIntoActive(): void {
+    if (!this._active) {
+      return;
+    }
+    this._active = {
+      ...this._active,
+      todoStore: this._activeTodoStore.toData(),
+    };
+  }
+
+  /**
    * Clear the active session without deleting any files.
    *
    * Used for draft/new-chat mode: the UI has no active session until the
@@ -109,6 +150,7 @@ export class SessionManager {
    */
   clearActive(): void {
     this._active = null;
+    this._activeTodoStore = new TodoStore();
   }
 
   /**
@@ -142,6 +184,7 @@ export class SessionManager {
       subagentChains: [],
       todoStore: { tasks: [] },
     };
+    this._activeTodoStore = new TodoStore();
     this._active = session;
     storageSaveSession(session, this._storageOpts);
     return session;
@@ -154,14 +197,22 @@ export class SessionManager {
    * forceAbortChat) cancel running subagents before switching so the global
    * manager cannot attach prior-session chains to the new active session.
    * Returns null if the session file doesn't exist or fails to parse.
+   *
+   * Rebinds the live TodoStore from the session snapshot so tools and UI
+   * share session-isolated state (Python ContextVar parity).
    */
   switchTo(id: string): Session | null {
     const session = storageLoadSession(id, this._storageOpts);
     if (!session) {
       return null;
     }
-    this._active = session;
-    return session;
+    this._activeTodoStore = TodoStore.fromData(session.todoStore ?? { tasks: [] });
+    // Keep session.todoStore in sync with the hydrated live store.
+    this._active = {
+      ...session,
+      todoStore: this._activeTodoStore.toData(),
+    };
+    return this._active;
   }
 
   /**
@@ -173,6 +224,7 @@ export class SessionManager {
     const result = storageDeleteSession(id, this._storageOpts);
     if (this._active?.id === id) {
       this._active = null;
+      this._activeTodoStore = new TodoStore();
     }
     return result;
   }
@@ -186,6 +238,7 @@ export class SessionManager {
     if (!this._active || this._active.id !== id) {
       return;
     }
+    this.flushTodosIntoActive();
     this._active = { ...this._active, name, updatedAt: new Date().toISOString() };
     storageSaveSession(this._active, this._storageOpts);
   }
@@ -200,6 +253,7 @@ export class SessionManager {
     if (!this._active || this._active.id !== id) {
       return;
     }
+    this.flushTodosIntoActive();
     this._active = { ...this._active, model, updatedAt: new Date().toISOString() };
     storageSaveSession(this._active, this._storageOpts);
   }
@@ -223,6 +277,7 @@ export class SessionManager {
       const reason = inspection.reason ?? 'invalid project directory';
       throw new Error(`Cannot change cwd: ${reason}`);
     }
+    this.flushTodosIntoActive();
     this._active = {
       ...this._active,
       cwd: inspection.path,
@@ -242,6 +297,7 @@ export class SessionManager {
     if (!this._active) {
       return;
     }
+    this.flushTodosIntoActive();
     storageSaveSession(this._active, this._storageOpts);
   }
 
@@ -319,6 +375,7 @@ export class SessionManager {
       ...this._active,
       chains,
       activeChainId: chain.id,
+      todoStore: this._activeTodoStore.toData(),
       updatedAt: now,
     };
     storageSaveSession(this._active, this._storageOpts);
@@ -353,6 +410,7 @@ export class SessionManager {
       this._active = {
         ...this._active,
         subagentChains: chains,
+        todoStore: this._activeTodoStore.toData(),
         updatedAt: now,
       };
       storageSaveSession(this._active, this._storageOpts);

@@ -7,7 +7,13 @@
  * Ported from Python `src/orchid/tools/todo.py`.
  */
 export { TodoStore } from './store';
-export { buildCreateTool, type TodoToolResult, type NotifyTodoChanged } from './create';
+export {
+  buildCreateTool,
+  resolveTodoStore,
+  type TodoToolResult,
+  type NotifyTodoChanged,
+  type TodoStoreSource,
+} from './create';
 export { buildUpdateTool } from './update';
 export { buildListTool } from './list';
 export { buildDeleteTool } from './delete';

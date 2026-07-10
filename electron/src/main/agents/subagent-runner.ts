@@ -97,14 +97,15 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       return;
     }
 
-    const context = {
+    // Live dynamic context scoped to this subagent (not main/peers).
+    const agentScopeId = params.agentScopeId;
+    const { buildSystemPromptContext } = await import('../llm/build-prompt-context');
+    const context = await buildSystemPromptContext({
       cwd: parentCwd,
-      osInfo: `${process.platform} ${process.arch}`,
-      time: new Date().toISOString(),
-      subagentStates: [],
-      todos: [],
-      backgroundCommands: [],
-    };
+      config,
+      sessionId,
+      agentScopeId,
+    });
 
     // Isolated history: only the subagent's task (no parent context).
     // streamChat builds API messages from this; the manager owns the persisted chain.
@@ -134,6 +135,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       registry: toolRegistry,
       mcpManager: getMCPManagerRef(),
       sessionId,
+      agentScopeId,
       abortSignal: params.abortSignal,
       modelInstance,
     });

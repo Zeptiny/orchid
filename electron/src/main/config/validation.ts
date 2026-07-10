@@ -117,6 +117,7 @@ export function validateConfig(cfg: Config): string[] {
   checkPositiveFloat(cfg as unknown as Record<string, unknown>, 'mcp_startup_timeout', errors);
   checkPositiveFloat(cfg as unknown as Record<string, unknown>, 'mcp_per_server_timeout', errors);
   checkPositiveFloat(cfg as unknown as Record<string, unknown>, 'background_command_idle_timeout', errors);
+  checkPositiveInt(cfg as unknown as Record<string, unknown>, 'max_tool_steps', errors);
 
   // --- RAG ---
   const rag = cfg.rag as unknown as Record<string, unknown>;

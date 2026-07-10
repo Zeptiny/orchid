@@ -29,9 +29,10 @@ export async function executeSendInput(
   id: number,
   text: string,
   sessionId?: string | null,
+  agentScopeId?: string | null,
 ): Promise<{ display: string; content: string; isError?: boolean }> {
   const store = getBackgroundStore();
-  const entry = store.getVisible(id, sessionId ?? null);
+  const entry = store.getVisible(id, sessionId ?? null, agentScopeId ?? 'main');
   if (!entry) {
     return {
       display: `Background command ${id} not found`,
@@ -104,5 +105,10 @@ export const sendInputToolDefinition: ToolDefinition = {
 
 export const sendInputHandler: ToolHandler = async (input: unknown, ctx) => {
   const { id, text } = input as SendInputInput;
-  return executeSendInput(id, text, ctx.sessionId ?? null);
+  return executeSendInput(
+    id,
+    text,
+    ctx.sessionId ?? null,
+    ctx.agentScopeId ?? 'main',
+  );
 };

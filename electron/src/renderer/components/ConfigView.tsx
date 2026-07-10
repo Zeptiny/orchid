@@ -418,6 +418,7 @@ function renderTab(
           ignoredDirs={config.ignored_dirs}
           llmStreamIdleTimeout={config.llm_stream_idle_timeout}
           llmStreamRetries={config.llm_stream_retries}
+          maxToolSteps={config.max_tool_steps}
           personality={config.personality}
           personalities={personalities}
           providers={config.providers as Record<string, Record<string, unknown>>}

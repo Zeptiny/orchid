@@ -60,6 +60,8 @@ export interface ToolDispatchOptions {
    * Required for correct relative-path tool behavior; missing cwd is an error.
    */
   cwd?: string;
+  /** Agent scope (`main` or subagent id) for todos / bg command isolation. */
+  agentScopeId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +130,7 @@ export async function executeToolCall(
   const toolCtx: ToolExecutionContext = {
     cwd: options.cwd,
     sessionId: options.sessionId,
+    agentScopeId: options.agentScopeId,
   };
 
   // Execute with optional timeout (shared policy with MCP wrappers)

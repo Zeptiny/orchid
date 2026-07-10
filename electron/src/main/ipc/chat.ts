@@ -413,15 +413,16 @@ function createStreamFn(
     );
     const modelInstance = await createProviderModel(modelRef);
 
-    // Build system prompt context from frozen turn cwd (not process.cwd)
-    const context = {
+    // Live dynamic context: tree, todos, subagents, background commands
+    // (Python rebuilds this every stream — do not pass empty stubs).
+    const { buildSystemPromptContext } = await import('../llm/build-prompt-context');
+    const frozenAgentScopeId = turnCtx.agentScopeId ?? 'main';
+    const context = await buildSystemPromptContext({
       cwd: turnCtx.cwd,
-      osInfo: `${process.platform} ${process.arch}`,
-      time: new Date().toISOString(),
-      subagentStates: [],
-      todos: [],
-      backgroundCommands: [],
-    };
+      config,
+      sessionId: frozenSessionId,
+      agentScopeId: frozenAgentScopeId,
+    });
 
     // Use the orchestrator to stream with full message history
     const stream = streamChat({
@@ -433,6 +434,7 @@ function createStreamFn(
       registry: (await import('../tools')).toolRegistry,
       mcpManager: getMCPManagerRef(),
       sessionId: frozenSessionId,
+      agentScopeId: frozenAgentScopeId,
       abortSignal: params.abortSignal,
       modelInstance,
     });
@@ -608,6 +610,7 @@ export function registerChatIPC(): void {
     const turnCtx: ToolExecutionContext = {
       cwd: sessionGate.cwd,
       sessionId: activeSession?.id,
+      agentScopeId: 'main',
     };
     const turnModel = activeSession?.model ?? null;
 

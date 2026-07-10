@@ -150,7 +150,7 @@ export async function executeCommand(
   shell?: boolean,
   background?: boolean,
   interactive?: boolean,
-  options?: { sessionId?: string },
+  options?: { sessionId?: string; agentScopeId?: string },
 ): Promise<{ display: string; content: string; isError?: boolean }> {
   if (description === undefined) description = command;
   // Caller (handler) should pass an absolute cwd; '.' remains for direct unit tests.
@@ -186,6 +186,7 @@ export async function executeCommand(
         interactive,
         description,
         sessionId: options?.sessionId ?? null,
+        agentScopeId: options?.agentScopeId ?? 'main',
       });
       return {
         display: `$ ${command} (id: ${procId}, background)`,
@@ -330,6 +331,6 @@ export const executeCommandHandler: ToolHandler = async (input: unknown, ctx) =>
     shell,
     background,
     interactive,
-    { sessionId: ctx.sessionId },
+    { sessionId: ctx.sessionId, agentScopeId: ctx.agentScopeId ?? 'main' },
   );
 };

@@ -61,5 +61,20 @@ export function useTodos(activeSessionId: string | null): UseTodosReturn {
     refresh();
   }, [refresh]);
 
+  // Live updates when tools mutate the session-scoped todo store.
+  useEffect(() => {
+    if (!window.orchid?.session?.onTodosChanged) {
+      return;
+    }
+    return window.orchid.session.onTodosChanged((event) => {
+      if (
+        activeSessionId &&
+        (event.sessionId === null || event.sessionId === activeSessionId)
+      ) {
+        void refresh();
+      }
+    });
+  }, [activeSessionId, refresh]);
+
   return { state, refresh };
 }

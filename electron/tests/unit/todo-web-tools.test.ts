@@ -23,8 +23,9 @@ import type { ToolExecutionContext } from '../../src/main/tools/types';
 async function callTool(
   handler: (input: unknown, ctx: ToolExecutionContext) => Promise<unknown>,
   input: Record<string, unknown>,
+  agentScopeId: string = 'main',
 ) {
-  return handler(input, { cwd: process.cwd() });
+  return handler(input, { cwd: process.cwd(), agentScopeId });
 }
 
 // ── Todo Tools Tests ────────────────────────────────────────────────────────
@@ -285,19 +286,26 @@ describe('Todo Tools', () => {
       expect(progressResult.content).toContain('Progress task');
     });
 
-    it('should filter by subagent_id', async () => {
+    it('should isolate list by agent scope (not peer todos)', async () => {
       const createHandler = buildCreateTool(store).handler;
-      await callTool(createHandler, { title: 'Main task' });
-      await callTool(createHandler, { title: 'Sub task', subagent_id: 'sub-1' });
+      await callTool(createHandler, { title: 'Main task' }, 'main');
+      // Main assigns ownership to sub-1
+      await callTool(createHandler, { title: 'Sub task', subagent_id: 'sub-1' }, 'main');
 
       const listHandler = buildListTool(store).handler;
-      const result = (await callTool(listHandler, {
-        subagent_id: 'sub-1',
-      })) as { display: string; content: string };
+      const asSub = (await callTool(listHandler, {}, 'sub-1')) as {
+        display: string;
+        content: string;
+      };
+      expect(asSub.display).toBe('Found 1 task(s)');
+      expect(asSub.content).toContain('Sub task');
+      expect(asSub.content).not.toContain('Main task');
 
-      expect(result.display).toBe('Found 1 task(s)');
-      expect(result.content).toContain('Sub task');
-      expect(result.content).not.toContain('Main task');
+      const asMain = (await callTool(listHandler, {}, 'main')) as {
+        content: string;
+      };
+      expect(asMain.content).toContain('Main task');
+      expect(asMain.content).not.toContain('Sub task');
     });
 
     it('should return empty message when no tasks match', async () => {
@@ -308,7 +316,7 @@ describe('Todo Tools', () => {
       };
 
       expect(result.display).toBe('No tasks found');
-      expect(result.content).toContain('No tasks match');
+      expect(result.content).toContain('No tasks for agent scope');
     });
 
     it('should reject invalid status filter', async () => {
@@ -682,7 +690,7 @@ describe('Web Fetch Tools', () => {
           'text/html',
           expect.any(String),
           'What is this page about?',
-          { cwd: process.cwd() },
+          { cwd: process.cwd(), agentScopeId: 'main' },
         );
       } finally {
         globalThis.fetch = originalFetch;

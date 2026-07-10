@@ -31,6 +31,7 @@ import {
   buildToolMap,
   streamChat,
   drainPendingToolEvents,
+  combineAbortSignals,
   type StreamEvent,
   type StreamChatParams,
 } from '../../src/main/llm/orchestrator';
@@ -1450,7 +1451,7 @@ describe('streamChat', () => {
     await collectStreamEvents(streamChat(makeStreamChatParams()));
 
     expect(aiSdkMocks.wrapLanguageModel).toHaveBeenCalledOnce();
-    expect(aiSdkMocks.isStepCount).toHaveBeenCalledWith(10);
+    expect(aiSdkMocks.isStepCount).toHaveBeenCalledWith(100);
     expect(aiSdkMocks.streamText).toHaveBeenCalledOnce();
     const call = aiSdkMocks.streamText.mock.calls[0][0] as {
       system: string;
@@ -1460,9 +1461,124 @@ describe('streamChat', () => {
     };
     expect(call.system).toContain('You are a helpful assistant.');
     expect(call.messages).toEqual([{ role: 'user', content: 'Hello' }]);
-    expect(call.stopWhen).toEqual({ type: 'step-count', count: 10 });
+    expect(call.stopWhen).toEqual({ type: 'step-count', count: 100 });
     // no allowed tools → tools undefined
     expect(call.tools).toBeUndefined();
+  });
+
+  it(
+    'yields stream idle timeout when fullStream hangs with no content',
+    async () => {
+      aiSdkMocks.streamText.mockImplementation((params: {
+        abortSignal?: AbortSignal;
+      }) => ({
+        fullStream: {
+          async *[Symbol.asyncIterator]() {
+            await new Promise<void>((_resolve, reject) => {
+              const signal = params.abortSignal;
+              if (!signal) return;
+              if (signal.aborted) {
+                reject(new DOMException('Aborted', 'AbortError'));
+                return;
+              }
+              signal.addEventListener(
+                'abort',
+                () => reject(new DOMException('Aborted', 'AbortError')),
+                { once: true },
+              );
+            });
+          },
+        },
+        textStream: createAsyncIterable<string>([]),
+        finishReason: Promise.resolve('stop'),
+      }));
+
+      const cfg = {
+        ...defaults(),
+        llm_stream_idle_timeout: 0.05,
+        llm_stream_retries: 0,
+      };
+      const events = await collectStreamEvents(
+        streamChat(makeStreamChatParams({ config: cfg })),
+      );
+      expect(
+        events.some((e) => e.type === 'error' && e.title === 'Stream idle timeout'),
+      ).toBe(true);
+    },
+    10_000,
+  );
+
+  it(
+    'does not idle-abort while a tool is in flight',
+    async () => {
+      aiSdkMocks.streamText.mockImplementation((params: {
+        abortSignal?: AbortSignal;
+      }) => ({
+        fullStream: {
+          async *[Symbol.asyncIterator]() {
+            yield {
+              type: 'tool-input-available',
+              toolCallId: 'tc-1',
+              toolName: 'wait_for_subagent',
+              input: {},
+            };
+            // Hang longer than idle timeout during tool execution
+            await new Promise<void>((resolve, reject) => {
+              const t = setTimeout(resolve, 120);
+              const signal = params.abortSignal;
+              if (signal?.aborted) {
+                clearTimeout(t);
+                reject(new DOMException('Aborted', 'AbortError'));
+                return;
+              }
+              signal?.addEventListener(
+                'abort',
+                () => {
+                  clearTimeout(t);
+                  reject(new DOMException('Aborted', 'AbortError'));
+                },
+                { once: true },
+              );
+            });
+            yield {
+              type: 'tool-output-available',
+              toolCallId: 'tc-1',
+              output: { content: 'done', isError: false },
+            };
+          },
+        },
+        textStream: createAsyncIterable<string>([]),
+        finishReason: Promise.resolve('stop'),
+      }));
+
+      const cfg = {
+        ...defaults(),
+        llm_stream_idle_timeout: 0.05,
+        llm_stream_retries: 0,
+      };
+      const events = await collectStreamEvents(
+        streamChat(makeStreamChatParams({ config: cfg })),
+      );
+      expect(
+        events.some((e) => e.type === 'error' && e.title === 'Stream idle timeout'),
+      ).toBe(false);
+      expect(events.some((e) => e.type === 'tool_call')).toBe(true);
+      expect(events.some((e) => e.type === 'tool_result')).toBe(true);
+      expect(events.some((e) => e.type === 'finish')).toBe(true);
+    },
+    10_000,
+  );
+});
+
+describe('combineAbortSignals', () => {
+  it('aborts when either signal aborts and dispose is safe', () => {
+    const a = new AbortController();
+    const b = new AbortController();
+    const { signal, dispose } = combineAbortSignals(a.signal, b.signal);
+    expect(signal.aborted).toBe(false);
+    b.abort();
+    expect(signal.aborted).toBe(true);
+    dispose();
   });
 });
 

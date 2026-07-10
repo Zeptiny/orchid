@@ -33,9 +33,11 @@ import type { AssistantContent, ModelMessage, Tool } from 'ai';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { Message, Usage } from '../../shared/types/message';
 import type { Agent } from '../../shared/types/agent';
+import type { Skill } from '../../shared/types/skill';
 import type { ToolCall } from '../../shared/types/tool';
 import type { Config } from '../config/schema';
 import type { ToolRegistry } from '../tools/registry';
+import { ToolRegistry as ToolRegistryClass } from '../tools/registry';
 import type { MCPManager } from '../mcp/manager';
 import { toApiMessages } from './history';
 import {
@@ -49,6 +51,8 @@ import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
 import { buildContextSnapshot } from './context-snapshot';
 import { importESM } from '../utils/esm-import';
+import { buildSkillTool } from '../tools/skill/skill';
+import { getSkillsRegistry } from '../tools';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -85,6 +89,11 @@ export interface StreamChatParams {
   mcpManager: MCPManager | null;
   /** Session ID for tool output offloading. */
   sessionId?: string;
+  /**
+   * Agent scope within the session (`main` or subagent id).
+   * Propagated into tool dispatch for todos / background isolation.
+   */
+  agentScopeId?: string;
   /** Abort signal for cancellation. */
   abortSignal?: AbortSignal;
   /** The AI SDK model instance to use for streaming. */
@@ -165,6 +174,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     registry,
     mcpManager,
     sessionId,
+    agentScopeId,
     abortSignal,
     modelInstance,
   } = params;
@@ -252,10 +262,15 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
   // ── Filter and build tools ──
   // Freeze session cwd from prompt context so tools match the turn's workspace.
+  // Rebuild skill tool with this agent's allowed_skills (Python per-stream filter).
   const tools = buildToolMap(agent.allowed_tools, registry, mcpManager, {
     sessionId,
     timeoutSeconds: config.command_timeout,
     cwd: context.cwd,
+    agentScopeId,
+  }, {
+    skills: getSkillsRegistry(),
+    allowedSkills: agent.allowed_skills,
   });
 
   // ── Compose middleware ──
@@ -269,10 +284,18 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     middleware,
   });
 
-  // ── Determine max steps ──
-  const maxSteps = 10;
+  // ── Determine max steps (config; Python loop is unbounded) ──
+  const maxSteps = config.max_tool_steps ?? 100;
 
-  // ── Track usage across steps ──
+  // ── Idle timeout ──
+  // Python only idles while waiting on LLM tokens — not during tool execution.
+  // Pause the watchdog on tool-input-available; re-arm when the model streams again.
+  // Retry the whole stream attempt if idle fires before any content/tool was delivered.
+  // Min 1ms so a zero/negative config cannot arm a no-op timer.
+  const idleTimeoutMs = Math.max(1, config.llm_stream_idle_timeout * 1000);
+  const maxIdleAttempts = Math.max(1, (config.llm_stream_retries ?? 0) + 1);
+
+  // ── Track usage across steps (shared across idle retries) ──
   let totalUsage: Usage = {
     prompt_tokens: 0,
     completion_tokens: 0,
@@ -281,241 +304,262 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   };
   let latestContextUsage: LatestContextUsage | null = null;
 
-  // ── Track tool calls and results for yielding ──
-  // Pending arrays are filled by onStepFinish for the textStream fallback path
-  // (and as a safety net if fullStream omits a tool event). fullStream yields
-  // tools directly; seen* sets prevent double-yield when both sources fire.
-  const pendingToolCalls: PendingToolCall[] = [];
-  const pendingToolResults: PendingToolResult[] = [];
-  const seenToolCallIds = new Set<string>();
-  const seenToolResultIds = new Set<string>();
+  for (let idleAttempt = 0; idleAttempt < maxIdleAttempts; idleAttempt++) {
+    const idleController = new AbortController();
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    let idleTimedOut = false;
+    let deliveredAny = false;
+    let toolsInFlight = 0;
 
-  // ── Call streamText ──
-  const result = streamText({
-    model: wrappedModel,
-    system: fullSystemPrompt,
-    messages: coreMessages,
-    tools: Object.keys(tools).length > 0 ? tools : undefined,
-    stopWhen: isStepCount(maxSteps),
-    abortSignal,
-    onStepFinish: async ({ usage, request, toolCalls, toolResults }) => {
-      if (usage) {
-        const cachedTokens = usage.inputTokenDetails?.cacheReadTokens ?? 0;
-        totalUsage = {
-          prompt_tokens: totalUsage.prompt_tokens + (usage.inputTokens ?? 0),
-          completion_tokens: totalUsage.completion_tokens + (usage.outputTokens ?? 0),
-          total_tokens: totalUsage.total_tokens + (usage.totalTokens ?? 0),
-          cached_tokens: totalUsage.cached_tokens + cachedTokens,
-        };
-        latestContextUsage = {
-          messages: request?.messages ?? coreMessages,
-          inputTokens: usage.inputTokens,
-          outputTokens: usage.outputTokens,
-        };
+    const clearIdleTimer = (): void => {
+      if (idleTimer !== null) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
       }
-      // Capture tool calls for textStream fallback / safety net (deduped on drain)
-      if (toolCalls) {
-        for (const tc of toolCalls as Array<{ toolCallId: string; toolName: string; input?: unknown }>) {
-          pendingToolCalls.push({
-            toolCallId: tc.toolCallId,
-            toolName: tc.toolName,
-            args: stringifyToolInput(tc.input),
-          });
+    };
+    /** Arm/reset idle only when waiting on the model (not while tools run). */
+    const armIdleTimer = (): void => {
+      clearIdleTimer();
+      if (toolsInFlight > 0) return;
+      idleTimer = setTimeout(() => {
+        idleTimedOut = true;
+        idleController.abort();
+      }, idleTimeoutMs);
+    };
+    const pauseIdleForTool = (): void => {
+      toolsInFlight += 1;
+      clearIdleTimer();
+    };
+    const resumeIdleAfterTool = (): void => {
+      toolsInFlight = Math.max(0, toolsInFlight - 1);
+      if (toolsInFlight === 0) {
+        armIdleTimer();
+      }
+    };
+
+    armIdleTimer();
+    const { signal: combinedAbort, dispose: disposeAbortMerge } = combineAbortSignals(
+      abortSignal,
+      idleController.signal,
+    );
+
+    // Pending tool events (textStream fallback / safety net)
+    const pendingToolCalls: PendingToolCall[] = [];
+    const pendingToolResults: PendingToolResult[] = [];
+    const seenToolCallIds = new Set<string>();
+    const seenToolResultIds = new Set<string>();
+
+    const result = streamText({
+      model: wrappedModel,
+      system: fullSystemPrompt,
+      messages: coreMessages,
+      tools: Object.keys(tools).length > 0 ? tools : undefined,
+      stopWhen: isStepCount(maxSteps),
+      abortSignal: combinedAbort,
+      onStepFinish: async ({ usage, request, toolCalls, toolResults }) => {
+        if (usage) {
+          const cachedTokens = usage.inputTokenDetails?.cacheReadTokens ?? 0;
+          totalUsage = {
+            prompt_tokens: totalUsage.prompt_tokens + (usage.inputTokens ?? 0),
+            completion_tokens: totalUsage.completion_tokens + (usage.outputTokens ?? 0),
+            total_tokens: totalUsage.total_tokens + (usage.totalTokens ?? 0),
+            cached_tokens: totalUsage.cached_tokens + cachedTokens,
+          };
+          latestContextUsage = {
+            messages: request?.messages ?? coreMessages,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+          };
         }
-      }
-      // Capture tool results for textStream fallback / safety net (deduped on drain)
-      if (toolResults) {
-        for (const tr of toolResults as Array<{
-          toolCallId: string;
-          output?: unknown;
-          result?: unknown;
-          isError?: boolean;
-          error?: unknown;
-        }>) {
-          const raw = tr.output ?? tr.result ?? '';
-          const parsed = parseToolExecuteOutput(raw);
-          // SDK-level isError/error still win (tool threw before returning a payload)
-          const isError =
-            Boolean(tr.isError) || tr.error != null || parsed.isError;
-          pendingToolResults.push({
-            toolCallId: tr.toolCallId,
-            content: parsed.content,
-            isError,
-          });
+        if (toolCalls) {
+          for (const tc of toolCalls as Array<{ toolCallId: string; toolName: string; input?: unknown }>) {
+            pendingToolCalls.push({
+              toolCallId: tc.toolCallId,
+              toolName: tc.toolName,
+              args: stringifyToolInput(tc.input),
+            });
+          }
         }
-      }
-    },
-  });
-
-  // ── Process the stream ──
-  // AI SDK 7 fullStream tool parts use:
-  //   tool-input-start  → toolCallId, toolName
-  //   tool-input-delta  → toolCallId, inputTextDelta
-  //   tool-input-available → toolCallId, toolName, input  (args complete / running)
-  //   tool-output-available → toolCallId, output          (completed)
-  //   tool-output-error → toolCallId, errorText           (failed)
-  // Older aliases (tool-call / tool-result / id / delta) are kept as fallbacks.
-  try {
-    let usedFullStream = false;
-    try {
-      for await (const chunk of result.fullStream) {
-        usedFullStream = true;
-        const part = chunk as Record<string, unknown>;
-        const partType = String(part.type ?? '');
-
-        switch (partType) {
-          case 'text-delta': {
-            const text =
-              typeof part.text === 'string'
-                ? part.text
-                : typeof part.textDelta === 'string'
-                  ? part.textDelta
-                  : '';
-            if (text) yield { type: 'content', text };
-            break;
-          }
-
-          case 'tool-input-start': {
-            const toolCallId = streamToolCallId(part);
-            const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
-            if (toolCallId) {
-              yield { type: 'tool_call_start', toolCallId, toolName };
-            }
-            break;
-          }
-
-          case 'tool-input-delta': {
-            const toolCallId = streamToolCallId(part);
-            const argsDelta =
-              typeof part.inputTextDelta === 'string'
-                ? part.inputTextDelta
-                : typeof part.delta === 'string'
-                  ? part.delta
-                  : '';
-            if (toolCallId && argsDelta) {
-              yield { type: 'tool_call_delta', toolCallId, argsDelta };
-            }
-            break;
-          }
-
-          // Args complete → tool is about to / is executing (running phase)
-          case 'tool-input-available':
-          case 'tool-call': {
-            const toolCallId = streamToolCallId(part);
-            const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
-            const args = stringifyToolInput(part.input ?? part.args);
-            if (toolCallId && !seenToolCallIds.has(toolCallId)) {
-              seenToolCallIds.add(toolCallId);
-              yield { type: 'tool_call', toolCallId, toolName, args };
-            }
-            break;
-          }
-
-          // Tool finished — may still be an error if the tool returned an
-          // Error: / timeout string (executeToolCall soft-fails timeouts).
-          case 'tool-output-available':
-          case 'tool-result': {
-            const toolCallId = streamToolCallId(part);
-            const raw = part.output ?? part.result ?? '';
+        if (toolResults) {
+          for (const tr of toolResults as Array<{
+            toolCallId: string;
+            output?: unknown;
+            result?: unknown;
+            isError?: boolean;
+            error?: unknown;
+          }>) {
+            const raw = tr.output ?? tr.result ?? '';
             const parsed = parseToolExecuteOutput(raw);
-            if (toolCallId && !seenToolResultIds.has(toolCallId)) {
-              seenToolResultIds.add(toolCallId);
-              yield {
-                type: 'tool_result',
-                toolCallId,
-                content: parsed.content,
-                isError: parsed.isError,
-              };
-            }
-            break;
+            const isError =
+              Boolean(tr.isError) || tr.error != null || parsed.isError;
+            pendingToolResults.push({
+              toolCallId: tr.toolCallId,
+              content: parsed.content,
+              isError,
+            });
           }
+        }
+      },
+    });
 
-          // Tool failed
-          case 'tool-output-error':
-          case 'tool-error': {
-            const toolCallId = streamToolCallId(part);
-            const content =
-              typeof part.errorText === 'string'
-                ? part.errorText
-                : typeof part.error === 'string'
-                  ? part.error
-                  : stringifyToolInput(part.errorText ?? part.error ?? 'Tool failed');
-            if (toolCallId && !seenToolResultIds.has(toolCallId)) {
-              seenToolResultIds.add(toolCallId);
-              yield { type: 'tool_result', toolCallId, content, isError: true };
+    try {
+      let usedFullStream = false;
+      try {
+        for await (const chunk of result.fullStream) {
+          usedFullStream = true;
+          const part = chunk as Record<string, unknown>;
+          const partType = String(part.type ?? '');
+
+          switch (partType) {
+            case 'text-delta': {
+              armIdleTimer();
+              const text =
+                typeof part.text === 'string'
+                  ? part.text
+                  : typeof part.textDelta === 'string'
+                    ? part.textDelta
+                    : '';
+              if (text) {
+                deliveredAny = true;
+                yield { type: 'content', text };
+              }
+              break;
             }
-            break;
-          }
 
-          case 'tool-input-error': {
-            const toolCallId = streamToolCallId(part);
-            const content =
-              typeof part.errorText === 'string'
-                ? part.errorText
-                : 'Invalid tool input';
-            // Surface as a failed tool block when args never became valid
-            if (toolCallId) {
+            case 'tool-input-start': {
+              armIdleTimer();
+              const toolCallId = streamToolCallId(part);
               const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
-              if (!seenToolCallIds.has(toolCallId)) {
+              if (toolCallId) {
+                deliveredAny = true;
+                yield { type: 'tool_call_start', toolCallId, toolName };
+              }
+              break;
+            }
+
+            case 'tool-input-delta': {
+              armIdleTimer();
+              const toolCallId = streamToolCallId(part);
+              const argsDelta =
+                typeof part.inputTextDelta === 'string'
+                  ? part.inputTextDelta
+                  : typeof part.delta === 'string'
+                    ? part.delta
+                    : '';
+              if (toolCallId && argsDelta) {
+                deliveredAny = true;
+                yield { type: 'tool_call_delta', toolCallId, argsDelta };
+              }
+              break;
+            }
+
+            // Args complete → tool is about to execute — pause idle (Python parity)
+            case 'tool-input-available':
+            case 'tool-call': {
+              pauseIdleForTool();
+              const toolCallId = streamToolCallId(part);
+              const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+              const args = stringifyToolInput(part.input ?? part.args);
+              if (toolCallId && !seenToolCallIds.has(toolCallId)) {
                 seenToolCallIds.add(toolCallId);
+                deliveredAny = true;
+                yield { type: 'tool_call', toolCallId, toolName, args };
+              }
+              break;
+            }
+
+            case 'tool-output-available':
+            case 'tool-result': {
+              resumeIdleAfterTool();
+              const toolCallId = streamToolCallId(part);
+              const raw = part.output ?? part.result ?? '';
+              const parsed = parseToolExecuteOutput(raw);
+              if (toolCallId && !seenToolResultIds.has(toolCallId)) {
+                seenToolResultIds.add(toolCallId);
+                deliveredAny = true;
                 yield {
-                  type: 'tool_call',
+                  type: 'tool_result',
                   toolCallId,
-                  toolName,
-                  args: stringifyToolInput(part.input),
+                  content: parsed.content,
+                  isError: parsed.isError,
                 };
               }
-              if (!seenToolResultIds.has(toolCallId)) {
+              break;
+            }
+
+            case 'tool-output-error':
+            case 'tool-error': {
+              resumeIdleAfterTool();
+              const toolCallId = streamToolCallId(part);
+              const content =
+                typeof part.errorText === 'string'
+                  ? part.errorText
+                  : typeof part.error === 'string'
+                    ? part.error
+                    : stringifyToolInput(part.errorText ?? part.error ?? 'Tool failed');
+              if (toolCallId && !seenToolResultIds.has(toolCallId)) {
                 seenToolResultIds.add(toolCallId);
+                deliveredAny = true;
                 yield { type: 'tool_result', toolCallId, content, isError: true };
               }
+              break;
             }
-            break;
+
+            case 'tool-input-error': {
+              // Args never became valid — no execute, keep/reset idle
+              armIdleTimer();
+              const toolCallId = streamToolCallId(part);
+              const content =
+                typeof part.errorText === 'string'
+                  ? part.errorText
+                  : 'Invalid tool input';
+              if (toolCallId) {
+                const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+                if (!seenToolCallIds.has(toolCallId)) {
+                  seenToolCallIds.add(toolCallId);
+                  deliveredAny = true;
+                  yield {
+                    type: 'tool_call',
+                    toolCallId,
+                    toolName,
+                    args: stringifyToolInput(part.input),
+                  };
+                }
+                if (!seenToolResultIds.has(toolCallId)) {
+                  seenToolResultIds.add(toolCallId);
+                  yield { type: 'tool_result', toolCallId, content, isError: true };
+                }
+              }
+              break;
+            }
+
+            case 'reasoning-delta':
+            case 'reasoning': {
+              armIdleTimer();
+              const text =
+                typeof part.text === 'string'
+                  ? part.text
+                  : typeof part.delta === 'string'
+                    ? part.delta
+                    : '';
+              if (text) {
+                deliveredAny = true;
+                yield { type: 'thinking', text };
+              }
+              break;
+            }
+
+            case 'error': {
+              const err = part.error ?? part.errorText ?? chunk;
+              const { title, detail } = classifyStreamError(err);
+              yield { type: 'error', title, detail };
+              break;
+            }
+
+            default:
+              break;
           }
 
-          case 'reasoning-delta':
-          case 'reasoning': {
-            const text =
-              typeof part.text === 'string'
-                ? part.text
-                : typeof part.delta === 'string'
-                  ? part.delta
-                  : '';
-            if (text) yield { type: 'thinking', text };
-            break;
-          }
-
-          case 'error': {
-            const err = part.error ?? part.errorText ?? chunk;
-            const { title, detail } = classifyStreamError(err);
-            yield { type: 'error', title, detail };
-            break;
-          }
-
-          // step-start/finish, start, finish, tool-input-end, etc.
-          default:
-            break;
-        }
-
-        // Drain onStepFinish pending — skips IDs already yielded from fullStream
-        yield* drainPendingToolEvents(
-          pendingToolCalls,
-          pendingToolResults,
-          seenToolCallIds,
-          seenToolResultIds,
-        );
-      }
-    } catch (fullStreamErr) {
-      // If fullStream fails (e.g. provider doesn't support it),
-      // fall back to textStream
-      if (!usedFullStream) {
-        console.warn('[orchestrator] fullStream failed, falling back to textStream:', fullStreamErr);
-        for await (const textDelta of result.textStream) {
-          if (textDelta) {
-            yield { type: 'content', text: textDelta };
-          }
-
-          // textStream has no tool parts — onStepFinish pending is the source of truth
           yield* drainPendingToolEvents(
             pendingToolCalls,
             pendingToolResults,
@@ -523,52 +567,90 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             seenToolResultIds,
           );
         }
-      } else {
-        throw fullStreamErr;
+      } catch (fullStreamErr) {
+        // Idle/user abort is not "fullStream unsupported" — rethrow so the
+        // outer catch can emit Stream idle timeout / cancel (not textStream fallback).
+        if (idleTimedOut || abortSignal?.aborted || combinedAbort.aborted) {
+          throw fullStreamErr;
+        }
+        if (!usedFullStream) {
+          console.warn('[orchestrator] fullStream failed, falling back to textStream:', fullStreamErr);
+          for await (const textDelta of result.textStream) {
+            armIdleTimer();
+            if (textDelta) {
+              deliveredAny = true;
+              yield { type: 'content', text: textDelta };
+            }
+            yield* drainPendingToolEvents(
+              pendingToolCalls,
+              pendingToolResults,
+              seenToolCallIds,
+              seenToolResultIds,
+            );
+          }
+        } else {
+          throw fullStreamErr;
+        }
       }
+
+      yield* drainPendingToolEvents(
+        pendingToolCalls,
+        pendingToolResults,
+        seenToolCallIds,
+        seenToolResultIds,
+      );
+
+      const finishReason = await result.finishReason;
+      const contextUsage = latestContextUsage as LatestContextUsage | null;
+      const usageContext = contextUsage
+        ? buildContextSnapshot({
+            systemPrompt: fullSystemPrompt,
+            tools,
+            messages: contextUsage.messages,
+            inputTokens: contextUsage.inputTokens,
+            outputTokens: contextUsage.outputTokens,
+          })
+        : undefined;
+      yield {
+        type: 'usage',
+        usage: usageContext ? { ...totalUsage, context: usageContext } : totalUsage,
+      };
+      yield { type: 'finish', finishReason: finishReason ?? 'stop' };
+
+      if (finishReason === 'length') {
+        console.warn('[orchestrator] Stream terminated due to max token limit');
+      } else if (finishReason === 'content-filter') {
+        console.warn('[orchestrator] Stream terminated by content filter');
+      }
+      return; // success
+    } catch (err) {
+      const canRetryIdle =
+        idleTimedOut &&
+        !abortSignal?.aborted &&
+        !deliveredAny &&
+        idleAttempt + 1 < maxIdleAttempts;
+      if (canRetryIdle) {
+        console.warn(
+          `[orchestrator] Stream idle before any content (attempt ${idleAttempt + 1}/${maxIdleAttempts}); retrying`,
+        );
+        continue;
+      }
+      if (idleTimedOut && !abortSignal?.aborted) {
+        yield {
+          type: 'error',
+          title: 'Stream idle timeout',
+          detail:
+            `LLM stream was idle for more than ${config.llm_stream_idle_timeout}s with no deltas.`,
+        };
+      } else {
+        const { title, detail } = classifyStreamError(err);
+        yield { type: 'error', title, detail };
+      }
+      return;
+    } finally {
+      clearIdleTimer();
+      disposeAbortMerge();
     }
-
-    // Yield any remaining pending tool calls/results after stream ends
-    // (deduped — no-ops for IDs already emitted via fullStream)
-    yield* drainPendingToolEvents(
-      pendingToolCalls,
-      pendingToolResults,
-      seenToolCallIds,
-      seenToolResultIds,
-    );
-
-    // Get the finish reason from the result
-    const finishReason = await result.finishReason;
-
-    // Yield usage BEFORE finish so the agent machine receives it while
-    // still in streaming state (not yet transitioned to idle).
-    // onStepFinish mutates this from an SDK callback, which TypeScript's
-    // control-flow analysis cannot observe across the awaited stream.
-    const contextUsage = latestContextUsage as LatestContextUsage | null;
-    const context = contextUsage
-      ? buildContextSnapshot({
-          systemPrompt: fullSystemPrompt,
-          tools,
-          messages: contextUsage.messages,
-          inputTokens: contextUsage.inputTokens,
-          outputTokens: contextUsage.outputTokens,
-        })
-      : undefined;
-    yield {
-      type: 'usage',
-      usage: context ? { ...totalUsage, context } : totalUsage,
-    };
-    yield { type: 'finish', finishReason: finishReason ?? 'stop' };
-
-    // Stream termination diagnostics (R19)
-    if (finishReason === 'length') {
-      console.warn('[orchestrator] Stream terminated due to max token limit');
-    } else if (finishReason === 'content-filter') {
-      console.warn('[orchestrator] Stream terminated by content filter');
-    }
-  } catch (err) {
-    const { title, detail } = classifyStreamError(err);
-    yield { type: 'error', title, detail };
   }
 }
 
@@ -576,17 +658,29 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 // Tool building
 // ---------------------------------------------------------------------------
 
+export interface BuildToolMapSkillOptions {
+  /** Full skill registry (for per-agent skill tool rebuild). */
+  skills?: Map<string, Skill>;
+  /** Agent's allowed_skills globs; when set, skill tool is filtered. */
+  allowedSkills?: readonly string[];
+}
+
 /**
  * Build a tool map for AI SDK from the registry, filtered by agent's allowed tools.
  *
  * Each tool gets a custom `execute` function that uses our dispatch logic
  * (timeout + output offloading).
+ *
+ * When `skillOptions.skills` is provided and `skill` is in the map, the skill
+ * tool is rebuilt with `allowedSkills` so restricted agents cannot load skills
+ * outside their allowlist (Python `build_skill_tool(allowed_skills)` parity).
  */
 export function buildToolMap(
   allowedTools: readonly string[],
   registry: ToolRegistry,
   mcpManager: MCPManager | null,
   dispatchOptions: ToolDispatchOptions,
+  skillOptions?: BuildToolMapSkillOptions,
 ): Record<string, Tool> {
   // Use a loose record internally to avoid TS2589 (excessively deep
   // instantiation) from Tool's conditional generic types, then assert to
@@ -614,6 +708,34 @@ export function buildToolMap(
 
         const result = await executeToolCall(toolCall, registry, dispatchOptions);
         // Structured payload so orchestrator can read isError without content sniffing.
+        return { content: result.content, isError: result.is_error };
+      },
+    };
+  }
+
+  // Per-agent skill filter: rebuild definition into a one-shot registry so
+  // executeToolCall still applies cwd checks, timeout, and output offload.
+  if (toolMap.skill && skillOptions?.skills) {
+    const allowed =
+      skillOptions.allowedSkills !== undefined
+        ? [...skillOptions.allowedSkills]
+        : undefined;
+    const { definition, handler } = buildSkillTool(skillOptions.skills, allowed);
+    const skillRegistry = new ToolRegistryClass();
+    skillRegistry.register(definition, handler);
+    toolMap.skill = {
+      description: definition.description,
+      inputSchema: definition.inputSchema,
+      execute: async (args: unknown) => {
+        const toolCall: ToolCall = {
+          id: crypto.randomUUID(),
+          type: 'function',
+          function: {
+            name: definition.name,
+            arguments: JSON.stringify(args),
+          },
+        };
+        const result = await executeToolCall(toolCall, skillRegistry, dispatchOptions);
         return { content: result.content, isError: result.is_error };
       },
     };
@@ -666,6 +788,45 @@ export function buildToolMap(
   }
 
   return toolMap as Record<string, Tool>;
+}
+
+/**
+ * Merge optional user AbortSignal with the idle-timeout controller.
+ * Aborts when either fires. Call `dispose` in finally to drop listeners.
+ */
+export function combineAbortSignals(
+  userSignal: AbortSignal | undefined,
+  idleSignal: AbortSignal,
+): { signal: AbortSignal; dispose: () => void } {
+  if (!userSignal) {
+    return { signal: idleSignal, dispose: () => {} };
+  }
+  // Node 20+ / modern Electron — no manual listeners to clean up
+  if (typeof AbortSignal.any === 'function') {
+    return {
+      signal: AbortSignal.any([userSignal, idleSignal]),
+      dispose: () => {},
+    };
+  }
+  const controller = new AbortController();
+  const onAbort = (): void => {
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  };
+  if (userSignal.aborted || idleSignal.aborted) {
+    controller.abort();
+    return { signal: controller.signal, dispose: () => {} };
+  }
+  userSignal.addEventListener('abort', onAbort);
+  idleSignal.addEventListener('abort', onAbort);
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      userSignal.removeEventListener('abort', onAbort);
+      idleSignal.removeEventListener('abort', onAbort);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

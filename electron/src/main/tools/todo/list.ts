@@ -1,29 +1,34 @@
 /**
- * todo_list tool — list tasks in the shared todo list.
+ * todo_list tool — list tasks owned by the calling agent scope.
  *
- * Params: status (string, optional), subagent_id (string, optional)
- * Filters by status and/or subagent_id. Returns list of todos.
- *
- * Ported from Python `src/orchid/tools/todo.py` (execute_todo_list).
+ * Agent isolation: main only lists main-owned tasks; subagents only list
+ * their own. Optional status filter still applies within the scope.
+ * The subagent_id param is ignored for isolation (scope is always the caller).
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
-import type { TodoStore } from './store';
-import type { TodoToolResult } from './create';
+import type { TodoToolResult, TodoStoreSource } from './create';
+import { resolveTodoStore } from './create';
 import { TodoStatus } from '../../../shared/types/todo';
+import {
+  filterTodosForScope,
+  MAIN_AGENT_SCOPE_ID,
+  normalizeAgentScopeId,
+} from '../../../shared/types/agent-scope';
 
 /**
  * Build the todo_list tool.
  *
- * @param store - TodoStore instance for the current session
+ * @param store - TodoStore instance, or getter for the active session store
  */
 export function buildListTool(
-  store: TodoStore,
+  store: TodoStoreSource,
 ): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
     name: 'todo_list',
     description:
-      'List tasks in the shared todo list, optionally filtered by status or subagent.',
+      'List tasks owned by the current agent (main or this subagent). ' +
+      'Optionally filter by status. Peer agents\' tasks are never returned.',
     inputSchema: z.object({
       status: z
         .string()
@@ -31,16 +36,19 @@ export function buildListTool(
         .describe(
           `Filter by status. Must be one of: ${Object.values(TodoStatus).join(', ')}.`,
         ),
-      subagent_id: z.string().optional().describe('Filter by subagent ID.'),
+      // Kept for schema stability; enforced scope always overrides.
+      subagent_id: z
+        .string()
+        .optional()
+        .describe('Deprecated: scope is always the calling agent. Ignored.'),
     }),
     actionLabel: 'Listing todos...',
     category: 'todo',
   };
 
-  const handler: ToolHandler = async (input: unknown, _ctx): Promise<TodoToolResult> => {
-    const { status, subagent_id } = input as {
+  const handler: ToolHandler = async (input: unknown, ctx): Promise<TodoToolResult> => {
+    const { status } = input as {
       status?: string;
-      subagent_id?: string;
     };
 
     // Parse and validate status
@@ -51,28 +59,28 @@ export function buildListTool(
         return {
           display: 'Invalid status',
           content: `Error: Invalid status '${status}'. Valid statuses: ${Object.values(TodoStatus).join(', ')}`,
-      isError: true,
+          isError: true,
         };
       }
       parsedStatus = upper as TodoStatus;
     }
 
-    const tasks = store.list(parsedStatus, subagent_id);
+    const scope = normalizeAgentScopeId(ctx.agentScopeId);
+    const all = resolveTodoStore(store).list(parsedStatus);
+    const tasks = filterTodosForScope(all, scope);
 
     if (tasks.length === 0) {
       return {
         display: 'No tasks found',
-        content: 'No tasks match the given filters.',
+        content: `No tasks for agent scope '${scope}'.`,
       };
     }
 
-    const lines = [`Found ${tasks.length} task(s):\n`];
+    const lines = [`Found ${tasks.length} task(s) for scope '${scope}':\n`];
     for (const t of tasks) {
       const parts = [`[${t.id}] ${t.title}`];
       parts.push(`  Status: ${t.status}`);
-      if (t.subagent_id) {
-        parts.push(`  Subagent: ${t.subagent_id}`);
-      }
+      parts.push(`  Owner: ${t.subagent_id ?? MAIN_AGENT_SCOPE_ID}`);
       lines.push(parts.join('\n') + '\n');
     }
 

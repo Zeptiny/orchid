@@ -26,14 +26,18 @@ import { MCPManager } from './mcp';
 import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
 import { initFileLogging, closeFileLogging } from './logging';
 import { registerBuiltinTools } from './tools';
+import { getBackgroundStore } from './tools/process/background-store';
 import { wireSubagentRuntime } from './agents/wire-subagents';
 import { applyWorkspaceProjectLayers } from './project/layers';
 import { canonicalizeProjectDirectory } from './project/path';
+import { getConfig } from './config/loader';
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null;
 let mcpManager: MCPManager | null = null;
+/** Periodic reclaim of USER-owned bg command stdin after idle timeout. */
+let bgIdleOwnershipTimer: ReturnType<typeof setInterval> | null = null;
 
 // ── Window creation ──────────────────────────────────────────────────────────
 
@@ -150,6 +154,22 @@ app.whenReady().then(async () => {
     // 5. Register all IPC handlers (before creating window)
     registerAllIPC();
 
+    // 5b. Reclaim USER-owned background command stdin after idle timeout
+    // (Python app main loop calls check_idle_ownership periodically).
+    if (bgIdleOwnershipTimer) {
+      clearInterval(bgIdleOwnershipTimer);
+    }
+    bgIdleOwnershipTimer = setInterval(() => {
+      try {
+        const cfg = getConfig();
+        getBackgroundStore().checkIdleOwnership(
+          cfg.background_command_idle_timeout * 1000,
+        );
+      } catch {
+        // Config / store may be unavailable during teardown
+      }
+    }, 10_000);
+
     // Start MCP in background — don't block window creation
     mcpManager
       .startAll(config.mcp_servers as Record<string, import('./mcp/schema').MCPServerConfig>, {
@@ -212,6 +232,11 @@ app.on('before-quit', async (event) => {
   event.preventDefault();
 
   try {
+    if (bgIdleOwnershipTimer) {
+      clearInterval(bgIdleOwnershipTimer);
+      bgIdleOwnershipTimer = null;
+    }
+
     // 1. Close file logging stream
     await closeFileLogging();
 

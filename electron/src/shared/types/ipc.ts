@@ -208,6 +208,11 @@ export interface SessionRenamedEvent {
   name: string;
 }
 
+export interface SessionTodosChangedEvent {
+  /** Active session id when todos changed, or null if no active session. */
+  sessionId: string | null;
+}
+
 /** Fired when main creates a session (e.g. first message from draft mode). */
 export interface SessionCreatedEvent {
   session: Session;
@@ -369,6 +374,8 @@ export interface OrchidAPI {
     onWorkspaceChanged: (callback: (event: SessionWorkspaceChangedEvent) => void) => () => void;
     /** Subagent chains persisted — refresh sidebar / chain-footer usage. */
     onSubagentsChanged: (callback: () => void) => () => void;
+    /** Todo store mutated — refresh todos sidebar. */
+    onTodosChanged: (callback: (event: SessionTodosChangedEvent) => void) => () => void;
   };
 
   tool: {
@@ -488,6 +495,8 @@ export const IPC_CHANNELS = {
   SESSION_WORKSPACE_CHANGED: 'session:workspace_changed',
   /** Fired when subagent_chains are persisted (spawn progress / complete). */
   SESSION_SUBAGENTS_CHANGED: 'session:subagents_changed',
+  /** Fired when the active session's todo store mutates (tool create/update/delete). */
+  SESSION_TODOS_CHANGED: 'session:todos_changed',
 
   // Tool
   TOOL_EXECUTE: 'tool:execute',
@@ -602,6 +611,7 @@ export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
   IPC_CHANNELS.SESSION_CREATED,
   IPC_CHANNELS.SESSION_WORKSPACE_CHANGED,
   IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED,
+  IPC_CHANNELS.SESSION_TODOS_CHANGED,
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
   IPC_CHANNELS.UPDATER_STATUS_UPDATE,

@@ -117,6 +117,11 @@ export const configSchema = z
     llm_stream_retries: z.number().int().nonnegative().default(3),
     background_command_idle_timeout: z.number().positive().default(900.0),
     /**
+     * Max multi-step tool-loop iterations per stream (AI SDK stopWhen).
+     * Python's tool loop is unbounded; 100 is a high practical default.
+     */
+    max_tool_steps: z.number().int().positive().default(100),
+    /**
      * Sticky home-config default project directory for new sessions.
      * Empty string is treated as null. When non-null, must be absolute.
      * Never invented from process.cwd().

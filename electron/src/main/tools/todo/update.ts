@@ -1,33 +1,34 @@
 /**
- * todo_update tool — update an existing task in the shared todo list.
+ * todo_update tool — update a task owned by the calling agent scope.
  *
- * Params: id (string, required), title (string, optional), status (string, optional),
- *         subagent_id (string, optional)
- * Validates transitions against VALID_TRANSITIONS (OPEN → IN_PROGRESS → DONE).
- * Triggers notifyTodoChanged() callback.
- *
- * Ported from Python `src/orchid/tools/todo.py` (execute_todo_update).
+ * Cross-scope updates are rejected (Sub1 cannot mutate main/Sub2 todos).
+ * Subagents cannot reassign ownership away from themselves.
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
-import type { TodoStore } from './store';
-import type { TodoToolResult, NotifyTodoChanged } from './create';
+import type { TodoToolResult, NotifyTodoChanged, TodoStoreSource } from './create';
+import { resolveTodoStore } from './create';
 import { TodoStatus } from '../../../shared/types/todo';
+import {
+  isMainAgentScope,
+  normalizeAgentScopeId,
+  todoBelongsToScope,
+} from '../../../shared/types/agent-scope';
 
 /**
  * Build the todo_update tool.
  *
- * @param store - TodoStore instance for the current session
+ * @param store - TodoStore instance, or getter for the active session store
  * @param notifyChanged - Optional callback to notify UI of changes
  */
 export function buildUpdateTool(
-  store: TodoStore,
+  store: TodoStoreSource,
   notifyChanged?: NotifyTodoChanged,
 ): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
     name: 'todo_update',
     description:
-      'Update an existing task in the shared todo list.\n\n' +
+      'Update an existing task owned by the current agent.\n\n' +
       'Status transitions:\n' +
       `  OPEN → IN_PROGRESS\n` +
       `  IN_PROGRESS → DONE\n` +
@@ -41,19 +42,42 @@ export function buildUpdateTool(
         .describe(
           `New status. Must be one of: ${Object.values(TodoStatus).join(', ')}.`,
         ),
-      subagent_id: z.string().optional().describe('New subagent ID (optional).'),
+      subagent_id: z
+        .string()
+        .optional()
+        .describe(
+          'Main agent only: reassign ownership. Subagents cannot change owner.',
+        ),
     }),
     actionLabel: 'Updating todo...',
     category: 'todo',
   };
 
-  const handler: ToolHandler = async (input: unknown, _ctx): Promise<TodoToolResult> => {
+  const handler: ToolHandler = async (input: unknown, ctx): Promise<TodoToolResult> => {
     const { id, title, status, subagent_id } = input as {
       id: string;
       title?: string;
       status?: string;
       subagent_id?: string;
     };
+
+    const scope = normalizeAgentScopeId(ctx.agentScopeId);
+    const todoStore = resolveTodoStore(store);
+    const existing = todoStore.get(id);
+    if (!existing) {
+      return {
+        display: 'Update failed',
+        content: `Error: No task found with ID '${id}'.`,
+        isError: true,
+      };
+    }
+    if (!todoBelongsToScope(existing, scope)) {
+      return {
+        display: 'Update failed',
+        content: `Error: Task '${id}' is not owned by agent scope '${scope}'.`,
+        isError: true,
+      };
+    }
 
     // Parse and validate status
     let parsedStatus: TodoStatus | undefined;
@@ -63,17 +87,22 @@ export function buildUpdateTool(
         return {
           display: 'Invalid status',
           content: `Error: Invalid status '${status}'. Valid statuses: ${Object.values(TodoStatus).join(', ')}`,
-      isError: true,
+          isError: true,
         };
       }
       parsedStatus = upper as TodoStatus;
     }
 
-    const [task, error] = store.update(id, {
+    // Ownership reassignment: main only; subagents cannot reassign.
+    const updates: { title?: string; status?: TodoStatus; subagent_id?: string } = {
       title,
       status: parsedStatus,
-      subagent_id,
-    });
+    };
+    if (isMainAgentScope(scope) && subagent_id !== undefined) {
+      updates.subagent_id = subagent_id;
+    }
+
+    const [task, error] = todoStore.update(id, updates);
 
     if (error) {
       return { display: 'Update failed', content: `Error: ${error}`, isError: true };
@@ -87,11 +116,13 @@ export function buildUpdateTool(
     const changes: string[] = [];
     if (title !== undefined) changes.push(`Title: ${task!.title}`);
     if (status !== undefined) changes.push(`Status: ${task!.status}`);
-    if (subagent_id !== undefined) changes.push(`Subagent: ${task!.subagent_id}`);
+    if (isMainAgentScope(scope) && subagent_id !== undefined) {
+      changes.push(`Owner: ${task!.subagent_id || 'main'}`);
+    }
 
     return {
       display: `Updated task ${task!.id}`,
-      content: 'Task updated successfully.\n\n' + changes.join('\n'),
+      content: 'Task updated successfully.\n\n' + (changes.join('\n') || 'No fields changed.'),
     };
   };
 

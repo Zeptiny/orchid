@@ -105,6 +105,7 @@ describe('schema & defaults', () => {
     expect(cfg.mcp_startup_timeout).toBe(60.0);
     expect(cfg.mcp_per_server_timeout).toBe(10.0);
     expect(cfg.llm_stream_idle_timeout).toBe(300.0);
+    expect(cfg.max_tool_steps).toBe(100);
     expect(cfg.llm_stream_retries).toBe(3);
     expect(cfg.background_command_idle_timeout).toBe(900.0);
     // Sticky project default: unbound until the user intentionally picks a folder
