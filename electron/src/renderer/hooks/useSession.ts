@@ -22,14 +22,22 @@ export type SessionListState =
   | { status: 'error'; error: string };
 
 export interface UseSessionReturn {
-  /** The active (loaded) session, or null. */
+  /** The active (loaded) session, or null (draft / new chat). */
   activeSession: Session | null;
   /** Session list state with interaction states. */
   listState: SessionListState;
   /** Load a session by ID. Returns the loaded session (or null on failure). */
   load: (id: string) => Promise<Session | null>;
-  /** Create a new session. */
+  /**
+   * Eagerly create a session file (legacy / tests). Prefer `enterDraft` for
+   * the New Chat button — session is created on first message instead.
+   */
   create: () => Promise<Session>;
+  /**
+   * Enter draft mode: no active session, no new disk file. First chat:send
+   * will lazy-create a session in main.
+   */
+  enterDraft: () => Promise<void>;
   /** Delete a session by ID. */
   deleteSession: (id: string) => Promise<void>;
   /** Rename a session. */
@@ -97,6 +105,20 @@ export function useSession(): UseSessionReturn {
     return unsubscribe;
   }, [refresh]);
 
+  // Lazy create: first chat:send with no active session creates one in main
+  // and pushes SESSION_CREATED so the sidebar gains a list entry.
+  useEffect(() => {
+    if (!window.orchid?.session?.onCreated) {
+      return undefined;
+    }
+
+    const unsubscribe = window.orchid.session.onCreated((event) => {
+      setActiveSession(event.session);
+      void refresh();
+    });
+    return unsubscribe;
+  }, [refresh]);
+
   const load = useCallback(async (id: string): Promise<Session | null> => {
     if (!window.orchid?.session?.load) {
       return null;
@@ -142,6 +164,13 @@ export function useSession(): UseSessionReturn {
       setIsLoading(false);
     }
   }, [refresh]);
+
+  const enterDraft = useCallback(async () => {
+    if (window.orchid?.session?.clearActive) {
+      await window.orchid.session.clearActive();
+    }
+    setActiveSession(null);
+  }, []);
 
   const deleteSession = useCallback(
     async (id: string) => {
@@ -221,6 +250,7 @@ export function useSession(): UseSessionReturn {
     listState,
     load,
     create,
+    enterDraft,
     deleteSession,
     rename,
     changeModel,

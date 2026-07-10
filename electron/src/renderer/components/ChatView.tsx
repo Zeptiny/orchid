@@ -164,15 +164,16 @@ export function ChatView() {
     [session, chat, applySessionMessages],
   );
 
+  // New chat: enter draft mode (no disk file). Session is created on first send.
   const handleSessionCreate = useCallback(async () => {
     const gen = ++sessionSwitchGen.current;
     chat.setMessages([]);
-    const newSession = await session.create();
+    await session.enterDraft();
     if (gen !== sessionSwitchGen.current) {
       return;
     }
-    // create() already activates; clear UI for the empty new session.
-    applySessionMessages(newSession);
+    // Ensure empty pane after draft clear (enterDraft does not load messages).
+    applySessionMessages(null);
   }, [session, chat, applySessionMessages]);
 
   // Auto-select the most recent session on first list load so the UI isn't
@@ -221,6 +222,15 @@ export function ChatView() {
     [session, chat, handleSessionSelect],
   );
 
+  const handleSend = useCallback(
+    async (message: string) => {
+      const preferredModel =
+        session.activeSession?.model || currentModel || undefined;
+      await chat.send(message, preferredModel ? { model: preferredModel } : undefined);
+    },
+    [chat, session.activeSession?.model, currentModel],
+  );
+
   const handleRetry = useCallback(async () => {
     // Re-send the last user message after an error
     const lastUser = [...chat.messages]
@@ -228,8 +238,8 @@ export function ChatView() {
       .find((m) => m.role === 'user' && !m.hidden && Boolean(m.content?.trim()));
     if (!lastUser?.content) return;
     chat.clearError();
-    await chat.send(lastUser.content);
-  }, [chat]);
+    await handleSend(lastUser.content);
+  }, [chat, handleSend]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -490,7 +500,7 @@ export function ChatView() {
           status={chat.status}
           model={model}
           interruptState={chat.interruptState}
-          onSend={chat.send}
+          onSend={handleSend}
           onCancel={chat.cancel}
           commandContext={commandContext}
           sessions={sessions}

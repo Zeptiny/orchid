@@ -49,6 +49,8 @@ import {
 const chatSendSchema = z.object({
   message: z.string().min(1, 'Message must be non-empty'),
   sessionId: z.string().optional(),
+  /** Preferred model when lazy-creating a session from draft mode. */
+  model: z.string().optional(),
 });
 
 const bgCommandSnapshotSchema = z.object({
@@ -224,6 +226,30 @@ function canSend(webContents: WebContents): boolean {
   return typeof webContents.isDestroyed !== 'function' || !webContents.isDestroyed();
 }
 
+/**
+ * Ensure there is an active session before streaming/persisting.
+ * Draft mode leaves no active session until the first chat:send — create
+ * lazily here and notify the renderer so the sidebar gains a list entry.
+ */
+function ensureActiveSession(
+  webContents: WebContents,
+  preferredModel?: string,
+): void {
+  const manager = getSessionManager();
+  if (manager.getActive()) {
+    return;
+  }
+
+  const config = getConfig();
+  const model =
+    (preferredModel && preferredModel.trim()) ||
+    config.default_model ||
+    '';
+  const session = manager.create(model);
+  if (canSend(webContents)) {
+    webContents.send(IPC_CHANNELS.SESSION_CREATED, { session });
+  }
+}
 
 function classifyErrorKind(title: string | null | undefined, detail: string): ChatErrorKind {
   const haystack = `${title ?? ''} ${detail}`.toLowerCase();
@@ -449,12 +475,15 @@ export function registerChatIPC(): void {
       throw new Error(`Invalid chat:send payload: ${parsed.error.message}`);
     }
 
-    const { message } = parsed.data;
+    const { message, model: preferredModel } = parsed.data;
     const config = getConfig();
 
     // Cancel any existing actor for this window
     const windowId = String(webContents.id);
     const existing = activeAgents.get(windowId);
+
+    // Lazy session create: first message from draft mode writes the session.
+    ensureActiveSession(webContents, preferredModel);
 
     // Prefer live window history; fall back to active session chain on cold start.
     let existingMessages: Message[] =

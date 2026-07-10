@@ -109,7 +109,9 @@ export function registerSessionIPC(): void {
     return session;
   });
 
-  // session:create — create a new session
+  // session:create — eagerly create + activate a session (writes to disk).
+  // Prefer session:clear_active + first chat:send for draft UX; this remains
+  // for tests and any callers that need an immediate empty session file.
   ipcMain.handle(IPC_CHANNELS.SESSION_CREATE, async (event) => {
     const config = getConfig();
     const manager = getSessionManager();
@@ -117,7 +119,18 @@ export function registerSessionIPC(): void {
     abortChatForWindow(windowId);
     const session = manager.create(config.default_model);
     clearChatHistory(windowId);
+    event.sender.send(IPC_CHANNELS.SESSION_CREATED, { session });
     return session;
+  });
+
+  // session:clear_active — draft / new chat: no active session, no new file
+  ipcMain.handle(IPC_CHANNELS.SESSION_CLEAR_ACTIVE, async (event) => {
+    const manager = getSessionManager();
+    const windowId = String(event.sender.id);
+    abortChatForWindow(windowId);
+    manager.clearActive();
+    clearChatHistory(windowId);
+    return { status: 'cleared' };
   });
 
   // session:delete — delete a session
@@ -181,6 +194,7 @@ export function unregisterSessionIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_LIST);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_LOAD);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CREATE);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_CLEAR_ACTIVE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_DELETE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_RENAME);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CHANGE_MODEL);

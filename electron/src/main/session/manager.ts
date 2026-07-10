@@ -83,6 +83,16 @@ export class SessionManager {
   }
 
   /**
+   * Clear the active session without deleting any files.
+   *
+   * Used for draft/new-chat mode: the UI has no active session until the
+   * first message is sent (which calls create()).
+   */
+  clearActive(): void {
+    this._active = null;
+  }
+
+  /**
    * Create a new session with a UUID and default name.
    *
    * The session is immediately saved to disk and set as active.

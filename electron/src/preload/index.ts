@@ -31,6 +31,7 @@ import type {
   SessionLoadMessage,
   SessionDeleteMessage,
   SessionRenamedEvent,
+  SessionCreatedEvent,
   ToolExecuteMessage,
   AgentSpawnMessage,
   RAGIndexMessage,
@@ -139,6 +140,9 @@ const orchidAPI: OrchidAPI = {
     create: () =>
       invoke(IPC_CHANNELS.SESSION_CREATE),
 
+    clearActive: () =>
+      invoke(IPC_CHANNELS.SESSION_CLEAR_ACTIVE),
+
     delete: (id: SessionDeleteMessage) =>
       invoke(IPC_CHANNELS.SESSION_DELETE, id),
 
@@ -150,6 +154,9 @@ const orchidAPI: OrchidAPI = {
 
     onRenamed: (callback: (event: SessionRenamedEvent) => void) =>
       on(IPC_CHANNELS.SESSION_RENAMED, (...args) => callback(args[0] as SessionRenamedEvent)),
+
+    onCreated: (callback: (event: SessionCreatedEvent) => void) =>
+      on(IPC_CHANNELS.SESSION_CREATED, (...args) => callback(args[0] as SessionCreatedEvent)),
 
     onSubagentsChanged: (callback: () => void) =>
       on(IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED, () => callback()),

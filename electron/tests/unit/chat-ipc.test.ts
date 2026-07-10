@@ -6,10 +6,75 @@ const mocks = vi.hoisted(() => {
   const streamResponses: string[] = [];
   const streamEventSequences: Array<Array<Record<string, unknown>>> = [];
 
+  let activeSession: {
+    id: string;
+    name: string;
+    model: string;
+    chains: unknown[];
+    activeChainId: string | null;
+    createdAt: string;
+    updatedAt: string;
+    subagentChains: unknown[];
+    todoStore: { tasks: unknown[] };
+  } | null = null;
+
+  const sessionManager = {
+    getActive: vi.fn(() => activeSession),
+    clearActive: vi.fn(() => {
+      activeSession = null;
+    }),
+    create: vi.fn((model: string) => {
+      activeSession = {
+        id: 'lazy-session-id',
+        name: 'Session draft',
+        model,
+        chains: [],
+        activeChainId: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        subagentChains: [],
+        todoStore: { tasks: [] },
+      };
+      return activeSession;
+    }),
+    syncActiveChain: vi.fn((params: { messages: unknown[] }) => {
+      if (!activeSession) return null;
+      activeSession = {
+        ...activeSession,
+        chains: [
+          {
+            id: 'chain-1',
+            sessionId: activeSession.id,
+            messages: params.messages,
+            status: 'completed',
+            model: activeSession.model,
+            agentName: 'general',
+            agentType: 'subagent',
+            agentTier: 'bloom',
+            subagentRecord: null,
+          },
+        ],
+        activeChainId: 'chain-1',
+      };
+      return activeSession;
+    }),
+    autoNameActive: vi.fn(async () => activeSession),
+    /** Test helper: reset between cases */
+    _reset: () => {
+      activeSession = null;
+      sessionManager.getActive.mockClear();
+      sessionManager.create.mockClear();
+      sessionManager.clearActive.mockClear();
+      sessionManager.syncActiveChain.mockClear();
+      sessionManager.autoNameActive.mockClear();
+    },
+  };
+
   return {
     handlers,
     streamResponses,
     streamEventSequences,
+    sessionManager,
     ipcMain: {
       handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
         handlers.set(channel, handler);
@@ -88,6 +153,10 @@ vi.mock('../../src/main/llm/orchestrator', () => ({
   streamChat: mocks.streamChat,
 }));
 
+vi.mock('../../src/main/ipc/session', () => ({
+  getSessionManager: () => mocks.sessionManager,
+}));
+
 let chatIpc: typeof import('../../src/main/ipc/chat');
 
 function doneEvents(send: ReturnType<typeof vi.fn>) {
@@ -118,6 +187,7 @@ describe('chat IPC', () => {
     mocks.streamResponses.length = 0;
     mocks.streamEventSequences.length = 0;
     mocks.subagentManager.cancelRunning.mockClear();
+    mocks.sessionManager._reset();
 
     chatIpc = await import('../../src/main/ipc/chat');
     chatIpc.registerChatIPC();
@@ -128,6 +198,39 @@ describe('chat IPC', () => {
     mocks.handlers.clear();
     mocks.streamResponses.length = 0;
     mocks.streamEventSequences.length = 0;
+    mocks.sessionManager._reset();
+  });
+
+  it('lazy-creates a session on first send when none is active', async () => {
+    mocks.streamResponses.push('Hello back');
+    const send = vi.fn();
+    const webContents = { id: 99, send };
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+    expect(chatSend).toBeDefined();
+
+    expect(mocks.sessionManager.getActive()).toBeNull();
+
+    await chatSend!(
+      { sender: webContents },
+      { message: 'Hi from draft', model: 'preferred/model' },
+    );
+    await waitForDoneCount(send, 1);
+
+    expect(mocks.sessionManager.create).toHaveBeenCalledTimes(1);
+    expect(mocks.sessionManager.create).toHaveBeenCalledWith('preferred/model');
+    expect(mocks.sessionManager.getActive()?.id).toBe('lazy-session-id');
+
+    const created = channelEvents(send, IPC_CHANNELS.SESSION_CREATED);
+    expect(created).toHaveLength(1);
+    expect(created[0][1]).toMatchObject({
+      session: { id: 'lazy-session-id', model: 'preferred/model' },
+    });
+
+    // Second send reuses the active session — no second create
+    mocks.streamResponses.push('Again');
+    await chatSend!({ sender: webContents }, { message: 'Follow-up' });
+    await waitForDoneCount(send, 2);
+    expect(mocks.sessionManager.create).toHaveBeenCalledTimes(1);
   });
 
   it('does not replay the previous assistant response when a new turn starts', async () => {

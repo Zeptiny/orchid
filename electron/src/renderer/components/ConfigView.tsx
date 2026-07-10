@@ -145,8 +145,8 @@ export function ConfigView({ onClose }: ConfigViewProps) {
   );
 
   const handleSessionCreate = useCallback(async () => {
-    const newSession = await session.create();
-    await session.load(newSession.id);
+    // Draft mode — no empty session file; first message creates the session.
+    await session.enterDraft();
   }, [session]);
 
   return (

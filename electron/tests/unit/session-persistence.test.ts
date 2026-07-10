@@ -592,6 +592,20 @@ describe('SessionManager', () => {
     expect(manager.getActive()!.id).toBe(session.id);
   });
 
+  it('clearActive() drops active without deleting the session file', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create('gpt-4o');
+    expect(manager.getActive()!.id).toBe(session.id);
+
+    manager.clearActive();
+    expect(manager.getActive()).toBeNull();
+
+    // File still on disk
+    const loaded = loadSession(session.id, storageOpts);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.id).toBe(session.id);
+  });
+
   it('switchTo() loads session from disk and sets as active', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session1 = manager.create('gpt-4o');

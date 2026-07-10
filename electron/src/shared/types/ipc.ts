@@ -42,6 +42,11 @@ export interface ChatSendMessage {
   message: string;
   /** Optional session ID (uses active session if omitted). */
   sessionId?: string;
+  /**
+   * Preferred model when auto-creating a session on first send (draft mode).
+   * Ignored when an active session already exists.
+   */
+  model?: string;
 }
 
 export interface ChatCancelMessage {
@@ -175,6 +180,11 @@ export interface SessionRenamedEvent {
   name: string;
 }
 
+/** Fired when main creates a session (e.g. first message from draft mode). */
+export interface SessionCreatedEvent {
+  session: Session;
+}
+
 export interface SessionChangeModelMessage {
   id: string;
   model: string;
@@ -262,10 +272,17 @@ export interface OrchidAPI {
     list: () => Promise<SessionSummary[]>;
     load: (id: SessionLoadMessage) => Promise<Session | null>;
     create: () => Promise<Session>;
+    /**
+     * Enter draft mode: clear active session, abort in-flight chat, clear
+     * window history. Does not write a session file.
+     */
+    clearActive: () => Promise<{ status: string }>;
     delete: (id: SessionDeleteMessage) => Promise<{ status: string }>;
     rename: (id: string, name: string) => Promise<{ status: string }>;
     changeModel: (id: string, model: string) => Promise<{ status: string }>;
     onRenamed: (callback: (event: SessionRenamedEvent) => void) => () => void;
+    /** Session auto-created on first message from draft mode. */
+    onCreated: (callback: (event: SessionCreatedEvent) => void) => () => void;
     /** Subagent chains persisted — refresh sidebar / chain-footer usage. */
     onSubagentsChanged: (callback: () => void) => () => void;
   };
@@ -336,9 +353,13 @@ export const IPC_CHANNELS = {
   SESSION_LIST: 'session:list',
   SESSION_LOAD: 'session:load',
   SESSION_CREATE: 'session:create',
+  /** Clear active session without creating a file (draft / new chat). */
+  SESSION_CLEAR_ACTIVE: 'session:clear_active',
   SESSION_DELETE: 'session:delete',
   SESSION_RENAME: 'session:rename',
   SESSION_RENAMED: 'session:renamed',
+  /** Fired when a session is created (eager create or first-message lazy create). */
+  SESSION_CREATED: 'session:created',
   SESSION_CHANGE_MODEL: 'session:change_model',
   /** Fired when subagent_chains are persisted (spawn progress / complete). */
   SESSION_SUBAGENTS_CHANGED: 'session:subagents_changed',
@@ -390,6 +411,7 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.SESSION_LIST,
   IPC_CHANNELS.SESSION_LOAD,
   IPC_CHANNELS.SESSION_CREATE,
+  IPC_CHANNELS.SESSION_CLEAR_ACTIVE,
   IPC_CHANNELS.SESSION_DELETE,
   IPC_CHANNELS.SESSION_RENAME,
   IPC_CHANNELS.SESSION_CHANGE_MODEL,
@@ -422,6 +444,7 @@ export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
   IPC_CHANNELS.CHAT_TOOL_CALL_DELTA,
   IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
   IPC_CHANNELS.SESSION_RENAMED,
+  IPC_CHANNELS.SESSION_CREATED,
   IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED,
   IPC_CHANNELS.UPDATER_STATUS_UPDATE,
   IPC_CHANNELS.UPDATER_PROGRESS,

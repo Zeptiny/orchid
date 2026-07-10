@@ -49,6 +49,8 @@ describe('IPC Channel Names', () => {
     expect(IPC_CHANNELS.SESSION_LIST).toBe('session:list');
     expect(IPC_CHANNELS.SESSION_LOAD).toBe('session:load');
     expect(IPC_CHANNELS.SESSION_CREATE).toBe('session:create');
+    expect(IPC_CHANNELS.SESSION_CLEAR_ACTIVE).toBe('session:clear_active');
+    expect(IPC_CHANNELS.SESSION_CREATED).toBe('session:created');
     expect(IPC_CHANNELS.SESSION_DELETE).toBe('session:delete');
     expect(IPC_CHANNELS.SESSION_RENAME).toBe('session:rename');
   });
@@ -91,6 +93,7 @@ describe('IPC Security', () => {
       IPC_CHANNELS.SESSION_LIST,
       IPC_CHANNELS.SESSION_LOAD,
       IPC_CHANNELS.SESSION_CREATE,
+      IPC_CHANNELS.SESSION_CLEAR_ACTIVE,
       IPC_CHANNELS.SESSION_DELETE,
       IPC_CHANNELS.SESSION_RENAME,
       IPC_CHANNELS.TOOL_EXECUTE,

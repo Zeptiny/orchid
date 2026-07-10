@@ -94,9 +94,14 @@ export interface ChatState {
   cwd: string;
 }
 
+export interface ChatSendOptions {
+  /** Preferred model when main lazy-creates a session from draft mode. */
+  model?: string;
+}
+
 export interface UseChatReturn extends ChatState {
   /** Send a message to the chat. */
-  send: (message: string) => Promise<void>;
+  send: (message: string, options?: ChatSendOptions) => Promise<void>;
   /** Cancel the current stream. */
   cancel: () => Promise<void>;
   /** Clear the error state. */
@@ -455,7 +460,7 @@ export function useChat(): UseChatReturn {
   }, [applyToolBlocks, applyStreamSegments]);
 
   const send = useCallback(
-    async (message: string) => {
+    async (message: string, options?: ChatSendOptions) => {
       // isSendingRef is synchronous; status alone can be stale across rapid Enter.
       if (!message.trim() || status === 'streaming' || isSendingRef.current) return;
       if (!window.orchid?.chat) {
@@ -511,7 +516,10 @@ export function useChat(): UseChatReturn {
       setStatus('streaming');
 
       try {
-        await window.orchid.chat.send({ message: trimmed });
+        await window.orchid.chat.send({
+          message: trimmed,
+          ...(options?.model ? { model: options.model } : {}),
+        });
       } catch (err) {
         isSendingRef.current = false;
         setError(err instanceof Error ? err.message : String(err));

@@ -39,8 +39,11 @@ const mockOrchid = {
     list: vi.fn().mockResolvedValue([]),
     load: vi.fn().mockResolvedValue(null),
     create: vi.fn().mockResolvedValue({ id: 'new-session', name: 'New Session' }),
+    clearActive: vi.fn().mockResolvedValue({ status: 'cleared' }),
     delete: vi.fn().mockResolvedValue({ status: 'ok' }),
     rename: vi.fn().mockResolvedValue({ status: 'ok' }),
+    onCreated: vi.fn().mockReturnValue(() => {}),
+    onRenamed: vi.fn().mockReturnValue(() => {}),
   },
   tool: {
     execute: vi.fn().mockResolvedValue({ content: '', isError: false }),
@@ -198,6 +201,12 @@ describe('Session Management', () => {
 
     const result = await mockOrchid.session.create();
     expect(result.id).toBe('new');
+  });
+
+  it('session.clearActive enters draft mode without creating a session', async () => {
+    await mockOrchid.session.clearActive();
+    expect(mockOrchid.session.clearActive).toHaveBeenCalled();
+    expect(mockOrchid.session.create).not.toHaveBeenCalled();
   });
 
   it('session.delete deletes a session', async () => {
