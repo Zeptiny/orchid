@@ -22,6 +22,7 @@ import * as path from 'node:path';
 vi.mock('onnxruntime-node', () => ({
   InferenceSession: {
     create: vi.fn().mockResolvedValue({
+      inputNames: ['input_ids', 'attention_mask', 'token_type_ids'],
       run: vi.fn().mockResolvedValue({
         last_hidden_state: {
           data: new Float32Array(512 * 384).fill(0.1),
@@ -39,14 +40,17 @@ vi.mock('onnxruntime-node', () => ({
 // Mock node:os to control homedir
 // ---------------------------------------------------------------------------
 
+const { mockedHomedirFn, setMockedHomedir } = vi.hoisted(() => {
+  let fn: () => string = () => '';
+  return { mockedHomedirFn: () => fn, setMockedHomedir: (newFn: () => string) => { fn = newFn; } };
+});
 const actualOs = await vi.importActual<typeof os>('node:os');
-let mockedHomedir: () => string = () => actualOs.homedir();
 
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof os>();
   return {
     ...actual,
-    homedir: () => mockedHomedir(),
+    homedir: () => mockedHomedirFn()(),
   };
 });
 
@@ -147,7 +151,7 @@ beforeEach(() => {
   fs.mkdirSync(homeModelsDir, { recursive: true });
 
   // Point homedir to our temp dir
-  mockedHomedir = () => tmpDir;
+  setMockedHomedir(() => tmpDir);
 
   // Clear tokenizer cache between tests
   clearTokenizerCache();
