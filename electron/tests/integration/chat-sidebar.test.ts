@@ -14,6 +14,7 @@ import { SubagentStatus } from '../../src/shared/types/subagent';
 import type { Todo } from '../../src/shared/types/todo';
 import { TodoStatus } from '../../src/shared/types/todo';
 import type { MCPServerStatus } from '../../src/main/mcp/schema';
+import { countMCPServerStatuses } from '../../src/renderer/components/Sidebar';
 
 // ─── Mock Setup ──────────────────────────────────────────────────────────────
 
@@ -262,6 +263,32 @@ describe('Sidebar Data Sources', () => {
     expect(result).toHaveLength(2);
     expect(result[0].status).toBe('connected');
     expect(result[1].status).toBe('failed');
+  });
+
+  it('MCP status counts include every lifecycle state', () => {
+    const servers: MCPServerStatus[] = [
+      { name: 'context7', status: 'connected', toolCount: 5, error: null },
+      { name: 'github', status: 'connected', toolCount: 2, error: null },
+      { name: 'linear', status: 'starting', toolCount: 0, error: null },
+      { name: 'slack', status: 'failed', toolCount: 0, error: 'Connection refused' },
+      { name: 'not-configured', status: 'unavailable', toolCount: 0, error: 'Unavailable' },
+    ];
+
+    expect(countMCPServerStatuses(servers)).toEqual({
+      connected: 2,
+      starting: 1,
+      failed: 1,
+      unavailable: 1,
+    });
+  });
+
+  it('MCP status counts stay empty when no servers are configured', () => {
+    expect(countMCPServerStatuses([])).toEqual({
+      connected: 0,
+      starting: 0,
+      failed: 0,
+      unavailable: 0,
+    });
   });
 
   it('RAG status returns store info', async () => {

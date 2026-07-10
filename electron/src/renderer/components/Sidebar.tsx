@@ -1,10 +1,11 @@
 /**
- * Sidebar — right inspector panel (Context, Usage, Subagents, Todos, Index, MCP).
+ * Sidebar — right inspector panel (Todos, Subagents, Context, Usage, Index, MCP).
  * Iteration 012 mock-aligned collapse blocks.
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import type {
   MCPServerStatus,
+  MCPServerStatusValue,
   RAGStoreStatus,
   ASTStoreStatus,
   RAGIndexProgress,
@@ -100,16 +101,8 @@ export function Sidebar({
       </div>
 
       <div className="panel-body">
-        <CollapseBlock
-          title="Context"
-          defaultOpen
-          badge={<ContextBadge usage={usage} maxContext={maxContext} />}
-        >
-          <ContextGrid messages={messages} usage={usage} maxContext={maxContext} />
-        </CollapseBlock>
-
-        <CollapseBlock title="Usage">
-          <TokenUsageSection cumulativeUsage={cumulativeUsage} maxContext={maxContext} />
+        <CollapseBlock title="Todos">
+          <TodosSection state={todoState} onRefresh={onRefreshTodos} />
         </CollapseBlock>
 
         <CollapseBlock
@@ -129,8 +122,16 @@ export function Sidebar({
           />
         </CollapseBlock>
 
-        <CollapseBlock title="Todos">
-          <TodosSection state={todoState} onRefresh={onRefreshTodos} />
+        <CollapseBlock
+          title="Context"
+          defaultOpen
+          badge={<ContextBadge usage={usage} maxContext={maxContext} />}
+        >
+          <ContextGrid messages={messages} usage={usage} maxContext={maxContext} />
+        </CollapseBlock>
+
+        <CollapseBlock title="Usage">
+          <TokenUsageSection cumulativeUsage={cumulativeUsage} maxContext={maxContext} />
         </CollapseBlock>
 
         <CollapseBlock
@@ -146,7 +147,7 @@ export function Sidebar({
           />
         </CollapseBlock>
 
-        <CollapseBlock title="MCP Servers" defaultOpen>
+        <CollapseBlock title="MCP Servers" defaultOpen badge={<MCPStatusBadges servers={mcpServers} />}>
           <MCPSection servers={mcpServers} />
         </CollapseBlock>
       </div>
@@ -697,6 +698,53 @@ function formatRelativeTime(iso: string): string {
 
 interface MCPSectionProps {
   servers: MCPServerStatus[];
+}
+
+export type MCPStatusCounts = Record<MCPServerStatusValue, number>;
+
+export function countMCPServerStatuses(servers: readonly MCPServerStatus[]): MCPStatusCounts {
+  const counts: MCPStatusCounts = {
+    connected: 0,
+    starting: 0,
+    failed: 0,
+    unavailable: 0,
+  };
+
+  for (const server of servers) {
+    counts[server.status] += 1;
+  }
+
+  return counts;
+}
+
+const MCP_STATUS_BADGES: readonly {
+  status: MCPServerStatusValue;
+  className: string;
+  label: string;
+}[] = [
+  { status: 'connected', className: 'badge-success', label: 'connected' },
+  { status: 'starting', className: 'badge-warning', label: 'starting' },
+  { status: 'failed', className: 'badge-error', label: 'failed' },
+  { status: 'unavailable', className: 'badge-ghost', label: 'unavailable' },
+];
+
+function MCPStatusBadges({ servers }: MCPSectionProps) {
+  const counts = countMCPServerStatuses(servers);
+
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1" aria-label="MCP server status counts">
+      {MCP_STATUS_BADGES.filter(({ status }) => counts[status] > 0).map(({ status, className, label }) => (
+        <span
+          key={status}
+          className={`badge badge-xs ${className}`}
+          title={`${counts[status]} ${label} MCP ${counts[status] === 1 ? 'server' : 'servers'}`}
+          aria-label={`${counts[status]} ${label} MCP ${counts[status] === 1 ? 'server' : 'servers'}`}
+        >
+          {counts[status]}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 function MCPSection({ servers }: MCPSectionProps) {
