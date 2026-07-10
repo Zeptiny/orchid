@@ -26,7 +26,7 @@ import { z } from 'zod';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { URL } from 'node:url';
-import type { ToolDefinition, ToolHandler } from '../types';
+import type { ToolDefinition, ToolExecutionContext, ToolHandler } from '../types';
 import { HOME_CONFIG_DIR } from '../../config/loader';
 
 // ---------------------------------------------------------------------------
@@ -62,6 +62,7 @@ export type SummarizeCallback = (
   contentType: string,
   content: string,
   query: string,
+  context: ToolExecutionContext,
 ) => Promise<string>;
 
 /** Options for building the web_fetch tool. */
@@ -303,54 +304,35 @@ export function buildWebFetchTool(
   const definition: ToolDefinition = {
     name: 'web_fetch',
     description:
-      'Fetch a URL and extract information from it. In summarize mode, fetches the page, ' +
-      'converts HTML to markdown, and asks an internal model to answer the query. In raw ' +
-      'mode, returns the converted content directly or writes large content to a cache file.',
+      'Fetch a URL and extract information from it. Without a query, returns the converted page ' +
+      'content directly. With a query, converts HTML to markdown and asks an internal model to ' +
+      'answer the query.',
     inputSchema: z.object({
       url: z.string().describe('The http or https URL to fetch.'),
-      query: z.string().describe('What to extract from the fetched content.'),
-      mode: z
+      query: z
         .string()
         .optional()
-        .describe('"summarize" (default) to answer the query, or "raw" to return page content.'),
+        .describe(
+          'Optional question or extraction request. Omit or leave blank to return the raw page content.',
+        ),
     }),
     actionLabel: 'Fetching...',
     category: 'web',
   };
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<WebFetchResult> => {
-    const { url: rawUrl, query: rawQuery, mode: rawMode } = input as {
+    const { url: rawUrl, query: rawQuery } = input as {
       url: string;
-      query: string;
-      mode?: string;
+      query?: string;
     };
 
     const url = (rawUrl || '').trim();
     const query = (rawQuery || '').trim();
-    const mode = (rawMode || 'summarize').trim().toLowerCase();
 
     // Validate URL
     const urlError = validateUrl(url);
     if (urlError) {
       return { display: 'Invalid URL', content: `Error: ${urlError}`, isError: true };
-    }
-
-    // Validate query
-    if (!query) {
-      return {
-        display: 'Empty query',
-        content: 'Error: query is required and cannot be empty.',
-        isError: true,
-      };
-    }
-
-    // Validate mode
-    if (mode !== 'summarize' && mode !== 'raw') {
-      return {
-        display: 'Invalid mode',
-        content: 'Error: mode must be either "summarize" or "raw".',
-        isError: true,
-      };
     }
 
     // Fetch the URL
@@ -428,7 +410,7 @@ export function buildWebFetchTool(
     const content = isHtml ? htmlToMarkdown(body) : body;
     const title = isHtml ? extractTitle(body) : '';
 
-    if (mode === 'raw') {
+    if (!query) {
       return buildRawResult(
         finalUrl,
         title,
@@ -444,7 +426,7 @@ export function buildWebFetchTool(
         display: 'Summarize not available',
         content:
           'Error: Summarize mode requires a summarize callback. ' +
-          'Use mode "raw" to get the page content directly.',
+          'Omit query to get the page content directly.',
         isError: true,
       };
     }
@@ -456,6 +438,7 @@ export function buildWebFetchTool(
         contentType,
         content,
         query,
+        ctx,
       );
 
       return {

@@ -15,15 +15,16 @@ import { buildListTool } from '../../src/main/tools/todo/list';
 import { buildDeleteTool } from '../../src/main/tools/todo/delete';
 import { buildWebFetchTool } from '../../src/main/tools/web/fetch';
 import { TodoStatus } from '../../src/shared/types/todo';
+import type { ToolExecutionContext } from '../../src/main/tools/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Call a tool handler with input and return the result. */
 async function callTool(
-  handler: (input: unknown) => Promise<unknown>,
+  handler: (input: unknown, ctx: ToolExecutionContext) => Promise<unknown>,
   input: Record<string, unknown>,
 ) {
-  return handler(input);
+  return handler(input, { cwd: process.cwd() });
 }
 
 // ── Todo Tools Tests ────────────────────────────────────────────────────────
@@ -545,25 +546,81 @@ describe('Web Fetch Tools', () => {
       expect(result.content).toContain('credentials');
     });
 
-    it('should reject empty query', async () => {
-      const { handler } = buildWebFetchTool();
-      const result = (await callTool(handler, {
+    it('should treat an omitted query as raw mode', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
         url: 'https://example.com',
-        query: '',
-      })) as { display: string; content: string };
+        status: 200,
+        headers: new Map([['content-type', 'text/html']]),
+        arrayBuffer: () => Promise.resolve(
+          new TextEncoder().encode('<title>Test</title><body>Hello</body>').buffer,
+        ),
+      } as unknown as Response);
 
-      expect(result.display).toBe('Empty query');
+      try {
+        const { handler } = buildWebFetchTool();
+        const result = (await callTool(handler, {
+          url: 'https://example.com',
+        })) as { display: string; content: string };
+
+        expect(result.display).toContain('Fetched');
+        expect(result.content).toContain('<web_fetch_raw');
+        expect(result.content).toContain('Hello');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
 
-    it('should reject invalid mode', async () => {
-      const { handler } = buildWebFetchTool();
-      const result = (await callTool(handler, {
+    it('should treat a blank query as raw mode', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
         url: 'https://example.com',
-        query: 'test',
-        mode: 'invalid',
-      })) as { display: string; content: string };
+        status: 200,
+        headers: new Map([['content-type', 'text/html']]),
+        arrayBuffer: () => Promise.resolve(
+          new TextEncoder().encode('<title>Test</title><body>Hello</body>').buffer,
+        ),
+      } as unknown as Response);
 
-      expect(result.display).toBe('Invalid mode');
+      try {
+        const { handler } = buildWebFetchTool();
+        const result = (await callTool(handler, {
+          url: 'https://example.com',
+          query: '   ',
+        })) as { display: string; content: string };
+
+        expect(result.display).toContain('Fetched');
+        expect(result.content).toContain('<web_fetch_raw');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('ignores the removed mode parameter', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        url: 'https://example.com',
+        status: 200,
+        headers: new Map([['content-type', 'text/html']]),
+        arrayBuffer: () => Promise.resolve(
+          new TextEncoder().encode('<body>Hello</body>').buffer,
+        ),
+      } as unknown as Response);
+
+      try {
+        const { handler } = buildWebFetchTool();
+        const result = (await callTool(handler, {
+          url: 'https://example.com',
+          mode: 'invalid',
+        })) as { display: string; content: string };
+
+        expect(result.content).toContain('<web_fetch_raw');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 
@@ -625,6 +682,7 @@ describe('Web Fetch Tools', () => {
           'text/html',
           expect.any(String),
           'What is this page about?',
+          { cwd: process.cwd() },
         );
       } finally {
         globalThis.fetch = originalFetch;
@@ -652,8 +710,6 @@ describe('Web Fetch Tools', () => {
         const { handler } = buildWebFetchTool();
         const result = (await callTool(handler, {
           url: 'https://example.com',
-          query: 'test',
-          mode: 'raw',
         })) as { display: string; content: string };
 
         expect(result.display).toContain('Fetched');
@@ -685,8 +741,6 @@ describe('Web Fetch Tools', () => {
         const result = (await handler(
           {
             url: 'https://example.com/large',
-            query: 'test',
-            mode: 'raw',
           },
           { cwd: process.cwd(), sessionId: 'test-session' },
         )) as { display: string; content: string };
@@ -720,8 +774,6 @@ describe('Web Fetch Tools', () => {
         const { handler } = buildWebFetchTool(); // No sessionId
         const result = (await callTool(handler, {
           url: 'https://example.com/large',
-          query: 'test',
-          mode: 'raw',
         })) as { display: string; content: string };
 
         expect(result.display).toBe('No active session');
@@ -804,8 +856,6 @@ describe('Web Fetch Tools', () => {
         const { handler } = buildWebFetchTool();
         const result = (await callTool(handler, {
           url: 'https://example.com',
-          query: 'test',
-          mode: 'raw',
         })) as { content: string };
 
         // Title should be normalized (whitespace collapsed)
@@ -840,8 +890,6 @@ describe('Web Fetch Tools', () => {
         const { handler } = buildWebFetchTool();
         const result = (await callTool(handler, {
           url: 'https://example.com',
-          query: 'test',
-          mode: 'raw',
         })) as { content: string };
 
         // Should contain markdown-formatted content
