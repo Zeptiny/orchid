@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { getConfig } from '../config/loader';
 import { chunkFile } from './chunker';
-import { Embedder } from './embedder';
+import { createEmbedderFromConfig, type IEmbedder } from './embedder';
 import { RAGStore } from './store';
 import type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
 import type { RAGIndexResult, RAGIndexProgress } from '../../shared/types/ipc-boundary';
@@ -106,7 +106,7 @@ export async function indexProject(
   projectPath?: string,
   paths?: string[],
   force?: boolean,
-  embedder?: Embedder,
+  embedder?: IEmbedder,
   progressCallback?: RAGIndexProgressCallback,
   options?: IndexProjectOptions,
 ): Promise<IndexResult> {
@@ -167,7 +167,7 @@ export async function runIndexProjectImpl(
   projectPath?: string,
   paths?: string[],
   force?: boolean,
-  embedder?: Embedder,
+  embedder?: IEmbedder,
   progressCallback?: RAGIndexProgressCallback,
 ): Promise<IndexResult> {
   const cfg = getConfig();
@@ -244,11 +244,7 @@ export async function runIndexProjectImpl(
   store.initDb();
 
   if (!embedder) {
-    embedder = new Embedder({
-      model: cfg.rag.embedding_model,
-      threads: cfg.rag.embedding_threads,
-      batchSize: cfg.rag.embedding_batch_size,
-    });
+    embedder = await createEmbedderFromConfig();
   }
 
   const existingHashes = store.getFileHashes();
@@ -523,11 +519,7 @@ export async function updateFile(
   }
 
   try {
-    const embedder = new Embedder({
-      model: cfg.rag.embedding_model,
-      threads: cfg.rag.embedding_threads,
-      batchSize: cfg.rag.embedding_batch_size,
-    });
+    const embedder = await createEmbedderFromConfig();
     const texts = chunks.map((c) => c.content);
     const embeddingsFloat = await embedder.embed(texts);
     const embeddings = embeddingsFloat.map((e) => Array.from(e));

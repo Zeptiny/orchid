@@ -83,7 +83,7 @@ describe('Config Parity', () => {
       expect(cfg.rag).toHaveProperty('embedding_model');
     });
 
-    it('top-level field count matches expected (19 top-level + 7 rag nested fields)', () => {
+    it('top-level field count matches expected (19 top-level + 8 rag nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
@@ -91,7 +91,7 @@ describe('Config Parity', () => {
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);
-      expect(ragKeys).toHaveLength(7);
+      expect(ragKeys).toHaveLength(8);
     });
   });
 

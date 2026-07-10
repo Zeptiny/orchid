@@ -133,7 +133,204 @@ function modelFilesForHub(hubId: string): Array<{
 }
 
 // ---------------------------------------------------------------------------
-// Embedder
+// Shared embedder interface
+// ---------------------------------------------------------------------------
+
+/** Common interface for both local ONNX and API-based embedders. */
+export interface IEmbedder {
+  embed(texts: string[]): Promise<Float32Array[]>;
+  embedSingle(text: string): Promise<Float32Array>;
+}
+
+// ---------------------------------------------------------------------------
+// API-based embedding (provider /embeddings endpoint)
+// ---------------------------------------------------------------------------
+
+/** Max retries for transient API failures (rate limits, network blips). */
+const API_MAX_RETRIES = 3;
+
+/** Errors that will not recover by retrying (auth, bad model, bad request). */
+function isPermanentApiError(err: Error): boolean {
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes('http 401') ||
+    msg.includes('http 403') ||
+    msg.includes('http 404') ||
+    msg.includes('http 400') ||
+    msg.includes('returned no data')
+  );
+}
+
+/**
+ * Embedder that calls a provider's `/embeddings` API endpoint.
+ *
+ * Uses `resolveModelRef` + `resolveApiKey` from the LLM provider system to
+ * authenticate. Returns Float32Array[] matching the local Embedder interface.
+ */
+export class ApiEmbedder implements IEmbedder {
+  private baseUrl: string;
+  private apiKey: string | undefined;
+  private modelId: string;
+  private batchSize: number;
+
+  constructor(
+    baseUrl: string,
+    apiKey: string | undefined,
+    modelId: string,
+    batchSize?: number,
+  ) {
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.apiKey = apiKey;
+    this.modelId = modelId;
+    this.batchSize = Math.max(1, Math.min(256, batchSize ?? 64));
+  }
+
+  async embed(texts: string[]): Promise<Float32Array[]> {
+    if (texts.length === 0) return [];
+
+    const all: Float32Array[] = [];
+    for (let i = 0; i < texts.length; i += this.batchSize) {
+      const batch = texts.slice(i, i + this.batchSize);
+      const vectors = await this._embedBatchWithRetry(batch);
+      all.push(...vectors);
+      if (i + this.batchSize < texts.length) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    }
+    return all;
+  }
+
+  async embedSingle(text: string): Promise<Float32Array> {
+    const results = await this.embed([text]);
+    if (results.length === 0) {
+      throw new EmbeddingError('API embedding returned no vectors');
+    }
+    return results[0]!;
+  }
+
+  private async _embedBatchWithRetry(texts: string[]): Promise<Float32Array[]> {
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt < API_MAX_RETRIES; attempt++) {
+      try {
+        return await this._embedBatch(texts);
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (isPermanentApiError(lastError)) break;
+        if (attempt < API_MAX_RETRIES - 1) {
+          const wait = 2 ** attempt * 1000;
+          await new Promise((resolve) => setTimeout(resolve, wait));
+        }
+      }
+    }
+
+    throw new EmbeddingError(
+      `API embedding failed after ${API_MAX_RETRIES} attempts: ${lastError?.message}`,
+    );
+  }
+  private async _embedBatch(texts: string[]): Promise<Float32Array[]> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+
+    try {
+      const response = await fetch(`${this.baseUrl}/embeddings`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model: this.modelId, input: texts }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new EmbeddingError(
+          `API embeddings failed (HTTP ${response.status}): ${body.slice(0, 200)}`,
+        );
+      }
+
+      const data = (await response.json()) as {
+        data?: Array<{ embedding?: number[] }>;
+      };
+
+      if (!data.data || data.data.length === 0) {
+        throw new EmbeddingError('API embeddings returned no data');
+      }
+
+      return data.data.map((d) => {
+        const arr = d.embedding ?? [];
+        return Float32Array.from(arr);
+      });
+    } catch (err) {
+      clearTimeout(timeout);
+      if (err instanceof EmbeddingError) throw err;
+      throw new EmbeddingError(
+        `API embeddings request failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+}
+
+/**
+ * Create an embedder based on config.
+ *
+ * If `rag.embedding_api_model` is set (e.g. `"openai/text-embedding-3-small"`),
+ * returns an {@link ApiEmbedder} that calls the provider's /embeddings endpoint.
+ * Otherwise returns a local ONNX {@link Embedder}.
+ */
+export async function createEmbedderFromConfig(): Promise<IEmbedder> {
+  let cfgThreads = DEFAULT_THREADS;
+  let cfgBatch = DEFAULT_BATCH_SIZE;
+  let cfgModel: string | undefined;
+  let cfgApiModel: string | null = null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getConfig } = require('../config/loader') as typeof import('../config/loader');
+    const rag = getConfig().rag;
+    cfgModel = rag.embedding_model;
+    cfgApiModel = rag.embedding_api_model ?? null;
+    if (typeof rag.embedding_threads === 'number' && rag.embedding_threads > 0) {
+      cfgThreads = rag.embedding_threads;
+    }
+    if (typeof rag.embedding_batch_size === 'number' && rag.embedding_batch_size > 0) {
+      cfgBatch = rag.embedding_batch_size;
+    }
+  } catch {
+    // config unavailable — use hard defaults
+  }
+
+  if (cfgApiModel) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { getConfig } = require('../config/loader') as typeof import('../config/loader');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { resolveModelRef } = require('../llm/providers') as typeof import('../llm/providers');
+      const config = getConfig();
+      const ref = resolveModelRef(cfgApiModel, config);
+      return new ApiEmbedder(ref.baseUrl ?? '', ref.apiKey, ref.modelId, cfgBatch);
+    } catch {
+      // API model alias not found or resolve failed — fall back to local ONNX
+      console.warn(
+        `Failed to resolve API embedding model '${cfgApiModel}', falling back to local ONNX`,
+      );
+    }
+  }
+
+  return new Embedder({
+    model: cfgModel ?? DEFAULT_ONNX_MODEL,
+    threads: cfgThreads,
+    batchSize: cfgBatch,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// ONNX Embedder
 // ---------------------------------------------------------------------------
 
 /**
@@ -151,7 +348,7 @@ export interface EmbedderOptions {
   batchSize?: number;
 }
 
-export class Embedder {
+export class Embedder implements IEmbedder {
   private warmedUp = false;
   private modelName: string;
   private threads: number;

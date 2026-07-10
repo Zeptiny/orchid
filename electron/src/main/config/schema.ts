@@ -27,6 +27,12 @@ export const ragConfigSchema = z.object({
   // Defaults keep RAG from saturating all cores / huge tensors.
   embedding_threads: z.number().int().min(1).max(64).default(2),
   embedding_batch_size: z.number().int().min(1).max(256).default(16),
+  /**
+   * API-based embedding model in `provider/model` format.
+   * When set, RAG calls the provider's /embeddings endpoint instead of
+   * running local ONNX inference. null = use local ONNX (embedding_model).
+   */
+  embedding_api_model: z.string().nullable().default(null),
 });
 
 /**
@@ -37,7 +43,7 @@ export const modelMetadataOverridesSchema = z.object({
   max_input_tokens: z.number().int().positive().nullable().optional(),
   max_output_tokens: z.number().int().positive().nullable().optional(),
   supports_vision: z.boolean().optional(),
-  mode: z.enum(['chat', 'completion']).optional(),
+  mode: z.enum(['chat', 'embeddings']).optional(),
 });
 
 // ---------------------------------------------------------------------------

@@ -33,8 +33,8 @@ export interface ModelMetadata {
   max_output_tokens: number | null;
   /** Whether the model supports image/vision inputs. */
   supports_vision: boolean;
-  /** Model operating mode. */
-  mode: 'chat' | 'completion';
+  /** Model operating mode: chat (LLM) or embeddings (vector generation). */
+  mode: 'chat' | 'embeddings';
 }
 
 /**
@@ -66,6 +66,13 @@ export interface RAGConfig {
    * Default 16 (was a hard-coded 100).
    */
   embedding_batch_size: number;
+  /**
+   * API-based embedding model reference in `provider/model` format
+   * (e.g. `"openai/text-embedding-3-small"`).
+   * When set, RAG uses this provider endpoint instead of local ONNX.
+   * `null` means use the local ONNX `embedding_model` instead.
+   */
+  embedding_api_model: string | null;
 }
 
 export interface Config {

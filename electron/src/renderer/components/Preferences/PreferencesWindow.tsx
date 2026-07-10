@@ -351,6 +351,7 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
         return (
           <RAGTab
             rag={currentConfig.rag}
+            providers={currentConfig.providers as Record<string, Record<string, unknown>>}
             onChange={(rag) => updateDraft({ rag })}
           />
         );
