@@ -21,6 +21,7 @@ import {
   type DetectedProvider,
   type DetectionResult,
 } from './ProviderDetector';
+import orchidIcon from '../../assets/orchid-icon.svg';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -200,7 +201,9 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
       case 'welcome':
         return (
           <div className="onb-step onb-welcome">
-            <div className="onb-welcome-icon">{'\u{1F33A}'}</div>
+            <div className="onb-welcome-icon">
+              <img src={orchidIcon} alt="" width={72} height={72} />
+            </div>
             <h1>Welcome to Orchid</h1>
             <p className="onb-welcome-subtitle">
               Your AI-powered coding assistant. Orchid helps you write, debug,

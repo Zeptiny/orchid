@@ -29,6 +29,16 @@ let mcpManager: MCPManager | null = null;
 
 // ── Window creation ──────────────────────────────────────────────────────────
 
+function resolveAppIcon(): string | undefined {
+  // Packaged builds: electron-builder places icon under resources via extraResources.
+  // Dev: use build/icon.png next to the electron package root.
+  if (app.isPackaged) {
+    const packaged = path.join(process.resourcesPath, 'icon.png');
+    return packaged;
+  }
+  return path.join(__dirname, '../../build/icon.png');
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -36,6 +46,7 @@ function createWindow(): void {
     minWidth: 800,
     minHeight: 600,
     title: 'Orchid',
+    icon: resolveAppIcon(),
     backgroundColor: '#1a1a2e', // Match default dark theme
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),

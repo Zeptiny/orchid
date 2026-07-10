@@ -11,6 +11,11 @@ directories:
   output: release
   buildResources: build
 
+# Runtime window icon (BrowserWindow.icon) for Linux and fallbacks.
+extraResources:
+  - from: build/icon.png
+    to: icon.png
+
 asar: true
 asarUnpack:
   - "**/node_modules/better-sqlite3/**/*"

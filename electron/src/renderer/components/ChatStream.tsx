@@ -19,6 +19,7 @@ import { MessageWidget } from './MessageWidget';
 import { ChainFooter } from './ChainFooter';
 import { ErrorBanner } from './ErrorBanner';
 import { ToolCallBlock } from './ToolCallBlock';
+import orchidIcon from '../assets/orchid-icon.svg';
 
 interface ChatStreamProps {
   messages: Message[];
@@ -179,7 +180,7 @@ export function ChatStream({
       <div className="chat-scroll flex min-h-0 flex-1 items-center justify-center">
         <div className="empty-state">
           <div className="empty-state-icon" aria-hidden>
-            🌺
+            <img src={orchidIcon} alt="" width={96} height={96} />
           </div>
           <div className="empty-state-title">Welcome to Orchid</div>
           <div className="empty-state-desc">
