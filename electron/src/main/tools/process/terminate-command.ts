@@ -26,9 +26,11 @@ export type TerminateCommandInput = z.infer<typeof terminateCommandInputSchema>;
 
 export async function executeTerminateCommand(
   id: number,
+  sessionId?: string | null,
 ): Promise<{ display: string; content: string; isError?: boolean }> {
   const store = getBackgroundStore();
-  const entry = store.getVisible(id);
+  // Visibility check with sessionId; terminate itself only needs the id.
+  const entry = store.getVisible(id, sessionId ?? null);
   if (!entry) {
     return {
       display: `Background command ${id} not found`,
@@ -71,7 +73,7 @@ export const terminateCommandToolDefinition: ToolDefinition = {
   category: 'process',
 };
 
-export const terminateCommandHandler: ToolHandler = async (input: unknown, _ctx) => {
+export const terminateCommandHandler: ToolHandler = async (input: unknown, ctx) => {
   const { id } = input as TerminateCommandInput;
-  return executeTerminateCommand(id);
+  return executeTerminateCommand(id, ctx.sessionId ?? null);
 };

@@ -28,9 +28,10 @@ export type SendInputInput = z.infer<typeof sendInputSchema>;
 export async function executeSendInput(
   id: number,
   text: string,
+  sessionId?: string | null,
 ): Promise<{ display: string; content: string; isError?: boolean }> {
   const store = getBackgroundStore();
-  const entry = store.getVisible(id);
+  const entry = store.getVisible(id, sessionId ?? null);
   if (!entry) {
     return {
       display: `Background command ${id} not found`,
@@ -101,7 +102,7 @@ export const sendInputToolDefinition: ToolDefinition = {
   category: 'process',
 };
 
-export const sendInputHandler: ToolHandler = async (input: unknown, _ctx) => {
+export const sendInputHandler: ToolHandler = async (input: unknown, ctx) => {
   const { id, text } = input as SendInputInput;
-  return executeSendInput(id, text);
+  return executeSendInput(id, text, ctx.sessionId ?? null);
 };

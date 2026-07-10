@@ -20,9 +20,12 @@ import {
   executeCommand,
   executeCommandHandler,
 } from '../../src/main/tools/process/execute-command';
-import { executeReadOutput } from '../../src/main/tools/process/read-output';
-import { executeSendInput } from '../../src/main/tools/process/send-input';
-import { executeTerminateCommand } from '../../src/main/tools/process/terminate-command';
+import { executeReadOutput, readOutputHandler } from '../../src/main/tools/process/read-output';
+import { executeSendInput, sendInputHandler } from '../../src/main/tools/process/send-input';
+import {
+  executeTerminateCommand,
+  terminateCommandHandler,
+} from '../../src/main/tools/process/terminate-command';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -292,27 +295,38 @@ describe('execute_command background', () => {
   });
 
   it('should return ID for background sleep command', async () => {
-    const result = await executeCommand('sleep 10', undefined, undefined, undefined, undefined, true);
+    const result = await executeCommand(
+      'sleep 10',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+      undefined,
+      { sessionId: 'sess-bg-1' },
+    );
 
     expect(result.display).toContain('id:');
     expect(result.display).toContain('background');
   });
 
   it('should read output from background command', async () => {
+    const sessionId = 'sess-read-1';
     const procId = await store.spawn('echo "hello from background"; sleep 2', {
       cwd: '.',
+      sessionId,
     });
 
     // Wait a moment for output to arrive
     await new Promise((r) => setTimeout(r, 500));
 
-    const result = await executeReadOutput(procId);
+    const result = await executeReadOutput(procId, undefined, undefined, sessionId);
 
     expect(result.content).toContain('hello from background');
   });
 
   it('should track exit code when background command finishes', async () => {
-    const procId = await store.spawn('echo done; exit 0');
+    const procId = await store.spawn('echo done; exit 0', { sessionId: 'sess-exit-1' });
 
     // Wait for completion
     await new Promise((r) => setTimeout(r, 500));
@@ -320,6 +334,48 @@ describe('execute_command background', () => {
     const entry = store.get(procId);
     expect(entry).toBeDefined();
     expect(entry!.exitCode).toBe(0);
+  });
+
+  it('handlers resolve bg commands with matching sessionId from ToolExecutionContext', async () => {
+    const sessionId = 'sess-handler-match';
+    const cwd = process.cwd();
+    const spawnResult = await executeCommandHandler(
+      { command: 'echo "session scoped"; sleep 2', background: true },
+      { cwd, sessionId },
+    );
+    expect(spawnResult.isError).toBeFalsy();
+    expect(spawnResult.display).toMatch(/id:\s*(\d+)/);
+
+    const idMatch = spawnResult.display.match(/id:\s*(\d+)/);
+    const procId = Number(idMatch![1]);
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    const readResult = await readOutputHandler({ id: procId }, { cwd, sessionId });
+    expect(readResult.isError).toBeFalsy();
+    expect(readResult.content).toContain('session scoped');
+  });
+
+  it('read/send/terminate not found when sessionId does not match spawn', async () => {
+    const cwd = process.cwd();
+    const procId = await store.spawn('sleep 30', { sessionId: 'sess-owner' });
+
+    const readMiss = await executeReadOutput(procId, undefined, undefined, 'other-session');
+    expect(readMiss.display).toContain('not found');
+    expect(readMiss.isError).toBe(true);
+
+    const sendMiss = await executeSendInput(procId, 'x\n', 'other-session');
+    expect(sendMiss.display).toContain('not found');
+
+    const termMiss = await executeTerminateCommand(procId, 'other-session');
+    expect(termMiss.display).toContain('not found');
+
+    // Same session can still terminate
+    const termOk = await terminateCommandHandler(
+      { id: procId },
+      { cwd, sessionId: 'sess-owner' },
+    );
+    expect(termOk.display).toContain('Terminated');
   });
 });
 
@@ -340,31 +396,37 @@ describe('send_input', () => {
   });
 
   it('should reject send_input for non-interactive command', async () => {
-    const procId = await store.spawn('sleep 10');
+    const sessionId = 'sess-send-1';
+    const procId = await store.spawn('sleep 10', { sessionId });
 
-    const result = await executeSendInput(procId, 'hello\n');
+    const result = await executeSendInput(procId, 'hello\n', sessionId);
 
     expect(result.display).toContain('not interactive');
     expect(result.content).toContain('interactive=true');
   });
 
   it('should reject send_input for non-interactive command (even if exited)', async () => {
-    const procId = await store.spawn('echo hi; exit 0');
+    const sessionId = 'sess-send-2';
+    const procId = await store.spawn('echo hi; exit 0', { sessionId });
 
     // Wait for exit
     await new Promise((r) => setTimeout(r, 500));
 
-    const result = await executeSendInput(procId, 'hello\n');
+    const result = await executeSendInput(procId, 'hello\n', sessionId);
 
     // "not interactive" check happens before "exited" check (matches Python)
     expect(result.display).toContain('not interactive');
   });
 
   it('should reject send_input for non-interactive even if USER-owned', async () => {
-    const procId = await store.spawn('sleep 10');
+    const sessionId = 'sess-send-3';
+    const procId = await store.spawn('sleep 10', { sessionId });
     store.takeOwnership(procId);
 
-    const result = await executeSendInput(procId, 'hello\n');
+    const result = await sendInputHandler(
+      { id: procId, text: 'hello\n' },
+      { cwd: process.cwd(), sessionId },
+    );
 
     // "not interactive" check happens before "USER-owned" check (matches Python)
     expect(result.display).toContain('not interactive');
@@ -388,31 +450,33 @@ describe('terminate_command', () => {
   });
 
   it('should terminate a running background command', async () => {
-    const procId = await store.spawn('sleep 30');
+    const sessionId = 'sess-term-1';
+    const procId = await store.spawn('sleep 30', { sessionId });
 
     // Verify it's running
     const entryBefore = store.get(procId);
     expect(entryBefore!.exitCode).toBeNull();
 
-    const result = await executeTerminateCommand(procId);
+    const result = await executeTerminateCommand(procId, sessionId);
 
     expect(result.display).toContain('Terminated');
     expect(result.content).toContain('sleep 30');
   });
 
   it('should report already exited command', async () => {
-    const procId = await store.spawn('echo done; exit 0');
+    const sessionId = 'sess-term-2';
+    const procId = await store.spawn('echo done; exit 0', { sessionId });
 
     // Wait for exit
     await new Promise((r) => setTimeout(r, 500));
 
-    const result = await executeTerminateCommand(procId);
+    const result = await executeTerminateCommand(procId, sessionId);
 
     expect(result.display).toContain('already exited');
   });
 
   it('should return error for non-existent command', async () => {
-    const result = await executeTerminateCommand(999);
+    const result = await executeTerminateCommand(999, 'sess-term-3');
 
     expect(result.display).toContain('not found');
   });

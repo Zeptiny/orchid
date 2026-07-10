@@ -36,9 +36,12 @@ export async function executeReadOutput(
   id: number,
   lastN?: number,
   waitMs?: number,
+  sessionId?: string | null,
 ): Promise<{ display: string; content: string; isError?: boolean }> {
   const store = getBackgroundStore();
-  const entry = store.getVisible(id);
+  const scopeSessionId = sessionId ?? null;
+  // Visibility is session-scoped; wait_for_progress uses get() after this check.
+  const entry = store.getVisible(id, scopeSessionId);
   if (!entry) {
     return {
       display: `Background command ${id} not found`,
@@ -53,7 +56,7 @@ export async function executeReadOutput(
     await store.wait_for_progress(id, bounded);
   }
 
-  const result = store.snapshotVisible(id, lastN);
+  const result = store.snapshotVisible(id, lastN, scopeSessionId);
   if (!result) {
     return {
       display: `Background command ${id} not found`,
@@ -91,7 +94,7 @@ export const readOutputToolDefinition: ToolDefinition = {
   category: 'process',
 };
 
-export const readOutputHandler: ToolHandler = async (input: unknown, _ctx) => {
+export const readOutputHandler: ToolHandler = async (input: unknown, ctx) => {
   const { id, last_n, wait_ms } = input as ReadOutputInput;
-  return executeReadOutput(id, last_n, wait_ms);
+  return executeReadOutput(id, last_n, wait_ms, ctx.sessionId ?? null);
 };
