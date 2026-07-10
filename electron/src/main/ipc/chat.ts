@@ -272,6 +272,11 @@ function ensureActiveSession(
   applyWorkspaceProjectLayers(workspace.cwd);
 
   if (active) {
+    // Legacy sessions may have null/empty cwd while the window workspace is
+    // bound via sticky/draft. Persist that cwd onto the session before tools run.
+    if (!active.cwd || active.cwd.trim() === '') {
+      manager.changeCwd(active.id, workspace.cwd);
+    }
     return { ok: true, cwd: workspace.cwd };
   }
 
@@ -373,12 +378,19 @@ function resolveUiWorkspaceCwd(windowId: string): string | null {
  * In production, this wraps the streamChat orchestrator from U9.
  *
  * @param turnCtx - Frozen session cwd + sessionId for this agent turn
+ * @param turnModel - Session model frozen at turn start (not re-read via getActive)
  */
 function createStreamFn(
   config: Config,
   messages: Message[],
   turnCtx: ToolExecutionContext,
+  turnModel?: string | null,
 ) {
+  // Freeze for the whole multi-step agent loop — mid-turn session switch must
+  // not rebind model or session id for later streamChat steps.
+  const frozenSessionId = turnCtx.sessionId;
+  const frozenModel = turnModel ?? null;
+
   return async function* (params: {
     message: string;
     agent: Agent;
@@ -389,10 +401,9 @@ function createStreamFn(
     const { streamChat } = await import('../llm/orchestrator');
 
     // Resolve the model for this agent:
-    // session model (from /model) → tier model → global default.
-    const sessionModel = getSessionManager().getActive()?.model;
+    // frozen session model (from /model) → tier model → global default.
     const modelRef = resolveModelRef(
-      sessionModel ||
+      frozenModel ||
         config.tier_models[params.agent.tier] ||
         config.default_model,
       config,
@@ -418,7 +429,7 @@ function createStreamFn(
       config,
       registry: (await import('../tools')).toolRegistry,
       mcpManager: getMCPManagerRef(),
-      sessionId: turnCtx.sessionId ?? getSessionManager().getActive()?.id,
+      sessionId: frozenSessionId,
       abortSignal: params.abortSignal,
       modelInstance,
     });
@@ -537,7 +548,6 @@ export function registerChatIPC(): void {
     }
 
     const { message, model: preferredModel } = parsed.data;
-    const config = getConfig();
 
     // Cancel any existing actor for this window
     const windowId = String(webContents.id);
@@ -545,10 +555,15 @@ export function registerChatIPC(): void {
 
     // Lazy session create + workspace gate (R2/R3): require valid workspace;
     // create with that cwd; if unbound, fail without streaming.
+    // Must run before getConfig() so project layers from the resolved workspace
+    // are applied and the turn freezes post-rebind config.
     const sessionGate = ensureActiveSession(webContents, preferredModel);
     if (!sessionGate.ok) {
       return sessionGate.result;
     }
+
+    // Capture config after ensureActiveSession (layers may have reloaded it).
+    const config = getConfig();
 
     // Prefer live window history; fall back to active session chain on cold start.
     let existingMessages: Message[] =
@@ -584,13 +599,14 @@ export function registerChatIPC(): void {
       allowed_skills: ['*'],
     };
 
-    // Freeze turn tool/prompt context at send time (R6): mid-turn session
-    // switch must not rebind tools or system prompt working_directory.
+    // Freeze turn tool/prompt context + model at send time (R6): mid-turn
+    // session switch must not rebind tools, model, or working_directory.
     const activeSession = getSessionManager().getActive();
     const turnCtx: ToolExecutionContext = {
       cwd: sessionGate.cwd,
       sessionId: activeSession?.id,
     };
+    const turnModel = activeSession?.model ?? null;
 
     // Create the agent actor with message history.
     // Append the configured personality (from ~/.orchid/personalities/) like Python.
@@ -600,7 +616,7 @@ export function registerChatIPC(): void {
       input: {
         agent,
         systemPrompt: appendPersonality(baseSystemPrompt, config.personality),
-        streamFn: createStreamFn(config, messages, turnCtx),
+        streamFn: createStreamFn(config, messages, turnCtx, turnModel),
         executeFn: createExecuteFn(turnCtx),
       },
     });

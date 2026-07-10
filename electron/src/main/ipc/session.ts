@@ -30,8 +30,24 @@ import { applyWorkspaceProjectLayers } from '../project/layers';
  *
  * Uses createRequire so resolution works under both Electron CJS and Vitest.
  * Falls back silently if chat is unavailable (unit tests with partial graph).
+ *
+ * Unit tests may inject via `__setAbortChatForTests` because createRequire
+ * bypasses Vitest's module mock graph.
  */
+let abortChatOverride: ((windowId: string) => void) | null = null;
+
+/** @internal — unit tests only */
+export function __setAbortChatForTests(
+  fn: ((windowId: string) => void) | null,
+): void {
+  abortChatOverride = fn;
+}
+
 function abortChatForWindow(windowId: string): void {
+  if (abortChatOverride) {
+    abortChatOverride(windowId);
+    return;
+  }
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { createRequire } = require('node:module') as typeof import('node:module');
@@ -119,6 +135,11 @@ export function bindProjectDirectory(
   dir: string,
 ): WorkspaceInfo {
   const canonical = requireValidProjectDirectory(dir);
+
+  // Intentional rebind: drop in-flight stream before cwd/layers change so
+  // tools/prompt cannot keep running against the previous workspace.
+  abortChatForWindow(windowId);
+
   updateStickyDefaultProjectDir(canonical);
 
   const manager = getSessionManager();
@@ -354,6 +375,10 @@ export function registerSessionIPC(): void {
     }
 
     const windowId = String(event.sender.id);
+    // Intentional rebind: abort in-flight chat before cwd/layers change
+    // (same policy as session:load / set_workspace / pick_project_dir).
+    abortChatForWindow(windowId);
+
     const manager = getSessionManager();
     const session = manager.changeCwd(parsed.data.id, parsed.data.cwd);
 

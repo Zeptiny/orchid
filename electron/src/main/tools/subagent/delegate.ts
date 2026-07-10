@@ -140,7 +140,8 @@ export function buildDelegateTool(
     const record = manager.spawn(name, task, agent, {
       model,
       parentChainIndex,
-      sessionId: session?.id ?? ctx?.sessionId,
+      // Prefer frozen turn context sessionId over live getActive() (mid-turn switch).
+      sessionId: ctx?.sessionId ?? session?.id,
       cwd: ctx?.cwd,
     });
 

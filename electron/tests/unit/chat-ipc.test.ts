@@ -42,6 +42,13 @@ const mocks = vi.hoisted(() => {
       };
       return activeSession;
     }),
+    changeCwd: vi.fn((id: string, cwd: string) => {
+      if (!activeSession || activeSession.id !== id) {
+        throw new Error(`Cannot change cwd: session ${id} is not active`);
+      }
+      activeSession = { ...activeSession, cwd };
+      return activeSession;
+    }),
     syncActiveChain: vi.fn((params: { messages: unknown[] }) => {
       if (!activeSession) return null;
       activeSession = {
@@ -70,9 +77,14 @@ const mocks = vi.hoisted(() => {
       workspaceBound = true;
       sessionManager.getActive.mockClear();
       sessionManager.create.mockClear();
+      sessionManager.changeCwd.mockClear();
       sessionManager.clearActive.mockClear();
       sessionManager.syncActiveChain.mockClear();
       sessionManager.autoNameActive.mockClear();
+    },
+    /** Test helper: seed an active session without going through create(). */
+    _setActive: (session: typeof activeSession) => {
+      activeSession = session;
     },
   };
 
@@ -318,6 +330,37 @@ describe('chat IPC', () => {
     expect(mocks.sessionManager.create).not.toHaveBeenCalled();
     expect(mocks.streamChat).not.toHaveBeenCalled();
     expect(doneEvents(send)).toHaveLength(0);
+  });
+
+  it('binds legacy null session cwd from sticky/draft workspace before tools run', async () => {
+    mocks.streamResponses.push('Legacy bound');
+    mocks.sessionManager._setActive({
+      id: 'legacy-session-id',
+      name: 'Legacy',
+      model: 'test/model',
+      cwd: null,
+      chains: [],
+      activeChainId: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      subagentChains: [],
+      todoStore: { tasks: [] },
+    });
+
+    const send = vi.fn();
+    const webContents = { id: 101, send };
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+
+    await chatSend!({ sender: webContents }, { message: 'Hello legacy' });
+    await waitForDoneCount(send, 1);
+
+    expect(mocks.sessionManager.changeCwd).toHaveBeenCalledWith(
+      'legacy-session-id',
+      mocks.workspace._testProjectDir,
+    );
+    expect(mocks.sessionManager.getActive()?.cwd).toBe(mocks.workspace._testProjectDir);
+    expect(mocks.sessionManager.create).not.toHaveBeenCalled();
+    expect(mocks.streamChat).toHaveBeenCalled();
   });
 
   it('does not replay the previous assistant response when a new turn starts', async () => {
