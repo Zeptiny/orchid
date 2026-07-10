@@ -72,6 +72,11 @@ export interface Config {
   llm_stream_idle_timeout: number;
   llm_stream_retries: number;
   background_command_idle_timeout: number;
+  /**
+   * Sticky default project directory for new sessions / draft workspace.
+   * Absolute path when set; `null` when unbound (never invented from process.cwd()).
+   */
+  default_project_dir: string | null;
 }
 
 // ── MCP ─────────────────────────────────────────────────────────────────────

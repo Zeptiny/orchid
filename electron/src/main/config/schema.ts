@@ -1,7 +1,8 @@
 /**
  * Config schema — single source of truth for types, defaults, and validation.
  *
- * All 22 fields ported from Python `src/orchid/config.py` lines 40–104.
+ * 22 fields ported from Python `src/orchid/config.py` lines 40–104, plus
+ * Electron-only `default_project_dir` for sticky session workspace default.
  */
 import { z } from 'zod';
 import type { Config } from '../../shared/types/ipc-boundary';
@@ -104,6 +105,14 @@ export const configSchema = z
     llm_stream_idle_timeout: z.number().positive().default(300.0),
     llm_stream_retries: z.number().int().nonnegative().default(3),
     background_command_idle_timeout: z.number().positive().default(900.0),
+    /**
+     * Sticky home-config default project directory for new sessions.
+     * Empty string is treated as null. Never invented from process.cwd().
+     */
+    default_project_dir: z.preprocess(
+      (val) => (val === '' || val === undefined ? null : val),
+      z.string().nullable().default(null),
+    ),
   })
   .strict();
 

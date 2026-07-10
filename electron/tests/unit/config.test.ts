@@ -90,7 +90,7 @@ function clearOrchidEnv(): void {
 // ===========================================================================
 
 describe('schema & defaults', () => {
-  it('defaults() returns all 22 fields populated', () => {
+  it('defaults() returns all fields populated', () => {
     const cfg = defaults();
 
     // Top-level scalar fields
@@ -107,6 +107,8 @@ describe('schema & defaults', () => {
     expect(cfg.llm_stream_idle_timeout).toBe(300.0);
     expect(cfg.llm_stream_retries).toBe(3);
     expect(cfg.background_command_idle_timeout).toBe(900.0);
+    // Sticky project default: unbound until the user intentionally picks a folder
+    expect(cfg.default_project_dir).toBeNull();
 
     // tier_models
     expect(cfg.tier_models).toEqual({
@@ -160,6 +162,30 @@ describe('schema & defaults', () => {
   it('parsePartial returns only provided fields (for merging)', () => {
     const partial = parsePartial({ default_model: 'custom/model', rag: { top_k: 10 } });
     expect(partial).toHaveProperty('default_model', 'custom/model');
+  });
+
+  it('accepts default_project_dir null and an absolute string', () => {
+    const withNull = configSchema.parse({ default_project_dir: null });
+    expect(withNull.default_project_dir).toBeNull();
+
+    const abs = '/tmp/orchid-project';
+    const withPath = configSchema.parse({ default_project_dir: abs });
+    expect(withPath.default_project_dir).toBe(abs);
+  });
+
+  it('treats empty string default_project_dir as null', () => {
+    const parsed = configSchema.parse({ default_project_dir: '' });
+    expect(parsed.default_project_dir).toBeNull();
+  });
+
+  it('defaults leave default_project_dir null (never invent process.cwd())', () => {
+    const cfg = defaults();
+    expect(cfg.default_project_dir).toBeNull();
+    expect(cfg.default_project_dir).not.toBe(process.cwd());
+
+    // Field absent from input → still null, not cwd
+    const parsed = configSchema.parse({});
+    expect(parsed.default_project_dir).toBeNull();
   });
 });
 
@@ -1085,6 +1111,7 @@ describe('config save IPC schema validation', () => {
     expect(knownKeys).toContain('theme');
     expect(knownKeys).toContain('personality');
     expect(knownKeys).toContain('command_timeout');
+    expect(knownKeys).toContain('default_project_dir');
     expect(knownKeys).not.toContain('typo_key');
     expect(knownKeys).not.toContain('providres');
   });
