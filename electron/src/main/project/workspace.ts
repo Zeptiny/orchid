@@ -2,7 +2,7 @@
  * Main-owned workspace binding — draft cwd, sticky default, pure resolution.
  *
  * Resolution order (R2/R3):
- *   draft cwd (if set) → active session.cwd → valid default_project_dir → unbound
+ *   draft cwd (if valid) → active session.cwd → sticky default_project_dir → unbound
  *
  * Never uses process.cwd() as a product default.
  * Never calls process.chdir.
@@ -12,28 +12,15 @@
  */
 import * as fs from 'node:fs';
 import { getConfig, atomicWriteJson, HOME_CONFIG_PATH } from '../config/loader';
-import type { Config } from '../config/schema';
-import {
-  inspectProjectDirectory,
-  type ProjectDirectoryStatus,
-} from './path';
+import { withConfigSaveLock } from '../ipc/config';
+import type { WorkspaceInfo, WorkspaceSource } from '../../shared/types/ipc';
+import { inspectProjectDirectory } from './path';
 
 // ---------------------------------------------------------------------------
-// Types
+// Types — shared IPC contract (single source of truth)
 // ---------------------------------------------------------------------------
 
-/** Where the resolved workspace path came from. */
-export type WorkspaceSource = 'draft' | 'session' | 'default' | 'unbound';
-
-/** Resolved workspace state for IPC / UI. */
-export interface WorkspaceInfo {
-  /** Canonical absolute path when bound; null when unbound. */
-  readonly cwd: string | null;
-  /** Source of the resolved path. */
-  readonly source: WorkspaceSource;
-  /** Coarse directory status (valid / missing / unbound). */
-  readonly status: ProjectDirectoryStatus;
-}
+export type { WorkspaceSource, WorkspaceInfo };
 
 /** Inputs for pure workspace resolution (callers supply session/sticky). */
 export interface WorkspaceResolveInput {
@@ -88,22 +75,39 @@ export function clearAllDraftCwds(): void {
  *
  * Mutates the in-memory ConfigManager cache and patches the home config file
  * for that field only — avoids dumping a full project-merged config into home.
+ *
+ * Serialized via withConfigSaveLock so sticky patches cannot race config:save.
+ * On home-config parse failure, aborts the file write (does not clobber with `{}`)
+ * while still applying the in-memory update.
  */
-export function updateStickyDefaultProjectDir(dir: string | null): void {
-  const cfg = getConfig() as Config & { default_project_dir: string | null };
-  cfg.default_project_dir = dir;
+export async function updateStickyDefaultProjectDir(
+  dir: string | null,
+): Promise<void> {
+  return withConfigSaveLock(async () => {
+    const cfg = getConfig();
+    cfg.default_project_dir = dir;
 
-  let home: Record<string, unknown> = {};
-  try {
-    if (fs.existsSync(HOME_CONFIG_PATH)) {
-      const raw = fs.readFileSync(HOME_CONFIG_PATH, 'utf-8');
-      home = JSON.parse(raw) as Record<string, unknown>;
+    let home: Record<string, unknown>;
+    try {
+      if (fs.existsSync(HOME_CONFIG_PATH)) {
+        const raw = fs.readFileSync(HOME_CONFIG_PATH, 'utf-8');
+        const parsed: unknown = JSON.parse(raw);
+        if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          // Corrupt / non-object home config — do not write {}.
+          return;
+        }
+        home = parsed as Record<string, unknown>;
+      } else {
+        home = {};
+      }
+    } catch {
+      // Parse / read failure — abort sticky file update; leave disk untouched.
+      return;
     }
-  } catch {
-    home = {};
-  }
-  home.default_project_dir = dir;
-  atomicWriteJson(HOME_CONFIG_PATH, home);
+
+    home.default_project_dir = dir;
+    atomicWriteJson(HOME_CONFIG_PATH, home);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -113,21 +117,27 @@ export function updateStickyDefaultProjectDir(dir: string | null): void {
 /**
  * Pure workspace resolution from explicit inputs.
  *
- * Priority: draft → session.cwd → valid sticky default → unbound.
+ * Priority: valid draft → session.cwd → sticky default → unbound.
  * Never falls back to process.cwd().
+ *
+ * Stale/missing drafts fall through to session/sticky without clearing the
+ * stored draft (callers may clear explicitly when appropriate).
  */
 export function resolveWorkspaceFromParts(
   input: WorkspaceResolveInput,
 ): WorkspaceInfo {
-  // 1. Draft cwd
+  // 1. Draft cwd — only win when the directory is still valid
   const draft = input.draftCwd;
   if (draft != null && draft !== '') {
     const inspection = inspectProjectDirectory(draft);
-    return {
-      cwd: inspection.path,
-      source: 'draft',
-      status: inspection.status,
-    };
+    if (inspection.status === 'valid' && inspection.path != null) {
+      return {
+        cwd: inspection.path,
+        source: 'draft',
+        status: 'valid',
+      };
+    }
+    // Stale draft (missing / inaccessible): fall through to session → sticky
   }
 
   // 2. Active session cwd (when bound)

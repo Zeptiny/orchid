@@ -39,6 +39,7 @@ let configState: Record<string, unknown>;
 
 vi.mock('../../src/main/config/loader', () => ({
   HOME_CONFIG_PATH: '/tmp/orchid-test-config.json',
+  HOME_CONFIG_DIR: '/tmp/orchid-test-home',
   getConfig: vi.fn(() => {
     mocks.getConfigCalls++;
     return configState;
@@ -54,10 +55,30 @@ vi.mock('../../src/main/config/loader', () => ({
         );
       }
     }),
+    load: vi.fn(() => {
+      if (mocks.writtenConfigs.length > 0) {
+        configState = JSON.parse(
+          JSON.stringify(mocks.writtenConfigs[mocks.writtenConfigs.length - 1]),
+        );
+      }
+      return configState;
+    }),
   },
   atomicWriteJson: vi.fn((_path: string, data: unknown) => {
     mocks.writtenConfigs.push(JSON.parse(JSON.stringify(data)));
   }),
+}));
+
+vi.mock('../../src/main/project/layers', () => ({
+  applyWorkspaceProjectLayers: vi.fn(() => ({
+    applied: true,
+    projectDir: '/mock',
+    config: {},
+    agents: null,
+    skills: null,
+  })),
+  resetLastAppliedProjectDir: vi.fn(),
+  getLastAppliedProjectDir: vi.fn(() => null),
 }));
 
 vi.mock('../../src/main/config/keychain', () => ({

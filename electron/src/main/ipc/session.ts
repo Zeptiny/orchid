@@ -114,12 +114,12 @@ export function resolveWindowWorkspace(windowId: string): WorkspaceInfo {
  * - Otherwise: store as draft for this window.
  * - Always updates sticky default_project_dir (intentional pick).
  */
-export function bindProjectDirectory(
+export async function bindProjectDirectory(
   windowId: string,
   dir: string,
-): WorkspaceInfo {
+): Promise<WorkspaceInfo> {
   const canonical = requireValidProjectDirectory(dir);
-  updateStickyDefaultProjectDir(canonical);
+  await updateStickyDefaultProjectDir(canonical);
 
   const manager = getSessionManager();
   const active = manager.getActive();
@@ -328,7 +328,7 @@ export function registerSessionIPC(): void {
       return resolveWindowWorkspace(windowId);
     }
 
-    const workspace = bindProjectDirectory(windowId, result.filePaths[0]);
+    const workspace = await bindProjectDirectory(windowId, result.filePaths[0]);
     emitWorkspaceChanged(event.sender, workspace);
     return workspace;
   });
@@ -341,7 +341,7 @@ export function registerSessionIPC(): void {
     }
 
     const windowId = String(event.sender.id);
-    const workspace = bindProjectDirectory(windowId, parsed.data.cwd);
+    const workspace = await bindProjectDirectory(windowId, parsed.data.cwd);
     emitWorkspaceChanged(event.sender, workspace);
     return workspace;
   });
@@ -359,7 +359,7 @@ export function registerSessionIPC(): void {
 
     // Intentional change → update sticky default (R4).
     if (session.cwd) {
-      updateStickyDefaultProjectDir(session.cwd);
+      await updateStickyDefaultProjectDir(session.cwd);
       // R5: reload project config + agents/skills for the new cwd.
       applyWorkspaceProjectLayers(session.cwd);
     }

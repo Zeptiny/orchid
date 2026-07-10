@@ -10,7 +10,13 @@
 import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import { getConfig, ConfigManager, atomicWriteJson, HOME_CONFIG_PATH } from '../config/loader';
+import {
+  getConfig,
+  ConfigManager,
+  atomicWriteJson,
+  HOME_CONFIG_DIR,
+  HOME_CONFIG_PATH,
+} from '../config/loader';
 import { mergeConfigUpdates } from '../config/merge';
 import { configSchema } from '../config/schema';
 import { resolveModelMetadata } from '../llm/model-metadata';
@@ -24,6 +30,10 @@ import {
   providerKeychainKey,
   redactConfig,
 } from '../config/keychain';
+import {
+  applyWorkspaceProjectLayers,
+  resetLastAppliedProjectDir,
+} from '../project/layers';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -73,8 +83,11 @@ let configSaveChain: Promise<void> = Promise.resolve();
 /**
  * Run `fn` exclusively after any prior config save completes.
  * Errors from previous operations do not block subsequent ones.
+ *
+ * Exported so sticky `default_project_dir` patches share the same lock and
+ * cannot race with config:save read-modify-write cycles.
  */
-function withConfigSaveLock<T>(fn: () => Promise<T>): Promise<T> {
+export function withConfigSaveLock<T>(fn: () => Promise<T>): Promise<T> {
   const previous = configSaveChain;
   const run = previous.catch(() => undefined).then(fn);
   // Update the chain — swallow both success and error so the chain never blocks
@@ -200,8 +213,22 @@ export function registerConfigIPC(): void {
       const configToSave = { ...validated, providers: providersWithoutKeys };
       atomicWriteJson(HOME_CONFIG_PATH, configToSave);
 
+      // Capture sticky before reset — validated config is about to leave the cache.
+      // Without re-applying project layers, lastAppliedProjectDir can stay on a
+      // stale project while the in-memory config is home-only / wrong overlays.
+      const sticky = configToSave.default_project_dir;
+
       // Reset the cached config so next load picks up changes
       ConfigManager.reset();
+      resetLastAppliedProjectDir();
+
+      if (sticky != null && sticky !== '') {
+        // Re-merge project .orchid.json + agents/skills for the sticky workspace.
+        applyWorkspaceProjectLayers(sticky);
+      } else {
+        // Home-only load — never fall back to process.cwd() as project root (R2).
+        ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
+      }
 
       return { status: 'saved' as const };
     });
