@@ -155,6 +155,20 @@ function isCurrentAgent(windowId: string, active: ActiveAgent): boolean {
  * not lose context when switching sessions mid-stream (P2-9).
  */
 export function forceAbortChat(windowId: string): void {
+  // Multi-cwd safety: cancel all non-terminal subagents so they cannot keep
+  // streaming tools or writing chains into a newly selected session after
+  // switch/clear. Runs even when there is no active agent (subagents may
+  // outlive the parent turn). onChange + sessionId-scoped persist still write
+  // the interrupted state back to each record's owning session.
+  try {
+    getSubagentManager().cancelRunning();
+  } catch (err) {
+    console.debug(
+      'forceAbortChat subagent cancel failed (non-fatal):',
+      err,
+    );
+  }
+
   const existing = activeAgents.get(windowId);
   if (!existing) return;
 

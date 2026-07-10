@@ -95,6 +95,12 @@ export interface SubagentRecord {
   readonly model: string | null;
   /** Parent chain index (for attribution). */
   readonly parentChainIndex: number | null;
+  /**
+   * Owning session id for chain persistence.
+   * Required so onChange sync writes to the correct session after a switch
+   * (global manager + getActive() would otherwise attach chains to the new session).
+   */
+  readonly sessionId: string | null;
   /** Abort controller for the in-flight run. */
   abortController: AbortController | null;
   /** Pending completion promise resolvers. */
@@ -179,6 +185,7 @@ export class SubagentManager {
       usage: null,
       model: options.model ?? null,
       parentChainIndex: options.parentChainIndex ?? null,
+      sessionId: options.sessionId ?? null,
       abortController: null,
       _resolveWait: [],
       _runPromise: null,
@@ -188,7 +195,7 @@ export class SubagentManager {
     this._notify();
 
     if (this._runner) {
-      record._runPromise = this._startRun(record, options.sessionId, options.cwd);
+      record._runPromise = this._startRun(record, options.cwd);
     }
 
     return record;
@@ -301,9 +308,18 @@ export class SubagentManager {
     return cancelled;
   }
 
-  cancelRunning(): string[] {
+  /**
+   * Cancel non-terminal subagents.
+   *
+   * @param sessionId - When provided, only cancel subagents owned by that
+   *   session. When omitted, cancel all running (Esc interrupt / session switch).
+   */
+  cancelRunning(sessionId?: string | null): string[] {
     const cancelled: string[] = [];
     for (const [id, record] of this._subagents) {
+      if (sessionId !== undefined && sessionId !== null && record.sessionId !== sessionId) {
+        continue;
+      }
       if (!TERMINAL_STATES.has(record.state)) {
         if (this.cancelOne(id)) {
           cancelled.push(id);
@@ -372,16 +388,23 @@ export class SubagentManager {
     return Array.from(this._subagents.values());
   }
 
-  /** Convert runtime records to domain SubagentRecords for session storage. */
-  toDomainRecords(): DomainSubagentRecord[] {
-    return this.allRecords().map(runtimeToDomain);
+  /**
+   * Convert runtime records to domain SubagentRecords for session storage.
+   *
+   * @param sessionId - When provided, only include records owned by that session.
+   */
+  toDomainRecords(sessionId?: string | null): DomainSubagentRecord[] {
+    const records =
+      sessionId === undefined
+        ? this.allRecords()
+        : this.allRecords().filter((r) => r.sessionId === sessionId);
+    return records.map(runtimeToDomain);
   }
 
   // ── Private: run loop ─────────────────────────────────────────────────────
 
   private async _startRun(
     record: SubagentRecord,
-    sessionId?: string,
     cwd?: string,
   ): Promise<void> {
     const runner = this._runner;
@@ -406,7 +429,7 @@ export class SubagentManager {
         agent: record.agent,
         model: record.model,
         abortSignal: abort.signal,
-        sessionId,
+        sessionId: record.sessionId ?? undefined,
         cwd,
       });
 

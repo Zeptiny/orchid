@@ -5,7 +5,7 @@
  *
  * Key behaviors (matching Python):
  * - create(): New session with UUID, auto-saved to disk
- * - switchTo(id): Load and set as active (running subagents NOT cancelled)
+ * - switchTo(id): Load and set as active
  * - delete(id): Delete session file and caches
  * - rename(id, name): Update name, save
  * - changeModel(id, model): Update model, save
@@ -16,8 +16,10 @@
  * - Auto-naming: After first exchange, if name starts with "Session ",
  *   call the generateTitle callback for a 3-6 word title
  *
- * Session switching does NOT cancel running subagents (matching Python).
- * Background commands continue running.
+ * SessionManager itself does not cancel subagents on switch. IPC layer
+ * (session:load / forceAbortChat) cancels running subagents for multi-cwd
+ * safety so a global SubagentManager cannot keep writing chains into the
+ * newly active session. Background commands continue running.
  */
 import { randomUUID } from 'node:crypto';
 import type { Session } from '../../shared/types/session';
@@ -148,7 +150,9 @@ export class SessionManager {
   /**
    * Load a session from disk and set it as active.
    *
-   * Running subagents are NOT cancelled (matching Python).
+   * Does not cancel subagents itself — callers (session:load IPC /
+   * forceAbortChat) cancel running subagents before switching so the global
+   * manager cannot attach prior-session chains to the new active session.
    * Returns null if the session file doesn't exist or fails to parse.
    */
   switchTo(id: string): Session | null {
@@ -322,24 +326,52 @@ export class SessionManager {
   }
 
   /**
-   * Replace subagent_chains on the active session and persist.
+   * Replace subagent_chains on a session and persist.
    *
    * Used when subagents complete so chain-footer token usage and the
    * right-rail subagent list can reload real data from disk.
+   *
+   * @param subagentChains - Full replacement list for that session
+   * @param sessionId - Owning session id. When omitted, uses the active
+   *   session (legacy callers). When provided and not active, loads that
+   *   session from disk, patches, and saves — so a debounced flush after a
+   *   session switch still writes to the correct owner.
    */
   syncSubagentChains(
     subagentChains: Session['subagentChains'],
+    sessionId?: string,
   ): Session | null {
-    if (!this._active) {
+    const targetId = sessionId ?? this._active?.id;
+    if (!targetId) {
       return null;
     }
-    this._active = {
-      ...this._active,
-      subagentChains: [...subagentChains],
-      updatedAt: new Date().toISOString(),
+
+    const now = new Date().toISOString();
+    const chains = [...subagentChains];
+
+    if (this._active?.id === targetId) {
+      this._active = {
+        ...this._active,
+        subagentChains: chains,
+        updatedAt: now,
+      };
+      storageSaveSession(this._active, this._storageOpts);
+      return this._active;
+    }
+
+    // Non-active owner: patch on disk so a late flush cannot clobber the
+    // newly active session with the previous session's subagent chains.
+    const loaded = storageLoadSession(targetId, this._storageOpts);
+    if (!loaded) {
+      return null;
+    }
+    const updated: Session = {
+      ...loaded,
+      subagentChains: chains,
+      updatedAt: now,
     };
-    storageSaveSession(this._active, this._storageOpts);
-    return this._active;
+    storageSaveSession(updated, this._storageOpts);
+    return updated;
   }
 
   /**

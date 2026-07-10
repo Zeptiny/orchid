@@ -186,4 +186,23 @@ describe('SubagentManager runtime', () => {
     expect(domain[0].id).toBe(record.id);
     expect(sumSubagentUsage(domain[0])?.prompt_tokens).toBe(5);
   });
+
+  it('tracks sessionId on spawn and scopes cancelRunning / toDomainRecords', () => {
+    const a = manager.spawn('a', 'task a', testAgent, { sessionId: 'session-a' });
+    const b = manager.spawn('b', 'task b', testAgent, { sessionId: 'session-b' });
+    manager.markRunning(a.id);
+    manager.markRunning(b.id);
+
+    expect(a.sessionId).toBe('session-a');
+    expect(b.sessionId).toBe('session-b');
+
+    const cancelled = manager.cancelRunning('session-a');
+    expect(cancelled).toEqual([a.id]);
+    expect(a.state).toBe(SubagentState.INTERRUPTED);
+    expect(b.state).toBe(SubagentState.RUNNING);
+
+    expect(manager.toDomainRecords('session-b')).toHaveLength(1);
+    expect(manager.toDomainRecords('session-b')[0].id).toBe(b.id);
+    expect(manager.toDomainRecords('session-a')[0].status).toBe('interrupted');
+  });
 });
