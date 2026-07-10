@@ -665,7 +665,7 @@ describe('Web Fetch Tools', () => {
       }
     });
 
-    it('should write large content to cache file', async () => {
+    it('should write large content using the per-call session context', async () => {
       // Create content > 10K chars
       const largeContent = 'x'.repeat(15_000);
       const html = `<html><head><title>Large Page</title></head><body>${largeContent}</body></html>`;
@@ -681,17 +681,21 @@ describe('Web Fetch Tools', () => {
       } as unknown as Response);
 
       try {
-        const { handler } = buildWebFetchTool({ sessionId: 'test-session' });
-        const result = (await callTool(handler, {
-          url: 'https://example.com/large',
-          query: 'test',
-          mode: 'raw',
-        })) as { display: string; content: string };
+        const { handler } = buildWebFetchTool();
+        const result = (await handler(
+          {
+            url: 'https://example.com/large',
+            query: 'test',
+            mode: 'raw',
+          },
+          { cwd: process.cwd(), sessionId: 'test-session' },
+        )) as { display: string; content: string };
 
         expect(result.display).toContain('characters to');
         expect(result.content).toContain('<web_fetch_raw');
         expect(result.content).toContain('warning');
         expect(result.content).toContain('cache');
+        expect(result.content).toContain('test-session');
       } finally {
         globalThis.fetch = originalFetch;
       }

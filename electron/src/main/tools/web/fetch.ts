@@ -318,7 +318,7 @@ export function buildWebFetchTool(
     category: 'web',
   };
 
-  const handler: ToolHandler = async (input: unknown, _ctx): Promise<WebFetchResult> => {
+  const handler: ToolHandler = async (input: unknown, ctx): Promise<WebFetchResult> => {
     const { url: rawUrl, query: rawQuery, mode: rawMode } = input as {
       url: string;
       query: string;
@@ -429,7 +429,13 @@ export function buildWebFetchTool(
     const title = isHtml ? extractTitle(body) : '';
 
     if (mode === 'raw') {
-      return buildRawResult(finalUrl, title, contentType, content, options?.sessionId);
+      return buildRawResult(
+        finalUrl,
+        title,
+        contentType,
+        content,
+        ctx?.sessionId ?? options?.sessionId,
+      );
     }
 
     // Summarize mode
