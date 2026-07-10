@@ -22,11 +22,11 @@
   /* Accent colors */
   --accent-primary: #00ff41;
   --accent-primary-hover: #33ff66;
-  --accent-secondary: #00ccff;
+  --accent-secondary: #00cc66;
   --accent-success: #00ff41;
-  --accent-warning: #ffff00;
+  --accent-warning: #66cc66;
   --accent-error: #ff3333;
-  --accent-info: #00ccff;
+  --accent-info: #00e699;
 
   /* Border colors */
   --border-default: #1a3a1a;
@@ -43,8 +43,8 @@
   --msg-system-text: #009926;
   --msg-error-bg: #2a0a0a;
   --msg-error-text: #ff3333;
-  --msg-thinking-bg: #0a0f1a;
-  --msg-thinking-text: #00ccff;
+  --msg-thinking-bg: #0a1a0a;
+  --msg-thinking-text: #00e699;
 
   /* Input colors */
   --input-bg: #0f0f0f;
@@ -147,8 +147,8 @@
   --syntax-string: #00ff41;
   --context-free: #141414;
   --context-system: #009926;
-  --context-tool: #ffff00;
-  --context-user: #00ccff;
+  --context-tool: #00b84a;
+  --context-user: #00e699;
   --context-assistant: #00ff41;
   color-scheme: dark;
 }

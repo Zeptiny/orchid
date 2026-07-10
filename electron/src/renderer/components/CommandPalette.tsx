@@ -616,7 +616,7 @@ const THEME_SWATCHES: Record<string, string> = {
   'solarized-light': '#fdf6e3',
   bluey: '#2e3440',
   'windows-xp': '#3a6ea5',
-  'green-terminal': '#002b36',
+  'green-terminal': '#0a2a0a',
 };
 
 function iconForResult(item: PaletteResult): IconName {
