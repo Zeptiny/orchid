@@ -158,8 +158,9 @@ export function ConfigView({ onClose }: ConfigViewProps) {
   const handleSessionSelect = useCallback(
     async (id: string) => {
       await session.load(id);
+      onClose();
     },
-    [session],
+    [onClose, session],
   );
 
   const handleSessionCreate = useCallback(async () => {
@@ -370,6 +371,7 @@ function renderTab(
       return (
         <RAGTab
           rag={config.rag}
+          providers={config.providers}
           onChange={(rag) => updateDraft({ rag })}
         />
       );

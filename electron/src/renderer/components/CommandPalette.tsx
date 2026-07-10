@@ -440,7 +440,7 @@ export function CommandPalette({
         onKeyDown={handleKeyDown}
       >
         {/* Header / input */}
-        <div className="flex items-center gap-2 border-b border-base-300 px-3 py-2.5">
+        <div className="command-palette-search-row">
           {subPicker && (
             <button
               className="btn btn-ghost btn-sm btn-circle"
@@ -454,19 +454,21 @@ export function CommandPalette({
               <Icon name="arrowLeft" size={16} />
             </button>
           )}
-          <Icon name="search" size={14} className="text-base-content/40" />
-          <input
-            ref={inputRef}
-            className="min-w-0 flex-1 border-none bg-transparent text-sm outline-none placeholder:text-base-content/40"
-            type="text"
-            placeholder={subPicker ? subPickerTitle ?? 'Type a command or search...' : 'Type a command or search...'}
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setSelectedIndex(0);
-            }}
-            autoFocus
-          />
+          <label className="input input-sm command-palette-search-field">
+            <Icon name="search" size={14} className="shrink-0 text-base-content/45" />
+            <input
+              ref={inputRef}
+              className="command-palette-input"
+              type="text"
+              placeholder={subPicker ? subPickerTitle ?? 'Type a command or search...' : 'Type a command or search...'}
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setSelectedIndex(0);
+              }}
+              autoFocus
+            />
+          </label>
         </div>
 
         {/* Results or sub-picker */}
@@ -485,7 +487,7 @@ export function CommandPalette({
 
           {subPicker && flatResults.length > 0 ? (
             <div className="p-1">
-              <div className="mb-0.5 px-2 py-1 text-[9px] uppercase text-base-content/50">
+              <div className="mb-0.5 px-3 py-2 text-[9px] uppercase text-base-content/50">
                 {subPickerTitle ?? 'Select'}
               </div>
               <div className="flex flex-col gap-[1px]">
@@ -526,7 +528,7 @@ export function CommandPalette({
 
               return (
                 <div key={group.category} className="command-palette-group mb-1">
-                  <div className="flex items-center gap-1.5 px-2 py-1 text-[9px] uppercase text-base-content/50">
+                  <div className="flex items-center gap-1.5 px-3 py-2 text-[9px] uppercase text-base-content/50">
                     <Icon name={CATEGORY_ICONS[group.category]} size={12} />
                     {group.label}
                   </div>
@@ -538,7 +540,7 @@ export function CommandPalette({
                       return (
                         <button
                           key={item.id}
-                          className={`command-palette-item flex min-h-[32px] w-full items-center gap-2 rounded-[5px] px-2 py-[5px] text-left text-[12px] ${
+                          className={`command-palette-item flex min-h-[32px] w-full items-center gap-2 rounded-[5px] px-3 py-2 text-left text-[12px] ${
                             isSelected ? 'bg-primary/15' : 'hover:bg-base-content/5'
                           }`}
                           data-selected={isSelected}

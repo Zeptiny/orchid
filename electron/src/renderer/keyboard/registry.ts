@@ -142,8 +142,7 @@ export function formatShortcut(id: string): string {
 /** Shortcuts shown in the idle chat footer (order preserved). */
 export const FOOTER_SHORTCUT_IDS = [
   'palette.toggle',
-  'inspector.toggle',
-  'session.new',
+  'shortcuts.help',
 ] as const;
 
 export const HELP_GROUP_ORDER: ShortcutGroup[] = [

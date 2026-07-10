@@ -1053,6 +1053,38 @@
 
 /* ── Header (search input) ───────────────────────────────────────────────── */
 
+.command-palette-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: 58px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-surface-overlay) 62%, transparent);
+}
+.command-palette-search-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 34px;
+  height: 34px;
+  flex: 1;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--bg-surface-raised);
+}
+.command-palette-search-field:focus-within {
+  border-color: var(--accent-primary);
+}
+.command-palette-search-field .command-palette-input {
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+}
+
 .command-palette-header {
   display: flex;
   align-items: center;
@@ -4486,6 +4518,209 @@ button.inspector-row:hover {
   border-color: color-mix(in srgb, #7e88ff 50%, #26303d);
 }
 
+/* Shared searchable model picker (chat composer + configuration) */
+.model-picker-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  min-height: 34px;
+  height: 34px;
+  min-width: 0;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid #26303d;
+  border-radius: 5px;
+  background: #090e15;
+  color: #eef3f8;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+}
+.model-picker-trigger:hover:not(:disabled),
+.model-picker-trigger:focus-visible {
+  border-color: color-mix(in srgb, #7e88ff 50%, #26303d);
+  background: color-mix(in srgb, #7e88ff 8%, #090e15);
+}
+.model-picker-trigger-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-picker-menu {
+  width: min(620px, calc(100vw - 32px));
+  max-height: min(430px, 72vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid #26303d;
+  border-radius: 9px;
+  background: #151a21;
+  color: #eef3f8;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55);
+}
+.model-picker-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.model-picker-title {
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+.model-picker-current {
+  max-width: 45%;
+  overflow: hidden;
+  color: #7e88ff;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: auto;
+  min-height: 32px;
+  height: 32px;
+  margin: 10px 12px 8px;
+  padding: 0 9px;
+  border: 1px solid #26303d;
+  border-radius: 5px;
+  background: #090e15;
+  color: #eef3f8;
+}
+.model-picker-search:focus-within {
+  border-color: color-mix(in srgb, #7e88ff 50%, #26303d);
+}
+.model-picker-search input {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+.model-picker-search input::placeholder {
+  color: #98a5b5;
+}
+.model-picker-table-wrap {
+  min-height: 0;
+  overflow: auto;
+  padding: 0 8px 8px;
+}
+.model-picker-table {
+  width: 100%;
+  min-width: 500px;
+  table-layout: fixed;
+  font-size: 11px;
+}
+.model-picker-table th {
+  padding: 6px 8px;
+  color: #98a5b5;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.model-picker-table th:first-child,
+.model-picker-table td:first-child {
+  width: 52%;
+  text-align: left;
+}
+.model-picker-table th:not(:first-child),
+.model-picker-table td:not(:first-child) {
+  width: 16%;
+  text-align: right;
+}
+.model-picker-table td {
+  padding: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+  color: #c5d0dc;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.model-picker-row {
+  cursor: pointer;
+  outline: none;
+  transition: background 120ms ease;
+}
+.model-picker-row:hover,
+.model-picker-row:focus-visible {
+  background: color-mix(in srgb, #7e88ff 12%, transparent);
+}
+.model-picker-row.is-selected {
+  background: color-mix(in srgb, #7e88ff 18%, transparent);
+}
+.model-picker-model-name {
+  overflow: hidden;
+  color: #eef3f8;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-picker-provider {
+  margin-top: 2px;
+  color: #98a5b5;
+  font-size: 10px;
+}
+.model-picker-empty {
+  padding: 18px 10px;
+  color: #98a5b5;
+  font-size: 12px;
+  text-align: center;
+}
+.config-model-picker {
+  width: 240px;
+  flex-shrink: 0;
+}
+.config-model-picker .model-picker-menu {
+  z-index: 200;
+  width: min(620px, calc(100vw - 292px));
+  max-width: calc(100vw - 292px);
+}
+.config-model-picker.model-picker-align-start .model-picker-menu {
+  right: auto;
+  left: 0;
+}
+.composer-model-picker {
+  width: 180px;
+}
+.composer-model-picker .model-picker-trigger {
+  min-height: 32px;
+  height: 32px;
+  padding: 5px 10px;
+  border-color: transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: #98a5b5;
+}
+.composer-model-picker .model-picker-trigger:hover:not(:disabled),
+.composer-model-picker .model-picker-trigger:focus-visible {
+  border-color: color-mix(in srgb, #7e88ff 25%, #26303d);
+  background: color-mix(in srgb, #7e88ff 12%, transparent);
+  color: #eef3f8;
+}
+.composer-model-picker .model-picker-menu {
+  margin-bottom: 4px;
+}
+@media (max-width: 720px) {
+  .config-model-picker {
+    width: 100%;
+  }
+}
+
 .config-card-list {
   display: flex;
   flex-direction: column;
@@ -4615,9 +4850,6 @@ button.inspector-row:hover {
       color-mix(in srgb, #1a222d 88%, #fff) 0%,
       color-mix(in srgb, #121820 96%, #000) 100%
     );
-  box-shadow:
-    0 1px 0 color-mix(in srgb, #000 35%, transparent),
-    inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent);
   color: color-mix(in srgb, #c5d0dc 94%, #7e88ff);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 550;

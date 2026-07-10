@@ -9,10 +9,8 @@
  */
 import { useCallback, useMemo } from 'react';
 import { THEMES, THEME_NAMES, type ThemeName } from '../../themes';
-import {
-  collectModelsFromProviders,
-  withCurrentModelOption,
-} from '../../utils/models';
+import { collectModelsFromProviders } from '../../utils/models';
+import { ModelPicker } from '../ModelPicker';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,10 +59,7 @@ export function GeneralTab({
       ? [personality, ...personalities]
       : [...personalities];
 
-  const modelOptions = useMemo(
-    () => withCurrentModelOption(collectModelsFromProviders(providers), defaultModel),
-    [providers, defaultModel],
-  );
+  const modelOptions = useMemo(() => collectModelsFromProviders(providers), [providers]);
 
   const handleNumberChange = useCallback(
     (field: string, value: string) => {
@@ -93,25 +88,15 @@ export function GeneralTab({
         <legend className="config-fieldset-legend">General</legend>
         <div className="config-form-grid">
           <div className="config-field">
-            <label htmlFor="general-default-model">Default Model</label>
-            <select
-              id="general-default-model"
+            <label>Default Model</label>
+            <ModelPicker
               value={defaultModel}
-              onChange={(e) => onChange({ default_model: e.target.value })}
-              className="select config-control"
-            >
-              {modelOptions.length === 0 ? (
-                <option value={defaultModel || ''}>
-                  {defaultModel || '— Add providers first —'}
-                </option>
-              ) : (
-                modelOptions.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))
-              )}
-            </select>
+              options={modelOptions}
+              onChange={(value) => onChange({ default_model: value })}
+              label="Select default model"
+              className="config-model-picker"
+              emptyMessage="Add providers first"
+            />
             {modelOptions.length === 0 && (
               <span className="config-field-hint">
                 No models listed. Add providers (and their models) in the Providers tab.

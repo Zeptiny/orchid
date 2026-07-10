@@ -7,6 +7,7 @@
  */
 import { useCallback, useMemo } from 'react';
 import { collectEmbeddingModelsFromProviders } from '../../utils/models';
+import { ModelPicker } from '../ModelPicker';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -63,7 +64,10 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
   );
 
   const apiModelSet = useMemo(() => new Set(apiEmbeddingModels), [apiEmbeddingModels]);
-  const localModelSet = useMemo(() => new Set(LOCAL_EMBEDDING_MODELS), []);
+  const modelOptions = useMemo(
+    () => [...new Set([...LOCAL_EMBEDDING_MODELS, ...apiEmbeddingModels])],
+    [apiEmbeddingModels],
+  );
 
   // The active value: API model takes precedence, else local ONNX model
   const activeModel = rag.embedding_api_model ?? rag.embedding_model;
@@ -142,32 +146,16 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
       <fieldset className="config-fieldset">
         <legend className="config-fieldset-legend">Embedding Model</legend>
         <div className="config-field">
-          <label htmlFor="rag-embedding-model">Model</label>
-          <select
-            id="rag-embedding-model"
+          <label>Model</label>
+          <ModelPicker
             value={activeModel}
-            onChange={(e) => handleModelChange(e.target.value)}
-            className="select config-control"
-          >
-            {LOCAL_EMBEDDING_MODELS.map((model) => (
-              <option key={model} value={model}>
-                {model} (local)
-              </option>
-            ))}
-            {apiEmbeddingModels.length > 0 && (
-              <optgroup label="API (provider)">
-                {apiEmbeddingModels.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            {/* Preserve unknown / custom values */}
-            {!localModelSet.has(activeModel) && !apiModelSet.has(activeModel) && (
-              <option value={activeModel}>{activeModel}</option>
-            )}
-          </select>
+            options={modelOptions}
+            onChange={handleModelChange}
+            label="Select embedding model"
+            align="start"
+            className="config-model-picker"
+            emptyMessage="Add an embedding model first"
+          />
           <span className="config-field-hint">
             {usingApi
               ? 'API model — embeddings generated via provider endpoint.'

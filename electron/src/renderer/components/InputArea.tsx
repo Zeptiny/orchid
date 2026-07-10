@@ -8,7 +8,7 @@
  * Slash commands: type `/` to open autocomplete above the input.
  * Context radial lives in Footer (always right-aligned).
  */
-import { useRef, useCallback, useEffect, useState, useMemo, useId } from 'react';
+import { useRef, useCallback, useEffect, useState, useMemo } from 'react';
 import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
 import type { ChatStatus, InterruptState } from '../hooks/useChat';
 import {
@@ -22,6 +22,7 @@ import {
   type PaletteResult,
 } from '../commands/registry';
 import { Icon } from './Icon';
+import { ModelPicker } from './ModelPicker';
 import { SlashCommandMenu } from './SlashCommandMenu';
 
 interface InputAreaProps {
@@ -66,8 +67,6 @@ export function InputArea({
   const [input, setInput] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [subPicker, setSubPicker] = useState<SubPicker>(null);
-  const [modelOpen, setModelOpen] = useState(false);
-  const modelMenuId = useId();
 
   const isStreaming = status === 'streaming';
   const hasInput = Boolean(input.trim());
@@ -93,8 +92,6 @@ export function InputArea({
     (subPicker !== null || (input.startsWith('/') && !input.includes('\n')));
 
   const availableModels = commandContext?.getAvailableModels() ?? [];
-  const modelLabel = shortModelLabel(model);
-  const modelParts = splitModelId(model);
 
   const slashResults = useMemo<PaletteResult[]>(() => {
     if (!isSlashMode || !commandContext) return [];
@@ -175,19 +172,6 @@ export function InputArea({
   useEffect(() => {
     setSelectedIndex(0);
   }, [input, subPicker]);
-
-  // Close model dropup on outside click
-  useEffect(() => {
-    if (!modelOpen) return;
-    const onPointer = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (!target) return;
-      if (target.closest('[data-composer-dropup]')) return;
-      setModelOpen(false);
-    };
-    document.addEventListener('mousedown', onPointer);
-    return () => document.removeEventListener('mousedown', onPointer);
-  }, [modelOpen]);
 
   const closeSlashMenu = useCallback(() => {
     setSubPicker(null);
@@ -292,7 +276,6 @@ export function InputArea({
 
   const handleSelectModel = useCallback(
     async (next: string) => {
-      setModelOpen(false);
       if (!commandContext || next === model) return;
       try {
         await commandContext.onSetModel(next);
@@ -338,12 +321,6 @@ export function InputArea({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
 
-      if (modelOpen) {
-        event.preventDefault();
-        setModelOpen(false);
-        return;
-      }
-
       if (!canInterrupt) return;
       // Let slash-menu Esc handlers win when the menu is open on confirmSubagents
       // with typed input — only intercept when cancel UI is active without slash.
@@ -354,7 +331,7 @@ export function InputArea({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canInterrupt, isSlashMode, modelOpen, onCancel]);
+  }, [canInterrupt, isSlashMode, onCancel]);
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim();
@@ -369,7 +346,6 @@ export function InputArea({
     isSendingRef.current = true;
     setInput('');
     setSubPicker(null);
-    setModelOpen(false);
     try {
       await onSend(trimmed);
     } catch {
@@ -572,80 +548,15 @@ export function InputArea({
         />
 
         <div className="composer-controls">
-          {/* Model selector — High-style chip with styled dropup */}
-          <div
-            className={`dropdown dropdown-top dropdown-end ${modelOpen ? 'dropdown-open' : ''}`}
-            data-composer-dropup
-          >
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm composer-model-btn"
-              aria-haspopup="listbox"
-              aria-expanded={modelOpen}
-              aria-controls={modelMenuId}
-              title={model || 'Select model'}
-              disabled={isStreaming || interruptState === 'confirmAgent'}
-              onClick={() => setModelOpen((o) => !o)}
-            >
-              <Icon name="cpu" size={13} className="opacity-70 shrink-0" />
-              <span className="composer-model-label">{modelLabel}</span>
-              <Icon
-                name="chevronDown"
-                size={12}
-                className={`opacity-60 shrink-0 transition-transform ${modelOpen ? 'rotate-180' : ''}`}
-              />
-            </button>
-            {modelOpen && (
-              <div
-                id={modelMenuId}
-                role="listbox"
-                aria-label="Select model"
-                className="dropdown-content composer-model-menu z-50 mb-1"
-              >
-                <div className="composer-model-menu-header">
-                  <span>Model</span>
-                  {modelParts.provider ? (
-                    <span className="composer-model-menu-current mono truncate" title={model}>
-                      {modelParts.provider}
-                    </span>
-                  ) : null}
-                </div>
-                <ul className="composer-model-menu-list">
-                  {availableModels.length === 0 ? (
-                    <li className="composer-model-empty">No models configured</li>
-                  ) : (
-                    availableModels.map((m) => {
-                      const parts = splitModelId(m);
-                      const selected = m === model;
-                      return (
-                        <li key={m} role="option" aria-selected={selected}>
-                          <button
-                            type="button"
-                            className={`composer-model-option ${selected ? 'is-selected' : ''}`}
-                            onClick={() => void handleSelectModel(m)}
-                          >
-                            <span className="composer-model-option-body min-w-0">
-                              <span className="composer-model-option-name truncate">
-                                {parts.name}
-                              </span>
-                              {parts.provider ? (
-                                <span className="composer-model-option-provider truncate">
-                                  {parts.provider}
-                                </span>
-                              ) : null}
-                            </span>
-                            {selected ? (
-                              <Icon name="check" size={14} className="shrink-0 text-success" />
-                            ) : null}
-                          </button>
-                        </li>
-                      );
-                    })
-                  )}
-                </ul>
-              </div>
-            )}
-          </div>
+          <ModelPicker
+            value={model}
+            options={availableModels}
+            onChange={(next) => void handleSelectModel(next)}
+            placement="top"
+            label="Select model"
+            disabled={isStreaming || interruptState === 'confirmAgent'}
+            className="composer-model-picker"
+          />
 
           {/* Send (arrow up) or Cancel (square) — multi-stage cancel mirrors Esc */}
           {showCancel ? (
@@ -700,20 +611,3 @@ function filterResults(items: PaletteResult[], query: string): PaletteResult[] {
 }
 
 /** Prefer the model id after provider/ for the compact chip. */
-function shortModelLabel(model: string): string {
-  if (!model) return 'Model';
-  const slash = model.lastIndexOf('/');
-  if (slash >= 0 && slash < model.length - 1) {
-    return model.slice(slash + 1);
-  }
-  return model;
-}
-
-function splitModelId(model: string): { provider: string | null; name: string } {
-  if (!model) return { provider: null, name: 'Model' };
-  const slash = model.indexOf('/');
-  if (slash > 0 && slash < model.length - 1) {
-    return { provider: model.slice(0, slash), name: model.slice(slash + 1) };
-  }
-  return { provider: null, name: model };
-}

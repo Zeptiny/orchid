@@ -5,10 +5,8 @@
  * Each tier uses the same model dropdown listing as Default Model (General).
  */
 import { useMemo } from 'react';
-import {
-  collectModelsFromProviders,
-  withCurrentModelOption,
-} from '../../utils/models';
+import { collectModelsFromProviders } from '../../utils/models';
+import { ModelPicker } from '../ModelPicker';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -65,8 +63,6 @@ export function TierModelsTab({ tierModels, providers, onChange }: TierModelsTab
         <div className="config-card-list">
           {TIERS.map((tier) => {
             const currentModel = tierModels[tier.id] ?? '';
-            const options = withCurrentModelOption(availableModels, currentModel);
-
             return (
               <div key={tier.id} className="config-card config-card-row">
                 <div className="min-w-0">
@@ -74,26 +70,14 @@ export function TierModelsTab({ tierModels, providers, onChange }: TierModelsTab
                   <p className="config-card-desc">{tier.description}</p>
                 </div>
                 <div className="flex shrink-0 items-center">
-                  <select
-                    className="select config-control w-[240px]"
+                  <ModelPicker
                     value={currentModel}
-                    onChange={(e) =>
-                      onChange({ ...tierModels, [tier.id]: e.target.value })
-                    }
-                    aria-label={`${tier.label} model`}
-                  >
-                    {options.length === 0 ? (
-                      <option value={currentModel || ''}>
-                        {currentModel || '— Add providers first —'}
-                      </option>
-                    ) : (
-                      options.map((model) => (
-                        <option key={model} value={model}>
-                          {model}
-                        </option>
-                      ))
-                    )}
-                  </select>
+                    options={availableModels}
+                    onChange={(value) => onChange({ ...tierModels, [tier.id]: value })}
+                    label={`${tier.label} model`}
+                    className="config-model-picker"
+                    emptyMessage="Add providers first"
+                  />
                 </div>
               </div>
             );
