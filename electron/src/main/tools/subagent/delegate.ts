@@ -23,6 +23,8 @@ export interface SubagentToolResult {
   display: string;
   /** Full content (may include XML-like structured data) */
   content: string;
+  /** Explicit failure flag for UI/status (never inferred from content). */
+  isError?: boolean;
 }
 
 /**
@@ -98,6 +100,7 @@ export function buildDelegateTool(
       return {
         display: `Unknown agent type: ${type}`,
         content: `Error: agent type '${type}' does not exist. Available agents: ${available}`,
+      isError: true,
       };
     }
 
@@ -110,6 +113,7 @@ export function buildDelegateTool(
         return {
           display: `Invalid tier: ${tier}`,
           content: `Error: tier '${tier}' is not valid. Available tiers: ${valid}`,
+      isError: true,
         };
       }
       resolvedTier = tier as AgentTier;

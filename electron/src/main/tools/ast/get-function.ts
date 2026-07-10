@@ -81,7 +81,8 @@ export const getFunctionHandler: ToolHandler = async (input: unknown) => {
         content:
           `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
           `File not found: ${file_path}</ast_error>`,
-      };
+      isError: true
+    };
     }
 
     const names = [function_name.trim()].filter(Boolean);
@@ -89,7 +90,8 @@ export const getFunctionHandler: ToolHandler = async (input: unknown) => {
       return {
         display: 'No function names provided',
         content: '<ast_error tool="get_function">No valid function names provided.</ast_error>',
-      };
+      isError: true
+    };
     }
 
     const content = fs.readFileSync(file_path, 'utf-8');
@@ -211,7 +213,8 @@ export const getFunctionHandler: ToolHandler = async (input: unknown) => {
         content:
           `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
           `${err.message}</ast_error>`,
-      };
+      isError: true
+    };
     }
     const msg = err instanceof Error ? err.message : String(err);
     return {
@@ -219,6 +222,7 @@ export const getFunctionHandler: ToolHandler = async (input: unknown) => {
       content:
         `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
         `${msg}</ast_error>`,
+      isError: true
     };
   }
 };

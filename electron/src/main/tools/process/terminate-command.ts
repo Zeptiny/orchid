@@ -26,13 +26,14 @@ export type TerminateCommandInput = z.infer<typeof terminateCommandInputSchema>;
 
 export async function executeTerminateCommand(
   id: number,
-): Promise<{ display: string; content: string }> {
+): Promise<{ display: string; content: string; isError?: boolean }> {
   const store = getBackgroundStore();
   const entry = store.getVisible(id);
   if (!entry) {
     return {
       display: `Background command ${id} not found`,
       content: `Error: No background command with id ${id}.`,
+      isError: true,
     };
   }
 

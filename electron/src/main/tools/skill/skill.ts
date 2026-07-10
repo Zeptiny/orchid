@@ -166,7 +166,7 @@ function executeResourceRead(
   name: string,
   registry: Map<string, Skill>,
   filtered: Map<string, Skill>,
-): { display: string; content: string } {
+): { display: string; content: string; isError?: boolean } {
   const slashIdx = name.indexOf('/');
   const skillName = name.slice(0, slashIdx);
   const resourcePath = name.slice(slashIdx + 1);
@@ -176,11 +176,13 @@ function executeResourceRead(
       return {
         display: `Skill '${skillName}' not available`,
         content: `Error: skill '${skillName}' is not available for this agent.`,
-      };
+      isError: true
+    };
     }
     return {
       display: `Unknown skill: ${skillName}`,
       content: `Error: skill '${skillName}' does not exist.`,
+      isError: true
     };
   }
 
@@ -193,6 +195,7 @@ function executeResourceRead(
     return {
       display: 'Skill location unknown',
       content: `Error: skill '${skillName}' has no file location (cannot read resources).`,
+      isError: true
     };
   }
 
@@ -207,6 +210,7 @@ function executeResourceRead(
     return {
       display: 'Path traversal rejected',
       content: 'Error: resource path is outside the skill directory.',
+      isError: true,
     };
   }
 
@@ -225,6 +229,7 @@ function executeResourceRead(
       display: 'Resource not in allowed directory',
       content:
         'Error: resource must be in scripts/, references/, or assets/ directory.',
+      isError: true,
     };
   }
 
@@ -232,6 +237,7 @@ function executeResourceRead(
     return {
       display: 'Resource not found',
       content: `Error: resource file '${resourcePath}' not found in skill '${skillName}'.`,
+      isError: true
     };
   }
 
@@ -243,6 +249,7 @@ function executeResourceRead(
     return {
       display: 'Read error',
       content: `Error reading resource: ${message}`,
+      isError: true
     };
   }
 
@@ -275,7 +282,7 @@ function executeSkill(
   name: string,
   registry: Map<string, Skill>,
   allowedSkills: string[] | undefined,
-): { display: string; content: string } {
+): { display: string; content: string; isError?: boolean } {
   // Check if this is a resource file read request (skill_name/resource_path)
   if (name.includes('/')) {
     const filtered =
@@ -295,12 +302,14 @@ function executeSkill(
       return {
         display: `Skill '${name}' not available`,
         content: `Error: skill '${name}' is not available for this agent.`,
-      };
+      isError: true
+    };
     }
     const available = Array.from(filtered.keys()).join(', ');
     return {
       display: `Unknown skill: ${name}`,
       content: `Error: skill '${name}' does not exist. Available skills: ${available}`,
+      isError: true
     };
   }
 
@@ -314,7 +323,9 @@ function executeSkill(
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { display: 'Dependency error', content: `Error: ${message}` };
+    return { display: 'Dependency error', content: `Error: ${message}`,
+      isError: true
+    };
   }
 
   const e = escapeXml;
@@ -391,7 +402,7 @@ export function buildSkillTool(
     category: 'skill',
   };
 
-  const handler: ToolHandler = async (input: unknown): Promise<{ display: string; content: string }> => {
+  const handler: ToolHandler = async (input: unknown): Promise<{ display: string; content: string; isError?: boolean }> => {
     const { name } = input as { name: string };
     return executeSkill(name, skills, allowedSkills);
   };

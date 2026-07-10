@@ -171,9 +171,7 @@ function ToolResultMessage({ message }: { message: Message }) {
   );
 
   const block = useMemo((): ToolBlock => {
-    const isError =
-      message.content.startsWith('Error:') ||
-      message.content.toLowerCase().includes('error:');
+    const isError = Boolean(message.is_error);
     return {
       id: message.tool_call_id ?? message.id,
       toolName: message.name ?? 'tool',

@@ -52,7 +52,8 @@ export const getFileSkeletonHandler: ToolHandler = async (input: unknown) => {
         content:
           `<ast_error tool="get_file_skeleton" file="${xmlAttr(file_path)}">` +
           `File not found: ${file_path}</ast_error>`,
-      };
+      isError: true
+    };
     }
 
     const langName = langForExtension(file_path);
@@ -142,7 +143,8 @@ export const getFileSkeletonHandler: ToolHandler = async (input: unknown) => {
         content:
           `<ast_error tool="get_file_skeleton" file="${xmlAttr(file_path)}">` +
           `${err.message}</ast_error>`,
-      };
+      isError: true
+    };
     }
     const msg = err instanceof Error ? err.message : String(err);
     return {
@@ -150,6 +152,7 @@ export const getFileSkeletonHandler: ToolHandler = async (input: unknown) => {
       content:
         `<ast_error tool="get_file_skeleton" file="${xmlAttr(file_path)}">` +
         `${msg}</ast_error>`,
+      isError: true
     };
   }
 };

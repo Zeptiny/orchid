@@ -36,13 +36,14 @@ export async function executeReadOutput(
   id: number,
   lastN?: number,
   waitMs?: number,
-): Promise<{ display: string; content: string }> {
+): Promise<{ display: string; content: string; isError?: boolean }> {
   const store = getBackgroundStore();
   const entry = store.getVisible(id);
   if (!entry) {
     return {
       display: `Background command ${id} not found`,
       content: `Error: No background command with id ${id}.`,
+      isError: true,
     };
   }
 
@@ -57,6 +58,7 @@ export async function executeReadOutput(
     return {
       display: `Background command ${id} not found`,
       content: `Error: No background command with id ${id}.`,
+      isError: true,
     };
   }
 

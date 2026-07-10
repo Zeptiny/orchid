@@ -65,6 +65,12 @@ export interface Message {
   readonly timestamp: string;
   readonly usage: Usage | null;
   readonly hidden: boolean;
+  /**
+   * Explicit tool failure flag (TOOL_RESULT). Set by the backend when the tool
+   * execution failed; frontend must render from this field only — never infer
+   * failure from content text.
+   */
+  readonly is_error: boolean;
 }
 
 // ── Zod schemas ─────────────────────────────────────────────────────────────
@@ -96,6 +102,7 @@ export const messageSchema = z.object({
   timestamp: z.string(),
   usage: usageSchema.nullable().default(null),
   hidden: z.boolean().default(false),
+  is_error: z.boolean().default(false),
 });
 
 // ── Storage dict ────────────────────────────────────────────────────────────
@@ -116,6 +123,8 @@ export interface MessageStorageDict {
     cached_tokens?: number;
   };
   hidden?: boolean;
+  /** Explicit tool failure; only meaningful for tool_result messages. */
+  is_error?: boolean;
   // Forward-compat: extra keys tolerated on restore
   [key: string]: unknown;
 }
@@ -201,6 +210,9 @@ export function messageToStorageDict(msg: Message): MessageStorageDict {
   if (msg.hidden) {
     d.hidden = true;
   }
+  if (msg.is_error) {
+    d.is_error = true;
+  }
   return d;
 }
 
@@ -265,5 +277,6 @@ export function messageFromStorageDict(data: unknown): Message {
     timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : new Date().toISOString(),
     usage,
     hidden: raw.hidden === true,
+    is_error: raw.is_error === true,
   };
 }

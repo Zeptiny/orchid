@@ -60,14 +60,16 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown) => {
       return {
         display: 'Empty symbol name',
         content: '<ast_error tool="rename_symbol">Symbol name is required.</ast_error>',
-      };
+      isError: true
+    };
     }
 
     if (!new_name || !new_name.trim()) {
       return {
         display: 'Empty new name',
         content: '<ast_error tool="rename_symbol">New name is required.</ast_error>',
-      };
+      isError: true
+    };
     }
 
     await ensureIndexed();
@@ -82,7 +84,8 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown) => {
         content:
           `<ast_error tool="rename_symbol">` +
           `No references found for '${old_name}'. No files modified.</ast_error>`,
-      };
+      isError: true
+    };
     }
 
     // Group symbols by file
@@ -175,7 +178,8 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown) => {
         content:
           `<ast_error tool="rename_symbol">` +
           `No changes made for '${old_name}'.</ast_error>`,
-      };
+      isError: true
+    };
     }
 
     // Phase 2: write all files
@@ -222,7 +226,8 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown) => {
         content:
           `<ast_error tool="rename_symbol">` +
           `No changes made for '${old_name}'.</ast_error>`,
-      };
+      isError: true
+    };
     }
 
     const overallSuccess = failedFiles.length === 0;
@@ -253,6 +258,7 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown) => {
     return {
       display: `Error renaming '${old_name}'`,
       content: `<ast_error tool="rename_symbol">${msg}</ast_error>`,
+      isError: true
     };
   }
 };

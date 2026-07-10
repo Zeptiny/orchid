@@ -19,6 +19,8 @@ export interface TodoToolResult {
   display: string;
   /** Full content (may include structured data) */
   content: string;
+  /** Explicit failure flag for UI/status (never inferred from content). */
+  isError?: boolean;
 }
 
 /** Callback type for notifying the UI of todo changes. */

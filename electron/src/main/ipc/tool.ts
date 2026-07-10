@@ -69,11 +69,9 @@ export function registerToolIPC(): void {
     }
 
     try {
+      const { normalizeToolHandlerResult } = await import('../tools/result');
       const result = await tool.handler(args);
-      return {
-        content: typeof result === 'string' ? result : JSON.stringify(result),
-        isError: false,
-      };
+      return normalizeToolHandlerResult(result);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       return {

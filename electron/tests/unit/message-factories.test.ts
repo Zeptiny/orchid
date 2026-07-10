@@ -2,7 +2,7 @@
  * Unit tests for shared Message factories (message-factories.ts).
  *
  * Ensures a single shape for conversation history construction across chat
- * IPC, subagent manager, and tool-dispatch — including Error: prefixing.
+ * IPC, subagent manager, and tool-dispatch — including explicit is_error.
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -34,6 +34,7 @@ describe('makeUserMessage', () => {
     expect(msg.thinking).toBeNull();
     expect(msg.usage).toBeNull();
     expect(msg.hidden).toBe(false);
+    expect(msg.is_error).toBe(false);
     expect(msg.id).toBeTruthy();
     expect(msg.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
@@ -54,6 +55,7 @@ describe('makeAssistantMessage', () => {
     expect(msg.usage).toBeNull();
     expect(msg.tool_calls).toBeNull();
     expect(msg.hidden).toBe(false);
+    expect(msg.is_error).toBe(false);
   });
 
   it('attaches usage when provided', () => {
@@ -87,6 +89,7 @@ describe('makeToolCallMessage', () => {
     expect(msg.content).toBe('');
     expect(msg.tool_call_id).toBe('tc-1');
     expect(msg.name).toBe('read_file');
+    expect(msg.is_error).toBe(false);
     expect(msg.tool_calls).toEqual([
       {
         id: 'tc-1',
@@ -103,7 +106,7 @@ describe('makeToolCallMessage', () => {
 });
 
 describe('makeToolResultMessage', () => {
-  it('builds a successful TOOL_RESULT without Error: prefix', () => {
+  it('builds a successful TOOL_RESULT with is_error false and unchanged content', () => {
     const msg = makeToolResultMessage('tc-1', 'read_file', 'file contents', false);
     expect(msg.role).toBe(MessageRole.TOOL);
     expect(msg.type).toBe(MessageType.TOOL_RESULT);
@@ -111,42 +114,44 @@ describe('makeToolResultMessage', () => {
     expect(msg.tool_call_id).toBe('tc-1');
     expect(msg.name).toBe('read_file');
     expect(msg.tool_calls).toBeNull();
+    expect(msg.is_error).toBe(false);
   });
 
-  it('prefixes Error: when isError and content lacks the prefix', () => {
+  it('stores is_error true without rewriting content', () => {
     const msg = makeToolResultMessage('tc-1', 'read_file', 'not found', true);
-    expect(msg.content).toBe('Error: not found');
+    expect(msg.content).toBe('not found');
+    expect(msg.is_error).toBe(true);
   });
 
-  it('does not double-prefix content that already starts with Error:', () => {
-    const msg = makeToolResultMessage(
+  it('does not add or strip Error: prefix based on isError', () => {
+    const already = makeToolResultMessage(
       'tc-1',
       'read_file',
       'Error: already formatted',
       true,
     );
-    expect(msg.content).toBe('Error: already formatted');
-  });
+    expect(already.content).toBe('Error: already formatted');
+    expect(already.is_error).toBe(true);
 
-  it('prefixes empty error content so UI classifiers still mark failure', () => {
-    const msg = makeToolResultMessage('tc-1', 'read_file', '', true);
-    expect(msg.content).toBe('Error: ');
-    expect(msg.content.startsWith('Error:')).toBe(true);
-  });
-
-  it('allows null tool name (legacy tool-dispatch style)', () => {
-    const msg = makeToolResultMessage('tc-1', null, 'ok', false);
-    expect(msg.name).toBeNull();
-  });
-
-  it('does not prefix success content that happens to mention Error:', () => {
-    // Only isError triggers prefixing; success content is left as-is.
-    const msg = makeToolResultMessage(
+    const successLookingLikeError = makeToolResultMessage(
       'tc-1',
       'echo',
       'Error: is just text here',
       false,
     );
-    expect(msg.content).toBe('Error: is just text here');
+    expect(successLookingLikeError.content).toBe('Error: is just text here');
+    expect(successLookingLikeError.is_error).toBe(false);
+  });
+
+  it('allows empty error content with is_error true', () => {
+    const msg = makeToolResultMessage('tc-1', 'read_file', '', true);
+    expect(msg.content).toBe('');
+    expect(msg.is_error).toBe(true);
+  });
+
+  it('allows null tool name (legacy tool-dispatch style)', () => {
+    const msg = makeToolResultMessage('tc-1', null, 'ok', false);
+    expect(msg.name).toBeNull();
+    expect(msg.is_error).toBe(false);
   });
 });

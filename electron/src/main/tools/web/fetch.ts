@@ -80,6 +80,8 @@ export interface WebFetchResult {
   display: string;
   /** Full content */
   content: string;
+  /** Explicit failure flag for UI/status (never inferred from content). */
+  isError?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -330,7 +332,7 @@ export function buildWebFetchTool(
     // Validate URL
     const urlError = validateUrl(url);
     if (urlError) {
-      return { display: 'Invalid URL', content: `Error: ${urlError}` };
+      return { display: 'Invalid URL', content: `Error: ${urlError}`, isError: true };
     }
 
     // Validate query
@@ -338,6 +340,7 @@ export function buildWebFetchTool(
       return {
         display: 'Empty query',
         content: 'Error: query is required and cannot be empty.',
+        isError: true,
       };
     }
 
@@ -346,6 +349,7 @@ export function buildWebFetchTool(
       return {
         display: 'Invalid mode',
         content: 'Error: mode must be either "summarize" or "raw".',
+        isError: true,
       };
     }
 
@@ -371,9 +375,10 @@ export function buildWebFetchTool(
         return {
           display: 'Fetch timed out',
           content: 'Error: Request timed out after 30 seconds.',
+          isError: true,
         };
       }
-      return { display: 'Fetch failed', content: `Error: ${message}` };
+      return { display: 'Fetch failed', content: `Error: ${message}`, isError: true };
     }
 
     // Validate final URL after redirects to prevent SSRF bypass.
@@ -384,6 +389,7 @@ export function buildWebFetchTool(
       return {
         display: 'Redirect blocked',
         content: `Error: Redirect to blocked URL (${redirectError})`,
+        isError: true,
       };
     }
 
@@ -392,6 +398,7 @@ export function buildWebFetchTool(
       return {
         display: `HTTP ${response.status}`,
         content: `Error: Request failed with HTTP status ${response.status}.`,
+        isError: true,
       };
     }
 
@@ -403,12 +410,13 @@ export function buildWebFetchTool(
         return {
           display: 'Response too large',
           content: `Error: Response body exceeds ${MAX_BODY_SIZE} bytes limit.`,
+          isError: true,
         };
       }
       body = new TextDecoder().decode(buffer);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { display: 'Read failed', content: `Error: Failed to read response: ${message}` };
+      return { display: 'Read failed', content: `Error: Failed to read response: ${message}`, isError: true };
     }
 
     // Get final URL (after redirects)
@@ -431,6 +439,7 @@ export function buildWebFetchTool(
         content:
           'Error: Summarize mode requires a summarize callback. ' +
           'Use mode "raw" to get the page content directly.',
+        isError: true,
       };
     }
 
@@ -455,6 +464,7 @@ export function buildWebFetchTool(
       return {
         display: 'Summarization failed',
         content: `Error: ${message}`,
+        isError: true,
       };
     }
   };
@@ -497,6 +507,7 @@ function buildRawResult(
       display: 'No active session',
       content:
         'Error: Large raw web_fetch results require an active session for cache storage.',
+      isError: true,
     };
   }
 
@@ -514,6 +525,7 @@ function buildRawResult(
     return {
       display: 'Cache write failed',
       content: `Error: ${message}`,
+      isError: true,
     };
   }
 }

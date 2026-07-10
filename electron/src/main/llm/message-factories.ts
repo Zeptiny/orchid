@@ -2,10 +2,8 @@
  * Shared Message factory helpers for main-process conversation history.
  *
  * Single source of truth for constructing Message objects so chat IPC,
- * subagent manager, and tool-dispatch stay aligned on shape and Error: prefixing.
- *
- * UI and orchestrator classify soft tool failures via the `Error:` content
- * prefix (ChatStream, MessageWidget, orchestrator soft-error detection).
+ * subagent manager, and tool-dispatch stay aligned. Tool failure is an
+ * explicit `is_error` flag — never inferred from content text.
  */
 
 import type { Message, Usage } from '../../shared/types/message';
@@ -33,6 +31,7 @@ export function makeUserMessage(content: string): Message {
     timestamp: nowIso(),
     usage: null,
     hidden: false,
+    is_error: false,
   };
 }
 
@@ -53,6 +52,7 @@ export function makeAssistantMessage(
     timestamp: nowIso(),
     usage,
     hidden: false,
+    is_error: false,
   };
 }
 
@@ -70,6 +70,7 @@ export function makeThinkingMessage(content: string): Message {
     timestamp: nowIso(),
     usage: null,
     hidden: false,
+    is_error: false,
   };
 }
 
@@ -97,18 +98,15 @@ export function makeToolCallMessage(
     timestamp: nowIso(),
     usage: null,
     hidden: false,
+    is_error: false,
   };
 }
 
 /**
  * Create a TOOL_RESULT message.
  *
- * When `isError` is true, content is prefixed with `Error:` unless it already
- * starts with that prefix (avoids double-prefix when callers pass pre-formatted
- * error strings). Empty error content becomes `"Error: "` so UI classifiers still
- * mark the tool as failed.
- *
- * Keep TOOL_RESULT type for chain reconciliation pairing.
+ * `isError` is stored as `is_error` on the Message and persisted to session
+ * JSON. Content is stored as-is (no automatic Error: prefix).
  */
 export function makeToolResultMessage(
   toolCallId: string,
@@ -116,15 +114,10 @@ export function makeToolResultMessage(
   content: string,
   isError: boolean,
 ): Message {
-  const finalContent =
-    isError && !content.startsWith('Error:')
-      ? `Error: ${content}`
-      : content;
-
   return {
     id: newId(),
     role: MessageRole.TOOL,
-    content: finalContent,
+    content,
     type: MessageType.TOOL_RESULT,
     tool_calls: null,
     tool_call_id: toolCallId,
@@ -133,5 +126,6 @@ export function makeToolResultMessage(
     timestamp: nowIso(),
     usage: null,
     hidden: false,
+    is_error: isError,
   };
 }

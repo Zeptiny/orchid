@@ -63,6 +63,7 @@ export function buildUpdateTool(
         return {
           display: 'Invalid status',
           content: `Error: Invalid status '${status}'. Valid statuses: ${Object.values(TodoStatus).join(', ')}`,
+      isError: true,
         };
       }
       parsedStatus = upper as TodoStatus;
@@ -75,7 +76,7 @@ export function buildUpdateTool(
     });
 
     if (error) {
-      return { display: 'Update failed', content: `Error: ${error}` };
+      return { display: 'Update failed', content: `Error: ${error}`, isError: true };
     }
 
     if (notifyChanged) {

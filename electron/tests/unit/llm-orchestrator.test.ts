@@ -85,7 +85,7 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     timestamp: new Date().toISOString(),
     usage: null,
     hidden: false,
-    ...overrides,
+    is_error: false,...overrides,
   };
 }
 
@@ -449,7 +449,7 @@ describe('executeToolCall', () => {
     const result = await executeToolCall(toolCall, registry);
 
     expect(result.content).toContain('internal error');
-    expect(result.content.startsWith('Error:')).toBe(true);
+    expect(result.is_error).toBe(true);
   });
 
   describe('timeout', () => {
@@ -473,7 +473,7 @@ describe('executeToolCall', () => {
       });
 
       expect(result.content).toContain('timed out');
-      expect(result.content.startsWith('Error:')).toBe(true);
+      expect(result.is_error).toBe(true);
       expect(result.content).toContain("Tool 'slow' timed out after");
     }, 10000);
 
@@ -494,7 +494,7 @@ describe('executeToolCall', () => {
       });
 
       expect(result.content).toContain('timed out');
-      expect(result.content.startsWith('Error:')).toBe(true);
+      expect(result.is_error).toBe(true);
     });
 
     it('skips timeout for exempt tools', async () => {
@@ -1080,7 +1080,7 @@ describe('streamChat', () => {
     ]);
   });
 
-  it('maps tool-output-error and soft-failed tool-output-available as errors', async () => {
+  it('maps tool-output-error and structured isError tool-output-available as errors', async () => {
     setupStreamText({
       fullStreamParts: [
         {
@@ -1088,15 +1088,22 @@ describe('streamChat', () => {
           toolCallId: 'tc-err',
           errorText: 'Tool boom',
         },
+        // Explicit failure from tool execute payload (not content sniffing)
         {
           type: 'tool-output-available',
           toolCallId: 'tc-soft',
-          output: 'Error: Tool execution failed',
+          output: { content: 'Tool execution failed', isError: true },
         },
         {
           type: 'tool-output-available',
           toolCallId: 'tc-timeout',
-          output: "Tool 'slow' timed out after 30 seconds",
+          output: { content: "Tool 'slow' timed out after 30 seconds", isError: true },
+        },
+        // Content that *looks* like an error but has no isError flag stays success
+        {
+          type: 'tool-output-available',
+          toolCallId: 'tc-false-positive',
+          output: 'Error: is just text in a successful tool result',
         },
       ],
     });
@@ -1109,7 +1116,7 @@ describe('streamChat', () => {
       {
         type: 'tool_result',
         toolCallId: 'tc-soft',
-        content: 'Error: Tool execution failed',
+        content: 'Tool execution failed',
         isError: true,
       },
       {
@@ -1117,6 +1124,12 @@ describe('streamChat', () => {
         toolCallId: 'tc-timeout',
         content: "Tool 'slow' timed out after 30 seconds",
         isError: true,
+      },
+      {
+        type: 'tool_result',
+        toolCallId: 'tc-false-positive',
+        content: 'Error: is just text in a successful tool result',
+        isError: false,
       },
     ]);
   });

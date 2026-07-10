@@ -53,7 +53,8 @@ export const findSymbolReferencesHandler: ToolHandler = async (input: unknown) =
       return {
         display: 'Empty symbol name',
         content: '<ast_error tool="find_symbol_references">Symbol name is required.</ast_error>',
-      };
+      isError: true
+    };
     }
 
     await ensureIndexed();
@@ -106,6 +107,7 @@ export const findSymbolReferencesHandler: ToolHandler = async (input: unknown) =
     return {
       display: `Error finding '${symbol_name}'`,
       content: `<ast_error tool="find_symbol_references">${msg}</ast_error>`,
+      isError: true
     };
   }
 };

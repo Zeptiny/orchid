@@ -23,6 +23,7 @@ function msg(usage: Message['usage']): Message {
     timestamp: new Date().toISOString(),
     usage,
     hidden: false,
+    is_error: false,
   };
 }
 

@@ -478,7 +478,8 @@ export function useChat(): UseChatReturn {
         timestamp: new Date().toISOString(),
         usage: null,
         hidden: false,
-      };
+    is_error: false,
+  };
 
       // On retry after error, the last user message is already in the list —
       // don't append a duplicate bubble (mock Retry action).
@@ -685,7 +686,8 @@ function commitSegmentsToMessages(opts: {
           timestamp: new Date().toISOString(),
           usage: index === lastTextIndex ? usage : null,
           hidden: false,
-        });
+    is_error: false,
+  });
         return;
       }
       if (seg.kind === 'thinking' && seg.content) {
@@ -701,7 +703,8 @@ function commitSegmentsToMessages(opts: {
           timestamp: new Date().toISOString(),
           usage: null,
           hidden: false,
-        });
+    is_error: false,
+  });
       }
     });
 
@@ -731,7 +734,8 @@ function commitSegmentsToMessages(opts: {
       timestamp: new Date().toISOString(),
       usage,
       hidden: false,
-    });
+    is_error: false,
+  });
   }
   return out;
 }
@@ -759,6 +763,7 @@ function toolBlockToMessages(block: ToolBlock): Message[] {
     timestamp: block.startedAt,
     usage: null,
     hidden: false,
+    is_error: false,
   };
 
   const resultContent =
@@ -778,6 +783,7 @@ function toolBlockToMessages(block: ToolBlock): Message[] {
     timestamp: block.finishedAt ?? block.startedAt,
     usage: null,
     hidden: false,
+    is_error: block.status === 'failed',
   };
 
   return [call, result];

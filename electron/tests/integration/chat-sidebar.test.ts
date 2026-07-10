@@ -104,7 +104,8 @@ describe('Message Types', () => {
       timestamp: new Date().toISOString(),
       usage: null,
       hidden: false,
-    };
+    is_error: false,
+  };
 
     expect(message.id).toBe('test-id');
     expect(message.role).toBe('user');

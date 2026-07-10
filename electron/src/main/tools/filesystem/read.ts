@@ -75,7 +75,8 @@ export const readHandler: ToolHandler = async (input: unknown) => {
       return {
         display: `Read error ${file_path}`,
         content: `Error reading file ${file_path}: file appears to be binary.`,
-      };
+      isError: true
+    };
     }
 
     const content = fs.readFileSync(file_path, 'utf-8');
@@ -95,6 +96,7 @@ export const readHandler: ToolHandler = async (input: unknown) => {
       return {
         display: `Read ${file_path}, offset ${offset} out of range`,
         content: `Offset of ${offset} is greater than the file line count ${lineCount}`,
+        isError: true,
       };
     }
 
@@ -117,6 +119,7 @@ export const readHandler: ToolHandler = async (input: unknown) => {
     return {
       display: `Read error ${file_path}`,
       content: `Error reading file ${file_path}: ${msg}`,
+      isError: true
     };
   }
 };

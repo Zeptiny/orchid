@@ -215,7 +215,7 @@ export async function executeGrep(
   includePattern?: string,
   caseInsensitive?: boolean,
   maxResults?: number,
-): Promise<{ display: string; content: string }> {
+): Promise<{ display: string; content: string; isError?: boolean }> {
   if (maxResults === undefined) {
     maxResults = getConfig().grep_max_results;
   }
@@ -230,6 +230,7 @@ export async function executeGrep(
     return {
       display: `Invalid regex: ${pattern}`,
       content: `Error: Invalid regex pattern '${pattern}': ${msg}`,
+      isError: true,
     };
   }
 
@@ -241,12 +242,14 @@ export async function executeGrep(
       return {
         display: `Directory not found: ${directoryPath}`,
         content: `Error: Directory '${directoryPath}' does not exist.`,
+      isError: true,
       };
     }
   } catch {
     return {
       display: `Directory not found: ${directoryPath}`,
       content: `Error: Directory '${directoryPath}' does not exist.`,
+      isError: true,
     };
   }
 

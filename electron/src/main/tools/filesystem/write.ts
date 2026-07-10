@@ -128,6 +128,7 @@ export const writeHandler: ToolHandler = async (input: unknown) => {
     return {
       display: `Write error ${file_path}`,
       content: `Error writing file: ${msg}`,
+      isError: true
     };
   }
 };

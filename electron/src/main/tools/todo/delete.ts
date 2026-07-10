@@ -39,6 +39,7 @@ export function buildDeleteTool(
       return {
         display: 'Task not found',
         content: `Error: No task found with ID '${id}'.`,
+      isError: true,
       };
     }
 

@@ -126,6 +126,7 @@ export const readDirectoryHandler: ToolHandler = async (input: unknown) => {
     return {
       display: `Read directory error ${directory_path}`,
       content: `Error reading directory ${directory_path}: ${msg}`,
+      isError: true
     };
   }
 };

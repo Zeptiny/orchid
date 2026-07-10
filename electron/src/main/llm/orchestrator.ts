@@ -44,6 +44,7 @@ import {
   ToolTimeoutError,
   type ToolDispatchOptions,
 } from './tool-dispatch';
+import { parseToolExecuteOutput } from '../tools/result';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
 import { importESM } from '../utils/esm-import';
@@ -316,14 +317,13 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           error?: unknown;
         }>) {
           const raw = tr.output ?? tr.result ?? '';
-          const content = typeof raw === 'string' ? raw : stringifyToolInput(raw);
+          const parsed = parseToolExecuteOutput(raw);
+          // SDK-level isError/error still win (tool threw before returning a payload)
           const isError =
-            Boolean(tr.isError) ||
-            tr.error != null ||
-            isToolResultErrorContent(content);
+            Boolean(tr.isError) || tr.error != null || parsed.isError;
           pendingToolResults.push({
             toolCallId: tr.toolCallId,
-            content,
+            content: parsed.content,
             isError,
           });
         }
@@ -401,14 +401,14 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           case 'tool-result': {
             const toolCallId = streamToolCallId(part);
             const raw = part.output ?? part.result ?? '';
-            const content = typeof raw === 'string' ? raw : stringifyToolInput(raw);
+            const parsed = parseToolExecuteOutput(raw);
             if (toolCallId && !seenToolResultIds.has(toolCallId)) {
               seenToolResultIds.add(toolCallId);
               yield {
                 type: 'tool_result',
                 toolCallId,
-                content,
-                isError: isToolResultErrorContent(content),
+                content: parsed.content,
+                isError: parsed.isError,
               };
             }
             break;
@@ -582,7 +582,8 @@ export function buildToolMap(
         };
 
         const result = await executeToolCall(toolCall, registry, dispatchOptions);
-        return result.content;
+        // Structured payload so orchestrator can read isError without content sniffing.
+        return { content: result.content, isError: result.is_error };
       },
     };
   }
@@ -612,12 +613,21 @@ export function buildToolMap(
               definition.name,
               { timeoutSeconds: dispatchOptions.timeoutSeconds },
             );
-            return typeof result === 'string' ? result : JSON.stringify(result);
+            // MCP legacy: plain "Error:" string indicates failure
+            if (typeof result === 'string' && result.startsWith('Error:')) {
+              return { content: result, isError: true };
+            }
+            // Structured result → delegate to parseToolExecuteOutput
+            if (typeof result === 'object' && result !== null) {
+              return parseToolExecuteOutput(result);
+            }
+            return { content: String(result), isError: false };
           } catch (err) {
             if (err instanceof ToolTimeoutError) {
-              return `Error: ${err.message}`;
+              return { content: err.message, isError: true };
             }
-            throw err;
+            const message = err instanceof Error ? err.message : String(err);
+            return { content: message, isError: true };
           }
         },
       };
@@ -625,16 +635,6 @@ export function buildToolMap(
   }
 
   return toolMap as Record<string, Tool>;
-}
-
-/** Detect soft-failed tool payloads (timeout / Error: prefix) for UI status. */
-function isToolResultErrorContent(content: string): boolean {
-  if (!content) return false;
-  return (
-    content.startsWith('Error:') ||
-    content.startsWith('Tool execution failed') ||
-    /timed out after\s+\d/i.test(content)
-  );
 }
 
 // ---------------------------------------------------------------------------

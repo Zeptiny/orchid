@@ -28,13 +28,14 @@ export type SendInputInput = z.infer<typeof sendInputSchema>;
 export async function executeSendInput(
   id: number,
   text: string,
-): Promise<{ display: string; content: string }> {
+): Promise<{ display: string; content: string; isError?: boolean }> {
   const store = getBackgroundStore();
   const entry = store.getVisible(id);
   if (!entry) {
     return {
       display: `Background command ${id} not found`,
       content: `Error: No background command with id ${id}.`,
+      isError: true,
     };
   }
 
@@ -43,6 +44,7 @@ export async function executeSendInput(
     return {
       display: `Command ${id} is not interactive`,
       content: `Error: Command was not started with interactive=true. Respawn with interactive=true to send input.`,
+      isError: true,
     };
   }
 
@@ -51,6 +53,7 @@ export async function executeSendInput(
     return {
       display: `Command ${id} has exited`,
       content: `Error: Command has already exited.`,
+      isError: true,
     };
   }
 
@@ -59,6 +62,7 @@ export async function executeSendInput(
     return {
       display: `Command ${id} owned by user`,
       content: `Error: A user currently owns the input for this command (control: USER). Wait for them to release.`,
+      isError: true,
     };
   }
 
@@ -67,6 +71,7 @@ export async function executeSendInput(
     return {
       display: `Failed to send input to command ${id}`,
       content: `Error: Failed to write to stdin (pipe broken or closed).`,
+      isError: true,
     };
   }
 

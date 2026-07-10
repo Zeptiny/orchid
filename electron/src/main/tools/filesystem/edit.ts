@@ -226,6 +226,7 @@ export const editHandler: ToolHandler = async (input: unknown) => {
       return {
         display: 'Invalid old_string',
         content: 'old_string must not be empty. Provide a non-empty string to match.',
+        isError: true,
       };
     }
 
@@ -233,6 +234,7 @@ export const editHandler: ToolHandler = async (input: unknown) => {
       return {
         display: `String not found in ${file_path}`,
         content: `String '${old_string}' not found in file '${file_path}'. No changes made.`,
+        isError: true,
       };
     }
 
@@ -244,6 +246,7 @@ export const editHandler: ToolHandler = async (input: unknown) => {
         content:
           `String '${old_string}' found ${matchCount} times in '${file_path}'. ` +
           `Use replace_all=true or provide a more specific string.`,
+        isError: true,
       };
     }
 
@@ -282,6 +285,7 @@ export const editHandler: ToolHandler = async (input: unknown) => {
     return {
       display: `Edit error ${file_path}`,
       content: `Error editing file ${file_path}: ${msg}`,
+      isError: true
     };
   }
 };

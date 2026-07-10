@@ -349,6 +349,7 @@ function createStreamFn(config: Config, messages: Message[]) {
 function createExecuteFn() {
   return async (toolName: string, args: string) => {
     const { toolRegistry } = await import('../tools');
+    const { normalizeToolHandlerResult } = await import('../tools/result');
     const tool = toolRegistry.get(toolName);
     if (!tool) {
       return { content: `Tool '${toolName}' not found`, isError: true };
@@ -364,10 +365,7 @@ function createExecuteFn() {
       }
 
       const result = await tool.handler(validation.data);
-      return {
-        content: typeof result === 'string' ? result : JSON.stringify(result),
-        isError: false,
-      };
+      return normalizeToolHandlerResult(result);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       return { content: `Tool execution failed: ${errorMessage}`, isError: true };

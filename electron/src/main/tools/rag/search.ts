@@ -51,7 +51,7 @@ export const ragSearchDefinition: ToolDefinition = {
 
 export const ragSearchHandler: ToolHandler = async (
   input: unknown,
-): Promise<string> => {
+) => {
   const { query, top_k, file_pattern } = input as {
     query: string;
     top_k?: number;
@@ -64,7 +64,8 @@ export const ragSearchHandler: ToolHandler = async (
   const status = store.status();
 
   if (status.totalChunks === 0) {
-    return 'No RAG index found. Run `rag_index` with action "index" first.';
+    // Operational precondition, not an execution failure — agent can index first.
+    return { display: 'No RAG index', content: 'No RAG index found. Run `rag_index` with action "index" first.' };
   }
 
   // Generate query embedding
@@ -73,7 +74,10 @@ export const ragSearchHandler: ToolHandler = async (
   try {
     queryEmbedding = await embedder.embedSingle(query);
   } catch (err) {
-    return `Embedding failed: ${err instanceof Error ? err.message : String(err)}`;
+    return {
+      content: `Embedding failed: ${err instanceof Error ? err.message : String(err)}`,
+      isError: true,
+    };
   }
 
   // Search
@@ -84,7 +88,7 @@ export const ragSearchHandler: ToolHandler = async (
   );
 
   if (results.length === 0) {
-    return 'No relevant results found.';
+    return { display: 'No results', content: 'No relevant results found.' };
   }
 
   // Format results

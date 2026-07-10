@@ -67,7 +67,8 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown) => {
           error: 'file_not_found',
           message: `File not found: ${file_path}`,
         }),
-      };
+      isError: true
+    };
     }
 
     const content = fs.readFileSync(file_path, 'utf-8');
@@ -98,7 +99,8 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown) => {
             error: 'symbol_not_found',
             message: `Symbol '${symbol_name}' not found in ${file_path}`,
           }),
-        };
+      isError: true
+    };
       }
 
       // Find definition nodes and their extended ranges
@@ -138,7 +140,8 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown) => {
             error: 'symbol_not_found',
             message: `Symbol '${symbol_name}' not found in ${file_path}`,
           }),
-        };
+      isError: true
+    };
       }
 
       // Ambiguity guard: if multiple definitions in different parent contexts,
@@ -167,7 +170,8 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown) => {
               `Please specify which definition to replace (e.g. by providing ` +
               `the class name or line number).`,
           }),
-        };
+      isError: true
+    };
       }
 
       // Sort replacements in reverse byte order (so offsets don't shift)
@@ -246,7 +250,8 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown) => {
           error: 'unsupported_file',
           message: err.message,
         }),
-      };
+      isError: true
+    };
     }
     const msg = err instanceof Error ? err.message : String(err);
     return {
@@ -260,6 +265,7 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown) => {
         error: 'replace_error',
         message: `Error replacing '${symbol_name}' in ${file_path}: ${msg}`,
       }),
+      isError: true
     };
   }
 };

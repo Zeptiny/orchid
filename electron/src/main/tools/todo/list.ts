@@ -51,6 +51,7 @@ export function buildListTool(
         return {
           display: 'Invalid status',
           content: `Error: Invalid status '${status}'. Valid statuses: ${Object.values(TodoStatus).join(', ')}`,
+      isError: true,
         };
       }
       parsedStatus = upper as TodoStatus;

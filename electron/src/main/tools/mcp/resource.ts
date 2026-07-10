@@ -18,6 +18,8 @@ export interface McpResourceResult {
   display: string;
   /** Full content */
   content: string;
+  /** Explicit failure flag for UI/status (never inferred from content). */
+  isError?: boolean;
 }
 
 /**
@@ -51,6 +53,7 @@ export function buildMcpResourceTool(
       return {
         display: 'Resource not found',
         content: `Error: No MCP server found for URI '${uri}'.`,
+      isError: true,
       };
     }
 
@@ -65,7 +68,8 @@ export function buildMcpResourceTool(
       return {
         display: 'MCP read error',
         content: `Error reading MCP resource: ${message}`,
-      };
+      isError: true
+    };
     }
   };
 

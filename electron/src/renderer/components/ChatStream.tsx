@@ -620,7 +620,8 @@ function buildLiveTailItems(opts: {
             timestamp: ts,
             usage: null,
             hidden: false,
-          },
+    is_error: false,
+  },
           stillStreaming,
         );
         return;
@@ -642,7 +643,8 @@ function buildLiveTailItems(opts: {
             timestamp: ts,
             usage: null,
             hidden: false,
-          },
+    is_error: false,
+  },
           stillStreamingThink,
         );
       }
@@ -669,7 +671,8 @@ function buildLiveTailItems(opts: {
         timestamp: new Date().toISOString(),
         usage: null,
         hidden: false,
-      },
+    is_error: false,
+  },
       true,
     );
   }
@@ -732,9 +735,8 @@ function messagePairToToolBlock(call: Message, result: Message | null): ToolBloc
     call.tool_calls?.[0]?.function?.name ?? call.name ?? result?.name ?? 'unknown';
   const args = call.tool_calls?.[0]?.function?.arguments ?? call.content ?? '';
   const callId = call.tool_call_id ?? call.tool_calls?.[0]?.id ?? call.id;
-  const isError =
-    Boolean(result?.content?.startsWith('Error:')) ||
-    Boolean(result?.content?.toLowerCase().includes('error:'));
+  // Backend owns failure; never infer from content text.
+  const isError = Boolean(result?.is_error);
 
   return {
     id: callId,
@@ -750,9 +752,7 @@ function messagePairToToolBlock(call: Message, result: Message | null): ToolBloc
 }
 
 function resultOnlyToToolBlock(result: Message): ToolBlock {
-  const isError =
-    Boolean(result.content?.startsWith('Error:')) ||
-    Boolean(result.content?.toLowerCase().includes('error:'));
+  const isError = Boolean(result.is_error);
 
   return {
     id: result.tool_call_id ?? result.id,

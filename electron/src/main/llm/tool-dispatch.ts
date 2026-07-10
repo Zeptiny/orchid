@@ -22,6 +22,7 @@ import {
   TOOLS_WITHOUT_OUTPUT_OFFLOAD,
 } from './middleware/provider-quirks';
 import { makeToolResultMessage } from './message-factories';
+import { normalizeToolHandlerResult } from '../tools/result';
 
 // ---------------------------------------------------------------------------
 // Constants — match Python client.py:44, 48-56
@@ -83,7 +84,7 @@ export async function executeToolCall(
     return makeToolResultMessage(
       toolCall.id,
       name,
-      `Error: Could not parse arguments for tool '${name}': invalid JSON.`,
+      `Could not parse arguments for tool '${name}': invalid JSON.`,
       true,
     );
   }
@@ -92,7 +93,7 @@ export async function executeToolCall(
     return makeToolResultMessage(
       toolCall.id,
       name,
-      `Error: Arguments for tool '${name}' must be a JSON object, got ${typeof args}.`,
+      `Arguments for tool '${name}' must be a JSON object, got ${typeof args}.`,
       true,
     );
   }
@@ -104,7 +105,7 @@ export async function executeToolCall(
     return makeToolResultMessage(
       toolCall.id,
       name,
-      `Error: tool '${name}' does not exist. Available tools: ${available.join(', ')}`,
+      `Tool '${name}' does not exist. Available tools: ${available.join(', ')}`,
       true,
     );
   }
@@ -122,25 +123,23 @@ export async function executeToolCall(
     );
   } catch (err) {
     if (err instanceof ToolTimeoutError) {
-      // Prefix Error: so UI / stream classifiers mark the tool as failed.
-      return makeToolResultMessage(toolCall.id, name, `Error: ${err.message}`, true);
+      return makeToolResultMessage(toolCall.id, name, err.message, true);
     }
     console.error(`Tool '${name}' raised an exception:`, err);
     return makeToolResultMessage(
       toolCall.id,
       name,
-      `Error: Tool '${name}' failed with an internal error.`,
+      `Tool '${name}' failed with an internal error.`,
       true,
     );
   }
 
-  // Coerce result to string
-  const content = typeof result === 'string' ? result : JSON.stringify(result);
+  const { content, isError } = normalizeToolHandlerResult(result);
 
-  // Maybe offload large output
+  // Maybe offload large output (preserves isError)
   const trimmed = maybeOffloadToolOutput(name, content, toolCall.id, options.sessionId);
 
-  return makeToolResultMessage(toolCall.id, name, trimmed, false);
+  return makeToolResultMessage(toolCall.id, name, trimmed, isError);
 }
 
 // ---------------------------------------------------------------------------

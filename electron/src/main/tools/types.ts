@@ -37,8 +37,15 @@ export interface ToolDefinition {
   noTimeout?: boolean;
 }
 
-/** Handler function that executes the tool with validated input */
-export type ToolHandler = (input: unknown) => Promise<unknown>;
+export interface StructuredToolResultLike {
+  display?: string;
+  content: string;
+  isError?: boolean;
+  is_error?: boolean;
+}
+
+/** Handler function that executes the tool with validated input. Returns a plain string (success) or a structured result. */
+export type ToolHandler = (input: unknown) => Promise<string | StructuredToolResultLike>;
 
 /** A registered tool combining definition and handler */
 export interface RegisteredTool {

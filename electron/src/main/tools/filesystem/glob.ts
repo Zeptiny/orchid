@@ -207,6 +207,7 @@ export const globHandler: ToolHandler = async (input: unknown) => {
     return {
       display: `Glob error pattern: ${pattern}`,
       content: `Error searching for files using pattern ${pattern}: ${msg}`,
+      isError: true
     };
   }
 };

@@ -43,6 +43,7 @@ export function buildWaitTool(
       return {
         display: 'No subagent IDs provided',
         content: 'Error: subagent_ids must be a non-empty list of IDs.',
+      isError: true,
       };
     }
 

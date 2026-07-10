@@ -149,7 +149,7 @@ export async function executeCommand(
   shell?: boolean,
   background?: boolean,
   interactive?: boolean,
-): Promise<{ display: string; content: string }> {
+): Promise<{ display: string; content: string; isError?: boolean }> {
   if (description === undefined) description = command;
   if (workingDirectory === undefined) workingDirectory = '.';
   if (shell === undefined) shell = true;
@@ -161,6 +161,7 @@ export async function executeCommand(
     return {
       display: 'interactive=true requires background=true',
       content: `Error: interactive=true is only supported with background=true`,
+      isError: true,
     };
   }
 
@@ -169,6 +170,7 @@ export async function executeCommand(
     return {
       display: 'shell=false is incompatible with background=true',
       content: `Error: shell=false is not supported with background=true`,
+      isError: true,
     };
   }
 
@@ -190,7 +192,8 @@ export async function executeCommand(
       return {
         display: 'Failed to start background command',
         content: `Error: ${msg}`,
-      };
+      isError: true
+    };
     }
   }
 
@@ -253,9 +256,12 @@ export async function executeCommand(
       if (stderrStr) parts.push(`STDERR:\n${stderrStr}`);
       if (truncated) parts.push('(output truncated)');
 
+      const exitCode = proc.exitCode ?? 0;
       return {
-        display: `$ ${description} (exit code: ${proc.exitCode})`,
+        display: `$ ${description} (exit code: ${exitCode})`,
         content: parts.join('\n\n') || '(no output)',
+        // Non-zero exit is a real command failure (backend-owned status).
+        isError: exitCode !== 0,
       };
     } catch (err) {
       // Timeout
@@ -265,7 +271,8 @@ export async function executeCommand(
         return {
           display: `$ ${description} - Timed out after ${timeout} seconds`,
           content: `Error: ${description} timed out after ${timeout} seconds.`,
-        };
+      isError: true
+    };
       }
       throw err;
     }
@@ -274,6 +281,7 @@ export async function executeCommand(
     return {
       display: `$ ${description} - Execution error`,
       content: `Error: ${msg}`,
+      isError: true
     };
   }
 }

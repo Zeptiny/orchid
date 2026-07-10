@@ -84,7 +84,8 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         timestamp: new Date().toISOString(),
         usage: null,
         hidden: false,
-      },
+    is_error: false,
+  },
     ];
 
     const stream = streamChat({
