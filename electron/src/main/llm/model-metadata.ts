@@ -2,14 +2,19 @@
  * Model metadata resolution — capabilities and limits for known LLM models.
  *
  * Provides a `resolveModelMetadata()` function that returns display-ready
- * metadata (max tokens, vision support, mode) for a given model ID.
+ * metadata (max tokens, vision support, mode) for a model ref.
+ *
+ * Model refs from the UI are `alias/model` (same as resolveModelRef). Bare
+ * model ids are also accepted for built-in / legacy lookups.
  *
  * Resolution order:
- * 1. Look up model ID in built-in defaults table
- * 2. Merge any per-model overrides from provider config
- * 3. Cache the result for subsequent lookups
+ * 1. Split `alias/model` on the first slash when present
+ * 2. Look up bare model id in built-in defaults table
+ * 3. Merge per-model overrides from that provider's config
+ * 4. Cache the result under the full ref for subsequent lookups
  *
  * Unknown models get safe defaults: null limits, no vision, 'chat' mode.
+ * Call `clearModelMetadataCache()` after config saves so overrides refresh.
  */
 import type { ModelMetadata } from '../../shared/types/ipc-boundary';
 import type { Config } from '../config/schema';
@@ -241,7 +246,29 @@ const DEFAULT_METADATA: ModelMetadata = {
 };
 
 /**
- * Find the best matching built-in metadata for a model ID.
+ * Split a model ref into provider alias and bare model id.
+ *
+ * UI / session model ids are `alias/model` (first slash only), matching
+ * `resolveModelRef`. Bare ids (no slash) are returned as-is with a null alias.
+ * Model ids that themselves contain slashes (e.g. `cline-pass/mimo-v2.5`)
+ * remain intact after the first slash: `cline/cline-pass/mimo-v2.5`.
+ */
+export function splitProviderModelRef(ref: string): {
+  alias: string | null;
+  modelId: string;
+} {
+  const slashIndex = ref.indexOf('/');
+  if (slashIndex <= 0 || slashIndex >= ref.length - 1) {
+    return { alias: null, modelId: ref };
+  }
+  return {
+    alias: ref.slice(0, slashIndex),
+    modelId: ref.slice(slashIndex + 1),
+  };
+}
+
+/**
+ * Find the best matching built-in metadata for a bare model ID.
  * Tries exact match first, then prefix match (longest prefix wins).
  */
 function findBuiltInMetadata(modelId: string): ModelMetadata | null {
@@ -267,64 +294,91 @@ function findBuiltInMetadata(modelId: string): ModelMetadata | null {
 /**
  * Extract per-model overrides from provider config.
  *
- * Looks for a `models` dict in each provider entry where the key matches
- * the model ID. The value can contain override fields:
- * `{ max_input_tokens: 128000, supports_vision: true, ... }`
+ * When `alias` is set (from `alias/model` refs used by pickers), only that
+ * provider's models dict is consulted — so two providers with the same bare
+ * model id keep independent overrides.
+ *
+ * Without an alias, scans all providers and returns the first match (legacy
+ * bare-id lookups). Prefer alias-qualified refs from the UI.
+ *
+ * Override fields: `{ max_input_tokens, max_output_tokens, supports_vision, mode }`
  */
 function findConfigOverrides(
   modelId: string,
   config: Config,
+  alias: string | null,
 ): Partial<ModelMetadata> | null {
   const providers = config.providers;
   if (!providers || typeof providers !== 'object') {
     return null;
   }
 
+  if (alias != null) {
+    const provider = providers[alias];
+    if (typeof provider !== 'object' || provider === null) {
+      return null;
+    }
+    return readModelOverride(provider as Record<string, unknown>, modelId);
+  }
+
+  // Bare model id: scan providers (order is object key order). Prefer
+  // alias-qualified refs so same-id models under different providers do not
+  // collide.
   for (const provider of Object.values(providers)) {
     if (typeof provider !== 'object' || provider === null) continue;
-
-    const models = (provider as Record<string, unknown>).models;
-    if (typeof models !== 'object' || models === null) continue;
-
-    // Exact match in models dict
-    const entry = (models as Record<string, unknown>)[modelId];
-    if (typeof entry === 'object' && entry !== null) {
-      return entry as Partial<ModelMetadata>;
-    }
+    const entry = readModelOverride(provider as Record<string, unknown>, modelId);
+    if (entry) return entry;
   }
 
   return null;
 }
 
+function readModelOverride(
+  provider: Record<string, unknown>,
+  modelId: string,
+): Partial<ModelMetadata> | null {
+  const models = provider.models;
+  if (typeof models !== 'object' || models === null) return null;
+
+  const entry = (models as Record<string, unknown>)[modelId];
+  if (typeof entry === 'object' && entry !== null) {
+    return entry as Partial<ModelMetadata>;
+  }
+  return null;
+}
+
 /**
- * Resolve model metadata for a given model ID.
+ * Resolve model metadata for a given model ref.
  *
  * Resolution order:
  * 1. Cache hit → return cached result
- * 2. Built-in defaults for known models
- * 3. Per-model overrides from provider config
- * 4. Merge: built-in defaults ← config overrides
- * 5. Cache and return
+ * 2. Split `alias/model` (first slash) when present
+ * 3. Built-in defaults for the bare model id
+ * 4. Per-model overrides from that provider's config (or any provider if bare)
+ * 5. Merge: built-in defaults ← config overrides
+ * 6. Cache and return
  *
  * Unknown models get safe defaults: null limits, no vision, 'chat' mode.
  *
- * @param modelId - The model ID (e.g., 'gpt-4o', 'claude-3-5-sonnet-20241022')
+ * @param modelRef - Bare model id or `alias/model` (e.g. `default/mimo-v2.5`)
  * @param config - The application config (for provider overrides)
  * @returns ModelMetadata with all fields populated (nulls for unknown limits)
  */
 export function resolveModelMetadata(
-  modelId: string,
+  modelRef: string,
   config: Config,
 ): ModelMetadata {
-  // Check cache
-  const cached = metadataCache.get(modelId);
+  // Check cache (keyed by full ref so provider-specific overrides stay distinct)
+  const cached = metadataCache.get(modelRef);
   if (cached) return cached;
 
-  // Find built-in defaults
+  const { alias, modelId } = splitProviderModelRef(modelRef);
+
+  // Find built-in defaults from bare model id
   const builtIn = findBuiltInMetadata(modelId);
 
-  // Find config overrides
-  const overrides = findConfigOverrides(modelId, config);
+  // Find config overrides for this provider + model
+  const overrides = findConfigOverrides(modelId, config, alias);
 
   // Merge: built-in defaults (or DEFAULT) ← config overrides
   const base = builtIn ?? { ...DEFAULT_METADATA };
@@ -344,8 +398,8 @@ export function resolveModelMetadata(
     mode: overrides?.mode !== undefined ? overrides.mode : base.mode,
   };
 
-  // Cache the result
-  metadataCache.set(modelId, merged);
+  // Cache the result under the full ref
+  metadataCache.set(modelRef, merged);
 
   return merged;
 }

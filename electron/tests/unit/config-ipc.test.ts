@@ -99,6 +99,7 @@ vi.mock('../../src/main/config/keychain', () => ({
 
 vi.mock('../../src/main/llm/model-metadata', () => ({
   resolveModelMetadata: vi.fn(),
+  clearModelMetadataCache: vi.fn(),
 }));
 
 vi.mock('../../src/main/llm/providers', () => ({

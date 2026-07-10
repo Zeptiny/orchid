@@ -61,11 +61,10 @@ export function ModelPicker({
   useEffect(() => {
     if (!open || !window.orchid?.config?.modelMetadata) return;
     let cancelled = false;
-    const missing = modelOptions.filter((model) => !(model in metadata));
-    if (missing.length === 0) return;
-
+    // Always refresh when opened so overrides saved in Preferences appear
+    // without requiring an app restart (main-process cache is cleared on save).
     Promise.all(
-      missing.map(async (model) => {
+      modelOptions.map(async (model) => {
         try {
           return [model, await window.orchid.config.modelMetadata(model)] as const;
         } catch {
@@ -74,16 +73,13 @@ export function ModelPicker({
       }),
     ).then((entries) => {
       if (cancelled) return;
-      setMetadata((previous) => ({
-        ...previous,
-        ...Object.fromEntries(entries),
-      }));
+      setMetadata(Object.fromEntries(entries));
     });
 
     return () => {
       cancelled = true;
     };
-  }, [metadata, modelOptions, open]);
+  }, [modelOptions, open]);
 
   const selectModel = (model: string) => {
     onChange(model);
@@ -149,7 +145,7 @@ export function ModelPicker({
           </label>
 
           <div className="model-picker-table-wrap">
-            <table className="table table-xs model-picker-table">
+            <table className="table table-sm model-picker-table">
               <thead>
                 <tr>
                   <th>Model</th>

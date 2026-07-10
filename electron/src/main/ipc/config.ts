@@ -19,7 +19,10 @@ import {
 } from '../config/loader';
 import { mergeConfigUpdates } from '../config/merge';
 import { configSchema } from '../config/schema';
-import { resolveModelMetadata } from '../llm/model-metadata';
+import {
+  clearModelMetadataCache,
+  resolveModelMetadata,
+} from '../llm/model-metadata';
 import { discoverModelsAsync } from '../llm/providers';
 import {
   listPersonalityNames,
@@ -324,6 +327,8 @@ export function registerConfigIPC(): void {
       // Reset the cached config so next load picks up changes
       ConfigManager.reset();
       resetLastAppliedProjectDir();
+      // Drop model-metadata cache so picker limits reflect new overrides.
+      clearModelMetadataCache();
 
       if (sticky != null && sticky !== '') {
         // Re-merge project .orchid.json + agents/skills for the sticky workspace.

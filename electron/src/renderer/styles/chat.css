@@ -4794,14 +4794,14 @@ button.inspector-row:hover {
   width: 100%;
   min-width: 500px;
   table-layout: fixed;
-  font-size: 11px;
+  font-size: 13px;
 }
 .model-picker-table th {
-  padding: 6px 8px;
+  padding: 7px 8px;
   color: var(--text-secondary);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 650;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 .model-picker-table th:first-child,
@@ -4813,11 +4813,13 @@ button.inspector-row:hover {
 .model-picker-table td:not(:first-child) {
   width: 16%;
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 .model-picker-table td {
-  padding: 8px;
+  padding: 9px 8px;
   border-top: 1px solid color-mix(in srgb, var(--text-primary) 4.5%, transparent);
   color: var(--text-muted);
+  font-size: 13px;
   vertical-align: middle;
   white-space: nowrap;
 }
@@ -4836,6 +4838,7 @@ button.inspector-row:hover {
 .model-picker-model-name {
   overflow: hidden;
   color: var(--text-primary);
+  font-size: 13px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4843,7 +4846,7 @@ button.inspector-row:hover {
 .model-picker-provider {
   margin-top: 2px;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 11px;
 }
 .model-picker-empty {
   padding: 18px 10px;
