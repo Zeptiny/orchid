@@ -105,6 +105,39 @@ function extractJsonString(text: string, key: string): string | undefined {
 }
 
 /**
+ * Extract a nullable string field (e.g. "cwd") from partial JSON text.
+ *
+ * - quoted string → the decoded string
+ * - explicit `null` → null
+ * - key not found / unparseable → undefined (caller may full-parse)
+ */
+function extractJsonNullableString(
+  text: string,
+  key: string,
+): string | null | undefined {
+  const stringVal = extractJsonString(text, key);
+  if (stringVal !== undefined) {
+    return stringVal;
+  }
+  // Match `"key": null` (with optional whitespace)
+  const nullPattern = new RegExp(
+    `${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:\\s*null\\b`,
+  );
+  if (nullPattern.test(text)) {
+    return null;
+  }
+  return undefined;
+}
+
+/**
+ * Parse cwd from a fully-parsed session storage object.
+ * Missing / non-string → null (legacy / unbound).
+ */
+function cwdFromParsed(data: Record<string, unknown>): string | null {
+  return typeof data.cwd === 'string' ? data.cwd : null;
+}
+
+/**
  * Try to extract the length of the "chains" array from partial JSON text.
  * Returns the count if the complete array is found, undefined otherwise.
  */
@@ -181,7 +214,7 @@ export function loadSession(sessionId: string, opts?: StorageOptions): Session |
  * Return metadata for all saved sessions sorted by most recent mtime.
  *
  * Uses a partial read strategy for top-level string metadata (first 2048
- * bytes, regex extract id/name/model). Falls back to full parse if the
+ * bytes, regex extract id/name/model/cwd). Falls back to full parse if the
  * partial read doesn't contain enough data.
  *
  * Matches Python `storage.py:list_saved_sessions`.
@@ -235,12 +268,15 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
       const sessionId = extractJsonString(head, '"id"');
       const name = extractJsonString(head, '"name"');
       const model = extractJsonString(head, '"model"');
+      const cwdFromHead = extractJsonNullableString(head, '"cwd"');
 
       if (sessionId) {
         // Try to get chainCount from partial read first (avoids double-read)
         let chainCount = extractChainCount(head);
         let parsedName = name ?? 'Unnamed';
         let parsedModel = model;
+        // Missing cwd in head → treat as null for legacy; refine on full parse
+        let parsedCwd: string | null = cwdFromHead === undefined ? null : cwdFromHead;
 
         if (chainCount === undefined) {
           // Chains array extends beyond partial read — full parse needed
@@ -248,12 +284,15 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
           const data = JSON.parse(raw) as Record<string, unknown>;
           const chains = Array.isArray(data.chains) ? data.chains : [];
           chainCount = chains.length;
-          // Also refine name/model from full parse if partial didn't get them
+          // Also refine name/model/cwd from full parse if partial didn't get them
           if (!parsedName || parsedName === 'Unnamed') {
             parsedName = typeof data.name === 'string' ? data.name : 'Unnamed';
           }
           if (parsedModel === undefined) {
             parsedModel = typeof data.model === 'string' ? data.model : undefined;
+          }
+          if (cwdFromHead === undefined) {
+            parsedCwd = cwdFromParsed(data);
           }
         }
 
@@ -261,6 +300,7 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
           id: sessionId,
           name: parsedName,
           model: parsedModel,
+          cwd: parsedCwd,
           chainCount,
           updatedAt: mtime,
         });
@@ -273,6 +313,7 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
           id: typeof data.id === 'string' ? data.id : '',
           name: typeof data.name === 'string' ? data.name : 'Unnamed',
           model: typeof data.model === 'string' ? data.model : undefined,
+          cwd: cwdFromParsed(data),
           chainCount: chains.length,
           updatedAt: mtime,
         });

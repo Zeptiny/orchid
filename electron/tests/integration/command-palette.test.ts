@@ -518,9 +518,9 @@ describe('Command Palette Keyboard Shortcuts', () => {
 
 describe('Session Search in Palette', () => {
   const sessions: SessionSummary[] = [
-    { id: 's1', name: 'TypeScript Migration', model: 'openai/gpt-4o', chainCount: 3, updatedAt: Date.now() },
-    { id: 's2', name: 'Python Bug Fix', model: 'anthropic/claude-3', chainCount: 1, updatedAt: Date.now() - 86400000 },
-    { id: 's3', name: 'React Component Work', model: 'openai/gpt-4o', chainCount: 2, updatedAt: Date.now() - 2 * 86400000 },
+    { id: 's1', name: 'TypeScript Migration', model: 'openai/gpt-4o', cwd: null, chainCount: 3, updatedAt: Date.now() },
+    { id: 's2', name: 'Python Bug Fix', model: 'anthropic/claude-3', cwd: null, chainCount: 1, updatedAt: Date.now() - 86400000 },
+    { id: 's3', name: 'React Component Work', model: 'openai/gpt-4o', cwd: null, chainCount: 2, updatedAt: Date.now() - 2 * 86400000 },
   ];
 
   it('fuzzy search matches session names', () => {

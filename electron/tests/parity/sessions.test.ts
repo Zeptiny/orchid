@@ -43,6 +43,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     id: overrides.id ?? randomUUID(),
     name: overrides.name ?? 'Test Session',
     model: overrides.model ?? 'gpt-4o',
+    cwd: overrides.cwd !== undefined ? overrides.cwd : null,
     chains: overrides.chains ?? [],
     activeChainId: overrides.activeChainId ?? null,
     createdAt: overrides.createdAt ?? now,
@@ -89,6 +90,26 @@ describe('Session Parity', () => {
       expect(session.activeChainId).toBeNull();
       expect(session.subagentChains).toEqual([]);
       expect(session.todoStore).toEqual({ tasks: [] });
+    });
+
+    it('SessionManager.create() defaults cwd to null (not process.cwd)', () => {
+      const manager = new SessionManager({ storage: storageOpts });
+      const session = manager.create('gpt-4o');
+      expect(session.cwd).toBeNull();
+    });
+
+    it('SessionManager.create() accepts optional cwd and persists it', () => {
+      const projectDir = path.join(tmpDir, 'parity-project');
+      fs.mkdirSync(projectDir, { recursive: true });
+      const manager = new SessionManager({ storage: storageOpts });
+      const session = manager.create('gpt-4o', { cwd: projectDir });
+      expect(session.cwd).toBe(fs.realpathSync(projectDir));
+
+      const loaded = loadSession(session.id, storageOpts);
+      expect(loaded!.cwd).toBe(session.cwd);
+
+      const listed = listSavedSessions(storageOpts);
+      expect(listed[0].cwd).toBe(session.cwd);
     });
 
     it('SessionManager.create() sets as active session', () => {
@@ -223,6 +244,17 @@ describe('Session Parity', () => {
 
       const sessions = listSavedSessions(storageOpts);
       expect(sessions[0].chainCount).toBe(2);
+    });
+
+    it('list includes cwd on summary (null when unbound)', () => {
+      const session = makeSession({
+        id: 'caaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        cwd: null,
+      });
+      saveSession(session, storageOpts);
+
+      const sessions = listSavedSessions(storageOpts);
+      expect(sessions[0].cwd).toBeNull();
     });
   });
 

@@ -147,6 +147,7 @@ export function useSession(): UseSessionReturn {
           id: session.id,
           name: session.name,
           model: session.model,
+          cwd: session.cwd,
           chainCount: session.chains.length,
           updatedAt: Date.now(),
         }],
@@ -267,6 +268,7 @@ function makeLocalSession(): Session {
     id: sessionId,
     name: 'Local Session',
     model: '',
+    cwd: null,
     chains: [{
       id: chainId,
       sessionId,

@@ -17,6 +17,7 @@ export {
 
 export {
   SessionManager,
+  type CreateSessionOptions,
   type GenerateTitleCallback,
   type SessionManagerOptions,
 } from './manager';

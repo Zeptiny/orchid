@@ -30,6 +30,11 @@ export interface Session {
   readonly id: string;
   readonly name: string;
   readonly model: string;
+  /**
+   * Absolute working/project directory for this session.
+   * `null` = unbound (legacy sessions without cwd, or intentionally unbound).
+   */
+  readonly cwd: string | null;
   readonly chains: readonly Chain[];
   readonly activeChainId: string | null;
   readonly createdAt: string;
@@ -57,6 +62,8 @@ export interface SessionStorageDict {
   id: string;
   name: string;
   model?: string;
+  /** Absolute working directory; missing/null on legacy sessions. */
+  cwd?: string | null;
   chains?: unknown[];
   activeChainId?: string | null;
   active_chain_id?: string | null;
@@ -75,11 +82,14 @@ export interface SessionStorageDict {
 // ── Serialization ───────────────────────────────────────────────────────────
 
 export function sessionToStorageDict(session: Session): SessionStorageDict {
+  // Serialize cwd near the top (after id/name/model) so partial list reads
+  // can extract it without a full JSON parse.
   return {
     version: 1,
     id: session.id,
     name: session.name,
     model: session.model,
+    cwd: session.cwd,
     chains: session.chains.map(chainToStorageDict),
     activeChainId: session.activeChainId,
     createdAt: session.createdAt,
@@ -127,6 +137,8 @@ export function sessionFromStorageDict(data: unknown): Session {
     id: typeof raw.id === 'string' ? raw.id : '',
     name: typeof raw.name === 'string' ? raw.name : 'Unnamed',
     model: typeof raw.model === 'string' ? raw.model : '',
+    // Legacy sessions without cwd → null (R9); never invent process.cwd().
+    cwd: typeof raw.cwd === 'string' ? raw.cwd : null,
     chains,
     activeChainId:
       typeof raw.activeChainId === 'string'

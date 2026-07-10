@@ -57,6 +57,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     id: overrides.id ?? randomUUID(),
     name: overrides.name ?? 'Test Session',
     model: overrides.model ?? 'gpt-4o',
+    cwd: overrides.cwd !== undefined ? overrides.cwd : null,
     chains: overrides.chains ?? [],
     activeChainId: overrides.activeChainId ?? null,
     createdAt: overrides.createdAt ?? now,
@@ -563,6 +564,161 @@ describe('path traversal rejection', () => {
 });
 
 // ===========================================================================
+// Session cwd — create / load / list / changeCwd (U2)
+// ===========================================================================
+
+describe('session cwd persistence', () => {
+  it('create with cwd → disk JSON contains cwd → load restores it', () => {
+    const projectDir = path.join(tmpDir, 'project-a');
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create('gpt-4o', { cwd: projectDir });
+
+    expect(session.cwd).toBe(fs.realpathSync(projectDir));
+
+    // Disk JSON has cwd near the top (after id/name/model)
+    const raw = fs.readFileSync(
+      path.join(tmpDir, 'sessions', `${session.id}.json`),
+      'utf-8',
+    );
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    expect(parsed.cwd).toBe(session.cwd);
+    // Key order: cwd appears before chains
+    const cwdIdx = raw.indexOf('"cwd"');
+    const chainsIdx = raw.indexOf('"chains"');
+    expect(cwdIdx).toBeGreaterThan(-1);
+    expect(chainsIdx).toBeGreaterThan(cwdIdx);
+
+    const loaded = loadSession(session.id, storageOpts);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.cwd).toBe(session.cwd);
+  });
+
+  it('create without cwd does not write process.cwd()', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create('gpt-4o');
+
+    expect(session.cwd).toBeNull();
+
+    const raw = fs.readFileSync(
+      path.join(tmpDir, 'sessions', `${session.id}.json`),
+      'utf-8',
+    );
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    expect(parsed.cwd).toBeNull();
+    expect(parsed.cwd).not.toBe(process.cwd());
+
+    const loaded = loadSession(session.id, storageOpts);
+    expect(loaded!.cwd).toBeNull();
+  });
+
+  it('list summary includes cwd from partial head read', () => {
+    const projectDir = path.join(tmpDir, 'project-list');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const canonical = fs.realpathSync(projectDir);
+
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create('gpt-4o', { cwd: projectDir });
+
+    const summaries = listSavedSessions(storageOpts);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].id).toBe(session.id);
+    expect(summaries[0].cwd).toBe(canonical);
+  });
+
+  it('legacy file without cwd → load yields null; list summary cwd null', () => {
+    const legacyId = 'd1111111-1111-4111-8111-111111111111';
+    const sessionsDir = path.join(tmpDir, 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    // Legacy shape: no cwd field at all
+    fs.writeFileSync(
+      path.join(sessionsDir, `${legacyId}.json`),
+      JSON.stringify({
+        version: 1,
+        id: legacyId,
+        name: 'Legacy Session',
+        model: 'gpt-4o',
+        chains: [],
+        activeChainId: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        subagent_chains: [],
+        todo_store: { tasks: [] },
+      }),
+      'utf-8',
+    );
+
+    const loaded = loadSession(legacyId, storageOpts);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.cwd).toBeNull();
+
+    const summaries = listSavedSessions(storageOpts);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].id).toBe(legacyId);
+    expect(summaries[0].cwd).toBeNull();
+  });
+
+  it('changeCwd persists and is visible on reload', () => {
+    const projectDir = path.join(tmpDir, 'project-change');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const canonical = fs.realpathSync(projectDir);
+
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create('gpt-4o');
+    expect(session.cwd).toBeNull();
+
+    const updated = manager.changeCwd(session.id, projectDir);
+    expect(updated.cwd).toBe(canonical);
+    expect(manager.getActive()!.cwd).toBe(canonical);
+
+    const loaded = loadSession(session.id, storageOpts);
+    expect(loaded!.cwd).toBe(canonical);
+
+    // Also visible via list summary
+    const summaries = listSavedSessions(storageOpts);
+    expect(summaries[0].cwd).toBe(canonical);
+  });
+
+  it('changeCwd rejects missing path without corrupting prior cwd', () => {
+    const projectDir = path.join(tmpDir, 'project-keep');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const canonical = fs.realpathSync(projectDir);
+
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create('gpt-4o', { cwd: projectDir });
+    expect(session.cwd).toBe(canonical);
+
+    const missing = path.join(tmpDir, 'does-not-exist');
+    expect(() => manager.changeCwd(session.id, missing)).toThrow(/Cannot change cwd/);
+
+    // Prior cwd preserved in memory and on disk
+    expect(manager.getActive()!.cwd).toBe(canonical);
+    const loaded = loadSession(session.id, storageOpts);
+    expect(loaded!.cwd).toBe(canonical);
+  });
+
+  it('changeCwd rejects relative paths', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create('gpt-4o');
+
+    expect(() => manager.changeCwd(session.id, 'relative/path')).toThrow(/Cannot change cwd/);
+    expect(manager.getActive()!.cwd).toBeNull();
+  });
+
+  it('changeCwd rejects non-active session', () => {
+    const projectDir = path.join(tmpDir, 'project-other');
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    const manager = new SessionManager({ storage: storageOpts });
+    const session1 = manager.create('gpt-4o');
+    manager.create('gpt-4o'); // session1 no longer active
+
+    expect(() => manager.changeCwd(session1.id, projectDir)).toThrow(/not active/);
+  });
+});
+
+// ===========================================================================
 // SessionManager — create, switch, delete, rename, changeModel
 // ===========================================================================
 
@@ -576,6 +732,7 @@ describe('SessionManager', () => {
     expect(session.name.startsWith('Session ')).toBe(true);
     expect(session.chains).toEqual([]);
     expect(session.activeChainId).toBeNull();
+    expect(session.cwd).toBeNull();
 
     // Should be saved to disk
     const loaded = loadSession(session.id, storageOpts);

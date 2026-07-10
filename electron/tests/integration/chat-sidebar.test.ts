@@ -177,8 +177,8 @@ describe('Streaming Events', () => {
 describe('Session Management', () => {
   it('session.list returns session summaries', async () => {
     const sessions: SessionSummary[] = [
-      { id: 's1', name: 'Session 1', model: 'test/model', chainCount: 2, updatedAt: Date.now() },
-      { id: 's2', name: 'Session 2', model: 'test/model', chainCount: 1, updatedAt: Date.now() - 86400000 },
+      { id: 's1', name: 'Session 1', model: 'test/model', cwd: null, chainCount: 2, updatedAt: Date.now() },
+      { id: 's2', name: 'Session 2', model: 'test/model', cwd: null, chainCount: 1, updatedAt: Date.now() - 86400000 },
     ];
     mockOrchid.session.list.mockResolvedValueOnce(sessions);
 
@@ -292,7 +292,7 @@ describe('Interaction States', () => {
     it('ready state has sessions array', () => {
       const state = {
         status: 'ready' as const,
-        sessions: [{ id: 's1', name: 'Test', model: 'm', chainCount: 1, updatedAt: Date.now() }],
+        sessions: [{ id: 's1', name: 'Test', model: 'm', cwd: null, chainCount: 1, updatedAt: Date.now() }],
       };
       expect(state.status).toBe('ready');
       expect(state.sessions).toHaveLength(1);
@@ -307,7 +307,7 @@ describe('Interaction States', () => {
     it('partial state has sessions and error', () => {
       const state = {
         status: 'partial' as const,
-        sessions: [{ id: 's1', name: 'Test', model: 'm', chainCount: 1, updatedAt: Date.now() }],
+        sessions: [{ id: 's1', name: 'Test', model: 'm', cwd: null, chainCount: 1, updatedAt: Date.now() }],
         error: 'Some sessions failed to load',
       };
       expect(state.status).toBe('partial');
@@ -417,10 +417,10 @@ describe('Session Date Grouping', () => {
   it('groups sessions into Today, Yesterday, This Week, and older', () => {
     const now = Date.now();
     const sessions: SessionSummary[] = [
-      { id: 's1', name: 'Today', model: 'm', chainCount: 1, updatedAt: now },
-      { id: 's2', name: 'Yesterday', model: 'm', chainCount: 1, updatedAt: now - 86400000 },
-      { id: 's3', name: 'This Week', model: 'm', chainCount: 1, updatedAt: now - 3 * 86400000 },
-      { id: 's4', name: 'Older', model: 'm', chainCount: 1, updatedAt: now - 30 * 86400000 },
+      { id: 's1', name: 'Today', model: 'm', cwd: null, chainCount: 1, updatedAt: now },
+      { id: 's2', name: 'Yesterday', model: 'm', cwd: null, chainCount: 1, updatedAt: now - 86400000 },
+      { id: 's3', name: 'This Week', model: 'm', cwd: null, chainCount: 1, updatedAt: now - 3 * 86400000 },
+      { id: 's4', name: 'Older', model: 'm', cwd: null, chainCount: 1, updatedAt: now - 30 * 86400000 },
     ];
 
     // The grouping function is internal to Sidebar, but we can verify the logic

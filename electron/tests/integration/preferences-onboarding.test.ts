@@ -285,7 +285,7 @@ describe('Onboarding Flow', () => {
 
   it('sessions exist → skip onboarding', async () => {
     mockOrchid.session.list.mockResolvedValueOnce([
-      { id: 's1', name: 'Session 1', model: 'test', chainCount: 1, updatedAt: Date.now() },
+      { id: 's1', name: 'Session 1', model: 'test', cwd: null, chainCount: 1, updatedAt: Date.now() },
     ]);
     const sessions = await mockOrchid.session.list();
     expect(sessions.length > 0).toBe(true);

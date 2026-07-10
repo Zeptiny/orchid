@@ -15,6 +15,11 @@ export interface SessionSummary {
   readonly id: string;
   readonly name: string;
   readonly model: string | undefined;
+  /**
+   * Absolute working directory for the session.
+   * `null` when unbound or for legacy sessions without a stored cwd.
+   */
+  readonly cwd: string | null;
   readonly chainCount: number;
   readonly updatedAt: number;
 }

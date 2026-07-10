@@ -24,6 +24,10 @@ import type { Session } from '../../shared/types/session';
 import type { Message } from '../../shared/types/message';
 import { ChainStatus, type Chain } from '../../shared/types/chain';
 import {
+  canonicalizeProjectDirectory,
+  inspectProjectDirectory,
+} from '../project/path';
+import {
   saveSession as storageSaveSession,
   loadSession as storageLoadSession,
   deleteSession as storageDeleteSession,
@@ -31,6 +35,19 @@ import {
   type StorageOptions,
   type SessionSummary,
 } from './storage';
+
+// ---------------------------------------------------------------------------
+// Create options
+// ---------------------------------------------------------------------------
+
+export interface CreateSessionOptions {
+  /**
+   * Absolute working directory for the new session.
+   * Caller-supplied only — never silently defaults to process.cwd().
+   * `null` / omitted → unbound session.
+   */
+  cwd?: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // Auto-naming callback type
@@ -97,13 +114,25 @@ export class SessionManager {
    *
    * The session is immediately saved to disk and set as active.
    * Matches Python SessionManager.create().
+   *
+   * @param model - Model id for the session
+   * @param options - Optional create options. `cwd` is caller-supplied only
+   *   (absolute path or null); never silently defaults to process.cwd().
    */
-  create(model: string): Session {
+  create(model: string, options?: CreateSessionOptions): Session {
     const now = new Date().toISOString();
+    // Unbound by default; only set cwd when the caller explicitly provides one.
+    // Valid absolute dirs are canonicalized; invalid non-null paths store as
+    // null rather than inventing a fallback (caller should validate first).
+    let cwd: string | null = null;
+    if (options?.cwd != null && options.cwd !== '') {
+      cwd = canonicalizeProjectDirectory(options.cwd);
+    }
     const session: Session = {
       id: randomUUID(),
       name: `Session ${now.replace('T', ' ').replace(/\.\d+Z$/, '')}`,
       model,
+      cwd,
       chains: [],
       activeChainId: null,
       createdAt: now,
@@ -169,6 +198,34 @@ export class SessionManager {
     }
     this._active = { ...this._active, model, updatedAt: new Date().toISOString() };
     storageSaveSession(this._active, this._storageOpts);
+  }
+
+  /**
+   * Change the working directory for the active session.
+   *
+   * Validates via project path helpers: path must be absolute, exist, be a
+   * directory, and be readable/executable. Stores the canonical absolute path
+   * (realpath when available). Rejects invalid paths without mutating prior cwd.
+   *
+   * @returns The updated session on success
+   * @throws Error if the session is not active or the path is invalid
+   */
+  changeCwd(id: string, cwd: string): Session {
+    if (!this._active || this._active.id !== id) {
+      throw new Error(`Cannot change cwd: session ${id} is not active`);
+    }
+    const inspection = inspectProjectDirectory(cwd);
+    if (inspection.status !== 'valid' || inspection.path == null) {
+      const reason = inspection.reason ?? 'invalid project directory';
+      throw new Error(`Cannot change cwd: ${reason}`);
+    }
+    this._active = {
+      ...this._active,
+      cwd: inspection.path,
+      updatedAt: new Date().toISOString(),
+    };
+    storageSaveSession(this._active, this._storageOpts);
+    return this._active;
   }
 
   /**
