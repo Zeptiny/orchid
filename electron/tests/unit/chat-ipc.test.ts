@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => {
     id: string;
     name: string;
     model: string;
+    cwd: string | null;
     chains: unknown[];
     activeChainId: string | null;
     createdAt: string;
@@ -18,16 +19,20 @@ const mocks = vi.hoisted(() => {
     todoStore: { tasks: unknown[] };
   } | null = null;
 
+  let workspaceBound = true;
+  const testProjectDir = '/tmp/orchid-chat-ipc-project';
+
   const sessionManager = {
     getActive: vi.fn(() => activeSession),
     clearActive: vi.fn(() => {
       activeSession = null;
     }),
-    create: vi.fn((model: string) => {
+    create: vi.fn((model: string, options?: { cwd?: string | null }) => {
       activeSession = {
         id: 'lazy-session-id',
         name: 'Session draft',
         model,
+        cwd: options?.cwd ?? null,
         chains: [],
         activeChainId: null,
         createdAt: new Date().toISOString(),
@@ -62,6 +67,7 @@ const mocks = vi.hoisted(() => {
     /** Test helper: reset between cases */
     _reset: () => {
       activeSession = null;
+      workspaceBound = true;
       sessionManager.getActive.mockClear();
       sessionManager.create.mockClear();
       sessionManager.clearActive.mockClear();
@@ -70,11 +76,39 @@ const mocks = vi.hoisted(() => {
     },
   };
 
+  const workspace = {
+    resolveWorkspace: vi.fn((_windowId: string, _options?: unknown) => {
+      if (!workspaceBound) {
+        return { cwd: null, source: 'unbound' as const, status: 'unbound' as const };
+      }
+      return {
+        cwd: testProjectDir,
+        source: 'default' as const,
+        status: 'valid' as const,
+      };
+    }),
+    isWorkspaceBound: vi.fn((info: { status: string; cwd: string | null }) => {
+      return info.status === 'valid' && info.cwd != null && info.cwd !== '';
+    }),
+    clearDraftCwd: vi.fn(),
+    setDraftCwd: vi.fn(),
+    getDraftCwd: vi.fn(() => null),
+    clearAllDraftCwds: vi.fn(),
+    updateStickyDefaultProjectDir: vi.fn(),
+    requireValidProjectDirectory: vi.fn((dir: string) => dir),
+    resolveWorkspaceFromParts: vi.fn(),
+    _setBound: (bound: boolean) => {
+      workspaceBound = bound;
+    },
+    _testProjectDir: testProjectDir,
+  };
+
   return {
     handlers,
     streamResponses,
     streamEventSequences,
     sessionManager,
+    workspace,
     ipcMain: {
       handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
         handlers.set(channel, handler);
@@ -157,6 +191,21 @@ vi.mock('../../src/main/ipc/session', () => ({
   getSessionManager: () => mocks.sessionManager,
 }));
 
+vi.mock('../../src/main/project/workspace', () => ({
+  resolveWorkspace: (...args: unknown[]) =>
+    mocks.workspace.resolveWorkspace(...(args as [string, unknown?])),
+  isWorkspaceBound: (...args: unknown[]) =>
+    mocks.workspace.isWorkspaceBound(...(args as [{ status: string; cwd: string | null }])),
+  clearDraftCwd: (...args: unknown[]) =>
+    mocks.workspace.clearDraftCwd(...(args as [string])),
+  setDraftCwd: mocks.workspace.setDraftCwd,
+  getDraftCwd: mocks.workspace.getDraftCwd,
+  clearAllDraftCwds: mocks.workspace.clearAllDraftCwds,
+  updateStickyDefaultProjectDir: mocks.workspace.updateStickyDefaultProjectDir,
+  requireValidProjectDirectory: mocks.workspace.requireValidProjectDirectory,
+  resolveWorkspaceFromParts: mocks.workspace.resolveWorkspaceFromParts,
+}));
+
 let chatIpc: typeof import('../../src/main/ipc/chat');
 
 function doneEvents(send: ReturnType<typeof vi.fn>) {
@@ -217,8 +266,12 @@ describe('chat IPC', () => {
     await waitForDoneCount(send, 1);
 
     expect(mocks.sessionManager.create).toHaveBeenCalledTimes(1);
-    expect(mocks.sessionManager.create).toHaveBeenCalledWith('preferred/model');
+    expect(mocks.sessionManager.create).toHaveBeenCalledWith('preferred/model', {
+      cwd: mocks.workspace._testProjectDir,
+    });
     expect(mocks.sessionManager.getActive()?.id).toBe('lazy-session-id');
+    expect(mocks.sessionManager.getActive()?.cwd).toBe(mocks.workspace._testProjectDir);
+    expect(mocks.workspace.clearDraftCwd).toHaveBeenCalledWith('99');
 
     const created = channelEvents(send, IPC_CHANNELS.SESSION_CREATED);
     expect(created).toHaveLength(1);
@@ -231,6 +284,28 @@ describe('chat IPC', () => {
     await chatSend!({ sender: webContents }, { message: 'Follow-up' });
     await waitForDoneCount(send, 2);
     expect(mocks.sessionManager.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects chat:send when workspace is unbound (no session create, no stream)', async () => {
+    mocks.workspace._setBound(false);
+    const send = vi.fn();
+    const webContents = { id: 100, send };
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+    expect(chatSend).toBeDefined();
+
+    const result = await chatSend!(
+      { sender: webContents },
+      { message: 'Should not start' },
+    );
+
+    expect(result).toEqual({
+      status: 'error',
+      error: expect.stringContaining('project folder'),
+      kind: 'unbound_workspace',
+    });
+    expect(mocks.sessionManager.create).not.toHaveBeenCalled();
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+    expect(doneEvents(send)).toHaveLength(0);
   });
 
   it('does not replay the previous assistant response when a new turn starts', async () => {

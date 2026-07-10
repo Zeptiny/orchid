@@ -30,7 +30,7 @@ import { importESM } from '../utils/esm-import';
 import { getBackgroundStore } from '../tools/process/background-store';
 import { getMCPManagerRef } from './mcp';
 import { getSubagentManager } from '../tools';
-import type { ChatErrorKind } from '../../shared/types/ipc';
+import type { ChatErrorKind, ChatSendResult } from '../../shared/types/ipc';
 import {
   clearAllChatHistory,
   getChatHistory,
@@ -43,7 +43,11 @@ import {
   makeToolResultMessage,
   makeUserMessage,
 } from '../llm/message-factories';
-
+import {
+  clearDraftCwd,
+  isWorkspaceBound,
+  resolveWorkspace,
+} from '../project/workspace';
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
 const chatSendSchema = z.object({
@@ -230,14 +234,38 @@ function canSend(webContents: WebContents): boolean {
  * Ensure there is an active session before streaming/persisting.
  * Draft mode leaves no active session until the first chat:send — create
  * lazily here and notify the renderer so the sidebar gains a list entry.
+ *
+ * Requires a valid workspace (draft → session → sticky default). Never uses
+ * process.cwd() as the product default. If unbound, does not create a session.
+ *
+ * @returns ok + session cwd, or a structured failure for the send gate
  */
 function ensureActiveSession(
   webContents: WebContents,
   preferredModel?: string,
-): void {
+): { ok: true; cwd: string } | { ok: false; result: ChatSendResult } {
+  const windowId = String(webContents.id);
   const manager = getSessionManager();
-  if (manager.getActive()) {
-    return;
+  const active = manager.getActive();
+  const workspace = resolveWorkspace(windowId, {
+    sessionCwd: active?.cwd ?? null,
+    stickyDefault: getConfig().default_project_dir,
+  });
+
+  if (!isWorkspaceBound(workspace) || workspace.cwd == null) {
+    return {
+      ok: false,
+      result: {
+        status: 'error',
+        error:
+          'No project folder selected. Choose a folder before sending a message.',
+        kind: 'unbound_workspace',
+      },
+    };
+  }
+
+  if (active) {
+    return { ok: true, cwd: workspace.cwd };
   }
 
   const config = getConfig();
@@ -245,10 +273,13 @@ function ensureActiveSession(
     (preferredModel && preferredModel.trim()) ||
     config.default_model ||
     '';
-  const session = manager.create(model);
+  const session = manager.create(model, { cwd: workspace.cwd });
+  // Draft was promoted into the new session.
+  clearDraftCwd(windowId);
   if (canSend(webContents)) {
     webContents.send(IPC_CHANNELS.SESSION_CREATED, { session });
   }
+  return { ok: true, cwd: workspace.cwd };
 }
 
 function classifyErrorKind(title: string | null | undefined, detail: string): ChatErrorKind {
@@ -482,8 +513,12 @@ export function registerChatIPC(): void {
     const windowId = String(webContents.id);
     const existing = activeAgents.get(windowId);
 
-    // Lazy session create: first message from draft mode writes the session.
-    ensureActiveSession(webContents, preferredModel);
+    // Lazy session create + workspace gate (R2/R3): require valid workspace;
+    // create with that cwd; if unbound, fail without streaming.
+    const sessionGate = ensureActiveSession(webContents, preferredModel);
+    if (!sessionGate.ok) {
+      return sessionGate.result;
+    }
 
     // Prefer live window history; fall back to active session chain on cold start.
     let existingMessages: Message[] =

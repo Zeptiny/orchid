@@ -516,14 +516,35 @@ export function useChat(): UseChatReturn {
       setStatus('streaming');
 
       try {
-        await window.orchid.chat.send({
+        const result = await window.orchid.chat.send({
           message: trimmed,
           ...(options?.model ? { model: options.model } : {}),
         });
+        // Structured gate failures (e.g. unbound workspace) — no stream starts.
+        if (result && result.status === 'error') {
+          isSendingRef.current = false;
+          setError(
+            result.error ??
+              (result.kind === 'unbound_workspace'
+                ? 'No project folder selected. Choose a folder before sending a message.'
+                : 'Failed to send message'),
+          );
+          setStatus('error');
+          // Drop the optimistic user bubble when send never started.
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.id === userMessage.id) {
+              return prev.slice(0, -1);
+            }
+            return prev;
+          });
+          setStreamStartTime(null);
+          setElapsedSeconds(0);
+        }
       } catch (err) {
         isSendingRef.current = false;
         setError(err instanceof Error ? err.message : String(err));
-        setStatus('idle');
+        setStatus('error');
       }
     },
     [status, error, applyToolBlocks, applyStreamSegments],

@@ -32,6 +32,10 @@ import type {
   SessionDeleteMessage,
   SessionRenamedEvent,
   SessionCreatedEvent,
+  SessionChangeCwdMessage,
+  SessionSetWorkspaceMessage,
+  SessionWorkspaceChangedEvent,
+  WorkspaceInfo,
   ToolExecuteMessage,
   AgentSpawnMessage,
   RAGIndexMessage,
@@ -152,11 +156,28 @@ const orchidAPI: OrchidAPI = {
     changeModel: (id: string, model: string) =>
       invoke(IPC_CHANNELS.SESSION_CHANGE_MODEL, { id, model }),
 
+    getWorkspace: () =>
+      invoke<WorkspaceInfo>(IPC_CHANNELS.SESSION_GET_WORKSPACE),
+
+    pickProjectDir: () =>
+      invoke<WorkspaceInfo>(IPC_CHANNELS.SESSION_PICK_PROJECT_DIR),
+
+    setWorkspace: (message: SessionSetWorkspaceMessage) =>
+      invoke<WorkspaceInfo>(IPC_CHANNELS.SESSION_SET_WORKSPACE, message),
+
+    changeCwd: (message: SessionChangeCwdMessage) =>
+      invoke(IPC_CHANNELS.SESSION_CHANGE_CWD, message),
+
     onRenamed: (callback: (event: SessionRenamedEvent) => void) =>
       on(IPC_CHANNELS.SESSION_RENAMED, (...args) => callback(args[0] as SessionRenamedEvent)),
 
     onCreated: (callback: (event: SessionCreatedEvent) => void) =>
       on(IPC_CHANNELS.SESSION_CREATED, (...args) => callback(args[0] as SessionCreatedEvent)),
+
+    onWorkspaceChanged: (callback: (event: SessionWorkspaceChangedEvent) => void) =>
+      on(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, (...args) =>
+        callback(args[0] as SessionWorkspaceChangedEvent),
+      ),
 
     onSubagentsChanged: (callback: () => void) =>
       on(IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED, () => callback()),

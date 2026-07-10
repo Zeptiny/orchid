@@ -1,10 +1,10 @@
 /**
  * Session IPC handlers — session:list, session:load, session:create,
- * session:delete, session:rename.
+ * session:delete, session:rename, workspace binding (get/pick/set/change_cwd).
  *
  * Wraps SessionManager from U5 with zod-validated payloads.
  */
-import { ipcMain } from 'electron';
+import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { Message } from '../../shared/types/message';
@@ -12,15 +12,34 @@ import type { Session } from '../../shared/types/session';
 import { SessionManager } from '../session/manager';
 import { getConfig } from '../config/loader';
 import { clearChatHistory, seedChatHistory } from './chat-history';
+import {
+  clearDraftCwd,
+  getDraftCwd,
+  isWorkspaceBound,
+  requireValidProjectDirectory,
+  resolveWorkspace,
+  setDraftCwd,
+  updateStickyDefaultProjectDir,
+  type WorkspaceInfo,
+} from '../project/workspace';
 
 /**
  * Lazily resolve forceAbortChat to avoid a circular init dependency:
  * chat.ts → getSessionManager (session.ts) → forceAbortChat (chat.ts).
+ *
+ * Uses createRequire so resolution works under both Electron CJS and Vitest.
+ * Falls back silently if chat is unavailable (unit tests with partial graph).
  */
 function abortChatForWindow(windowId: string): void {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { forceAbortChat } = require('./chat') as typeof import('./chat');
-  forceAbortChat(windowId);
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createRequire } = require('node:module') as typeof import('node:module');
+    const req = createRequire(__filename);
+    const chat = req('./chat') as typeof import('./chat');
+    chat.forceAbortChat(windowId);
+  } catch {
+    // chat module not loadable (circular init race or isolated unit test)
+  }
 }
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
@@ -45,6 +64,15 @@ const sessionChangeModelSchema = z.object({
   model: z.string().min(1),
 });
 
+const sessionChangeCwdSchema = z.object({
+  id: z.string().uuid(),
+  cwd: z.string().min(1),
+});
+
+const sessionSetWorkspaceSchema = z.object({
+  cwd: z.string().min(1),
+});
+
 // ── Singleton session manager ────────────────────────────────────────────────
 
 let sessionManager: SessionManager | null = null;
@@ -67,6 +95,54 @@ export function flattenSessionMessages(session: Session): Message[] {
   return session.chains.flatMap((chain) => [...chain.messages]);
 }
 
+/**
+ * Resolve workspace for a window using draft + active session + sticky default.
+ */
+export function resolveWindowWorkspace(windowId: string): WorkspaceInfo {
+  const active = getSessionManager().getActive();
+  return resolveWorkspace(windowId, {
+    sessionCwd: active?.cwd ?? null,
+    stickyDefault: getConfig().default_project_dir,
+  });
+}
+
+/**
+ * Bind a validated absolute project directory as the current workspace.
+ *
+ * - If an active session exists: update session.cwd via changeCwd.
+ * - Otherwise: store as draft for this window.
+ * - Always updates sticky default_project_dir (intentional pick).
+ */
+export function bindProjectDirectory(
+  windowId: string,
+  dir: string,
+): WorkspaceInfo {
+  const canonical = requireValidProjectDirectory(dir);
+  updateStickyDefaultProjectDir(canonical);
+
+  const manager = getSessionManager();
+  const active = manager.getActive();
+  if (active) {
+    manager.changeCwd(active.id, canonical);
+    clearDraftCwd(windowId);
+  } else {
+    setDraftCwd(windowId, canonical);
+  }
+
+  return resolveWindowWorkspace(windowId);
+}
+
+/** Emit session:workspace_changed to the sender window. */
+function emitWorkspaceChanged(
+  sender: Electron.WebContents,
+  workspace: WorkspaceInfo,
+): void {
+  if (typeof sender.isDestroyed === 'function' && sender.isDestroyed()) {
+    return;
+  }
+  sender.send(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, { workspace });
+}
+
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerSessionIPC(): void {
@@ -77,6 +153,7 @@ export function registerSessionIPC(): void {
   });
 
   // session:load — load a session by ID; optionally set as active + seed history
+  // Does NOT rewrite sticky default_project_dir (R4).
   ipcMain.handle(IPC_CHANNELS.SESSION_LOAD, async (event, payload: unknown) => {
     const parsed = sessionLoadSchema.safeParse(payload);
     if (!parsed.success) {
@@ -98,6 +175,10 @@ export function registerSessionIPC(): void {
 
     const session = manager.switchTo(id);
 
+    // Session owns workspace now — clear draft so it doesn't shadow session.cwd.
+    // Sticky default is intentionally NOT updated on load (R4).
+    clearDraftCwd(windowId);
+
     // Seed history with ALL chains (matches renderer flatten) so the next
     // chat:send continues the full conversation, not only the active chain.
     if (session) {
@@ -106,30 +187,45 @@ export function registerSessionIPC(): void {
       clearChatHistory(windowId);
     }
 
+    emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
     return session;
   });
 
   // session:create — eagerly create + activate a session (writes to disk).
   // Prefer session:clear_active + first chat:send for draft UX; this remains
   // for tests and any callers that need an immediate empty session file.
+  // Requires a valid workspace (draft or sticky); never process.cwd().
   ipcMain.handle(IPC_CHANNELS.SESSION_CREATE, async (event) => {
     const config = getConfig();
     const manager = getSessionManager();
     const windowId = String(event.sender.id);
     abortChatForWindow(windowId);
-    const session = manager.create(config.default_model);
+
+    const workspace = resolveWindowWorkspace(windowId);
+    if (!isWorkspaceBound(workspace) || workspace.cwd == null) {
+      throw new Error(
+        'Cannot create session: no project folder selected. Choose a folder first.',
+      );
+    }
+
+    const session = manager.create(config.default_model, { cwd: workspace.cwd });
+    // Draft was promoted into the session.
+    clearDraftCwd(windowId);
     clearChatHistory(windowId);
     event.sender.send(IPC_CHANNELS.SESSION_CREATED, { session });
+    emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
     return session;
   });
 
   // session:clear_active — draft / new chat: no active session, no new file
+  // Keeps any existing draft cwd; otherwise UI falls through to sticky default.
   ipcMain.handle(IPC_CHANNELS.SESSION_CLEAR_ACTIVE, async (event) => {
     const manager = getSessionManager();
     const windowId = String(event.sender.id);
     abortChatForWindow(windowId);
     manager.clearActive();
     clearChatHistory(windowId);
+    emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
     return { status: 'cleared' };
   });
 
@@ -147,6 +243,7 @@ export function registerSessionIPC(): void {
       const windowId = String(event.sender.id);
       abortChatForWindow(windowId);
       clearChatHistory(windowId);
+      emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
     }
     return { status: deleted ? 'deleted' : 'not_found' };
   });
@@ -185,6 +282,69 @@ export function registerSessionIPC(): void {
     }
     return { status: 'changed', model: active.model };
   });
+
+  // session:get_workspace — resolve current workspace for this window
+  ipcMain.handle(IPC_CHANNELS.SESSION_GET_WORKSPACE, async (event) => {
+    const windowId = String(event.sender.id);
+    return resolveWindowWorkspace(windowId);
+  });
+
+  // session:pick_project_dir — native directory dialog → bind + sticky
+  ipcMain.handle(IPC_CHANNELS.SESSION_PICK_PROJECT_DIR, async (event) => {
+    const windowId = String(event.sender.id);
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const dialogOpts = {
+      properties: ['openDirectory' as const],
+      title: 'Choose project folder',
+    };
+    const result = win
+      ? await dialog.showOpenDialog(win, dialogOpts)
+      : await dialog.showOpenDialog(dialogOpts);
+
+    if (result.canceled || !result.filePaths[0]) {
+      // User cancelled — return current workspace unchanged.
+      return resolveWindowWorkspace(windowId);
+    }
+
+    const workspace = bindProjectDirectory(windowId, result.filePaths[0]);
+    emitWorkspaceChanged(event.sender, workspace);
+    return workspace;
+  });
+
+  // session:set_workspace — bind path without dialog (tests / programmatic)
+  ipcMain.handle(IPC_CHANNELS.SESSION_SET_WORKSPACE, async (event, payload: unknown) => {
+    const parsed = sessionSetWorkspaceSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid session:set_workspace payload: ${parsed.error.message}`);
+    }
+
+    const windowId = String(event.sender.id);
+    const workspace = bindProjectDirectory(windowId, parsed.data.cwd);
+    emitWorkspaceChanged(event.sender, workspace);
+    return workspace;
+  });
+
+  // session:change_cwd — validate + SessionManager.changeCwd + sticky update
+  ipcMain.handle(IPC_CHANNELS.SESSION_CHANGE_CWD, async (event, payload: unknown) => {
+    const parsed = sessionChangeCwdSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid session:change_cwd payload: ${parsed.error.message}`);
+    }
+
+    const windowId = String(event.sender.id);
+    const manager = getSessionManager();
+    const session = manager.changeCwd(parsed.data.id, parsed.data.cwd);
+
+    // Intentional change → update sticky default (R4).
+    if (session.cwd) {
+      updateStickyDefaultProjectDir(session.cwd);
+    }
+    clearDraftCwd(windowId);
+
+    const workspace = resolveWindowWorkspace(windowId);
+    emitWorkspaceChanged(event.sender, workspace);
+    return session;
+  });
 }
 
 /**
@@ -198,4 +358,11 @@ export function unregisterSessionIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_DELETE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_RENAME);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CHANGE_MODEL);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_GET_WORKSPACE);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_PICK_PROJECT_DIR);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_SET_WORKSPACE);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_CHANGE_CWD);
 }
+
+// Re-export draft helper for tests that need to seed draft without IPC.
+export { getDraftCwd, setDraftCwd, clearDraftCwd };

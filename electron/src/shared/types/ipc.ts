@@ -190,6 +190,46 @@ export interface SessionChangeModelMessage {
   model: string;
 }
 
+/** Source of the resolved workspace path. */
+export type WorkspaceSource = 'draft' | 'session' | 'default' | 'unbound';
+
+/** Coarse project-directory status (mirrors main project path helpers). */
+export type WorkspaceStatus = 'unbound' | 'valid' | 'missing';
+
+/** Resolved workspace for UI chrome and send gate. */
+export interface WorkspaceInfo {
+  /** Canonical absolute path when bound; null when unbound. */
+  cwd: string | null;
+  /** Where the path came from. */
+  source: WorkspaceSource;
+  /** Directory usability status. */
+  status: WorkspaceStatus;
+}
+
+export interface SessionChangeCwdMessage {
+  id: string;
+  /** Absolute path to an existing readable directory. */
+  cwd: string;
+}
+
+export interface SessionSetWorkspaceMessage {
+  /** Absolute path to bind (no dialog). Used by tests and non-dialog callers. */
+  cwd: string;
+}
+
+export interface SessionWorkspaceChangedEvent {
+  workspace: WorkspaceInfo;
+}
+
+/** Result of chat:send (started stream or structured gate failure). */
+export interface ChatSendResult {
+  status: string;
+  /** Human-readable error when status is not started. */
+  error?: string;
+  /** Machine-readable failure kind (e.g. unbound_workspace). */
+  kind?: string;
+}
+
 // ── Tool API ─────────────────────────────────────────────────────────────────
 
 export interface ToolExecuteMessage {
@@ -246,7 +286,7 @@ export interface UpdaterErrorEvent {
 
 export interface OrchidAPI {
   chat: {
-    send: (message: ChatSendMessage) => Promise<{ status: string }>;
+    send: (message: ChatSendMessage) => Promise<ChatSendResult>;
     cancel: () => Promise<{ status: string }>;
     onChunk: (callback: (event: ChatChunkEvent) => void) => () => void;
     onThinking: (callback: (event: ChatThinkingEvent) => void) => () => void;
@@ -280,9 +320,25 @@ export interface OrchidAPI {
     delete: (id: SessionDeleteMessage) => Promise<{ status: string }>;
     rename: (id: string, name: string) => Promise<{ status: string }>;
     changeModel: (id: string, model: string) => Promise<{ status: string }>;
+    /** Resolve current workspace (draft → session → sticky default → unbound). */
+    getWorkspace: () => Promise<WorkspaceInfo>;
+    /**
+     * Native directory picker; binds draft or active session cwd and updates
+     * sticky default_project_dir. Cancelled dialog returns current workspace.
+     */
+    pickProjectDir: () => Promise<WorkspaceInfo>;
+    /**
+     * Bind an absolute path without a dialog (tests / non-dialog callers).
+     * Updates sticky default like an intentional pick.
+     */
+    setWorkspace: (message: SessionSetWorkspaceMessage) => Promise<WorkspaceInfo>;
+    /** Change cwd on the active session and update sticky default. */
+    changeCwd: (message: SessionChangeCwdMessage) => Promise<Session>;
     onRenamed: (callback: (event: SessionRenamedEvent) => void) => () => void;
     /** Session auto-created on first message from draft mode. */
     onCreated: (callback: (event: SessionCreatedEvent) => void) => () => void;
+    /** Workspace draft/session/default changed. */
+    onWorkspaceChanged: (callback: (event: SessionWorkspaceChangedEvent) => void) => () => void;
     /** Subagent chains persisted — refresh sidebar / chain-footer usage. */
     onSubagentsChanged: (callback: () => void) => () => void;
   };
@@ -361,6 +417,16 @@ export const IPC_CHANNELS = {
   /** Fired when a session is created (eager create or first-message lazy create). */
   SESSION_CREATED: 'session:created',
   SESSION_CHANGE_MODEL: 'session:change_model',
+  /** Resolve current workspace (draft / session / sticky / unbound). */
+  SESSION_GET_WORKSPACE: 'session:get_workspace',
+  /** Native folder dialog → bind workspace + sticky default. */
+  SESSION_PICK_PROJECT_DIR: 'session:pick_project_dir',
+  /** Bind absolute path without dialog (tests). */
+  SESSION_SET_WORKSPACE: 'session:set_workspace',
+  /** Change active session cwd + sticky default. */
+  SESSION_CHANGE_CWD: 'session:change_cwd',
+  /** Fired when workspace binding changes. */
+  SESSION_WORKSPACE_CHANGED: 'session:workspace_changed',
   /** Fired when subagent_chains are persisted (spawn progress / complete). */
   SESSION_SUBAGENTS_CHANGED: 'session:subagents_changed',
 
@@ -415,6 +481,10 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.SESSION_DELETE,
   IPC_CHANNELS.SESSION_RENAME,
   IPC_CHANNELS.SESSION_CHANGE_MODEL,
+  IPC_CHANNELS.SESSION_GET_WORKSPACE,
+  IPC_CHANNELS.SESSION_PICK_PROJECT_DIR,
+  IPC_CHANNELS.SESSION_SET_WORKSPACE,
+  IPC_CHANNELS.SESSION_CHANGE_CWD,
   IPC_CHANNELS.TOOL_EXECUTE,
   IPC_CHANNELS.AGENT_LIST,
   IPC_CHANNELS.AGENT_SPAWN,
@@ -445,6 +515,7 @@ export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
   IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
   IPC_CHANNELS.SESSION_RENAMED,
   IPC_CHANNELS.SESSION_CREATED,
+  IPC_CHANNELS.SESSION_WORKSPACE_CHANGED,
   IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED,
   IPC_CHANNELS.UPDATER_STATUS_UPDATE,
   IPC_CHANNELS.UPDATER_PROGRESS,

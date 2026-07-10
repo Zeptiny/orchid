@@ -8,3 +8,18 @@ export {
   type ProjectDirectoryStatus,
   type ProjectDirectoryInspection,
 } from './path';
+
+export {
+  resolveWorkspace,
+  resolveWorkspaceFromParts,
+  isWorkspaceBound,
+  requireValidProjectDirectory,
+  setDraftCwd,
+  getDraftCwd,
+  clearDraftCwd,
+  clearAllDraftCwds,
+  updateStickyDefaultProjectDir,
+  type WorkspaceSource,
+  type WorkspaceInfo,
+  type WorkspaceResolveInput,
+} from './workspace';
