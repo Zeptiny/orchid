@@ -4298,7 +4298,6 @@ button.inspector-row:hover {
   outline: none;
   resize: none;
   overflow-y: auto;
-  field-sizing: content;
 }
 .composer-textarea::placeholder {
   color: #98a5b5;

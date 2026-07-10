@@ -825,6 +825,11 @@ describe('CSS Structure', () => {
     expect(css).toContain('.input-textarea');
   });
 
+  it('composer textarea leaves sizing to its resize effect', () => {
+    const css = fs.readFileSync(cssPath, 'utf-8');
+    expect(css).not.toContain('field-sizing: content');
+  });
+
   it('chat.css contains footer classes', () => {
     const css = fs.readFileSync(cssPath, 'utf-8');
     expect(css).toContain('.footer');
