@@ -8,7 +8,7 @@
  * - Initialize MCP servers
  * - Graceful shutdown: close MCP, save sessions, cleanup
  */
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, Menu } from 'electron';
 import * as path from 'path';
 import { registerAllIPC, unregisterAllIPC, setMCPManagerRef } from './ipc';
 import {
@@ -160,10 +160,13 @@ app.whenReady().then(async () => {
         console.warn('MCP initialization failed (non-fatal):', err);
       });
 
-    // 6. Create the main window
+    // 6. Remove default File/Edit/View/Window menu bar (Linux/Windows)
+    Menu.setApplicationMenu(null);
+
+    // 7. Create the main window
     createWindow();
 
-    // 7. Initialize auto-updater (after window is created)
+    // 8. Initialize auto-updater (after window is created)
     if (mainWindow) {
       // Auto-update is gated to signed releases
       // For unsigned beta builds, auto-download is disabled but manual check is allowed
