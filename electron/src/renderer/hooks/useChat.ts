@@ -27,6 +27,7 @@ import {
   type ContextBreakdown,
   computeContextBreakdown,
 } from '../components/ContextGrid';
+import { latestUsageFromMessages } from '../../shared/usage';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -117,9 +118,8 @@ export function useChat(): UseChatReturn {
   const [toolBlocks, setToolBlocks] = useState<ToolBlock[]>([]);
   const [streamSegments, setStreamSegments] = useState<StreamSegment[]>([]);
   const [error, setError] = useState<string | null>(null);
-  // TODO: Wire up usage tracking — no IPC event populates this yet.
-  // The infrastructure (state, Footer display) is ready; needs a
-  // ChatUsageEvent from main→renderer to complete the data path.
+  // Live stream usage; also rehydrated from the last message with usage
+  // when replacing messages (session switch / load).
   const [usage, setUsage] = useState<Usage | null>(null);
   const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -592,7 +592,9 @@ export function useChat(): UseChatReturn {
 
   /**
    * Replace messages (session load / new session) and drop all live/stale UI
-   * state so nothing from the previous session remains (tools, stream, usage).
+   * state so nothing from the previous session remains (tools, stream, etc.).
+   * Restores context usage from the newest message that carries usage so the
+   * sidebar Context panel and footer radial reflect the loaded session.
    */
   const replaceMessages = useCallback((next: Message[]) => {
     setMessages(next);
@@ -605,8 +607,11 @@ export function useChat(): UseChatReturn {
     setInterruptState('idle');
     isSendingRef.current = false;
     setStatus('idle');
-    setUsage(null);
-    usageRef.current = null;
+    // Rehydrate last-turn context usage from persisted messages; empty/new
+    // sessions correctly get null → 0% context until the next stream.
+    const restored = latestUsageFromMessages(next);
+    setUsage(restored);
+    usageRef.current = restored;
     setStreamStartTime(null);
     setElapsedSeconds(0);
     accumulatedContentRef.current = '';

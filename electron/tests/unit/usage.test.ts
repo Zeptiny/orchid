@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addUsage,
   hasUsage,
+  latestUsageFromMessages,
   sumMessageUsages,
   sumSubagentUsage,
   sumSubagentsUsage,
@@ -133,5 +134,43 @@ describe('usage helpers', () => {
       total_tokens: 3,
       cached_tokens: 0,
     });
+  });
+
+  it('latestUsageFromMessages returns newest non-zero usage', () => {
+    const older = {
+      prompt_tokens: 100,
+      completion_tokens: 10,
+      total_tokens: 110,
+      cached_tokens: 0,
+    };
+    const newer = {
+      prompt_tokens: 500,
+      completion_tokens: 50,
+      total_tokens: 550,
+      cached_tokens: 20,
+    };
+    expect(
+      latestUsageFromMessages([
+        msg(older),
+        msg(null),
+        msg(newer),
+        msg(null),
+      ]),
+    ).toEqual(newer);
+  });
+
+  it('latestUsageFromMessages skips zero usage and empty lists', () => {
+    expect(latestUsageFromMessages([])).toBeNull();
+    expect(
+      latestUsageFromMessages([
+        msg(null),
+        msg({
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+          cached_tokens: 0,
+        }),
+      ]),
+    ).toBeNull();
   });
 });

@@ -50,6 +50,23 @@ export function sumMessageUsages(messages: readonly Message[]): Usage | null {
 }
 
 /**
+ * Newest non-zero `message.usage` (scan newest → oldest).
+ * Used to rehydrate live context usage when loading a session so the
+ * Context panel / footer radial match the last completed turn.
+ */
+export function latestUsageFromMessages(
+  messages: readonly Message[],
+): Usage | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const usage = messages[i]?.usage;
+    if (usage && hasUsage(usage)) {
+      return usage;
+    }
+  }
+  return null;
+}
+
+/**
  * Minimal shape needed to aggregate subagent token usage from persisted chains.
  * Compatible with renderer SubagentRecord and raw session payloads.
  */
