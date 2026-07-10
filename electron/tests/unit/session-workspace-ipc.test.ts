@@ -151,6 +151,19 @@ vi.mock('../../src/main/config/loader', () => ({
   },
 }));
 
+// U5: project layer reload — keep IPC tests focused on workspace binding.
+vi.mock('../../src/main/project/layers', () => ({
+  applyWorkspaceProjectLayers: vi.fn(() => ({
+    applied: true,
+    projectDir: '/mock',
+    config: {},
+    agents: null,
+    skills: null,
+  })),
+  getLastAppliedProjectDir: vi.fn(() => null),
+  resetLastAppliedProjectDir: vi.fn(),
+}));
+
 vi.mock('../../src/main/ipc/chat', () => ({
   forceAbortChat: vi.fn(),
 }));

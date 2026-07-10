@@ -11,16 +11,24 @@
 import { app, BrowserWindow } from 'electron';
 import * as path from 'path';
 import { registerAllIPC, unregisterAllIPC, setMCPManagerRef } from './ipc';
-import { ensureHomeConfig, ConfigManager } from './config/loader';
+import {
+  ensureHomeConfig,
+  ConfigManager,
+  HOME_CONFIG_DIR,
+  HOME_AGENTS_DIR,
+  HOME_SKILLS_DIR,
+  HOME_PERSONALITIES_DIR,
+} from './config/loader';
 import { loadAgents, seedAgentsDir } from './agents/registry';
 import { loadSkills, seedSkillsDir } from './skills/registry';
 import { loadPersonalities, seedPersonalitiesDir } from './personality/registry';
-import { HOME_AGENTS_DIR, HOME_SKILLS_DIR, HOME_PERSONALITIES_DIR } from './config/loader';
 import { MCPManager } from './mcp';
 import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
 import { initFileLogging, closeFileLogging } from './logging';
 import { registerBuiltinTools } from './tools';
 import { wireSubagentRuntime } from './agents/wire-subagents';
+import { applyWorkspaceProjectLayers } from './project/layers';
+import { canonicalizeProjectDirectory } from './project/path';
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
@@ -80,16 +88,57 @@ app.whenReady().then(async () => {
     // 1. Ensure home config structure exists
     ensureHomeConfig();
 
-    // 2. Load config
-    const config = ConfigManager.load();
-
-    // 3. Seed and load agents/skills/personalities
+    // 2. Seed defaults into home dirs (before any load)
     seedAgentsDir(HOME_AGENTS_DIR);
-    const agents = loadAgents();
     seedSkillsDir(HOME_SKILLS_DIR);
-    const skills = loadSkills();
     seedPersonalitiesDir(HOME_PERSONALITIES_DIR);
     loadPersonalities();
+
+    // 3. Load config + project layers.
+    // Do NOT merge process.cwd() as a product project root (R2/R7).
+    // When sticky default_project_dir is valid, apply project .orchid.json
+    // and project agents/skills immediately (R5).
+    ConfigManager.reset();
+    // Home-only pass to discover sticky default (HOME_CONFIG_DIR has no .orchid.json).
+    const homeConfig = ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
+    const stickyCanonical =
+      homeConfig.default_project_dir != null && homeConfig.default_project_dir !== ''
+        ? canonicalizeProjectDirectory(homeConfig.default_project_dir)
+        : null;
+
+    let config = homeConfig;
+    let agents;
+    let skills;
+    if (stickyCanonical != null) {
+      const applied = applyWorkspaceProjectLayers(stickyCanonical);
+      config = applied.config;
+      // apply always reloads agents/skills when applied; fall back only if skipped.
+      agents =
+        applied.agents ??
+        loadAgents({
+          projectDir: path.join(stickyCanonical, '.orchid', 'agents'),
+        });
+      skills =
+        applied.skills ??
+        loadSkills({
+          projectDir: path.join(stickyCanonical, '.orchid', 'skills'),
+        });
+    } else {
+      // Unbound workspace: home agents/skills only (empty project overlay).
+      // Avoid process.cwd() project dirs as product default (R2).
+      const emptyProjectAgents = path.join(
+        HOME_CONFIG_DIR,
+        '.orchid-no-project',
+        'agents',
+      );
+      const emptyProjectSkills = path.join(
+        HOME_CONFIG_DIR,
+        '.orchid-no-project',
+        'skills',
+      );
+      agents = loadAgents({ projectDir: emptyProjectAgents });
+      skills = loadSkills({ projectDir: emptyProjectSkills });
+    }
 
     // 4. Initialize MCP servers (async, non-blocking for window)
     mcpManager = new MCPManager();

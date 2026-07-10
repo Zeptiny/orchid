@@ -22,6 +22,7 @@ import {
   updateStickyDefaultProjectDir,
   type WorkspaceInfo,
 } from '../project/workspace';
+import { applyWorkspaceProjectLayers } from '../project/layers';
 
 /**
  * Lazily resolve forceAbortChat to avoid a circular init dependency:
@@ -129,6 +130,9 @@ export function bindProjectDirectory(
     setDraftCwd(windowId, canonical);
   }
 
+  // R5: reload project config + agents/skills immediately (does not kill bg cmds).
+  applyWorkspaceProjectLayers(canonical);
+
   return resolveWindowWorkspace(windowId);
 }
 
@@ -178,6 +182,13 @@ export function registerSessionIPC(): void {
     // Session owns workspace now — clear draft so it doesn't shadow session.cwd.
     // Sticky default is intentionally NOT updated on load (R4).
     clearDraftCwd(windowId);
+
+    // R5: when activating a session whose cwd differs from last applied
+    // project layers, reload config/agents/skills. No-op if same path.
+    // Does not rewrite sticky default; does not terminate background commands.
+    if (session?.cwd) {
+      applyWorkspaceProjectLayers(session.cwd);
+    }
 
     // Seed history with ALL chains (matches renderer flatten) so the next
     // chat:send continues the full conversation, not only the active chain.
@@ -338,6 +349,8 @@ export function registerSessionIPC(): void {
     // Intentional change → update sticky default (R4).
     if (session.cwd) {
       updateStickyDefaultProjectDir(session.cwd);
+      // R5: reload project config + agents/skills for the new cwd.
+      applyWorkspaceProjectLayers(session.cwd);
     }
     clearDraftCwd(windowId);
 

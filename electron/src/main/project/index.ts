@@ -23,3 +23,11 @@ export {
   type WorkspaceInfo,
   type WorkspaceResolveInput,
 } from './workspace';
+
+export {
+  applyWorkspaceProjectLayers,
+  getLastAppliedProjectDir,
+  resetLastAppliedProjectDir,
+  type ApplyWorkspaceProjectLayersOptions,
+  type ApplyWorkspaceProjectLayersResult,
+} from './layers';
