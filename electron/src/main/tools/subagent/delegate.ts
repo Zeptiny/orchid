@@ -85,7 +85,7 @@ export function buildDelegateTool(
     category: 'subagent',
   };
 
-  const handler: ToolHandler = async (input: unknown, _ctx): Promise<SubagentToolResult> => {
+  const handler: ToolHandler = async (input: unknown, ctx): Promise<SubagentToolResult> => {
     const { name, task, type, tier } = input as {
       name: string;
       task: string;
@@ -135,11 +135,13 @@ export function buildDelegateTool(
         idx >= 0 ? idx : Math.max(0, session.chains.length - 1);
     }
 
-    // Spawn + start background run (when runner is configured)
+    // Spawn + start background run (when runner is configured).
+    // Freeze parent-turn cwd so mid-turn workspace changes do not rebind the subagent.
     const record = manager.spawn(name, task, agent, {
       model,
       parentChainIndex,
-      sessionId: session?.id,
+      sessionId: session?.id ?? ctx?.sessionId,
+      cwd: ctx?.cwd,
     });
 
     return {

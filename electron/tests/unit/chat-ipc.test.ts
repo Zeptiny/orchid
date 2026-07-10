@@ -191,6 +191,18 @@ vi.mock('../../src/main/ipc/session', () => ({
   getSessionManager: () => mocks.sessionManager,
 }));
 
+vi.mock('../../src/main/project/layers', () => ({
+  applyWorkspaceProjectLayers: vi.fn(() => ({
+    applied: true,
+    projectDir: '/tmp/orchid-chat-ipc-project',
+    config: {},
+    agents: null,
+    skills: null,
+  })),
+  getLastAppliedProjectDir: vi.fn(() => null),
+  resetLastAppliedProjectDir: vi.fn(),
+}));
+
 vi.mock('../../src/main/project/workspace', () => ({
   resolveWorkspace: (...args: unknown[]) =>
     mocks.workspace.resolveWorkspace(...(args as [string, unknown?])),

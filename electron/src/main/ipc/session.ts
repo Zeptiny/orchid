@@ -183,13 +183,6 @@ export function registerSessionIPC(): void {
     // Sticky default is intentionally NOT updated on load (R4).
     clearDraftCwd(windowId);
 
-    // R5: when activating a session whose cwd differs from last applied
-    // project layers, reload config/agents/skills. No-op if same path.
-    // Does not rewrite sticky default; does not terminate background commands.
-    if (session?.cwd) {
-      applyWorkspaceProjectLayers(session.cwd);
-    }
-
     // Seed history with ALL chains (matches renderer flatten) so the next
     // chat:send continues the full conversation, not only the active chain.
     if (session) {
@@ -198,7 +191,15 @@ export function registerSessionIPC(): void {
       clearChatHistory(windowId);
     }
 
-    emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
+    // R5: align project layers with the workspace now shown (session cwd,
+    // or sticky/draft fallback for legacy unbound sessions). Does not rewrite
+    // sticky default; does not terminate background commands.
+    const workspace = resolveWindowWorkspace(windowId);
+    if (isWorkspaceBound(workspace) && workspace.cwd) {
+      applyWorkspaceProjectLayers(workspace.cwd);
+    }
+
+    emitWorkspaceChanged(event.sender, workspace);
     return session;
   });
 
@@ -219,6 +220,7 @@ export function registerSessionIPC(): void {
       );
     }
 
+    applyWorkspaceProjectLayers(workspace.cwd);
     const session = manager.create(config.default_model, { cwd: workspace.cwd });
     // Draft was promoted into the session.
     clearDraftCwd(windowId);
@@ -236,7 +238,12 @@ export function registerSessionIPC(): void {
     abortChatForWindow(windowId);
     manager.clearActive();
     clearChatHistory(windowId);
-    emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
+    // R5: re-apply layers for the workspace the UI now shows (draft or sticky).
+    const workspace = resolveWindowWorkspace(windowId);
+    if (isWorkspaceBound(workspace) && workspace.cwd) {
+      applyWorkspaceProjectLayers(workspace.cwd);
+    }
+    emitWorkspaceChanged(event.sender, workspace);
     return { status: 'cleared' };
   });
 
@@ -254,7 +261,11 @@ export function registerSessionIPC(): void {
       const windowId = String(event.sender.id);
       abortChatForWindow(windowId);
       clearChatHistory(windowId);
-      emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
+      const workspace = resolveWindowWorkspace(windowId);
+      if (isWorkspaceBound(workspace) && workspace.cwd) {
+        applyWorkspaceProjectLayers(workspace.cwd);
+      }
+      emitWorkspaceChanged(event.sender, workspace);
     }
     return { status: deleted ? 'deleted' : 'not_found' };
   });

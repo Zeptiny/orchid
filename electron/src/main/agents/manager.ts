@@ -60,6 +60,8 @@ export type SubagentStreamRunner = (params: {
   model: string | null;
   abortSignal: AbortSignal;
   sessionId?: string;
+  /** Frozen parent-turn workspace cwd (do not re-resolve live session). */
+  cwd?: string;
 }) => AsyncGenerator<StreamEvent>;
 
 export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
@@ -151,6 +153,8 @@ export class SubagentManager {
       model?: string;
       parentChainIndex?: number;
       sessionId?: string;
+      /** Frozen parent-turn workspace cwd for tools/prompt. */
+      cwd?: string;
     } = {},
   ): SubagentRecord {
     const id = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -184,7 +188,7 @@ export class SubagentManager {
     this._notify();
 
     if (this._runner) {
-      record._runPromise = this._startRun(record, options.sessionId);
+      record._runPromise = this._startRun(record, options.sessionId, options.cwd);
     }
 
     return record;
@@ -375,7 +379,11 @@ export class SubagentManager {
 
   // ── Private: run loop ─────────────────────────────────────────────────────
 
-  private async _startRun(record: SubagentRecord, sessionId?: string): Promise<void> {
+  private async _startRun(
+    record: SubagentRecord,
+    sessionId?: string,
+    cwd?: string,
+  ): Promise<void> {
     const runner = this._runner;
     if (!runner) return;
 
@@ -399,6 +407,7 @@ export class SubagentManager {
         model: record.model,
         abortSignal: abort.signal,
         sessionId,
+        cwd,
       });
 
       for await (const event of stream) {

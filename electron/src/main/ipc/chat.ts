@@ -48,6 +48,7 @@ import {
   isWorkspaceBound,
   resolveWorkspace,
 } from '../project/workspace';
+import { applyWorkspaceProjectLayers } from '../project/layers';
 import type { ToolExecutionContext } from '../tools/types';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
@@ -265,6 +266,10 @@ function ensureActiveSession(
       },
     };
   }
+
+  // R5: keep project config/agents/skills aligned with the resolved workspace
+  // (e.g. after New Chat returns to sticky default following a different session).
+  applyWorkspaceProjectLayers(workspace.cwd);
 
   if (active) {
     return { ok: true, cwd: workspace.cwd };

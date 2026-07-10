@@ -22,10 +22,10 @@ const SUBAGENT_FORBIDDEN_TOOLS = new Set([
 ]);
 
 /**
- * Resolve parent session cwd for subagent tools/prompts.
- * Inherits active session workspace; never falls back to process.cwd().
+ * Fallback cwd when spawn did not pass a frozen parent-turn path.
+ * Never uses process.cwd().
  */
-function resolveParentSessionCwd(): string | null {
+function resolveParentSessionCwdFallback(): string | null {
   try {
     const session = getSessionManager().getActive();
     if (session?.cwd != null && session.cwd !== '') {
@@ -52,6 +52,8 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     model: string | null;
     abortSignal: AbortSignal;
     sessionId?: string;
+    /** Frozen parent-turn workspace cwd. */
+    cwd?: string;
   }): AsyncGenerator<StreamEvent> {
     const config = getConfig();
     const { streamChat } = await import('../llm/orchestrator');
@@ -80,8 +82,10 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     const sessionId =
       params.sessionId ?? getSessionManager().getActive()?.id;
 
-    // Inherit parent session cwd (R6/subagent inheritance)
-    const parentCwd = resolveParentSessionCwd();
+    // Prefer frozen parent-turn cwd; only fall back if spawn omitted it.
+    const parentCwd =
+      (params.cwd != null && params.cwd !== '' ? params.cwd : null) ??
+      resolveParentSessionCwdFallback();
     if (parentCwd == null) {
       yield {
         type: 'error',
