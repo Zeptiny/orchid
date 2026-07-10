@@ -30,6 +30,9 @@ import { applyWorkspaceProjectLayers } from '../project/layers';
  *
  * Uses createRequire so resolution works under both Electron CJS and Vitest.
  * Falls back silently if chat is unavailable (unit tests with partial graph).
+ *
+ * forceAbortChat also cancels running subagents for the active session
+ * (multi-cwd safety). When chat cannot load, cancel via tools directly.
  */
 function abortChatForWindow(windowId: string): void {
   try {
@@ -39,7 +42,23 @@ function abortChatForWindow(windowId: string): void {
     const chat = req('./chat') as typeof import('./chat');
     chat.forceAbortChat(windowId);
   } catch {
-    // chat module not loadable (circular init race or isolated unit test)
+    // chat module not loadable (circular init race or isolated unit test) —
+    // still cancel running subagents so a session switch cannot leave them
+    // writing into the next active session.
+    cancelRunningSubagentsForActiveSession();
+  }
+}
+
+/** Best-effort cancel of all in-flight subagents (session switch fallback). */
+function cancelRunningSubagentsForActiveSession(): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createRequire } = require('node:module') as typeof import('node:module');
+    const req = createRequire(__filename);
+    const tools = req('../tools') as typeof import('../tools');
+    tools.getSubagentManager().cancelRunning();
+  } catch {
+    // tools / manager unavailable in isolated unit tests
   }
 }
 

@@ -10,7 +10,7 @@ import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import type { SubagentManager } from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
-import { getSessionManager } from '../../ipc/session';
+import { persistSubagentChains } from '../../agents/persist-subagent-chains';
 
 /**
  * Build the wait_for_subagent tool.
@@ -50,9 +50,9 @@ export function buildWaitTool(
     // Wait for all specified subagents to reach terminal state
     const records = await manager.wait(subagent_ids);
 
-    // Persist latest subagent chains (usage + messages) onto the active session
+    // Persist latest subagent chains onto each owning session (not blindly active)
     try {
-      getSessionManager().syncSubagentChains(manager.toDomainRecords());
+      persistSubagentChains(manager);
     } catch {
       // Non-fatal — UI can still read in-memory state on next refresh
     }

@@ -6,10 +6,13 @@
 import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { getSubagentManager } from '../tools';
-import { getSessionManager } from '../ipc/session';
 import { createSubagentStreamRunner } from './subagent-runner';
+import { persistSubagentChains } from './persist-subagent-chains';
 
 let wired = false;
+
+// Re-export for callers that previously imported from this module.
+export { persistSubagentChains } from './persist-subagent-chains';
 
 /**
  * Attach the stream runner and onChange persistence to the shared SubagentManager.
@@ -29,7 +32,7 @@ export function wireSubagentRuntime(): void {
   const flush = () => {
     persistTimer = null;
     try {
-      getSessionManager().syncSubagentChains(manager.toDomainRecords());
+      persistSubagentChains(manager);
     } catch (err) {
       console.debug('Failed to persist subagent chains (non-fatal):', err);
     }
@@ -58,4 +61,3 @@ function broadcastSubagentsChanged(): void {
     }
   }
 }
-
