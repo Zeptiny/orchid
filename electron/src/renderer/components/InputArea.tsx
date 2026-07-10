@@ -1,13 +1,16 @@
 /**
- * InputArea — composer with info bar (cwd / model / tokens / context).
- * Iteration 012 mock-aligned.
- * Enter send · Shift+Enter newline · Ctrl/Cmd+S send · Esc cancel while streaming.
+ * InputArea — composer with model selector and send/cancel.
+ *
+ * Layout (right-aligned controls, image-#1 style model chip):
+ *   [ textarea … ] [ model ▾ ] [ ↑ / ■ ]
+ *
+ * Enter send · Shift+Enter newline · Ctrl/Cmd+S send · Esc multi-stage interrupt.
  * Slash commands: type `/` to open autocomplete above the input.
+ * Context radial lives in Footer (always right-aligned).
  */
-import { useRef, useCallback, useEffect, useState, useMemo } from 'react';
-import type { Usage } from '../../shared/types/message';
+import { useRef, useCallback, useEffect, useState, useMemo, useId } from 'react';
 import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
-import type { ChatStatus } from '../hooks/useChat';
+import type { ChatStatus, InterruptState } from '../hooks/useChat';
 import {
   COMMANDS,
   trackRecentCommand,
@@ -24,9 +27,8 @@ import { SlashCommandMenu } from './SlashCommandMenu';
 interface InputAreaProps {
   status: ChatStatus;
   model: string;
-  cwd?: string;
-  usage?: Usage | null;
-  maxContext?: number | null;
+  /** Staged Esc / cancel-button interrupt phase. */
+  interruptState?: InterruptState;
   onSend: (message: string) => Promise<void>;
   onCancel: () => Promise<void>;
   /** When set, enables `/command` autocomplete above the input. */
@@ -42,9 +44,7 @@ type SubPicker = '/theme' | '/personality' | '/model' | '/sessions' | null;
 export function InputArea({
   status,
   model,
-  cwd,
-  usage,
-  maxContext,
+  interruptState = 'idle',
   onSend,
   onCancel,
   commandContext,
@@ -61,14 +61,35 @@ export function InputArea({
   const [input, setInput] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [subPicker, setSubPicker] = useState<SubPicker>(null);
+  const [modelOpen, setModelOpen] = useState(false);
+  const modelMenuId = useId();
 
   const isStreaming = status === 'streaming';
+  const hasInput = Boolean(input.trim());
+  const confirming =
+    interruptState === 'confirmAgent' || interruptState === 'confirmSubagents';
+  /** Agent stream active, or waiting for subagent-cancel confirmation. */
+  const canInterrupt =
+    isStreaming || interruptState === 'confirmAgent' || interruptState === 'confirmSubagents';
+  /**
+   * Show cancel (square) while streaming / first confirm, and during
+   * confirmSubagents only when the input is empty. Typing a follow-up message
+   * switches the control back to send.
+   */
+  const showCancel =
+    isStreaming ||
+    interruptState === 'confirmAgent' ||
+    (interruptState === 'confirmSubagents' && !hasInput);
 
   /** Slash mode: input starts with `/` (single line) or a sub-picker is open. */
   const isSlashMode =
     Boolean(commandContext) &&
     !isStreaming &&
     (subPicker !== null || (input.startsWith('/') && !input.includes('\n')));
+
+  const availableModels = commandContext?.getAvailableModels() ?? [];
+  const modelLabel = shortModelLabel(model);
+  const modelParts = splitModelId(model);
 
   const slashResults = useMemo<PaletteResult[]>(() => {
     if (!isSlashMode || !commandContext) return [];
@@ -149,6 +170,19 @@ export function InputArea({
   useEffect(() => {
     setSelectedIndex(0);
   }, [input, subPicker]);
+
+  // Close model dropup on outside click
+  useEffect(() => {
+    if (!modelOpen) return;
+    const onPointer = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('[data-composer-dropup]')) return;
+      setModelOpen(false);
+    };
+    document.addEventListener('mousedown', onPointer);
+    return () => document.removeEventListener('mousedown', onPointer);
+  }, [modelOpen]);
 
   const closeSlashMenu = useCallback(() => {
     setSubPicker(null);
@@ -251,6 +285,20 @@ export function InputArea({
     [slashContext, clearAndClose],
   );
 
+  const handleSelectModel = useCallback(
+    async (next: string) => {
+      setModelOpen(false);
+      if (!commandContext || next === model) return;
+      try {
+        await commandContext.onSetModel(next);
+        commandContext.onNotify(`Model changed to ${next}`, 'info');
+      } catch {
+        // Non-fatal — parent may already toast
+      }
+    },
+    [commandContext, model],
+  );
+
   const resizeTextarea = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -260,11 +308,11 @@ export function InputArea({
   }, []);
 
   useEffect(() => {
-    if (status === 'idle') {
+    if (status === 'idle' && interruptState === 'idle') {
       isSendingRef.current = false;
       textareaRef.current?.focus();
     }
-  }, [status]);
+  }, [status, interruptState]);
 
   useEffect(() => {
     resizeTextarea();
@@ -279,26 +327,39 @@ export function InputArea({
     };
   }, []);
 
+  // Multi-stage Esc — same path as the cancel button (agent → subagents).
+  // Model dropup closes first; slash menu owns Esc while open.
   useEffect(() => {
-    if (status !== 'streaming') return;
-
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+
+      if (modelOpen) {
+        event.preventDefault();
+        setModelOpen(false);
+        return;
+      }
+
+      if (!canInterrupt) return;
+      // Let slash-menu Esc handlers win when the menu is open on confirmSubagents
+      // with typed input — only intercept when cancel UI is active without slash.
+      if (isSlashMode) return;
       event.preventDefault();
-      onCancel();
+      void onCancel();
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onCancel, status]);
+  }, [canInterrupt, isSlashMode, modelOpen, onCancel]);
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim();
     // status and isSendingRef both guard: status can lag one frame behind Enter.
-    if (!trimmed || status === 'streaming' || isSendingRef.current) return;
+    // Allow send during confirmSubagents so a follow-up can be queued after cancel UI.
+    if (!trimmed || isStreaming || isSendingRef.current) return;
     isSendingRef.current = true;
     setInput('');
     setSubPicker(null);
+    setModelOpen(false);
     try {
       await onSend(trimmed);
     } catch {
@@ -311,7 +372,7 @@ export function InputArea({
         textareaRef.current.style.height = '34px';
       }
     });
-  }, [input, status, onSend]);
+  }, [input, isStreaming, onSend]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -365,7 +426,7 @@ export function InputArea({
       }
 
       // Sub-picker open with no options: don't send filter text as a chat message
-      if (subPicker && (e.key === 'Enter' && !e.shiftKey)) {
+      if (subPicker && e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         return;
       }
@@ -388,7 +449,7 @@ export function InputArea({
         }
 
         e.preventDefault();
-        handleSend();
+        void handleSend();
         return;
       }
 
@@ -424,32 +485,25 @@ export function InputArea({
     [subPicker],
   );
 
-  const tokenTotal = usage?.total_tokens ?? 0;
-  const contextPercent =
-    usage && maxContext && maxContext > 0
-      ? Math.min(100, Math.round((usage.prompt_tokens / maxContext) * 100))
-      : null;
-
   const showMenu = isSlashMode && (slashResults.length > 0 || subPicker !== null || input === '/');
+
+  const cancelTitle =
+    interruptState === 'confirmSubagents'
+      ? 'Cancel subagents'
+      : interruptState === 'confirmAgent'
+        ? 'Cancel agent'
+        : 'Interrupt';
+
+  const cancelClass =
+    interruptState === 'confirmSubagents'
+      ? 'btn btn-warning btn-sm btn-circle composer-action'
+      : 'btn btn-error btn-sm btn-circle composer-action';
+
+  // During confirmSubagents the agent is done — keep input editable for follow-ups.
+  const inputDisabled = isStreaming || interruptState === 'confirmAgent';
 
   return (
     <div className="composer-area">
-      <div className="composer-info">
-        {cwd ? (
-          <>
-            <span className="composer-info-cwd" title={cwd}>
-              {cwd}
-            </span>
-            <span className="composer-info-sep">-</span>
-          </>
-        ) : null}
-        <span className="composer-info-model">{model || 'No model'}</span>
-        <span className="composer-info-sep">-</span>
-        <span>{formatTokens(tokenTotal)} tokens</span>
-        <span className="composer-info-sep">-</span>
-        <span>{contextPercent != null ? contextPercent : 0}% context</span>
-      </div>
-
       {showMenu && (
         <SlashCommandMenu
           results={slashResults}
@@ -461,7 +515,11 @@ export function InputArea({
         />
       )}
 
-      <div className={`composer ${isStreaming ? 'streaming' : ''}`}>
+      <div
+        className={`composer ${isStreaming || confirming ? 'streaming' : ''} ${
+          showCancel ? 'composer-cancel-mode' : ''
+        }`}
+      >
         <textarea
           ref={textareaRef}
           className="composer-textarea"
@@ -469,46 +527,128 @@ export function InputArea({
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           placeholder={
-            isStreaming
-              ? 'Streaming...'
-              : commandContext
-                ? 'Type a message or /command… (Enter to send)'
-                : 'Type a message... (Enter to send, Shift+Enter for newline)'
+            isStreaming || interruptState === 'confirmAgent'
+              ? 'Streaming… (Esc or ■ to interrupt)'
+              : interruptState === 'confirmSubagents'
+                ? 'Type a follow-up, or Esc / ■ to cancel subagents…'
+                : commandContext
+                  ? 'Type a message or /command… (Enter to send)'
+                  : 'Type a message… (Enter to send, Shift+Enter for newline)'
           }
-          disabled={isStreaming}
+          disabled={inputDisabled}
           rows={1}
           aria-autocomplete={commandContext ? 'list' : undefined}
           aria-expanded={showMenu || undefined}
           aria-controls={showMenu ? 'slash-command-menu' : undefined}
         />
-        {isStreaming ? (
-          <button
-            className="btn btn-error btn-sm composer-action"
-            onClick={onCancel}
-            title="Cancel"
-            type="button"
+
+        <div className="composer-controls">
+          {/* Model selector — High-style chip with styled dropup */}
+          <div
+            className={`dropdown dropdown-top dropdown-end ${modelOpen ? 'dropdown-open' : ''}`}
+            data-composer-dropup
           >
-            <Icon name="square" size={12} />
-            Cancel
-          </button>
-        ) : (
-          <button
-            className="btn btn-primary btn-sm composer-action"
-            onClick={() => {
-              if (showMenu && slashResults[selectedIndex]) {
-                void handleSelectResult(slashResults[selectedIndex]);
-                return;
-              }
-              void handleSend();
-            }}
-            disabled={isStreaming || (!input.trim() && !subPicker)}
-            title={showMenu ? 'Run command' : 'Send'}
-            type="button"
-            aria-disabled={isStreaming || undefined}
-          >
-            {showMenu ? 'Run' : 'Send'}
-          </button>
-        )}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm composer-model-btn"
+              aria-haspopup="listbox"
+              aria-expanded={modelOpen}
+              aria-controls={modelMenuId}
+              title={model || 'Select model'}
+              disabled={isStreaming || interruptState === 'confirmAgent'}
+              onClick={() => setModelOpen((o) => !o)}
+            >
+              <Icon name="cpu" size={13} className="opacity-70 shrink-0" />
+              <span className="composer-model-label">{modelLabel}</span>
+              <Icon
+                name="chevronDown"
+                size={12}
+                className={`opacity-60 shrink-0 transition-transform ${modelOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+            {modelOpen && (
+              <div
+                id={modelMenuId}
+                role="listbox"
+                aria-label="Select model"
+                className="dropdown-content composer-model-menu z-50 mb-1"
+              >
+                <div className="composer-model-menu-header">
+                  <span>Model</span>
+                  {modelParts.provider ? (
+                    <span className="composer-model-menu-current mono truncate" title={model}>
+                      {modelParts.provider}
+                    </span>
+                  ) : null}
+                </div>
+                <ul className="composer-model-menu-list">
+                  {availableModels.length === 0 ? (
+                    <li className="composer-model-empty">No models configured</li>
+                  ) : (
+                    availableModels.map((m) => {
+                      const parts = splitModelId(m);
+                      const selected = m === model;
+                      return (
+                        <li key={m} role="option" aria-selected={selected}>
+                          <button
+                            type="button"
+                            className={`composer-model-option ${selected ? 'is-selected' : ''}`}
+                            onClick={() => void handleSelectModel(m)}
+                          >
+                            <span className="composer-model-option-body min-w-0">
+                              <span className="composer-model-option-name truncate">
+                                {parts.name}
+                              </span>
+                              {parts.provider ? (
+                                <span className="composer-model-option-provider truncate">
+                                  {parts.provider}
+                                </span>
+                              ) : null}
+                            </span>
+                            {selected ? (
+                              <Icon name="check" size={14} className="shrink-0 text-success" />
+                            ) : null}
+                          </button>
+                        </li>
+                      );
+                    })
+                  )}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          {/* Send (arrow up) or Cancel (square) — multi-stage cancel mirrors Esc */}
+          {showCancel ? (
+            <button
+              className={cancelClass}
+              onClick={() => void onCancel()}
+              title={cancelTitle}
+              type="button"
+              aria-label={cancelTitle}
+            >
+              <Icon name="square" size={14} />
+            </button>
+          ) : (
+            <button
+              className="btn btn-primary btn-sm btn-circle composer-action"
+              onClick={() => {
+                if (showMenu && slashResults[selectedIndex]) {
+                  void handleSelectResult(slashResults[selectedIndex]);
+                  return;
+                }
+                void handleSend();
+              }}
+              disabled={!hasInput}
+              title={showMenu ? 'Run command' : 'Send'}
+              type="button"
+              aria-label={showMenu ? 'Run command' : 'Send'}
+              aria-disabled={!hasInput || undefined}
+            >
+              <Icon name="arrowUp" size={16} />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -530,7 +670,21 @@ function filterResults(items: PaletteResult[], query: string): PaletteResult[] {
   return scored.map((s) => s.item);
 }
 
-function formatTokens(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
+/** Prefer the model id after provider/ for the compact chip. */
+function shortModelLabel(model: string): string {
+  if (!model) return 'Model';
+  const slash = model.lastIndexOf('/');
+  if (slash >= 0 && slash < model.length - 1) {
+    return model.slice(slash + 1);
+  }
+  return model;
+}
+
+function splitModelId(model: string): { provider: string | null; name: string } {
+  if (!model) return { provider: null, name: 'Model' };
+  const slash = model.indexOf('/');
+  if (slash > 0 && slash < model.length - 1) {
+    return { provider: model.slice(0, slash), name: model.slice(slash + 1) };
+  }
+  return { provider: null, name: model };
 }

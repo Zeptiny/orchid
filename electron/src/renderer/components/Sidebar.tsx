@@ -34,6 +34,8 @@ interface SidebarProps {
   cumulativeUsage?: Usage | null;
   maxContext?: number | null;
   messages?: readonly Message[];
+  /** Working directory shown in the bottom status strip. */
+  cwd?: string;
 }
 
 export function Sidebar({
@@ -58,6 +60,7 @@ export function Sidebar({
   cumulativeUsage,
   maxContext,
   messages,
+  cwd,
 }: SidebarProps) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -151,10 +154,19 @@ export function Sidebar({
         </CollapseBlock>
       </div>
 
-      <div className="panel-status-footer">
-        <span>orchid</span>
-        <span>-</span>
-        <span>general</span>
+      <div className="panel-status-footer" title={cwd || undefined}>
+        {cwd ? (
+          <>
+            <Icon name="folder" size={11} className="shrink-0 opacity-60" />
+            <span className="panel-status-cwd mono truncate">{cwd}</span>
+          </>
+        ) : (
+          <>
+            <span>orchid</span>
+            <span>-</span>
+            <span>general</span>
+          </>
+        )}
       </div>
     </aside>
   );

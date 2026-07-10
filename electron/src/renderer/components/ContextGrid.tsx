@@ -164,6 +164,83 @@ function buildLegend(b: TokenBreakdown): LegendEntry[] {
   ];
 }
 
+interface ContextLegendProps extends ContextGridProps {
+  /**
+   * `inspector` — compact sidebar rows.
+   * `panel` — styled dropup rows (footer context viewer).
+   */
+  variant?: 'inspector' | 'panel';
+}
+
+/** Category rows only — used by the context dropup (no table/grid). */
+export function ContextLegend({
+  usage,
+  messages,
+  maxContext,
+  variant = 'inspector',
+}: ContextLegendProps) {
+  const breakdown = useMemo(
+    () => computeBreakdown(messages ?? [], usage ?? null, maxContext),
+    [messages, usage, maxContext],
+  );
+  const legend = useMemo(() => buildLegend(breakdown), [breakdown]);
+
+  if (variant === 'panel') {
+    return (
+      <div className="context-panel-list">
+        {legend.map((entry) => (
+          <div key={entry.label} className="context-panel-row">
+            <span className="context-panel-row-left">
+              <span
+                className="context-panel-swatch"
+                style={{ backgroundColor: entry.color }}
+                aria-hidden
+              />
+              <span className="context-panel-label">{entry.label}</span>
+            </span>
+            <span className="context-panel-row-right mono">
+              <span className="context-panel-tokens">{formatTokens(entry.tokens)}</span>
+              <span className="context-panel-pct">{entry.pct}%</span>
+            </span>
+            <span
+              className="context-panel-bar"
+              aria-hidden
+            >
+              <span
+                className="context-panel-bar-fill"
+                style={{
+                  width: `${Math.min(100, Math.max(0, entry.pct))}%`,
+                  backgroundColor: entry.color,
+                }}
+              />
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="inspector-stack">
+      {legend.map((entry) => (
+        <div key={entry.label} className="inspector-row">
+          <span className="inline-flex min-w-0 items-center gap-1.5">
+            <span
+              className="inline-block h-2 w-2 shrink-0 rounded-[2px]"
+              style={{ backgroundColor: entry.color }}
+              aria-hidden
+            />
+            <strong className="font-semibold">{entry.label}</strong>
+          </span>
+          <span className="subtle shrink-0">
+            {formatTokens(entry.tokens)} ({entry.pct}%)
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ContextGrid({ usage, messages, maxContext }: ContextGridProps) {
   const breakdown = useMemo(
     () => computeBreakdown(messages ?? [], usage ?? null, maxContext),
@@ -171,7 +248,6 @@ export function ContextGrid({ usage, messages, maxContext }: ContextGridProps) {
   );
 
   const blocks = useMemo(() => buildBlockList(breakdown), [breakdown]);
-  const legend = useMemo(() => buildLegend(breakdown), [breakdown]);
 
   return (
     <div>
@@ -184,23 +260,7 @@ export function ContextGrid({ usage, messages, maxContext }: ContextGridProps) {
         ))}
       </div>
 
-      <div className="inspector-stack">
-        {legend.map((entry) => (
-          <div key={entry.label} className="inspector-row">
-            <span className="inline-flex min-w-0 items-center gap-1.5">
-              <span
-                className="inline-block h-2 w-2 shrink-0 rounded-[2px]"
-                style={{ backgroundColor: entry.color }}
-                aria-hidden
-              />
-              <strong className="font-semibold">{entry.label}</strong>
-            </span>
-            <span className="subtle shrink-0">
-              {formatTokens(entry.tokens)} ({entry.pct}%)
-            </span>
-          </div>
-        ))}
-      </div>
+      <ContextLegend usage={usage} messages={messages} maxContext={maxContext} />
     </div>
   );
 }

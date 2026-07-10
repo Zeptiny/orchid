@@ -489,9 +489,7 @@ export function ChatView() {
         <InputArea
           status={chat.status}
           model={model}
-          cwd={chat.cwd}
-          usage={chat.usage}
-          maxContext={maxContext}
+          interruptState={chat.interruptState}
           onSend={chat.send}
           onCancel={chat.cancel}
           commandContext={commandContext}
@@ -504,6 +502,9 @@ export function ChatView() {
           elapsedSeconds={chat.elapsedSeconds}
           isStreaming={chat.status === 'streaming'}
           interruptState={chat.interruptState}
+          usage={chat.usage}
+          maxContext={maxContext}
+          messages={chat.messages}
         />
       </main>
 
@@ -529,6 +530,7 @@ export function ChatView() {
         cumulativeUsage={chat.cumulativeUsage}
         maxContext={maxContext}
         messages={chat.messages}
+        cwd={chat.cwd}
       />
 
       <CommandPalette
