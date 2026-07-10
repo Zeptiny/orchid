@@ -12,7 +12,7 @@ import {
   isCommand,
 } from '../../src/main/commands/registry';
 
-// ── Expected commands (11 total) ───────────────────────────────────────────
+// ── Expected commands (12 total) ───────────────────────────────────────────
 
 const EXPECTED_COMMANDS = [
   { name: '/new', category: 'commands' },
@@ -23,6 +23,7 @@ const EXPECTED_COMMANDS = [
   { name: '/theme', category: 'commands' },
   { name: '/personality', category: 'commands' },
   { name: '/settings', category: 'commands' },
+  { name: '/cd', category: 'commands' },
   { name: '/rag index', category: 'commands' },
   { name: '/ast index', category: 'commands' },
   { name: '/rag clear', category: 'commands' },
@@ -31,8 +32,8 @@ const EXPECTED_COMMANDS = [
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('Command Parity', () => {
-  it('all 11 commands are registered', () => {
-    expect(COMMANDS).toHaveLength(11);
+  it('all 12 commands are registered', () => {
+    expect(COMMANDS).toHaveLength(12);
   });
 
   it('all expected command names are present', () => {

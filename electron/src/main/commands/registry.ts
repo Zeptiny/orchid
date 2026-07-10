@@ -263,6 +263,26 @@ export const COMMANDS: Command[] = [
     },
   },
   {
+    name: '/cd',
+    description: 'Change the project working directory',
+    category: 'commands',
+    execute: async (ctx) => {
+      if (!ctx.onPickProjectDir) {
+        ctx.onNotify('Folder picker is not available.', 'warning');
+        ctx.onClose();
+        return;
+      }
+      ctx.onClose();
+      try {
+        await ctx.onPickProjectDir();
+        ctx.onNotify('Project folder updated.', 'info');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.onNotify(`Failed to change project folder: ${msg}`, 'error');
+      }
+    },
+  },
+  {
     name: '/rag index',
     description: 'Index the project for RAG semantic search',
     category: 'commands',

@@ -37,6 +37,9 @@ interface InputAreaProps {
   currentTheme?: string;
   currentPersonality?: string;
   personalityNames?: readonly string[];
+  /** When false, chat send is gated until a project folder is chosen (R3). */
+  workspaceBound?: boolean;
+  onPickProjectDir?: () => void;
 }
 
 type SubPicker = '/theme' | '/personality' | '/model' | '/sessions' | null;
@@ -52,6 +55,8 @@ export function InputArea({
   currentTheme = 'default',
   currentPersonality = 'default',
   personalityNames = [],
+  workspaceBound = true,
+  onPickProjectDir,
 }: InputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   /** Blocks rapid double-Enter before parent status re-renders to streaming. */
@@ -356,6 +361,11 @@ export function InputArea({
     // status and isSendingRef both guard: status can lag one frame behind Enter.
     // Allow send during confirmSubagents so a follow-up can be queued after cancel UI.
     if (!trimmed || isStreaming || isSendingRef.current) return;
+    // Allow slash commands even when unbound; block plain chat messages.
+    if (!workspaceBound && !trimmed.startsWith('/')) {
+      onPickProjectDir?.();
+      return;
+    }
     isSendingRef.current = true;
     setInput('');
     setSubPicker(null);
@@ -372,7 +382,7 @@ export function InputArea({
         textareaRef.current.style.height = '34px';
       }
     });
-  }, [input, isStreaming, onSend]);
+  }, [input, isStreaming, onSend, workspaceBound, onPickProjectDir]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -504,6 +514,22 @@ export function InputArea({
 
   return (
     <div className="composer-area">
+      {!workspaceBound && (
+        <div className="composer-workspace-gate" role="status">
+          <span>Select a project folder before chatting.</span>
+          {onPickProjectDir && (
+            <button
+              type="button"
+              className="btn btn-warning btn-xs"
+              onClick={onPickProjectDir}
+            >
+              <Icon name="folder" size={12} />
+              Open folder
+            </button>
+          )}
+        </div>
+      )}
+
       {showMenu && (
         <SlashCommandMenu
           results={slashResults}
@@ -531,9 +557,11 @@ export function InputArea({
               ? 'Streaming… (Esc or ■ to interrupt)'
               : interruptState === 'confirmSubagents'
                 ? 'Type a follow-up, or Esc / ■ to cancel subagents…'
-                : commandContext
-                  ? 'Type a message or /command… (Enter to send)'
-                  : 'Type a message… (Enter to send, Shift+Enter for newline)'
+                : !workspaceBound
+                  ? 'Choose a project folder first… (or /cd)'
+                  : commandContext
+                    ? 'Type a message or /command… (Enter to send)'
+                    : 'Type a message… (Enter to send, Shift+Enter for newline)'
           }
           disabled={inputDisabled}
           rows={1}
