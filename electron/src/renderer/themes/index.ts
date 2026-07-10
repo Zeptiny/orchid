@@ -19,9 +19,14 @@ export const THEME_NAMES = Object.keys(THEMES) as ThemeName[];
 
 /**
  * Apply a theme by loading its CSS file.
- * In dev mode, uses dynamic import. In production, styles are inlined.
+ * In development Vite serves the source file; production emits it as a
+ * static renderer asset via the Vite theme-assets plugin.
  */
 export function applyTheme(name: ThemeName): void {
+  // Keep the document-level attribute in sync so daisyUI and browser-native
+  // controls inherit the selected theme outside the React root as well.
+  document.documentElement.dataset.theme = name;
+
   // Remove any existing theme link
   const existingLink = document.getElementById('orchid-theme');
   if (existingLink) {
@@ -33,6 +38,9 @@ export function applyTheme(name: ThemeName): void {
   link.id = 'orchid-theme';
   link.rel = 'stylesheet';
   link.href = `./themes/${name}.css`;
+  link.addEventListener('load', () => {
+    window.dispatchEvent(new CustomEvent('orchid:theme-applied', { detail: { theme: name } }));
+  }, { once: true });
   document.head.appendChild(link);
 }
 

@@ -110,10 +110,11 @@ function App() {
   // Live theme apply from /theme command (palette or slash menu)
   useEffect(() => {
     const handleSetTheme = (event: Event) => {
-      const detail = (event as CustomEvent<{ theme?: string }>).detail;
+      const detail = (event as CustomEvent<{ theme?: string; persist?: boolean }>).detail;
       const name = detail?.theme as ThemeName | undefined;
       if (name && THEME_NAMES.includes(name)) {
-        void setTheme(name);
+        if (detail.persist === false) setThemeState(name);
+        else void setTheme(name);
       }
     };
     window.addEventListener('orchid:set-theme', handleSetTheme);

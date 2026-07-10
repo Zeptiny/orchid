@@ -6,7 +6,7 @@
  *
  * Supported tools: edit, write, replace_symbol, rename_symbol.
  */
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { DiffEditor, loader } from '@monaco-editor/react';
 import type { ToolCallEvent, DiffData } from './types';
 import { detectLanguage } from './types';
@@ -24,6 +24,11 @@ loader.config({
 interface DiffWidgetProps {
   /** The tool call event. */
   event: ToolCallEvent;
+}
+
+function monacoTheme(): 'vs' | 'vs-dark' {
+  const name = typeof document === 'undefined' ? 'default' : document.documentElement.dataset.theme;
+  return name === 'solarized-light' || name === 'windows-xp' ? 'vs' : 'vs-dark';
 }
 
 // ── Extract diff data from tool call ─────────────────────────────────────────
@@ -79,6 +84,13 @@ function extractDiffData(event: ToolCallEvent): DiffData {
 
 export function DiffWidget({ event }: DiffWidgetProps) {
   const diffData = useMemo(() => extractDiffData(event), [event]);
+  const [editorTheme, setEditorTheme] = useState<'vs' | 'vs-dark'>(monacoTheme);
+
+  useEffect(() => {
+    const handleThemeApplied = () => setEditorTheme(monacoTheme());
+    window.addEventListener('orchid:theme-applied', handleThemeApplied);
+    return () => window.removeEventListener('orchid:theme-applied', handleThemeApplied);
+  }, []);
 
   return (
     <div className="tool-widget-diff">
@@ -96,7 +108,7 @@ export function DiffWidget({ event }: DiffWidgetProps) {
           language={diffData.language}
           original={diffData.original}
           modified={diffData.modified}
-          theme="vs-dark"
+          theme={editorTheme}
           options={{
             readOnly: true,
             renderSideBySide: true,

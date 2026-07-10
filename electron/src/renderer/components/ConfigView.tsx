@@ -120,6 +120,11 @@ export function ConfigView({ onClose }: ConfigViewProps) {
         updates: updates as Partial<Config>,
         ...(activeRenames.length > 0 ? { providerRenames: activeRenames } : {}),
       });
+      if (typeof updates.theme === 'string') {
+        window.dispatchEvent(new CustomEvent('orchid:set-theme', {
+          detail: { theme: updates.theme, persist: false },
+        }));
+      }
       if (window.orchid?.config?.get) {
         const fresh = await window.orchid.config.get();
         setOriginalConfig(fresh);
@@ -171,7 +176,7 @@ export function ConfigView({ onClose }: ConfigViewProps) {
   return (
     <div
       ref={rootRef}
-      className="grid h-screen min-h-0 grid-cols-[auto_minmax(460px,1fr)] overflow-hidden bg-[#080c12] text-base-content"
+      className="grid h-screen min-h-0 grid-cols-[auto_minmax(460px,1fr)] overflow-hidden bg-base-100 text-base-content"
     >
       <LeftSidebar
         activeSessionId={session.activeSession?.id ?? null}

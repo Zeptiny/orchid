@@ -106,4 +106,45 @@
   --transition-fast: 150ms ease;
   --transition-normal: 200ms ease;
   --transition-slow: 300ms ease;
+
+  /* daisyUI semantic token bridge */
+  --color-primary: var(--accent-primary);
+  --color-primary-content: var(--btn-primary-text);
+  --color-secondary: var(--accent-secondary);
+  --color-secondary-content: var(--text-inverse);
+  --color-accent: var(--accent-warning);
+  --color-accent-content: var(--text-inverse);
+  --color-neutral: var(--bg-tertiary);
+  --color-neutral-content: var(--text-primary);
+  --color-base-100: var(--bg-primary);
+  --color-base-200: var(--bg-secondary);
+  --color-base-300: var(--bg-tertiary);
+  --color-base-content: var(--text-primary);
+  --color-info: var(--accent-info);
+  --color-info-content: var(--text-inverse);
+  --color-success: var(--accent-success);
+  --color-success-content: var(--text-inverse);
+  --color-warning: var(--accent-warning);
+  --color-warning-content: var(--text-inverse);
+  --color-error: var(--accent-error);
+  --color-error-content: var(--text-inverse);
+  --radius-selector: var(--radius-sm);
+  --radius-field: var(--radius-md);
+  --radius-box: var(--radius-lg);
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+  --text-muted: #c5d0dc;
+  --bg-surface-deep: #0c1016;
+  --overlay-color: #000000;
+  --syntax-comment: #6a9955;
+  --syntax-string: #ce9178;
+  --context-free: #303848;
+  --context-system: #54789c;
+  --context-tool: #b08642;
+  --context-user: #7e88ff;
+  --context-assistant: #68d38f;
+  color-scheme: dark;
 }

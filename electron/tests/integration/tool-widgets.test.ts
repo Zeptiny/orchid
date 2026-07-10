@@ -824,4 +824,17 @@ describe('Tool Widget CSS Classes', () => {
     expect(css).toContain('var(--accent-primary)');
     expect(css).toContain('var(--border-default)');
   });
+
+  it('theme-sensitive widgets consume theme state instead of fixed palettes', () => {
+    const widgetsDir = path.resolve(__dirname, '../../src/renderer/components/ToolWidgets');
+    const terminal = fs.readFileSync(path.join(widgetsDir, 'TerminalWidget.tsx'), 'utf-8');
+    const diff = fs.readFileSync(path.join(widgetsDir, 'DiffWidget.tsx'), 'utf-8');
+    const context = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/components/ContextGrid.tsx'), 'utf-8');
+    expect(terminal).toContain("getComputedStyle(document.documentElement)");
+    expect(terminal).toContain("orchid:theme-applied");
+    expect(diff).toContain('editorTheme');
+    expect(diff).toContain("name === 'solarized-light' || name === 'windows-xp'");
+    expect(context).toContain('var(--context-free)');
+    expect(context).not.toContain("const COLOR_FREE = '#303848'");
+  });
 });

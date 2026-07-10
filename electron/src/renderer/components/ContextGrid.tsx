@@ -1,8 +1,8 @@
 /**
  * ContextGrid — 8×3 colored block grid + category token rows.
  *
- * Categories (mock colors):
- *   system #54789c, tool #b08642, user #7e88ff, assistant #68d38f, free #303848
+ * Category colors are CSS variables so the grid updates immediately when the
+ * active theme changes without requiring a React rerender.
  *
  * Color swatches sit in front of each category row (no separate legend footer).
  * Uses real usage / maxContext only — no placeholder mock token counts.
@@ -15,11 +15,11 @@ const GRID_COLS = 8;
 const GRID_ROWS = 3;
 const GRID_TOTAL = GRID_COLS * GRID_ROWS;
 
-const COLOR_FREE = '#303848';
-const COLOR_SYSTEM = '#54789c';
-const COLOR_TOOL = '#b08642';
-const COLOR_USER = '#7e88ff';
-const COLOR_ASSISTANT = '#68d38f';
+const COLOR_FREE = 'var(--context-free)';
+const COLOR_SYSTEM = 'var(--context-system)';
+const COLOR_TOOL = 'var(--context-tool)';
+const COLOR_USER = 'var(--context-user)';
+const COLOR_ASSISTANT = 'var(--context-assistant)';
 
 export interface ContextBreakdown {
   free: number;

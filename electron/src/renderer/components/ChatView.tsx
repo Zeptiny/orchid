@@ -527,7 +527,7 @@ export function ChatView() {
 
   return (
     <div
-      className="app-frame grid h-screen min-h-0 overflow-hidden bg-[#080c12] text-base-content"
+      className="app-frame grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
       style={{ gridTemplateColumns: `${leftCol} minmax(460px, 1fr) ${rightCol}` }}
     >
       <LeftSidebar

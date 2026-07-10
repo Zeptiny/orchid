@@ -20,6 +20,20 @@ interface TerminalWidgetProps {
   event: ToolCallEvent;
 }
 
+function cssVariable(name: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback;
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+function terminalTheme() {
+  return {
+    background: cssVariable('--bg-surface-deep', '#1a1a2e'),
+    foreground: cssVariable('--text-primary', '#e0e0e0'),
+    cursor: cssVariable('--accent-primary', '#4a9eff'),
+    selectionBackground: cssVariable('--accent-primary', '#4a9eff'),
+  };
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function TerminalWidget({ event }: TerminalWidgetProps) {
@@ -33,12 +47,7 @@ export function TerminalWidget({ event }: TerminalWidgetProps) {
     if (!containerRef.current) return;
 
     const terminal = new Terminal({
-      theme: {
-        background: '#1a1a2e',
-        foreground: '#e0e0e0',
-        cursor: '#4a9eff',
-        selectionBackground: '#4a9eff40',
-      },
+      theme: terminalTheme(),
       fontSize: 12,
       fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
       cursorBlink: false,
@@ -55,6 +64,11 @@ export function TerminalWidget({ event }: TerminalWidgetProps) {
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
+    const handleThemeApplied = () => {
+      terminal.options.theme = terminalTheme();
+    };
+    window.addEventListener('orchid:theme-applied', handleThemeApplied);
+
     // Write initial command info
     const command = (event.args.command as string) ?? '';
     const isBg = event.args.background === true;
@@ -69,6 +83,7 @@ export function TerminalWidget({ event }: TerminalWidgetProps) {
     terminal.writeln('');
 
     return () => {
+      window.removeEventListener('orchid:theme-applied', handleThemeApplied);
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;

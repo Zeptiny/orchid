@@ -316,6 +316,29 @@ describe('Theme CSS Custom Properties', () => {
     '--font-mono',
     '--radius-md',
     '--transition-normal',
+    '--color-primary',
+    '--color-primary-content',
+    '--color-secondary',
+    '--color-secondary-content',
+    '--color-accent',
+    '--color-accent-content',
+    '--color-neutral',
+    '--color-neutral-content',
+    '--color-base-100',
+    '--color-base-200',
+    '--color-base-300',
+    '--color-base-content',
+    '--color-info',
+    '--color-info-content',
+    '--color-success',
+    '--color-success-content',
+    '--color-warning',
+    '--color-warning-content',
+    '--color-error',
+    '--color-error-content',
+    '--radius-selector',
+    '--radius-field',
+    '--radius-box',
   ];
 
   const themeDir = path.resolve(__dirname, '../../src/renderer/themes');
@@ -381,6 +404,15 @@ describe('Theme CSS Custom Properties', () => {
 
     // All themes should have different bg-primary values
     expect(bgValues.size).toBe(themeFiles.length);
+  });
+
+  it('active renderer rules do not hard-code a palette', () => {
+    const css = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/styles/chat.css'), 'utf-8');
+    const activeCss = css.slice(css.indexOf('/* ── Iteration 012 mock-aligned components'));
+    expect(activeCss).not.toMatch(/#[0-9a-fA-F]{3,8}/);
+    expect(activeCss).not.toMatch(/rgba?\(/);
+    expect(activeCss).toContain('var(--bg-primary)');
+    expect(activeCss).toContain('var(--accent-primary)');
   });
 });
 
@@ -474,6 +506,15 @@ describe('Theme Loader', () => {
   it('getCurrentTheme function exists', async () => {
     const { getCurrentTheme } = await import('../../src/renderer/themes/index');
     expect(typeof getCurrentTheme).toBe('function');
+  });
+
+  it('applies the theme at document scope and emits theme assets in production', () => {
+    const loader = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/themes/index.ts'), 'utf-8');
+    const viteConfig = fs.readFileSync(path.resolve(__dirname, '../../vite.config.ts'), 'utf-8');
+    expect(loader).toContain('document.documentElement.dataset.theme');
+    expect(loader).toContain("orchid:theme-applied");
+    expect(viteConfig).toContain('orchid-theme-assets');
+    expect(viteConfig).toContain('themes/${fileName}');
   });
 });
 
