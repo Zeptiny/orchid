@@ -55,6 +55,27 @@ type StreamItem =
       interrupted?: boolean;
     };
 
+export const AUTO_SCROLL_THRESHOLD_PX = 100;
+
+/**
+ * Pure helper: whether the scroll container is far enough from the bottom
+ * that auto-scroll should stay off. Used by ChatStream and architecture tests.
+ */
+export function isUserScrolledAwayFromBottom(
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+  thresholdPx: number = AUTO_SCROLL_THRESHOLD_PX,
+): boolean {
+  return scrollHeight - scrollTop - clientHeight > thresholdPx;
+}
+
+/** Pure helper: auto-scroll only when the user has not scrolled away. */
+export function shouldAutoScroll(isUserScrolledUp: boolean): boolean {
+  return !isUserScrolledUp;
+}
+
+
 export function ChatStream({
   messages,
   streamingContent,
@@ -76,7 +97,7 @@ export function ChatStream({
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
 
   const scrollToBottom = useCallback(() => {
-    if (!isUserScrolledUp) {
+    if (shouldAutoScroll(isUserScrolledUp)) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [isUserScrolledUp]);
@@ -87,8 +108,9 @@ export function ChatStream({
 
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = container;
-      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-      setIsUserScrolledUp(distanceFromBottom > 100);
+      setIsUserScrolledUp(
+        isUserScrolledAwayFromBottom(scrollTop, scrollHeight, clientHeight),
+      );
     };
 
     container.addEventListener('scroll', handleScroll, { passive: true });
@@ -106,13 +128,13 @@ export function ChatStream({
     }
   }, [status]);
 
-  const items = useMemo(
+  // Committed history is independent of per-token stream text. Keep it stable
+  // so long sessions do not rebuild O(n) lists on every chunk.
+  const history = useMemo(
     () =>
-      buildStreamItems({
+      buildHistoryStreamItems({
         messages,
         toolBlocks,
-        streamSegments,
-        streamingContent: status === 'streaming' ? streamingContent : '',
         status,
         liveUsage: usage,
         subagents,
@@ -123,8 +145,6 @@ export function ChatStream({
     [
       messages,
       toolBlocks,
-      streamSegments,
-      streamingContent,
       status,
       usage,
       subagents,
@@ -132,6 +152,19 @@ export function ChatStream({
       elapsedSeconds,
       interrupted,
     ],
+  );
+
+  // Live tail only — recomputed per token / segment / tool status change.
+  const liveItems = useMemo(
+    () =>
+      buildLiveTailItems({
+        toolBlocks,
+        streamSegments,
+        streamingContent: status === 'streaming' ? streamingContent : '',
+        status,
+        emittedToolIds: history.emittedToolIds,
+      }),
+    [toolBlocks, streamSegments, streamingContent, status, history.emittedToolIds],
   );
 
   if (
@@ -170,7 +203,8 @@ export function ChatStream({
         </div>
       )}
 
-      {items.map((item) => renderStreamItem(item))}
+      {history.items.map((item) => renderStreamItem(item))}
+      {liveItems.map((item) => renderStreamItem(item))}
 
       <div ref={messagesEndRef} />
     </div>
@@ -201,25 +235,34 @@ function renderStreamItem(item: StreamItem): ReactNode {
   );
 }
 
-// ── Chronological stream builder ─────────────────────────────────────────────
+// ── Chronological stream builders ────────────────────────────────────────────
+//
+// History and live tail are memoized separately in ChatStream so per-token
+// stream updates only rebuild the small in-flight tail, not the full session.
 
-function buildStreamItems(opts: {
+interface HistoryBuildResult {
+  items: StreamItem[];
+  /** Tool ids already rendered in committed history (live tail skips these). */
+  emittedToolIds: ReadonlySet<string>;
+}
+
+/**
+ * Build stream items for committed messages (+ idle leftover tools + footers).
+ * Independent of streamingContent / streamSegments so it stays stable per token.
+ */
+function buildHistoryStreamItems(opts: {
   messages: Message[];
   toolBlocks: ToolBlock[];
-  streamSegments: readonly StreamSegment[];
-  streamingContent: string;
   status: ChatStatus;
   liveUsage: Usage | null;
   subagents: readonly SubagentRecord[];
   sessionChains: readonly Chain[];
   elapsedSeconds?: number;
   interrupted: boolean;
-}): StreamItem[] {
+}): HistoryBuildResult {
   const {
     messages,
     toolBlocks,
-    streamSegments,
-    streamingContent,
     status,
     liveUsage,
     subagents,
@@ -401,7 +444,7 @@ function buildStreamItems(opts: {
     });
   };
 
-  const pushMessage = (msg: Message, kind: string, idx: number, isStreaming = false) => {
+  const pushMessage = (msg: Message, kind: string, idx: number) => {
     ensureTurn();
     turnHasBody = true;
     if (msg.role === MessageRole.ASSISTANT && msg.type === MessageType.TEXT && msg.usage) {
@@ -409,9 +452,8 @@ function buildStreamItems(opts: {
     }
     items.push({
       kind: 'message',
-      key: isStreaming ? 'streaming' : keyFor(msg, kind, idx),
+      key: keyFor(msg, kind, idx),
       message: msg,
-      isStreaming,
     });
   };
 
@@ -474,110 +516,9 @@ function buildStreamItems(opts: {
     }
   }
 
-  // ── Live in-flight turn: continue chronological stream segments ──────────
-  if (liveStreaming || streamSegments.length > 0) {
-    ensureTurn();
-
-    if (streamSegments.length > 0) {
-      let lastTextSegIndex = -1;
-      for (let i = streamSegments.length - 1; i >= 0; i--) {
-        if (streamSegments[i].kind === 'text') {
-          lastTextSegIndex = i;
-          break;
-        }
-      }
-      let segTextIdx = 0;
-      streamSegments.forEach((seg, segIndex) => {
-        if (seg.kind === 'tool') {
-          const block = liveById.get(seg.toolCallId);
-          if (block) {
-            pushTool(block, 'live');
-          }
-          return;
-        }
-        if (seg.kind === 'text' && seg.content) {
-          // Only the last text segment streams; earlier ones are frozen mid-turn.
-          const stillStreaming = liveStreaming && segIndex === lastTextSegIndex;
-          pushMessage(
-            {
-              id: seg.id,
-              role: MessageRole.ASSISTANT,
-              content: seg.content,
-              type: MessageType.TEXT,
-              tool_calls: null,
-              tool_call_id: null,
-              name: null,
-              thinking: null,
-              timestamp: new Date().toISOString(),
-              usage: null,
-              hidden: false,
-            },
-            'seg-text',
-            segTextIdx++,
-            stillStreaming,
-          );
-          return;
-        }
-        if (seg.kind === 'thinking' && seg.content) {
-          // Mark the latest thinking segment as streaming so Thought UI stays open
-          // while reasoning is still arriving.
-          let lastThinkIndex = -1;
-          for (let i = streamSegments.length - 1; i >= 0; i--) {
-            if (streamSegments[i].kind === 'thinking') {
-              lastThinkIndex = i;
-              break;
-            }
-          }
-          const stillStreamingThink = liveStreaming && segIndex === lastThinkIndex;
-          pushMessage(
-            {
-              id: seg.id,
-              role: MessageRole.ASSISTANT,
-              content: seg.content,
-              type: MessageType.THINKING,
-              tool_calls: null,
-              tool_call_id: null,
-              name: null,
-              thinking: seg.content,
-              timestamp: new Date().toISOString(),
-              usage: null,
-              hidden: false,
-            },
-            'seg-think',
-            segTextIdx++,
-            stillStreamingThink,
-          );
-        }
-      });
-    } else {
-      // Fallback when segments are empty but we still have live tools/text
-      // (e.g. mid-wire of older event paths).
-      for (const block of toolBlocks) {
-        pushTool(block, 'live');
-      }
-      if (streamingContent) {
-        pushMessage(
-          {
-            id: 'streaming',
-            role: MessageRole.ASSISTANT,
-            content: streamingContent,
-            type: MessageType.TEXT,
-            tool_calls: null,
-            tool_call_id: null,
-            name: null,
-            thinking: null,
-            timestamp: new Date().toISOString(),
-            usage: null,
-            hidden: false,
-          },
-          'stream',
-          0,
-          true,
-        );
-      }
-    }
-  } else if (toolBlocks.length > 0) {
-    // Idle but leftover live blocks not yet in history — append in order.
+  // Idle but leftover live blocks not yet in history — append in order.
+  // While streaming, these belong in the live tail (buildLiveTailItems).
+  if (!liveStreaming && toolBlocks.length > 0) {
     for (const block of toolBlocks) {
       if (!emittedToolIds.has(block.id)) {
         pushTool(block, 'live');
@@ -601,6 +542,137 @@ function buildStreamItems(opts: {
     }
   }
 
+  return { items, emittedToolIds };
+}
+
+/**
+ * Build only the in-flight live tail (stream segments / fallback stream text).
+ * Intentionally small so it can recompute cheaply on every token.
+ */
+function buildLiveTailItems(opts: {
+  toolBlocks: ToolBlock[];
+  streamSegments: readonly StreamSegment[];
+  streamingContent: string;
+  status: ChatStatus;
+  emittedToolIds: ReadonlySet<string>;
+}): StreamItem[] {
+  const { toolBlocks, streamSegments, streamingContent, status, emittedToolIds } = opts;
+  const liveStreaming = status === 'streaming';
+  if (!liveStreaming && streamSegments.length === 0) {
+    return [];
+  }
+
+  const items: StreamItem[] = [];
+  const liveById = new Map(toolBlocks.map((b) => [b.id, b]));
+  const seenTools = new Set<string>(emittedToolIds);
+
+  const pushTool = (block: ToolBlock) => {
+    if (seenTools.has(block.id)) return;
+    seenTools.add(block.id);
+    items.push({
+      kind: 'tool',
+      key: block.id || `live-${seenTools.size}`,
+      block,
+    });
+  };
+
+  const pushMessage = (msg: Message, isStreaming: boolean) => {
+    items.push({
+      kind: 'message',
+      key: isStreaming ? (msg.id || 'streaming') : msg.id,
+      message: msg,
+      isStreaming,
+    });
+  };
+
+  if (streamSegments.length > 0) {
+    let lastTextSegIndex = -1;
+    let lastThinkIndex = -1;
+    for (let i = streamSegments.length - 1; i >= 0; i--) {
+      const kind = streamSegments[i].kind;
+      if (lastTextSegIndex < 0 && kind === 'text') lastTextSegIndex = i;
+      if (lastThinkIndex < 0 && kind === 'thinking') lastThinkIndex = i;
+      if (lastTextSegIndex >= 0 && lastThinkIndex >= 0) break;
+    }
+
+    // Stable timestamp for the live rebuild so message objects differ only by content.
+    const ts = new Date().toISOString();
+
+    streamSegments.forEach((seg, segIndex) => {
+      if (seg.kind === 'tool') {
+        const block = liveById.get(seg.toolCallId);
+        if (block) pushTool(block);
+        return;
+      }
+      if (seg.kind === 'text' && seg.content) {
+        // Only the last text segment streams; earlier ones are frozen mid-turn.
+        const stillStreaming = liveStreaming && segIndex === lastTextSegIndex;
+        pushMessage(
+          {
+            id: seg.id,
+            role: MessageRole.ASSISTANT,
+            content: seg.content,
+            type: MessageType.TEXT,
+            tool_calls: null,
+            tool_call_id: null,
+            name: null,
+            thinking: null,
+            timestamp: ts,
+            usage: null,
+            hidden: false,
+          },
+          stillStreaming,
+        );
+        return;
+      }
+      if (seg.kind === 'thinking' && seg.content) {
+        // Mark the latest thinking segment as streaming so Thought UI stays open
+        // while reasoning is still arriving.
+        const stillStreamingThink = liveStreaming && segIndex === lastThinkIndex;
+        pushMessage(
+          {
+            id: seg.id,
+            role: MessageRole.ASSISTANT,
+            content: seg.content,
+            type: MessageType.THINKING,
+            tool_calls: null,
+            tool_call_id: null,
+            name: null,
+            thinking: seg.content,
+            timestamp: ts,
+            usage: null,
+            hidden: false,
+          },
+          stillStreamingThink,
+        );
+      }
+    });
+    return items;
+  }
+
+  // Fallback when segments are empty but we still have live tools/text
+  // (e.g. mid-wire of older event paths).
+  for (const block of toolBlocks) {
+    pushTool(block);
+  }
+  if (streamingContent) {
+    pushMessage(
+      {
+        id: 'streaming',
+        role: MessageRole.ASSISTANT,
+        content: streamingContent,
+        type: MessageType.TEXT,
+        tool_calls: null,
+        tool_call_id: null,
+        name: null,
+        thinking: null,
+        timestamp: new Date().toISOString(),
+        usage: null,
+        hidden: false,
+      },
+      true,
+    );
+  }
   return items;
 }
 

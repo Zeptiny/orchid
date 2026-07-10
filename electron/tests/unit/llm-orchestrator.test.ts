@@ -27,7 +27,13 @@ import type { Agent } from '../../src/shared/types/agent';
 import { AgentType, AgentTier } from '../../src/shared/types/agent';
 import { toApiMessages } from '../../src/main/llm/history';
 import { executeToolCall, maybeOffloadToolOutput } from '../../src/main/llm/tool-dispatch';
-import { buildToolMap } from '../../src/main/llm/orchestrator';
+import {
+  buildToolMap,
+  streamChat,
+  drainPendingToolEvents,
+  type StreamEvent,
+  type StreamChatParams,
+} from '../../src/main/llm/orchestrator';
 import {
   cleanOrphanToolResults,
   cleanDanglingToolCalls,
@@ -35,7 +41,32 @@ import {
   cleanStreamingArtifacts,
 } from '../../src/main/llm/cleanup';
 import { ToolRegistry } from '../../src/main/tools/registry';
+import { defaults } from '../../src/main/config/schema';
 import { z } from 'zod';
+
+// ---------------------------------------------------------------------------
+// AI SDK mock (streamChat imports `ai` via importESM)
+// ---------------------------------------------------------------------------
+
+const aiSdkMocks = vi.hoisted(() => {
+  const streamText = vi.fn();
+  const wrapLanguageModel = vi.fn(({ model }: { model: unknown }) => model);
+  const isStepCount = vi.fn((count: number) => ({ type: 'step-count' as const, count }));
+  return { streamText, wrapLanguageModel, isStepCount };
+});
+
+vi.mock('../../src/main/utils/esm-import', () => ({
+  importESM: vi.fn(async (specifier: string) => {
+    if (specifier === 'ai') {
+      return {
+        streamText: aiSdkMocks.streamText,
+        wrapLanguageModel: aiSdkMocks.wrapLanguageModel,
+        isStepCount: aiSdkMocks.isStepCount,
+      };
+    }
+    throw new Error(`Unexpected importESM specifier in test: ${specifier}`);
+  }),
+}));
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -816,6 +847,658 @@ describe('ToolRegistry integration with dispatch', () => {
         query: { type: 'string' },
       },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// History edge cases
+// ---------------------------------------------------------------------------
+
+describe('toApiMessages edge cases', () => {
+  it('handles empty message array', () => {
+    const result = toApiMessages([]);
+    expect(result).toHaveLength(0);
+  });
+
+  it('handles messages with only errors', () => {
+    const messages = [
+      makeMessage({ type: MessageType.ERROR, content: 'Error 1' }),
+      makeMessage({ type: MessageType.ERROR, content: 'Error 2' }),
+    ];
+
+    const result = toApiMessages(messages);
+    expect(result).toHaveLength(0);
+  });
+
+  it('handles complex multi-turn conversation with mixed content', () => {
+    const tc1 = makeToolCall('tc-1', 'read');
+    const tc2 = makeToolCall('tc-2', 'grep');
+
+    const messages = [
+      makeUserMessage('Read file and grep'),
+      makeThinkingMessage('Let me think...'),
+      makeAssistantToolCallMessage([tc1, tc2], 'I will read and grep'),
+      makeToolResultMessage('tc-1', 'file contents'),
+      makeToolResultMessage('tc-2', 'grep results'),
+      makeThinkingMessage('Now analyzing...'),
+      makeMessage({ role: MessageRole.ASSISTANT, content: 'Here are the results' }),
+      makeUserMessage('Thanks!'),
+      makeMessage({ role: MessageRole.ASSISTANT, content: 'You are welcome!' }),
+    ];
+
+    const result = toApiMessages(messages);
+
+    // user, thinking, assistant(tool_calls), tool(1), tool(2), thinking, assistant, user, assistant
+    expect(result).toHaveLength(9);
+    expect(result[0].role).toBe('user');
+    expect(result[1].role).toBe('assistant'); // thinking
+    expect(result[2].role).toBe('assistant');
+    expect(result[2].tool_calls).toHaveLength(2);
+    expect(result[3].role).toBe('tool');
+    expect(result[4].role).toBe('tool');
+    expect(result[5].role).toBe('assistant'); // thinking
+    expect(result[6].role).toBe('assistant');
+    expect(result[7].role).toBe('user');
+    expect(result[8].role).toBe('assistant');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// streamChat — fullStream event mapping (mocked AI SDK)
+// ---------------------------------------------------------------------------
+
+type FullStreamPart = Record<string, unknown>;
+
+type MockStreamTextOptions = {
+  fullStreamParts?: FullStreamPart[];
+  /** If set, fullStream throws before yielding any parts (triggers textStream fallback). */
+  fullStreamError?: Error;
+  /** textStream deltas used when fullStream fails early. */
+  textStreamParts?: string[];
+  finishReason?: string;
+  /** Invoke onStepFinish with this payload once when streamText is called. */
+  stepFinish?: {
+    usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+    toolCalls?: Array<{ toolCallId: string; toolName: string; input?: unknown }>;
+    toolResults?: Array<{
+      toolCallId: string;
+      output?: unknown;
+      result?: unknown;
+      isError?: boolean;
+      error?: unknown;
+    }>;
+  };
+};
+
+function createAsyncIterable<T>(items: T[], error?: Error): AsyncIterable<T> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      if (error) throw error;
+      for (const item of items) {
+        yield item;
+      }
+    },
+  };
+}
+
+function mockStreamTextResult(options: MockStreamTextOptions = {}) {
+  const finishReason = options.finishReason ?? 'stop';
+  return {
+    fullStream: createAsyncIterable(
+      options.fullStreamParts ?? [],
+      options.fullStreamError,
+    ),
+    textStream: createAsyncIterable(options.textStreamParts ?? []),
+    finishReason: Promise.resolve(finishReason),
+  };
+}
+
+async function collectStreamEvents(
+  gen: AsyncGenerator<StreamEvent>,
+): Promise<StreamEvent[]> {
+  const events: StreamEvent[] = [];
+  for await (const event of gen) {
+    events.push(event);
+  }
+  return events;
+}
+
+function makeStreamChatParams(
+  overrides: Partial<StreamChatParams> = {},
+): StreamChatParams {
+  const registry = overrides.registry ?? new ToolRegistry();
+  return {
+    messages: overrides.messages ?? [makeUserMessage('Hello')],
+    agent: overrides.agent ?? makeAgent({ allowed_tools: [] }),
+    systemPrompt: overrides.systemPrompt ?? 'You are a helpful assistant.',
+    context: overrides.context ?? { cwd: '/tmp/orchid-test' },
+    config: overrides.config ?? defaults(),
+    registry,
+    mcpManager: overrides.mcpManager ?? null,
+    sessionId: overrides.sessionId,
+    abortSignal: overrides.abortSignal,
+    modelInstance: overrides.modelInstance ?? ({
+      specificationVersion: 'v4',
+      provider: 'test',
+      modelId: 'test-model',
+      doGenerate: vi.fn(),
+      doStream: vi.fn(),
+    } as StreamChatParams['modelInstance']),
+  };
+}
+
+function setupStreamText(options: MockStreamTextOptions = {}) {
+  aiSdkMocks.streamText.mockImplementation((params: {
+    onStepFinish?: (step: {
+      usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+      toolCalls?: unknown;
+      toolResults?: unknown;
+    }) => void | Promise<void>;
+  }) => {
+    if (options.stepFinish && params.onStepFinish) {
+      void params.onStepFinish(options.stepFinish);
+    }
+    return mockStreamTextResult(options);
+  });
+}
+
+describe('streamChat', () => {
+  beforeEach(() => {
+    aiSdkMocks.streamText.mockReset();
+    aiSdkMocks.wrapLanguageModel.mockClear();
+    aiSdkMocks.isStepCount.mockClear();
+  });
+
+  it('yields content events for text-delta parts (text and textDelta aliases)', async () => {
+    setupStreamText({
+      fullStreamParts: [
+        { type: 'text-delta', text: 'Hello' },
+        { type: 'text-delta', textDelta: ' world' },
+        { type: 'text-delta', text: '' }, // ignored
+      ],
+      finishReason: 'stop',
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+
+    expect(events.filter((e) => e.type === 'content')).toEqual([
+      { type: 'content', text: 'Hello' },
+      { type: 'content', text: ' world' },
+    ]);
+    expect(events[events.length - 2]).toEqual({
+      type: 'usage',
+      usage: {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+        cached_tokens: 0,
+      },
+    });
+    expect(events[events.length - 1]).toEqual({ type: 'finish', finishReason: 'stop' });
+  });
+
+  it('maps tool-input-start/delta/available and tool-output-available', async () => {
+    setupStreamText({
+      fullStreamParts: [
+        { type: 'tool-input-start', toolCallId: 'tc-1', toolName: 'read' },
+        { type: 'tool-input-delta', toolCallId: 'tc-1', inputTextDelta: '{"path"' },
+        { type: 'tool-input-delta', toolCallId: 'tc-1', delta: ':"/a"}' },
+        {
+          type: 'tool-input-available',
+          toolCallId: 'tc-1',
+          toolName: 'read',
+          input: { path: '/a' },
+        },
+        {
+          type: 'tool-output-available',
+          toolCallId: 'tc-1',
+          output: 'file contents',
+        },
+        { type: 'text-delta', text: 'Done' },
+      ],
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+
+    expect(events.filter((e) => e.type !== 'usage' && e.type !== 'finish')).toEqual([
+      { type: 'tool_call_start', toolCallId: 'tc-1', toolName: 'read' },
+      { type: 'tool_call_delta', toolCallId: 'tc-1', argsDelta: '{"path"' },
+      { type: 'tool_call_delta', toolCallId: 'tc-1', argsDelta: ':"/a"}' },
+      {
+        type: 'tool_call',
+        toolCallId: 'tc-1',
+        toolName: 'read',
+        args: JSON.stringify({ path: '/a' }),
+      },
+      {
+        type: 'tool_result',
+        toolCallId: 'tc-1',
+        content: 'file contents',
+        isError: false,
+      },
+      { type: 'content', text: 'Done' },
+    ]);
+  });
+
+  it('maps tool-output-error and soft-failed tool-output-available as errors', async () => {
+    setupStreamText({
+      fullStreamParts: [
+        {
+          type: 'tool-output-error',
+          toolCallId: 'tc-err',
+          errorText: 'Tool boom',
+        },
+        {
+          type: 'tool-output-available',
+          toolCallId: 'tc-soft',
+          output: 'Error: Tool execution failed',
+        },
+        {
+          type: 'tool-output-available',
+          toolCallId: 'tc-timeout',
+          output: "Tool 'slow' timed out after 30 seconds",
+        },
+      ],
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+    const results = events.filter((e) => e.type === 'tool_result');
+
+    expect(results).toEqual([
+      { type: 'tool_result', toolCallId: 'tc-err', content: 'Tool boom', isError: true },
+      {
+        type: 'tool_result',
+        toolCallId: 'tc-soft',
+        content: 'Error: Tool execution failed',
+        isError: true,
+      },
+      {
+        type: 'tool_result',
+        toolCallId: 'tc-timeout',
+        content: "Tool 'slow' timed out after 30 seconds",
+        isError: true,
+      },
+    ]);
+  });
+
+  it('maps reasoning-delta / reasoning to thinking events', async () => {
+    setupStreamText({
+      fullStreamParts: [
+        { type: 'reasoning-delta', text: 'Step 1...' },
+        { type: 'reasoning', delta: ' Step 2.' },
+      ],
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+
+    expect(events.filter((e) => e.type === 'thinking')).toEqual([
+      { type: 'thinking', text: 'Step 1...' },
+      { type: 'thinking', text: ' Step 2.' },
+    ]);
+  });
+
+  it('maps stream error parts and classifies known error titles', async () => {
+    setupStreamText({
+      fullStreamParts: [
+        { type: 'error', error: new Error('rate limit exceeded (429)') },
+        { type: 'error', errorText: 'request timed out waiting for response' },
+        { type: 'error', error: new Error('401 unauthorized') },
+      ],
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+    const errors = events.filter((e) => e.type === 'error');
+
+    expect(errors).toEqual([
+      {
+        type: 'error',
+        title: 'Rate Limit Exceeded',
+        detail: 'rate limit exceeded (429)',
+      },
+      {
+        type: 'error',
+        title: 'Request Timed Out',
+        detail: 'request timed out waiting for response',
+      },
+      {
+        type: 'error',
+        title: 'Authentication Failed',
+        detail: '401 unauthorized',
+      },
+    ]);
+  });
+
+  it('supports legacy tool-call / tool-result part types', async () => {
+    setupStreamText({
+      fullStreamParts: [
+        {
+          type: 'tool-call',
+          id: 'legacy-1',
+          toolName: 'grep',
+          args: { pattern: 'foo' },
+        },
+        {
+          type: 'tool-result',
+          id: 'legacy-1',
+          result: { matches: 2 },
+        },
+      ],
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+
+    expect(events.filter((e) => e.type === 'tool_call' || e.type === 'tool_result')).toEqual([
+      {
+        type: 'tool_call',
+        toolCallId: 'legacy-1',
+        toolName: 'grep',
+        args: JSON.stringify({ pattern: 'foo' }),
+      },
+      {
+        type: 'tool_result',
+        toolCallId: 'legacy-1',
+        content: JSON.stringify({ matches: 2 }),
+        isError: false,
+      },
+    ]);
+  });
+
+  it('maps tool-input-error to tool_call + failed tool_result', async () => {
+    setupStreamText({
+      fullStreamParts: [
+        {
+          type: 'tool-input-error',
+          toolCallId: 'tc-bad',
+          toolName: 'read',
+          input: { path: 123 },
+          errorText: 'Invalid tool input',
+        },
+      ],
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+
+    expect(events.filter((e) => e.type === 'tool_call' || e.type === 'tool_result')).toEqual([
+      {
+        type: 'tool_call',
+        toolCallId: 'tc-bad',
+        toolName: 'read',
+        args: JSON.stringify({ path: 123 }),
+      },
+      {
+        type: 'tool_result',
+        toolCallId: 'tc-bad',
+        content: 'Invalid tool input',
+        isError: true,
+      },
+    ]);
+  });
+
+  it('falls back to textStream when fullStream fails before any part', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setupStreamText({
+      fullStreamError: new Error('fullStream not supported'),
+      textStreamParts: ['fallback', ' text'],
+      finishReason: 'stop',
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+
+    expect(events.filter((e) => e.type === 'content')).toEqual([
+      { type: 'content', text: 'fallback' },
+      { type: 'content', text: ' text' },
+    ]);
+    expect(events[events.length - 1]).toEqual({ type: 'finish', finishReason: 'stop' });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('fullStream failed, falling back to textStream'),
+      expect.any(Error),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('tracks usage from onStepFinish and yields finish reason', async () => {
+    setupStreamText({
+      fullStreamParts: [{ type: 'text-delta', text: 'ok' }],
+      finishReason: 'length',
+      stepFinish: {
+        usage: { inputTokens: 100, outputTokens: 40, totalTokens: 140 },
+      },
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+
+    const usageEvent = events.find((e) => e.type === 'usage');
+    expect(usageEvent).toEqual({
+      type: 'usage',
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 40,
+        total_tokens: 140,
+        cached_tokens: 0,
+      },
+    });
+    expect(events[events.length - 1]).toEqual({ type: 'finish', finishReason: 'length' });
+    // usage must come before finish
+    const usageIdx = events.findIndex((e) => e.type === 'usage');
+    const finishIdx = events.findIndex((e) => e.type === 'finish');
+    expect(usageIdx).toBeLessThan(finishIdx);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('max token limit'),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('yields pending tool calls/results captured via onStepFinish', async () => {
+    setupStreamText({
+      fullStreamParts: [{ type: 'text-delta', text: 'after tools' }],
+      stepFinish: {
+        toolCalls: [
+          { toolCallId: 'tc-step', toolName: 'echo', input: { text: 'hi' } },
+        ],
+        toolResults: [
+          { toolCallId: 'tc-step', output: 'hi', isError: false },
+        ],
+      },
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+
+    // onStepFinish fires before/during stream; pending items flush after chunks
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          type: 'tool_call',
+          toolCallId: 'tc-step',
+          toolName: 'echo',
+          args: JSON.stringify({ text: 'hi' }),
+        },
+        {
+          type: 'tool_result',
+          toolCallId: 'tc-step',
+          content: 'hi',
+          isError: false,
+        },
+        { type: 'content', text: 'after tools' },
+      ]),
+    );
+  });
+
+  it('yields classified error when fullStream fails after parts began', async () => {
+    // Once fullStream has yielded at least one part, further errors are not
+    // retried via textStream — they surface through the outer catch.
+    aiSdkMocks.streamText.mockImplementation(() => ({
+      fullStream: {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text-delta', text: 'partial' };
+          throw new Error('usage limit reached');
+        },
+      },
+      textStream: createAsyncIterable(['should-not-appear']),
+      finishReason: Promise.resolve('stop'),
+    }));
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+
+    expect(events).toEqual([
+      { type: 'content', text: 'partial' },
+      {
+        type: 'error',
+        title: 'Rate Limit Exceeded',
+        detail: 'usage limit reached',
+      },
+    ]);
+  });
+
+  it('wires wrapLanguageModel and stopWhen isStepCount(maxSteps)', async () => {
+    setupStreamText({ fullStreamParts: [] });
+
+    await collectStreamEvents(streamChat(makeStreamChatParams()));
+
+    expect(aiSdkMocks.wrapLanguageModel).toHaveBeenCalledOnce();
+    expect(aiSdkMocks.isStepCount).toHaveBeenCalledWith(10);
+    expect(aiSdkMocks.streamText).toHaveBeenCalledOnce();
+    const call = aiSdkMocks.streamText.mock.calls[0][0] as {
+      system: string;
+      messages: unknown[];
+      stopWhen: unknown;
+      tools: unknown;
+    };
+    expect(call.system).toContain('You are a helpful assistant.');
+    expect(call.messages).toEqual([{ role: 'user', content: 'Hello' }]);
+    expect(call.stopWhen).toEqual({ type: 'step-count', count: 10 });
+    // no allowed tools → tools undefined
+    expect(call.tools).toBeUndefined();
+  });
+});
+
+// P1-20: fullStream + onStepFinish must not double-yield tool events
+// ---------------------------------------------------------------------------
+
+describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
+  it('skips pending tool calls/results already emitted from fullStream', () => {
+    const pendingToolCalls = [
+      { toolCallId: 'tc-1', toolName: 'read', args: '{"path":"a.ts"}' },
+    ];
+    const pendingToolResults = [
+      { toolCallId: 'tc-1', content: 'file contents', isError: false },
+    ];
+    // Simulate fullStream already yielding tool_call + tool_result for tc-1
+    const seenToolCallIds = new Set(['tc-1']);
+    const seenToolResultIds = new Set(['tc-1']);
+
+    const events = [...drainPendingToolEvents(
+      pendingToolCalls,
+      pendingToolResults,
+      seenToolCallIds,
+      seenToolResultIds,
+    )];
+
+    expect(events).toEqual([]);
+    expect(pendingToolCalls).toHaveLength(0);
+    expect(pendingToolResults).toHaveLength(0);
+  });
+
+  it('yields pending tools when fullStream did not emit them (textStream fallback)', () => {
+    const pendingToolCalls = [
+      { toolCallId: 'tc-1', toolName: 'read', args: '{"path":"a.ts"}' },
+      { toolCallId: 'tc-2', toolName: 'grep', args: '{"pattern":"x"}' },
+    ];
+    const pendingToolResults = [
+      { toolCallId: 'tc-1', content: 'ok', isError: false },
+      { toolCallId: 'tc-2', content: 'Error: boom', isError: true },
+    ];
+    const seenToolCallIds = new Set<string>();
+    const seenToolResultIds = new Set<string>();
+
+    const events = [...drainPendingToolEvents(
+      pendingToolCalls,
+      pendingToolResults,
+      seenToolCallIds,
+      seenToolResultIds,
+    )];
+
+    expect(events).toEqual([
+      { type: 'tool_call', toolCallId: 'tc-1', toolName: 'read', args: '{"path":"a.ts"}' },
+      { type: 'tool_call', toolCallId: 'tc-2', toolName: 'grep', args: '{"pattern":"x"}' },
+      { type: 'tool_result', toolCallId: 'tc-1', content: 'ok', isError: false },
+      { type: 'tool_result', toolCallId: 'tc-2', content: 'Error: boom', isError: true },
+    ]);
+    expect(seenToolCallIds.has('tc-1')).toBe(true);
+    expect(seenToolCallIds.has('tc-2')).toBe(true);
+    expect(seenToolResultIds.has('tc-1')).toBe(true);
+    expect(seenToolResultIds.has('tc-2')).toBe(true);
+  });
+
+  it('yields only tools not yet seen (partial overlap / safety net)', () => {
+    const pendingToolCalls = [
+      { toolCallId: 'tc-stream', toolName: 'read', args: '{}' },
+      { toolCallId: 'tc-pending-only', toolName: 'write', args: '{}' },
+    ];
+    const pendingToolResults = [
+      { toolCallId: 'tc-stream', content: 'from-stream-dup', isError: false },
+      { toolCallId: 'tc-pending-only', content: 'from-pending', isError: false },
+    ];
+    // fullStream already emitted tc-stream call+result
+    const seenToolCallIds = new Set(['tc-stream']);
+    const seenToolResultIds = new Set(['tc-stream']);
+
+    const events = [...drainPendingToolEvents(
+      pendingToolCalls,
+      pendingToolResults,
+      seenToolCallIds,
+      seenToolResultIds,
+    )];
+
+    expect(events).toEqual([
+      {
+        type: 'tool_call',
+        toolCallId: 'tc-pending-only',
+        toolName: 'write',
+        args: '{}',
+      },
+      {
+        type: 'tool_result',
+        toolCallId: 'tc-pending-only',
+        content: 'from-pending',
+        isError: false,
+      },
+    ]);
+    // Duplicate drain must be a no-op
+    const again = [...drainPendingToolEvents(
+      pendingToolCalls,
+      pendingToolResults,
+      seenToolCallIds,
+      seenToolResultIds,
+    )];
+    expect(again).toEqual([]);
+  });
+
+  it('does not double-yield if the same pending id is drained twice via re-push', () => {
+    const pendingToolCalls = [
+      { toolCallId: 'tc-1', toolName: 'read', args: '{}' },
+    ];
+    const pendingToolResults: Array<{ toolCallId: string; content: string; isError: boolean }> = [];
+    const seenToolCallIds = new Set<string>();
+    const seenToolResultIds = new Set<string>();
+
+    const first = [...drainPendingToolEvents(
+      pendingToolCalls,
+      pendingToolResults,
+      seenToolCallIds,
+      seenToolResultIds,
+    )];
+    expect(first).toHaveLength(1);
+
+    // Simulate a buggy second onStepFinish push of the same id
+    pendingToolCalls.push({ toolCallId: 'tc-1', toolName: 'read', args: '{}' });
+    const second = [...drainPendingToolEvents(
+      pendingToolCalls,
+      pendingToolResults,
+      seenToolCallIds,
+      seenToolResultIds,
+    )];
+    expect(second).toEqual([]);
   });
 });
 

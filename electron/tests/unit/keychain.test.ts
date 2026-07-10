@@ -93,6 +93,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  keychain._setTestReadWriteBarrier(undefined);
   vi.restoreAllMocks();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -552,6 +553,82 @@ describe('injectKeychainKeys', () => {
     const config = { providers: 'not-an-object' };
     const result = await keychain.injectKeychainKeys(config, { keychainPath });
     expect(result).toEqual(config);
+  });
+});
+
+// ===========================================================================
+// Concurrent writes (P1-14 — RMW must not drop keys)
+// ===========================================================================
+
+describe('concurrent keychain writes', () => {
+  it('preserves all keys when encryptAndStore runs concurrently', async () => {
+    mockSafeStorage.isEncryptionAvailable.mockReturnValue(true);
+
+    // Yield between read and write so overlapping RMW would race without a lock.
+    keychain._setTestReadWriteBarrier(
+      () => new Promise((resolve) => setImmediate(resolve)),
+    );
+
+    const count = 20;
+    const keys = Array.from({ length: count }, (_, i) => `provider:p${i}:api_key`);
+
+    await Promise.all(
+      keys.map((key, i) =>
+        keychain.encryptAndStore(key, `secret-value-${i}`, { keychainPath }),
+      ),
+    );
+
+    const stored = await keychain.listKeys({ keychainPath });
+    expect(stored.sort()).toEqual([...keys].sort());
+
+    for (let i = 0; i < count; i++) {
+      const value = await keychain.retrieveAndDecrypt(keys[i]!, { keychainPath });
+      expect(value).toBe(`secret-value-${i}`);
+    }
+  });
+
+  it('serializes concurrent encryptAndStore and deleteKey without losing siblings', async () => {
+    mockSafeStorage.isEncryptionAvailable.mockReturnValue(true);
+
+    await keychain.encryptAndStore('keep-a', 'a', { keychainPath });
+    await keychain.encryptAndStore('to-delete', 'x', { keychainPath });
+    await keychain.encryptAndStore('keep-b', 'b', { keychainPath });
+
+    keychain._setTestReadWriteBarrier(
+      () => new Promise((resolve) => setImmediate(resolve)),
+    );
+
+    await Promise.all([
+      keychain.encryptAndStore('keep-c', 'c', { keychainPath }),
+      keychain.deleteKey('to-delete', { keychainPath }),
+      keychain.encryptAndStore('keep-d', 'd', { keychainPath }),
+    ]);
+
+    const stored = (await keychain.listKeys({ keychainPath })).sort();
+    expect(stored).toEqual(['keep-a', 'keep-b', 'keep-c', 'keep-d']);
+    expect(await keychain.retrieveAndDecrypt('to-delete', { keychainPath })).toBeNull();
+    expect(await keychain.retrieveAndDecrypt('keep-c', { keychainPath })).toBe('c');
+    expect(await keychain.retrieveAndDecrypt('keep-d', { keychainPath })).toBe('d');
+  });
+
+  it('last concurrent write to the same key wins', async () => {
+    mockSafeStorage.isEncryptionAvailable.mockReturnValue(true);
+
+    keychain._setTestReadWriteBarrier(
+      () => new Promise((resolve) => setImmediate(resolve)),
+    );
+
+    // Fire many overwrites of the same key; all must complete and final value
+    // must be one of the written values (not corrupted / lost).
+    const values = Array.from({ length: 10 }, (_, i) => `value-${i}`);
+    await Promise.all(
+      values.map((v) => keychain.encryptAndStore('same-key', v, { keychainPath })),
+    );
+
+    const result = await keychain.retrieveAndDecrypt('same-key', { keychainPath });
+    expect(values).toContain(result);
+    const keys = await keychain.listKeys({ keychainPath });
+    expect(keys).toEqual(['same-key']);
   });
 });
 

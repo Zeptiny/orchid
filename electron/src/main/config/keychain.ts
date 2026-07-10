@@ -74,6 +74,77 @@ interface KeychainFile {
 // File I/O (sync — keychain reads are blocking, matching Electron startup)
 // ---------------------------------------------------------------------------
 
+/**
+ * Per-path write chain so concurrent read-modify-write operations serialize.
+ * Without this, overlapping encryptAndStore/deleteKey calls can each read the
+ * same snapshot and the last writer drops the others' keys (P1-14).
+ */
+const keychainWriteChains = new Map<string, Promise<void>>();
+
+/**
+ * Run `fn` exclusively for `filePath`, after any prior write on that path.
+ * Errors from previous operations do not block subsequent ones.
+ *
+ * After the chain settles, the entry is cleaned up if no newer writes have
+ * been queued for the same path (P3-12 — unbounded map growth).
+ */
+function withKeychainWriteLock<T>(
+  filePath: string,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  const previous = keychainWriteChains.get(filePath) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(fn);
+  const chain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  keychainWriteChains.set(filePath, chain);
+  // Clean up map entry once this chain settles, but only if no newer write
+  // has replaced it. This prevents unbounded growth from temp paths (P3-12).
+  chain.finally(() => {
+    if (keychainWriteChains.get(filePath) === chain) {
+      keychainWriteChains.delete(filePath);
+    }
+  });
+  return run;
+}
+
+/**
+ * Clear all pending write chains. For test cleanup only.
+ * @internal
+ */
+export function _clearKeychainWriteChains(): void {
+  keychainWriteChains.clear();
+}
+
+/**
+ * Whether we are in a non-production environment where test barriers are safe.
+ * Checked at call-time (not module-load) so the env var can be set dynamically
+ * by test runners like Vitest.
+ */
+function isTestEnv(): boolean {
+  return process.env.NODE_ENV !== 'production';
+}
+
+/**
+ * Test-only barrier invoked between keychain read and write inside the lock.
+ * Used to force a yield so concurrent RMW races are observable without a lock.
+ */
+let testReadWriteBarrier: (() => Promise<void>) | undefined;
+
+/**
+ * Install (or clear) a test-only async barrier between keychain read and write.
+ * No-ops in production to prevent test infrastructure from leaking into
+ * production bundles (P1-2).
+ * @internal
+ */
+export function _setTestReadWriteBarrier(
+  fn: (() => Promise<void>) | undefined,
+): void {
+  if (!isTestEnv()) return;
+  testReadWriteBarrier = fn;
+}
+
 function readKeychainFile(filePath: string): KeychainFile {
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
@@ -186,19 +257,29 @@ export async function encryptAndStore(
   options?: KeychainOptions,
 ): Promise<void> {
   const { filePath, dirPath } = resolvePaths(options);
-  const file = readKeychainFile(filePath);
 
-  if (isAvailable()) {
-    const encrypted = safeStorage.encryptString(value);
-    file.entries[key] = encrypted.toString('base64');
-    file.encrypted = true;
-  } else {
-    emitPlaintextWarning();
-    file.entries[key] = value;
-    file.encrypted = false;
-  }
+  await withKeychainWriteLock(filePath, async () => {
+    const file = readKeychainFile(filePath);
 
-  writeKeychainFile(filePath, dirPath, file);
+    if (isAvailable()) {
+      const encrypted = safeStorage.encryptString(value);
+      file.entries[key] = encrypted.toString('base64');
+      file.encrypted = true;
+    } else {
+      emitPlaintextWarning();
+      file.entries[key] = value;
+      file.encrypted = false;
+    }
+
+    // Optional test barrier (yields so concurrent RMW without a lock races)
+    // Only active outside production to prevent test infrastructure from
+    // affecting real keychain writes (P1-2).
+    if (testReadWriteBarrier && isTestEnv()) {
+      await testReadWriteBarrier();
+    }
+
+    writeKeychainFile(filePath, dirPath, file);
+  });
 }
 
 /**
@@ -243,10 +324,19 @@ export async function retrieveAndDecrypt(
  */
 export async function deleteKey(key: string, options?: KeychainOptions): Promise<void> {
   const { filePath, dirPath } = resolvePaths(options);
-  const file = readKeychainFile(filePath);
-  if (!(key in file.entries)) return;
-  delete file.entries[key];
-  writeKeychainFile(filePath, dirPath, file);
+
+  await withKeychainWriteLock(filePath, async () => {
+    const file = readKeychainFile(filePath);
+    if (!(key in file.entries)) return;
+
+    delete file.entries[key];
+
+    if (testReadWriteBarrier && isTestEnv()) {
+      await testReadWriteBarrier();
+    }
+
+    writeKeychainFile(filePath, dirPath, file);
+  });
 }
 
 /**

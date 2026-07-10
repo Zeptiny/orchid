@@ -15,7 +15,14 @@ export {
   type ConfigDeepPartialInput,
 } from './schema';
 
-export { deepMerge, deepMergeProviderDict, mergeLayers, applyEnvOverrides } from './merge';
+export {
+  deepMerge,
+  deepMergeProviderDict,
+  mergeConfigUpdates,
+  mergeLayers,
+  applyEnvOverrides,
+  isUnsafeKey,
+} from './merge';
 
 export { validateConfig } from './validation';
 

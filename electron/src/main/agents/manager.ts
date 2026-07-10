@@ -20,11 +20,17 @@ import type { Agent } from '../../shared/types/agent';
 import type { Chain } from '../../shared/types/chain';
 import { ChainStatus } from '../../shared/types/chain';
 import type { Message, Usage } from '../../shared/types/message';
-import { MessageRole, MessageType } from '../../shared/types/message';
+import { MessageType } from '../../shared/types/message';
 import type { StreamEvent } from '../llm/orchestrator';
 import { addUsage, hasUsage } from '../../shared/usage';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
 import { SubagentStatus } from '../../shared/types/subagent';
+import {
+  makeAssistantMessage,
+  makeToolCallMessage,
+  makeToolResultMessage,
+  makeUserMessage,
+} from '../llm/message-factories';
 
 // ── Enums ───────────────────────────────────────────────────────────────────
 
@@ -588,7 +594,7 @@ export function runtimeToDomain(record: SubagentRecord): DomainSubagentRecord {
   };
 }
 
-// ── Message / chain factories ───────────────────────────────────────────────
+// ── Chain factory ───────────────────────────────────────────────────────────
 
 function makeEmptyChain(sessionKey: string, model: string, agent: Agent): Chain {
   return {
@@ -604,84 +610,4 @@ function makeEmptyChain(sessionKey: string, model: string, agent: Agent): Chain 
   };
 }
 
-function makeUserMessage(content: string): Message {
-  return {
-    id: randomUUID(),
-    role: MessageRole.USER,
-    content,
-    type: MessageType.TEXT,
-    tool_calls: null,
-    tool_call_id: null,
-    name: null,
-    thinking: null,
-    timestamp: new Date().toISOString(),
-    usage: null,
-    hidden: false,
-  };
-}
 
-function makeAssistantMessage(content: string, usage: Usage | null): Message {
-  return {
-    id: randomUUID(),
-    role: MessageRole.ASSISTANT,
-    content,
-    type: MessageType.TEXT,
-    tool_calls: null,
-    tool_call_id: null,
-    name: null,
-    thinking: null,
-    timestamp: new Date().toISOString(),
-    usage,
-    hidden: false,
-  };
-}
-
-function makeToolCallMessage(
-  toolCallId: string,
-  toolName: string,
-  args: string,
-): Message {
-  return {
-    id: randomUUID(),
-    role: MessageRole.ASSISTANT,
-    content: '',
-    type: MessageType.TOOL_CALL,
-    tool_calls: [
-      {
-        id: toolCallId,
-        type: 'function',
-        function: { name: toolName, arguments: args || '{}' },
-      },
-    ],
-    tool_call_id: toolCallId,
-    name: toolName,
-    thinking: null,
-    timestamp: new Date().toISOString(),
-    usage: null,
-    hidden: false,
-  };
-}
-
-function makeToolResultMessage(
-  toolCallId: string,
-  toolName: string,
-  content: string,
-  isError: boolean,
-): Message {
-  return {
-    id: randomUUID(),
-    role: MessageRole.TOOL,
-    content:
-      isError && content && !content.startsWith('Error:')
-        ? `Error: ${content}`
-        : content,
-    type: MessageType.TOOL_RESULT,
-    tool_calls: null,
-    tool_call_id: toolCallId,
-    name: toolName,
-    thinking: null,
-    timestamp: new Date().toISOString(),
-    usage: null,
-    hidden: false,
-  };
-}

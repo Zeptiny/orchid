@@ -36,6 +36,13 @@ import {
   getChatHistory,
   setChatHistory,
 } from './chat-history';
+import {
+  makeAssistantMessage,
+  makeThinkingMessage,
+  makeToolCallMessage,
+  makeToolResultMessage,
+  makeUserMessage,
+} from '../llm/message-factories';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -66,6 +73,8 @@ type ActiveAgent = {
   agent: Agent;
   agentCancelled: boolean;
   finalized: boolean;
+  /** Monotonic generation for this window; stale agents must not emit IPC. */
+  generation: number;
   unsubscribe: () => void;
   interruptUnsubscribe: () => void;
   interruptResetTimer: ReturnType<typeof setTimeout> | null;
@@ -73,12 +82,29 @@ type ActiveAgent = {
 
 const activeAgents = new Map<string, ActiveAgent>();
 
+/**
+ * Per-window generation counter. Incremented on every new chat:send and on
+ * forceAbort so stale actor/interrupt subscriptions can drop events even if
+ * they fire after the agent was replaced or torn down.
+ */
+const agentGenerations = new Map<string, number>();
+
+function nextAgentGeneration(windowId: string): number {
+  const gen = (agentGenerations.get(windowId) ?? 0) + 1;
+  agentGenerations.set(windowId, gen);
+  return gen;
+}
+
 function disposeActiveAgent(windowId: string, active: ActiveAgent): void {
-  activeAgents.delete(windowId);
+  // Only clear the map slot if we still own it (a newer agent may have replaced us).
+  if (activeAgents.get(windowId) === active) {
+    activeAgents.delete(windowId);
+  }
   active.unsubscribe();
   active.interruptUnsubscribe();
   if (active.interruptResetTimer) {
     clearTimeout(active.interruptResetTimer);
+    active.interruptResetTimer = null;
   }
   active.abortController.abort();
   active.actor.stop();
@@ -86,109 +112,118 @@ function disposeActiveAgent(windowId: string, active: ActiveAgent): void {
 }
 
 /**
+ * Whether this agent may still stream IPC to the renderer.
+ * Drops events from cancelled, finalized, replaced, or generation-stale agents.
+ */
+function canEmitStreamEvents(windowId: string, active: ActiveAgent): boolean {
+  return (
+    !active.agentCancelled &&
+    !active.finalized &&
+    activeAgents.get(windowId) === active &&
+    agentGenerations.get(windowId) === active.generation
+  );
+}
+
+/** True when this agent still occupies the window's active slot (may be cancelled). */
+function isCurrentAgent(windowId: string, active: ActiveAgent): boolean {
+  return (
+    activeAgents.get(windowId) === active &&
+    agentGenerations.get(windowId) === active.generation
+  );
+}
+
+/**
  * Silently abort any in-flight chat for a window (e.g. on session switch).
  * Does not emit CHAT_DONE — the renderer is about to replace its message list.
- * Dispose is deferred to a microtask so the subscription callback can read
- * the agentCancelled/finalized flags before teardown.
+ *
+ * Dispose is synchronous: a deferred microtask left a window where the old
+ * subscription could still emit CHAT_CHUNK after session:load swapped UI state
+ * (or after a new chat:send started). Flags + generation bump drop any late
+ * callbacks that race with stop/unsubscribe.
+ *
+ * Before discarding, we attempt to persist any partial turn (user message +
+ * tool calls + assistant text produced so far) as INTERRUPTED so the user does
+ * not lose context when switching sessions mid-stream (P2-9).
  */
 export function forceAbortChat(windowId: string): void {
   const existing = activeAgents.get(windowId);
   if (!existing) return;
+
+  try {
+    const snapshot = existing.actor.getSnapshot();
+    const context = snapshot?.context as AgentContext | undefined;
+    const partialResponse = context?.response ?? '';
+    const thinking = context?.thinking ?? '';
+    const usage = (context?.usage as Usage | null) ?? null;
+
+    if (thinking && thinking.length > existing.thinkingCommittedLength) {
+      const seg = thinking.slice(existing.thinkingCommittedLength);
+      if (seg.trim()) {
+        existing.turnMessages.push(makeThinkingMessage(seg));
+      }
+      existing.thinkingCommittedLength = thinking.length;
+    }
+
+    const remaining = partialResponse.slice(existing.responseCommittedLength);
+    if (remaining) {
+      existing.turnMessages.push(makeAssistantMessage(remaining, usage));
+      existing.responseCommittedLength = partialResponse.length;
+    } else if (usage && existing.turnMessages.length > 0) {
+      const last = existing.turnMessages[existing.turnMessages.length - 1];
+      if (
+        last &&
+        last.role === MessageRole.ASSISTANT &&
+        last.type === MessageType.TEXT
+      ) {
+        existing.turnMessages[existing.turnMessages.length - 1] = {
+          ...last,
+          usage,
+        };
+      }
+    }
+
+    if (existing.messages.length > 0 || existing.turnMessages.length > 0) {
+      const fullHistory = [...existing.messages, ...existing.turnMessages];
+      if (fullHistory.length > 0) {
+        try {
+          const sessionManager = getSessionManager();
+          sessionManager.syncActiveChain({
+            messages: fullHistory,
+            status: ChainStatus.INTERRUPTED,
+            agentName: existing.agent.name,
+            agentType: existing.agent.type,
+            agentTier: existing.agent.tier,
+          });
+        } catch (err) {
+          console.debug(
+            'Failed to persist partial chat on forceAbort (non-fatal):',
+            err,
+          );
+        }
+        try {
+          setChatHistory(windowId, fullHistory);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } catch (err) {
+    console.debug(
+      'forceAbortChat persistence attempt failed (non-fatal):',
+      err,
+    );
+  }
+
   existing.agentCancelled = true;
   existing.finalized = true;
-  // Abort the stream immediately
-  existing.abortController.abort();
-  // Defer dispose so the subscription callback sees the flags
-  queueMicrotask(() => {
-    if (activeAgents.get(windowId) === existing) {
-      disposeActiveAgent(windowId, existing);
-    }
-  });
+  nextAgentGeneration(windowId);
+  disposeActiveAgent(windowId, existing);
 }
 
 function canSend(webContents: WebContents): boolean {
   return typeof webContents.isDestroyed !== 'function' || !webContents.isDestroyed();
 }
 
-function makeToolCallMessage(
-  toolCallId: string,
-  toolName: string,
-  args: string,
-): Message {
-  return {
-    id: crypto.randomUUID(),
-    role: MessageRole.ASSISTANT,
-    content: '',
-    type: MessageType.TOOL_CALL,
-    tool_calls: [
-      {
-        id: toolCallId,
-        type: 'function',
-        function: { name: toolName, arguments: args || '{}' },
-      },
-    ],
-    tool_call_id: toolCallId,
-    name: toolName,
-    thinking: null,
-    timestamp: new Date().toISOString(),
-    usage: null,
-    hidden: false,
-  };
-}
-
-function makeToolResultMessage(
-  toolCallId: string,
-  toolName: string,
-  content: string,
-  isError: boolean,
-): Message {
-  return {
-    id: crypto.randomUUID(),
-    role: MessageRole.TOOL,
-    // Keep TOOL_RESULT type for chain reconciliation pairing; prefix errors.
-    content: isError && !content.startsWith('Error:') ? `Error: ${content}` : content,
-    type: MessageType.TOOL_RESULT,
-    tool_calls: null,
-    tool_call_id: toolCallId,
-    name: toolName,
-    thinking: null,
-    timestamp: new Date().toISOString(),
-    usage: null,
-    hidden: false,
-  };
-}
-
-function makeAssistantMessage(content: string, usage: Usage | null): Message {
-  return {
-    id: crypto.randomUUID(),
-    role: MessageRole.ASSISTANT,
-    content,
-    type: MessageType.TEXT,
-    tool_calls: null,
-    tool_call_id: null,
-    name: null,
-    thinking: null,
-    timestamp: new Date().toISOString(),
-    usage,
-    hidden: false,
-  };
-}
-
-function makeThinkingMessage(content: string): Message {
-  return {
-    id: crypto.randomUUID(),
-    role: MessageRole.ASSISTANT,
-    content,
-    type: MessageType.THINKING,
-    tool_calls: null,
-    tool_call_id: null,
-    name: null,
-    thinking: content,
-    timestamp: new Date().toISOString(),
-    usage: null,
-    hidden: false,
-  };
-}
 
 function classifyErrorKind(title: string | null | undefined, detail: string): ChatErrorKind {
   const haystack = `${title ?? ''} ${detail}`.toLowerCase();
@@ -441,19 +476,7 @@ export function registerChatIPC(): void {
     }
 
     // Build message history: existing messages + new user message
-    const userMessage: Message = {
-      id: crypto.randomUUID(),
-      role: MessageRole.USER,
-      content: message,
-      type: MessageType.TEXT,
-      tool_calls: null,
-      tool_call_id: null,
-      name: null,
-      thinking: null,
-      timestamp: new Date().toISOString(),
-      usage: null,
-      hidden: false,
-    };
+    const userMessage = makeUserMessage(message);
 
     const messages = [...existingMessages, userMessage];
 
@@ -496,6 +519,7 @@ export function registerChatIPC(): void {
     let lastStreamingToolCallId: string | null = null;
     const lastStreamingToolArgLength = new Map<string, number>();
     let lastToolUpdateSequence = 0;
+    const generation = nextAgentGeneration(windowId);
     const activeAgent: ActiveAgent = {
       actor,
       interruptActor,
@@ -509,6 +533,7 @@ export function registerChatIPC(): void {
       agent,
       agentCancelled: false,
       finalized: false,
+      generation,
       unsubscribe: () => subscription?.unsubscribe(),
       interruptUnsubscribe: () => interruptSubscription?.unsubscribe(),
       interruptResetTimer: null,
@@ -613,6 +638,11 @@ export function registerChatIPC(): void {
 
     // Track interrupt machine state changes and forward to renderer
     interruptSubscription = interruptActor.subscribe((interruptSnapshot) => {
+      // Drop events from replaced/aborted agents (session switch, newer turn).
+      if (!isCurrentAgent(windowId, activeAgent)) {
+        return;
+      }
+
       const interruptState = interruptSnapshot.value as
         | 'idle'
         | 'confirmAgent'
@@ -654,6 +684,12 @@ export function registerChatIPC(): void {
 
     // Subscribe to state changes and stream chunks to renderer
     subscription = actor.subscribe((snapshot) => {
+      // Drop late events from cancelled, finalized, or generation-stale agents so
+      // CHAT_CHUNK cannot leak across session switches / overlapping turns.
+      if (!canEmitStreamEvents(windowId, activeAgent)) {
+        return;
+      }
+
       const context = snapshot.context as AgentContext;
 
       // Send incremental text updates
@@ -1024,6 +1060,8 @@ export function unregisterChatIPC(): void {
 
   // Cancel all active agents
   for (const [, agent] of activeAgents) {
+    agent.agentCancelled = true;
+    agent.finalized = true;
     agent.unsubscribe();
     agent.interruptUnsubscribe();
     if (agent.interruptResetTimer) {
@@ -1034,5 +1072,6 @@ export function unregisterChatIPC(): void {
     agent.interruptActor.stop();
   }
   activeAgents.clear();
+  agentGenerations.clear();
   clearAllChatHistory();
 }

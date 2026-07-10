@@ -15,13 +15,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import type { Message } from '../../shared/types/message';
-import { MessageRole, MessageType } from '../../shared/types/message';
 import type { ToolCall } from '../../shared/types/tool';
 import type { ToolRegistry } from '../tools/registry';
 import {
   TOOL_OUTPUT_INLINE_THRESHOLD,
   TOOLS_WITHOUT_OUTPUT_OFFLOAD,
 } from './middleware/provider-quirks';
+import { makeToolResultMessage } from './message-factories';
 
 // ---------------------------------------------------------------------------
 // Constants — match Python client.py:44, 48-56
@@ -82,6 +82,7 @@ export async function executeToolCall(
   } catch {
     return makeToolResultMessage(
       toolCall.id,
+      name,
       `Error: Could not parse arguments for tool '${name}': invalid JSON.`,
       true,
     );
@@ -90,6 +91,7 @@ export async function executeToolCall(
   if (typeof args !== 'object' || args === null || Array.isArray(args)) {
     return makeToolResultMessage(
       toolCall.id,
+      name,
       `Error: Arguments for tool '${name}' must be a JSON object, got ${typeof args}.`,
       true,
     );
@@ -101,6 +103,7 @@ export async function executeToolCall(
     const available = registry.listAll().map((t) => t.definition.name);
     return makeToolResultMessage(
       toolCall.id,
+      name,
       `Error: tool '${name}' does not exist. Available tools: ${available.join(', ')}`,
       true,
     );
@@ -120,11 +123,12 @@ export async function executeToolCall(
   } catch (err) {
     if (err instanceof ToolTimeoutError) {
       // Prefix Error: so UI / stream classifiers mark the tool as failed.
-      return makeToolResultMessage(toolCall.id, `Error: ${err.message}`, true);
+      return makeToolResultMessage(toolCall.id, name, `Error: ${err.message}`, true);
     }
     console.error(`Tool '${name}' raised an exception:`, err);
     return makeToolResultMessage(
       toolCall.id,
+      name,
       `Error: Tool '${name}' failed with an internal error.`,
       true,
     );
@@ -136,7 +140,7 @@ export async function executeToolCall(
   // Maybe offload large output
   const trimmed = maybeOffloadToolOutput(name, content, toolCall.id, options.sessionId);
 
-  return makeToolResultMessage(toolCall.id, trimmed, false);
+  return makeToolResultMessage(toolCall.id, name, trimmed, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -303,27 +307,6 @@ export async function runWithToolTimeout<T>(
     timeoutSeconds * 1000,
     `Tool '${toolName}' timed out after ${timeoutSeconds}s.`,
   );
-}
-
-/** Create a TOOL_RESULT message. */
-function makeToolResultMessage(
-  toolCallId: string,
-  content: string,
-  _isError: boolean,
-): Message {
-  return {
-    id: crypto.randomUUID(),
-    role: MessageRole.TOOL,
-    content,
-    type: MessageType.TOOL_RESULT,
-    tool_calls: null,
-    tool_call_id: toolCallId,
-    name: null,
-    thinking: null,
-    timestamp: new Date().toISOString(),
-    usage: null,
-    hidden: false,
-  };
 }
 
 /** Get the tool-output cache directory for a session. */

@@ -7,7 +7,8 @@
  * - Tables: chunks, files, meta
  * - Vectors stored as .npy files (Float32Array)
  * - Cosine similarity: (V @ q) / (||V|| * ||q||)
- * - Process-level search cache
+ * - Process-level search cache (LRU-bounded; vectors as compact Float32 matrix;
+ *   chunk text loaded only for top-k hits)
  * - Corruption recovery (auto-rebuild)
  */
 import * as fs from 'node:fs';
@@ -69,12 +70,50 @@ export interface VectorState {
   idToIndex: Map<number, number>;
 }
 
-interface ChunkRow {
+/** Lightweight chunk row used for search scoring (no content payload). */
+interface ChunkMeta {
   chunk_id: number;
   file_path: string;
   start_line: number;
   end_line: number;
-  content: string;
+}
+
+/** Compact row-major float32 matrix used by the search path. */
+interface SearchMatrix {
+  data: Float32Array;
+  rows: number;
+  cols: number;
+}
+
+interface SearchCacheEntry {
+  matrix: SearchMatrix;
+  chunks: ChunkMeta[];
+}
+
+/** Max projects kept in the process-level search cache (LRU). */
+const MAX_SEARCH_CACHE_ENTRIES = 3;
+
+/**
+ * OOM protection: max total bytes across all cached entries.
+ * A 50k-chunk project with 384 dims uses ~76MB for the Float32 matrix alone.
+ * Capping at 200MB keeps the main process heap safe even with 2–3 large projects.
+ */
+const MAX_SEARCH_CACHE_BYTES = 200 * 1024 * 1024;
+
+/**
+ * OOM protection: entries larger than this are not cached at all.
+ * A single massive index (>100MB) is loaded from disk on each search rather
+ * than pinning the main process heap.
+ */
+const MAX_SINGLE_ENTRY_BYTES = 100 * 1024 * 1024;
+
+/** Estimate the byte size of a search cache entry (matrix + chunk metadata). */
+function estimateSearchCacheEntryBytes(entry: SearchCacheEntry): number {
+  // Float32Array data buffer (rows * cols * 4 bytes)
+  const matrixBytes = entry.matrix.data.byteLength;
+  // ChunkMeta: ~200 bytes average per row (file_path string + 3 integers)
+  const chunkMetaBytes = entry.chunks.length * 200;
+  return matrixBytes + chunkMetaBytes;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,9 +171,10 @@ function saveNpy(filePath: string, vectors: number[][]): void {
 }
 
 /**
- * Load a .npy file as a 2D array of number[].
+ * Load a .npy file as a compact row-major Float32Array matrix.
+ * Prefer this for search — ~4× less memory than number[][] and better locality.
  */
-function loadNpy(filePath: string): number[][] | null {
+function loadNpyMatrix(filePath: string): SearchMatrix | null {
   if (!fs.existsSync(filePath)) return null;
 
   try {
@@ -155,22 +195,44 @@ function loadNpy(filePath: string): number[][] | null {
     const rows = parseInt(shapeMatch[1]!, 10);
     const cols = parseInt(shapeMatch[2]!, 10);
 
-    // Read float32 data
     const dataOffset = 10 + headerLen;
-    const vectors: number[][] = [];
-    for (let i = 0; i < rows; i++) {
-      const row: number[] = [];
-      for (let j = 0; j < cols; j++) {
-        row.push(buffer.readFloatLE(dataOffset + (i * cols + j) * 4));
-      }
-      vectors.push(row);
+    const expectedBytes = rows * cols * 4;
+    if (buffer.byteLength < dataOffset + expectedBytes) {
+      throw new Error('Truncated .npy data');
     }
 
-    return vectors;
+    // Copy into a dedicated Float32Array so the full file buffer can be GC'd.
+    // Node Buffer endianness is platform-native; .npy '<f4' is little-endian.
+    const data = new Float32Array(rows * cols);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = buffer.readFloatLE(dataOffset + i * 4);
+    }
+
+    return { data, rows, cols };
   } catch {
     // Corrupted vectors — caller should clear
     return null;
   }
+}
+
+/**
+ * Load a .npy file as a 2D array of number[] (write/update path).
+ */
+function loadNpy(filePath: string): number[][] | null {
+  const matrix = loadNpyMatrix(filePath);
+  if (!matrix) return null;
+
+  const { data, rows, cols } = matrix;
+  const vectors: number[][] = new Array(rows);
+  for (let i = 0; i < rows; i++) {
+    const row = new Array<number>(cols);
+    const base = i * cols;
+    for (let j = 0; j < cols; j++) {
+      row[j] = data[base + j]!;
+    }
+    vectors[i] = row;
+  }
+  return vectors;
 }
 
 // ---------------------------------------------------------------------------
@@ -213,11 +275,11 @@ export class RAGStore {
   /** Cached database connection (lazy-opened, reused). */
   private _db: BetterSqlite3Database | null = null;
 
-  /** Process-level search cache: dbPath -> {vectors, chunks} */
-  private static _searchCache = new Map<
-    string,
-    { vectors: number[][]; chunks: ChunkRow[] }
-  >();
+  /**
+   * Process-level search cache: dbPath -> compact matrix + chunk meta.
+   * LRU-bounded (Map insertion order); content is NOT cached.
+   */
+  private static _searchCache = new Map<string, SearchCacheEntry>();
 
   constructor(projectPath: string) {
     this.projectPath = projectPath;
@@ -299,6 +361,67 @@ export class RAGStore {
 
   private _invalidateCache(): void {
     RAGStore._searchCache.delete(this.dbPath);
+  }
+
+  /** Sum of estimated bytes across all cached entries. */
+  private static _totalCacheBytes(): number {
+    let total = 0;
+    for (const entry of RAGStore._searchCache.values()) {
+      total += estimateSearchCacheEntryBytes(entry);
+    }
+    return total;
+  }
+
+  /**
+   * Clear all cached search data across all projects.
+   * Call on memory pressure or when bulk-invalidation is needed.
+   */
+  static clearCache(): void {
+    RAGStore._searchCache.clear();
+  }
+
+  /** Return current cache statistics (entries and estimated byte usage). */
+  static cacheStats(): { entries: number; estimatedBytes: number } {
+    return {
+      entries: RAGStore._searchCache.size,
+      estimatedBytes: RAGStore._totalCacheBytes(),
+    };
+  }
+
+  /** Insert/refresh a cache entry and evict least-recently-used over capacity. */
+  private _setSearchCache(entry: SearchCacheEntry): void {
+    const key = this.dbPath;
+    const entryBytes = estimateSearchCacheEntryBytes(entry);
+
+    // Skip caching entries that are too large — loading from disk on each
+    // search is cheaper than pinning hundreds of MB in the main process heap.
+    if (entryBytes > MAX_SINGLE_ENTRY_BYTES) return;
+
+    // Re-insert to mark as most recently used (Map preserves insertion order).
+    RAGStore._searchCache.delete(key);
+    RAGStore._searchCache.set(key, entry);
+
+    // Evict LRU entries until both count and byte limits are satisfied.
+    // Keep at least one entry (the just-inserted one) to avoid thrashing.
+    while (
+      RAGStore._searchCache.size > MAX_SEARCH_CACHE_ENTRIES ||
+      RAGStore._totalCacheBytes() > MAX_SEARCH_CACHE_BYTES
+    ) {
+      if (RAGStore._searchCache.size <= 1) break;
+      const oldest = RAGStore._searchCache.keys().next().value;
+      if (oldest === undefined) break;
+      RAGStore._searchCache.delete(oldest);
+    }
+  }
+
+  private _getSearchCache(): SearchCacheEntry | undefined {
+    const key = this.dbPath;
+    const entry = RAGStore._searchCache.get(key);
+    if (!entry) return undefined;
+    // Touch: move to end (most recently used).
+    RAGStore._searchCache.delete(key);
+    RAGStore._searchCache.set(key, entry);
+    return entry;
   }
 
   private _clearVectorsFile(): void {
@@ -611,6 +734,9 @@ export class RAGStore {
 
   /**
    * Search for chunks similar to the query embedding.
+   *
+   * Uses a compact Float32 matrix + metadata-only cache; chunk text is loaded
+   * only for the top-k hits after scoring.
    */
   search(
     queryEmbedding: number[],
@@ -620,60 +746,48 @@ export class RAGStore {
     const cfg = getConfig();
     const k = topK ?? cfg.rag.top_k;
 
-    const { vectors, chunks } = this._loadSearchData();
-    if (!vectors || !chunks) return [];
+    const data = this._loadSearchData();
+    if (!data) return [];
 
-    let vecs = vectors;
-    let chks = chunks;
-
+    const { matrix, chunks } = data;
     // Handle stale index (vector/chunk count mismatch)
-    if (vecs.length !== chks.length) {
-      const minLen = Math.min(vecs.length, chks.length);
-      vecs = vecs.slice(0, minLen);
-      chks = chks.slice(0, minLen);
-    }
-
-    if (vecs.length === 0 || queryEmbedding.length === 0) return [];
-
-    // Pre-filter by filePattern before scoring — avoids scoring + sorting
-    // vectors that will be discarded. Compile regex once (P1-3).
-    if (filePattern) {
-      const re = compilePattern(filePattern);
-      const filtered: { vec: number[]; chk: ChunkRow }[] = [];
-      for (let i = 0; i < chks.length; i++) {
-        if (re.test(chks[i]!.file_path)) {
-          filtered.push({ vec: vecs[i]!, chk: chks[i]! });
-        }
-      }
-      if (filtered.length === 0) return [];
-      vecs = filtered.map((f) => f.vec);
-      chks = filtered.map((f) => f.chk);
-    }
+    const n = Math.min(matrix.rows, chunks.length);
+    if (n === 0 || queryEmbedding.length === 0 || matrix.cols === 0) return [];
 
     // Dimension check
-    const dim = vecs[0]!.length;
-    if (queryEmbedding.length !== dim) {
+    if (queryEmbedding.length !== matrix.cols) {
       throw new Error(
         `Query embedding dimension (${queryEmbedding.length}) does not match ` +
-          `stored vector dimension (${dim}). Re-index with the correct embedding model.`,
+          `stored vector dimension (${matrix.cols}). Re-index with the correct embedding model.`,
       );
     }
 
-    // Compute cosine similarity
-    const scores = cosineSimilarity(queryEmbedding, vecs);
+    // Pre-filter by filePattern before scoring — score only matching rows by
+    // index (no vector copy). Compile regex once (P1-3).
+    let candidateIndices: number[] | null = null;
+    if (filePattern) {
+      const re = compilePattern(filePattern);
+      candidateIndices = [];
+      for (let i = 0; i < n; i++) {
+        if (re.test(chunks[i]!.file_path)) {
+          candidateIndices.push(i);
+        }
+      }
+      if (candidateIndices.length === 0) return [];
+    }
 
-    // Sort by score descending
-    const indexed = scores
-      .map((score, idx) => ({ score, idx }))
-      .sort((a, b) => b.score - a.score);
+    // Score candidates (or all rows) in-place against the Float32 matrix.
+    const top = cosineTopK(queryEmbedding, matrix, k, candidateIndices, n);
+
+    // Fetch text only for top-k hits.
+    const contentById = this._getChunkContents(top.map((t) => chunks[t.idx]!.chunk_id));
 
     const results: SearchResult[] = [];
-    for (const { score, idx } of indexed) {
-      if (results.length >= k) break;
-      const chunk = chks[idx]!;
+    for (const { score, idx } of top) {
+      const chunk = chunks[idx]!;
       results.push({
         filePath: chunk.file_path,
-        content: chunk.content,
+        content: contentById.get(chunk.chunk_id) ?? '',
         startLine: chunk.start_line,
         endLine: chunk.end_line,
         score,
@@ -814,69 +928,148 @@ export class RAGStore {
     return rows.map((r) => r.chunk_id);
   }
 
-  private _getAllChunks(): ChunkRow[] {
+  /** Metadata only — content is fetched for top-k hits after scoring. */
+  private _getChunkMetas(): ChunkMeta[] {
     const db = this._getDb();
     return db
       .prepare(
-        'SELECT chunk_id, file_path, start_line, end_line, content FROM chunks ORDER BY chunk_id',
+        'SELECT chunk_id, file_path, start_line, end_line FROM chunks ORDER BY chunk_id',
       )
-      .all() as ChunkRow[];
+      .all() as ChunkMeta[];
   }
 
-  private _loadSearchData(): {
-    vectors: number[][] | null;
-    chunks: ChunkRow[] | null;
-  } {
-    const cacheKey = this.dbPath;
-    const cached = RAGStore._searchCache.get(cacheKey);
+  /** Load content for the given chunk IDs (top-k only). */
+  private _getChunkContents(ids: number[]): Map<number, string> {
+    if (ids.length === 0) return new Map();
+    const db = this._getDb();
+    const placeholders = ids.map(() => '?').join(',');
+    const rows = db
+      .prepare(
+        `SELECT chunk_id, content FROM chunks WHERE chunk_id IN (${placeholders})`,
+      )
+      .all(...ids) as { chunk_id: number; content: string }[];
+    return new Map(rows.map((r) => [r.chunk_id, r.content]));
+  }
+
+  private _loadSearchData(): SearchCacheEntry | null {
+    const cached = this._getSearchCache();
     if (cached) return cached;
 
-    const vectors = this._loadVectorsArray();
-    if (!vectors) return { vectors: null, chunks: null };
+    const matrix = this._loadVectorsMatrix();
+    if (!matrix) return null;
 
-    const chunks = this._getAllChunks();
-    if (chunks.length === 0) return { vectors: null, chunks: null };
+    const chunks = this._getChunkMetas();
+    if (chunks.length === 0) return null;
 
-    RAGStore._searchCache.set(cacheKey, { vectors, chunks });
-    return { vectors, chunks };
+    const entry: SearchCacheEntry = { matrix, chunks };
+    this._setSearchCache(entry);
+    return entry;
+  }
+
+  private _loadVectorsMatrix(): SearchMatrix | null {
+    if (!fs.existsSync(this.vectorsFile)) return null;
+    const matrix = loadNpyMatrix(this.vectorsFile);
+    if (!matrix) {
+      // Corrupted — clear index
+      this.clear();
+      return null;
+    }
+    return matrix;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Cosine similarity
+// Cosine similarity (Float32 matrix + top-k selection)
 // ---------------------------------------------------------------------------
 
 /**
- * Compute cosine similarity between a query vector and a matrix of vectors.
+ * Cosine similarity against a compact row-major Float32 matrix, returning only
+ * the top-k highest scores. Optionally restricts scoring to candidateIndices
+ * (e.g. after file-pattern filter) without copying vectors.
  *
- * score = (V @ q) / (||V|| * ||q||)
+ * score = (v · q) / (||v|| * ||q||)
  */
-function cosineSimilarity(query: number[], vectors: number[][]): number[] {
-  const dim = query.length;
-  const scores: number[] = [];
+function cosineTopK(
+  query: number[],
+  matrix: SearchMatrix,
+  k: number,
+  candidateIndices: number[] | null,
+  rowLimit: number,
+): { score: number; idx: number }[] {
+  const dim = matrix.cols;
+  const data = matrix.data;
+  const take = Math.max(0, Math.min(k, candidateIndices?.length ?? rowLimit));
+  if (take === 0) return [];
 
-  // Precompute query norm
-  let qNorm = 0;
+  // Precompute query as Float32 + norm
+  const q = new Float32Array(dim);
+  let qNormSq = 0;
   for (let d = 0; d < dim; d++) {
-    qNorm += query[d]! * query[d]!;
+    const v = query[d]!;
+    q[d] = v;
+    qNormSq += v * v;
   }
-  qNorm = Math.sqrt(qNorm);
+  const qNorm = Math.sqrt(qNormSq);
+  if (qNorm === 0) return [];
 
-  if (qNorm === 0) return vectors.map(() => 0);
+  // Bounded min-heap of size `take` (heap[0] = lowest score among top-k).
+  // Avoids sorting all N candidates when N >> k.
+  const heap: { score: number; idx: number }[] = [];
 
-  for (const vec of vectors) {
+  const consider = (idx: number): void => {
+    const base = idx * dim;
     let dot = 0;
-    let vNorm = 0;
+    let vNormSq = 0;
     for (let d = 0; d < dim; d++) {
-      dot += vec[d]! * query[d]!;
-      vNorm += vec[d]! * vec[d]!;
+      const v = data[base + d]!;
+      dot += v * q[d]!;
+      vNormSq += v * v;
     }
-    vNorm = Math.sqrt(vNorm);
+    const vNorm = Math.sqrt(vNormSq);
     const denom = vNorm * qNorm;
-    scores.push(denom === 0 ? 0 : dot / denom);
+    const score = denom === 0 ? 0 : dot / denom;
+
+    if (heap.length < take) {
+      heap.push({ score, idx });
+      if (heap.length === take) {
+        // Establish min-heap order once full
+        heap.sort((a, b) => a.score - b.score);
+      }
+    } else if (score > heap[0]!.score) {
+      heap[0] = { score, idx };
+      // Restore min-heap property for small k (typical top_k is 5–20)
+      siftDownMin(heap, 0);
+    }
+  };
+
+  if (candidateIndices) {
+    for (const idx of candidateIndices) {
+      if (idx >= 0 && idx < rowLimit) consider(idx);
+    }
+  } else {
+    for (let idx = 0; idx < rowLimit; idx++) consider(idx);
   }
 
-  return scores;
+  // Highest score first
+  heap.sort((a, b) => b.score - a.score);
+  return heap;
+}
+
+/** Sift down at index i for a min-heap ordered by .score */
+function siftDownMin(heap: { score: number; idx: number }[], i: number): void {
+  const n = heap.length;
+  while (true) {
+    let smallest = i;
+    const left = 2 * i + 1;
+    const right = 2 * i + 2;
+    if (left < n && heap[left]!.score < heap[smallest]!.score) smallest = left;
+    if (right < n && heap[right]!.score < heap[smallest]!.score) smallest = right;
+    if (smallest === i) break;
+    const tmp = heap[i]!;
+    heap[i] = heap[smallest]!;
+    heap[smallest] = tmp;
+    i = smallest;
+  }
 }
 
 // ---------------------------------------------------------------------------

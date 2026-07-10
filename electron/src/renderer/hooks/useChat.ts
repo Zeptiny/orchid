@@ -156,15 +156,37 @@ export function useChat(): UseChatReturn {
   const usageRef = useRef<Usage | null>(null);
   const toolBlocksRef = useRef<ToolBlock[]>([]);
   const streamSegmentsRef = useRef<StreamSegment[]>([]);
+  /** Sync guard against double-send before status re-render (P1-35). */
+  const isSendingRef = useRef(false);
 
-  // Keep refs in sync so onDone can commit tools/segments into message history
-  useEffect(() => {
-    toolBlocksRef.current = toolBlocks;
-  }, [toolBlocks]);
+  /**
+   * Update toolBlocksRef synchronously, then mirror into React state.
+   * onDone commits from the ref; useEffect/setState-updater-only sync races
+   * CHAT_DONE in the same tick as the last tool event (P1-33).
+   */
+  const applyToolBlocks = useCallback(
+    (updater: ToolBlock[] | ((prev: ToolBlock[]) => ToolBlock[])) => {
+      const prev = toolBlocksRef.current;
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      toolBlocksRef.current = next;
+      setToolBlocks(next);
+    },
+    [],
+  );
 
-  useEffect(() => {
-    streamSegmentsRef.current = streamSegments;
-  }, [streamSegments]);
+  /**
+   * Update streamSegmentsRef synchronously, then mirror into React state.
+   * Mirrors applyToolBlocks so onDone never reads a stale segment timeline.
+   */
+  const applyStreamSegments = useCallback(
+    (updater: StreamSegment[] | ((prev: StreamSegment[]) => StreamSegment[])) => {
+      const prev = streamSegmentsRef.current;
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      streamSegmentsRef.current = next;
+      setStreamSegments(next);
+    },
+    [],
+  );
 
   // Elapsed time ticker
   useEffect(() => {
@@ -196,22 +218,18 @@ export function useChat(): UseChatReturn {
       accumulatedContentRef.current += event.data;
       setStreamingContent(accumulatedContentRef.current);
       // Append to last text segment, or open a new one (preserves tool→text→tool order).
-      setStreamSegments((prev) => {
+      applyStreamSegments((prev) => {
         const last = prev[prev.length - 1];
         if (last?.kind === 'text') {
-          const next = [
+          return [
             ...prev.slice(0, -1),
             { ...last, content: last.content + event.data },
           ];
-          streamSegmentsRef.current = next;
-          return next;
         }
-        const next: StreamSegment[] = [
+        return [
           ...prev,
           { kind: 'text', id: crypto.randomUUID(), content: event.data },
         ];
-        streamSegmentsRef.current = next;
-        return next;
       });
     });
 
@@ -220,22 +238,18 @@ export function useChat(): UseChatReturn {
         accumulatedThinkingRef.current += event.data;
         setStreamingThinking(accumulatedThinkingRef.current);
         // Chronological thinking segments → Thought widgets in ChatStream
-        setStreamSegments((prev) => {
+        applyStreamSegments((prev) => {
           const last = prev[prev.length - 1];
           if (last?.kind === 'thinking') {
-            const next = [
+            return [
               ...prev.slice(0, -1),
               { ...last, content: last.content + event.data },
             ];
-            streamSegmentsRef.current = next;
-            return next;
           }
-          const next: StreamSegment[] = [
+          return [
             ...prev,
             { kind: 'thinking', id: crypto.randomUUID(), content: event.data },
           ];
-          streamSegmentsRef.current = next;
-          return next;
         });
       }) ?? (() => {});
 
@@ -247,8 +261,11 @@ export function useChat(): UseChatReturn {
         setError(event.error);
       } else if (event.state === 'idle') {
         setStatus('idle');
+        // Stream finished from main — allow another send
+        isSendingRef.current = false;
       }
-      // Track interrupt confirmation phase from main process
+      // Track interrupt confirmation phase from main process (authoritative for
+      // confirmAgent / confirmSubagents; do not let onDone clobber this).
       if (event.interruptState) {
         setInterruptState(event.interruptState);
       }
@@ -264,6 +281,8 @@ export function useChat(): UseChatReturn {
         usageRef.current = event.usage;
       }
 
+      // toolBlocksRef / streamSegmentsRef are updated synchronously with state
+      // so a CHAT_DONE right after the last tool event still sees final tools.
       const liveTools = toolBlocksRef.current;
       const segments = streamSegmentsRef.current;
       const usageForCommit = event.usage ?? usageRef.current;
@@ -319,13 +338,17 @@ export function useChat(): UseChatReturn {
 
       setStreamingContent('');
       setStreamingThinking('');
-      setStreamSegments([]);
-      streamSegmentsRef.current = [];
+      applyStreamSegments([]);
       // Keep toolBlocks until next send so the last turn still renders them live;
       // messages now also contain them for multi-turn history.
       accumulatedContentRef.current = '';
       accumulatedThinkingRef.current = '';
-      setInterruptState('idle');
+      // P1-34: second Esc sends CHAT_DONE then CHAT_STATE(confirmSubagents).
+      // Never force interruptState idle on interrupted done — onState owns it.
+      if (!event.interrupted) {
+        setInterruptState('idle');
+      }
+      isSendingRef.current = false;
       setStatus('idle');
     });
 
@@ -337,10 +360,10 @@ export function useChat(): UseChatReturn {
           : event.error;
       setError(display);
       setStatus('idle');
+      isSendingRef.current = false;
       setStreamingContent('');
       setStreamingThinking('');
-      setStreamSegments([]);
-      streamSegmentsRef.current = [];
+      applyStreamSegments([]);
       setInterruptState('idle');
       accumulatedContentRef.current = '';
       accumulatedThinkingRef.current = '';
@@ -352,7 +375,7 @@ export function useChat(): UseChatReturn {
     });
 
     const unsubToolStart = window.orchid.chat.onToolCallStart?.((event: ChatToolCallStartEvent) => {
-      setToolBlocks((prev) => upsertToolBlock(prev, {
+      applyToolBlocks((prev) => upsertToolBlock(prev, {
         id: event.toolCallId,
         toolName: event.toolName,
         status: 'generating',
@@ -364,21 +387,19 @@ export function useChat(): UseChatReturn {
         finishedAt: null,
       }));
       // Record tool position in the chronological segment timeline.
-      setStreamSegments((prev) => {
+      applyStreamSegments((prev) => {
         if (prev.some((s) => s.kind === 'tool' && s.toolCallId === event.toolCallId)) {
           return prev;
         }
-        const next: StreamSegment[] = [
+        return [
           ...prev,
           { kind: 'tool', toolCallId: event.toolCallId },
         ];
-        streamSegmentsRef.current = next;
-        return next;
       });
     }) ?? (() => {});
 
     const unsubToolDelta = window.orchid.chat.onToolCallDelta?.((event: ChatToolCallDeltaEvent) => {
-      setToolBlocks((prev) => prev.map((block) => {
+      applyToolBlocks((prev) => prev.map((block) => {
         if (block.id !== event.toolCallId) return block;
         return {
           ...block,
@@ -391,7 +412,7 @@ export function useChat(): UseChatReturn {
     }) ?? (() => {});
 
     const unsubToolUpdate = window.orchid.chat.onToolCallUpdate?.((event: ChatToolCallUpdateEvent) => {
-      setToolBlocks((prev) => upsertToolBlock(prev, {
+      applyToolBlocks((prev) => upsertToolBlock(prev, {
         id: event.toolCallId,
         toolName: event.toolName ?? 'unknown',
         status: event.status === 'failed'
@@ -409,16 +430,14 @@ export function useChat(): UseChatReturn {
           : null,
       }, true));
       // Ensure tools that skip start events still appear in order.
-      setStreamSegments((prev) => {
+      applyStreamSegments((prev) => {
         if (prev.some((s) => s.kind === 'tool' && s.toolCallId === event.toolCallId)) {
           return prev;
         }
-        const next: StreamSegment[] = [
+        return [
           ...prev,
           { kind: 'tool', toolCallId: event.toolCallId },
         ];
-        streamSegmentsRef.current = next;
-        return next;
       });
     }) ?? (() => {});
 
@@ -433,15 +452,18 @@ export function useChat(): UseChatReturn {
       unsubToolDelta();
       unsubToolUpdate();
     };
-  }, []);
+  }, [applyToolBlocks, applyStreamSegments]);
 
   const send = useCallback(
     async (message: string) => {
-      if (!message.trim() || status === 'streaming') return;
+      // isSendingRef is synchronous; status alone can be stale across rapid Enter.
+      if (!message.trim() || status === 'streaming' || isSendingRef.current) return;
       if (!window.orchid?.chat) {
         setError('Chat IPC not available');
         return;
       }
+
+      isSendingRef.current = true;
 
       const trimmed = message.trim();
       const userMessage: Message = {
@@ -475,9 +497,8 @@ export function useChat(): UseChatReturn {
       setError(null);
       setStreamingContent('');
       setStreamingThinking('');
-      setToolBlocks([]);
-      setStreamSegments([]);
-      streamSegmentsRef.current = [];
+      applyToolBlocks([]);
+      applyStreamSegments([]);
       setUsage(null);
       setInterrupted(false);
       usageRef.current = null;
@@ -491,11 +512,12 @@ export function useChat(): UseChatReturn {
       try {
         await window.orchid.chat.send({ message: trimmed });
       } catch (err) {
+        isSendingRef.current = false;
         setError(err instanceof Error ? err.message : String(err));
         setStatus('idle');
       }
     },
-    [status, error],
+    [status, error, applyToolBlocks, applyStreamSegments],
   );
 
   const cancel = useCallback(async () => {
@@ -514,11 +536,12 @@ export function useChat(): UseChatReturn {
       // interrupted=true (partial content, no suffix). Stay in subagent phase
       // if applicable; mark in-flight tool blocks as failed.
       // Don't set status='idle' here — let onDone handle finalization to
-      // avoid double-committing segments.
+      // avoid double-committing segments. interruptState is confirmSubagents
+      // here and from onState; onDone must not reset it to idle (P1-34).
       if (status === 'confirming_subagents') {
         setInterruptState('confirmSubagents');
         setInterrupted(true);
-        setToolBlocks((prev) =>
+        applyToolBlocks((prev) =>
           prev.map((block) =>
             block.status === 'generating' || block.status === 'running'
               ? {
@@ -537,7 +560,8 @@ export function useChat(): UseChatReturn {
       if (status === 'cancelled') {
         setInterruptState('idle');
         setInterrupted(true);
-        setToolBlocks((prev) =>
+        isSendingRef.current = false;
+        applyToolBlocks((prev) =>
           prev.map((block) =>
             block.status === 'generating' || block.status === 'running'
               ? {
@@ -559,7 +583,7 @@ export function useChat(): UseChatReturn {
     } catch {
       // Ignore cancel errors
     }
-  }, []);
+  }, [applyToolBlocks]);
 
   const clearError = useCallback(() => {
     setError(null);
@@ -571,14 +595,14 @@ export function useChat(): UseChatReturn {
    */
   const replaceMessages = useCallback((next: Message[]) => {
     setMessages(next);
-    setToolBlocks([]);
-    setStreamSegments([]);
-    streamSegmentsRef.current = [];
+    applyToolBlocks([]);
+    applyStreamSegments([]);
     setStreamingContent('');
     setStreamingThinking('');
     setError(null);
     setInterrupted(false);
     setInterruptState('idle');
+    isSendingRef.current = false;
     setStatus('idle');
     setUsage(null);
     usageRef.current = null;
@@ -586,7 +610,7 @@ export function useChat(): UseChatReturn {
     setElapsedSeconds(0);
     accumulatedContentRef.current = '';
     accumulatedThinkingRef.current = '';
-  }, []);
+  }, [applyToolBlocks, applyStreamSegments]);
 
   return {
     messages,

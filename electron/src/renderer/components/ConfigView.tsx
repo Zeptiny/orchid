@@ -8,6 +8,7 @@ import { TierModelsTab } from './Preferences/TierModelsTab';
 import { LeftSidebar } from './LeftSidebar';
 import { useSession } from '../hooks/useSession';
 import { Icon } from './Icon';
+import { withMapDeletionTombstones } from '../utils/config-tombstones';
 
 type TabId = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag';
 
@@ -91,7 +92,11 @@ export function ConfigView({ onClose }: ConfigViewProps) {
 
     try {
       if (!window.orchid?.config?.save) throw new Error('Configuration API is not available.');
-      await window.orchid.config.save({ updates: draft as Partial<Config> });
+      // Deep-merge on the main process preserves nested fields/aliases.
+      // Convert omitted provider/MCP aliases into null tombstones so deletes
+      // still apply under PATCH-style merge.
+      const updates = withMapDeletionTombstones(draft, originalConfig);
+      await window.orchid.config.save({ updates: updates as Partial<Config> });
       if (window.orchid?.config?.get) {
         const fresh = await window.orchid.config.get();
         setOriginalConfig(fresh);
@@ -103,7 +108,7 @@ export function ConfigView({ onClose }: ConfigViewProps) {
     } finally {
       setSaving(false);
     }
-  }, [draft, hasMCPChanges, isDirty]);
+  }, [draft, hasMCPChanges, isDirty, originalConfig]);
 
   const requestClose = useCallback(() => {
     if (isDirty) {

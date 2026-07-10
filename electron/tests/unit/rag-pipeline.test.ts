@@ -128,12 +128,18 @@ function createMockDb(_dbPath: string) {
               .filter((r) => r.file_path === filePath)
               .map((r) => ({ chunk_id: r.chunk_id }));
           }
+          // Metadata-only (search cache) or full row (legacy)
           if (
-            sql.includes(
-              'SELECT chunk_id, file_path, start_line, end_line, content',
-            )
+            sql.includes('SELECT chunk_id, file_path, start_line, end_line')
           ) {
             return getOrCreateTable('chunks');
+          }
+          // Top-k content fetch: SELECT chunk_id, content FROM chunks WHERE chunk_id IN (...)
+          if (sql.includes('SELECT chunk_id, content FROM chunks')) {
+            const idSet = new Set(params as number[]);
+            return getOrCreateTable('chunks')
+              .filter((r) => idSet.has(r.chunk_id as number))
+              .map((r) => ({ chunk_id: r.chunk_id, content: r.content }));
           }
           if (sql.includes('SELECT file_path, hash FROM files')) {
             return getOrCreateTable('files');

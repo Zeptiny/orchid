@@ -54,6 +54,10 @@ export function InputArea({
   personalityNames = [],
 }: InputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /** Blocks rapid double-Enter before parent status re-renders to streaming. */
+  const isSendingRef = useRef(false);
+  /** Tracks pending requestAnimationFrame so we can cancel on unmount. */
+  const rafRef = useRef<number | null>(null);
   const [input, setInput] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [subPicker, setSubPicker] = useState<SubPicker>(null);
@@ -155,7 +159,9 @@ export function InputArea({
     setInput('');
     setSubPicker(null);
     setSelectedIndex(0);
-    requestAnimationFrame(() => {
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
       if (textareaRef.current) {
         textareaRef.current.style.height = '34px';
       }
@@ -255,6 +261,7 @@ export function InputArea({
 
   useEffect(() => {
     if (status === 'idle') {
+      isSendingRef.current = false;
       textareaRef.current?.focus();
     }
   }, [status]);
@@ -262,6 +269,15 @@ export function InputArea({
   useEffect(() => {
     resizeTextarea();
   }, [input, resizeTextarea]);
+
+  // Cancel pending rAF on unmount
+  useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (status !== 'streaming') return;
@@ -278,11 +294,19 @@ export function InputArea({
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim();
-    if (!trimmed || status === 'streaming') return;
+    // status and isSendingRef both guard: status can lag one frame behind Enter.
+    if (!trimmed || status === 'streaming' || isSendingRef.current) return;
+    isSendingRef.current = true;
     setInput('');
     setSubPicker(null);
-    await onSend(trimmed);
-    requestAnimationFrame(() => {
+    try {
+      await onSend(trimmed);
+    } catch {
+      isSendingRef.current = false;
+    }
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
       if (textareaRef.current) {
         textareaRef.current.style.height = '34px';
       }
@@ -477,9 +501,10 @@ export function InputArea({
               }
               void handleSend();
             }}
-            disabled={!input.trim() && !subPicker}
+            disabled={isStreaming || (!input.trim() && !subPicker)}
             title={showMenu ? 'Run command' : 'Send'}
             type="button"
+            aria-disabled={isStreaming || undefined}
           >
             {showMenu ? 'Run' : 'Send'}
           </button>

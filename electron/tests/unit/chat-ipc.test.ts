@@ -317,36 +317,171 @@ describe('chat IPC', () => {
     });
   });
 
-  it('forwards classified error title and kind on stream failure', async () => {
-    mocks.streamChat.mockImplementationOnce(async function* () {
-      yield {
+  it.each([
+    {
+      title: 'Authentication Failed',
+      detail: 'Invalid API key for provider "default"',
+      kind: 'auth',
+    },
+    {
+      title: 'Rate Limited',
+      detail: 'HTTP 429: rate limit exceeded, try again later',
+      kind: 'rate-limit',
+    },
+    {
+      title: 'Stream Error',
+      detail: 'Connection timed out while streaming response',
+      kind: 'stream',
+    },
+    {
+      title: 'Provider Error',
+      detail: 'Model returned an unexpected response payload',
+      kind: 'generic',
+    },
+  ] as const)(
+    'forwards classified error title and kind=$kind on stream failure',
+    async ({ title, detail, kind }) => {
+      mocks.streamChat.mockImplementationOnce(async function* () {
+        yield {
+          type: 'error',
+          title,
+          detail,
+        };
+      });
+
+      const send = vi.fn();
+      const webContents = { id: 45, send };
+      const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+      expect(chatSend).toBeDefined();
+
+      await chatSend!({ sender: webContents }, { message: 'Hello' });
+
+      const deadline = Date.now() + 1000;
+      while (Date.now() < deadline) {
+        const errors = channelEvents(send, IPC_CHANNELS.CHAT_ERROR);
+        if (errors.length > 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+
+      const errors = channelEvents(send, IPC_CHANNELS.CHAT_ERROR);
+      expect(errors.length).toBeGreaterThanOrEqual(1);
+      expect(errors[0][1]).toMatchObject({
         type: 'error',
-        title: 'Authentication Failed',
-        detail: 'Invalid API key for provider "default"',
-      };
+        title,
+        kind,
+        error: detail,
+      });
+    },
+  );
+  it('forceAbortChat stops further CHAT_CHUNK emission (session switch)', async () => {
+    // Stream yields one chunk, pauses (session switch window), then more content.
+    let releaseSecondHalf: (() => void) | undefined;
+    const secondHalf = new Promise<void>((resolve) => {
+      releaseSecondHalf = resolve;
+    });
+
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'Session-A-chunk' };
+      await secondHalf;
+      yield { type: 'content', text: 'LEAKED-AFTER-ABORT' };
+      yield { type: 'finish', finishReason: 'stop' };
     });
 
     const send = vi.fn();
-    const webContents = { id: 45, send };
+    const webContents = { id: 47, send };
     const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
     expect(chatSend).toBeDefined();
 
-    await chatSend!({ sender: webContents }, { message: 'Hello' });
+    const sendPromise = chatSend!({ sender: webContents }, { message: 'stream me' });
 
+    // Wait until the first chunk has been forwarded
     const deadline = Date.now() + 1000;
     while (Date.now() < deadline) {
-      const errors = channelEvents(send, IPC_CHANNELS.CHAT_ERROR);
-      if (errors.length > 0) break;
+      const chunks = channelEvents(send, IPC_CHANNELS.CHAT_CHUNK);
+      if (chunks.length > 0) break;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
-    const errors = channelEvents(send, IPC_CHANNELS.CHAT_ERROR);
-    expect(errors.length).toBeGreaterThanOrEqual(1);
-    expect(errors[0][1]).toMatchObject({
-      type: 'error',
-      title: 'Authentication Failed',
-      kind: 'auth',
-      error: 'Invalid API key for provider "default"',
+    const chunksBefore = channelEvents(send, IPC_CHANNELS.CHAT_CHUNK);
+    expect(chunksBefore.length).toBeGreaterThanOrEqual(1);
+    expect(
+      chunksBefore.some(([, p]) => (p as { data: string }).data.includes('Session-A-chunk')),
+    ).toBe(true);
+
+    // Simulate session:load / session:create abort path
+    chatIpc.forceAbortChat(String(webContents.id));
+
+    // Let the stream continue after abort — stale content must not be forwarded
+    releaseSecondHalf!();
+    await sendPromise;
+    // Allow any deferred microtasks / actor stop notifications
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const allChunks = channelEvents(send, IPC_CHANNELS.CHAT_CHUNK);
+    const leaked = allChunks.filter(([, p]) =>
+      (p as { data: string }).data.includes('LEAKED-AFTER-ABORT'),
+    );
+    expect(leaked).toHaveLength(0);
+
+    // forceAbort is silent — must not emit CHAT_DONE for the aborted turn
+    const donesAfterAbort = doneEvents(send);
+    expect(donesAfterAbort).toHaveLength(0);
+  });
+
+  it('forceAbortChat prevents old agent chunks from interleaving with a new turn', async () => {
+    let releaseOldStream: (() => void) | undefined;
+    const oldStreamGate = new Promise<void>((resolve) => {
+      releaseOldStream = resolve;
     });
+
+    mocks.streamChat
+      .mockImplementationOnce(async function* () {
+        yield { type: 'content', text: 'OLD-TURN' };
+        await oldStreamGate;
+        yield { type: 'content', text: 'OLD-STALE-TAIL' };
+        yield { type: 'finish', finishReason: 'stop' };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: 'content', text: 'NEW-TURN' };
+        yield { type: 'finish', finishReason: 'stop' };
+      });
+
+    const send = vi.fn();
+    const webContents = { id: 48, send };
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+    expect(chatSend).toBeDefined();
+
+    const oldSendPromise = chatSend!({ sender: webContents }, { message: 'old' });
+
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline) {
+      if (
+        channelEvents(send, IPC_CHANNELS.CHAT_CHUNK).some(([, p]) =>
+          (p as { data: string }).data.includes('OLD-TURN'),
+        )
+      ) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    // Session switch aborts old agent, then a new turn starts on the same window
+    chatIpc.forceAbortChat(String(webContents.id));
+    await chatSend!({ sender: webContents }, { message: 'new' });
+    await waitForDoneCount(send, 1);
+
+    // Old stream resumes after the new turn — must not emit stale chunks
+    releaseOldStream!();
+    await oldSendPromise;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const chunkTexts = channelEvents(send, IPC_CHANNELS.CHAT_CHUNK).map(
+      ([, p]) => (p as { data: string }).data,
+    );
+    expect(chunkTexts.some((t) => t.includes('OLD-STALE-TAIL'))).toBe(false);
+    expect(chunkTexts.some((t) => t.includes('NEW-TURN'))).toBe(true);
+
+    const responses = doneEvents(send).map(([, p]) => (p as { response: string }).response);
+    expect(responses).toEqual(['NEW-TURN']);
   });
 });

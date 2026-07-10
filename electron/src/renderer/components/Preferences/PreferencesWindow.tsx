@@ -13,12 +13,13 @@
  * Classified as modal overlay (z-index layer).
  */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { Config } from '../../../main/config/schema';
+import type { Config } from '../../../shared/types/ipc-boundary';
 import { ProvidersTab } from './ProvidersTab';
 import { MCPServersTab } from './MCPServersTab';
 import { TierModelsTab } from './TierModelsTab';
 import { RAGTab } from './RAGTab';
 import { GeneralTab } from './GeneralTab';
+import { withMapDeletionTombstones } from '../../utils/config-tombstones';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -212,7 +213,11 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
 
     try {
       if (window.orchid?.config?.save) {
-        await window.orchid.config.save({ updates: draft as Partial<Config> });
+        // Deep-merge on the main process preserves nested fields/aliases.
+        // Convert omitted provider/MCP aliases into null tombstones so deletes
+        // still apply under PATCH-style merge.
+        const updates = withMapDeletionTombstones(draft, originalConfig);
+        await window.orchid.config.save({ updates: updates as Partial<Config> });
       }
       // Refresh original to reflect saved state
       if (window.orchid?.config?.get) {
@@ -230,7 +235,7 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
       setError('Failed to save configuration. Please try again.');
       setSaving(false);
     }
-  }, [isDirty, draft, hasMCPChanges]);
+  }, [isDirty, draft, hasMCPChanges, originalConfig]);
 
   // ── Close handling ───────────────────────────────────────────────────────
 

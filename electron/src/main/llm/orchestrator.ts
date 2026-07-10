@@ -14,19 +14,20 @@
  * - Composes middleware from U8 (retry, throttle, provider-quirks)
  * - Token usage tracking across all steps
  *
- * AI SDK stream event flow:
+ * AI SDK stream event flow (fullStream):
  * - `step-start` → new step begins
  * - `reasoning` → model is thinking (yields as "thinking")
  * - `text-delta` → model is producing text (yields as "content")
- * - `tool-call` → model wants to call a tool (AI SDK executes via our custom execute fn)
+ * - `tool-input-available` / `tool-call` → model wants to call a tool
+ * - `tool-output-available` / `tool-result` → tool finished
  * - `step-finish` → step completed (tool executed, or text finished)
  * - `finish` → entire stream completed
  * - `error` → error occurred
  *
- * Note: AI SDK does NOT yield `tool-result` in the stream. When a tool is called,
- * AI SDK executes it (via our `tool.execute` function) and the result is fed back
- * to the model internally. We track tool results via the `onStepFinish` callback
- * and by monitoring what our `tool.execute` functions return.
+ * Tool events: prefer fullStream parts as the single source of truth. onStepFinish
+ * still captures toolCalls/toolResults into pending arrays for the textStream
+ * fallback path (when fullStream is unavailable). Drain of pending is deduped
+ * by toolCallId so the same call/result is never yielded twice.
  */
 import type { AssistantContent, ModelMessage, Tool } from 'ai';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
@@ -86,6 +87,47 @@ export interface StreamChatParams {
   abortSignal?: AbortSignal;
   /** The AI SDK model instance to use for streaming. */
   modelInstance: LanguageModelV4;
+}
+
+/** Pending tool call captured from onStepFinish (textStream fallback / safety net). */
+export type PendingToolCall = {
+  toolCallId: string;
+  toolName: string;
+  args: string;
+};
+
+/** Pending tool result captured from onStepFinish (textStream fallback / safety net). */
+export type PendingToolResult = {
+  toolCallId: string;
+  content: string;
+  isError: boolean;
+};
+
+/**
+ * Drain pending tool events from onStepFinish, skipping any toolCallId already
+ * emitted from fullStream. Prevents double-yield when both sources report the
+ * same tool call/result (P1-20).
+ *
+ * Mutates `pending*` (shift) and `seen*` (add). Exported for unit tests.
+ */
+export function* drainPendingToolEvents(
+  pendingToolCalls: PendingToolCall[],
+  pendingToolResults: PendingToolResult[],
+  seenToolCallIds: Set<string>,
+  seenToolResultIds: Set<string>,
+): Generator<Extract<StreamEvent, { type: 'tool_call' | 'tool_result' }>> {
+  while (pendingToolCalls.length > 0) {
+    const tc = pendingToolCalls.shift()!;
+    if (seenToolCallIds.has(tc.toolCallId)) continue;
+    seenToolCallIds.add(tc.toolCallId);
+    yield { type: 'tool_call', ...tc };
+  }
+  while (pendingToolResults.length > 0) {
+    const tr = pendingToolResults.shift()!;
+    if (seenToolResultIds.has(tr.toolCallId)) continue;
+    seenToolResultIds.add(tr.toolCallId);
+    yield { type: 'tool_result', ...tr };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -229,8 +271,13 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   };
 
   // ── Track tool calls and results for yielding ──
-  const pendingToolCalls: Array<{ toolCallId: string; toolName: string; args: string }> = [];
-  const pendingToolResults: Array<{ toolCallId: string; content: string; isError: boolean }> = [];
+  // Pending arrays are filled by onStepFinish for the textStream fallback path
+  // (and as a safety net if fullStream omits a tool event). fullStream yields
+  // tools directly; seen* sets prevent double-yield when both sources fire.
+  const pendingToolCalls: PendingToolCall[] = [];
+  const pendingToolResults: PendingToolResult[] = [];
+  const seenToolCallIds = new Set<string>();
+  const seenToolResultIds = new Set<string>();
 
   // ── Call streamText ──
   const result = streamText({
@@ -249,7 +296,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           cached_tokens: totalUsage.cached_tokens,
         };
       }
-      // Capture tool calls for yielding to the UI
+      // Capture tool calls for textStream fallback / safety net (deduped on drain)
       if (toolCalls) {
         for (const tc of toolCalls as Array<{ toolCallId: string; toolName: string; input?: unknown }>) {
           pendingToolCalls.push({
@@ -259,7 +306,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           });
         }
       }
-      // Capture tool results for yielding to the UI
+      // Capture tool results for textStream fallback / safety net (deduped on drain)
       if (toolResults) {
         for (const tr of toolResults as Array<{
           toolCallId: string;
@@ -341,7 +388,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             const toolCallId = streamToolCallId(part);
             const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
             const args = stringifyToolInput(part.input ?? part.args);
-            if (toolCallId) {
+            if (toolCallId && !seenToolCallIds.has(toolCallId)) {
+              seenToolCallIds.add(toolCallId);
               yield { type: 'tool_call', toolCallId, toolName, args };
             }
             break;
@@ -354,7 +402,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             const toolCallId = streamToolCallId(part);
             const raw = part.output ?? part.result ?? '';
             const content = typeof raw === 'string' ? raw : stringifyToolInput(raw);
-            if (toolCallId) {
+            if (toolCallId && !seenToolResultIds.has(toolCallId)) {
+              seenToolResultIds.add(toolCallId);
               yield {
                 type: 'tool_result',
                 toolCallId,
@@ -375,7 +424,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
                 : typeof part.error === 'string'
                   ? part.error
                   : stringifyToolInput(part.errorText ?? part.error ?? 'Tool failed');
-            if (toolCallId) {
+            if (toolCallId && !seenToolResultIds.has(toolCallId)) {
+              seenToolResultIds.add(toolCallId);
               yield { type: 'tool_result', toolCallId, content, isError: true };
             }
             break;
@@ -390,13 +440,19 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             // Surface as a failed tool block when args never became valid
             if (toolCallId) {
               const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
-              yield {
-                type: 'tool_call',
-                toolCallId,
-                toolName,
-                args: stringifyToolInput(part.input),
-              };
-              yield { type: 'tool_result', toolCallId, content, isError: true };
+              if (!seenToolCallIds.has(toolCallId)) {
+                seenToolCallIds.add(toolCallId);
+                yield {
+                  type: 'tool_call',
+                  toolCallId,
+                  toolName,
+                  args: stringifyToolInput(part.input),
+                };
+              }
+              if (!seenToolResultIds.has(toolCallId)) {
+                seenToolResultIds.add(toolCallId);
+                yield { type: 'tool_result', toolCallId, content, isError: true };
+              }
             }
             break;
           }
@@ -425,17 +481,13 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             break;
         }
 
-        // Yield any pending tool calls (from onStepFinish callback)
-        while (pendingToolCalls.length > 0) {
-          const tc = pendingToolCalls.shift()!;
-          yield { type: 'tool_call', ...tc };
-        }
-
-        // Yield any pending tool results
-        while (pendingToolResults.length > 0) {
-          const tr = pendingToolResults.shift()!;
-          yield { type: 'tool_result', ...tr };
-        }
+        // Drain onStepFinish pending — skips IDs already yielded from fullStream
+        yield* drainPendingToolEvents(
+          pendingToolCalls,
+          pendingToolResults,
+          seenToolCallIds,
+          seenToolResultIds,
+        );
       }
     } catch (fullStreamErr) {
       // If fullStream fails (e.g. provider doesn't support it),
@@ -447,17 +499,13 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             yield { type: 'content', text: textDelta };
           }
 
-          // Yield any pending tool calls
-          while (pendingToolCalls.length > 0) {
-            const tc = pendingToolCalls.shift()!;
-            yield { type: 'tool_call', ...tc };
-          }
-
-          // Yield any pending tool results
-          while (pendingToolResults.length > 0) {
-            const tr = pendingToolResults.shift()!;
-            yield { type: 'tool_result', ...tr };
-          }
+          // textStream has no tool parts — onStepFinish pending is the source of truth
+          yield* drainPendingToolEvents(
+            pendingToolCalls,
+            pendingToolResults,
+            seenToolCallIds,
+            seenToolResultIds,
+          );
         }
       } else {
         throw fullStreamErr;
@@ -465,14 +513,13 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     }
 
     // Yield any remaining pending tool calls/results after stream ends
-    while (pendingToolCalls.length > 0) {
-      const tc = pendingToolCalls.shift()!;
-      yield { type: 'tool_call', ...tc };
-    }
-    while (pendingToolResults.length > 0) {
-      const tr = pendingToolResults.shift()!;
-      yield { type: 'tool_result', ...tr };
-    }
+    // (deduped — no-ops for IDs already emitted via fullStream)
+    yield* drainPendingToolEvents(
+      pendingToolCalls,
+      pendingToolResults,
+      seenToolCallIds,
+      seenToolResultIds,
+    );
 
     // Get the finish reason from the result
     const finishReason = await result.finishReason;

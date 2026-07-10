@@ -16,6 +16,14 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
+/** Keys that can pollute Object.prototype if used as property names. */
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/** Return true if the key is a prototype-pollution vector. */
+export function isUnsafeKey(key: string): boolean {
+  return UNSAFE_KEYS.has(key);
+}
+
 // ---------------------------------------------------------------------------
 // Deep merge
 // ---------------------------------------------------------------------------
@@ -27,6 +35,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  *   target-only keys are preserved).
  * - Arrays, scalars: source replaces target.
  * - `undefined` values in source are skipped.
+ * - `null` values in source delete the key (tombstone for PATCH-style removes).
  */
 export function deepMerge(
   target: Record<string, unknown>,
@@ -34,8 +43,13 @@ export function deepMerge(
 ): Record<string, unknown> {
   const result: Record<string, unknown> = { ...target };
   for (const key of Object.keys(source)) {
+    if (isUnsafeKey(key)) continue;
     const srcVal = source[key];
     if (srcVal === undefined) continue;
+    if (srcVal === null) {
+      delete result[key];
+      continue;
+    }
     const tgtVal = result[key];
     if (isPlainObject(tgtVal) && isPlainObject(srcVal)) {
       result[key] = deepMerge(tgtVal, srcVal);
@@ -64,6 +78,7 @@ export function deepMergeProviderDict(
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const alias of new Set([...Object.keys(home), ...Object.keys(project)])) {
+    if (isUnsafeKey(alias)) continue;
     if (!(alias in project)) {
       result[alias] = home[alias];
       continue;
@@ -97,6 +112,95 @@ export function deepMergeProviderDict(
 const DEEP_MERGE_KEYS = new Set(['mcp_servers', 'providers']);
 
 /**
+ * Top-level keys whose values are required objects (maps or nested configs).
+ * Null tombstones are blocked for these keys — allowing `providers: null` to
+ * delete the entire providers map would wipe all custom providers when zod
+ * defaults restore only the built-in default.
+ */
+const TOP_LEVEL_OBJECT_KEYS = new Set([
+  'providers',
+  'mcp_servers',
+  'rag',
+  'tier_models',
+]);
+
+/**
+ * Merge partial `updates` into a full config for `config:save`.
+ *
+ * Same nested semantics as {@link mergeLayers}:
+ * - `providers` / `mcp_servers`: per-alias merge via {@link deepMergeProviderDict}
+ *   (partial provider patches preserve other aliases and entry fields)
+ * - other nested plain objects (`rag`, `tier_models`, …): {@link deepMerge}
+ * - scalars / arrays: source replaces target
+ * - `null` values act as tombstones (delete the key) so clients can remove
+ *   provider/MCP aliases under PATCH-style deep merge
+ *
+ * This avoids the shallow `{ ...current, ...updates }` bug where a partial
+ * `providers` or `rag` object replaced the entire nested map and zod defaults
+ * wiped sibling fields.
+ */
+export function mergeConfigUpdates(
+  current: Record<string, unknown>,
+  updates: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...current };
+
+  for (const key of Object.keys(updates)) {
+    if (isUnsafeKey(key)) continue;
+    const srcVal = updates[key];
+    if (srcVal === undefined) continue;
+
+    // Tombstone: explicit null removes a top-level key.
+    // Block deletion for required object keys (providers, mcp_servers, rag,
+    // tier_models) to prevent wiping the entire map — alias-level nulls
+    // inside those maps are handled separately below.
+    if (srcVal === null) {
+      if (TOP_LEVEL_OBJECT_KEYS.has(key)) continue;
+      delete result[key];
+      continue;
+    }
+
+    const tgtVal = result[key];
+
+    if (DEEP_MERGE_KEYS.has(key) && isPlainObject(tgtVal) && isPlainObject(srcVal)) {
+      // Per-alias merge, then apply null tombstones for deleted aliases
+      const merged = deepMergeProviderDict(
+        tgtVal as Record<string, unknown>,
+        // Strip nulls before provider merge (non-dict values would replace)
+        stripNullEntries(srcVal as Record<string, unknown>),
+      );
+      for (const [alias, val] of Object.entries(srcVal as Record<string, unknown>)) {
+        if (val === null) {
+          delete merged[alias];
+        }
+      }
+      result[key] = merged;
+    } else if (isPlainObject(tgtVal) && isPlainObject(srcVal)) {
+      result[key] = deepMerge(
+        tgtVal as Record<string, unknown>,
+        srcVal as Record<string, unknown>,
+      );
+    } else {
+      result[key] = srcVal;
+    }
+  }
+
+  return result;
+}
+
+/** Drop null-valued entries so they are not treated as provider dicts. */
+function stripNullEntries(
+  obj: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (isUnsafeKey(k)) continue;
+    if (v !== null) out[k] = v;
+  }
+  return out;
+}
+
+/**
  * Merge defaults, home config, and project config into a single flat dict.
  *
  * For nested dicts (rag, tier_models, etc.) the merge is recursive so that
@@ -116,6 +220,7 @@ export function mergeLayers(
 
   // Apply home overrides
   for (const key of Object.keys(home)) {
+    if (isUnsafeKey(key)) continue;
     if (!(key in merged)) continue;
     const homeVal = home[key];
     const mergedVal = merged[key];
@@ -139,6 +244,7 @@ export function mergeLayers(
 
   // Apply project overrides (same logic)
   for (const key of Object.keys(project)) {
+    if (isUnsafeKey(key)) continue;
     if (!(key in merged)) continue;
     const projVal = project[key];
     const mergedVal = merged[key];

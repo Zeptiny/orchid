@@ -10,48 +10,31 @@
 
 **Review team (13 reviewers, all succeeded):**
 - correctness (always) -- xstate machines, LLM orchestrator, RAG upsert, session, keychain, config loader
-- testing (always) -- 40+ test files, coverage gaps for orchestrator, xstate, providers-factory
-- maintainability (always) -- 92k line migration, god files, duplication
+- testing (always) -- 40+ test files, coverage gaps for xstate and non-filesystem tools
+- maintainability (always) -- 92k line migration, god files
 - project-standards (always) -- CLAUDE.md conventions, section headers
-- performance -- RAG store/indexer/embedder, AST indexer, ChatStream rerenders
-- api-contract -- IPC boundary types, ChainStatus/TodoStatus breaking, config shallow merge
+- performance -- RAG indexer/embedder, AST indexer, ChatStream scroll thrashing
+- api-contract -- IPC boundary types, ChainStatus/TodoStatus breaking
 - reliability -- XState interrupt/session machines, retry/throttle middleware, MCP timeouts, background-store
 - security -- keychain fallback, sessionId path traversal, MCP transport arbitrary exec, log perms
-- adversarial -- >=50 lines + auth/data-mutation/external API execution, keychain race, RAG poisoning, disk growth
-- kieran-typescript -- Record<string,unknown> casts, any casts, factory duplication, Usage inline redefinition
-- julik-frontend-races -- toolBlocksRef stale, double-send, interrupt prompt race, live polling overlap, rAF leak
+- adversarial -- >=50 lines + auth/data-mutation/external API execution, RAG poisoning, disk growth
+- kieran-typescript -- Record<string,unknown> casts, any casts, Usage inline redefinition
+- julik-frontend-races -- rAF leak
 - ce-agent-native-reviewer -- context injection broken, session/MCP/AST orphan commands, Decision enum anti-pattern
 - ce-learnings-researcher -- prior solutions for MCP CancelledError, RAG incremental wipe, SSRF
 
-**Raw findings:** 86 -> merged 86 -> 83 actionable, 3 suppressed (<75), 0 pre-existing
+**Raw findings:** 86 -> merged 86 -> 83 actionable, 3 suppressed (<75), 0 pre-existing  
+**Open after fixes (2026-07-09):** 64 actionable remaining (19 fixed: P0-1, P1-2/3/7/9/14/16–20/29/32–37, P2-7)
 
 ---
 
-## P0 -- Critical (4)
+## P0 -- Critical (3)
 
 | # | File | Issue | Reviewer | Confidence | Route |
 |---|------|-------|----------|------------|-------|
-| 1 | `electron/src/main/llm/orchestrator.ts:108` | Core orchestrator streamChat has zero direct tests | testing | 100 | `manual -> human` |
 | 2 | `electron/src/main/config/keychain.ts:222` | Keychain encrypted flag flip leaks ciphertext as plaintext API key | adversarial | 75 | `advisory -> human` |
 | 3 | `electron/src/main/session/storage.ts:138` | Session ID path traversal allows arbitrary file read/write via IPC | adversarial | 75 | `advisory -> human` |
 | 4 | `electron/src/main/mcp/transport.ts:40` | Arbitrary code execution via malicious project .orchid.json MCP config | security | 50 | `gated_auto -> human` |
-
-### P0-1: Core orchestrator streamChat has zero direct tests
-
-- **File:** `electron/src/main/llm/orchestrator.ts:108`
-- **Reviewer:** testing
-- **Severity:** P0 (Critical) | **Confidence:** 100 | **Route:** `manual -> human`
-- **Requires verification:** true
-
-**Why it matters:** streamChat is the core agentic loop that drives all LLM interactions. It handles 10+ stream event types, tool call lifecycle, error classification, and fallback from fullStream to textStream. A regression here breaks every chat turn, yet no test exercises it. The existing llm-orchestrator.test.ts only tests helper functions (history, dispatch, cleanup) and never imports streamChat.
-
-**Evidence:**
-- `electron/src/main/llm/orchestrator.ts:108 -- export async function* streamChat(params: StreamChatParams)`
-- `electron/tests/unit/llm-orchestrator.test.ts:1-39 -- imports only toApiMessages, executeToolCall, maybeOffloadToolOutput, buildToolMap, cleanup utils; never imports streamChat`
-- `electron/tests/unit/llm-orchestrator.test.ts:28-38 -- all imports are helper modules, zero coverage of the 647-line orchestrator main function`
-
-**Suggested fix:** Add integration tests for streamChat that mock AI SDK's streamText with fullStream events covering: text-delta, tool-input-start/delta/available, tool-output-available/error, reasoning-delta, error, and the textStream fallback path. Verify usage tracking and finish reason handling.
-
 
 ### P0-2: Keychain encrypted flag flip leaks ciphertext as plaintext API key
 
@@ -106,30 +89,20 @@
 
 ---
 
-## P1 -- High (37)
+## P1 -- High (20)
 
 | # | File | Issue | Reviewer | Confidence | Route |
 |---|------|-------|----------|------------|-------|
 | 1 | `electron/src/main/agents/xstate/agent-machine.ts:484` | agent-machine toolExecuting state unreachable dead code | maintainability | 100 | `safe_auto -> review-fixer` |
-| 2 | `electron/src/main/ipc/chat.ts:113` | Message factory functions duplicated across 3 files | kieran-typescript | 100 | `manual -> review-fixer` |
-| 3 | `electron/src/main/ipc/chat.ts:113` | Message factory duplication across 3 modules | maintainability | 100 | `safe_auto -> review-fixer` |
 | 4 | `electron/src/main/llm/orchestrator.ts:254` | onStepFinish casts toolCalls/toolResults with unsafe assertions | kieran-typescript | 100 | `manual -> review-fixer` |
 | 5 | `electron/src/main/llm/orchestrator.ts:300` | fullStream chunk cast to Record<string, unknown> bypasses AI SDK types | kieran-typescript | 100 | `manual -> review-fixer` |
 | 6 | `electron/src/main/llm/orchestrator.ts:518` | toolMap uses explicit any then unsafe cast to Record<string, Tool> | kieran-typescript | 100 | `safe_auto -> review-fixer` |
-| 7 | `electron/src/main/llm/providers-factory.ts:1` | Provider factory createProviderModel untested | testing | 100 | `manual -> human` |
 | 8 | `electron/src/main/llm/providers-factory.ts:19` | providers-factory supports only OpenAI despite 6 known providers | maintainability | 100 | `manual -> downstream-resolver` |
-| 9 | `electron/src/main/rag/store.ts:615` | RAG search loads entire vector table into memory without pagination | performance | 100 | `manual -> review-fixer` |
 | 10 | `electron/src/main/tools/process/background-store.ts:46` | Synchronous require('node-pty') crashes module if native dep missing | reliability | 100 | `safe_auto -> review-fixer` |
 | 11 | `electron/src/shared/types/chain.ts:26` | ChainStatus breaking: RUNNING→ACTIVE rename, FAILED removed | api-contract | 100 | `gated_auto -> human` |
 | 12 | `electron/src/shared/types/todo.ts:18` | TodoStatus narrowed from 7 to 3 values | api-contract | 100 | `gated_auto -> human` |
 | 13 | `electron/src/main/agents/xstate/agent-machine.ts:484` | XState toolExecuting state never exercised | testing | 75 | `manual -> human` |
-| 14 | `electron/src/main/config/keychain.ts:183` | Race: Concurrent keychain writes lose API keys (read-modify-write without lock) | adversarial | 75 | `advisory -> human` |
 | 15 | `electron/src/main/ipc/chat.ts:1` | chat.ts god file mixes 6 concerns in 1038 lines | maintainability | 75 | `manual -> downstream-resolver` |
-| 16 | `electron/src/main/ipc/chat.ts:94` | Race: forceAbortChat microtask window leaks chunks across sessions | adversarial | 75 | `advisory -> human` |
-| 17 | `electron/src/main/ipc/chat.ts:193` | Chat IPC error classification branches untested | testing | 75 | `safe_auto -> review-fixer` |
-| 18 | `electron/src/main/ipc/config.ts:113` | Config save shallow merge loses nested provider settings | adversarial | 75 | `advisory -> human` |
-| 19 | `electron/src/main/ipc/config.ts:113` | Config save shallow merge drops nested rag fields | api-contract | 75 | `safe_auto -> review-fixer` |
-| 20 | `electron/src/main/llm/orchestrator.ts:428` | Double-yield of tool calls/results from stream + onStepFinish | correctness | 75 | `safe_auto -> review-fixer` |
 | 21 | `electron/src/main/llm/tool-dispatch.ts:158` | Cascade: Tool output offloading creates unbounded disk growth via LLM loop | adversarial | 75 | `advisory -> human` |
 | 22 | `electron/src/main/mcp/manager.ts:211` | MCP callTool and readResource have no timeout | reliability | 75 | `safe_auto -> review-fixer` |
 | 23 | `electron/src/main/mcp/manager.ts:428` | MCP listTools/listResources have no timeout after connect | reliability | 75 | `safe_auto -> review-fixer` |
@@ -138,15 +111,8 @@
 | 26 | `electron/src/main/rag/indexer.ts:159` | Synchronous fs operations inside async indexing loops block main process | performance | 75 | `safe_auto -> review-fixer` |
 | 27 | `electron/src/main/rag/indexer.ts:372` | Cascade: RAG file content poisoning injects instructions into LLM context | adversarial | 75 | `advisory -> human` |
 | 28 | `electron/src/main/rag/store.ts:388` | RAG upsertFile loses all other files' vectors when vectors file is missing | correctness | 75 | `safe_auto -> review-fixer` |
-| 29 | `electron/src/main/session/manager.ts:202` | SessionManager.syncActiveChain untested | testing | 75 | `safe_auto -> review-fixer` |
 | 30 | `electron/src/main/session/storage.ts:138` | Path traversal via sessionId in session storage | security | 75 | `safe_auto -> review-fixer` |
 | 31 | `electron/src/main/tools/search/grep.ts:1` | Tool handlers beyond filesystem lack behavior tests | testing | 75 | `manual -> human` |
-| 32 | `electron/src/renderer/components/ChatStream.tsx:109` | ChatStream recomputes full message list per token without virtualization | performance | 75 | `manual -> review-fixer` |
-| 33 | `electron/src/renderer/hooks/useChat.ts:267` | Stale toolBlocksRef at commit drops final tool from history | julik-frontend-races | 75 | `safe_auto -> review-fixer` |
-| 34 | `electron/src/renderer/hooks/useChat.ts:328` | Interrupt confirmSubagents prompt lost in onDone vs onState race | julik-frontend-races | 75 | `manual -> review-fixer` |
-| 35 | `electron/src/renderer/hooks/useChat.ts:440` | Double-send race via stale status closure | julik-frontend-races | 75 | `safe_auto -> review-fixer` |
-| 36 | `electron/src/renderer/hooks/useLiveCommandOutput.ts:102` | Overlapping async polls cause out-of-order live command output | julik-frontend-races | 75 | `safe_auto -> review-fixer` |
-| 37 | `electron/tests/integration/architecture-validation.test.ts:1` | Architecture validation tests don't test app code | testing | 75 | `manual -> human` |
 
 ### P1-1: agent-machine toolExecuting state unreachable dead code
 
@@ -163,43 +129,6 @@
 - `electron/src/main/agents/xstate/agent-machine.ts:260-283 -- toolExecActor defined but only used by dead state`
 
 **Suggested fix:** Remove toolExecuting state and toolExecActor if AI SDK handles execution internally, or document why it exists and add transition from streaming on TOOL_CALL if it should be used. Currently it is never targeted.
-
-
-### P1-2: Message factory functions duplicated across 3 files
-
-- **File:** `electron/src/main/ipc/chat.ts:113`
-- **Reviewer:** kieran-typescript
-- **Severity:** P1 (High) | **Confidence:** 100 | **Route:** `manual -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** makeToolCallMessage, makeToolResultMessage, makeAssistantMessage are copy-pasted in chat.ts, manager.ts, and tool-dispatch.ts (plus toolBlockToMessages in useChat.ts). A schema change to Message (e.g., adding required field) requires 4 coordinated edits; missing one causes runtime type mismatches and broken session persistence.
-
-**Evidence:**
-- `chat.ts:113 -- function makeToolCallMessage`
-- `chat.ts:139 -- function makeToolResultMessage`
-- `chat.ts:161 -- function makeAssistantMessage`
-- `manager.ts:623 -- function makeAssistantMessage (duplicate)`
-- `manager.ts:639 -- function makeToolCallMessage (duplicate)`
-- `tool-dispatch.ts:309 -- function makeToolResultMessage (duplicate)`
-- `useChat.ts:716 -- function toolBlockToMessages (similar factory)`
-
-**Suggested fix:** Extract factories to electron/src/shared/types/message.ts or new electron/src/main/llm/message-factories.ts and import everywhere. Add unit tests for shared factories.
-
-
-### P1-3: Message factory duplication across 3 modules
-
-- **File:** `electron/src/main/ipc/chat.ts:113`
-- **Reviewer:** maintainability
-- **Severity:** P1 (High) | **Confidence:** 100 | **Route:** `safe_auto -> review-fixer`
-
-**Why it matters:** Identical message construction (tool call, tool result, assistant, thinking) is copy-pasted in chat.ts, agents/manager.ts, and subagent-runner via orchestrator. A fix to error prefixing or timestamp handling must be applied in 3 places, and drift has already started (chat.ts prefixes Error: conditionally, manager.ts does similar but with different null checks).
-
-**Evidence:**
-- `electron/src/main/ipc/chat.ts:113-191 -- makeToolCallMessage, makeToolResultMessage, makeAssistantMessage, makeThinkingMessage`
-- `electron/src/main/agents/manager.ts:607-687 -- makeUserMessage, makeAssistantMessage, makeToolCallMessage, makeToolResultMessage duplicated with same shape`
-- `electron/src/main/agents/manager.ts:639-663 -- second copy of makeToolCallMessage with identical crypto.randomUUID and MessageType.TOOL_CALL`
-
-**Suggested fix:** Extract shared factories to electron/src/main/llm/message-factories.ts and import in chat.ts and manager.ts. Keep single source for makeToolCallMessage, makeToolResultMessage, makeAssistantMessage, makeThinkingMessage.
 
 
 ### P1-4: onStepFinish casts toolCalls/toolResults with unsafe assertions
@@ -251,23 +180,6 @@
 **Suggested fix:** Type toolMap as Record<string, Tool> directly. If TS2589 occurs, extract a non-generic ToolLoose type or use a builder function with explicit return type instead of any.
 
 
-### P1-7: Provider factory createProviderModel untested
-
-- **File:** `electron/src/main/llm/providers-factory.ts:1`
-- **Reviewer:** testing
-- **Severity:** P1 (High) | **Confidence:** 100 | **Route:** `manual -> human`
-- **Requires verification:** true
-
-**Why it matters:** createProviderModel instantiates AI SDK provider models from resolved refs. It handles provider-specific instantiation (OpenAI, Anthropic, Google, etc.) and is called on every chat turn. A regression here would break all LLM calls, yet it has zero tests. The file doesn't appear in any test file.
-
-**Evidence:**
-- `electron/src/main/llm/providers-factory.ts -- entire file has no corresponding test file`
-- `electron/tests/unit/llm-middleware.test.ts -- tests resolveModelRef but not createProviderModel`
-- `glob electron/tests/**/*.test.ts -- no file matches *provider*factory* or *providers-factory*`
-
-**Suggested fix:** Add unit tests for createProviderModel covering: OpenAI direct, OpenAI-compatible with base_url, Anthropic, Google, and error handling for unknown providers. Mock the AI SDK provider factories.
-
-
 ### P1-8: providers-factory supports only OpenAI despite 6 known providers
 
 - **File:** `electron/src/main/llm/providers-factory.ts:19`
@@ -283,23 +195,6 @@
 - `electron/src/main/llm/providers-factory.ts:30-36 -- falls through to createOpenAI for any non-compatible provider, even anthropic`
 
 **Suggested fix:** Extend createProviderModel to handle anthropic, google, groq, xai via their AI SDK packages, or remove them from KNOWN_PROVIDERS and make factory explicitly openai-only with clear error for unsupported providers.
-
-
-### P1-9: RAG search loads entire vector table into memory without pagination
-
-- **File:** `electron/src/main/rag/store.ts:615`
-- **Reviewer:** performance
-- **Severity:** P1 (High) | **Confidence:** 100 | **Route:** `manual -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** Every RAG search loads all chunk vectors and all chunk rows into JS heap via _loadSearchData, then scores every vector with cosine similarity in the main process. On a 50k-chunk project this is ~150MB of JS numbers plus chunk text, and 50k*384 multiplications per query, blocking the Electron main process and risking OOM. The cache has no eviction, so multiple projects compound the leak.
-
-**Evidence:**
-- `store.ts:826-842 -- _loadSearchData loads all vectors via _loadVectorsArray and all chunks via _getAllChunks, caches entire result in static _searchCache without eviction`
-- `store.ts:615-684 -- search() calls _loadSearchData then cosineSimilarity over all vectors, no LIMIT before scoring`
-- `store.ts:854-880 -- cosineSimilarity loops O(N*D) in JS main thread: for (const vec of vectors) { for (let d=0; d<dim; d++) dot+=... }`
-
-**Suggested fix:** Implement streaming/paginated search: keep vectors in Float32Array, use approximate nearest neighbor or at least avoid loading chunk content until top-k is selected. Add LRU eviction to _searchCache and limit cache size. Move cosine similarity to a worker thread or use ONNX/WASM for batch dot products.
 
 
 ### P1-10: Synchronous require('node-pty') crashes module if native dep missing
@@ -371,122 +266,19 @@
 **Suggested fix:** Add tests that directly send TOOL_CALL events to transition to toolExecuting, verify tool execution via executeFn mock, test error handling when executeFn throws, and test CANCEL during toolExecuting transitions to interrupted.
 
 
-### P1-14: Race: Concurrent keychain writes lose API keys (read-modify-write without lock)
-
-- **File:** `electron/src/main/config/keychain.ts:183`
-- **Reviewer:** adversarial
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `advisory -> human`
-- **Requires verification:** true
-
-**Why it matters:** encryptAndStore does readKeychainFile -> modify entries -> writeKeychainFile as three separate synchronous operations with no file locking. If two providers save keys concurrently (e.g., user configures OpenAI and Anthropic in rapid succession via config:save), both read the same file, each adds only their key, and the second write overwrites the first, losing the first provider's key. The user sees one provider's key silently disappear.
-
-**Evidence:**
-- `keychain.ts:188-201 -- encryptAndStore: readKeychainFile(filePath) then file.entries[key]=value then writeKeychainFile, no lock`
-- `config.ts:39-64 -- storeProviderKeys loops providers and calls encryptAndStore sequentially but each call re-reads file, so if called concurrently from two IPC handlers, race occurs`
-- `config.ts:103-131 -- config:save handler calls storeProviderKeys which does multiple encryptAndStore, each with independent read-modify-write`
-- `Scenario: Two config:save IPC calls overlap. Call A reads {openai:key1}, Call B reads {openai:key1}, A writes {openai:key1, anthropic:key2}, B writes {openai:key1, groq:key3} -- anthropic key lost.`
-
-
 ### P1-15: chat.ts god file mixes 6 concerns in 1038 lines
 
 - **File:** `electron/src/main/ipc/chat.ts:1`
 - **Reviewer:** maintainability
 - **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `manual -> downstream-resolver`
 
-**Why it matters:** A single file owns IPC registration, message factories, stream orchestration, tool execution, title generation, error classification, and persistence. Any change to chat flow forces understanding the entire 1038-line file, and the next developer cannot modify one concern without risking others. The file already shows duplicated flush logic and timing hacks (queueMicrotask) that stem from this coupling.
+**Why it matters:** A single file still owns IPC registration, stream orchestration, tool execution wiring, title generation, error classification, and persistence. Any change to chat flow forces understanding the entire ~1k-line file, and the next developer cannot modify one concern without risking others. (Message factories were extracted to `message-factories.ts`; remaining coupling is stream/title/persistence.)
 
 **Evidence:**
-- `electron/src/main/ipc/chat.ts:1 -- 1038 lines, file header says 'Chat IPC handlers' but contains 4 message factories, 2 stream factories, title callback, error classifier, persistence, and IPC registration`
-- `electron/src/main/ipc/chat.ts:113-191 -- makeToolCallMessage, makeToolResultMessage, makeAssistantMessage, makeThinkingMessage defined here and duplicated in manager.ts`
-- `electron/src/main/ipc/chat.ts:259-341 -- createStreamFn and createExecuteFn embed orchestrator wiring inside IPC layer`
+- `electron/src/main/ipc/chat.ts:1 -- large Chat IPC handlers file mixing stream wiring, error classification, persistence, and IPC registration`
+- `electron/src/main/ipc/chat.ts -- createStreamFn/createExecuteFn embed orchestrator wiring inside IPC layer`
 
-**Suggested fix:** Split into modules: message-factories.ts (makeToolCallMessage etc), persistence.ts (persistConversation, historyFromActiveSession), stream-factory.ts (createStreamFn, createExecuteFn), title.ts (createGenerateTitleCallback), and keep chat.ts as thin IPC wiring.
-
-
-### P1-16: Race: forceAbortChat microtask window leaks chunks across sessions
-
-- **File:** `electron/src/main/ipc/chat.ts:94`
-- **Reviewer:** adversarial
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `advisory -> human`
-- **Requires verification:** true
-
-**Why it matters:** forceAbortChat sets agentCancelled=true and defers disposeActiveAgent via queueMicrotask. If session:load arrives and calls abortChatForWindow during this window, it also defers via queueMicrotask. The two microtasks race: the new session's chat:send can start before the old agent's subscription callback has finished processing, causing the old agent's CHAT_CHUNK events to be sent to the new session's webContents. User sees another session's response streaming into current session.
-
-**Evidence:**
-- `chat.ts:94-107 -- forceAbortChat sets flags then queueMicrotask(() => disposeActiveAgent)`
-- `session.ts:20-24 -- abortChatForWindow dynamically requires forceAbortChat, same microtask deferral`
-- `session.ts:97 -- session:load calls abortChatForWindow then immediately seedChatHistory and switchTo`
-- `chat.ts:410-441 -- chat:send checks existing agent, disposes it, then creates new actor. If old agent's microtask hasn't run, activeAgents still has old entry, new send disposes old, but old subscription may still fire CHAT_CHUNK to webContents`
-- `Scenario: User rapidly switches sessions. Session A streaming, user clicks Session B. forceAbortChat queues microtask. session:load queues another microtask. chat:send for Session B starts. Old agent's subscription fires CHAT_CHUNK with Session A content to Session B's UI.`
-
-
-### P1-17: Chat IPC error classification branches untested
-
-- **File:** `electron/src/main/ipc/chat.ts:193`
-- **Reviewer:** testing
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `safe_auto -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** classifyErrorKind maps error titles/details to 4 UI error kinds (rate-limit, auth, stream, generic) that drive different user-facing banners and retry behavior. Only the auth branch is tested in chat-ipc.test.ts. If rate-limit or stream classification breaks, users will see generic errors instead of actionable rate-limit or network messages.
-
-**Evidence:**
-- `electron/src/main/ipc/chat.ts:193-215 -- classifyErrorKind with 4 branches: rate-limit, auth, stream, generic`
-- `electron/tests/unit/chat-ipc.test.ts:320-351 -- only tests auth error kind, no tests for rate-limit, stream, or generic`
-- `electron/src/main/ipc/chat.ts:844-852 -- error event sends kind to renderer, untested for 3 of 4 kinds`
-
-**Suggested fix:** Add tests for classifyErrorKind covering all 4 branches: rate-limit (429, usage limit), auth (401, api key), stream (timeout, network, connection), and generic fallback. Test via the chat IPC error event path.
-
-
-### P1-18: Config save shallow merge loses nested provider settings
-
-- **File:** `electron/src/main/ipc/config.ts:113`
-- **Reviewer:** adversarial
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `advisory -> human`
-- **Requires verification:** true
-
-**Why it matters:** config:save does { ...current, ...updates } which is a shallow merge. If updates contains providers with only one provider entry, it replaces the entire providers object, deleting all other providers. User edits one provider in Preferences UI, saves, and all other configured providers disappear. The merge.ts module has deep merge logic but config:save doesn't use it.
-
-**Evidence:**
-- `config.ts:113-114 -- const merged = { ...current, ...updates } is shallow, not deep merge`
-- `config.ts:29-31 -- configSaveSchema uses configSchema.deepPartial() so updates.providers may contain only one provider`
-- `loader.ts:137 -- mergeLayers does deep merge for config loading, but config:save bypasses it with shallow spread`
-- `Scenario: User has providers {openai, anthropic, groq}. UI sends updates {providers: {openai: {api_key: 'new'}}}. Shallow merge replaces entire providers with only {openai}, losing anthropic and groq configs.`
-
-
-### P1-19: Config save shallow merge drops nested rag fields
-
-- **File:** `electron/src/main/ipc/config.ts:113`
-- **Reviewer:** api-contract
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `safe_auto -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** config:save does { ...current, ...updates } shallow merge. A client sending partial { rag: { chunk_size: 100 } } replaces entire rag object, then zod fills missing rag fields with defaults instead of preserving current values. This silently resets chunk_overlap, top_k, etc to defaults, breaking partial update contract.
-
-**Evidence:**
-- `electron/src/main/ipc/config.ts:113-114 -- const merged = { ...current, ...updates };`
-- `electron/src/main/config/schema.ts:83 -- rag: ragConfigSchema.default({}) with per-field defaults`
-- `electron/src/main/config/merge.ts -- existing deep merge utility for providers/mcp_servers not used here`
-
-**Suggested fix:** Deep merge rag and other nested objects: use existing merge utility from src/main/config/merge.ts or manually merge rag: { ...current.rag, ...updates.rag }. Same for tier_models, mcp_servers, providers.
-
-
-### P1-20: Double-yield of tool calls/results from stream + onStepFinish
-
-- **File:** `electron/src/main/llm/orchestrator.ts:428`
-- **Reviewer:** correctness
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `safe_auto -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** Every tool call and result is yielded twice to the UI — once from the fullStream chunk (tool-input-available / tool-output-available) and again from the onStepFinish callback's pendingToolCalls/pendingToolResults drain. The renderer receives duplicate tool_call and tool_result events, causing duplicate tool widgets and potentially double-counting in message history.
-
-**Evidence:**
-- `orchestrator.ts:253-260 -- onStepFinish pushes to pendingToolCalls from toolCalls`
-- `orchestrator.ts:339-348 -- fullStream case 'tool-input-available' yields tool_call directly`
-- `orchestrator.ts:428-438 -- after every chunk, drains pendingToolCalls yielding tool_call again`
-- `orchestrator.ts:352-365 -- fullStream case 'tool-output-available' yields tool_result directly`
-- `orchestrator.ts:434-438 -- drains pendingToolResults yielding tool_result again`
-
-**Suggested fix:** Remove the onStepFinish accumulation of tool calls/results (pendingToolCalls/pendingToolResults) since fullStream already yields them, OR guard the drain so it only yields tool calls that were not already yielded from stream chunks. The simplest fix: delete the pendingToolCalls/pendingToolResults arrays and their drain loops, relying solely on fullStream events.
+**Suggested fix:** Split remaining concerns into modules: persistence.ts (persistConversation, historyFromActiveSession), stream-factory.ts (createStreamFn, createExecuteFn), title.ts (createGenerateTitleCallback), and keep chat.ts as thin IPC wiring.
 
 
 ### P1-21: Cascade: Tool output offloading creates unbounded disk growth via LLM loop
@@ -627,23 +419,6 @@
 **Suggested fix:** In upsertFile, when oldVectors is null or length-mismatched, either (a) clear the entire index and re-index from scratch, or (b) throw/reject so the caller falls back to full re-index. At minimum, detect the null case and call this.clear() or return early with an error instead of silently producing a truncated vectors file.
 
 
-### P1-29: SessionManager.syncActiveChain untested
-
-- **File:** `electron/src/main/session/manager.ts:202`
-- **Reviewer:** testing
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `safe_auto -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** syncActiveChain is called after every chat turn to persist conversation history. It has complex branching: existing chain vs new chain, status handling, model/agent metadata merging, and chain list updates. A bug here would cause lost messages or corrupted session files on every turn, yet no test covers it. syncSubagentChains has the same gap.
-
-**Evidence:**
-- `electron/src/main/session/manager.ts:202-255 -- syncActiveChain with 3 branching paths (existing chain, last chain, new chain)`
-- `electron/src/main/session/manager.ts:263-276 -- syncSubagentChains with no tests`
-- `electron/tests/unit/session-persistence.test.ts:1-789 -- tests create, switchTo, delete, rename, changeModel, autoNameActive but never syncActiveChain or syncSubagentChains`
-
-**Suggested fix:** Add tests for syncActiveChain covering: new chain creation when no activeChainId, existing chain update, status override, model fallback, and persistence verification. Add tests for syncSubagentChains covering empty and populated subagent chains.
-
-
 ### P1-30: Path traversal via sessionId in session storage
 
 - **File:** `electron/src/main/session/storage.ts:138`
@@ -680,112 +455,7 @@
 **Suggested fix:** Add behavior tests for each tool category: search (grep with pattern matching), process (execute_command with timeout, background), rag (search with mock store), ast (get_file_skeleton, find_symbol_references with real files). Prioritize tools used in agentic loop.
 
 
-### P1-32: ChatStream recomputes full message list per token without virtualization
-
-- **File:** `electron/src/renderer/components/ChatStream.tsx:109`
-- **Reviewer:** performance
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `manual -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** buildStreamItems is memoized but depends on streamingContent which changes per token, so it rebuilds the entire chronological list (filter, maps, nested loops) O(n) per token. With 1000+ messages, this causes jank during streaming. No virtualization means all DOM nodes stay mounted, increasing layout cost.
-
-**Evidence:**
-- `ChatStream.tsx:109-135 -- useMemo deps include streamingContent, toolBlocks, streamSegments, messages; buildStreamItems iterates over all messages each time`
-- `ChatStream.tsx:238-245 -- visible = messages.filter, liveById = new Map(toolBlocks.map), resultByCallId built per call`
-- `ChatStream.tsx:98-100 -- useEffect triggers scrollToBottom on every streamingContent change`
-
-**Suggested fix:** Split memoization: memoize committed history (messages, toolBlocks) separately from live streaming segments. Only append live segments per token. Add react-window or similar virtualization for long histories, or at least throttle streamingContent updates.
-
-
-### P1-33: Stale toolBlocksRef at commit drops final tool from history
-
-- **File:** `electron/src/renderer/hooks/useChat.ts:267`
-- **Reviewer:** julik-frontend-races
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `safe_auto -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** When CHAT_DONE arrives immediately after the last tool update, toolBlocksRef.current can still hold the previous value because it is only synced via useEffect, not directly in onToolCallDelta/Start. The commit then misses the final tool call/result, so the persisted chain loses a tool and the UI shows a live tool that never becomes history. On reload the tool disappears.
-
-**Evidence:**
-- `useChat.ts:161-163 -- useEffect syncs toolBlocksRef from toolBlocks state (async)`
-- `useChat.ts:380-391 -- onToolCallDelta calls setToolBlocks without updating toolBlocksRef.current`
-- `useChat.ts:267-269 -- onDone reads toolBlocksRef.current which may be stale`
-
-**Suggested fix:** Update toolBlocksRef.current synchronously inside each setToolBlocks updater (or set it directly in onToolCallStart/Delta/Update), and do the same for streamSegmentsRef where missing. Alternatively read liveTools from a ref that is updated in the same tick as setState.
-
-
-### P1-34: Interrupt confirmSubagents prompt lost in onDone vs onState race
-
-- **File:** `electron/src/renderer/hooks/useChat.ts:328`
-- **Reviewer:** julik-frontend-races
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `manual -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** Second Esc triggers main to send CHAT_DONE (which sets interruptState idle) and CHAT_STATE with confirmSubagents. Depending on IPC order, the UI either never shows the 'Cancel subagents?' prompt or flickers idle→confirmSubagents→idle. Third Esc then does nothing, leaving subagents running after user thought they cancelled.
-
-**Evidence:**
-- `useChat.ts:328 -- setInterruptState('idle') in onDone unconditionally`
-- `electron/src/main/ipc/chat.ts:952-971 -- second Esc sends CHAT_DONE and CHAT_STATE confirmSubagents in same tick`
-- `useChat.ts:242-259 -- onState sets interruptState from event.interruptState, races with onDone`
-
-**Suggested fix:** In onDone, don't reset interruptState to idle when event.interrupted and subagents may be running; let onState drive interruptState. Or keep interruptState as confirmSubagents until explicit timeout or third Esc. Ensure CHAT_DONE and CHAT_STATE ordering is deterministic.
-
-
-### P1-35: Double-send race via stale status closure
-
-- **File:** `electron/src/renderer/hooks/useChat.ts:440`
-- **Reviewer:** julik-frontend-races
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `safe_auto -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** send() guards with status === 'streaming' from render closure, but setStatus('streaming') is async. Rapid double Enter before re-render bypasses the guard, appending two identical user messages and firing two chat:send IPC calls. Main disposes the first actor but the duplicate user bubble remains, and two streams race for CHAT_DONE.
-
-**Evidence:**
-- `useChat.ts:440 -- if (!message.trim() || status === 'streaming') return; uses closure status`
-- `useChat.ts:489 -- setStatus('streaming') called after optimistic setMessages, async`
-- `InputArea.tsx:480 -- Send button disabled only on !input.trim() && !subPicker, not on streaming`
-
-**Suggested fix:** Add isSendingRef guard: set ref true synchronously at top of send(), check ref in guard, clear ref on error/done. Also disable Send button when status === 'streaming' in InputArea.
-
-
-### P1-36: Overlapping async polls cause out-of-order live command output
-
-- **File:** `electron/src/renderer/hooks/useLiveCommandOutput.ts:102`
-- **Reviewer:** julik-frontend-races
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `safe_auto -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** Polling uses setInterval(200ms) to call an async poll(). If IPC takes >200ms, two polls run concurrently. The later response can be overwritten by the earlier one finishing last, causing tail output to jump backward or lose lines. User sees flickering command output.
-
-**Evidence:**
-- `useLiveCommandOutput.ts:46 -- poll is async`
-- `useLiveCommandOutput.ts:102 -- intervalRef.current = setInterval(poll, POLL_INTERVAL_MS) no overlap guard`
-- `useLiveCommandOutput.ts:66-72 -- delta computed from accumulatedRef, assumes serial execution`
-
-**Suggested fix:** Guard with isPollingRef or chain via setTimeout after await: if (isPollingRef.current) return; set true before await, false after. Or replace setInterval with recursive setTimeout that schedules next poll only after current finishes.
-
-
-### P1-37: Architecture validation tests don't test app code
-
-- **File:** `electron/tests/integration/architecture-validation.test.ts:1`
-- **Reviewer:** testing
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `manual -> human`
-- **Requires verification:** true
-
-**Why it matters:** These tests claim to validate architecture properties (parallel subagents, reactive updates, responsive input, auto-scroll) but they test generic JavaScript patterns with setTimeout, not the actual SubagentManager, session machine, or chat components. They provide false confidence: they will pass even if the real subagent parallelism is broken or the XState machines are misconfigured.
-
-**Evidence:**
-- `electron/tests/integration/architecture-validation.test.ts:21-33 -- simulateTask uses setTimeout, not SubagentManager`
-- `electron/tests/integration/architecture-validation.test.ts:157-187 -- 'reactive state updates' test simulates context with a for-loop and string assignment, not XState`
-- `electron/tests/integration/architecture-validation.test.ts:250-273 -- 'responsive input' test pushes strings into an array, not testing actual input handling`
-- `electron/tests/integration/architecture-validation.test.ts:303-341 -- 'auto-scroll' test toggles booleans, not testing ChatStream component`
-
-**Suggested fix:** Rewrite architecture-validation tests to use real SubagentManager.spawn with mock runners, real sessionMachine actors, and actual chat IPC handlers. For parallel subagents, spawn 4 via SubagentManager and verify they run concurrently. For reactive updates, use real agentMachine and verify context updates between tool calls.
-
-
----
-
-## P2 -- Moderate (33)
+## P2 -- Moderate (32)
 
 | # | File | Issue | Reviewer | Confidence | Route |
 |---|------|-------|----------|------------|-------|
@@ -795,7 +465,6 @@
 | 4 | `electron/src/main/agents/xstate/interrupt-machine.ts:67` | Interrupt machine has no internal timeout, can get stuck | julik-frontend-races | 75 | `safe_auto -> review-fixer` |
 | 5 | `electron/src/main/agents/xstate/session-machine.ts:260` | Session-machine INTERRUPT handler has empty loop body for subagent cancel | correctness | 75 | `safe_auto -> review-fixer` |
 | 6 | `electron/src/main/config/keychain.ts:305` | Keychain empty api_key treated as missing | testing | 75 | `safe_auto -> review-fixer` |
-| 7 | `electron/src/main/ipc/chat.ts:94` | forceAbortChat leaves interrupt timer alive until microtask | julik-frontend-races | 75 | `safe_auto -> review-fixer` |
 | 8 | `electron/src/main/llm/middleware/provider-quirks.ts:133` | Provider quirks benign error suppression untested for post-content path | testing | 75 | `safe_auto -> review-fixer` |
 | 9 | `electron/src/main/llm/middleware/retry.ts:43` | Retry middleware sleep ignores abort signal during backoff | reliability | 75 | `safe_auto -> review-fixer` |
 | 10 | `electron/src/main/llm/middleware/throttle.ts:80` | Throttle middleware timer callback can throw on closed controller | reliability | 75 | `safe_auto -> review-fixer` |
@@ -920,23 +589,6 @@
 - `electron/tests/unit/keychain.test.ts:526-539 -- tests missing keychain entry but not empty api_key`
 
 **Suggested fix:** Change check to `if (entryCopy['api_key'] === undefined)` to only inject when key is truly missing, not when empty. Add test for empty string api_key case.
-
-
-### P2-7: forceAbortChat leaves interrupt timer alive until microtask
-
-- **File:** `electron/src/main/ipc/chat.ts:94`
-- **Reviewer:** julik-frontend-races
-- **Severity:** P2 (Moderate) | **Confidence:** 75 | **Route:** `safe_auto -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** forceAbortChat sets agentCancelled and schedules dispose via queueMicrotask, but doesn't clear interruptResetTimer synchronously. Timer can fire between abort and dispose, sending INTERRUPT_TIMEOUT to an actor that is about to be stopped, causing an extra CHAT_STATE with idle that races with session switch and may resurrect a disposed actor's state.
-
-**Evidence:**
-- `chat.ts:94-107 -- forceAbortChat sets flags and queueMicrotask dispose, no clearTimeout`
-- `chat.ts:76-86 -- disposeActiveAgent clears timer, but only in microtask`
-- `chat.ts:615-640 -- interrupt subscription sets timer that could fire in gap`
-
-**Suggested fix:** In forceAbortChat, clear existing.interruptResetTimer synchronously with clearTimeout and null it before aborting controller.
 
 
 ### P2-8: Provider quirks benign error suppression untested for post-content path
@@ -1258,7 +910,7 @@
 **Evidence:**
 - `electron/src/renderer/hooks/useChat.ts:112-186 -- 8 useState + 4 useRef + elapsed ticker + ref sync effects`
 - `electron/src/renderer/hooks/useChat.ts:614-713 -- commitSegmentsToMessages duplicates toolBlockToMessages logic`
-- `electron/src/renderer/hooks/useChat.ts:160-167 -- useEffect syncing toolBlocksRef and streamSegmentsRef from state (anti-pattern)`
+- `electron/src/renderer/hooks/useChat.ts -- large hook still consolidates commit/send/cancel/interrupt state (ref sync race fixed separately)`
 
 **Suggested fix:** Extract commit logic to shared utils, replace ref sync with useReducer for chat state machine, and consolidate toolBlockToMessages in one module imported by both ChatStream and useChat.
 
@@ -1556,10 +1208,10 @@
   - `electron/src/main/llm/tool-dispatch.ts:335` -- Tool call ID from LLM used in cache file path without sanitization (conf 50)
   - `electron/src/main/ipc/chat.ts:94` -- forceAbortChat loses accumulated turn messages on session switch (conf 50)
   - `electron/src/main/mcp/transport.ts:33` -- MCP SSE URL from config allows SSRF if project config malicious (conf 50)
-- **Total raw:** 86, merged 86, actionable 83
+- **Total raw:** 86, merged 86, actionable 83 (64 remaining open after 2026-07-09 fixes)
 - **Artifacts:** `/tmp/compound-engineering/ce-code-review/20260709-172550-b47e915e/` (13 persona JSONs + merged.json)
 
-### Residual risks (51)
+### Residual risks (49)
 
 - Many additional files in electron/src/main/llm/, electron/src/main/tools/, electron/src/main/config/ use the same dash-separator style; only 5 representative files flagged to avoid noise. A repo-wide codemod to box-drawing headers would fully align with CLAUDE.md.
 - No AGENTS.md files found in repo; only electron/CLAUDE.md governs standards. If additional AGENTS.md files are expected at root or in subdirectories, they are missing.
@@ -1580,7 +1232,6 @@
 - MCP tool outputs are concatenated and fed to LLM without validation, enabling prompt injection from malicious MCP server. MCP servers considered trusted but could be compromised.
 - MCP tool input schema uses z.object({}).passthrough() so LLM can pass arbitrary JSON to MCP server. If MCP server has vulnerabilities, this could be exploited.
 - AI SDK 7 fullStream part shapes remain untyped across orchestrator — future SDK minor version could silently break tool streaming without compiler error
-- Message factory duplication means schema evolution requires coordinated edits in 4 files; risk of drift until extraction lands
 - ToolRegistry.toJsonSchema returns Record<string, unknown> — consumers cannot type-check tool schemas, risk of invalid LLM payloads
 - Config.providers and mcp_servers typed as Record<string, Record<string, unknown>> — broad unknown allows invalid provider configs to pass type checker and fail only at runtime in resolveModelRef
 - No IPC versioning: IPC_CHANNELS and payload shapes have no version field. Future breaking changes will have no negotiation path; old renderers will get silent wrong data.
@@ -1600,7 +1251,6 @@
 - Tool timeout constants duplicated across tool-dispatch.ts (DEFAULT_TOOL_TIMEOUT_S=60), config schema (command_timeout), and TOOLS_WITHOUT_TIMEOUT set - risk of drift when timeout policy changes
 - Middleware TransformStream wrapping duplicated in retry.ts, throttle.ts, provider-quirks.ts - similar boilerplate without shared helper, future middleware will copy-paste
 - ConfigManager singleton with static _instance and overloaded loadConfig(string|options) param - global mutable state makes testing hard and string overload is legacy compat that obscures intent
-- Orchestrator pendingToolCalls/pendingToolResults draining duplicated 3 times (fullStream loop, textStream fallback, post-stream) - should be extracted to helper
 - Error classification duplicated: classifyErrorKind in chat.ts and classifyStreamError in orchestrator.ts with overlapping keywords (rate limit, auth, timeout)
 - MCP shutdown _awaitRunner uses hardcoded 3s timeout and only warns on failure - if runner doesn't stop, transports may still be writing to cleared maps (race condition between shutdown clear and runner cleanup)
 - Background store wait_for_progress polls with no abort signal - if called from a context that gets cancelled, it continues polling until deadline
@@ -1613,22 +1263,14 @@
 - MCP manager _connectServer creates transport before timeout race (line 405) — if transport creation itself hangs (e.g., npx download), it is not covered by the per-server timeout
 - Agent machine abortController is created in idle→streaming transition but also has fallback new AbortController() in streaming invoke input (line 366) — if abortController is null for any reason, a new one is created that is not tracked for cancellation
 
-### Testing gaps (61)
+### Testing gaps (43)
 
-- electron/src/main/llm/providers-factory.ts - createProviderModel has no tests (P1)
 - electron/src/main/llm/system-prompt.ts - buildSystemPrompt has no tests (P2)
 - electron/src/main/agents/registry.ts - listAgents, getAgent have no tests (P2)
 - electron/src/main/personality/registry.ts - appendPersonality has no tests (P2)
-- electron/src/main/session/manager.ts - syncActiveChain and syncSubagentChains have no tests (P1)
-- electron/src/main/ipc/chat.ts - bgCommandSnapshot handler, auto-naming callback, and 3 of 4 error classification branches untested (P1)
 - electron/src/main/tools/search/, process/, rag/, ast/, todo/, web/, skill/, mcp/, subagent/ - 22 tool handlers have no behavior tests, only structure checks (P1)
-- electron/src/main/llm/orchestrator.ts - streamChat main function has zero direct tests, only helpers tested (P0)
 - electron/src/main/agents/xstate/agent-machine.ts - toolExecuting state and CANCEL during tool execution untested (P1)
 - electron/src/main/config/loader.ts - atomicWriteJson failure cleanup path untested (P2)
-- No test for rapid double-send (Enter twice within 50ms) verifying only one user message and one IPC call
-- No test for toolBlocksRef staleness: simulate tool update immediately followed by CHAT_DONE and assert committed history includes tool
-- No test for interrupt flow ordering: second Esc should leave UI in confirmSubagents until third Esc or 5s timeout, not flicker to idle
-- No test for useLiveCommandOutput overlapping polls: mock slow snapshot and verify output never goes backward
 - No test for rAF cleanup on unmount: mount InputArea, trigger clearAndClose, unmount before rAF fires, assert no error
 - No test for sessionId path traversal (e.g., '../../etc/passwd' in session:load IPC)
 - No test for malicious project .orchid.json with MCP server spawning arbitrary command
@@ -1636,32 +1278,23 @@
 - No test for MCP SSE URL SSRF validation (private IP, localhost, metadata endpoint)
 - No test for keychain plaintext fallback warning and file permissions on Linux
 - No test for web_fetch redirect to private IP being blocked
-- No tests for orchestrator fullStream event processing (tool-input-start, tool-input-delta, reasoning-delta, textStream fallback) — type casts hide shape mismatches that tests would catch
-- No tests for message factory round-trip (makeToolCallMessage -> storage -> fromStorage) — duplication risk not covered
 - No tests for ChatDoneEvent/ChatUsageEvent Usage shape compatibility with canonical Usage type
 - No tests for chat cancel three-phase status transitions with typed return values
 - No parity test for ChainStatus FAILED and RUNNING migration from Python storage dicts
 - No test for TodoStatus legacy values (blocked, abandoned, needs_review, under_review) mapping
-- No test for config:save partial rag update preserving other rag fields
 - No test for inconsistent error shapes handling in renderer hooks
 - No test for Session model null vs empty string vs undefined across Session and SessionSummary
-- No test for concurrent keychain writes (race condition on read-modify-write)
 - No test for session ID path traversal via IPC (malicious sessionId with ../)
 - No test for RAG content that contains prompt injection instructions
-- No test for rapid session switching during active streaming (microtask race)
 - No test for tool output offloading loop (large output -> cache -> read -> large output)
 - No test for MCP tool called with args that violate its declared JSON Schema
 - No test for background process LRU eviction leaving orphaned processes
-- No test for config:save shallow merge losing providers
-- No performance test for RAG search with 10k+ chunks measuring memory and latency
 - No test for indexing large project (1000+ files) measuring main process block time
-- No test for ChatStream with 1000+ messages measuring render time per token
 - No benchmark for loadNpy with large vectors.npy file
 - No test for agent-machine toolExecuting dead state - should verify it is unreachable or remove it
 - No test for providers-factory with anthropic/google/groq/xai aliases - would catch incomplete implementation
 - No test for discoverModels sync vs async behavior - sync returns [] on cold start, async fetches
 - No test for SystemPromptContext shape mismatch - chat.ts context missing directoryTree field
-- No test for message factory consistency across chat.ts and manager.ts - drift already present in Error: prefix logic
 - No test for MCP server hanging during listTools/listResources enumeration (timeout coverage)
 - No test for MCP callTool hanging indefinitely (missing timeout)
 - No test for node-pty module missing at load time (graceful degradation)
@@ -1669,7 +1302,6 @@
 - No test for retry backoff cancellation via abort signal during sleep
 - No test for background process terminate called multiple times (timer leak)
 - No test for execute_command timeout listener cleanup
-- No test for double-yield of tool calls when both fullStream chunks and onStepFinish callback produce the same tool events
 - No test for RAG upsertFile when vectors file is missing/corrupted — vector loss scenario
 - No test for session-machine INTERRUPT triple-Esc subagent cancellation path
 - No test for flushStateCallbacks being called while subagents are still running (non-terminal)
@@ -1681,14 +1313,12 @@
 
 > **Verdict:** Not ready
 >
-> **Reasoning:** 4 P0s including 3 security-critical: sessionId path traversal (arbitrary file read/write via IPC), keychain ciphertext leak as plaintext API key, project config MCP arbitrary code exec, plus zero tests for core orchestrator streamChat (LLM streaming backbone). 38 P1s include double-yield tool calls (duplicate tools in UI), RAG upsertFile vector loss, MCP no-timeout hangs, useChat stale ref dropping tools + double-send race, ChatStream perf without virtualization, breaking ChainStatus/TodoStatus contracts without migration.
+> **Reasoning:** 3 remaining P0s are security-critical: sessionId path traversal (arbitrary file read/write via IPC), keychain ciphertext leak as plaintext API key, and project config MCP arbitrary code exec. 20 remaining P1s include RAG upsertFile vector loss, MCP no-timeout hangs, breaking ChainStatus/TodoStatus contracts without migration, providers-factory OpenAI-only, chat.ts god file, and node-pty load crash. (Fixed and removed from this report: P0-1 streamChat tests; P1-2/3 message factories; P1-7 providers-factory tests; P1-9 RAG search memory; P1-14 keychain write lock; P1-16 forceAbort race; P1-17 error classification tests; P1-18/19 config deep merge; P1-20 double-yield; P1-29 syncActiveChain tests; P1-32 ChatStream memo split; P1-33–36 useChat/live-poll races; P1-37 architecture tests; P2-7 forceAbort interrupt timer.)
 >
 > **Fix order:**
 > 1. P0 security: session traversal via uuid validation, keychain null+warning when encryption unavailable, project MCP config user confirmation
-> 2. P0 testing: add streamChat fullStream mock tests (text-delta, tool-input-start/delta/available, tool-output, reasoning-delta, error, fallback)
-> 3. P1 correctness: double-yield dedup (fullStream vs onStepFinish), RAG upsertFile recovery, flushStateCallbacks terminal check, MCP glob regex escape
-> 4. P1 races: toolBlocksRef sync update inside setToolBlocks, double-send guard via isSendingRef, live poll setInterval->recursive setTimeout, interrupt prompt race onDone vs onState
-> 5. P1 reliability: MCP timeouts for callTool/listTools/readResource/listResources, node-pty try/catch, throttle timer try/catch + cancel clear, background-store SIGKILL timer leak, execute_command listener cleanup
-> 6. P1 api-contract: ChainStatus RUNNING->ACTIVE and FAILED mapping, TodoStatus 7->3 migration map, config deep merge for providers/rag
-> 7. P1 maintainability: extract message factories to shared module, split chat.ts god file, providers-factory handle anthropic/google/groq/xai
-> 8. P2 perf and standards: loadNpy Float32Array, VectorState filter vs splice, sync fs -> async with p-limit, scroll thrashing fix, section header box-drawing chars
+> 2. P1 correctness: RAG upsertFile recovery, flushStateCallbacks terminal check, MCP glob regex escape
+> 3. P1 reliability: MCP timeouts for callTool/listTools/readResource/listResources, node-pty try/catch, throttle timer try/catch + cancel clear, background-store SIGKILL timer leak, execute_command listener cleanup
+> 4. P1 api-contract: ChainStatus RUNNING->ACTIVE and FAILED mapping, TodoStatus 7->3 migration map
+> 5. P1 maintainability: split chat.ts god file, providers-factory handle anthropic/google/groq/xai
+> 6. P2 perf and standards: loadNpy Float32Array, VectorState filter vs splice, sync fs -> async with p-limit, scroll thrashing fix, section header box-drawing chars

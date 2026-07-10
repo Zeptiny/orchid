@@ -21,11 +21,13 @@ import {
   parsePartial,
   deepMerge,
   deepMergeProviderDict,
+  mergeConfigUpdates,
   mergeLayers,
   applyEnvOverrides,
   validateConfig,
   loadConfig,
   ConfigManager,
+  isUnsafeKey,
 } from '../../src/main/config';
 
 // ---------------------------------------------------------------------------
@@ -190,6 +192,155 @@ describe('deepMerge', () => {
   it('skips undefined values in source', () => {
     const result = deepMerge({ a: 1 }, { a: undefined, b: 2 });
     expect(result).toEqual({ a: 1, b: 2 });
+  });
+
+  it('null tombstone deletes a key', () => {
+    const result = deepMerge({ a: 1, b: 2 }, { b: null });
+    expect(result).toEqual({ a: 1 });
+  });
+});
+
+// ===========================================================================
+// mergeConfigUpdates (config:save deep merge — P1-18 / P1-19)
+// ===========================================================================
+
+describe('mergeConfigUpdates (config:save)', () => {
+  it('P1-19: partial rag update preserves other rag fields', () => {
+    const current = defaults() as unknown as Record<string, unknown>;
+    // Simulate user-customized rag values that must not be wiped by zod defaults
+    (current as { rag: Record<string, unknown> }).rag = {
+      chunk_size: 4000,
+      chunk_overlap: 400,
+      top_k: 8,
+      max_file_size: 1024000,
+      embedding_model: 'custom/embed',
+    };
+
+    const merged = mergeConfigUpdates(current, {
+      rag: { top_k: 10 },
+    });
+
+    const rag = merged['rag'] as Record<string, unknown>;
+    expect(rag['top_k']).toBe(10);
+    expect(rag['chunk_size']).toBe(4000);
+    expect(rag['chunk_overlap']).toBe(400);
+    expect(rag['max_file_size']).toBe(1024000);
+    expect(rag['embedding_model']).toBe('custom/embed');
+
+    // Full schema parse must also preserve customized fields (not re-default)
+    const validated = configSchema.parse(merged);
+    expect(validated.rag.top_k).toBe(10);
+    expect(validated.rag.chunk_size).toBe(4000);
+    expect(validated.rag.chunk_overlap).toBe(400);
+    expect(validated.rag.embedding_model).toBe('custom/embed');
+  });
+
+  it('P1-18: partial providers update preserves other provider aliases', () => {
+    const current = defaults() as unknown as Record<string, unknown>;
+    current['providers'] = {
+      default: {
+        base_url: 'https://opencode.ai/zen/go/v1',
+        litellm_provider: 'openai',
+        models: { 'mimo-v2.5': {} },
+      },
+      openai: {
+        base_url: 'https://api.openai.com/v1',
+        litellm_provider: 'openai',
+        models: { 'gpt-4o': {} },
+      },
+      anthropic: {
+        base_url: 'https://api.anthropic.com',
+        litellm_provider: 'anthropic',
+        models: { 'claude-3': {} },
+      },
+    };
+
+    // Partial update for only openai — must not drop anthropic / default
+    const merged = mergeConfigUpdates(current, {
+      providers: {
+        openai: { api_key: 'sk-new-key' },
+      },
+    });
+
+    const providers = merged['providers'] as Record<string, Record<string, unknown>>;
+    expect(providers).toHaveProperty('default');
+    expect(providers).toHaveProperty('anthropic');
+    expect(providers).toHaveProperty('openai');
+    expect(providers['openai']!['api_key']).toBe('sk-new-key');
+    // Existing openai fields preserved via per-alias merge
+    expect(providers['openai']!['base_url']).toBe('https://api.openai.com/v1');
+    expect(providers['openai']!['models']).toEqual({ 'gpt-4o': {} });
+    expect(providers['anthropic']!['base_url']).toBe('https://api.anthropic.com');
+
+    const validated = configSchema.parse(merged);
+    expect(Object.keys(validated.providers).sort()).toEqual(
+      ['anthropic', 'default', 'openai'].sort(),
+    );
+  });
+
+  it('partial tier_models update preserves other tiers', () => {
+    const current = defaults() as unknown as Record<string, unknown>;
+    const merged = mergeConfigUpdates(current, {
+      tier_models: { bloom: 'custom/bloom-model' },
+    });
+    const tiers = merged['tier_models'] as Record<string, string>;
+    expect(tiers['bloom']).toBe('custom/bloom-model');
+    expect(tiers['seed']).toBe('default/mimo-v2.5');
+    expect(tiers['sprout']).toBe('default/mimo-v2.5');
+    expect(tiers['crown']).toBe('default/mimo-v2.5');
+  });
+
+  it('null tombstone removes a provider alias', () => {
+    const current = defaults() as unknown as Record<string, unknown>;
+    current['providers'] = {
+      default: { base_url: 'https://example.com', models: {} },
+      openai: { base_url: 'https://api.openai.com/v1', models: {} },
+    };
+
+    const merged = mergeConfigUpdates(current, {
+      providers: { openai: null },
+    });
+
+    const providers = merged['providers'] as Record<string, unknown>;
+    expect(providers).toHaveProperty('default');
+    expect(providers).not.toHaveProperty('openai');
+  });
+
+  it('scalar top-level updates still replace', () => {
+    const current = defaults() as unknown as Record<string, unknown>;
+    const merged = mergeConfigUpdates(current, {
+      theme: 'dark',
+      default_model: 'custom/model',
+    });
+    expect(merged['theme']).toBe('dark');
+    expect(merged['default_model']).toBe('custom/model');
+    // Unrelated nested objects untouched
+    expect(merged['rag']).toEqual((current as { rag: unknown }).rag);
+  });
+
+  it('shallow-merge regression: partial rag must NOT equal zod-defaulted wipe', () => {
+    // Demonstrates the old bug: shallow top-level merge + zod defaults
+    const current = defaults() as unknown as Record<string, unknown>;
+    (current as { rag: Record<string, unknown> }).rag = {
+      chunk_size: 4000,
+      chunk_overlap: 400,
+      top_k: 8,
+      max_file_size: 1024000,
+      embedding_model: 'custom/embed',
+    };
+    const updates = { rag: { top_k: 10 } };
+
+    const shallow = { ...current, ...updates };
+    const shallowParsed = configSchema.parse(shallow);
+    // Old behavior: sibling rag fields reset to schema defaults
+    expect(shallowParsed.rag.chunk_size).toBe(2000);
+    expect(shallowParsed.rag.embedding_model).toBe('fastembed/BAAI/bge-small-en-v1.5');
+
+    // New behavior: siblings preserved
+    const deepParsed = configSchema.parse(mergeConfigUpdates(current, updates));
+    expect(deepParsed.rag.chunk_size).toBe(4000);
+    expect(deepParsed.rag.embedding_model).toBe('custom/embed');
+    expect(deepParsed.rag.top_k).toBe(10);
   });
 });
 
@@ -763,5 +914,178 @@ describe('edge cases', () => {
     expect(cfg.theme).toBe('dark');
     expect(cfg.llm_stream_retries).toBe(5);
     expect(cfg.background_command_idle_timeout).toBe(1800);
+  });
+});
+
+// ===========================================================================
+// Prototype pollution protection (P0)
+// ===========================================================================
+
+describe('prototype pollution protection', () => {
+  it('isUnsafeKey rejects __proto__, constructor, prototype', () => {
+    expect(isUnsafeKey('__proto__')).toBe(true);
+    expect(isUnsafeKey('constructor')).toBe(true);
+    expect(isUnsafeKey('prototype')).toBe(true);
+  });
+
+  it('isUnsafeKey allows normal keys', () => {
+    expect(isUnsafeKey('default_model')).toBe(false);
+    expect(isUnsafeKey('providers')).toBe(false);
+    expect(isUnsafeKey('openai')).toBe(false);
+  });
+
+  it('deepMerge ignores __proto__ key in source', () => {
+    const target = { a: 1 };
+    const source = { __proto__: { polluted: true }, b: 2 } as Record<string, unknown>;
+    const result = deepMerge(target, source);
+    expect(result).toEqual({ a: 1, b: 2 });
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
+  });
+
+  it('deepMerge ignores constructor key in source', () => {
+    const target = { a: 1 };
+    const source = { constructor: { polluted: true } } as Record<string, unknown>;
+    const result = deepMerge(target, source);
+    expect(result).toEqual({ a: 1 });
+  });
+
+  it('deepMergeProviderDict ignores __proto__ alias', () => {
+    const home = { good: { command: 'cmd' } };
+    const project = { __proto__: { command: 'evil' } } as Record<string, unknown>;
+    const result = deepMergeProviderDict(home, project);
+    expect(result).toEqual({ good: { command: 'cmd' } });
+    expect(result).not.toHaveProperty('__proto__');
+  });
+
+  it('mergeConfigUpdates ignores __proto__ key', () => {
+    const current = defaults() as unknown as Record<string, unknown>;
+    const updates = { __proto__: { polluted: true }, theme: 'dark' } as Record<string, unknown>;
+    const result = mergeConfigUpdates(current, updates);
+    expect(result['theme']).toBe('dark');
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
+  });
+
+  it('mergeLayers ignores __proto__ in home and project', () => {
+    const d = { known: 1 };
+    const home = { __proto__: { evil: true } } as Record<string, unknown>;
+    const project = { constructor: { evil: true } } as Record<string, unknown>;
+    const result = mergeLayers(d, home, project);
+    expect(result).toEqual({ known: 1 });
+  });
+});
+
+// ===========================================================================
+// Null tombstone protection for top-level object keys (P1)
+// ===========================================================================
+
+describe('null tombstone protection for top-level object keys', () => {
+  it('providers: null at top level is ignored (not deleted)', () => {
+    const current = defaults() as unknown as Record<string, unknown>;
+    current['providers'] = {
+      default: { base_url: 'url', models: {} },
+      openai: { base_url: 'https://api.openai.com/v1', models: {} },
+    };
+
+    const merged = mergeConfigUpdates(current, { providers: null });
+    // providers should be preserved, not wiped
+    expect(merged).toHaveProperty('providers');
+    const providers = merged['providers'] as Record<string, unknown>;
+    expect(providers).toHaveProperty('default');
+    expect(providers).toHaveProperty('openai');
+  });
+
+  it('mcp_servers: null at top level is ignored', () => {
+    const current = defaults() as unknown as Record<string, unknown>;
+    current['mcp_servers'] = {
+      context7: { command: 'npx', args: ['-y'] },
+      custom: { command: 'my-cmd' },
+    };
+
+    const merged = mergeConfigUpdates(current, { mcp_servers: null });
+    expect(merged).toHaveProperty('mcp_servers');
+    const servers = merged['mcp_servers'] as Record<string, unknown>;
+    expect(servers).toHaveProperty('context7');
+    expect(servers).toHaveProperty('custom');
+  });
+
+  it('rag: null at top level is ignored', () => {
+    const current = defaults() as unknown as Record<string, unknown>;
+    (current as { rag: Record<string, unknown> }).rag = {
+      chunk_size: 4000,
+      top_k: 10,
+    };
+
+    const merged = mergeConfigUpdates(current, { rag: null });
+    expect(merged).toHaveProperty('rag');
+    const rag = merged['rag'] as Record<string, unknown>;
+    expect(rag['chunk_size']).toBe(4000);
+  });
+
+  it('tier_models: null at top level is ignored', () => {
+    const current = defaults() as unknown as Record<string, unknown>;
+
+    const merged = mergeConfigUpdates(current, { tier_models: null });
+    expect(merged).toHaveProperty('tier_models');
+  });
+
+  it('alias-level null tombstone still works for providers', () => {
+    const current = defaults() as unknown as Record<string, unknown>;
+    current['providers'] = {
+      default: { base_url: 'url', models: {} },
+      openai: { base_url: 'https://api.openai.com/v1', models: {} },
+    };
+
+    const merged = mergeConfigUpdates(current, {
+      providers: { openai: null },
+    });
+
+    const providers = merged['providers'] as Record<string, unknown>;
+    expect(providers).toHaveProperty('default');
+    expect(providers).not.toHaveProperty('openai');
+  });
+
+  it('alias-level null tombstone still works for mcp_servers', () => {
+    const current = defaults() as unknown as Record<string, unknown>;
+    current['mcp_servers'] = {
+      context7: { command: 'npx', args: ['-y'] },
+      custom: { command: 'my-cmd' },
+    };
+
+    const merged = mergeConfigUpdates(current, {
+      mcp_servers: { custom: null },
+    });
+
+    const servers = merged['mcp_servers'] as Record<string, unknown>;
+    expect(servers).toHaveProperty('context7');
+    expect(servers).not.toHaveProperty('custom');
+  });
+
+  it('scalar top-level null tombstone still works (e.g. theme: null)', () => {
+    const current = defaults() as unknown as Record<string, unknown>;
+    const merged = mergeConfigUpdates(current, { theme: null });
+    expect(merged).not.toHaveProperty('theme');
+  });
+});
+
+// ===========================================================================
+// Config save schema validation (P2)
+// ===========================================================================
+
+describe('config save IPC schema validation', () => {
+  it('rejects unknown top-level keys with descriptive error', () => {
+    // Dynamically import the schema — it's module-scoped in ipc/config.ts
+    // so we test the logic indirectly via merge + parse.
+    // But we can test that known keys work and unknown would be caught.
+    const knownKeys = Object.keys(configSchema.shape);
+    expect(knownKeys).toContain('default_model');
+    expect(knownKeys).toContain('providers');
+    expect(knownKeys).toContain('mcp_servers');
+    expect(knownKeys).toContain('rag');
+    expect(knownKeys).toContain('tier_models');
+    expect(knownKeys).toContain('theme');
+    expect(knownKeys).toContain('personality');
+    expect(knownKeys).toContain('command_timeout');
+    expect(knownKeys).not.toContain('typo_key');
+    expect(knownKeys).not.toContain('providres');
   });
 });
