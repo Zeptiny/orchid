@@ -40,8 +40,9 @@ interface LeftSidebarProps {
  * session rows min-height 30px, pad 5px 7px, gap 1px
  * No daisyUI menu (avoids horizontal dividers between items).
  *
- * U6: defaults to current-workspace sessions; other projects expand;
- * search is global; workspace chip is always visible.
+ * U6: defaults to current-workspace sessions; other projects expand,
+ * then each project directory is its own dropdown; search is global;
+ * workspace chip is always visible. Session titles ellipsize (no x-scroll).
  */
 export function LeftSidebar({
   isCollapsed,
@@ -58,6 +59,19 @@ export function LeftSidebar({
 }: LeftSidebarProps) {
   const [query, setQuery] = useState('');
   const [showOtherProjects, setShowOtherProjects] = useState(false);
+  /** Expanded other-project directory keys (collapsed by default). */
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  const toggleProjectExpanded = (key: string) => {
+    setExpandedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const sessions =
     sessionListState.status === 'ready' || sessionListState.status === 'partial'
@@ -200,6 +214,8 @@ export function LeftSidebar({
             otherCount={otherCount}
             showOtherProjects={showOtherProjects}
             onToggleOtherProjects={() => setShowOtherProjects((v) => !v)}
+            expandedProjects={expandedProjects}
+            onToggleProject={toggleProjectExpanded}
             isSearching={isSearching}
             otherIds={otherIds}
             activeSessionId={activeSessionId}
@@ -303,6 +319,8 @@ interface SessionListProps {
   otherCount: number;
   showOtherProjects: boolean;
   onToggleOtherProjects: () => void;
+  expandedProjects: Set<string>;
+  onToggleProject: (key: string) => void;
   isSearching: boolean;
   otherIds: Set<string>;
   activeSessionId: string | null;
@@ -320,6 +338,8 @@ function SessionList({
   otherCount,
   showOtherProjects,
   onToggleOtherProjects,
+  expandedProjects,
+  onToggleProject,
   isSearching,
   otherIds,
   activeSessionId,
@@ -339,11 +359,20 @@ function SessionList({
     }
     if (!isSearching && showOtherProjects) {
       for (const project of otherProjectGroups) {
-        items.push(...project.sessions);
+        // Only keyboard-navigate sessions inside expanded project dropdowns.
+        if (expandedProjects.has(project.key)) {
+          items.push(...project.sessions);
+        }
       }
     }
     return items;
-  }, [groupedSessions, isSearching, showOtherProjects, otherProjectGroups]);
+  }, [
+    groupedSessions,
+    isSearching,
+    showOtherProjects,
+    otherProjectGroups,
+    expandedProjects,
+  ]);
 
   const preferredIndex = useMemo(() => {
     if (!activeSessionId) return 0;
@@ -499,49 +528,65 @@ function SessionList({
           </button>
 
           {showOtherProjects &&
-            otherProjectGroups.map((project) => (
-              <div
-                key={project.key}
-                className="session-group"
-                role="group"
-                aria-label={project.label}
-              >
+            otherProjectGroups.map((project) => {
+              const isExpanded = expandedProjects.has(project.key);
+              const count = project.sessions.length;
+              return (
                 <div
-                  className="session-group-title session-project-title"
-                  title={project.path ?? undefined}
+                  key={project.key}
+                  className="session-group session-project-group"
+                  role="group"
+                  aria-label={project.label}
                 >
-                  {project.label}
-                </div>
-                {groupSessionsByDate(project.sessions).map((dateGroup) => (
-                  <div key={`${project.key}-${dateGroup.label}`}>
-                    {project.sessions.length > 3 && (
-                      <div className="session-group-title session-date-sub">
-                        {dateGroup.label}
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs session-project-toggle"
+                    onClick={() => onToggleProject(project.key)}
+                    aria-expanded={isExpanded}
+                    title={project.path ?? project.label}
+                  >
+                    <Icon
+                      name={isExpanded ? 'chevronDown' : 'chevronRight'}
+                      size={12}
+                      className="session-project-chevron"
+                    />
+                    <span className="session-project-label truncate">
+                      {project.label}
+                    </span>
+                    <span className="session-project-count">{count}</span>
+                  </button>
+                  {isExpanded &&
+                    groupSessionsByDate(project.sessions).map((dateGroup) => (
+                      <div key={`${project.key}-${dateGroup.label}`}>
+                        {project.sessions.length > 3 && (
+                          <div className="session-group-title session-date-sub">
+                            {dateGroup.label}
+                          </div>
+                        )}
+                        {dateGroup.sessions.map((session) => {
+                          const index = sessionIndex++;
+                          return (
+                            <SessionRow
+                              key={session.id}
+                              optionId={`${listId}-opt-${session.id}`}
+                              sessionIndex={index}
+                              session={session}
+                              isActive={session.id === activeSessionId}
+                              isKeyboardActive={index === activeIndex}
+                              showPathHint={Boolean(session.cwd)}
+                              onSelect={(id) => {
+                                setActiveIndex(index);
+                                onSelect(id);
+                              }}
+                              onDelete={onDelete}
+                            />
+                          );
+                        })}
                       </div>
-                    )}
-                    {dateGroup.sessions.map((session) => {
-                      const index = sessionIndex++;
-                      return (
-                        <SessionRow
-                          key={session.id}
-                          optionId={`${listId}-opt-${session.id}`}
-                          sessionIndex={index}
-                          session={session}
-                          isActive={session.id === activeSessionId}
-                          isKeyboardActive={index === activeIndex}
-                          showPathHint={Boolean(session.cwd)}
-                          onSelect={(id) => {
-                            setActiveIndex(index);
-                            onSelect(id);
-                          }}
-                          onDelete={onDelete}
-                        />
-                      );
-                    })}
-                  </div>
-                ))}
-              </div>
-            ))}
+                    ))}
+                </div>
+              );
+            })}
         </div>
       )}
     </div>
@@ -589,7 +634,9 @@ function SessionRow({
         title={session.cwd ?? session.name}
       >
         <span className="session-item-main min-w-0">
-          <span className="session-item-name">{session.name}</span>
+          <span className="session-item-name truncate" title={session.name}>
+            {session.name}
+          </span>
           {showPathHint && (
             <span className="session-item-path mono truncate">{pathHint}</span>
           )}
