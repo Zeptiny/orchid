@@ -253,6 +253,33 @@ describe('plaintext fallback', () => {
 
     consoleSpy.mockRestore();
   });
+
+  it('returns null when file is encrypted but safeStorage is unavailable (P0-2)', async () => {
+    // Encrypt a value while safeStorage is available
+    mockSafeStorage.isEncryptionAvailable.mockReturnValue(true);
+    await keychain.encryptAndStore('key', 'sk-secret-api-key', { keychainPath });
+
+    // Verify the stored file is encrypted
+    const content = JSON.parse(fs.readFileSync(keychainPath, 'utf-8'));
+    expect(content.encrypted).toBe(true);
+
+    // Now simulate safeStorage becoming unavailable (e.g. Linux libsecret crash)
+    mockSafeStorage.isEncryptionAvailable.mockReturnValue(false);
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const result = await keychain.retrieveAndDecrypt('key', { keychainPath });
+
+    // Must NOT return the base64 ciphertext — that would leak it as a Bearer token
+    expect(result).toBeNull();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Cannot decrypt'),
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('safeStorage is unavailable'),
+    );
+
+    consoleSpy.mockRestore();
+  });
 });
 
 // ===========================================================================
@@ -553,6 +580,29 @@ describe('injectKeychainKeys', () => {
     const config = { providers: 'not-an-object' };
     const result = await keychain.injectKeychainKeys(config, { keychainPath });
     expect(result).toEqual(config);
+  });
+
+  it('preserves explicit empty string api_key instead of injecting from keychain (P2-6)', async () => {
+    mockSafeStorage.isEncryptionAvailable.mockReturnValue(true);
+
+    // Store a key in the keychain
+    await keychain.encryptAndStore(
+      keychain.providerKeychainKey('openai'),
+      'sk-stored-key',
+      { keychainPath },
+    );
+
+    // Config with explicit empty string api_key
+    const config = {
+      providers: {
+        openai: { api_key: '' },
+      },
+    };
+
+    const result = await keychain.injectKeychainKeys(config, { keychainPath });
+    const providers = result['providers'] as Record<string, Record<string, unknown>>;
+    // Empty string should be preserved, not overwritten from keychain
+    expect(providers['openai']!['api_key']).toBe('');
   });
 });
 

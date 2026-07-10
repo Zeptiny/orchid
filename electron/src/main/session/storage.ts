@@ -51,6 +51,23 @@ function resolveOptions(opts?: StorageOptions) {
 }
 
 // ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+/** UUID v4 regex (case-insensitive). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Validate that a session ID is a safe UUID.
+ *
+ * Defense-in-depth: rejects path traversal characters (`..`, `/`, `\`)
+ * even if the IPC layer already validates with `z.string().uuid()`.
+ */
+export function isValidSessionId(id: string): boolean {
+  return UUID_RE.test(id);
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -115,6 +132,9 @@ function extractChainCount(text: string): number | undefined {
  * Matches Python `storage.py:save_session`.
  */
 export function saveSession(session: Session, opts?: StorageOptions): void {
+  if (!isValidSessionId(session.id)) {
+    throw new Error(`Refusing to save session with unsafe ID: ${session.id}`);
+  }
   const { sessionsDir } = resolveOptions(opts);
   fs.mkdirSync(sessionsDir, { recursive: true });
   fs.chmodSync(sessionsDir, 0o700);
@@ -134,6 +154,9 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
  * Matches Python `storage.py:load_session`.
  */
 export function loadSession(sessionId: string, opts?: StorageOptions): Session | null {
+  if (!isValidSessionId(sessionId)) {
+    return null;
+  }
   const { sessionsDir } = resolveOptions(opts);
   const filePath = path.join(sessionsDir, `${sessionId}.json`);
   if (!fs.existsSync(filePath)) {
@@ -279,6 +302,9 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
  * Matches Python `storage.py:delete_session`.
  */
 export function deleteSession(sessionId: string, opts?: StorageOptions): boolean {
+  if (!isValidSessionId(sessionId)) {
+    return false;
+  }
   const { sessionsDir, toolOutputCacheDir, webFetchCacheDir } = resolveOptions(opts);
   const filePath = path.join(sessionsDir, `${sessionId}.json`);
   if (!fs.existsSync(filePath)) {

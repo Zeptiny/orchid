@@ -26,50 +26,28 @@
 **Raw findings:** 86 -> merged 86 -> 83 actionable, 3 suppressed (<75), 0 pre-existing  
 **Open after fixes (2026-07-09):** 64 actionable remaining (19 fixed: P0-1, P1-2/3/7/9/14/16–20/29/32–37, P2-7)
 
+## Fix Log
+
+| Date | Fixed | WONTFIX |
+|------|-------|---------|
+| 2026-07-09 session 1 | P0-1, P1-2/3/7/9/14/16-20/29/32-37, P2-7 (19) | — |
+| 2026-07-09 session 2 | P0-2 (keychain leak), P0-3+P1-30 (path traversal), P2-6 (empty api_key) (3+1 dup) | P0-4 (project MCP RCE accepted risk), P1-12 (todo→kanban), P1-27 (RAG poisoning) |
+
+**Current (2026-07-09+ session 2):** 59 open actionable (64 - 3 fixes - 3 WONTFIX counting P0-3/P1-30 as 1), or 62 if counting WONTFIX as still tracked. Breakdown: P0: 0 open +1 WONTFIX, P1: 16 open +2 WONTFIX, P2: 31 open, P3: 9 open.
+
 ---
 
-## P0 -- Critical (3)
+## P0 -- Critical (0 open, 1 WONTFIX)
 
-| # | File | Issue | Reviewer | Confidence | Route |
-|---|------|-------|----------|------------|-------|
-| 2 | `electron/src/main/config/keychain.ts:222` | Keychain encrypted flag flip leaks ciphertext as plaintext API key | adversarial | 75 | `advisory -> human` |
-| 3 | `electron/src/main/session/storage.ts:138` | Session ID path traversal allows arbitrary file read/write via IPC | adversarial | 75 | `advisory -> human` |
-| 4 | `electron/src/main/mcp/transport.ts:40` | Arbitrary code execution via malicious project .orchid.json MCP config | security | 50 | `gated_auto -> human` |
+| # | File | Issue | Reviewer | Confidence | Route | Status |
+|---|------|-------|----------|------------|-------|--------|
+| 4 | `electron/src/main/mcp/transport.ts:40` | Arbitrary code execution via malicious project .orchid.json MCP config | security | 50 | `gated_auto -> human` | WONTFIX |
 
-### P0-2: Keychain encrypted flag flip leaks ciphertext as plaintext API key
+### P0-4: Arbitrary code execution via malicious project .orchid.json MCP config [WONTFIX]
 
-- **File:** `electron/src/main/config/keychain.ts:222`
-- **Reviewer:** adversarial
-- **Severity:** P0 (Critical) | **Confidence:** 75 | **Route:** `advisory -> human`
-- **Requires verification:** true
+> **Resolution (2026-07-09+):** WONTFIX — accepted risk. Project config MCP servers are treated as trusted because the developer clones and opens the project intentionally. Equivalent to VS Code extension trust model. No auto-load block will be added. (User decision)
 
-**Why it matters:** When a keychain file was previously encrypted (encrypted:true) but safeStorage becomes unavailable (Linux without libsecret, keychain locked), retrieveAndDecrypt falls through to returning the raw base64 ciphertext as if it were the API key. This ciphertext is then injected into LLM provider config and sent as an Authorization header, leaking the encrypted blob to the provider and causing auth failures that are misdiagnosed. Conversely, when encrypted:false but safeStorage becomes available, plaintext keys are returned without re-encryption, leaving them exposed on disk indefinitely.
-
-**Evidence:**
-- `keychain.ts:222 -- if (file.encrypted && isAvailable()) tries decrypt, else falls through to return stored (base64 ciphertext) as plaintext`
-- `keychain.ts:233-235 -- plaintext fallback comment says 'return the raw value' but raw value is base64 ciphertext when file.encrypted was true`
-- `keychain.ts:286-317 -- injectKeychainKeys calls retrieveAndDecrypt and injects result directly into provider api_key without validating it looks like a real key`
-- `Scenario: User on Linux with libsecret stores key (encrypted:true, base64 value). Later libsecret crashes. isAvailable()=false, file.encrypted=true, condition false, returns base64 blob. LLM call sends base64 blob as Bearer token.`
-
-
-### P0-3: Session ID path traversal allows arbitrary file read/write via IPC
-
-- **File:** `electron/src/main/session/storage.ts:138`
-- **Reviewer:** adversarial
-- **Severity:** P0 (Critical) | **Confidence:** 75 | **Route:** `advisory -> human`
-- **Requires verification:** true
-
-**Why it matters:** Session IDs from renderer IPC (session:load, session:delete) are interpolated directly into filesystem paths via path.join without sanitization. A renderer compromise or malicious preload bypass can supply '../../config/keychain' as sessionId, causing loadSession to read arbitrary JSON files and deleteSession to delete them plus associated cache directories. The Zod schema only checks min(1) non-empty, not path safety.
-
-**Evidence:**
-- `storage.ts:138 -- filePath = path.join(sessionsDir, `${sessionId}.json`) with no sanitization of sessionId`
-- `storage.ts:281-316 -- deleteSession uses sessionId to build toolOutputCacheDir and webFetchCacheDir paths, then rmSync recursive`
-- `session.ts:28-32 -- sessionLoadSchema only validates z.string().min(1), no UUID format check`
-- `session.ts:34-36 -- sessionDeleteSchema same: only min(1)`
-- `Scenario: Renderer sends session:delete with id='../../cache' -> deletes ~/.orchid/cache recursively. Or session:load with id='../../config/keychain' -> reads keychain.json as session.`
-
-
-### P0-4: Arbitrary code execution via malicious project .orchid.json MCP config
+### P0-4 (original): Arbitrary code execution via malicious project .orchid.json MCP config
 
 - **File:** `electron/src/main/mcp/transport.ts:40`
 - **Reviewer:** security
@@ -89,7 +67,7 @@
 
 ---
 
-## P1 -- High (20)
+## P1 -- High (16 open, 2 WONTFIX)
 
 | # | File | Issue | Reviewer | Confidence | Route |
 |---|------|-------|----------|------------|-------|
@@ -111,7 +89,6 @@
 | 26 | `electron/src/main/rag/indexer.ts:159` | Synchronous fs operations inside async indexing loops block main process | performance | 75 | `safe_auto -> review-fixer` |
 | 27 | `electron/src/main/rag/indexer.ts:372` | Cascade: RAG file content poisoning injects instructions into LLM context | adversarial | 75 | `advisory -> human` |
 | 28 | `electron/src/main/rag/store.ts:388` | RAG upsertFile loses all other files' vectors when vectors file is missing | correctness | 75 | `safe_auto -> review-fixer` |
-| 30 | `electron/src/main/session/storage.ts:138` | Path traversal via sessionId in session storage | security | 75 | `safe_auto -> review-fixer` |
 | 31 | `electron/src/main/tools/search/grep.ts:1` | Tool handlers beyond filesystem lack behavior tests | testing | 75 | `manual -> human` |
 
 ### P1-1: agent-machine toolExecuting state unreachable dead code
@@ -231,7 +208,11 @@
 **Suggested fix:** Accept both 'running' and 'active' as ACTIVE in chainFromStorageDict, and preserve 'failed' as distinct status or map to INTERRUPTED with explicit migration. Add FAILED to ChainStatus enum for storage compat.
 
 
-### P1-12: TodoStatus narrowed from 7 to 3 values
+### P1-12: TodoStatus narrowed from 7 to 3 values [WONTFIX]
+
+> **Resolution (2026-07-09+):** WONTFIX — Todo tool will be replaced by kanban tool later. No need to restore full 7-status enum. Legacy status fallback to OPEN is acceptable interim. (User decision)
+
+### P1-12 (original): TodoStatus narrowed from 7 to 3 values
 
 - **File:** `electron/src/shared/types/todo.ts:18`
 - **Reviewer:** api-contract
@@ -385,7 +366,11 @@
 **Suggested fix:** Replace sync fs calls with async fs.promises equivalents and parallelize with limited concurrency (e.g., p-limit 10). Keep hash check sync only if needed, but move file reads off main thread or to worker.
 
 
-### P1-27: Cascade: RAG file content poisoning injects instructions into LLM context
+### P1-27: Cascade: RAG file content poisoning injects instructions into LLM context [WONTFIX]
+
+> **Resolution (2026-07-09+):** WONTFIX — will not be fixed. Accepted as residual risk, out-of-scope for current migration. RAG content is user-project controlled. (User decision)
+
+### P1-27 (original): Cascade: RAG file content poisoning injects instructions into LLM context
 
 - **File:** `electron/src/main/rag/indexer.ts:372`
 - **Reviewer:** adversarial
@@ -419,24 +404,6 @@
 **Suggested fix:** In upsertFile, when oldVectors is null or length-mismatched, either (a) clear the entire index and re-index from scratch, or (b) throw/reject so the caller falls back to full re-index. At minimum, detect the null case and call this.clear() or return early with an error instead of silently producing a truncated vectors file.
 
 
-### P1-30: Path traversal via sessionId in session storage
-
-- **File:** `electron/src/main/session/storage.ts:138`
-- **Reviewer:** security
-- **Severity:** P1 (High) | **Confidence:** 75 | **Route:** `safe_auto -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** An attacker who compromises the renderer (e.g., via XSS) can supply a sessionId containing '../' to escape the sessions directory. loadSession and deleteSession use path.join(sessionsDir, `${sessionId}.json`) without sanitization, allowing read of arbitrary JSON files and deletion of arbitrary files. The IPC handler only validates non-empty string, not UUID format.
-
-**Evidence:**
-- `storage.ts:138 -- const filePath = path.join(sessionsDir, `${sessionId}.json`);`
-- `storage.ts:283 -- const filePath = path.join(sessionsDir, `${sessionId}.json`); in deleteSession`
-- `ipc/session.ts:29 -- id: z.string().min(1) -- no UUID or path traversal check`
-- `ipc/session.ts:34 -- same for delete schema`
-
-**Suggested fix:** Validate sessionId as UUID v4 or sanitize with path.basename and reject if it contains '..', '/', or '\\'. Add z.string().uuid() validation in sessionLoadSchema and sessionDeleteSchema in electron/src/main/ipc/session.ts, and add basename check in storage.ts.
-
-
 ### P1-31: Tool handlers beyond filesystem lack behavior tests
 
 - **File:** `electron/src/main/tools/search/grep.ts:1`
@@ -455,7 +422,7 @@
 **Suggested fix:** Add behavior tests for each tool category: search (grep with pattern matching), process (execute_command with timeout, background), rag (search with mock store), ast (get_file_skeleton, find_symbol_references with real files). Prioritize tools used in agentic loop.
 
 
-## P2 -- Moderate (32)
+## P2 -- Moderate (31 open)
 
 | # | File | Issue | Reviewer | Confidence | Route |
 |---|------|-------|----------|------------|-------|
@@ -464,7 +431,6 @@
 | 3 | `electron/src/main/agents/manager.ts:306` | flushStateCallbacks resolves waiters for non-terminal subagents | correctness | 75 | `safe_auto -> review-fixer` |
 | 4 | `electron/src/main/agents/xstate/interrupt-machine.ts:67` | Interrupt machine has no internal timeout, can get stuck | julik-frontend-races | 75 | `safe_auto -> review-fixer` |
 | 5 | `electron/src/main/agents/xstate/session-machine.ts:260` | Session-machine INTERRUPT handler has empty loop body for subagent cancel | correctness | 75 | `safe_auto -> review-fixer` |
-| 6 | `electron/src/main/config/keychain.ts:305` | Keychain empty api_key treated as missing | testing | 75 | `safe_auto -> review-fixer` |
 | 8 | `electron/src/main/llm/middleware/provider-quirks.ts:133` | Provider quirks benign error suppression untested for post-content path | testing | 75 | `safe_auto -> review-fixer` |
 | 9 | `electron/src/main/llm/middleware/retry.ts:43` | Retry middleware sleep ignores abort signal during backoff | reliability | 75 | `safe_auto -> review-fixer` |
 | 10 | `electron/src/main/llm/middleware/throttle.ts:80` | Throttle middleware timer callback can throw on closed controller | reliability | 75 | `safe_auto -> review-fixer` |
@@ -572,23 +538,6 @@
 - `chat.ts:981 -- getSubagentManager().cancelRunning() handles third Esc at IPC layer, masking the session-machine bug`
 
 **Suggested fix:** In the idle branch of the INTERRUPT handler (line 260-268), actually cancel the matching subagent actors or update their entries to interrupted state. Alternatively, remove the dead loop and add a comment that subagent cancellation is handled at the IPC layer in chat.ts.
-
-
-### P2-6: Keychain empty api_key treated as missing
-
-- **File:** `electron/src/main/config/keychain.ts:305`
-- **Reviewer:** testing
-- **Severity:** P2 (Moderate) | **Confidence:** 75 | **Route:** `safe_auto -> review-fixer`
-- **Requires verification:** true
-
-**Why it matters:** injectKeychainKeys checks `if (!entryCopy['api_key'])` which treats empty string as falsy and would inject from keychain even when user explicitly set api_key to empty string to disable a provider. This could cause unexpected API key usage. The edge case is not tested.
-
-**Evidence:**
-- `electron/src/main/config/keychain.ts:305 -- if (!entryCopy['api_key']) treats empty string as missing`
-- `electron/tests/unit/keychain.test.ts:503-524 -- tests literal api_key precedence but not empty string case`
-- `electron/tests/unit/keychain.test.ts:526-539 -- tests missing keychain entry but not empty api_key`
-
-**Suggested fix:** Change check to `if (entryCopy['api_key'] === undefined)` to only inject when key is truly missing, not when empty. Add test for empty string api_key case.
 
 
 ### P2-8: Provider quirks benign error suppression untested for post-content path

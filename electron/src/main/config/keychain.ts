@@ -300,7 +300,13 @@ export async function retrieveAndDecrypt(
   const stored = file.entries[key];
   if (stored === undefined) return null;
 
-  if (file.encrypted && isAvailable()) {
+  if (file.encrypted) {
+    if (!isAvailable()) {
+      console.error(
+        `[keychain] Cannot decrypt key '${key}' — file was encrypted but safeStorage is unavailable.`,
+      );
+      return null;
+    }
     try {
       const buffer = Buffer.from(stored, 'base64');
       return safeStorage.decryptString(buffer);
@@ -311,8 +317,7 @@ export async function retrieveAndDecrypt(
     }
   }
 
-  // Plaintext fallback (either file was stored as plaintext, or encryption
-  // is currently unavailable — return the raw value).
+  // Plaintext fallback — file.encrypted === false, so stored is the raw value.
   return stored;
 }
 
@@ -391,8 +396,9 @@ export async function injectKeychainKeys(
 
     const entryCopy = { ...(entry as Record<string, unknown>) };
 
-    // Only inject from keychain if no literal api_key is set
-    if (!entryCopy['api_key']) {
+    // Only inject from keychain if no literal api_key is set.
+    // Use explicit undefined check so empty string ("") is preserved (P2-6).
+    if (entryCopy['api_key'] === undefined) {
       const stored = await retrieveAndDecrypt(providerKeychainKey(alias), options);
       if (stored) {
         entryCopy['api_key'] = stored;

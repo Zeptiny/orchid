@@ -26,22 +26,22 @@ function abortChatForWindow(windowId: string): void {
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
 const sessionLoadSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().uuid(),
   /** When false, peek from disk without activating or seeding chat history. */
   activate: z.boolean().optional().default(true),
 });
 
 const sessionDeleteSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().uuid(),
 });
 
 const sessionRenameSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().uuid(),
   name: z.string().min(1),
 });
 
 const sessionChangeModelSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().uuid(),
   model: z.string().min(1),
 });
 

@@ -10,6 +10,7 @@
  * - Switching: In-flight subagents continue running
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -26,6 +27,7 @@ import {
   loadSession,
   listSavedSessions,
   deleteSession,
+  isValidSessionId,
 } from '../../src/main/session/storage';
 import { SessionManager } from '../../src/main/session/manager';
 
@@ -52,7 +54,7 @@ function makeStorageOpts(dir: string): StorageOptions {
 function makeSession(overrides: Partial<Session> = {}): Session {
   const now = new Date().toISOString();
   return {
-    id: overrides.id ?? `session-${Math.random().toString(36).slice(2, 10)}`,
+    id: overrides.id ?? randomUUID(),
     name: overrides.name ?? 'Test Session',
     model: overrides.model ?? 'gpt-4o',
     chains: overrides.chains ?? [],
@@ -147,16 +149,16 @@ afterEach(() => {
 describe('saveSession → loadSession round-trip', () => {
   it('save then load produces identical session', () => {
     const session = makeSession({
-      id: 'round-trip-1',
+      id: 'a1111111-1111-4111-8111-111111111111',
       name: 'Round Trip Test',
       model: 'anthropic/claude-3.5-sonnet',
     });
 
     saveSession(session, storageOpts);
-    const loaded = loadSession('round-trip-1', storageOpts);
+    const loaded = loadSession('a1111111-1111-4111-8111-111111111111', storageOpts);
 
     expect(loaded).not.toBeNull();
-    expect(loaded!.id).toBe('round-trip-1');
+    expect(loaded!.id).toBe('a1111111-1111-4111-8111-111111111111');
     expect(loaded!.name).toBe('Round Trip Test');
     expect(loaded!.model).toBe('anthropic/claude-3.5-sonnet');
     expect(loaded!.chains).toEqual([]);
@@ -168,13 +170,13 @@ describe('saveSession → loadSession round-trip', () => {
   it('save then load preserves chains and messages', () => {
     const now = new Date().toISOString();
     const session = makeSession({
-      id: 'round-trip-2',
+      id: 'a2222222-2222-4222-8222-222222222222',
       name: 'With Chains',
       model: 'gpt-4o',
       chains: [
         {
           id: 'chain-1',
-          sessionId: 'round-trip-2',
+          sessionId: 'a2222222-2222-4222-8222-222222222222',
           messages: [
             {
               id: 'msg-1',
@@ -217,7 +219,7 @@ describe('saveSession → loadSession round-trip', () => {
     });
 
     saveSession(session, storageOpts);
-    const loaded = loadSession('round-trip-2', storageOpts);
+    const loaded = loadSession('a2222222-2222-4222-8222-222222222222', storageOpts);
 
     expect(loaded).not.toBeNull();
     expect(loaded!.chains).toHaveLength(1);
@@ -232,25 +234,26 @@ describe('saveSession → loadSession round-trip', () => {
   });
 
   it('load returns null for non-existent session', () => {
-    const loaded = loadSession('non-existent-id', storageOpts);
+    const loaded = loadSession(randomUUID(), storageOpts);
     expect(loaded).toBeNull();
   });
 
   it('load returns null for corrupted JSON', () => {
+    const corruptedId = 'b0000000-0000-4000-8000-000000000001';
     fs.mkdirSync(path.join(tmpDir, 'sessions'), { recursive: true });
-    fs.writeFileSync(path.join(tmpDir, 'sessions', 'corrupted.json'), 'not valid json{{{', 'utf-8');
-    const loaded = loadSession('corrupted', storageOpts);
+    fs.writeFileSync(path.join(tmpDir, 'sessions', `${corruptedId}.json`), 'not valid json{{{', 'utf-8');
+    const loaded = loadSession(corruptedId, storageOpts);
     expect(loaded).toBeNull();
   });
 
   it('save overwrites existing session', () => {
-    const session1 = makeSession({ id: 'overwrite-1', name: 'Original Name' });
+    const session1 = makeSession({ id: 'a3333333-3333-4333-8333-333333333333', name: 'Original Name' });
     saveSession(session1, storageOpts);
 
-    const session2 = makeSession({ id: 'overwrite-1', name: 'Updated Name', model: 'new-model' });
+    const session2 = makeSession({ id: 'a3333333-3333-4333-8333-333333333333', name: 'Updated Name', model: 'new-model' });
     saveSession(session2, storageOpts);
 
-    const loaded = loadSession('overwrite-1', storageOpts);
+    const loaded = loadSession('a3333333-3333-4333-8333-333333333333', storageOpts);
     expect(loaded).not.toBeNull();
     expect(loaded!.name).toBe('Updated Name');
     expect(loaded!.model).toBe('new-model');
@@ -259,7 +262,7 @@ describe('saveSession → loadSession round-trip', () => {
   it('save preserves todoStore data', () => {
     const now = new Date().toISOString();
     const session = makeSession({
-      id: 'todo-test',
+      id: 'a4444444-4444-4444-8444-444444444444',
       todoStore: {
         tasks: [
           {
@@ -275,7 +278,7 @@ describe('saveSession → loadSession round-trip', () => {
     });
 
     saveSession(session, storageOpts);
-    const loaded = loadSession('todo-test', storageOpts);
+    const loaded = loadSession('a4444444-4444-4444-8444-444444444444', storageOpts);
 
     expect(loaded).not.toBeNull();
     expect(loaded!.todoStore.tasks).toHaveLength(1);
@@ -291,8 +294,8 @@ describe('saveSession → loadSession round-trip', () => {
 
 describe('atomic write', () => {
   it('session file uses .tmp during write (no partial on crash)', () => {
-    const session = makeSession({ id: 'atomic-1', name: 'Atomic Test' });
-    const sessionPath = path.join(tmpDir, 'sessions', 'atomic-1.json');
+    const session = makeSession({ id: 'a5555555-5555-4555-8555-555555555555', name: 'Atomic Test' });
+    const sessionPath = path.join(tmpDir, 'sessions', 'a5555555-5555-4555-8555-555555555555.json');
     const tmpPath = sessionPath + '.tmp';
 
     saveSession(session, storageOpts);
@@ -304,15 +307,15 @@ describe('atomic write', () => {
     // Verify content is valid JSON
     const content = fs.readFileSync(sessionPath, 'utf-8');
     const parsed = JSON.parse(content);
-    expect(parsed.id).toBe('atomic-1');
+    expect(parsed.id).toBe('a5555555-5555-4555-8555-555555555555');
     expect(parsed.name).toBe('Atomic Test');
   });
 
   it('session file has mode 0o600', () => {
-    const session = makeSession({ id: 'chmod-1' });
+    const session = makeSession({ id: 'a6666666-6666-4666-8666-666666666666' });
     saveSession(session, storageOpts);
 
-    const sessionPath = path.join(tmpDir, 'sessions', 'chmod-1.json');
+    const sessionPath = path.join(tmpDir, 'sessions', 'a6666666-6666-4666-8666-666666666666.json');
     const stat = fs.statSync(sessionPath);
 
     // Check file permissions (owner read/write only)
@@ -331,12 +334,12 @@ describe('atomic write', () => {
   });
 
   it('atomic write cleans up .tmp on error', () => {
-    const session = makeSession({ id: 'atomic-cleanup' });
+    const session = makeSession({ id: 'a7777777-7777-4777-8777-777777777777' });
     saveSession(session, storageOpts);
 
     const sessionsDir = path.join(tmpDir, 'sessions');
     const files = fs.readdirSync(sessionsDir);
-    expect(files).toContain('atomic-cleanup.json');
+    expect(files).toContain('a7777777-7777-4777-8777-777777777777.json');
     expect(files.filter((f) => f.endsWith('.tmp'))).toHaveLength(0);
   });
 });
@@ -352,19 +355,19 @@ describe('listSavedSessions', () => {
   });
 
   it('lists a single session', () => {
-    const session = makeSession({ id: 'list-1', name: 'List Test', model: 'gpt-4o' });
+    const session = makeSession({ id: 'a8888888-8888-4888-8888-888888888888', name: 'List Test', model: 'gpt-4o' });
     saveSession(session, storageOpts);
 
     const sessions = listSavedSessions(storageOpts);
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].id).toBe('list-1');
+    expect(sessions[0].id).toBe('a8888888-8888-4888-8888-888888888888');
     expect(sessions[0].name).toBe('List Test');
     expect(sessions[0].model).toBe('gpt-4o');
   });
 
   it('lists multiple sessions sorted by mtime (newest first)', () => {
     // Create sessions with slight delays to ensure different mtimes
-    const session1 = makeSession({ id: 'list-old', name: 'Old Session' });
+    const session1 = makeSession({ id: 'a9999999-9999-4999-8999-999999999999', name: 'Old Session' });
     saveSession(session1, storageOpts);
 
     // Small delay to ensure different mtime
@@ -373,23 +376,23 @@ describe('listSavedSessions', () => {
       // busy wait
     }
 
-    const session2 = makeSession({ id: 'list-new', name: 'New Session' });
+    const session2 = makeSession({ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'New Session' });
     saveSession(session2, storageOpts);
 
     const sessions = listSavedSessions(storageOpts);
     expect(sessions).toHaveLength(2);
     // Newest first
-    expect(sessions[0].id).toBe('list-new');
-    expect(sessions[1].id).toBe('list-old');
+    expect(sessions[0].id).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    expect(sessions[1].id).toBe('a9999999-9999-4999-8999-999999999999');
   });
 
   it('includes chain count in summary', () => {
     const session = makeSession({
-      id: 'list-chains',
+      id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       chains: [
         {
           id: 'chain-1',
-          sessionId: 'list-chains',
+          sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
           messages: [],
           status: 'completed',
           model: 'gpt-4o',
@@ -400,7 +403,7 @@ describe('listSavedSessions', () => {
         },
         {
           id: 'chain-2',
-          sessionId: 'list-chains',
+          sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
           messages: [],
           status: 'completed',
           model: 'gpt-4o',
@@ -421,7 +424,7 @@ describe('listSavedSessions', () => {
   it('handles corrupted session files gracefully', () => {
     const sessionsDir = path.join(tmpDir, 'sessions');
     // Write a valid session
-    const session = makeSession({ id: 'valid-session' });
+    const session = makeSession({ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' });
     saveSession(session, storageOpts);
 
     // Write a corrupted session file
@@ -430,7 +433,7 @@ describe('listSavedSessions', () => {
     const sessions = listSavedSessions(storageOpts);
     // Should still return the valid session, skipping the corrupted one
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].id).toBe('valid-session');
+    expect(sessions[0].id).toBe('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
   });
 
   it('defaults name to "Unnamed" when missing', () => {
@@ -455,69 +458,107 @@ describe('listSavedSessions', () => {
 
 describe('deleteSession', () => {
   it('deletes session file', () => {
-    const session = makeSession({ id: 'delete-1' });
+    const session = makeSession({ id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' });
     saveSession(session, storageOpts);
 
-    const sessionPath = path.join(tmpDir, 'sessions', 'delete-1.json');
+    const sessionPath = path.join(tmpDir, 'sessions', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd.json');
     expect(fs.existsSync(sessionPath)).toBe(true);
 
-    const result = deleteSession('delete-1', storageOpts);
+    const result = deleteSession('dddddddd-dddd-4ddd-8ddd-dddddddddddd', storageOpts);
     expect(result).toBe(true);
     expect(fs.existsSync(sessionPath)).toBe(false);
   });
 
   it('returns false for non-existent session', () => {
-    const result = deleteSession('non-existent', storageOpts);
+    const result = deleteSession(randomUUID(), storageOpts);
     expect(result).toBe(false);
   });
 
   it('cleans up tool-output cache directory', () => {
-    const session = makeSession({ id: 'delete-cache' });
+    const session = makeSession({ id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' });
     saveSession(session, storageOpts);
 
     // Create tool-output cache
-    const toolOutputDir = path.join(tmpDir, 'cache', 'tool-output', 'delete-cache');
+    const toolOutputDir = path.join(tmpDir, 'cache', 'tool-output', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee');
     fs.mkdirSync(toolOutputDir, { recursive: true });
     fs.writeFileSync(path.join(toolOutputDir, 'output.txt'), 'cached output');
 
     expect(fs.existsSync(toolOutputDir)).toBe(true);
 
-    deleteSession('delete-cache', storageOpts);
+    deleteSession('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', storageOpts);
 
     expect(fs.existsSync(toolOutputDir)).toBe(false);
   });
 
   it('cleans up web-fetch cache directory', () => {
-    const session = makeSession({ id: 'delete-web' });
+    const session = makeSession({ id: 'ffffffff-ffff-4fff-8fff-ffffffffffff' });
     saveSession(session, storageOpts);
 
     // Create web-fetch cache
-    const webFetchDir = path.join(tmpDir, 'cache', 'web-fetch', 'delete-web');
+    const webFetchDir = path.join(tmpDir, 'cache', 'web-fetch', 'ffffffff-ffff-4fff-8fff-ffffffffffff');
     fs.mkdirSync(webFetchDir, { recursive: true });
     fs.writeFileSync(path.join(webFetchDir, 'page.md'), 'cached page');
 
     expect(fs.existsSync(webFetchDir)).toBe(true);
 
-    deleteSession('delete-web', storageOpts);
+    deleteSession('ffffffff-ffff-4fff-8fff-ffffffffffff', storageOpts);
 
     expect(fs.existsSync(webFetchDir)).toBe(false);
   });
 
   it('cleans up both caches simultaneously', () => {
-    const session = makeSession({ id: 'delete-both' });
+    const session = makeSession({ id: 'a1111111-1111-4111-8111-111111111112' });
     saveSession(session, storageOpts);
 
-    const toolOutputDir = path.join(tmpDir, 'cache', 'tool-output', 'delete-both');
-    const webFetchDir = path.join(tmpDir, 'cache', 'web-fetch', 'delete-both');
+    const toolOutputDir = path.join(tmpDir, 'cache', 'tool-output', 'a1111111-1111-4111-8111-111111111112');
+    const webFetchDir = path.join(tmpDir, 'cache', 'web-fetch', 'a1111111-1111-4111-8111-111111111112');
     fs.mkdirSync(toolOutputDir, { recursive: true });
     fs.mkdirSync(webFetchDir, { recursive: true });
     fs.writeFileSync(path.join(toolOutputDir, 'output.txt'), 'data');
     fs.writeFileSync(path.join(webFetchDir, 'page.md'), 'data');
 
-    deleteSession('delete-both', storageOpts);
+    deleteSession('a1111111-1111-4111-8111-111111111112', storageOpts);
 
     expect(fs.existsSync(toolOutputDir)).toBe(false);
     expect(fs.existsSync(webFetchDir)).toBe(false);
+  });
+});
+
+// ===========================================================================
+// Path traversal / invalid ID rejection
+// ===========================================================================
+
+describe('path traversal rejection', () => {
+  it('isValidSessionId rejects path traversal sequences', () => {
+    expect(isValidSessionId('../../etc/passwd')).toBe(false);
+    expect(isValidSessionId('../steal-data')).toBe(false);
+    expect(isValidSessionId('foo/bar')).toBe(false);
+    expect(isValidSessionId('foo\\bar')).toBe(false);
+    expect(isValidSessionId('..')).toBe(false);
+    expect(isValidSessionId('')).toBe(false);
+    expect(isValidSessionId('not-a-uuid')).toBe(false);
+  });
+
+  it('isValidSessionId accepts valid UUIDs', () => {
+    expect(isValidSessionId('a1111111-1111-4111-8111-111111111111')).toBe(true);
+    expect(isValidSessionId(randomUUID())).toBe(true);
+  });
+
+  it('loadSession returns null for path traversal IDs', () => {
+    expect(loadSession('../../etc/passwd', storageOpts)).toBeNull();
+    expect(loadSession('foo/bar', storageOpts)).toBeNull();
+    expect(loadSession('foo\\bar', storageOpts)).toBeNull();
+  });
+
+  it('deleteSession returns false for path traversal IDs', () => {
+    expect(deleteSession('../../etc/passwd', storageOpts)).toBe(false);
+    expect(deleteSession('foo/bar', storageOpts)).toBe(false);
+    expect(deleteSession('foo\\bar', storageOpts)).toBe(false);
+  });
+
+  it('saveSession throws for path traversal IDs', () => {
+    const session = makeSession({ id: '../../etc/passwd' });
+    expect(() => saveSession(session, storageOpts)).toThrow(/unsafe ID/);
   });
 });
 
@@ -568,7 +609,7 @@ describe('SessionManager', () => {
 
   it('switchTo() returns null for non-existent session', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const result = manager.switchTo('non-existent');
+    const result = manager.switchTo(randomUUID());
     expect(result).toBeNull();
     expect(manager.getActive()).toBeNull();
   });

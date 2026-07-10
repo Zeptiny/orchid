@@ -5,6 +5,7 @@
  * Tests STRUCTURE (operations complete without error), not deep behavior.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -39,7 +40,7 @@ function makeStorageOpts(dir: string): StorageOptions {
 function makeSession(overrides: Partial<Session> = {}): Session {
   const now = new Date().toISOString();
   return {
-    id: overrides.id ?? `session-${Math.random().toString(36).slice(2, 10)}`,
+    id: overrides.id ?? randomUUID(),
     name: overrides.name ?? 'Test Session',
     model: overrides.model ?? 'gpt-4o',
     chains: overrides.chains ?? [],
@@ -102,40 +103,41 @@ describe('Session Parity', () => {
 
   describe('load', () => {
     it('save then load produces identical session', () => {
-      const session = makeSession({ id: 'load-test', name: 'Load Test' });
+      const session = makeSession({ id: 'c1111111-1111-4111-8111-111111111111', name: 'Load Test' });
       saveSession(session, storageOpts);
 
-      const loaded = loadSession('load-test', storageOpts);
+      const loaded = loadSession('c1111111-1111-4111-8111-111111111111', storageOpts);
       expect(loaded).not.toBeNull();
-      expect(loaded!.id).toBe('load-test');
+      expect(loaded!.id).toBe('c1111111-1111-4111-8111-111111111111');
       expect(loaded!.name).toBe('Load Test');
     });
 
     it('load returns null for non-existent session', () => {
-      const loaded = loadSession('non-existent', storageOpts);
+      const loaded = loadSession(randomUUID(), storageOpts);
       expect(loaded).toBeNull();
     });
 
     it('load returns null for corrupted JSON', () => {
+      const corruptedId = 'c0000000-0000-4000-8000-000000000001';
       fs.mkdirSync(path.join(tmpDir, 'sessions'), { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, 'sessions', 'corrupted.json'), 'not json', 'utf-8');
+      fs.writeFileSync(path.join(tmpDir, 'sessions', `${corruptedId}.json`), 'not json', 'utf-8');
 
-      const loaded = loadSession('corrupted', storageOpts);
+      const loaded = loadSession(corruptedId, storageOpts);
       expect(loaded).toBeNull();
     });
   });
 
   describe('save', () => {
     it('save creates a session file', () => {
-      const session = makeSession({ id: 'save-test' });
+      const session = makeSession({ id: 'c2222222-2222-4222-8222-222222222222' });
       saveSession(session, storageOpts);
 
-      const filePath = path.join(tmpDir, 'sessions', 'save-test.json');
+      const filePath = path.join(tmpDir, 'sessions', 'c2222222-2222-4222-8222-222222222222.json');
       expect(fs.existsSync(filePath)).toBe(true);
     });
 
     it('save uses atomic write (no .tmp file after completion)', () => {
-      const session = makeSession({ id: 'atomic-test' });
+      const session = makeSession({ id: 'c3333333-3333-4333-8333-333333333333' });
       saveSession(session, storageOpts);
 
       const files = fs.readdirSync(path.join(tmpDir, 'sessions'));
@@ -143,43 +145,43 @@ describe('Session Parity', () => {
     });
 
     it('save overwrites existing session', () => {
-      const session1 = makeSession({ id: 'overwrite', name: 'Original' });
+      const session1 = makeSession({ id: 'c4444444-4444-4444-8444-444444444444', name: 'Original' });
       saveSession(session1, storageOpts);
 
-      const session2 = makeSession({ id: 'overwrite', name: 'Updated' });
+      const session2 = makeSession({ id: 'c4444444-4444-4444-8444-444444444444', name: 'Updated' });
       saveSession(session2, storageOpts);
 
-      const loaded = loadSession('overwrite', storageOpts);
+      const loaded = loadSession('c4444444-4444-4444-8444-444444444444', storageOpts);
       expect(loaded!.name).toBe('Updated');
     });
   });
 
   describe('delete', () => {
     it('delete removes session file', () => {
-      const session = makeSession({ id: 'delete-test' });
+      const session = makeSession({ id: 'c5555555-5555-4555-8555-555555555555' });
       saveSession(session, storageOpts);
 
-      const result = deleteSession('delete-test', storageOpts);
+      const result = deleteSession('c5555555-5555-4555-8555-555555555555', storageOpts);
       expect(result).toBe(true);
-      expect(loadSession('delete-test', storageOpts)).toBeNull();
+      expect(loadSession('c5555555-5555-4555-8555-555555555555', storageOpts)).toBeNull();
     });
 
     it('delete returns false for non-existent session', () => {
-      const result = deleteSession('non-existent', storageOpts);
+      const result = deleteSession(randomUUID(), storageOpts);
       expect(result).toBe(false);
     });
 
     it('delete cleans up cache directories', () => {
-      const session = makeSession({ id: 'cache-test' });
+      const session = makeSession({ id: 'c6666666-6666-4666-8666-666666666666' });
       saveSession(session, storageOpts);
 
       // Create cache dirs
-      const toolOutputDir = path.join(tmpDir, 'cache', 'tool-output', 'cache-test');
-      const webFetchDir = path.join(tmpDir, 'cache', 'web-fetch', 'cache-test');
+      const toolOutputDir = path.join(tmpDir, 'cache', 'tool-output', 'c6666666-6666-4666-8666-666666666666');
+      const webFetchDir = path.join(tmpDir, 'cache', 'web-fetch', 'c6666666-6666-4666-8666-666666666666');
       fs.mkdirSync(toolOutputDir, { recursive: true });
       fs.mkdirSync(webFetchDir, { recursive: true });
 
-      deleteSession('cache-test', storageOpts);
+      deleteSession('c6666666-6666-4666-8666-666666666666', storageOpts);
 
       expect(fs.existsSync(toolOutputDir)).toBe(false);
       expect(fs.existsSync(webFetchDir)).toBe(false);
@@ -193,28 +195,28 @@ describe('Session Parity', () => {
     });
 
     it('list returns sessions sorted by mtime (newest first)', () => {
-      const session1 = makeSession({ id: 'old', name: 'Old' });
+      const session1 = makeSession({ id: 'c7777777-7777-4777-8777-777777777777', name: 'Old' });
       saveSession(session1, storageOpts);
 
       // Small delay for different mtime
       const start = Date.now();
       while (Date.now() - start < 50) { /* busy wait */ }
 
-      const session2 = makeSession({ id: 'new', name: 'New' });
+      const session2 = makeSession({ id: 'c8888888-8888-4888-8888-888888888888', name: 'New' });
       saveSession(session2, storageOpts);
 
       const sessions = listSavedSessions(storageOpts);
       expect(sessions).toHaveLength(2);
-      expect(sessions[0].id).toBe('new');
-      expect(sessions[1].id).toBe('old');
+      expect(sessions[0].id).toBe('c8888888-8888-4888-8888-888888888888');
+      expect(sessions[1].id).toBe('c7777777-7777-4777-8777-777777777777');
     });
 
     it('list includes chain count', () => {
       const session = makeSession({
-        id: 'chains-test',
+        id: 'c9999999-9999-4999-8999-999999999999',
         chains: [
-          { id: 'c1', sessionId: 'chains-test', messages: [], status: 'completed', model: 'gpt-4o', agentName: 'General', agentType: 'internal', agentTier: 'bloom', subagentRecord: null },
-          { id: 'c2', sessionId: 'chains-test', messages: [], status: 'completed', model: 'gpt-4o', agentName: 'General', agentType: 'internal', agentTier: 'bloom', subagentRecord: null },
+          { id: 'c1', sessionId: 'c9999999-9999-4999-8999-999999999999', messages: [], status: 'completed', model: 'gpt-4o', agentName: 'General', agentType: 'internal', agentTier: 'bloom', subagentRecord: null },
+          { id: 'c2', sessionId: 'c9999999-9999-4999-8999-999999999999', messages: [], status: 'completed', model: 'gpt-4o', agentName: 'General', agentType: 'internal', agentTier: 'bloom', subagentRecord: null },
         ],
       });
       saveSession(session, storageOpts);
@@ -286,7 +288,7 @@ describe('Session Parity', () => {
 
     it('switchTo() returns null for non-existent session', () => {
       const manager = new SessionManager({ storage: storageOpts });
-      const result = manager.switchTo('non-existent');
+      const result = manager.switchTo(randomUUID());
       expect(result).toBeNull();
     });
 
