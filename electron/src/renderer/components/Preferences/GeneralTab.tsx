@@ -94,6 +94,7 @@ export function GeneralTab({
               options={modelOptions}
               onChange={(value) => onChange({ default_model: value })}
               label="Select default model"
+              align="start"
               className="config-model-picker"
               emptyMessage="Add providers first"
             />
