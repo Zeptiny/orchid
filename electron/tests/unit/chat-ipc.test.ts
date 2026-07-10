@@ -201,6 +201,8 @@ vi.mock('../../src/main/llm/orchestrator', () => ({
 
 vi.mock('../../src/main/ipc/session', () => ({
   getSessionManager: () => mocks.sessionManager,
+  resolveWindowWorkspace: (windowId: string) =>
+    mocks.workspace.resolveWorkspace(windowId),
 }));
 
 vi.mock('../../src/main/project/layers', () => ({
@@ -361,6 +363,37 @@ describe('chat IPC', () => {
     expect(mocks.sessionManager.getActive()?.cwd).toBe(mocks.workspace._testProjectDir);
     expect(mocks.sessionManager.create).not.toHaveBeenCalled();
     expect(mocks.streamChat).toHaveBeenCalled();
+  });
+
+  it('passes frozen turn cwd + sessionId into streamChat context', async () => {
+    mocks.streamResponses.push('ctx ok');
+    mocks.sessionManager._setActive({
+      id: 'turn-ctx-session',
+      name: 'Ctx',
+      model: 'test/model',
+      cwd: mocks.workspace._testProjectDir,
+      chains: [],
+      activeChainId: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      subagentChains: [],
+      todoStore: { tasks: [] },
+    });
+
+    const send = vi.fn();
+    const webContents = { id: 102, send };
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+
+    await chatSend!({ sender: webContents }, { message: 'Use frozen cwd' });
+    await waitForDoneCount(send, 1);
+
+    expect(mocks.streamChat).toHaveBeenCalled();
+    const call = mocks.streamChat.mock.calls[0]?.[0] as {
+      context?: { cwd?: string };
+      sessionId?: string;
+    };
+    expect(call.context?.cwd).toBe(mocks.workspace._testProjectDir);
+    expect(call.sessionId).toBe('turn-ctx-session');
   });
 
   it('does not replay the previous assistant response when a new turn starts', async () => {

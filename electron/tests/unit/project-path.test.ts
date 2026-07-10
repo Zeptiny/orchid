@@ -18,6 +18,10 @@ import {
   canonicalizeProjectDirectory,
   getProjectDirectoryStatus,
 } from '../../src/main/project/path';
+import {
+  resolveWorkspaceFromParts,
+  isWorkspaceBound,
+} from '../../src/main/project/workspace';
 
 // ---------------------------------------------------------------------------
 // Temp dir helpers
@@ -189,5 +193,102 @@ describe('getProjectDirectoryStatus', () => {
     expect(getProjectDirectoryStatus(dir)).toBe('valid');
     expect(getProjectDirectoryStatus(path.join(tmpDir, 'gone'))).toBe('missing');
     expect(getProjectDirectoryStatus('relative')).toBe('missing');
+  });
+});
+
+// ===========================================================================
+// resolveWorkspaceFromParts — draft fallthrough
+// ===========================================================================
+
+describe('resolveWorkspaceFromParts', () => {
+  it('prefers valid draft over session and sticky', () => {
+    const draft = path.join(tmpDir, 'draft');
+    const session = path.join(tmpDir, 'session');
+    const sticky = path.join(tmpDir, 'sticky');
+    fs.mkdirSync(draft);
+    fs.mkdirSync(session);
+    fs.mkdirSync(sticky);
+
+    const info = resolveWorkspaceFromParts({
+      draftCwd: draft,
+      sessionCwd: session,
+      stickyDefault: sticky,
+    });
+
+    expect(info.source).toBe('draft');
+    expect(info.status).toBe('valid');
+    expect(info.cwd).toBe(fs.realpathSync(draft));
+    expect(isWorkspaceBound(info)).toBe(true);
+  });
+
+  it('falls through stale/missing draft to valid session cwd', () => {
+    const session = path.join(tmpDir, 'session-ok');
+    const sticky = path.join(tmpDir, 'sticky-ok');
+    fs.mkdirSync(session);
+    fs.mkdirSync(sticky);
+    const missingDraft = path.join(tmpDir, 'draft-gone');
+
+    const info = resolveWorkspaceFromParts({
+      draftCwd: missingDraft,
+      sessionCwd: session,
+      stickyDefault: sticky,
+    });
+
+    expect(info.source).toBe('session');
+    expect(info.status).toBe('valid');
+    expect(info.cwd).toBe(fs.realpathSync(session));
+    expect(isWorkspaceBound(info)).toBe(true);
+  });
+
+  it('falls through stale draft and null session to sticky default', () => {
+    const sticky = path.join(tmpDir, 'sticky-only');
+    fs.mkdirSync(sticky);
+    const missingDraft = path.join(tmpDir, 'draft-missing');
+
+    const info = resolveWorkspaceFromParts({
+      draftCwd: missingDraft,
+      sessionCwd: null,
+      stickyDefault: sticky,
+    });
+
+    expect(info.source).toBe('default');
+    expect(info.status).toBe('valid');
+    expect(info.cwd).toBe(fs.realpathSync(sticky));
+  });
+
+  it('falls through relative draft (rejected) to session', () => {
+    const session = path.join(tmpDir, 'session-rel');
+    fs.mkdirSync(session);
+
+    const info = resolveWorkspaceFromParts({
+      draftCwd: 'relative/draft',
+      sessionCwd: session,
+      stickyDefault: null,
+    });
+
+    expect(info.source).toBe('session');
+    expect(info.cwd).toBe(fs.realpathSync(session));
+  });
+
+  it('returns unbound when draft/session/sticky are all empty', () => {
+    const info = resolveWorkspaceFromParts({
+      draftCwd: null,
+      sessionCwd: null,
+      stickyDefault: null,
+    });
+    expect(info).toEqual({ cwd: null, source: 'unbound', status: 'unbound' });
+    expect(isWorkspaceBound(info)).toBe(false);
+  });
+
+  it('does not treat invalid session.cwd as bound (isWorkspaceBound false)', () => {
+    const missing = path.join(tmpDir, 'session-missing');
+    const info = resolveWorkspaceFromParts({
+      draftCwd: null,
+      sessionCwd: missing,
+      stickyDefault: null,
+    });
+    expect(info.source).toBe('session');
+    expect(info.status).toBe('missing');
+    expect(isWorkspaceBound(info)).toBe(false);
   });
 });

@@ -15,12 +15,8 @@ import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { toolRegistry } from '../tools';
 import type { ToolExecutionContext } from '../tools/types';
-import { getConfig } from '../config/loader';
-import { getSessionManager } from './session';
-import {
-  isWorkspaceBound,
-  resolveWorkspace,
-} from '../project/workspace';
+import { getSessionManager, resolveWindowWorkspace } from './session';
+import { isWorkspaceBound } from '../project/workspace';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -48,18 +44,16 @@ const RENDERER_ALLOWED_TOOLS = new Set([
 
 /**
  * Resolve tool context for renderer-initiated tool:execute (outside an agent turn).
- * Uses active workspace (draft → session → sticky). Rejects if unbound.
+ * Uses active workspace (draft → session → sticky) via resolveWindowWorkspace.
+ * Rejects unless isWorkspaceBound (no raw session.cwd fallback).
  */
 function resolveToolExecuteContext(windowId: string): ToolExecutionContext | null {
   try {
-    const active = getSessionManager().getActive();
-    const info = resolveWorkspace(windowId, {
-      sessionCwd: active?.cwd ?? null,
-      stickyDefault: getConfig().default_project_dir,
-    });
+    const info = resolveWindowWorkspace(windowId);
     if (!isWorkspaceBound(info) || info.cwd == null) {
       return null;
     }
+    const active = getSessionManager().getActive();
     return {
       cwd: info.cwd,
       sessionId: active?.id,
@@ -108,9 +102,18 @@ export function registerToolIPC(): void {
       };
     }
 
+    // Validate args against the tool's Zod input schema before the handler
+    const validation = toolRegistry.validate(name, args);
+    if (!validation.ok) {
+      return {
+        content: validation.error,
+        isError: true,
+      };
+    }
+
     try {
       const { normalizeToolHandlerResult } = await import('../tools/result');
-      const result = await tool.handler(args, toolCtx);
+      const result = await tool.handler(validation.data, toolCtx);
       return normalizeToolHandlerResult(result);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);

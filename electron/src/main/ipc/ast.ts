@@ -12,12 +12,8 @@ import {
   isIndexing,
 } from '../ast/indexer';
 import { ASTStore } from '../ast/store';
-import { getConfig } from '../config/loader';
-import { getSessionManager } from './session';
-import {
-  isWorkspaceBound,
-  resolveWorkspace,
-} from '../project/workspace';
+import { resolveWindowWorkspace } from './session';
+import { isWorkspaceBound } from '../project/workspace';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -26,21 +22,16 @@ const astIndexSchema = z.object({
 });
 
 /**
- * Resolve project path for AST IPC from active workspace.
- * windowId is optional — when missing, session/sticky only.
+ * Resolve project path for AST IPC from active workspace
+ * (draft → session → sticky via resolveWindowWorkspace).
+ * Only returns a path when isWorkspaceBound — no raw session.cwd fallback.
  */
 function resolveAstProjectPath(windowId?: string): string | null {
   try {
-    const active = getSessionManager().getActive();
-    const info = resolveWorkspace(windowId ?? '', {
-      sessionCwd: active?.cwd ?? null,
-      stickyDefault: getConfig().default_project_dir,
-    });
+    const info = resolveWindowWorkspace(windowId ?? '');
     if (isWorkspaceBound(info) && info.cwd != null) {
       return info.cwd;
     }
-    // Fallback: session cwd even if status is missing (legacy)
-    if (active?.cwd) return active.cwd;
   } catch {
     // ignore
   }

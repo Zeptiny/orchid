@@ -71,8 +71,8 @@ export interface ChatStateEvent {
   error: string | null;
   /** Current interrupt confirmation phase. */
   interruptState: 'idle' | 'confirmAgent' | 'confirmSubagents';
-  /** Current working directory of the main process. */
-  cwd?: string;
+  /** Active workspace cwd (session → draft → sticky); null/undefined when unbound. */
+  cwd?: string | null;
 }
 
 export interface ChatDoneEvent {

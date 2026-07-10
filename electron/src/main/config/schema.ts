@@ -4,6 +4,7 @@
  * 22 fields ported from Python `src/orchid/config.py` lines 40–104, plus
  * Electron-only `default_project_dir` for sticky session workspace default.
  */
+import * as path from 'node:path';
 import { z } from 'zod';
 import type { Config } from '../../shared/types/ipc-boundary';
 
@@ -107,11 +108,18 @@ export const configSchema = z
     background_command_idle_timeout: z.number().positive().default(900.0),
     /**
      * Sticky home-config default project directory for new sessions.
-     * Empty string is treated as null. Never invented from process.cwd().
+     * Empty string is treated as null. When non-null, must be absolute.
+     * Never invented from process.cwd().
      */
     default_project_dir: z.preprocess(
       (val) => (val === '' || val === undefined ? null : val),
-      z.string().nullable().default(null),
+      z
+        .string()
+        .nullable()
+        .default(null)
+        .refine((val) => val === null || path.isAbsolute(val), {
+          message: 'default_project_dir must be an absolute path when set',
+        }),
     ),
   })
   .strict();

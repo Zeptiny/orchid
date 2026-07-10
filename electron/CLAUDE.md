@@ -87,6 +87,11 @@ src/
 │   │   ├── index.ts         # Session initialization
 │   │   ├── manager.ts       # SessionManager — CRUD, auto-naming
 │   │   └── storage.ts       # JSON file storage in ~/.orchid/sessions/
+│   ├── project/             # Workspace binding (session cwd / sticky default)
+│   │   ├── path.ts          # inspect/canonicalize absolute project directories
+│   │   ├── workspace.ts     # draft cwd, sticky default_project_dir, resolveWorkspace*
+│   │   ├── layers.ts        # apply project .orchid.json + agents/skills overlays
+│   │   └── index.ts         # public re-exports
 │   ├── mcp/                 # Model Context Protocol client
 │   │   ├── index.ts         # MCPManager export
 │   │   ├── manager.ts       # MCPManager — start/stop/call/list tools
@@ -228,6 +233,14 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 - Built-in tools: filesystem, search, process, AST, RAG, todo, web, skill, MCP, subagent
 - MCP tools are merged from `MCPManager` at stream time
 - Tool output offloading: large outputs stored in session files, summary sent to LLM
+- **`ToolExecutionContext`**: frozen `{ cwd, sessionId? }` captured at turn start; every tool handler receives it (never re-reads live session/process.cwd mid-turn)
+- **`tool:execute` IPC**: allowlisted read-only tools only; args validated via `toolRegistry.validate` before the handler
+
+### Workspace / Session Cwd
+- Each `Session` has `cwd: string | null` (absolute project dir; null = unbound / legacy)
+- Resolution order: draft cwd → active `session.cwd` → sticky `default_project_dir` → unbound
+- `resolveWindowWorkspace(windowId)` (session IPC) and pure `resolveWorkspaceFromParts` (project/) — never `process.cwd()` as product default
+- Intentional rebind (pick/set/change_cwd) aborts in-flight chat and reloads project config layers
 
 ### LLM Provider Resolution
 - Config format: `alias/model` (e.g., `default/mimo-v2.5`, `openai/gpt-4o`)
@@ -255,11 +268,12 @@ Applied via `wrapLanguageModel()`:
 ### Session Persistence
 - JSON files in `~/.orchid/sessions/`
 - Sessions contain chains (conversation threads) with message history
+- Each session persists `cwd` (absolute project directory or null)
 - Auto-naming: seed-tier model generates titles from first exchange
 
 ## Configuration
 
-### Config Schema (22 fields)
+### Config Schema (23 fields)
 Defined in `src/main/config/schema.ts` — single source of truth:
 
 | Field | Default | Description |
@@ -286,6 +300,7 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 | `llm_stream_idle_timeout` | 300s | Stream idle timeout |
 | `llm_stream_retries` | 3 | LLM retry count |
 | `background_command_idle_timeout` | 900s | Background cmd timeout |
+| `default_project_dir` | `null` | Sticky absolute project dir for new sessions / draft workspace |
 
 ### Config Locations
 - User config: `~/.orchid/config.json`
@@ -345,6 +360,7 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 | Add IPC channel | `src/shared/types/ipc.ts` (channels + types), `src/main/ipc/<module>.ts`, `src/preload/index.ts` |
 | Modify chat flow | `src/main/ipc/chat.ts`, `src/main/agents/xstate/agent-machine.ts`, `src/renderer/hooks/useChat.ts` |
 | Change config | `src/main/config/schema.ts`, `src/main/config/loader.ts`, `src/shared/types/ipc-boundary.ts` |
+| Workspace / session cwd | `src/main/project/*`, `src/main/ipc/session.ts`, `src/shared/types/session.ts` |
 | Add React component | `src/renderer/components/`, import in parent |
 | Modify themes | `src/renderer/themes/`, CSS files + `index.ts` |
 | Agent definitions | `src/main/agents/defaults/` (YAML/JSON), `src/main/agents/registry.ts` |

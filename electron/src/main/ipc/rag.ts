@@ -13,12 +13,8 @@ import {
   clearIndex,
   isIndexing,
 } from '../rag/indexer';
-import { getConfig } from '../config/loader';
-import { getSessionManager } from './session';
-import {
-  isWorkspaceBound,
-  resolveWorkspace,
-} from '../project/workspace';
+import { resolveWindowWorkspace } from './session';
+import { isWorkspaceBound } from '../project/workspace';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -26,17 +22,17 @@ const ragIndexSchema = z.object({
   force: z.boolean().optional().default(false),
 });
 
+/**
+ * Resolve project path for RAG IPC from active workspace
+ * (draft → session → sticky via resolveWindowWorkspace).
+ * Only returns a path when isWorkspaceBound — no raw session.cwd fallback.
+ */
 function resolveRagProjectPath(windowId?: string): string | null {
   try {
-    const active = getSessionManager().getActive();
-    const info = resolveWorkspace(windowId ?? '', {
-      sessionCwd: active?.cwd ?? null,
-      stickyDefault: getConfig().default_project_dir,
-    });
+    const info = resolveWindowWorkspace(windowId ?? '');
     if (isWorkspaceBound(info) && info.cwd != null) {
       return info.cwd;
     }
-    if (active?.cwd) return active.cwd;
   } catch {
     // ignore
   }

@@ -25,7 +25,7 @@ import { MessageRole, MessageType } from '../../shared/types/message';
 import type { Message, Usage } from '../../shared/types/message';
 import { ChainStatus } from '../../shared/types/chain';
 import type { GenerateTitleCallback } from '../session/manager';
-import { getSessionManager } from './session';
+import { getSessionManager, resolveWindowWorkspace } from './session';
 import { importESM } from '../utils/esm-import';
 import { getBackgroundStore } from '../tools/process/background-store';
 import { getMCPManagerRef } from './mcp';
@@ -43,11 +43,7 @@ import {
   makeToolResultMessage,
   makeUserMessage,
 } from '../llm/message-factories';
-import {
-  clearDraftCwd,
-  isWorkspaceBound,
-  resolveWorkspace,
-} from '../project/workspace';
+import { clearDraftCwd, isWorkspaceBound } from '../project/workspace';
 import { applyWorkspaceProjectLayers } from '../project/layers';
 import type { ToolExecutionContext } from '../tools/types';
 
@@ -264,10 +260,7 @@ function ensureActiveSession(
   const windowId = String(webContents.id);
   const manager = getSessionManager();
   const active = manager.getActive();
-  const workspace = resolveWorkspace(windowId, {
-    sessionCwd: active?.cwd ?? null,
-    stickyDefault: getConfig().default_project_dir,
-  });
+  const workspace = resolveWindowWorkspace(windowId);
 
   if (!isWorkspaceBound(workspace) || workspace.cwd == null) {
     return {
@@ -374,12 +367,7 @@ function historyFromActiveSession(): Message[] {
  */
 function resolveUiWorkspaceCwd(windowId: string): string | null {
   try {
-    const active = getSessionManager().getActive();
-    const info = resolveWorkspace(windowId, {
-      sessionCwd: active?.cwd ?? null,
-      stickyDefault: getConfig().default_project_dir,
-    });
-    return info.cwd;
+    return resolveWindowWorkspace(windowId).cwd;
   } catch {
     return null;
   }

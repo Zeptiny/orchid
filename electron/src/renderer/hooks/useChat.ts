@@ -90,7 +90,7 @@ export interface ChatState {
   interrupted: boolean;
   /** Cumulative usage summed across all messages in the session. */
   cumulativeUsage: Usage;
-  /** Current working directory of the main process. */
+  /** Active workspace cwd (session → draft → sticky); empty when unbound. */
   cwd: string;
 }
 

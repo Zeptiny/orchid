@@ -49,6 +49,8 @@ export const sessionSchema = z.object({
   id: z.string(),
   name: z.string(),
   model: z.string(),
+  /** Absolute working/project directory; null when unbound. */
+  cwd: z.string().nullable(),
   chains: z.array(z.object({}).passthrough()),
   activeChainId: z.string().nullable().default(null),
   createdAt: z.string(),

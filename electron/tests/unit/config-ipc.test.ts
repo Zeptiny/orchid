@@ -242,3 +242,37 @@ describe('config:save concurrency lock (P1-3)', () => {
     expect(mocks.getConfigCalls).toBe(2);
   });
 });
+
+describe('config:save workspace layer reset', () => {
+  it('resets lastApplied and re-applies sticky project layers when set', async () => {
+    const layers = await import('../../src/main/project/layers');
+    vi.mocked(layers.resetLastAppliedProjectDir).mockClear();
+    vi.mocked(layers.applyWorkspaceProjectLayers).mockClear();
+
+    const sticky = '/tmp/orchid-sticky-project';
+    configState.default_project_dir = sticky;
+
+    await callSave({ theme: 'layer-test' });
+
+    expect(layers.resetLastAppliedProjectDir).toHaveBeenCalled();
+    expect(layers.applyWorkspaceProjectLayers).toHaveBeenCalledWith(sticky);
+  });
+
+  it('resets lastApplied and loads home-only when sticky is null', async () => {
+    const layers = await import('../../src/main/project/layers');
+    const loader = await import('../../src/main/config/loader');
+    vi.mocked(layers.resetLastAppliedProjectDir).mockClear();
+    vi.mocked(layers.applyWorkspaceProjectLayers).mockClear();
+    vi.mocked(loader.ConfigManager.load).mockClear();
+
+    configState.default_project_dir = null;
+
+    await callSave({ theme: 'home-only' });
+
+    expect(layers.resetLastAppliedProjectDir).toHaveBeenCalled();
+    expect(layers.applyWorkspaceProjectLayers).not.toHaveBeenCalled();
+    expect(loader.ConfigManager.load).toHaveBeenCalledWith({
+      projectDir: '/tmp/orchid-test-home',
+    });
+  });
+});

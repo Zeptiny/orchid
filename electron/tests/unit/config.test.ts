@@ -173,6 +173,12 @@ describe('schema & defaults', () => {
     expect(withPath.default_project_dir).toBe(abs);
   });
 
+  it('rejects relative default_project_dir when non-null', () => {
+    expect(() =>
+      configSchema.parse({ default_project_dir: 'relative/project' }),
+    ).toThrow(/absolute/i);
+  });
+
   it('treats empty string default_project_dir as null', () => {
     const parsed = configSchema.parse({ default_project_dir: '' });
     expect(parsed.default_project_dir).toBeNull();
