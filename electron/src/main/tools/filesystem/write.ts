@@ -18,6 +18,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { resolveToolPath } from '../types';
 import { triggerPostWriteCallbacks } from './callbacks';
 
 // ── Schema ─────────────────────────────────────────────────────────────────
@@ -82,8 +83,9 @@ function atomicWrite(filePath: string, content: string): void {
 
 // ── Handler ────────────────────────────────────────────────────────────────
 
-export const writeHandler: ToolHandler = async (input: unknown) => {
-  const { file_path, content } = input as WriteInput;
+export const writeHandler: ToolHandler = async (input: unknown, ctx) => {
+  const { file_path: rawPath, content } = input as WriteInput;
+  const file_path = resolveToolPath(ctx.cwd, rawPath);
 
   try {
     // Auto-create parent directories

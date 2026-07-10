@@ -40,7 +40,7 @@ const context7QuerySchema = z.object({
   query: z.string().describe('Documentation query'),
 });
 
-const dummyHandler: ToolHandler = async (input) => ({ result: input });
+const dummyHandler: ToolHandler = async (input, _ctx) => ({ result: input });
 
 function makeReadTool(): ToolDefinition {
   return {
@@ -376,14 +376,17 @@ describe('ToolRegistry', () => {
     });
 
     it('should preserve handler reference integrity', async () => {
-      const customHandler: ToolHandler = async (input) => ({
+      const customHandler: ToolHandler = async (input, _ctx) => ({
         processed: true,
         data: input,
       });
       registry.register(makeReadTool(), customHandler);
 
       const tool = registry.get('read')!;
-      const result = await tool.handler({ file_path: '/test' });
+      const result = await tool.handler(
+        { file_path: '/test' },
+        { cwd: '/tmp' },
+      );
       expect(result).toEqual({ processed: true, data: { file_path: '/test' } });
     });
 

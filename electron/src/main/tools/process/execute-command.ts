@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { getConfig } from '../../config/loader';
 import { getBackgroundStore, ENV_SUPPRESSION } from './background-store';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { resolveToolPath } from '../types';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -149,8 +150,10 @@ export async function executeCommand(
   shell?: boolean,
   background?: boolean,
   interactive?: boolean,
+  options?: { sessionId?: string },
 ): Promise<{ display: string; content: string; isError?: boolean }> {
   if (description === undefined) description = command;
+  // Caller (handler) should pass an absolute cwd; '.' remains for direct unit tests.
   if (workingDirectory === undefined) workingDirectory = '.';
   if (shell === undefined) shell = true;
   if (background === undefined) background = false;
@@ -182,6 +185,7 @@ export async function executeCommand(
         cwd: workingDirectory,
         interactive,
         description,
+        sessionId: options?.sessionId ?? null,
       });
       return {
         display: `$ ${command} (id: ${procId}, background)`,
@@ -311,16 +315,21 @@ export const executeCommandToolDefinition: ToolDefinition = {
   category: 'process',
 };
 
-export const executeCommandHandler: ToolHandler = async (input: unknown) => {
+export const executeCommandHandler: ToolHandler = async (input: unknown, ctx) => {
   const { command, description, working_directory, timeout, shell, background, interactive } =
     input as ExecuteCommandInput;
+  // Default cwd is the frozen session workspace; explicit paths resolve relative to it.
+  const resolvedCwd = working_directory
+    ? resolveToolPath(ctx.cwd, working_directory)
+    : ctx.cwd;
   return executeCommand(
     command,
     description,
-    working_directory,
+    resolvedCwd,
     timeout,
     shell,
     background,
     interactive,
+    { sessionId: ctx.sessionId },
   );
 };

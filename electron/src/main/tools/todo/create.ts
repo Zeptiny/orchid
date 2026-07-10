@@ -50,7 +50,7 @@ export function buildCreateTool(
     category: 'todo',
   };
 
-  const handler: ToolHandler = async (input: unknown): Promise<TodoToolResult> => {
+  const handler: ToolHandler = async (input: unknown, _ctx): Promise<TodoToolResult> => {
     const { title, subagent_id } = input as {
       title: string;
       subagent_id?: string;

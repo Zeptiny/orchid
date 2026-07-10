@@ -52,7 +52,7 @@ const IDENT_CHARS = new Set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXY
 // Handler
 // ---------------------------------------------------------------------------
 
-export const renameSymbolHandler: ToolHandler = async (input: unknown) => {
+export const renameSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
   const { old_name, new_name } = input as RenameSymbolInput;
 
   try {
@@ -72,9 +72,9 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown) => {
     };
     }
 
-    await ensureIndexed();
+    const projectPath = ctx.cwd;
+    await ensureIndexed(projectPath);
 
-    const projectPath = process.cwd();
     const store = new ASTStore(projectPath);
     const symbols = store.getSymbolsByName(old_name, 'both');
 

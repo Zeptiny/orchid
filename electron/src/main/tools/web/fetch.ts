@@ -318,7 +318,7 @@ export function buildWebFetchTool(
     category: 'web',
   };
 
-  const handler: ToolHandler = async (input: unknown): Promise<WebFetchResult> => {
+  const handler: ToolHandler = async (input: unknown, _ctx): Promise<WebFetchResult> => {
     const { url: rawUrl, query: rawQuery, mode: rawMode } = input as {
       url: string;
       query: string;

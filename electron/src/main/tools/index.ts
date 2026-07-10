@@ -141,4 +141,10 @@ export function registerBuiltinTools(options: BuiltinToolOptions = {}): void {
 }
 
 export { ToolRegistry } from './registry';
-export type { ToolDefinition, ToolHandler, RegisteredTool } from './types';
+export type {
+  ToolDefinition,
+  ToolHandler,
+  RegisteredTool,
+  ToolExecutionContext,
+} from './types';
+export { resolveToolPath } from './types';

@@ -22,6 +22,26 @@ const SUBAGENT_FORBIDDEN_TOOLS = new Set([
 ]);
 
 /**
+ * Resolve parent session cwd for subagent tools/prompts.
+ * Inherits active session workspace; never falls back to process.cwd().
+ */
+function resolveParentSessionCwd(): string | null {
+  try {
+    const session = getSessionManager().getActive();
+    if (session?.cwd != null && session.cwd !== '') {
+      return session.cwd;
+    }
+    const sticky = getConfig().default_project_dir;
+    if (sticky != null && sticky !== '') {
+      return sticky;
+    }
+  } catch {
+    // Session manager may be unavailable in tests
+  }
+  return null;
+}
+
+/**
  * Create the production stream runner for subagents.
  * Resolves model, strips nested-subagent tools, and yields StreamEvents.
  */
@@ -60,8 +80,20 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     const sessionId =
       params.sessionId ?? getSessionManager().getActive()?.id;
 
+    // Inherit parent session cwd (R6/subagent inheritance)
+    const parentCwd = resolveParentSessionCwd();
+    if (parentCwd == null) {
+      yield {
+        type: 'error',
+        title: 'No workspace',
+        detail:
+          'Subagent cannot run: parent session has no project working directory.',
+      };
+      return;
+    }
+
     const context = {
-      cwd: process.cwd(),
+      cwd: parentCwd,
       osInfo: `${process.platform} ${process.arch}`,
       time: new Date().toISOString(),
       subagentStates: [],
@@ -84,8 +116,8 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         timestamp: new Date().toISOString(),
         usage: null,
         hidden: false,
-    is_error: false,
-  },
+        is_error: false,
+      },
     ];
 
     const stream = streamChat({

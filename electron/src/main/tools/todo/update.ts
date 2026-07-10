@@ -47,7 +47,7 @@ export function buildUpdateTool(
     category: 'todo',
   };
 
-  const handler: ToolHandler = async (input: unknown): Promise<TodoToolResult> => {
+  const handler: ToolHandler = async (input: unknown, _ctx): Promise<TodoToolResult> => {
     const { id, title, status, subagent_id } = input as {
       id: string;
       title?: string;

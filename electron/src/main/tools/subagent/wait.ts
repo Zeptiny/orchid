@@ -35,7 +35,7 @@ export function buildWaitTool(
     category: 'subagent',
   };
 
-  const handler: ToolHandler = async (input: unknown): Promise<SubagentToolResult> => {
+  const handler: ToolHandler = async (input: unknown, _ctx): Promise<SubagentToolResult> => {
     const { subagent_ids } = input as { subagent_ids: string[] };
 
     // Validate non-empty

@@ -9,6 +9,7 @@
 import * as fs from 'node:fs';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { resolveToolPath } from '../types';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from '../../ast/parser';
 import { xmlAttr, fnv1a } from './utils';
 
@@ -71,8 +72,9 @@ const IMPORT_QUERIES: Record<string, string> = {
 // Handler
 // ---------------------------------------------------------------------------
 
-export const getFunctionHandler: ToolHandler = async (input: unknown) => {
-  const { file_path, function_name } = input as GetFunctionInput;
+export const getFunctionHandler: ToolHandler = async (input: unknown, ctx) => {
+  const { file_path: rawPath, function_name } = input as GetFunctionInput;
+  const file_path = resolveToolPath(ctx.cwd, rawPath);
 
   try {
     if (!fs.existsSync(file_path)) {

@@ -85,7 +85,7 @@ export function buildDelegateTool(
     category: 'subagent',
   };
 
-  const handler: ToolHandler = async (input: unknown): Promise<SubagentToolResult> => {
+  const handler: ToolHandler = async (input: unknown, _ctx): Promise<SubagentToolResult> => {
     const { name, task, type, tier } = input as {
       name: string;
       task: string;

@@ -45,7 +45,7 @@ export function buildMcpResourceTool(
     category: 'mcp',
   };
 
-  const handler: ToolHandler = async (input: unknown): Promise<McpResourceResult> => {
+  const handler: ToolHandler = async (input: unknown, _ctx): Promise<McpResourceResult> => {
     const { uri } = input as { uri: string };
 
     const serverName = manager.getResourceServer(uri);

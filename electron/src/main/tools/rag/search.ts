@@ -51,6 +51,7 @@ export const ragSearchDefinition: ToolDefinition = {
 
 export const ragSearchHandler: ToolHandler = async (
   input: unknown,
+  ctx,
 ) => {
   const { query, top_k, file_pattern } = input as {
     query: string;
@@ -58,7 +59,7 @@ export const ragSearchHandler: ToolHandler = async (
     file_pattern?: string;
   };
   const cfg = getConfig();
-  const projectPath = process.cwd();
+  const projectPath = ctx.cwd;
 
   const store = new RAGStore(projectPath);
   const status = store.status();

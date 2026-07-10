@@ -71,7 +71,7 @@ export const terminateCommandToolDefinition: ToolDefinition = {
   category: 'process',
 };
 
-export const terminateCommandHandler: ToolHandler = async (input: unknown) => {
+export const terminateCommandHandler: ToolHandler = async (input: unknown, _ctx) => {
   const { id } = input as TerminateCommandInput;
   return executeTerminateCommand(id);
 };

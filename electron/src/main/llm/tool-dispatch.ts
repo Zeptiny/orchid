@@ -23,6 +23,7 @@ import {
 } from './middleware/provider-quirks';
 import { makeToolResultMessage } from './message-factories';
 import { normalizeToolHandlerResult } from '../tools/result';
+import type { ToolExecutionContext } from '../tools/types';
 
 // ---------------------------------------------------------------------------
 // Constants — match Python client.py:44, 48-56
@@ -54,6 +55,11 @@ export interface ToolDispatchOptions {
   timeoutSeconds?: number;
   /** Session ID for output offloading cache. */
   sessionId?: string;
+  /**
+   * Absolute workspace cwd frozen for this turn.
+   * Required for correct relative-path tool behavior; missing cwd is an error.
+   */
+  cwd?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +71,7 @@ export interface ToolDispatchOptions {
  *
  * @param toolCall - The tool call to execute
  * @param registry - The tool registry to look up the handler
- * @param options - Optional timeout and session ID
+ * @param options - Optional timeout, session ID, and frozen turn cwd
  * @returns A TOOL_RESULT message with the tool's output
  */
 export async function executeToolCall(
@@ -110,11 +116,25 @@ export async function executeToolCall(
     );
   }
 
+  if (!options.cwd || options.cwd.trim() === '') {
+    return makeToolResultMessage(
+      toolCall.id,
+      name,
+      `Tool '${name}' cannot run: no workspace cwd in tool execution context.`,
+      true,
+    );
+  }
+
+  const toolCtx: ToolExecutionContext = {
+    cwd: options.cwd,
+    sessionId: options.sessionId,
+  };
+
   // Execute with optional timeout (shared policy with MCP wrappers)
   let result: unknown;
   try {
     result = await runWithToolTimeout(
-      () => registered.handler(args),
+      () => registered.handler(args, toolCtx),
       name,
       {
         timeoutSeconds,

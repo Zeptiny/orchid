@@ -9,6 +9,7 @@
 import * as fs from 'node:fs';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { resolveToolPath } from '../types';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from '../../ast/parser';
 import { xmlAttr, extractCallNames } from './utils';
 
@@ -42,8 +43,9 @@ export const getFileSkeletonDefinition: ToolDefinition = {
 // Handler
 // ---------------------------------------------------------------------------
 
-export const getFileSkeletonHandler: ToolHandler = async (input: unknown) => {
-  const { file_path } = input as GetFileSkeletonInput;
+export const getFileSkeletonHandler: ToolHandler = async (input: unknown, ctx) => {
+  const { file_path: rawPath } = input as GetFileSkeletonInput;
+  const file_path = resolveToolPath(ctx.cwd, rawPath);
 
   try {
     if (!fs.existsSync(file_path)) {

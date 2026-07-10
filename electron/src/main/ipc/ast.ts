@@ -2,6 +2,7 @@
  * AST IPC handlers — ast:status, ast:index.
  *
  * Wraps AST indexer from U17 with zod-validated payloads.
+ * Uses active workspace cwd (session → sticky), not process.cwd().
  */
 import { ipcMain } from 'electron';
 import { z } from 'zod';
@@ -11,6 +12,12 @@ import {
   isIndexing,
 } from '../ast/indexer';
 import { ASTStore } from '../ast/store';
+import { getConfig } from '../config/loader';
+import { getSessionManager } from './session';
+import {
+  isWorkspaceBound,
+  resolveWorkspace,
+} from '../project/workspace';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -18,17 +25,48 @@ const astIndexSchema = z.object({
   force: z.boolean().optional().default(false),
 });
 
+/**
+ * Resolve project path for AST IPC from active workspace.
+ * windowId is optional — when missing, session/sticky only.
+ */
+function resolveAstProjectPath(windowId?: string): string | null {
+  try {
+    const active = getSessionManager().getActive();
+    const info = resolveWorkspace(windowId ?? '', {
+      sessionCwd: active?.cwd ?? null,
+      stickyDefault: getConfig().default_project_dir,
+    });
+    if (isWorkspaceBound(info) && info.cwd != null) {
+      return info.cwd;
+    }
+    // Fallback: session cwd even if status is missing (legacy)
+    if (active?.cwd) return active.cwd;
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerASTIPC(): void {
   // ast:status — return AST store status
-  ipcMain.handle(IPC_CHANNELS.AST_STATUS, async () => {
-    const store = new ASTStore(process.cwd());
+  ipcMain.handle(IPC_CHANNELS.AST_STATUS, async (event) => {
+    const projectPath = resolveAstProjectPath(String(event.sender.id));
+    if (!projectPath) {
+      return {
+        totalFiles: 0,
+        totalSymbols: 0,
+        lastIndexed: null,
+        lastIndexDuration: null,
+      };
+    }
+    const store = new ASTStore(projectPath);
     return store.status();
   });
 
   // ast:index — trigger AST indexing
-  ipcMain.handle(IPC_CHANNELS.AST_INDEX, async (_event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.AST_INDEX, async (event, payload: unknown) => {
     // Validate input with zod (payload is optional)
     const parsed = astIndexSchema.safeParse(payload ?? {});
     if (!parsed.success) {
@@ -49,7 +87,20 @@ export function registerASTIPC(): void {
       };
     }
 
-    return indexProject({ force });
+    const projectPath = resolveAstProjectPath(String(event.sender.id));
+    if (!projectPath) {
+      return {
+        filesScanned: 0,
+        filesIndexed: 0,
+        filesSkipped: 0,
+        filesDeleted: 0,
+        symbolsExtracted: 0,
+        errors: ['No project folder selected'],
+        durationSeconds: 0,
+      };
+    }
+
+    return indexProject({ force, projectPath });
   });
 }
 

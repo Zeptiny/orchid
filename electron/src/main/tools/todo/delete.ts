@@ -31,7 +31,7 @@ export function buildDeleteTool(
     category: 'todo',
   };
 
-  const handler: ToolHandler = async (input: unknown): Promise<TodoToolResult> => {
+  const handler: ToolHandler = async (input: unknown, _ctx): Promise<TodoToolResult> => {
     const { id } = input as { id: string };
 
     const task = store.delete(id);

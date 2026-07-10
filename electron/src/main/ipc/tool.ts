@@ -14,6 +14,13 @@ import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { toolRegistry } from '../tools';
+import type { ToolExecutionContext } from '../tools/types';
+import { getConfig } from '../config/loader';
+import { getSessionManager } from './session';
+import {
+  isWorkspaceBound,
+  resolveWorkspace,
+} from '../project/workspace';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -39,11 +46,34 @@ const RENDERER_ALLOWED_TOOLS = new Set([
   'rag_search',
 ]);
 
+/**
+ * Resolve tool context for renderer-initiated tool:execute (outside an agent turn).
+ * Uses active workspace (draft → session → sticky). Rejects if unbound.
+ */
+function resolveToolExecuteContext(windowId: string): ToolExecutionContext | null {
+  try {
+    const active = getSessionManager().getActive();
+    const info = resolveWorkspace(windowId, {
+      sessionCwd: active?.cwd ?? null,
+      stickyDefault: getConfig().default_project_dir,
+    });
+    if (!isWorkspaceBound(info) || info.cwd == null) {
+      return null;
+    }
+    return {
+      cwd: info.cwd,
+      sessionId: active?.id,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerToolIPC(): void {
   // tool:execute — execute a tool by name (restricted to safe subset)
-  ipcMain.handle(IPC_CHANNELS.TOOL_EXECUTE, async (_event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.TOOL_EXECUTE, async (event, payload: unknown) => {
     const parsed = toolExecuteSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid tool:execute payload: ${parsed.error.message}`);
@@ -68,9 +98,19 @@ export function registerToolIPC(): void {
       };
     }
 
+    const windowId = String(event.sender.id);
+    const toolCtx = resolveToolExecuteContext(windowId);
+    if (!toolCtx) {
+      return {
+        content:
+          'No project folder selected. Choose a folder before running tools.',
+        isError: true,
+      };
+    }
+
     try {
       const { normalizeToolHandlerResult } = await import('../tools/result');
-      const result = await tool.handler(args);
+      const result = await tool.handler(args, toolCtx);
       return normalizeToolHandlerResult(result);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);

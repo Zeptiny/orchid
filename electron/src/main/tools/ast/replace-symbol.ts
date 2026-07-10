@@ -9,6 +9,7 @@
 import * as fs from 'node:fs';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { resolveToolPath } from '../types';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from '../../ast/parser';
 import { triggerPostWriteCallbacks } from '../filesystem/callbacks';
 import {
@@ -51,8 +52,9 @@ export const replaceSymbolDefinition: ToolDefinition = {
 // Handler
 // ---------------------------------------------------------------------------
 
-export const replaceSymbolHandler: ToolHandler = async (input: unknown) => {
-  const { file_path, symbol_name, new_source } = input as ReplaceSymbolInput;
+export const replaceSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
+  const { file_path: rawPath, symbol_name, new_source } = input as ReplaceSymbolInput;
+  const file_path = resolveToolPath(ctx.cwd, rawPath);
 
   try {
     if (!fs.existsSync(file_path)) {

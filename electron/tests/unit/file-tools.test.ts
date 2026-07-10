@@ -25,10 +25,15 @@ import {
   clearPostWriteCallbacks,
   callbackCount,
 } from '../../src/main/tools/filesystem/callbacks';
+import type { ToolExecutionContext } from '../../src/main/tools/types';
 
 // ── Test fixtures ──────────────────────────────────────────────────────────
 
 let tmpDir: string;
+
+function toolCtx(cwd?: string): ToolExecutionContext {
+  return { cwd: cwd ?? tmpDir };
+}
 
 function createTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'file-tools-test-'));
@@ -78,7 +83,7 @@ describe('read tool', () => {
       file_path: filePath,
       offset: 10,
       limit: 11,
-    });
+    }, toolCtx());
 
     expect(result.display).toContain('Read');
     expect(result.display).toContain('10-20');
@@ -93,7 +98,7 @@ describe('read tool', () => {
   it('should handle empty file', async () => {
     const filePath = writeFile('empty.txt', '');
 
-    const result = await readHandler({ file_path: filePath });
+    const result = await readHandler({ file_path: filePath }, toolCtx());
 
     expect(result.display).toContain('empty');
     expect(result.content).toContain('empty');
@@ -103,7 +108,7 @@ describe('read tool', () => {
   it('should use default limit from config when not specified', async () => {
     const filePath = writeFile('long.txt', generateLines(2000));
 
-    const result = await readHandler({ file_path: filePath });
+    const result = await readHandler({ file_path: filePath }, toolCtx());
 
     // Default limit is 1000
     expect(result.content).toContain('Showing lines 1-1000 of 2000');
@@ -116,7 +121,7 @@ describe('read tool', () => {
     const buf = Buffer.from([0x00, 0x01, 0x02, 0x03, 0x04]);
     fs.writeFileSync(filePath, buf);
 
-    const result = await readHandler({ file_path: filePath });
+    const result = await readHandler({ file_path: filePath }, toolCtx());
 
     expect(result.display).toContain('error');
     expect(result.content).toContain('binary');
@@ -129,7 +134,7 @@ describe('read tool', () => {
       file_path: filePath,
       offset: 10,
       limit: 5,
-    });
+    }, toolCtx());
 
     expect(result.display).toContain('out of range');
     expect(result.content).toContain('Offset of 10 is greater than the file line count 3');
@@ -138,7 +143,7 @@ describe('read tool', () => {
   it('should return error for nonexistent file', async () => {
     const result = await readHandler({
       file_path: path.join(tmpDir, 'nonexistent.txt'),
-    });
+    }, toolCtx());
 
     expect(result.display).toContain('error');
     expect(result.content).toContain('Error reading file');
@@ -155,7 +160,7 @@ describe('edit tool', () => {
       file_path: filePath,
       old_string: 'foo bar',
       new_string: 'baz qux',
-    });
+    }, toolCtx());
 
     expect(result.display).toContain('Edited');
     const content = readFile('edit.txt');
@@ -173,7 +178,7 @@ describe('edit tool', () => {
       file_path: filePath,
       old_string: 'hello',
       new_string: 'goodbye',
-    });
+    }, toolCtx());
 
     expect(result.display).toContain('Multiple matches');
     expect(result.content).toContain('found 3 times');
@@ -193,7 +198,7 @@ describe('edit tool', () => {
       old_string: 'hello',
       new_string: 'goodbye',
       replace_all: true,
-    });
+    }, toolCtx());
 
     expect(result.display).toContain('Edited');
     const content = readFile('multi.txt');
@@ -210,7 +215,7 @@ describe('edit tool', () => {
       file_path: filePath,
       old_string: 'nonexistent',
       new_string: 'replacement',
-    });
+    }, toolCtx());
 
     expect(result.display).toContain('not found');
     expect(result.content).toContain('not found');
@@ -223,7 +228,7 @@ describe('edit tool', () => {
       file_path: filePath,
       old_string: 'line 2',
       new_string: 'modified line 2',
-    });
+    }, toolCtx());
 
     expect(result.content).toContain('---');
     expect(result.content).toContain('+++');
@@ -243,7 +248,7 @@ describe('edit tool', () => {
       file_path: filePath,
       old_string: 'hello',
       new_string: 'goodbye',
-    });
+    }, toolCtx());
 
     expect(calledWith).toHaveLength(1);
     expect(calledWith[0]).toBe(filePath);
@@ -259,7 +264,7 @@ describe('edit tool', () => {
       file_path: filePath,
       old_string: 'hello',
       new_string: 'goodbye',
-    });
+    }, toolCtx());
 
     const afterStat = fs.statSync(filePath);
     expect(afterStat.mode).toBe(beforeStat.mode);
@@ -277,7 +282,7 @@ describe('edit tool', () => {
       file_path: filePath,
       old_string: 'echo hello',
       new_string: 'echo world',
-    });
+    }, toolCtx());
 
     const afterStat = fs.statSync(filePath);
     expect(afterStat.mode).toBe(beforeStat.mode);
@@ -294,7 +299,7 @@ describe('write tool', () => {
     const result = await writeHandler({
       file_path: filePath,
       content: 'hello world',
-    });
+    }, toolCtx());
 
     expect(result.display).toContain('Wrote');
     expect(result.display).toContain('1 lines');
@@ -308,7 +313,7 @@ describe('write tool', () => {
     const result = await writeHandler({
       file_path: filePath,
       content: 'new content',
-    });
+    }, toolCtx());
 
     expect(result.display).toContain('Wrote');
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('new content');
@@ -325,7 +330,7 @@ describe('write tool', () => {
     await writeHandler({
       file_path: filePath,
       content: 'test',
-    });
+    }, toolCtx());
 
     expect(calledWith).toHaveLength(1);
     expect(calledWith[0]).toBe(filePath);
@@ -337,7 +342,7 @@ describe('write tool', () => {
     const result = await writeHandler({
       file_path: filePath,
       content: 'first\nsecond\nthird',
-    });
+    }, toolCtx());
 
     expect(result.content).toContain('1 | first');
     expect(result.content).toContain('2 | second');
@@ -353,7 +358,7 @@ describe('write tool', () => {
     await writeHandler({
       file_path: filePath,
       content: 'new content',
-    });
+    }, toolCtx());
 
     const afterStat = fs.statSync(filePath);
     expect(afterStat.mode).toBe(beforeStat.mode);
@@ -366,7 +371,7 @@ describe('write tool', () => {
     await writeHandler({
       file_path: filePath,
       content: 'new file content',
-    });
+    }, toolCtx());
 
     const stat = fs.statSync(filePath);
     // Check that the file has 0o644 permissions (masked with umask)
@@ -386,7 +391,7 @@ describe('read_directory tool', () => {
 
     const result = await readDirectoryHandler({
       directory_path: tmpDir,
-    });
+    }, toolCtx());
 
     expect(result.display).toContain('Read directory');
     expect(result.content).toContain('package.json');
@@ -401,7 +406,7 @@ describe('read_directory tool', () => {
     const result = await readDirectoryHandler({
       directory_path: tmpDir,
       max_depth: 2,
-    });
+    }, toolCtx());
 
     // Depth 2: should show a/ and b/ but not c/ or deeper
     expect(result.content).toContain('a/');
@@ -416,7 +421,7 @@ describe('read_directory tool', () => {
 
     const result = await readDirectoryHandler({
       directory_path: tmpDir,
-    });
+    }, toolCtx());
 
     expect(result.content).toContain('visible.txt');
     expect(result.content).not.toContain('.hidden-file');
@@ -430,7 +435,7 @@ describe('read_directory tool', () => {
     const result = await readDirectoryHandler({
       directory_path: tmpDir,
       include_hidden: true,
-    });
+    }, toolCtx());
 
     expect(result.content).toContain('visible.txt');
     expect(result.content).toContain('.hidden-file');
@@ -455,7 +460,7 @@ describe('glob tool', () => {
     const result = await globHandler({
       directory_path: tmpDir,
       pattern: '**/*.ts',
-    });
+    }, toolCtx());
 
     expect(result.display).toContain('Found');
     expect(result.display).toContain('matches');
@@ -476,7 +481,7 @@ describe('glob tool', () => {
     const result = await globHandler({
       directory_path: tmpDir,
       pattern: '**/*.py',
-    });
+    }, toolCtx());
 
     expect(result.display).toContain('No matches');
     expect(result.content).toContain('No files found');
@@ -489,7 +494,7 @@ describe('glob tool', () => {
     const result = await globHandler({
       directory_path: tmpDir,
       pattern: '**/*.ts',
-    });
+    }, toolCtx());
 
     expect(result.content).toContain('visible.ts');
     expect(result.content).not.toContain('.hidden.ts');
@@ -503,7 +508,7 @@ describe('glob tool', () => {
       directory_path: tmpDir,
       pattern: '*.ts',
       include_hidden: true,
-    });
+    }, toolCtx());
 
     expect(result.content).toContain('visible.ts');
     expect(result.content).toContain('.hidden.ts');
@@ -530,7 +535,7 @@ describe('post-write callbacks', () => {
       file_path: filePath,
       old_string: 'hello',
       new_string: 'world',
-    });
+    }, toolCtx());
 
     expect(calls).toHaveLength(2);
     expect(calls).toContain(`rag:${filePath}`);
@@ -551,7 +556,7 @@ describe('post-write callbacks', () => {
     await writeHandler({
       file_path: filePath,
       content: 'test content',
-    });
+    }, toolCtx());
 
     expect(calls).toHaveLength(2);
     expect(calls).toContain(`rag:${filePath}`);
@@ -569,7 +574,7 @@ describe('post-write callbacks', () => {
       file_path: filePath,
       old_string: 'hello',
       new_string: 'world',
-    });
+    }, toolCtx());
 
     expect(result.display).toContain('warnings');
     expect(result.display).toContain('1 callback(s) failed');
@@ -586,7 +591,7 @@ describe('post-write callbacks', () => {
       file_path: filePath,
       old_string: 'hello',
       new_string: 'world',
-    });
+    }, toolCtx());
 
     // Edit should still succeed
     expect(result.display).toContain('Edited');
@@ -607,5 +612,51 @@ describe('post-write callbacks', () => {
 
     clearPostWriteCallbacks();
     expect(callbackCount()).toBe(0);
+  });
+});
+
+// ── session cwd / relative paths (U4) ───────────────────────────────────────
+
+describe('session cwd path resolution', () => {
+  it('should read a relative path against ToolExecutionContext.cwd', async () => {
+    writeFile('rel.txt', 'hello from session cwd\n');
+
+    const result = await readHandler(
+      { file_path: 'rel.txt' },
+      toolCtx(tmpDir),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('hello from session cwd');
+  });
+
+  it('should resolve relative read differently under another cwd', async () => {
+    const otherDir = createTmpDir();
+    try {
+      writeFile('only-here.txt', 'in tmpDir\n');
+      fs.writeFileSync(path.join(otherDir, 'only-here.txt'), 'in otherDir\n', 'utf-8');
+
+      const a = await readHandler({ file_path: 'only-here.txt' }, toolCtx(tmpDir));
+      const b = await readHandler({ file_path: 'only-here.txt' }, toolCtx(otherDir));
+
+      expect(a.content).toContain('in tmpDir');
+      expect(b.content).toContain('in otherDir');
+    } finally {
+      fs.rmSync(otherDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should leave absolute paths absolute', async () => {
+    const filePath = writeFile('abs.txt', 'absolute ok\n');
+    const otherDir = createTmpDir();
+    try {
+      const result = await readHandler(
+        { file_path: filePath },
+        toolCtx(otherDir),
+      );
+      expect(result.content).toContain('absolute ok');
+    } finally {
+      fs.rmSync(otherDir, { recursive: true, force: true });
+    }
   });
 });

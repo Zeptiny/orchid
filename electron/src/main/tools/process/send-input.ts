@@ -101,7 +101,7 @@ export const sendInputToolDefinition: ToolDefinition = {
   category: 'process',
 };
 
-export const sendInputHandler: ToolHandler = async (input: unknown) => {
+export const sendInputHandler: ToolHandler = async (input: unknown, _ctx) => {
   const { id, text } = input as SendInputInput;
   return executeSendInput(id, text);
 };

@@ -458,7 +458,7 @@ export class MCPManager {
           category: 'mcp',
         };
 
-        const handler: ToolHandler = async (input: unknown) => {
+        const handler: ToolHandler = async (input: unknown, _ctx) => {
           const raw = await this.callTool(registryName, input);
           if (typeof raw === 'string' && raw.startsWith('Error:')) {
             return { content: raw, isError: true };

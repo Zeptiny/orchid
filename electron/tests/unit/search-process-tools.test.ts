@@ -15,8 +15,11 @@ import {
   BackgroundProcessStore,
   setBackgroundStore,
 } from '../../src/main/tools/process/background-store';
-import { executeGrep } from '../../src/main/tools/search/grep';
-import { executeCommand } from '../../src/main/tools/process/execute-command';
+import { executeGrep, grepHandler } from '../../src/main/tools/search/grep';
+import {
+  executeCommand,
+  executeCommandHandler,
+} from '../../src/main/tools/process/execute-command';
 import { executeReadOutput } from '../../src/main/tools/process/read-output';
 import { executeSendInput } from '../../src/main/tools/process/send-input';
 import { executeTerminateCommand } from '../../src/main/tools/process/terminate-command';
@@ -239,6 +242,36 @@ describe('execute_command foreground', () => {
 
     expect(result.content).toContain('hello');
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('handler defaults working directory to session ctx.cwd', async () => {
+    const dir = createTmpDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'session-cwd.txt'), 'from-session-cwd');
+      const result = await executeCommandHandler(
+        { command: 'cat session-cwd.txt' },
+        { cwd: dir },
+      );
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('from-session-cwd');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('grep handler session cwd', () => {
+  it('resolves relative directory_path against ctx.cwd', async () => {
+    writeFile('src/hit.ts', 'export function findme() {}\n');
+    const result = await grepHandler(
+      {
+        pattern: 'findme',
+        directory_path: 'src',
+      },
+      { cwd: tmpDir },
+    );
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('findme');
   });
 });
 

@@ -16,6 +16,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { resolveToolPath } from '../types';
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 
@@ -150,8 +151,9 @@ function escapeRegex(s: string): string {
 
 // ── Handler ────────────────────────────────────────────────────────────────
 
-export const globHandler: ToolHandler = async (input: unknown) => {
-  const { directory_path, pattern, include_hidden = false } = input as GlobInput;
+export const globHandler: ToolHandler = async (input: unknown, ctx) => {
+  const { directory_path: rawDir, pattern, include_hidden = false } = input as GlobInput;
+  const directory_path = resolveToolPath(ctx.cwd, rawDir);
 
   try {
     const matches = globSync(directory_path, pattern);

@@ -20,6 +20,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { resolveToolPath } from '../types';
 import { triggerPostWriteCallbacks } from './callbacks';
 
 // ── Schema ─────────────────────────────────────────────────────────────────
@@ -212,8 +213,9 @@ function countDiffChanges(diffText: string): { added: number; removed: number } 
 
 // ── Handler ────────────────────────────────────────────────────────────────
 
-export const editHandler: ToolHandler = async (input: unknown) => {
-  const { file_path, old_string, new_string, replace_all = false } = input as EditInput;
+export const editHandler: ToolHandler = async (input: unknown, ctx) => {
+  const { file_path: rawPath, old_string, new_string, replace_all = false } = input as EditInput;
+  const file_path = resolveToolPath(ctx.cwd, rawPath);
 
   try {
     const content = fs.readFileSync(file_path, 'utf-8');

@@ -48,6 +48,8 @@ import {
   isWorkspaceBound,
   resolveWorkspace,
 } from '../project/workspace';
+import type { ToolExecutionContext } from '../tools/types';
+
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
 const chatSendSchema = z.object({
@@ -342,13 +344,36 @@ function historyFromActiveSession(): Message[] {
   }
 }
 
+/**
+ * Resolve active workspace cwd for UI chrome (CHAT_STATE).
+ * Prefers active session → draft → sticky; never process.cwd().
+ */
+function resolveUiWorkspaceCwd(windowId: string): string | null {
+  try {
+    const active = getSessionManager().getActive();
+    const info = resolveWorkspace(windowId, {
+      sessionCwd: active?.cwd ?? null,
+      stickyDefault: getConfig().default_project_dir,
+    });
+    return info.cwd;
+  } catch {
+    return null;
+  }
+}
+
 // ── Stream function (wraps the orchestrator) ─────────────────────────────────
 
 /**
  * Creates a StreamFn compatible with the agent machine.
  * In production, this wraps the streamChat orchestrator from U9.
+ *
+ * @param turnCtx - Frozen session cwd + sessionId for this agent turn
  */
-function createStreamFn(config: Config, messages: Message[]) {
+function createStreamFn(
+  config: Config,
+  messages: Message[],
+  turnCtx: ToolExecutionContext,
+) {
   return async function* (params: {
     message: string;
     agent: Agent;
@@ -369,9 +394,9 @@ function createStreamFn(config: Config, messages: Message[]) {
     );
     const modelInstance = await createProviderModel(modelRef);
 
-    // Build system prompt context
+    // Build system prompt context from frozen turn cwd (not process.cwd)
     const context = {
-      cwd: process.cwd(),
+      cwd: turnCtx.cwd,
       osInfo: `${process.platform} ${process.arch}`,
       time: new Date().toISOString(),
       subagentStates: [],
@@ -388,7 +413,7 @@ function createStreamFn(config: Config, messages: Message[]) {
       config,
       registry: (await import('../tools')).toolRegistry,
       mcpManager: getMCPManagerRef(),
-      sessionId: getSessionManager().getActive()?.id,
+      sessionId: turnCtx.sessionId ?? getSessionManager().getActive()?.id,
       abortSignal: params.abortSignal,
       modelInstance,
     });
@@ -401,9 +426,9 @@ function createStreamFn(config: Config, messages: Message[]) {
 
 /**
  * Creates an ExecuteFn compatible with the agent machine.
- * Dispatches to the tool registry.
+ * Dispatches to the tool registry with the frozen turn context.
  */
-function createExecuteFn() {
+function createExecuteFn(turnCtx: ToolExecutionContext) {
   return async (toolName: string, args: string) => {
     const { toolRegistry } = await import('../tools');
     const { normalizeToolHandlerResult } = await import('../tools/result');
@@ -421,7 +446,7 @@ function createExecuteFn() {
         return { content: validation.error, isError: true };
       }
 
-      const result = await tool.handler(validation.data);
+      const result = await tool.handler(validation.data, turnCtx);
       return normalizeToolHandlerResult(result);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -554,6 +579,14 @@ export function registerChatIPC(): void {
       allowed_skills: ['*'],
     };
 
+    // Freeze turn tool/prompt context at send time (R6): mid-turn session
+    // switch must not rebind tools or system prompt working_directory.
+    const activeSession = getSessionManager().getActive();
+    const turnCtx: ToolExecutionContext = {
+      cwd: sessionGate.cwd,
+      sessionId: activeSession?.id,
+    };
+
     // Create the agent actor with message history.
     // Append the configured personality (from ~/.orchid/personalities/) like Python.
     const abortController = new AbortController();
@@ -562,8 +595,8 @@ export function registerChatIPC(): void {
       input: {
         agent,
         systemPrompt: appendPersonality(baseSystemPrompt, config.personality),
-        streamFn: createStreamFn(config, messages),
-        executeFn: createExecuteFn(),
+        streamFn: createStreamFn(config, messages, turnCtx),
+        executeFn: createExecuteFn(turnCtx),
       },
     });
 
@@ -739,7 +772,7 @@ export function registerChatIPC(): void {
           response: context.response,
           error: context.error,
           interruptState,
-          cwd: process.cwd(),
+          cwd: turnCtx.cwd,
         });
       }
     });
@@ -790,7 +823,7 @@ export function registerChatIPC(): void {
           response: context.response,
           error: context.error,
           interruptState,
-          cwd: process.cwd(),
+          cwd: turnCtx.cwd,
         });
       }
 
@@ -971,7 +1004,7 @@ export function registerChatIPC(): void {
         response: '',
         error: null,
         interruptState: 'idle',
-        cwd: process.cwd(),
+        cwd: turnCtx.cwd,
       });
     }
 
@@ -1059,7 +1092,7 @@ export function registerChatIPC(): void {
             response: partial,
             error: null,
             interruptState: 'confirmSubagents',
-            cwd: process.cwd(),
+            cwd: resolveUiWorkspaceCwd(windowId),
           });
         }
       }
@@ -1084,7 +1117,7 @@ export function registerChatIPC(): void {
           response: '',
           error: null,
           interruptState: 'idle',
-          cwd: process.cwd(),
+          cwd: resolveUiWorkspaceCwd(windowId),
         });
       }
       return { status: 'cancelled' };

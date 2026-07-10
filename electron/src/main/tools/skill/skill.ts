@@ -402,7 +402,7 @@ export function buildSkillTool(
     category: 'skill',
   };
 
-  const handler: ToolHandler = async (input: unknown): Promise<{ display: string; content: string; isError?: boolean }> => {
+  const handler: ToolHandler = async (input: unknown, _ctx): Promise<{ display: string; content: string; isError?: boolean }> => {
     const { name } = input as { name: string };
     return executeSkill(name, skills, allowedSkills);
   };

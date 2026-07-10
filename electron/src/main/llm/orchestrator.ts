@@ -244,9 +244,11 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   }
 
   // ── Filter and build tools ──
+  // Freeze session cwd from prompt context so tools match the turn's workspace.
   const tools = buildToolMap(agent.allowed_tools, registry, mcpManager, {
     sessionId,
     timeoutSeconds: config.command_timeout,
+    cwd: context.cwd,
   });
 
   // ── Compose middleware ──

@@ -8,6 +8,7 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { resolveToolPath } from '../types';
 import { ensureIndexed } from '../../ast/indexer';
 import { ASTStore } from '../../ast/store';
 import { xmlAttr } from './utils';
@@ -45,7 +46,7 @@ export const findSymbolReferencesDefinition: ToolDefinition = {
 // Handler
 // ---------------------------------------------------------------------------
 
-export const findSymbolReferencesHandler: ToolHandler = async (input: unknown) => {
+export const findSymbolReferencesHandler: ToolHandler = async (input: unknown, ctx) => {
   const { symbol_name, file_path } = input as FindSymbolReferencesInput;
 
   try {
@@ -57,15 +58,21 @@ export const findSymbolReferencesHandler: ToolHandler = async (input: unknown) =
     };
     }
 
-    await ensureIndexed();
+    const projectPath = ctx.cwd;
+    await ensureIndexed(projectPath);
 
-    const projectPath = process.cwd();
     const store = new ASTStore(projectPath);
     const symbols = store.getSymbolsByName(symbol_name, 'both');
 
-    // Filter by file if specified
-    const filtered = file_path
-      ? symbols.filter((s) => s.filePath === file_path)
+    // Filter by file if specified (resolve relative paths against session cwd)
+    const filterPath = file_path ? resolveToolPath(ctx.cwd, file_path) : undefined;
+    const filtered = filterPath
+      ? symbols.filter(
+          (s) =>
+            s.filePath === filterPath ||
+            s.filePath === file_path ||
+            resolveToolPath(projectPath, s.filePath) === filterPath,
+        )
       : symbols;
 
     if (filtered.length === 0) {

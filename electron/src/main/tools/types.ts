@@ -7,6 +7,7 @@
  * - JSON Schema generation (zod-to-json-schema)
  * - MCP exposure and LLM function-calling
  */
+import * as path from 'node:path';
 import { z } from 'zod';
 
 /**
@@ -44,8 +45,35 @@ export interface StructuredToolResultLike {
   is_error?: boolean;
 }
 
-/** Handler function that executes the tool with validated input. Returns a plain string (success) or a structured result. */
-export type ToolHandler = (input: unknown) => Promise<string | StructuredToolResultLike>;
+/**
+ * Frozen per-turn execution context for tools.
+ *
+ * Captured at turn start (chat:send) and passed into every tool invocation
+ * for that turn — never re-read live process.cwd() or active session mid-turn.
+ */
+export interface ToolExecutionContext {
+  /** Absolute working/project directory for this turn. */
+  cwd: string;
+  /** Session id when available (bg process ownership, output offload). */
+  sessionId?: string;
+}
+
+/**
+ * Resolve a user-supplied path against the tool execution cwd.
+ * Absolute paths stay absolute (normalized); relative paths join cwd.
+ */
+export function resolveToolPath(cwd: string, userPath: string): string {
+  if (path.isAbsolute(userPath)) {
+    return path.normalize(userPath);
+  }
+  return path.resolve(cwd, userPath);
+}
+
+/** Handler function that executes the tool with validated input + turn context. */
+export type ToolHandler = (
+  input: unknown,
+  ctx: ToolExecutionContext,
+) => Promise<string | StructuredToolResultLike>;
 
 /** A registered tool combining definition and handler */
 export interface RegisteredTool {

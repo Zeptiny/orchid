@@ -12,6 +12,7 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import { getConfig } from '../../config/loader';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { resolveToolPath } from '../types';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -336,8 +337,9 @@ export const grepToolDefinition: ToolDefinition = {
   category: 'search',
 };
 
-export const grepHandler: ToolHandler = async (input: unknown) => {
+export const grepHandler: ToolHandler = async (input: unknown, ctx) => {
   const { pattern, directory_path, include_pattern, case_insensitive, max_results } =
     input as GrepInput;
-  return executeGrep(pattern, directory_path, include_pattern, case_insensitive, max_results);
+  const resolvedDir = resolveToolPath(ctx.cwd, directory_path);
+  return executeGrep(pattern, resolvedDir, include_pattern, case_insensitive, max_results);
 };

@@ -91,7 +91,7 @@ export const readOutputToolDefinition: ToolDefinition = {
   category: 'process',
 };
 
-export const readOutputHandler: ToolHandler = async (input: unknown) => {
+export const readOutputHandler: ToolHandler = async (input: unknown, _ctx) => {
   const { id, last_n, wait_ms } = input as ReadOutputInput;
   return executeReadOutput(id, last_n, wait_ms);
 };

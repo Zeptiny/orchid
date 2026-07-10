@@ -39,9 +39,10 @@ export const ragIndexDefinition: ToolDefinition = {
 
 export const ragIndexHandler: ToolHandler = async (
   input: unknown,
+  ctx,
 ): Promise<string> => {
   const { action } = input as { action: 'status' | 'index' | 'clear' };
-  const projectPath = process.cwd();
+  const projectPath = ctx.cwd;
 
   switch (action) {
     case 'status': {

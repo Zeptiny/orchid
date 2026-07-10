@@ -2,6 +2,7 @@
  * RAG IPC handlers — rag:status, rag:index, rag:clear.
  *
  * Wraps RAG indexer from U16 with zod-validated payloads.
+ * Uses active workspace cwd (session → sticky), not process.cwd().
  */
 import { ipcMain } from 'electron';
 import { z } from 'zod';
@@ -12,6 +13,12 @@ import {
   clearIndex,
   isIndexing,
 } from '../rag/indexer';
+import { getConfig } from '../config/loader';
+import { getSessionManager } from './session';
+import {
+  isWorkspaceBound,
+  resolveWorkspace,
+} from '../project/workspace';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -19,16 +26,42 @@ const ragIndexSchema = z.object({
   force: z.boolean().optional().default(false),
 });
 
+function resolveRagProjectPath(windowId?: string): string | null {
+  try {
+    const active = getSessionManager().getActive();
+    const info = resolveWorkspace(windowId ?? '', {
+      sessionCwd: active?.cwd ?? null,
+      stickyDefault: getConfig().default_project_dir,
+    });
+    if (isWorkspaceBound(info) && info.cwd != null) {
+      return info.cwd;
+    }
+    if (active?.cwd) return active.cwd;
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerRAGIPC(): void {
   // rag:status — return RAG store status
-  ipcMain.handle(IPC_CHANNELS.RAG_STATUS, async () => {
-    return getStatus();
+  ipcMain.handle(IPC_CHANNELS.RAG_STATUS, async (event) => {
+    const projectPath = resolveRagProjectPath(String(event.sender.id));
+    if (!projectPath) {
+      return {
+        totalChunks: 0,
+        totalFiles: 0,
+        lastIndexed: null,
+        lastIndexDuration: null,
+      };
+    }
+    return getStatus(projectPath);
   });
 
   // rag:index — trigger RAG indexing
-  ipcMain.handle(IPC_CHANNELS.RAG_INDEX, async (_event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.RAG_INDEX, async (event, payload: unknown) => {
     // Validate input with zod (payload is optional)
     const parsed = ragIndexSchema.safeParse(payload ?? {});
     if (!parsed.success) {
@@ -49,12 +82,28 @@ export function registerRAGIPC(): void {
       };
     }
 
-    return indexProject(undefined, undefined, force);
+    const projectPath = resolveRagProjectPath(String(event.sender.id));
+    if (!projectPath) {
+      return {
+        filesScanned: 0,
+        filesIndexed: 0,
+        filesSkipped: 0,
+        filesDeleted: 0,
+        chunksCreated: 0,
+        errors: ['No project folder selected'],
+        durationSeconds: 0,
+      };
+    }
+
+    return indexProject(projectPath, undefined, force);
   });
 
   // rag:clear — clear the RAG index
-  ipcMain.handle(IPC_CHANNELS.RAG_CLEAR, async () => {
-    clearIndex();
+  ipcMain.handle(IPC_CHANNELS.RAG_CLEAR, async (event) => {
+    const projectPath = resolveRagProjectPath(String(event.sender.id));
+    if (projectPath) {
+      clearIndex(projectPath);
+    }
     return { status: 'cleared' };
   });
 }
