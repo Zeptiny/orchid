@@ -538,35 +538,54 @@ describe('Skill Loading — Defaults', () => {
 // ===========================================================================
 
 describe('Agent & Skill Merge', () => {
-  it('should overlay project agents on home agents (project wins)', () => {
+  it('should overlay project agents on home agents (project wins for non-internal)', () => {
     const homeDir = path.join(tmpDir, 'home-agents');
     const projectDir = path.join(tmpDir, 'project-agents');
 
-    // Home has general with ['*'] tools
+    // Home has a subagent
+    writeAgent(
+      homeDir,
+      'helper',
+      'name: helper\ntype: subagent\ntier: bloom\ndescription: Home helper\nallowed_tools:\n  - \'*\'\nallowed_skills:\n  - \'*\'',
+      'Home system prompt',
+    );
+
+    // Project overrides helper
+    writeAgent(
+      projectDir,
+      'helper',
+      'name: helper\ntype: subagent\ntier: crown\ndescription: Project helper\nallowed_tools:\n  - read\n  - grep\nallowed_skills:\n  - work',
+      'Project system prompt',
+    );
+
+    // Project tries to shadow reserved internal general — must NOT win
     writeAgent(
       homeDir,
       'general',
       'name: general\ntype: internal\ntier: bloom\ndescription: Home general\nallowed_tools:\n  - \'*\'\nallowed_skills:\n  - \'*\'',
       'Home system prompt',
     );
-
-    // Project overrides general with restricted tools
     writeAgent(
       projectDir,
       'general',
-      'name: general\ntype: internal\ntier: crown\ndescription: Project general\nallowed_tools:\n  - read\n  - grep\nallowed_skills:\n  - work',
+      'name: general\ntype: subagent\ntier: crown\ndescription: Project general\nallowed_tools:\n  - read\nallowed_skills:\n  - work',
       'Project system prompt',
     );
 
     const agents = loadAgents({ homeDir, projectDir });
 
+    const helper = agents.get('helper');
+    expect(helper).toBeDefined();
+    expect(helper!.tier).toBe(AgentTier.CROWN);
+    expect(helper!.description).toBe('Project helper');
+    expect(helper!.allowed_tools).toEqual(['read', 'grep']);
+
     const general = agents.get('general');
     expect(general).toBeDefined();
-    // Project wins
-    expect(general!.tier).toBe(AgentTier.CROWN);
-    expect(general!.description).toBe('Project general');
-    expect(general!.allowed_tools).toEqual(['read', 'grep']);
-    expect(general!.allowed_skills).toEqual(['work']);
+    // Reserved/internal home agent is not project-shadowed
+    expect(general!.tier).toBe(AgentTier.BLOOM);
+    expect(general!.description).toBe('Home general');
+    expect(general!.type).toBe(AgentType.INTERNAL);
   });
 
   it('should keep home agents not overridden by project', () => {

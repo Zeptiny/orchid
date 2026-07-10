@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { DefinitionsListResult } from '../../shared/types/definitions';
 import type { Config } from '../../shared/types/ipc-boundary';
+import { AgentsTab } from './Preferences/AgentsTab';
 import { GeneralTab } from './Preferences/GeneralTab';
 import { MCPServersTab } from './Preferences/MCPServersTab';
+import { PersonalitiesTab } from './Preferences/PersonalitiesTab';
 import { ProvidersTab } from './Preferences/ProvidersTab';
 import { RAGTab } from './Preferences/RAGTab';
+import { SkillsTab } from './Preferences/SkillsTab';
 import { TierModelsTab } from './Preferences/TierModelsTab';
 import { LeftSidebar } from './LeftSidebar';
 import { useSession } from '../hooks/useSession';
@@ -17,7 +21,15 @@ import {
   type ProviderRename,
 } from '../utils/provider-renames';
 
-type TabId = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag';
+type TabId =
+  | 'general'
+  | 'providers'
+  | 'mcp'
+  | 'tier-models'
+  | 'rag'
+  | 'skills'
+  | 'agents'
+  | 'personalities';
 
 interface TabDef {
   id: TabId;
@@ -30,6 +42,9 @@ const TABS: TabDef[] = [
   { id: 'mcp', label: 'MCP' },
   { id: 'tier-models', label: 'Tier Models' },
   { id: 'rag', label: 'RAG' },
+  { id: 'skills', label: 'Skills' },
+  { id: 'agents', label: 'Agents' },
+  { id: 'personalities', label: 'Personalities' },
 ];
 
 interface ConfigViewProps {
@@ -50,6 +65,12 @@ export function ConfigView({ onClose }: ConfigViewProps) {
   const [personalities, setPersonalities] = useState<string[]>([]);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [showRestartDialog, setShowRestartDialog] = useState(false);
+  /**
+   * Cached skills/agents/personalities for definition tabs.
+   * Loaded once when Config opens so tab switches never flash a spinner.
+   */
+  const [definitions, setDefinitions] = useState<DefinitionsListResult | null>(null);
+  const [defsLoading, setDefsLoading] = useState(true);
 
   useFocusTrap({
     enabled: true,
@@ -58,6 +79,35 @@ export function ConfigView({ onClose }: ConfigViewProps) {
 
   const isDirty = Object.keys(draft).length > 0;
   const hasMCPChanges = 'mcp_servers' in draft;
+
+  const applyDefinitions = useCallback((result: DefinitionsListResult) => {
+    setDefinitions(result);
+    // Effective personality names for General dropdown (unique across scopes)
+    const names = Array.from(
+      new Set(result.personalities.map((p) => p.name)),
+    ).sort((a, b) => a.localeCompare(b));
+    setPersonalities(names);
+  }, []);
+
+  const loadDefinitions = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!window.orchid?.definitions?.list) {
+      setDefsLoading(false);
+      return;
+    }
+    try {
+      const result = await window.orchid.definitions.list();
+      applyDefinitions(result);
+    } catch (err) {
+      // Keep previous cache; always surface the failure so silent refresh isn't invisible.
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Failed to load skills, agents, and personalities.';
+      setError(opts?.silent ? `Definitions refresh failed: ${msg}` : msg);
+    } finally {
+      setDefsLoading(false);
+    }
+  }, [applyDefinitions]);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,13 +120,8 @@ export function ConfigView({ onClose }: ConfigViewProps) {
       try {
         if (!window.orchid?.config?.get) throw new Error('Configuration API is not available.');
         const config = await window.orchid.config.get();
-        let names: string[] = [];
-        if (window.orchid?.config?.listPersonalities) {
-          names = await window.orchid.config.listPersonalities();
-        }
         if (!cancelled) {
           setOriginalConfig(config);
-          setPersonalities(names);
           setLoading(false);
         }
       } catch {
@@ -87,9 +132,23 @@ export function ConfigView({ onClose }: ConfigViewProps) {
       }
     }
 
-    loadConfig();
+    // Prefetch definitions in parallel with config so Skills/Agents/Personalities
+    // are ready before the user switches tabs.
+    void loadConfig();
+    void loadDefinitions();
     return () => { cancelled = true; };
-  }, []);
+  }, [loadDefinitions]);
+
+  // Refresh when workspace binding changes; drop in-progress definition edits.
+  useEffect(() => {
+    const unsub = window.orchid?.session?.onWorkspaceChanged?.(() => {
+      window.dispatchEvent(new CustomEvent('orchid:definitions-workspace-changed'));
+      void loadDefinitions({ silent: true });
+    });
+    return () => {
+      unsub?.();
+    };
+  }, [loadDefinitions]);
 
   const currentConfig = useMemo(() => {
     if (!originalConfig) return null;
@@ -260,6 +319,9 @@ export function ConfigView({ onClose }: ConfigViewProps) {
               updateDraft,
               recordProviderRename,
               personalities,
+              definitions,
+              defsLoading,
+              loadDefinitions,
             )
           ) : (
             <div className="alert alert-warning">
@@ -324,12 +386,24 @@ export function ConfigView({ onClose }: ConfigViewProps) {
   );
 }
 
+function DefinitionsLoading() {
+  return (
+    <div className="flex items-center gap-3 py-6 text-base-content/60">
+      <span className="loading loading-spinner loading-sm" />
+      <span>Loading definitions…</span>
+    </div>
+  );
+}
+
 function renderTab(
   activeTab: TabId,
   config: Config,
   updateDraft: (updates: Record<string, unknown>) => void,
   recordProviderRename: (from: string, to: string) => void,
   personalities: readonly string[] = [],
+  definitions: DefinitionsListResult | null = null,
+  defsLoading = false,
+  reloadDefinitions: () => Promise<void> = async () => {},
 ) {
   switch (activeTab) {
     case 'general':
@@ -384,5 +458,32 @@ function renderTab(
           onChange={(rag) => updateDraft({ rag })}
         />
       );
+    case 'skills':
+      if (!definitions) {
+        return defsLoading ? <DefinitionsLoading /> : (
+          <div className="alert alert-warning">
+            <span>Skills could not be loaded.</span>
+          </div>
+        );
+      }
+      return <SkillsTab data={definitions} onReload={reloadDefinitions} />;
+    case 'agents':
+      if (!definitions) {
+        return defsLoading ? <DefinitionsLoading /> : (
+          <div className="alert alert-warning">
+            <span>Agents could not be loaded.</span>
+          </div>
+        );
+      }
+      return <AgentsTab data={definitions} onReload={reloadDefinitions} />;
+    case 'personalities':
+      if (!definitions) {
+        return defsLoading ? <DefinitionsLoading /> : (
+          <div className="alert alert-warning">
+            <span>Personalities could not be loaded.</span>
+          </div>
+        );
+      }
+      return <PersonalitiesTab data={definitions} onReload={reloadDefinitions} />;
   }
 }

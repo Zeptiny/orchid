@@ -131,3 +131,54 @@ export function getStringArray(
   }
   return fallback;
 }
+
+/**
+ * Serialize metadata + body into a markdown document with YAML frontmatter.
+ *
+ * List values become multi-line `- item` blocks; strings with special characters
+ * are single-quoted. Keys are emitted in insertion order.
+ */
+export function serializeFrontmatter(
+  metadata: FrontmatterDict,
+  body: string,
+): string {
+  const lines: string[] = ['---'];
+
+  for (const [key, value] of Object.entries(metadata)) {
+    if (Array.isArray(value)) {
+      lines.push(`${key}:`);
+      for (const item of value) {
+        lines.push(`  - ${yamlScalar(item)}`);
+      }
+    } else {
+      lines.push(`${key}: ${yamlScalar(value)}`);
+    }
+  }
+
+  lines.push('---');
+  const trimmedBody = body.replace(/^\n+/, '').replace(/\s+$/, '');
+  if (trimmedBody) {
+    lines.push('');
+    lines.push(trimmedBody);
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+/** Quote a YAML scalar when needed (colons, leading/trailing space, quotes). */
+function yamlScalar(value: string): string {
+  if (value === '') return "''";
+  const needsQuotes =
+    /[:#{}[\],&*!|>'"%@`]/.test(value) ||
+    /^\s|\s$/.test(value) ||
+    value.includes('\n') ||
+    value === 'true' ||
+    value === 'false' ||
+    value === 'null' ||
+    /^-?\d+(\.\d+)?$/.test(value);
+
+  if (!needsQuotes) return value;
+
+  // Prefer single quotes; double-escape any internal single quotes.
+  return `'${value.replace(/'/g, "''")}'`;
+}

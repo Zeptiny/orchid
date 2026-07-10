@@ -87,8 +87,8 @@ export function GeneralTab({
 
   return (
     <div className="config-form">
-      <fieldset className="config-fieldset">
-        <legend className="config-fieldset-legend">General</legend>
+      <section className="config-fieldset">
+        <div className="config-fieldset-legend">General</div>
         <div className="config-form-grid">
           <div className="config-field">
             <label>Default Model</label>
@@ -159,10 +159,10 @@ export function GeneralTab({
             <span className="config-field-hint">Comma-separated directory names to skip.</span>
           </div>
         </div>
-      </fieldset>
+      </section>
 
-      <fieldset className="config-fieldset">
-        <legend className="config-fieldset-legend">Tool Limits</legend>
+      <section className="config-fieldset">
+        <div className="config-fieldset-legend">Tool Limits</div>
         <div className="config-form-grid">
           <div className="config-field">
             <label htmlFor="general-command-timeout">Command Timeout (s)</label>
@@ -224,10 +224,10 @@ export function GeneralTab({
             />
           </div>
         </div>
-      </fieldset>
+      </section>
 
-      <fieldset className="config-fieldset">
-        <legend className="config-fieldset-legend">Chat display</legend>
+      <section className="config-fieldset">
+        <div className="config-fieldset-legend">Chat display</div>
         <div className="config-form-grid">
           <div className="config-field config-form-grid-full">
             <label className="config-checkbox-label" htmlFor="general-expand-tool-groups">
@@ -248,10 +248,10 @@ export function GeneralTab({
             </span>
           </div>
         </div>
-      </fieldset>
+      </section>
 
-      <fieldset className="config-fieldset">
-        <legend className="config-fieldset-legend">Streaming</legend>
+      <section className="config-fieldset">
+        <div className="config-fieldset-legend">Streaming</div>
         <div className="config-form-grid">
           <div className="config-field">
             <label htmlFor="general-stream-idle">Stream Idle Timeout (s)</label>
@@ -290,7 +290,7 @@ export function GeneralTab({
             />
           </div>
         </div>
-      </fieldset>
+      </section>
     </div>
   );
 }

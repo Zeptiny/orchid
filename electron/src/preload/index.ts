@@ -38,6 +38,11 @@ import type {
   WorkspaceInfo,
   ToolExecuteMessage,
   AgentSpawnMessage,
+  AgentSaveMessage,
+  DefinitionDeleteMessage,
+  DefinitionRevealMessage,
+  PersonalitySaveMessage,
+  SkillSaveMessage,
   RAGIndexMessage,
   RAGIndexProgress,
   ASTIndexMessage,
@@ -196,6 +201,36 @@ const orchidAPI: OrchidAPI = {
 
     spawn: (message: AgentSpawnMessage) =>
       invoke(IPC_CHANNELS.AGENT_SPAWN, message),
+
+    save: (message: AgentSaveMessage) =>
+      invoke(IPC_CHANNELS.AGENT_SAVE, message),
+
+    delete: (message: DefinitionDeleteMessage) =>
+      invoke(IPC_CHANNELS.AGENT_DELETE, message),
+  },
+
+  definitions: {
+    list: () =>
+      invoke(IPC_CHANNELS.DEFINITIONS_LIST),
+
+    reveal: (message: DefinitionRevealMessage) =>
+      invoke(IPC_CHANNELS.DEFINITION_REVEAL, message),
+  },
+
+  skill: {
+    save: (message: SkillSaveMessage) =>
+      invoke(IPC_CHANNELS.SKILL_SAVE, message),
+
+    delete: (message: DefinitionDeleteMessage) =>
+      invoke(IPC_CHANNELS.SKILL_DELETE, message),
+  },
+
+  personality: {
+    save: (message: PersonalitySaveMessage) =>
+      invoke(IPC_CHANNELS.PERSONALITY_SAVE, message),
+
+    delete: (message: DefinitionDeleteMessage) =>
+      invoke(IPC_CHANNELS.PERSONALITY_DELETE, message),
   },
 
   mcp: {

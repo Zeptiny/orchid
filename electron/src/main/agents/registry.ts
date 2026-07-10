@@ -25,6 +25,7 @@ import { registerBuiltinTools } from '../tools';
 import {
   HOME_AGENTS_DIR,
 } from '../config/loader';
+import { RESERVED_INTERNAL_AGENT_NAMES } from '../defs/paths';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -163,8 +164,15 @@ export function loadAgents(options?: {
     ? loadAgentsFromDir(options.projectDir)
     : new Map<string, Agent>();
 
-  // Merge: project overlays home
-  const merged = new Map<string, Agent>([...homeAgents, ...projectAgents]);
+  // Merge: project overlays home, except reserved/internal home agents
+  // (e.g. general, web-fetch) which must not be shadowed by project files.
+  const merged = new Map<string, Agent>(homeAgents);
+  for (const [name, agent] of projectAgents) {
+    const home = homeAgents.get(name);
+    if (home?.type === AgentType.INTERNAL) continue;
+    if (RESERVED_INTERNAL_AGENT_NAMES.has(name)) continue;
+    merged.set(name, agent);
+  }
   agentRegistry = merged;
 
   // Rebuild dynamic tool descriptions with the latest agent registry.

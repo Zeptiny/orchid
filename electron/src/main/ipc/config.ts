@@ -39,6 +39,7 @@ import {
 import { getRuntimeConfig } from '../config/runtime';
 import {
   applyWorkspaceProjectLayers,
+  getLastAppliedProjectDir,
   resetLastAppliedProjectDir,
 } from '../project/layers';
 
@@ -255,10 +256,12 @@ export function registerConfigIPC(): void {
     return discoverModelsAsync(alias, config, force === true);
   });
 
-  // config:list_personalities — names from ~/.orchid/personalities/*.md
+  // config:list_personalities — names from home (+ project overlay when layers applied)
   ipcMain.handle(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES, async () => {
-    // Reload so newly-added files appear without restarting the app
-    loadPersonalities();
+    // Reload so newly-added files appear without restarting the app.
+    // Prefer last applied project dir (set by workspace bind / session load).
+    const projectDir = getLastAppliedProjectDir() ?? undefined;
+    loadPersonalities(projectDir ? { projectDir } : undefined);
     return listPersonalityNames();
   });
 

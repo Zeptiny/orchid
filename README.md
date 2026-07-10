@@ -326,12 +326,17 @@ All config options can be overridden via `ORCHID_`-prefixed environment variable
 
 ### Settings UI
 
-The `/settings` command opens a 5-tab preferences window:
+The `/settings` command opens the configuration view:
 - **Providers** — add/edit/remove LLM providers, configure models
 - **MCP Servers** — add/edit/remove MCP servers
 - **Tier Models** — map each agent tier to a specific model
 - **RAG** — configure chunk size, overlap, top_k, embedding model
 - **General** — default model, theme, personality, timeouts
+- **Skills** — create/edit/delete skills at global (`~/.orchid/skills`) or project (`.orchid/skills`) scope
+- **Agents** — create/edit/delete subagents; **internal** agents (`general`, `web-fetch`, …) are editable in place but cannot be deleted or renamed via the app
+- **Personalities** — create/edit/delete personality prompts (global or project overlay)
+
+Skills, agents, and personalities save immediately to disk (not via the JSON config Save button). Project scope requires a bound workspace; project definitions override global ones with the same name, except reserved internal agents which cannot be project-shadowed. Agent tools that write the same paths on disk are unrestricted by design (coding agent FS access); Config enforces definition policy only on its IPC path.
 
 ---
 

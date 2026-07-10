@@ -86,8 +86,8 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
 
   return (
     <div className="config-form">
-      <fieldset className="config-fieldset">
-        <legend className="config-fieldset-legend">RAG Configuration</legend>
+      <section className="config-fieldset">
+        <div className="config-fieldset-legend">RAG Configuration</div>
         <div className="config-form-grid">
           <div className="config-field">
             <label htmlFor="rag-chunk-size">Chunk Size (tokens)</label>
@@ -141,10 +141,10 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
             />
           </div>
         </div>
-      </fieldset>
+      </section>
 
-      <fieldset className="config-fieldset">
-        <legend className="config-fieldset-legend">Embedding Model</legend>
+      <section className="config-fieldset">
+        <div className="config-fieldset-legend">Embedding Model</div>
         <div className="config-field">
           <label>Model</label>
           <ModelPicker
@@ -164,10 +164,10 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
               ' Add a provider model with mode "embeddings" in the Providers tab to use API embeddings.'}
           </span>
         </div>
-      </fieldset>
+      </section>
 
-      <fieldset className="config-fieldset">
-        <legend className="config-fieldset-legend">Resource Limits</legend>
+      <section className="config-fieldset">
+        <div className="config-fieldset-legend">Resource Limits</div>
         {!usingApi && (
           <p className="config-help text-sm opacity-70 mb-2">
             Caps local ONNX embedding CPU and peak memory during indexing and search.
@@ -204,7 +204,7 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
             />
           </div>
         </div>
-      </fieldset>
+      </section>
     </div>
   );
 }

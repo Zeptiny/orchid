@@ -17,6 +17,7 @@ import {
 import type { Config } from '../config/schema';
 import { loadAgents } from '../agents/registry';
 import { loadSkills } from '../skills/registry';
+import { loadPersonalities } from '../personality/registry';
 import type { Agent } from '../../shared/types/agent';
 import type { Skill } from '../../shared/types/skill';
 import { canonicalizeProjectDirectory } from './path';
@@ -128,6 +129,8 @@ export function applyWorkspaceProjectLayers(
     homeDir: options?.homeSkillsDir,
     projectDir: path.join(normalized, '.orchid', 'skills'),
   });
+  // Project personalities overlay home (same merge semantics as agents/skills).
+  loadPersonalities({ projectDir: normalized });
 
   lastAppliedProjectDir = normalized;
 

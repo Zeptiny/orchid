@@ -9,6 +9,10 @@ import { registerSessionIPC, unregisterSessionIPC } from './session';
 import { registerToolIPC, unregisterToolIPC } from './tool';
 import { registerAgentIPC, unregisterAgentIPC } from './agent';
 import {
+  registerDefinitionsIPC,
+  unregisterDefinitionsIPC,
+} from './definitions';
+import {
   registerMCPIPC,
   unregisterMCPIPC,
   setMCPManagerRef,
@@ -28,6 +32,7 @@ export function registerAllIPC(): void {
   registerSessionIPC();
   registerToolIPC();
   registerAgentIPC();
+  registerDefinitionsIPC();
   registerMCPIPC();
   registerRAGIPC();
   registerASTIPC();
@@ -44,6 +49,7 @@ export function unregisterAllIPC(): void {
   unregisterSessionIPC();
   unregisterToolIPC();
   unregisterAgentIPC();
+  unregisterDefinitionsIPC();
   unregisterMCPIPC();
   unregisterRAGIPC();
   unregisterASTIPC();

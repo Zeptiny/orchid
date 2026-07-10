@@ -761,8 +761,8 @@ export function ProvidersTab({ providers, onChange, onRename }: ProvidersTabProp
 
   return (
     <div className="config-form">
-      <fieldset className="config-fieldset">
-        <legend className="config-fieldset-legend">
+      <section className="config-fieldset">
+        <div className="config-fieldset-legend">
           <span>Providers</span>
           {!isAdding && (
             <button
@@ -773,7 +773,7 @@ export function ProvidersTab({ providers, onChange, onRename }: ProvidersTabProp
               + Add Provider
             </button>
           )}
-        </legend>
+        </div>
 
         <div className="config-card-list">
           {providerList.map((p) => (
@@ -822,7 +822,7 @@ export function ProvidersTab({ providers, onChange, onRename }: ProvidersTabProp
             </div>
           )}
         </div>
-      </fieldset>
+      </section>
     </div>
   );
 }

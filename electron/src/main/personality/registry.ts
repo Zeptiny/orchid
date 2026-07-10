@@ -18,6 +18,9 @@ import { HOME_PERSONALITIES_DIR, getConfig } from '../config/loader';
 /** name → markdown body */
 let personalityRegistry: Map<string, string> = new Map();
 
+/** Last projectDir used with loadPersonalities (for lazy-reload overlay). */
+let lastPersonalityProjectDir: string | undefined;
+
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
@@ -100,10 +103,15 @@ export function seedPersonalitiesDir(homeDir: string = HOME_PERSONALITIES_DIR): 
  * Load personalities from `~/.orchid/personalities/` (or override).
  * Seeds defaults first so a fresh install always has the built-in set.
  *
+ * When `projectDir` is set, also loads `<projectDir>/.orchid/personalities/`
+ * and overlays project files on top of home (same name → project wins).
+ *
  * @param options.homeDir  Override personalities directory
+ * @param options.projectDir  Project root (not the personalities subdir)
  */
 export function loadPersonalities(options?: {
   homeDir?: string;
+  projectDir?: string;
 }): Map<string, string> {
   const homeDir = options?.homeDir ?? HOME_PERSONALITIES_DIR;
 
@@ -112,8 +120,35 @@ export function loadPersonalities(options?: {
     seedPersonalitiesDir(homeDir);
   }
 
-  personalityRegistry = loadFromDir(homeDir);
+  // Remember project overlay for lazy-reload in appendPersonality.
+  // Explicit `projectDir: undefined` with only homeDir (tests) keeps prior tracking.
+  if (options && 'projectDir' in options) {
+    lastPersonalityProjectDir = options.projectDir;
+  } else if (!options) {
+    lastPersonalityProjectDir = undefined;
+  }
+
+  const home = loadFromDir(homeDir);
+  const projectDir = options?.projectDir ?? lastPersonalityProjectDir;
+  if (projectDir) {
+    const projectPersonalityDir = path.join(
+      projectDir,
+      '.orchid',
+      'personalities',
+    );
+    const project = loadFromDir(projectPersonalityDir);
+    personalityRegistry = new Map([...home, ...project]);
+  } else {
+    personalityRegistry = home;
+  }
   return personalityRegistry;
+}
+
+/**
+ * Replace the in-memory personality registry (used after disk CRUD merges).
+ */
+export function replacePersonalityRegistry(map: Map<string, string>): void {
+  personalityRegistry = new Map(map);
 }
 
 /**
@@ -152,7 +187,12 @@ export function appendPersonality(agentSystemPrompt: string, personalityName?: s
   const name = personalityName ?? getConfig().personality;
   let personalityText = personalityRegistry.get(name);
   if (!personalityText) {
-    loadPersonalities();
+    // Reload preserving last project overlay (do not wipe project personalities).
+    loadPersonalities(
+      lastPersonalityProjectDir
+        ? { projectDir: lastPersonalityProjectDir }
+        : {},
+    );
     personalityText = personalityRegistry.get(name);
   }
   if (!personalityText) {

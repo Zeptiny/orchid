@@ -11,6 +11,17 @@ import type { Session } from './session';
 import type { Agent } from './agent';
 import type { Usage } from './message';
 import type {
+  AgentSaveMessage,
+  DefinitionDeleteMessage,
+  DefinitionRevealMessage,
+  DefinitionsListResult,
+  ManagedAgent,
+  ManagedPersonality,
+  ManagedSkill,
+  PersonalitySaveMessage,
+  SkillSaveMessage,
+} from './definitions';
+import type {
   SessionSummary,
   Config,
   ModelMetadata,
@@ -25,6 +36,19 @@ import type {
   IndexRunState,
   UpdaterState,
 } from './ipc-boundary';
+
+export type {
+  AgentSaveMessage,
+  DefinitionDeleteMessage,
+  DefinitionRevealMessage,
+  DefinitionsListResult,
+  ManagedAgent,
+  ManagedPersonality,
+  ManagedSkill,
+  PersonalitySaveMessage,
+  SkillSaveMessage,
+  DefinitionScope,
+} from './definitions';
 
 export type {
   SessionSummary,
@@ -354,6 +378,29 @@ export interface OrchidAPI {
   agent: {
     list: () => Promise<Agent[]>;
     spawn: (message: AgentSpawnMessage) => Promise<AgentSpawnResult>;
+    /** Create or update an AGENT.md under global or project scope. */
+    save: (message: AgentSaveMessage) => Promise<ManagedAgent>;
+    /** Delete an agent definition from the given scope. */
+    delete: (message: DefinitionDeleteMessage) => Promise<{ status: string }>;
+  };
+
+  /**
+   * Skills / agents / personalities management (Config UI).
+   * Project scope requires a bound workspace.
+   */
+  definitions: {
+    list: () => Promise<DefinitionsListResult>;
+    reveal: (message: DefinitionRevealMessage) => Promise<{ status: string }>;
+  };
+
+  skill: {
+    save: (message: SkillSaveMessage) => Promise<ManagedSkill>;
+    delete: (message: DefinitionDeleteMessage) => Promise<{ status: string }>;
+  };
+
+  personality: {
+    save: (message: PersonalitySaveMessage) => Promise<ManagedPersonality>;
+    delete: (message: DefinitionDeleteMessage) => Promise<{ status: string }>;
   };
 
   mcp: {
@@ -448,6 +495,16 @@ export const IPC_CHANNELS = {
   // Agent
   AGENT_LIST: 'agent:list',
   AGENT_SPAWN: 'agent:spawn',
+  AGENT_SAVE: 'agent:save',
+  AGENT_DELETE: 'agent:delete',
+
+  // Skills / agents / personalities management
+  DEFINITIONS_LIST: 'definitions:list',
+  DEFINITION_REVEAL: 'definition:reveal',
+  SKILL_SAVE: 'skill:save',
+  SKILL_DELETE: 'skill:delete',
+  PERSONALITY_SAVE: 'personality:save',
+  PERSONALITY_DELETE: 'personality:delete',
 
   // MCP
   MCP_STATUS: 'mcp:status',
@@ -506,6 +563,14 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.TOOL_EXECUTE,
   IPC_CHANNELS.AGENT_LIST,
   IPC_CHANNELS.AGENT_SPAWN,
+  IPC_CHANNELS.AGENT_SAVE,
+  IPC_CHANNELS.AGENT_DELETE,
+  IPC_CHANNELS.DEFINITIONS_LIST,
+  IPC_CHANNELS.DEFINITION_REVEAL,
+  IPC_CHANNELS.SKILL_SAVE,
+  IPC_CHANNELS.SKILL_DELETE,
+  IPC_CHANNELS.PERSONALITY_SAVE,
+  IPC_CHANNELS.PERSONALITY_DELETE,
   IPC_CHANNELS.MCP_STATUS,
   IPC_CHANNELS.RAG_STATUS,
   IPC_CHANNELS.RAG_INDEX,

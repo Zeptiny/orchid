@@ -57,8 +57,8 @@ export function TierModelsTab({ tierModels, providers, onChange }: TierModelsTab
 
   return (
     <div className="config-form">
-      <fieldset className="config-fieldset">
-        <legend className="config-fieldset-legend">Tier Models</legend>
+      <section className="config-fieldset">
+        <div className="config-fieldset-legend">Tier Models</div>
 
         <div className="config-card-list">
           {TIERS.map((tier) => {
@@ -83,7 +83,7 @@ export function TierModelsTab({ tierModels, providers, onChange }: TierModelsTab
             );
           })}
         </div>
-      </fieldset>
+      </section>
 
       {availableModels.length === 0 && (
         <div className="config-note">

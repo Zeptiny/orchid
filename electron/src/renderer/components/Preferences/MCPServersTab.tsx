@@ -164,8 +164,8 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="config-form">
-      <fieldset className="config-fieldset">
-        <legend className="config-fieldset-legend">
+      <section className="config-fieldset">
+        <div className="config-fieldset-legend">
           <span>MCP Servers</span>
           {!isAdding && (
             <button
@@ -176,7 +176,7 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
               + Add Server
             </button>
           )}
-        </legend>
+        </div>
 
         <div className="config-card-list">
           {serverList.map((s) => (
@@ -346,7 +346,7 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
             </div>
           )}
         </div>
-      </fieldset>
+      </section>
     </div>
   );
 }
