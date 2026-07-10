@@ -20,6 +20,11 @@ import { TierModelsTab } from './TierModelsTab';
 import { RAGTab } from './RAGTab';
 import { GeneralTab } from './GeneralTab';
 import { withMapDeletionTombstones } from '../../utils/config-tombstones';
+import {
+  activeProviderRenames,
+  mergeProviderRename,
+  type ProviderRename,
+} from '../../utils/provider-renames';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -131,6 +136,7 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
 
   // Working copy of config changes
   const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const [providerRenames, setProviderRenames] = useState<ProviderRename[]>([]);
 
   // Dialog state
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
@@ -159,6 +165,7 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
     setLoading(true);
     setError(null);
     setDraft({});
+    setProviderRenames([]);
     setActiveTab('providers');
 
     async function loadConfig() {
@@ -203,6 +210,10 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
     [],
   );
 
+  const recordProviderRename = useCallback((from: string, to: string) => {
+    setProviderRenames((previous) => mergeProviderRename(previous, from, to));
+  }, []);
+
   // ── Save ─────────────────────────────────────────────────────────────────
 
   const handleSave = useCallback(async () => {
@@ -217,7 +228,11 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
         // Convert omitted provider/MCP aliases into null tombstones so deletes
         // still apply under PATCH-style merge.
         const updates = withMapDeletionTombstones(draft, originalConfig);
-        await window.orchid.config.save({ updates: updates as Partial<Config> });
+        const activeRenames = activeProviderRenames(providerRenames, updates.providers);
+        await window.orchid.config.save({
+          updates: updates as Partial<Config>,
+          ...(activeRenames.length > 0 ? { providerRenames: activeRenames } : {}),
+        });
       }
       // Refresh original to reflect saved state
       if (window.orchid?.config?.get) {
@@ -225,6 +240,7 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
         setOriginalConfig(fresh);
       }
       setDraft({});
+      setProviderRenames([]);
       setSaving(false);
 
       // If MCP changed, show restart prompt
@@ -235,7 +251,7 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
       setError('Failed to save configuration. Please try again.');
       setSaving(false);
     }
-  }, [isDirty, draft, hasMCPChanges, originalConfig]);
+  }, [isDirty, draft, hasMCPChanges, originalConfig, providerRenames]);
 
   // ── Close handling ───────────────────────────────────────────────────────
 
@@ -252,6 +268,7 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
     setShowUnsavedDialog(false);
     setPendingClose(false);
     setDraft({});
+    setProviderRenames([]);
     onClose();
   }, [onClose]);
 
@@ -330,6 +347,7 @@ export function PreferencesWindow({ isOpen, onClose }: PreferencesWindowProps) {
           <ProvidersTab
             providers={currentConfig.providers}
             onChange={(providers) => updateDraft({ providers })}
+            onRename={recordProviderRename}
           />
         );
       case 'mcp-servers':

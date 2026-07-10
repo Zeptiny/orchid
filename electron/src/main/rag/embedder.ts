@@ -308,10 +308,10 @@ export async function createEmbedderFromConfig(): Promise<IEmbedder> {
   if (cfgApiModel) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { getConfig } = require('../config/loader') as typeof import('../config/loader');
+      const { getRuntimeConfig } = require('../config/runtime') as typeof import('../config/runtime');
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { resolveModelRef } = require('../llm/providers') as typeof import('../llm/providers');
-      const config = getConfig();
+      const config = await getRuntimeConfig();
       const ref = resolveModelRef(cfgApiModel, config);
       return new ApiEmbedder(ref.baseUrl ?? '', ref.apiKey, ref.modelId, cfgBatch);
     } catch {

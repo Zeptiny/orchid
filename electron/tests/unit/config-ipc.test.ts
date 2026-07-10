@@ -27,6 +27,12 @@ const mocks = vi.hoisted(() => {
     writtenConfigs: [] as unknown[],
     // Track getConfig call order for race detection
     getConfigCalls: 0,
+    encryptAndStore: vi.fn(async () => {}),
+    retrieveAndDecrypt: vi.fn(async () => null as string | null),
+    deleteKey: vi.fn(async () => {}),
+    injectKeychainKeys: vi.fn(async (cfg: Record<string, unknown>) => cfg),
+    redactConfig: vi.fn((cfg: Record<string, unknown>) => cfg),
+    redactApiKey: vi.fn((key: string) => key.length <= 8 ? '****' : `${key.slice(0, 3)}...${key.slice(-4)}`),
   };
 });
 
@@ -82,9 +88,13 @@ vi.mock('../../src/main/project/layers', () => ({
 }));
 
 vi.mock('../../src/main/config/keychain', () => ({
-  encryptAndStore: vi.fn(async () => {}),
+  encryptAndStore: mocks.encryptAndStore,
+  retrieveAndDecrypt: mocks.retrieveAndDecrypt,
+  deleteKey: mocks.deleteKey,
+  injectKeychainKeys: mocks.injectKeychainKeys,
   providerKeychainKey: (alias: string) => `provider:${alias}:api_key`,
-  redactConfig: (cfg: Record<string, unknown>) => cfg,
+  redactApiKey: mocks.redactApiKey,
+  redactConfig: mocks.redactConfig,
 }));
 
 vi.mock('../../src/main/llm/model-metadata', () => ({
@@ -108,6 +118,11 @@ beforeEach(async () => {
   mocks.handlers.clear();
   mocks.writtenConfigs.length = 0;
   mocks.getConfigCalls = 0;
+  mocks.encryptAndStore.mockClear();
+  mocks.retrieveAndDecrypt.mockReset().mockResolvedValue(null);
+  mocks.deleteKey.mockClear();
+  mocks.injectKeychainKeys.mockReset().mockImplementation(async (cfg) => cfg);
+  mocks.redactConfig.mockReset().mockImplementation((cfg) => cfg);
 
   // Fresh default config state for each test
   configState = defaults() as unknown as Record<string, unknown>;
@@ -129,10 +144,19 @@ function getSaveHandler() {
   return handler;
 }
 
+function getConfigHandler() {
+  const handler = mocks.handlers.get(IPC_CHANNELS.CONFIG_GET);
+  if (!handler) throw new Error('config:get handler not registered');
+  return handler;
+}
+
 /** Simulate a config:save IPC call with the given updates. */
-function callSave(updates: Record<string, unknown>) {
+function callSave(
+  updates: Record<string, unknown>,
+  providerRenames?: Array<{ from: string; to: string }>,
+) {
   const handler = getSaveHandler();
-  return handler(null, { updates });
+  return handler(null, { updates, providerRenames });
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -274,5 +298,128 @@ describe('config:save workspace layer reset', () => {
     expect(loader.ConfigManager.load).toHaveBeenCalledWith({
       projectDir: '/tmp/orchid-test-home',
     });
+  });
+});
+
+describe('provider API key lifecycle', () => {
+  it('hydrates keychain keys before redacting config:get results', async () => {
+    const hydrated = {
+      ...configState,
+      providers: {
+        default: {
+          ...(configState.providers as Record<string, Record<string, unknown>>).default,
+          api_key: 'sk-runtime-secret',
+        },
+      },
+    };
+    const redacted = {
+      ...hydrated,
+      providers: {
+        default: {
+          ...(hydrated.providers as Record<string, Record<string, unknown>>).default,
+          api_key: 'sk-...cret',
+        },
+      },
+    };
+    mocks.injectKeychainKeys.mockResolvedValue(hydrated);
+    mocks.redactConfig.mockReturnValue(redacted);
+
+    const result = await getConfigHandler()(null);
+
+    expect(mocks.injectKeychainKeys).toHaveBeenCalledWith(configState);
+    expect(mocks.redactConfig).toHaveBeenCalledWith(hydrated);
+    expect(result).toEqual(redacted);
+  });
+
+  it('moves an existing key when a provider is explicitly renamed', async () => {
+    configState.providers = {
+      legacy: { base_url: 'https://legacy.example.com', models: {} },
+    };
+    mocks.retrieveAndDecrypt.mockResolvedValue('sk-existing-secret');
+
+    await callSave(
+      {
+        providers: {
+          legacy: null,
+          current: { base_url: 'https://current.example.com', models: {} },
+        },
+      },
+      [{ from: 'legacy', to: 'current' }],
+    );
+
+    expect(mocks.retrieveAndDecrypt).toHaveBeenCalledWith(
+      'provider:legacy:api_key',
+    );
+    expect(mocks.encryptAndStore).toHaveBeenCalledWith(
+      'provider:current:api_key',
+      'sk-existing-secret',
+    );
+    expect(mocks.deleteKey).toHaveBeenCalledWith('provider:legacy:api_key');
+  });
+
+  it('deletes keychain entries for removed providers', async () => {
+    configState.providers = {
+      removeMe: { base_url: 'https://remove.example.com', models: {} },
+    };
+
+    await callSave({ providers: { removeMe: null } });
+
+    expect(mocks.deleteKey).toHaveBeenCalledWith('provider:removeMe:api_key');
+  });
+
+  it('clears stale keys when adding a provider without a new key', async () => {
+    configState.providers = {};
+
+    await callSave({
+      providers: {
+        reused: { base_url: 'https://reused.example.com', models: {} },
+      },
+    });
+
+    expect(mocks.deleteKey).toHaveBeenCalledWith('provider:reused:api_key');
+  });
+
+  it('clears a stale target key when a renamed provider has no source key', async () => {
+    configState.providers = {
+      legacy: { base_url: 'https://legacy.example.com', models: {} },
+    };
+    mocks.retrieveAndDecrypt.mockResolvedValue(null);
+
+    await callSave(
+      {
+        providers: {
+          legacy: null,
+          current: { base_url: 'https://current.example.com', models: {} },
+        },
+      },
+      [{ from: 'legacy', to: 'current' }],
+    );
+
+    expect(mocks.deleteKey).toHaveBeenCalledWith('provider:current:api_key');
+  });
+
+  it('never stores a redacted key returned by config:get', async () => {
+    configState.providers = {
+      existing: { base_url: 'https://existing.example.com', models: {} },
+    };
+    mocks.retrieveAndDecrypt.mockResolvedValue('sk-runtime-secret');
+
+    await callSave({
+      providers: {
+        existing: {
+          base_url: 'https://existing.example.com',
+          api_key: 'sk-...cret',
+          models: {},
+        },
+      },
+    });
+
+    expect(mocks.encryptAndStore).not.toHaveBeenCalledWith(
+      'provider:existing:api_key',
+      'sk-...cret',
+    );
+    const finalWrite = mocks.writtenConfigs.at(-1) as Record<string, unknown>;
+    const providers = finalWrite.providers as Record<string, Record<string, unknown>>;
+    expect(providers.existing.api_key).toBeUndefined();
   });
 });

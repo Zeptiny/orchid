@@ -7,6 +7,7 @@
 import type { Agent } from '../../shared/types/agent';
 import type { StreamEvent } from '../llm/orchestrator';
 import { getConfig } from '../config/loader';
+import { getRuntimeConfig } from '../config/runtime';
 import { resolveModelRef } from '../llm/providers';
 import { createProviderModel } from '../llm/providers-factory';
 import { getSessionManager } from '../ipc/session';
@@ -55,7 +56,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     /** Frozen parent-turn workspace cwd. */
     cwd?: string;
   }): AsyncGenerator<StreamEvent> {
-    const config = getConfig();
+    const config = await getRuntimeConfig();
     const { streamChat } = await import('../llm/orchestrator');
 
     // Resolve model: explicit override → tier model → default

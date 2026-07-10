@@ -11,6 +11,11 @@ import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
 import { withMapDeletionTombstones } from '../utils/config-tombstones';
+import {
+  activeProviderRenames,
+  mergeProviderRename,
+  type ProviderRename,
+} from '../utils/provider-renames';
 
 type TabId = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag';
 
@@ -41,6 +46,7 @@ export function ConfigView({ onClose }: ConfigViewProps) {
   const [error, setError] = useState<string | null>(null);
   const [originalConfig, setOriginalConfig] = useState<Config | null>(null);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const [providerRenames, setProviderRenames] = useState<ProviderRename[]>([]);
   const [personalities, setPersonalities] = useState<string[]>([]);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [showRestartDialog, setShowRestartDialog] = useState(false);
@@ -58,6 +64,7 @@ export function ConfigView({ onClose }: ConfigViewProps) {
     setLoading(true);
     setError(null);
     setDraft({});
+    setProviderRenames([]);
 
     async function loadConfig() {
       try {
@@ -93,6 +100,10 @@ export function ConfigView({ onClose }: ConfigViewProps) {
     setDraft((prev) => ({ ...prev, ...updates }));
   }, []);
 
+  const recordProviderRename = useCallback((from: string, to: string) => {
+    setProviderRenames((previous) => mergeProviderRename(previous, from, to));
+  }, []);
+
   const handleSave = useCallback(async () => {
     if (!isDirty) return;
     setSaving(true);
@@ -104,19 +115,24 @@ export function ConfigView({ onClose }: ConfigViewProps) {
       // Convert omitted provider/MCP aliases into null tombstones so deletes
       // still apply under PATCH-style merge.
       const updates = withMapDeletionTombstones(draft, originalConfig);
-      await window.orchid.config.save({ updates: updates as Partial<Config> });
+      const activeRenames = activeProviderRenames(providerRenames, updates.providers);
+      await window.orchid.config.save({
+        updates: updates as Partial<Config>,
+        ...(activeRenames.length > 0 ? { providerRenames: activeRenames } : {}),
+      });
       if (window.orchid?.config?.get) {
         const fresh = await window.orchid.config.get();
         setOriginalConfig(fresh);
       }
       setDraft({});
+      setProviderRenames([]);
       if (hasMCPChanges) setShowRestartDialog(true);
     } catch {
       setError('Failed to save configuration. Please try again.');
     } finally {
       setSaving(false);
     }
-  }, [draft, hasMCPChanges, isDirty, originalConfig]);
+  }, [draft, hasMCPChanges, isDirty, originalConfig, providerRenames]);
 
   const requestClose = useCallback(() => {
     if (isDirty) {
@@ -229,7 +245,13 @@ export function ConfigView({ onClose }: ConfigViewProps) {
               <span>Loading configuration...</span>
             </div>
           ) : currentConfig ? (
-            renderTab(activeTab, currentConfig, updateDraft, personalities)
+            renderTab(
+              activeTab,
+              currentConfig,
+              updateDraft,
+              recordProviderRename,
+              personalities,
+            )
           ) : (
             <div className="alert alert-warning">
               <Icon name="alert" />
@@ -262,7 +284,7 @@ export function ConfigView({ onClose }: ConfigViewProps) {
               <button className="btn btn-primary" onClick={async () => { await handleSave(); onClose(); }}>
                 Save
               </button>
-              <button className="btn btn-error" onClick={() => { setDraft({}); onClose(); }}>
+              <button className="btn btn-error" onClick={() => { setDraft({}); setProviderRenames([]); onClose(); }}>
                 Discard
               </button>
               <button className="btn btn-ghost" onClick={() => setShowUnsavedDialog(false)}>
@@ -297,6 +319,7 @@ function renderTab(
   activeTab: TabId,
   config: Config,
   updateDraft: (updates: Record<string, unknown>) => void,
+  recordProviderRename: (from: string, to: string) => void,
   personalities: readonly string[] = [],
 ) {
   switch (activeTab) {
@@ -325,6 +348,7 @@ function renderTab(
         <ProvidersTab
           providers={config.providers}
           onChange={(providers) => updateDraft({ providers })}
+          onRename={recordProviderRename}
         />
       );
     case 'mcp':

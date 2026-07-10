@@ -9,7 +9,7 @@
  */
 import { ipcMain } from 'electron';
 import { z } from 'zod';
-import { IPC_CHANNELS } from '../../shared/types/ipc';
+import { IPC_CHANNELS, type ProviderRename } from '../../shared/types/ipc';
 import {
   getConfig,
   ConfigManager,
@@ -26,10 +26,14 @@ import {
   loadPersonalities,
 } from '../personality/registry';
 import {
+  deleteKey,
   encryptAndStore,
   providerKeychainKey,
+  redactApiKey,
   redactConfig,
+  retrieveAndDecrypt,
 } from '../config/keychain';
+import { getRuntimeConfig } from '../config/runtime';
 import {
   applyWorkspaceProjectLayers,
   resetLastAppliedProjectDir,
@@ -52,8 +56,14 @@ const KNOWN_CONFIG_KEYS = new Set(Object.keys(configSchema.shape));
  *
  * Structure is validated after deep-merge via `configSchema.parse`.
  */
+const providerAliasSchema = z.string().regex(/^[a-z0-9-]+$/);
+
 const configSaveSchema = z.object({
   updates: z.record(z.string(), z.unknown()),
+  providerRenames: z.array(z.object({
+    from: providerAliasSchema,
+    to: providerAliasSchema,
+  })).optional(),
 }).superRefine((data, ctx) => {
   for (const key of Object.keys(data.updates)) {
     if (!KNOWN_CONFIG_KEYS.has(key)) {
@@ -108,10 +118,7 @@ export function _resetConfigSaveChainForTests(): void {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Extract API keys from providers and store them in the keychain.
- * Returns a new providers dict with `api_key` fields removed.
- */
+/** Extract API keys into the keychain and remove them from persisted config. */
 async function storeProviderKeys(
   providers: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
@@ -126,10 +133,15 @@ async function storeProviderKeys(
     const entryCopy = { ...(entry as Record<string, unknown>) };
     const apiKey = entryCopy['api_key'];
 
-    if (typeof apiKey === 'string' && apiKey) {
-      // Store in keychain
-      await encryptAndStore(providerKeychainKey(alias), apiKey);
-      // Remove from config (we'll resolve from keychain at runtime)
+    if (typeof apiKey === 'string') {
+      if (apiKey) {
+        const keychainKey = providerKeychainKey(alias);
+        const stored = await retrieveAndDecrypt(keychainKey);
+        if (stored === null || redactApiKey(stored) !== apiKey) {
+          await encryptAndStore(keychainKey, apiKey);
+        }
+      }
+      // Literal and redacted keys never belong in the config file.
       delete entryCopy['api_key'];
     }
 
@@ -139,12 +151,86 @@ async function storeProviderKeys(
   return result;
 }
 
+function getProviderMap(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function validateProviderRenames(
+  currentProviders: Record<string, unknown>,
+  providerUpdates: Record<string, unknown>,
+  finalProviders: Record<string, unknown>,
+  renames: ProviderRename[],
+): void {
+  const seenSources = new Set<string>();
+  const seenTargets = new Set<string>();
+  for (const { from, to } of renames) {
+    if (seenSources.has(from) || seenTargets.has(to)) {
+      throw new Error('Provider rename aliases must be unique');
+    }
+    seenSources.add(from);
+    seenTargets.add(to);
+    if (from === to) {
+      throw new Error(`Invalid provider rename: source and target are both '${from}'`);
+    }
+    if (!(from in currentProviders) || currentProviders[to] !== undefined) {
+      throw new Error(`Invalid provider rename: '${from}' cannot be renamed to '${to}'`);
+    }
+    if (providerUpdates[from] !== null || providerUpdates[to] == null) {
+      throw new Error(`Invalid provider rename payload for '${from}' → '${to}'`);
+    }
+    if (from in finalProviders || !(to in finalProviders)) {
+      throw new Error(`Provider rename did not produce '${to}'`);
+    }
+  }
+}
+
+async function copyProviderKeysForRenames(
+  renames: ProviderRename[],
+): Promise<void> {
+  for (const { from, to } of renames) {
+    const stored = await retrieveAndDecrypt(providerKeychainKey(from));
+    if (stored) {
+      await encryptAndStore(providerKeychainKey(to), stored);
+    } else {
+      await deleteKey(providerKeychainKey(to));
+    }
+  }
+}
+
+async function clearStaleKeysForAddedProviders(
+  previousProviders: Record<string, unknown>,
+  nextProviders: Record<string, unknown>,
+  renames: ProviderRename[],
+): Promise<void> {
+  const renameTargets = new Set(renames.map(({ to }) => to));
+  for (const [alias, value] of Object.entries(nextProviders)) {
+    if (alias in previousProviders || renameTargets.has(alias)) continue;
+    const entry = getProviderMap(value);
+    if (typeof entry.api_key !== 'string' || !entry.api_key) {
+      await deleteKey(providerKeychainKey(alias));
+    }
+  }
+}
+
+async function deleteRemovedProviderKeys(
+  previousProviders: Record<string, unknown>,
+  nextProviders: Record<string, unknown>,
+): Promise<void> {
+  for (const alias of Object.keys(previousProviders)) {
+    if (!(alias in nextProviders)) {
+      await deleteKey(providerKeychainKey(alias));
+    }
+  }
+}
+
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerConfigIPC(): void {
   // config:get — return the current merged config with API keys redacted
   ipcMain.handle(IPC_CHANNELS.CONFIG_GET, async () => {
-    const config = getConfig();
+    const config = await getRuntimeConfig();
     return redactConfig(config as unknown as Record<string, unknown>);
   });
 
@@ -162,7 +248,7 @@ export function registerConfigIPC(): void {
     if (typeof alias !== 'string' || !alias) {
       throw new Error('config:discover_models requires a non-empty alias string');
     }
-    const config = getConfig();
+    const config = await getRuntimeConfig();
     return discoverModelsAsync(alias, config, force === true);
   });
 
@@ -187,7 +273,7 @@ export function registerConfigIPC(): void {
       throw new Error(`Invalid config:save payload: ${parsed.error.message}`);
     }
 
-    const { updates } = parsed.data;
+    const { updates, providerRenames = [] } = parsed.data;
 
     // Serialize the read → merge → write cycle so concurrent saves don't race.
     // getConfig() is called *inside* the lock to avoid reading a stale snapshot
@@ -205,9 +291,26 @@ export function registerConfigIPC(): void {
       // Validate the merged result
       const validated = configSchema.parse(merged);
 
+      const currentProviders = getProviderMap(current.providers);
+      const providerUpdates = getProviderMap(updates.providers);
+      const finalProviders = validated.providers as Record<string, unknown>;
+      validateProviderRenames(
+        currentProviders,
+        providerUpdates,
+        finalProviders,
+        providerRenames,
+      );
+
+      // Copy first and delete old aliases only after the config write succeeds.
+      await copyProviderKeysForRenames(providerRenames);
+      await clearStaleKeysForAddedProviders(
+        currentProviders,
+        finalProviders,
+        providerRenames,
+      );
+
       // Extract API keys from providers and store in keychain
-      const providers = validated.providers as Record<string, unknown>;
-      const providersWithoutKeys = await storeProviderKeys(providers);
+      const providersWithoutKeys = await storeProviderKeys(finalProviders);
 
       // Persist config with keys stripped
       const configToSave = { ...validated, providers: providersWithoutKeys };
@@ -229,6 +332,8 @@ export function registerConfigIPC(): void {
         // Home-only load — never fall back to process.cwd() as project root (R2).
         ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
       }
+
+      await deleteRemovedProviderKeys(currentProviders, providersWithoutKeys);
 
       return { status: 'saved' as const };
     });

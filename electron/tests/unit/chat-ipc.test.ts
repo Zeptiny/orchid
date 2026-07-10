@@ -174,6 +174,15 @@ vi.mock('../../src/main/config/loader', () => ({
   })),
 }));
 
+vi.mock('../../src/main/config/runtime', () => ({
+  getRuntimeConfig: vi.fn(async () => ({
+    default_model: 'test/model',
+    tier_models: { bloom: 'test/model' },
+    command_timeout: 30,
+    llm_stream_retries: 0,
+  })),
+}));
+
 vi.mock('../../src/main/agents/registry', () => ({
   listAgents: mocks.listAgents,
   getAgent: vi.fn(),

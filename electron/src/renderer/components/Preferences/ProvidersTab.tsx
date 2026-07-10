@@ -30,6 +30,7 @@ export interface ProviderEntry {
 export interface ProvidersTabProps {
   providers: Record<string, Record<string, unknown>>;
   onChange: (providers: Record<string, Record<string, unknown>>) => void;
+  onRename: (from: string, to: string) => void;
 }
 
 interface ModelOverride {
@@ -168,12 +169,12 @@ function editingProviderToEntry(form: EditingProvider): ProviderEntry {
 
 /** Detect if a redacted api_key came from config:get (keychain-stored). */
 function isRedactedKey(key: string | undefined): boolean {
-  return typeof key === 'string' && key.includes('...');
+  return typeof key === 'string' && (key === '****' || key.includes('...'));
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function ProvidersTab({ providers, onChange }: ProvidersTabProps) {
+export function ProvidersTab({ providers, onChange, onRename }: ProvidersTabProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<EditingProvider | null>(null);
   const [isAdding, setIsAdding] = useState(false);
@@ -213,12 +214,15 @@ export function ProvidersTab({ providers, onChange }: ProvidersTabProps) {
   }, []);
 
   const saveEdit = useCallback(() => {
-    if (!editForm || !editingId) return;
+    if (!editForm) return;
+    if (!isAdding && !editingId) return;
 
     const entry = editingProviderToEntry(editForm);
     const updated = { ...providers };
-    if (editingId !== editForm.id && editingId in updated) {
+    // If editing an existing provider and the ID changed, remove old entry
+    if (editingId && editingId !== editForm.id && editingId in updated) {
       delete updated[editingId];
+      onRename(editingId, editForm.id);
     }
     updated[editForm.id] = providerToDict(entry);
 
@@ -227,7 +231,7 @@ export function ProvidersTab({ providers, onChange }: ProvidersTabProps) {
     setEditForm(null);
     setIsAdding(false);
     setTestResult({ status: 'idle', message: '', modelCount: 0 });
-  }, [editForm, editingId, providers, onChange]);
+  }, [editForm, editingId, isAdding, providers, onChange, onRename]);
 
   // ── Delete ───────────────────────────────────────────────────────────────
 
@@ -743,7 +747,7 @@ export function ProvidersTab({ providers, onChange }: ProvidersTabProps) {
           <button
             className="btn btn-primary btn-sm"
             onClick={saveEdit}
-            disabled={!form.id}
+            disabled={!form.id || (form.id !== editingId && form.id in providers)}
             type="button"
           >
             {isNew ? 'Add Provider' : 'Save'}

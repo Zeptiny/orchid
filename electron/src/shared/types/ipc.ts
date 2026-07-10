@@ -156,8 +156,15 @@ export interface BgCommandSnapshotResult {
 
 // ── Config API ───────────────────────────────────────────────────────────────
 
+export interface ProviderRename {
+  from: string;
+  to: string;
+}
+
 export interface ConfigSaveMessage {
   updates: Partial<Config>;
+  /** Explicit provider alias changes so keychain entries can follow renames safely. */
+  providerRenames?: ProviderRename[];
 }
 
 // ── Session API ──────────────────────────────────────────────────────────────

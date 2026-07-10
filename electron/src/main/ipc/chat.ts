@@ -17,6 +17,7 @@ import type { Agent } from '../../shared/types/agent';
 import type { Config } from '../config/schema';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { getConfig } from '../config/loader';
+import { getRuntimeConfig } from '../config/runtime';
 import { listAgents } from '../agents/registry';
 import { appendPersonality } from '../personality/registry';
 import { resolveModelRef } from '../llm/providers';
@@ -565,7 +566,7 @@ export function registerChatIPC(): void {
     }
 
     // Capture config after ensureActiveSession (layers may have reloaded it).
-    const config = getConfig();
+    const config = await getRuntimeConfig();
 
     // Prefer live window history; fall back to active session chain on cold start.
     let existingMessages: Message[] =
