@@ -2,13 +2,14 @@
  * Sidebar — right inspector panel (Context, Usage, Subagents, Todos, Index, MCP).
  * Iteration 012 mock-aligned collapse blocks.
  */
-import { useState, useEffect, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus } from '../../shared/types/ipc-boundary';
 import { ContextGrid } from './ContextGrid';
 import type { Message, Usage } from '../../shared/types/message';
 import { TodoStatus } from '../../shared/types/todo';
 import type { SubagentListState, SubagentDetail } from '../hooks/useSubagents';
 import type { TodoListState } from '../hooks/useTodos';
+import { formatShortcut } from '../keyboard';
 import { Icon } from './Icon';
 
 interface SidebarProps {
@@ -62,16 +63,7 @@ export function Sidebar({
   messages,
   cwd,
 }: SidebarProps) {
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
-        e.preventDefault();
-        onToggle();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onToggle]);
+  // Inspector toggle (Mod+B) is owned by ChatView via the central shortcut registry.
 
   if (!isOpen) {
     return (
@@ -79,7 +71,7 @@ export function Sidebar({
         <button
           className="btn btn-ghost btn-sm btn-circle"
           onClick={onToggle}
-          title="Expand inspector"
+          title={`Expand inspector (${formatShortcut('inspector.toggle')})`}
           type="button"
         >
           <Icon name="chevronLeft" size={14} />
@@ -95,7 +87,7 @@ export function Sidebar({
         <button
           className="btn btn-ghost btn-sm btn-circle"
           onClick={onToggle}
-          title="Collapse inspector"
+          title={`Collapse inspector (${formatShortcut('inspector.toggle')})`}
           type="button"
         >
           <Icon name="chevronRight" size={14} />

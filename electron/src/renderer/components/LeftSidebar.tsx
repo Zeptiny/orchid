@@ -1,7 +1,15 @@
-import { useMemo, useState } from 'react';
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import type { SessionSummary } from '../../shared/types/ipc-boundary';
 import type { WorkspaceInfo } from '../../shared/types/ipc';
 import type { SessionListState } from '../hooks/useSession';
+import { formatShortcut, useRovingListIndex } from '../keyboard';
 import {
   buildPrimarySessions,
   groupSessionsByDate,
@@ -98,7 +106,7 @@ export function LeftSidebar({
         <button
           className="btn btn-ghost btn-sm btn-circle"
           onClick={onToggle}
-          title="Expand sidebar"
+          title={`Expand sessions rail (${formatShortcut('sessionsRail.toggle')})`}
           type="button"
         >
           <Icon name="chevronRight" size={14} />
@@ -106,7 +114,7 @@ export function LeftSidebar({
         <button
           className="btn btn-ghost btn-sm btn-circle"
           onClick={onSessionCreate}
-          title="New session"
+          title={`New session (${formatShortcut('session.new')})`}
           type="button"
         >
           <Icon name="plus" size={16} />
@@ -146,7 +154,7 @@ export function LeftSidebar({
           <button
             className="btn btn-ghost btn-sm btn-circle"
             onClick={onSessionCreate}
-            title="New session"
+            title={`New session (${formatShortcut('session.new')})`}
             type="button"
           >
             <Icon name="plus" size={14} />
@@ -154,7 +162,7 @@ export function LeftSidebar({
           <button
             className="btn btn-ghost btn-sm btn-circle"
             onClick={onToggle}
-            title="Collapse sidebar"
+            title={`Collapse sessions rail (${formatShortcut('sessionsRail.toggle')})`}
             type="button"
           >
             <Icon name="chevronLeft" size={14} />
@@ -321,6 +329,41 @@ function SessionList({
   isUnbound,
   onPickProjectDir,
 }: SessionListProps) {
+  const listId = useId();
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const flatSessions = useMemo(() => {
+    const items: SessionSummary[] = [];
+    for (const group of groupedSessions) {
+      items.push(...group.sessions);
+    }
+    if (!isSearching && showOtherProjects) {
+      for (const project of otherProjectGroups) {
+        items.push(...project.sessions);
+      }
+    }
+    return items;
+  }, [groupedSessions, isSearching, showOtherProjects, otherProjectGroups]);
+
+  const preferredIndex = useMemo(() => {
+    if (!activeSessionId) return 0;
+    const idx = flatSessions.findIndex((s) => s.id === activeSessionId);
+    return idx >= 0 ? idx : 0;
+  }, [flatSessions, activeSessionId]);
+
+  const { activeIndex, setActiveIndex, onListKeyDown } = useRovingListIndex({
+    length: flatSessions.length,
+    preferredIndex,
+  });
+
+  // Keep the highlighted row visible when moving with arrows.
+  useEffect(() => {
+    const el = listRef.current?.querySelector<HTMLElement>(
+      `[data-session-index="${activeIndex}"]`,
+    );
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [activeIndex]);
+
   if (state.status === 'loading') {
     return (
       <div className="session-list-state">
@@ -370,8 +413,42 @@ function SessionList({
     );
   }
 
+  const activeOptionId =
+    flatSessions[activeIndex] != null
+      ? `${listId}-opt-${flatSessions[activeIndex].id}`
+      : undefined;
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    onListKeyDown(event);
+    if (event.defaultPrevented) return;
+
+    const current = flatSessions[activeIndex];
+    if (!current) return;
+
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onSelect(current.id);
+      return;
+    }
+    // Delete only (not Backspace) to avoid surprising edits while focusing the list.
+    if (event.key === 'Delete') {
+      event.preventDefault();
+      onDelete(current.id);
+    }
+  };
+
+  let sessionIndex = 0;
+
   return (
-    <div className="session-list">
+    <div
+      ref={listRef}
+      className="session-list"
+      role="listbox"
+      aria-label="Sessions"
+      aria-activedescendant={activeOptionId}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+    >
       {!hasPrimary && !isSearching && (
         <div className="session-list-empty">
           {isUnbound
@@ -381,18 +458,27 @@ function SessionList({
       )}
 
       {groupedSessions.map((group) => (
-        <div key={group.label} className="session-group">
+        <div key={group.label} className="session-group" role="group" aria-label={group.label}>
           <div className="session-group-title">{group.label}</div>
-          {group.sessions.map((session) => (
-            <SessionRow
-              key={session.id}
-              session={session}
-              isActive={session.id === activeSessionId}
-              showPathHint={isSearching && otherIds.has(session.id)}
-              onSelect={onSelect}
-              onDelete={onDelete}
-            />
-          ))}
+          {group.sessions.map((session) => {
+            const index = sessionIndex++;
+            return (
+              <SessionRow
+                key={session.id}
+                optionId={`${listId}-opt-${session.id}`}
+                sessionIndex={index}
+                session={session}
+                isActive={session.id === activeSessionId}
+                isKeyboardActive={index === activeIndex}
+                showPathHint={isSearching && otherIds.has(session.id)}
+                onSelect={(id) => {
+                  setActiveIndex(index);
+                  onSelect(id);
+                }}
+                onDelete={onDelete}
+              />
+            );
+          })}
         </div>
       ))}
 
@@ -414,7 +500,12 @@ function SessionList({
 
           {showOtherProjects &&
             otherProjectGroups.map((project) => (
-              <div key={project.key} className="session-group">
+              <div
+                key={project.key}
+                className="session-group"
+                role="group"
+                aria-label={project.label}
+              >
                 <div
                   className="session-group-title session-project-title"
                   title={project.path ?? undefined}
@@ -428,16 +519,25 @@ function SessionList({
                         {dateGroup.label}
                       </div>
                     )}
-                    {dateGroup.sessions.map((session) => (
-                      <SessionRow
-                        key={session.id}
-                        session={session}
-                        isActive={session.id === activeSessionId}
-                        showPathHint={Boolean(session.cwd)}
-                        onSelect={onSelect}
-                        onDelete={onDelete}
-                      />
-                    ))}
+                    {dateGroup.sessions.map((session) => {
+                      const index = sessionIndex++;
+                      return (
+                        <SessionRow
+                          key={session.id}
+                          optionId={`${listId}-opt-${session.id}`}
+                          sessionIndex={index}
+                          session={session}
+                          isActive={session.id === activeSessionId}
+                          isKeyboardActive={index === activeIndex}
+                          showPathHint={Boolean(session.cwd)}
+                          onSelect={(id) => {
+                            setActiveIndex(index);
+                            onSelect(id);
+                          }}
+                          onDelete={onDelete}
+                        />
+                      );
+                    })}
                   </div>
                 ))}
               </div>
@@ -450,13 +550,19 @@ function SessionList({
 
 function SessionRow({
   session,
+  optionId,
+  sessionIndex,
   isActive,
+  isKeyboardActive,
   showPathHint,
   onSelect,
   onDelete,
 }: {
   session: SessionSummary;
+  optionId: string;
+  sessionIndex: number;
   isActive: boolean;
+  isKeyboardActive: boolean;
   showPathHint: boolean;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
@@ -466,10 +572,19 @@ function SessionRow({
     : 'Unknown path';
 
   return (
-    <div className="session-row group">
+    <div
+      className={`session-row group ${isKeyboardActive ? 'session-row-keyboard' : ''}`}
+      data-session-index={sessionIndex}
+    >
       <button
+        id={optionId}
         type="button"
-        className={`session-item ${isActive ? 'session-item-active' : ''}`}
+        role="option"
+        aria-selected={isActive}
+        tabIndex={-1}
+        className={`session-item ${isActive ? 'session-item-active' : ''} ${
+          isKeyboardActive ? 'session-item-keyboard' : ''
+        }`}
         onClick={() => onSelect(session.id)}
         title={session.cwd ?? session.name}
       >
@@ -483,6 +598,7 @@ function SessionRow({
       </button>
       <button
         className="btn btn-ghost btn-xs btn-square session-item-delete"
+        tabIndex={-1}
         onClick={(event) => {
           event.stopPropagation();
           onDelete(session.id);

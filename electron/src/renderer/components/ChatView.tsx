@@ -3,11 +3,12 @@
  *
  * Iteration 012 three-panel shell: left sessions | center chat | right inspector.
  */
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useChat } from '../hooks/useChat';
 import { useSession } from '../hooks/useSession';
 import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
+import { useGlobalShortcuts } from '../keyboard';
 import type { Message } from '../../shared/types/message';
 import type { Session } from '../../shared/types/session';
 import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus, CommandContext } from '../../shared/types/ipc-boundary';
@@ -17,6 +18,7 @@ import { Footer } from './Footer';
 import { Sidebar } from './Sidebar';
 import { LeftSidebar } from './LeftSidebar';
 import { CommandPalette } from './CommandPalette';
+import { ShortcutsHelp } from './ShortcutsHelp';
 
 /** Flatten every chain's messages for the center pane (chronological). */
 function messagesFromSession(loaded: Session): Message[] {
@@ -48,6 +50,7 @@ export function ChatView() {
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [maxContext, setMaxContext] = useState<number | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Guards against out-of-order session:load responses overwriting a newer pick.
@@ -63,7 +66,13 @@ export function ChatView() {
   }, []);
 
   const togglePalette = useCallback(() => {
+    setHelpOpen(false);
     setPaletteOpen((prev) => !prev);
+  }, []);
+
+  const toggleHelp = useCallback(() => {
+    setPaletteOpen(false);
+    setHelpOpen((prev) => !prev);
   }, []);
 
   const openSettings = useCallback(() => {
@@ -285,36 +294,59 @@ export function ChatView() {
     await handleSend(lastUser.content);
   }, [chat, handleSend]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        togglePalette();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
-        e.preventDefault();
-        handleSessionCreate();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === ',') {
-        e.preventDefault();
-        openSettings();
-      }
-      // Ctrl/Cmd+[1-9] — switch to session N (mock notes)
-      if ((e.ctrlKey || e.metaKey) && e.key >= '1' && e.key <= '9') {
+  const sessionSwitchHandlers = useMemo(() => {
+    const handlers: Record<string, (event: KeyboardEvent) => void> = {};
+    for (let n = 1; n <= 9; n++) {
+      handlers[`session.switch.${n}`] = () => {
         const list =
           session.listState.status === 'ready' || session.listState.status === 'partial'
             ? session.listState.sessions
             : [];
-        const idx = parseInt(e.key, 10) - 1;
-        if (list[idx]) {
-          e.preventDefault();
-          void handleSessionSelect(list[idx].id);
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePalette, handleSessionCreate, openSettings, session.listState, handleSessionSelect]);
+        const target = list[n - 1];
+        if (target) void handleSessionSelect(target.id);
+      };
+    }
+    return handlers;
+  }, [session.listState, handleSessionSelect]);
+
+  const shortcutHandlers = useMemo(
+    () => ({
+      'palette.toggle': () => togglePalette(),
+      'shortcuts.help': () => toggleHelp(),
+      'settings.open': () => openSettings(),
+      'session.new': () => {
+        void handleSessionCreate();
+      },
+      'inspector.toggle': () => toggleSidebar(),
+      'sessionsRail.toggle': () => toggleLeftSidebar(),
+      ...sessionSwitchHandlers,
+    }),
+    [
+      togglePalette,
+      toggleHelp,
+      openSettings,
+      handleSessionCreate,
+      toggleSidebar,
+      toggleLeftSidebar,
+      sessionSwitchHandlers,
+    ],
+  );
+
+  const shortcutGate = useCallback(
+    (id: string) => {
+      // Always allow palette / help toggles (they close themselves).
+      if (id === 'palette.toggle' || id === 'shortcuts.help') return true;
+      // Suppress other globals while overlays own the keyboard.
+      if (paletteOpen || helpOpen) return false;
+      return true;
+    },
+    [paletteOpen, helpOpen],
+  );
+
+  useGlobalShortcuts({
+    handlers: shortcutHandlers,
+    isEnabled: shortcutGate,
+  });
 
   const refreshMCP = useCallback(async () => {
     try {
@@ -597,6 +629,8 @@ export function ChatView() {
         currentPersonality={currentPersonality}
         personalityNames={personalityNames}
       />
+
+      <ShortcutsHelp isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 }

@@ -21,6 +21,7 @@ import {
   type DetectedProvider,
   type DetectionResult,
 } from './ProviderDetector';
+import { useFocusTrap } from '../../keyboard';
 import orchidIcon from '../../assets/orchid-icon.svg';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -142,17 +143,18 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
     onSkip();
   }, [onSkip]);
 
-  // ── Focus trap ───────────────────────────────────────────────────────────
+  useFocusTrap({
+    enabled: isOpen,
+    containerRef,
+  });
 
+  // Re-focus first control when the step changes.
   useEffect(() => {
     if (!isOpen || !containerRef.current) return;
-    const el = containerRef.current;
-    const focusable = el.querySelectorAll<HTMLElement>(
+    const focusable = containerRef.current.querySelectorAll<HTMLElement>(
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
     );
-    if (focusable.length > 0) {
-      focusable[0].focus();
-    }
+    focusable[0]?.focus();
   }, [isOpen, stepIndex]);
 
   // ── Keyboard shortcuts ───────────────────────────────────────────────────

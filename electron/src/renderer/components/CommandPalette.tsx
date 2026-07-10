@@ -18,8 +18,10 @@ import {
   type CommandCategory,
   type PaletteResult,
 } from '../commands/registry';
+import { useFocusTrap } from '../keyboard';
 import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
 import { Icon, type IconName } from './Icon';
+import { Keycaps } from './Keycaps';
 
 export interface CommandPaletteProps {
   isOpen: boolean;
@@ -62,6 +64,13 @@ export function CommandPalette({
   const [subPicker, setSubPicker] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useFocusTrap({
+    enabled: isOpen,
+    containerRef: panelRef,
+    initialFocusRef: inputRef,
+  });
 
   const results = useMemo<PaletteResult[]>(() => {
     if (subPicker === '/theme') {
@@ -400,19 +409,7 @@ export function CommandPalette({
     [flatResults, selectedIndex, handleSelect, onClose, query, subPicker],
   );
 
-  useEffect(() => {
-    const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        if (isOpen) {
-          onClose();
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleGlobalKeyDown);
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [isOpen, onClose]);
+  // Mod+K toggle is owned by ChatView via the central shortcut registry.
 
   if (!isOpen) return null;
 
@@ -437,6 +434,7 @@ export function CommandPalette({
       aria-label="Command palette"
     >
       <div
+        ref={panelRef}
         className="command-palette flex max-h-[420px] w-[min(520px,90%)] flex-col overflow-hidden rounded-[10px] border border-base-300 bg-base-200 shadow-2xl"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={handleKeyDown}
@@ -563,7 +561,7 @@ export function CommandPalette({
                             )}
                           </div>
                           {item.category === 'commands' && (
-                            <kbd className="kbd kbd-xs">Enter</kbd>
+                            <Keycaps chord="Enter" size="xs" />
                           )}
                         </button>
                       );
@@ -576,10 +574,20 @@ export function CommandPalette({
         </div>
 
         {/* Footer */}
-        <div className="command-palette-footer flex gap-3 border-t border-base-300 px-2.5 py-1.5 text-[9px] text-base-content/50">
-          <span><kbd className="kbd kbd-xs">up/down</kbd> navigate</span>
-          <span><kbd className="kbd kbd-xs">Enter</kbd> select</span>
-          <span><kbd className="kbd kbd-xs">Esc</kbd> close</span>
+        <div className="command-palette-footer orchid-shortcut-bar">
+          <span className="orchid-shortcut-bar-item">
+            <Keycaps chord="↑" size="xs" />
+            <Keycaps chord="↓" size="xs" />
+            <span>navigate</span>
+          </span>
+          <span className="orchid-shortcut-bar-item">
+            <Keycaps chord="Enter" size="xs" />
+            <span>select</span>
+          </span>
+          <span className="orchid-shortcut-bar-item">
+            <Keycaps chord="Esc" size="xs" />
+            <span>close</span>
+          </span>
         </div>
       </div>
     </div>

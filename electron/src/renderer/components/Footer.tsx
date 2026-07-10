@@ -8,8 +8,10 @@
 import { useEffect, useId, useState, type CSSProperties } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
 import type { InterruptState } from '../hooks/useChat';
+import { FOOTER_SHORTCUT_IDS, getShortcut } from '../keyboard';
 import { ContextLegend } from './ContextGrid';
 import { Icon } from './Icon';
+import { Keycaps } from './Keycaps';
 
 interface FooterProps {
   elapsedSeconds: number;
@@ -87,11 +89,11 @@ export function Footer({
             <span className="opacity-40 shrink-0">-</span>
             <span className="shrink-0">elapsed {formatElapsed(elapsedSeconds)}</span>
             <span className="opacity-40 shrink-0">-</span>
-            <span className="inline-flex items-center gap-1 min-w-0 truncate">
-              <kbd className="kbd">Esc</kbd>
-              <span className="opacity-60">or</span>
+            <span className="chat-footer-hint">
+              <Keycaps chord="Esc" size="xs" />
+              <span className="chat-footer-hint-sep">or</span>
               <Icon name="square" size={10} className="opacity-80 shrink-0" />
-              <span>
+              <span className="chat-footer-hint-label">
                 {interruptState === 'confirmSubagents'
                   ? 'to cancel subagents'
                   : interruptState === 'confirmAgent'
@@ -102,17 +104,25 @@ export function Footer({
           </>
         ) : (
           <>
-            <span className="shrink-0">
-              <kbd className="kbd">Ctrl K</kbd> commands
-            </span>
-            <span className="opacity-40 shrink-0">-</span>
-            <span className="shrink-0">
-              <kbd className="kbd">Ctrl B</kbd> inspector
-            </span>
-            <span className="opacity-40 shrink-0">-</span>
-            <span className="shrink-0">
-              <kbd className="kbd">Ctrl N</kbd> new session
-            </span>
+            {FOOTER_SHORTCUT_IDS.map((id, index) => {
+              const def = getShortcut(id);
+              if (!def) return null;
+              return (
+                <span key={id} className="contents">
+                  {index > 0 && (
+                    <span className="chat-footer-divider" aria-hidden>
+                      ·
+                    </span>
+                  )}
+                  <span className="chat-footer-hint">
+                    <Keycaps chord={def.chord} size="xs" />
+                    <span className="chat-footer-hint-label">
+                      {def.footerLabel ?? def.label}
+                    </span>
+                  </span>
+                </span>
+              );
+            })}
           </>
         )}
       </div>

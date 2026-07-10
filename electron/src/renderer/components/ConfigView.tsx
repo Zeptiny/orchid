@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Config } from '../../shared/types/ipc-boundary';
 import { GeneralTab } from './Preferences/GeneralTab';
 import { MCPServersTab } from './Preferences/MCPServersTab';
@@ -7,7 +7,9 @@ import { RAGTab } from './Preferences/RAGTab';
 import { TierModelsTab } from './Preferences/TierModelsTab';
 import { LeftSidebar } from './LeftSidebar';
 import { useSession } from '../hooks/useSession';
+import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import { Icon } from './Icon';
+import { Keycaps } from './Keycaps';
 import { withMapDeletionTombstones } from '../utils/config-tombstones';
 
 type TabId = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag';
@@ -31,6 +33,7 @@ interface ConfigViewProps {
 
 export function ConfigView({ onClose }: ConfigViewProps) {
   const session = useSession();
+  const rootRef = useRef<HTMLDivElement>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>('general');
   const [loading, setLoading] = useState(true);
@@ -41,6 +44,11 @@ export function ConfigView({ onClose }: ConfigViewProps) {
   const [personalities, setPersonalities] = useState<string[]>([]);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [showRestartDialog, setShowRestartDialog] = useState(false);
+
+  useFocusTrap({
+    enabled: true,
+    containerRef: rootRef,
+  });
 
   const isDirty = Object.keys(draft).length > 0;
   const hasMCPChanges = 'mcp_servers' in draft;
@@ -118,24 +126,18 @@ export function ConfigView({ onClose }: ConfigViewProps) {
     onClose();
   }, [isDirty, onClose]);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key === 's') {
-        event.preventDefault();
-        handleSave();
-        return;
-      }
-      if (event.key === 'Escape') {
-        event.preventDefault();
+  useGlobalShortcuts({
+    handlers: {
+      'config.save': () => {
+        void handleSave();
+      },
+      'config.close': () => {
         if (showUnsavedDialog) setShowUnsavedDialog(false);
         else if (showRestartDialog) setShowRestartDialog(false);
         else requestClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleSave, requestClose, showRestartDialog, showUnsavedDialog]);
+      },
+    },
+  });
 
   const handleSessionSelect = useCallback(
     async (id: string) => {
@@ -150,7 +152,10 @@ export function ConfigView({ onClose }: ConfigViewProps) {
   }, [session]);
 
   return (
-    <div className="grid h-screen min-h-0 grid-cols-[auto_minmax(460px,1fr)] overflow-hidden bg-[#080c12] text-base-content">
+    <div
+      ref={rootRef}
+      className="grid h-screen min-h-0 grid-cols-[auto_minmax(460px,1fr)] overflow-hidden bg-[#080c12] text-base-content"
+    >
       <LeftSidebar
         activeSessionId={session.activeSession?.id ?? null}
         isCollapsed={leftCollapsed}
@@ -233,12 +238,18 @@ export function ConfigView({ onClose }: ConfigViewProps) {
           )}
         </div>
 
-        <footer className="flex min-h-7 shrink-0 items-center gap-2.5 border-t border-base-300 bg-base-200 px-4 py-1.5 text-[10px] text-base-content/50">
-          <span><kbd className="kbd kbd-xs">Ctrl S</kbd> save</span>
-          <span>-</span>
-          <span><kbd className="kbd kbd-xs">Esc</kbd> close</span>
-          <span>-</span>
-          <span>Config layers: defaults, home, project, env</span>
+        <footer className="config-footer-bar orchid-shortcut-bar">
+          <span className="orchid-shortcut-bar-item">
+            <Keycaps chord={{ key: 's', mod: true }} size="xs" />
+            <span>save</span>
+          </span>
+          <span className="orchid-shortcut-bar-item">
+            <Keycaps chord="Esc" size="xs" />
+            <span>close</span>
+          </span>
+          <span className="config-footer-meta">
+            Config layers: defaults, home, project, env
+          </span>
         </footer>
       </main>
 

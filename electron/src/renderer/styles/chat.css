@@ -3517,9 +3517,9 @@
 
 /* Chat footer (mock .chat-footer) — shortcuts/status left, context radial right */
 .chat-footer {
-  min-height: 28px;
+  min-height: 30px;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
-  padding: 2px 10px 2px 14px;
+  padding: 4px 12px 4px 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3529,7 +3529,32 @@
   flex: 0 0 auto;
   background: #0b0f14;
 }
-.chat-footer .kbd {
+.chat-footer-main {
+  gap: 6px;
+}
+.chat-footer-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.chat-footer-hint-label {
+  color: color-mix(in srgb, #98a5b5 92%, transparent);
+  letter-spacing: 0.01em;
+}
+.chat-footer-hint-sep {
+  opacity: 0.45;
+  font-size: 9px;
+}
+.chat-footer-divider {
+  opacity: 0.28;
+  margin: 0 2px;
+  flex-shrink: 0;
+  user-select: none;
+}
+/* Legacy daisy kbd inside footer (streaming status may still use raw kbd) */
+.chat-footer .kbd:not(.orchid-keycap) {
   min-width: 16px;
   padding: 1px 3px;
   border: 1px solid #26303d;
@@ -4021,6 +4046,16 @@
 .session-item-active {
   background: color-mix(in srgb, #7e88ff 18%, transparent) !important;
 }
+.session-item-keyboard {
+  outline: 1px solid color-mix(in srgb, #7e88ff 70%, transparent);
+  outline-offset: -1px;
+  background: color-mix(in srgb, #7e88ff 12%, transparent);
+}
+.session-list:focus-visible {
+  outline: 1px solid color-mix(in srgb, #7e88ff 55%, transparent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
 .session-item-name {
   flex: 1;
   min-width: 0;
@@ -4476,4 +4511,275 @@ button.inspector-row:hover {
   .app-frame {
     min-width: 0;
   }
+}
+
+/* ── Shared keycaps (shortcut chords) ─────────────────────────────────────── */
+
+.orchid-keycaps {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+  user-select: none;
+}
+.orchid-keycaps-unit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+.orchid-keycaps-sep {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.7em;
+  margin: 0 1px;
+  font-size: 0.72em;
+  font-weight: 600;
+  line-height: 1;
+  color: color-mix(in srgb, currentColor 38%, transparent);
+  opacity: 0.85;
+}
+.orchid-keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35em;
+  margin: 0;
+  border: 1px solid color-mix(in srgb, #26303d 92%, #7e88ff);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, #1a222d 88%, #fff) 0%,
+      color-mix(in srgb, #121820 96%, #000) 100%
+    );
+  box-shadow:
+    0 1px 0 color-mix(in srgb, #000 35%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent);
+  color: color-mix(in srgb, #c5d0dc 94%, #7e88ff);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+}
+.orchid-keycap-xs .orchid-keycap {
+  min-height: 15px;
+  padding: 1px 4px;
+  font-size: 9px;
+  border-radius: 3px;
+}
+.orchid-keycap-sm .orchid-keycap {
+  min-height: 20px;
+  padding: 3px 7px;
+  font-size: 11px;
+  border-radius: 4px;
+}
+.orchid-keycap-md .orchid-keycap {
+  min-height: 24px;
+  padding: 4px 9px;
+  font-size: 12px;
+  border-radius: 5px;
+}
+
+/* Compact shortcut hint bars (palette footer, config footer) */
+.orchid-shortcut-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  min-height: 30px;
+  padding: 6px 12px;
+  border-top: 1px solid color-mix(in srgb, #26303d 90%, transparent);
+  background: color-mix(in srgb, #0b0f14 88%, #151a21);
+  color: color-mix(in srgb, #98a5b5 92%, transparent);
+  font-size: 10px;
+}
+.orchid-shortcut-bar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.orchid-shortcut-bar-item > span:last-child {
+  letter-spacing: 0.01em;
+}
+.config-footer-bar {
+  flex-shrink: 0;
+}
+.config-footer-meta {
+  margin-left: auto;
+  opacity: 0.55;
+  font-size: 9px;
+  letter-spacing: 0.02em;
+}
+
+/* ── Keyboard shortcuts help modal ────────────────────────────────────────── */
+
+.shortcuts-help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 10vh 16px 24px;
+  background: color-mix(in srgb, #05070a 62%, transparent);
+  backdrop-filter: blur(3px);
+}
+.shortcuts-help-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  max-height: min(640px, 82vh);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, #26303d 85%, #7e88ff);
+  border-radius: 12px;
+  background:
+    linear-gradient(
+      165deg,
+      color-mix(in srgb, #151a21 92%, #7e88ff) 0%,
+      #10151c 42%,
+      #0c1016 100%
+    );
+  box-shadow:
+    0 24px 64px color-mix(in srgb, #000 55%, transparent),
+    0 0 0 1px color-mix(in srgb, #fff 3%, transparent) inset;
+  color: #eef3f8;
+}
+.shortcuts-help-dialog :focus-visible {
+  outline: 2px solid color-mix(in srgb, #7e88ff 80%, transparent);
+  outline-offset: 2px;
+}
+.shortcuts-help-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid color-mix(in srgb, #26303d 88%, transparent);
+  background: color-mix(in srgb, #121820 70%, transparent);
+}
+.shortcuts-help-title-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+.shortcuts-help-icon-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, #7e88ff 28%, #26303d);
+  background: color-mix(in srgb, #7e88ff 12%, #151a21);
+  color: color-mix(in srgb, #aab2ff 90%, #fff);
+  flex-shrink: 0;
+}
+.shortcuts-help-title-text {
+  min-width: 0;
+  padding-top: 1px;
+}
+.shortcuts-help-title-text h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  color: #eef3f8;
+}
+.shortcuts-help-title-text p {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: color-mix(in srgb, #98a5b5 95%, transparent);
+}
+.shortcuts-help-close {
+  margin-top: -2px;
+  margin-right: -4px;
+  color: #98a5b5;
+}
+.shortcuts-help-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  scrollbar-width: thin;
+  scrollbar-color: #26303d transparent;
+}
+.shortcuts-help-body::-webkit-scrollbar {
+  width: 6px;
+}
+.shortcuts-help-body::-webkit-scrollbar-thumb {
+  background: #26303d;
+  border-radius: 999px;
+}
+.shortcuts-help-section {
+  margin: 0;
+  padding: 10px 10px 8px;
+  border: 1px solid color-mix(in srgb, #26303d 80%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, #0b0f14 55%, transparent);
+}
+.shortcuts-help-section-title {
+  margin: 0 0 8px;
+  padding: 0 4px 6px;
+  border-bottom: 1px solid color-mix(in srgb, #26303d 70%, transparent);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, #98a5b5 78%, #7e88ff);
+}
+.shortcuts-help-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.shortcuts-help-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  transition: background 120ms ease;
+}
+.shortcuts-help-row:hover {
+  background: color-mix(in srgb, #7e88ff 8%, transparent);
+}
+.shortcuts-help-label {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: color-mix(in srgb, #eef3f8 88%, transparent);
+}
+.shortcuts-help-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 16px 12px;
+  border-top: 1px solid color-mix(in srgb, #26303d 88%, transparent);
+  background: color-mix(in srgb, #0b0f14 80%, #151a21);
+  color: color-mix(in srgb, #98a5b5 90%, transparent);
+  font-size: 10px;
+}
+.shortcuts-help-footer-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.shortcuts-help-footer-dot {
+  opacity: 0.35;
+  user-select: none;
 }

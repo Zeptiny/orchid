@@ -549,6 +549,7 @@ export function InputArea({
         <textarea
           ref={textareaRef}
           className="composer-textarea"
+          data-orchid-composer
           value={input}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
