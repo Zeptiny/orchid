@@ -98,7 +98,7 @@ async function _indexProjectImpl(
   const t0 = Date.now();
 
   // File discovery
-  const files = discoverFiles(root, paths, cfg.ignored_dirs);
+  const files = await discoverFiles(root, paths, cfg.ignored_dirs);
   const stats: IndexResult = {
     filesScanned: files.length,
     filesIndexed: 0,
@@ -156,7 +156,7 @@ async function _indexProjectImpl(
 
     try {
       // Read + hash
-      const result = readAndHash(filepath);
+      const result = await readAndHash(filepath);
       if (!result) {
         if (existingHashes.has(rel)) {
           store.deleteByFileBatch(vectorState, rel);
@@ -266,7 +266,7 @@ export async function updateFile(
     return;
   }
 
-  const result = readAndHash(absPath);
+  const result = await readAndHash(absPath);
   if (!result) {
     store.deleteByFile(rel);
     return;
@@ -315,45 +315,52 @@ export function clearIndex(projectPath?: string): void {
 // File discovery
 // ---------------------------------------------------------------------------
 
-function discoverFiles(
+async function discoverFiles(
   root: string,
   paths: string[] | undefined,
   ignoredDirs: string[],
-): string[] {
+): Promise<string[]> {
   const skip = new Set([...ignoredDirs, ...DEFAULT_IGNORED_DIRS]);
 
   if (paths && paths.length > 0) {
     const result: string[] = [];
     for (const p of paths) {
       const abs = path.isAbsolute(p) ? p : path.join(root, p);
-      const stat = safeStat(abs);
+      const stat = await safeStat(abs);
       if (stat?.isFile() && shouldInclude(abs)) {
         result.push(abs);
       } else if (stat?.isDirectory()) {
-        result.push(...walkDir(abs, skip));
+        result.push(...(await walkDir(abs, skip)));
       }
     }
     return [...new Set(result)].sort();
   }
 
-  return walkDir(root, skip).sort();
+  return (await walkDir(root, skip)).sort();
 }
 
-function walkDir(directory: string, skip: Set<string>): string[] {
+async function walkDir(directory: string, skip: Set<string>): Promise<string[]> {
   const files: string[] = [];
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(directory, { withFileTypes: true });
+    entries = await fs.promises.readdir(directory, { withFileTypes: true });
   } catch {
     return files;
   }
 
+  const subDirPromises: Promise<string[]>[] = [];
   for (const entry of entries) {
     if (entry.isDirectory() && !skip.has(entry.name)) {
-      files.push(...walkDir(path.join(directory, entry.name), skip));
+      subDirPromises.push(walkDir(path.join(directory, entry.name), skip));
     } else if (entry.isFile()) {
       const p = path.join(directory, entry.name);
       if (shouldInclude(p)) files.push(p);
+    }
+  }
+  if (subDirPromises.length > 0) {
+    const subResults = await Promise.all(subDirPromises);
+    for (const sub of subResults) {
+      files.push(...sub);
     }
   }
   return files;
@@ -369,16 +376,16 @@ function shouldInclude(filepath: string): boolean {
 // Read + hash
 // ---------------------------------------------------------------------------
 
-function readAndHash(
+async function readAndHash(
   filepath: string,
-): { content: string; hash: string } | null {
+): Promise<{ content: string; hash: string } | null> {
   const cfg = getConfig();
   try {
-    const stat = fs.statSync(filepath);
+    const stat = await fs.promises.stat(filepath);
     if (stat.size > cfg.rag.max_file_size) return null;
     if (stat.size === 0) return null;
 
-    const content = fs.readFileSync(filepath, 'utf-8');
+    const content = await fs.promises.readFile(filepath, 'utf-8');
     if (content.includes('\0')) return null; // binary
 
     const hash = crypto.createHash('md5').update(content).digest('hex');
@@ -388,9 +395,9 @@ function readAndHash(
   }
 }
 
-function safeStat(filepath: string): fs.Stats | null {
+async function safeStat(filepath: string): Promise<fs.Stats | null> {
   try {
-    return fs.statSync(filepath);
+    return await fs.promises.stat(filepath);
   } catch {
     return null;
   }

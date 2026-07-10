@@ -111,7 +111,7 @@ export async function updateFile(
   const store = new ASTStore(projectPath);
   store.initDb();
 
-  const readResult = readAndHash(absPath);
+  const readResult = await readAndHash(absPath);
   if (!readResult) {
     store.deleteByFile(rel);
     return;
@@ -161,7 +161,7 @@ async function indexProjectImpl(opts: {
 
   const t0 = Date.now();
 
-  const files = discoverFiles(projectPath, cfg.ignored_dirs);
+  const files = await discoverFiles(projectPath, cfg.ignored_dirs);
   const result = makeIndexResult();
   result.filesScanned = files.length;
 
@@ -189,7 +189,7 @@ async function indexProjectImpl(opts: {
     }
 
     try {
-      const readResult = readAndHash(filepath);
+      const readResult = await readAndHash(filepath);
 
       if (!readResult) {
         if (existingHashes[rel]) {
@@ -251,25 +251,26 @@ function sleep(ms: number): Promise<void> {
 /**
  * Discover all supported source files in the project directory.
  */
-function discoverFiles(root: string, ignoredDirs: string[]): string[] {
+async function discoverFiles(root: string, ignoredDirs: string[]): Promise<string[]> {
   const skip = new Set([...ignoredDirs, ...SKIP_DIRS]);
   const files: string[] = [];
-  walk(root, skip, files);
+  await walk(root, skip, files);
   return files.sort();
 }
 
-function walk(directory: string, skip: Set<string>, out: string[]): void {
+async function walk(directory: string, skip: Set<string>, out: string[]): Promise<void> {
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(directory, { withFileTypes: true });
+    entries = await fs.promises.readdir(directory, { withFileTypes: true });
   } catch {
     return;
   }
 
+  const subTasks: Promise<void>[] = [];
   for (const entry of entries) {
     if (entry.isDirectory()) {
       if (!skip.has(entry.name)) {
-        walk(path.join(directory, entry.name), skip, out);
+        subTasks.push(walk(path.join(directory, entry.name), skip, out));
       }
     } else if (entry.isFile()) {
       const p = path.join(directory, entry.name);
@@ -277,6 +278,9 @@ function walk(directory: string, skip: Set<string>, out: string[]): void {
         out.push(p);
       }
     }
+  }
+  if (subTasks.length > 0) {
+    await Promise.all(subTasks);
   }
 }
 
@@ -289,14 +293,14 @@ function shouldInclude(filepath: string): boolean {
  * Read file content and compute MD5 hash.
  * Returns null for files that should be skipped (too large, empty, binary).
  */
-function readAndHash(filepath: string): { content: string; hash: string } | null {
+async function readAndHash(filepath: string): Promise<{ content: string; hash: string } | null> {
   const cfg = getConfig();
   try {
-    const stat = fs.statSync(filepath);
+    const stat = await fs.promises.stat(filepath);
     if (stat.size > cfg.ast_max_file_size) return null;
     if (stat.size === 0) return null;
 
-    const content = fs.readFileSync(filepath, 'utf-8');
+    const content = await fs.promises.readFile(filepath, 'utf-8');
     if (content.includes('\0')) return null;
 
     const hash = crypto.createHash('md5').update(content).digest('hex');

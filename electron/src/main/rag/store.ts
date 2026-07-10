@@ -512,6 +512,45 @@ export class RAGStore {
 
     const oldIds = this._getOrderedChunkIds();
     const oldVectors = this._loadVectorsArray();
+
+    if (oldIds.length > 0 && (!oldVectors || oldVectors.length !== oldIds.length)) {
+      console.warn(
+        `[RAGStore] upsertFile: vectors missing/corrupted or length mismatch ` +
+          `(oldIds=${oldIds.length}, vectors=${oldVectors?.length ?? 'null'}). ` +
+          `Clearing tables and vectors file; full reindex recommended. ` +
+          `Rebuilding index with current file only to maintain consistency.`,
+      );
+      const dbToReset = this._getDb();
+      dbToReset.exec('DELETE FROM chunks');
+      dbToReset.exec('DELETE FROM files');
+      this._clearVectorsFile();
+      const freshDb = this._getDb();
+      if (chunks.length > 0) {
+        const insertChunk = freshDb.prepare(
+          'INSERT INTO chunks (file_path, start_line, end_line, content) VALUES (?, ?, ?, ?)',
+        );
+        for (const c of chunks) {
+          insertChunk.run(c.filePath, c.startLine, c.endLine, c.content);
+        }
+        freshDb
+          .prepare(
+            'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) VALUES (?, ?, ?)',
+          )
+          .run(filePath, '', chunks.length);
+      } else {
+        freshDb
+          .prepare(
+            'INSERT OR REPLACE INTO files (file_path, hash, chunk_count) VALUES (?, ?, ?)',
+          )
+          .run(filePath, '', 0);
+      }
+      freshDb
+        .prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)')
+        .run('last_indexed', new Date().toISOString());
+      this._saveVectors(embeddings);
+      return;
+    }
+
     const idToVec = new Map<number, number[]>();
     if (oldVectors && oldVectors.length === oldIds.length) {
       for (let i = 0; i < oldIds.length; i++) {
@@ -546,6 +585,11 @@ export class RAGStore {
 
     // Rebuild vectors: keep old vectors for surviving chunks, append new
     const fileNewIdSet = new Set(this._chunkIdsForFile(filePath));
+    if (fileNewIdSet.size !== embeddings.length) {
+      throw new Error(
+        `upsertFile: file chunk ID count (${fileNewIdSet.size}) does not match embeddings count (${embeddings.length}) for ${filePath}`,
+      );
+    }
     const newIds = this._getOrderedChunkIds();
     const newVectors: number[][] = [];
     let embedIdx = 0;
@@ -556,6 +600,12 @@ export class RAGStore {
         newVectors.push(embeddings[embedIdx]!);
         embedIdx++;
       }
+    }
+
+    if (newVectors.length !== newIds.length) {
+      throw new Error(
+        `upsertFile: rebuilt vectors length (${newVectors.length}) does not match chunk IDs length (${newIds.length}); refusing to save truncated vectors`,
+      );
     }
 
     this._saveVectors(newVectors);

@@ -216,7 +216,20 @@ export class MCPManager {
       return `Error: MCP server '${serverName}' is not connected.`;
     }
 
-    const result = await client.callTool({ name: toolName, arguments: args as Record<string, unknown> });
+    let result: Awaited<ReturnType<typeof client.callTool>>;
+    try {
+      result = await this._withTimeout(
+        client.callTool({ name: toolName, arguments: args as Record<string, unknown> }),
+        this._perServerTimeout,
+        `MCP tool '${toolName}' on server '${serverName}' timed out after ${Math.round(this._perServerTimeout / 1000)}s`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.toLowerCase().includes('timed out')) {
+        return `Error: ${message}`;
+      }
+      return `Error: MCP tool '${toolName}' failed: ${message}`;
+    }
 
     // Concatenate text content, note non-text blocks (matching Python behavior)
     const textParts: string[] = [];
@@ -260,7 +273,20 @@ export class MCPManager {
       return `Error: MCP server '${serverName}' is not connected.`;
     }
 
-    const result = await client.readResource({ uri });
+    let result: Awaited<ReturnType<typeof client.readResource>>;
+    try {
+      result = await this._withTimeout(
+        client.readResource({ uri }),
+        this._perServerTimeout,
+        `MCP readResource '${uri}' on server '${serverName}' timed out after ${Math.round(this._perServerTimeout / 1000)}s`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.toLowerCase().includes('timed out')) {
+        return `Error: ${message}`;
+      }
+      return `Error: MCP readResource '${uri}' failed: ${message}`;
+    }
     const parts: string[] = [];
 
     for (const item of result.contents) {
@@ -397,9 +423,10 @@ export class MCPManager {
       return;
     }
 
-    // Per-server timeout
+    // Per-server timeout — one budget for connect+enumerate sequence
     const serverTimeout = AbortSignal.timeout(this._perServerTimeout);
     const combined = AbortSignal.any([outerSignal, serverTimeout]);
+    const timeoutMessage = `MCP server '${serverName}' startup timed out after ${this._perServerTimeout / 1000}s`;
 
     // Create transport and client
     const transport = createTransport(config);
@@ -408,54 +435,55 @@ export class MCPManager {
       { capabilities: {} },
     );
 
-    // Connect with timeout
-    await Promise.race([
-      client.connect(transport),
-      new Promise<void>((_, reject) => {
-        if (combined.aborted) {
-          reject(new Error(`MCP server '${serverName}' startup timed out`));
-          return;
+    try {
+      // Connect with timeout — combined covers per-server budget and overall abort
+      await this._raceWithSignal(client.connect(transport), combined, timeoutMessage);
+
+      this._clients.set(serverName, client);
+
+      // Enumerate tools — also bounded by same per-server budget
+      const toolsResult = await this._raceWithSignal(client.listTools(), combined, timeoutMessage);
+      for (const tool of toolsResult.tools) {
+        const registryName = `mcp::${serverName}::${tool.name}`;
+        if (this._tools.has(registryName)) {
+          console.warn(
+            `MCP tool '${registryName}' from server '${serverName}' shadows existing registration`,
+          );
         }
-        combined.addEventListener('abort', () => {
-          reject(new Error(`MCP server '${serverName}' startup timed out after ${this._perServerTimeout / 1000}s`));
-        }, { once: true });
-      }),
-    ]);
 
-    this._clients.set(serverName, client);
+        const definition: ToolDefinition = {
+          name: registryName,
+          description: tool.description ?? '',
+          inputSchema: this._jsonSchemaToZod(tool.inputSchema),
+          category: 'mcp',
+        };
 
-    // Enumerate tools
-    const toolsResult = await client.listTools();
-    for (const tool of toolsResult.tools) {
-      const registryName = `mcp::${serverName}::${tool.name}`;
-      if (this._tools.has(registryName)) {
-        console.warn(
-          `MCP tool '${registryName}' from server '${serverName}' shadows existing registration`,
-        );
+        const handler: ToolHandler = async (input: unknown) => {
+          const raw = await this.callTool(registryName, input);
+          if (typeof raw === 'string' && raw.startsWith('Error:')) {
+            return { content: raw, isError: true };
+          }
+          return raw as string | { display?: string; content: string; isError?: boolean };
+        };
+
+        this._tools.set(registryName, { definition, handler });
       }
 
-      const definition: ToolDefinition = {
-        name: registryName,
-        description: tool.description ?? '',
-        inputSchema: this._jsonSchemaToZod(tool.inputSchema),
-        category: 'mcp',
-      };
-
-      const handler: ToolHandler = async (input: unknown) => {
-        const raw = await this.callTool(registryName, input);
-        if (typeof raw === 'string' && raw.startsWith('Error:')) {
-          return { content: raw, isError: true };
-        }
-        return raw as string | { display?: string; content: string; isError?: boolean };
-      };
-
-      this._tools.set(registryName, { definition, handler });
-    }
-
-    // Enumerate resources
-    const resourcesResult = await client.listResources();
-    for (const resource of resourcesResult.resources) {
-      this._uriMap.set(resource.uri, serverName);
+      // Enumerate resources — also bounded by same per-server budget
+      const resourcesResult = await this._raceWithSignal(client.listResources(), combined, timeoutMessage);
+      for (const resource of resourcesResult.resources) {
+        this._uriMap.set(resource.uri, serverName);
+      }
+    } catch (err) {
+      try {
+        await transport.close();
+      } catch {
+      }
+      try {
+        await client.close();
+      } catch {
+      }
+      throw err;
     }
   }
 
@@ -537,6 +565,79 @@ export class MCPManager {
       serverName: rest.slice(0, separatorIdx),
       toolName: rest.slice(separatorIdx + 2),
     };
+  }
+
+  private _withTimeout<T>(
+    promise: Promise<T>,
+    ms: number,
+    message: string,
+  ): Promise<T> {
+    if (!Number.isFinite(ms) || ms <= 0) {
+      promise.then(() => undefined, () => undefined);
+      return Promise.reject(new Error(message));
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    const timeoutPromise = new Promise<T>((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        reject(new Error(message));
+      }, ms);
+      if (typeof timer === 'object' && timer && 'unref' in timer) {
+        (timer as NodeJS.Timeout).unref();
+      }
+    });
+    return Promise.race([
+      promise.then(
+        (v) => {
+          if (timer !== undefined) clearTimeout(timer);
+          return v;
+        },
+        (err: unknown) => {
+          if (timer !== undefined) clearTimeout(timer);
+          throw err;
+        },
+      ),
+      timeoutPromise,
+    ]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (timedOut) promise.then(() => undefined, () => undefined);
+    });
+  }
+
+  private _raceWithSignal<T>(
+    promise: Promise<T>,
+    signal: AbortSignal,
+    message: string,
+  ): Promise<T> {
+    if (signal.aborted) {
+      promise.then(() => undefined, () => undefined);
+      return Promise.reject(new Error(message));
+    }
+    let rejectOnAbort: (() => void) | undefined;
+    const abortPromise = new Promise<T>((_, reject) => {
+      rejectOnAbort = () => reject(new Error(message));
+      signal.addEventListener('abort', rejectOnAbort, { once: true });
+    });
+    return Promise.race([
+      promise.then(
+        (v) => {
+          if (rejectOnAbort !== undefined) signal.removeEventListener('abort', rejectOnAbort);
+          return v;
+        },
+        (err: unknown) => {
+          if (rejectOnAbort !== undefined) signal.removeEventListener('abort', rejectOnAbort);
+          throw err;
+        },
+      ),
+      abortPromise,
+    ]).finally(() => {
+      if (rejectOnAbort !== undefined) signal.removeEventListener('abort', rejectOnAbort);
+      // If already aborted, swallow late rejection to avoid unhandled
+      if (signal.aborted) {
+        promise.then(() => undefined, () => undefined);
+      }
+    });
   }
 
   /**
