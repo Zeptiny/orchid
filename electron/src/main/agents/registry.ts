@@ -149,18 +149,19 @@ function seedDefaults(sourceDir: string, targetDir: string): void {
  * reset so tool filtering can be rebuilt with the new agent definitions.
  *
  * @param options.homeDir  Override home agents directory (default: `~/.orchid/agents/`)
- * @param options.projectDir  Override project agents directory (default: `.orchid/agents/` from cwd)
+ * @param options.projectDir  Project agents directory (e.g. `<workspace>/.orchid/agents`).
+ *   When omitted, only home agents load — never invents process.cwd().
  */
 export function loadAgents(options?: {
   homeDir?: string;
   projectDir?: string;
 }): Map<string, Agent> {
   const homeDir = options?.homeDir ?? HOME_AGENTS_DIR;
-  const projectDir =
-    options?.projectDir ?? path.join(process.cwd(), '.orchid', 'agents');
 
   const homeAgents = loadAgentsFromDir(homeDir);
-  const projectAgents = loadAgentsFromDir(projectDir);
+  const projectAgents = options?.projectDir
+    ? loadAgentsFromDir(options.projectDir)
+    : new Map<string, Agent>();
 
   // Merge: project overlays home
   const merged = new Map<string, Agent>([...homeAgents, ...projectAgents]);

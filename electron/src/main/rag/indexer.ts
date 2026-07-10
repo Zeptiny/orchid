@@ -94,7 +94,10 @@ async function _indexProjectImpl(
   progressCallback?: (filePath: string, done: number, total: number) => void,
 ): Promise<IndexResult> {
   const cfg = getConfig();
-  const root = projectPath ?? process.cwd();
+  if (!projectPath) {
+    throw new Error('projectPath is required; pass the active workspace cwd');
+  }
+  const root = projectPath;
   const t0 = Date.now();
 
   // File discovery
@@ -248,7 +251,10 @@ export async function updateFile(
   filePath: string,
   projectPath?: string,
 ): Promise<void> {
-  const root = projectPath ?? process.cwd();
+  if (!projectPath) {
+    throw new Error('projectPath is required; pass the active workspace cwd');
+  }
+  const root = projectPath;
   const absPath = path.isAbsolute(filePath) ? filePath : path.join(root, filePath);
 
   let rel: string;
@@ -300,13 +306,19 @@ export async function updateFile(
 // ---------------------------------------------------------------------------
 
 export function getStatus(projectPath?: string): RAGStoreStatus {
-  const root = projectPath ?? process.cwd();
+  if (!projectPath) {
+    throw new Error('projectPath is required; pass the active workspace cwd');
+  }
+  const root = projectPath;
   const store = new RAGStore(root);
   return store.status();
 }
 
 export function clearIndex(projectPath?: string): void {
-  const root = projectPath ?? process.cwd();
+  if (!projectPath) {
+    throw new Error('projectPath is required; pass the active workspace cwd');
+  }
+  const root = projectPath;
   const store = new RAGStore(root);
   store.clear();
 }

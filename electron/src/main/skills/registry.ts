@@ -224,18 +224,19 @@ function seedDefaults(sourceDir: string, targetDir: string): void {
  * reset so tool filtering can be rebuilt with the new skill context.
  *
  * @param options.homeDir  Override home skills directory (default: `~/.orchid/skills/`)
- * @param options.projectDir  Override project skills directory (default: `.orchid/skills/` from cwd)
+ * @param options.projectDir  Project skills directory (e.g. `<workspace>/.orchid/skills`).
+ *   When omitted, only home skills load — never invents process.cwd().
  */
 export function loadSkills(options?: {
   homeDir?: string;
   projectDir?: string;
 }): Map<string, Skill> {
   const homeDir = options?.homeDir ?? HOME_SKILLS_DIR;
-  const projectDir =
-    options?.projectDir ?? path.join(process.cwd(), '.orchid', 'skills');
 
   const homeSkills = loadSkillsFromDir(homeDir);
-  const projectSkills = loadSkillsFromDir(projectDir);
+  const projectSkills = options?.projectDir
+    ? loadSkillsFromDir(options.projectDir)
+    : new Map<string, Skill>();
 
   // Merge: project overlays home
   const merged = new Map<string, Skill>([...homeSkills, ...projectSkills]);

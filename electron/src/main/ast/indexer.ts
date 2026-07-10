@@ -93,7 +93,7 @@ export async function updateFile(
   projectPath?: string,
 ): Promise<void> {
   if (!projectPath) {
-    projectPath = process.cwd();
+    throw new Error('projectPath is required; pass the active workspace cwd');
   }
 
   let absPath = filePath;
@@ -156,7 +156,7 @@ async function indexProjectImpl(opts: {
 
   const cfg = getConfig();
   if (!projectPath) {
-    projectPath = process.cwd();
+    throw new Error('projectPath is required; pass the active workspace cwd');
   }
 
   const t0 = Date.now();
