@@ -216,6 +216,31 @@ function seedDefaults(sourceDir: string, targetDir: string): void {
 // Public API
 // ---------------------------------------------------------------------------
 
+export interface ReadSkillsOptions {
+  /** Override home skills directory (default: `~/.orchid/skills/`). */
+  homeDir?: string;
+  /** Project skills directory (for example `<workspace>/.orchid/skills`). */
+  projectDir?: string;
+}
+
+/**
+ * Read and merge skill definitions without changing process-wide state.
+ *
+ * Each invocation returns a new map. Project skills overlay home skills.
+ */
+export function readSkills(
+  options?: ReadSkillsOptions,
+): Map<string, Skill> {
+  const homeDir = options?.homeDir ?? HOME_SKILLS_DIR;
+
+  const homeSkills = loadSkillsFromDir(homeDir);
+  const projectSkills = options?.projectDir
+    ? loadSkillsFromDir(options.projectDir)
+    : new Map<string, Skill>();
+
+  return new Map<string, Skill>([...homeSkills, ...projectSkills]);
+}
+
 /**
  * Load all skills by merging home and project skill directories.
  *
@@ -227,19 +252,10 @@ function seedDefaults(sourceDir: string, targetDir: string): void {
  * @param options.projectDir  Project skills directory (e.g. `<workspace>/.orchid/skills`).
  *   When omitted, only home skills load — never invents process.cwd().
  */
-export function loadSkills(options?: {
-  homeDir?: string;
-  projectDir?: string;
-}): Map<string, Skill> {
-  const homeDir = options?.homeDir ?? HOME_SKILLS_DIR;
-
-  const homeSkills = loadSkillsFromDir(homeDir);
-  const projectSkills = options?.projectDir
-    ? loadSkillsFromDir(options.projectDir)
-    : new Map<string, Skill>();
-
-  // Merge: project overlays home
-  const merged = new Map<string, Skill>([...homeSkills, ...projectSkills]);
+export function loadSkills(
+  options?: ReadSkillsOptions,
+): Map<string, Skill> {
+  const merged = readSkills(options);
   skillRegistry = merged;
 
   // Rebuild dynamic tool descriptions with the latest skill registry.

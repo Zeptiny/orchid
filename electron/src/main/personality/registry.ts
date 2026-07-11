@@ -90,6 +90,34 @@ function loadFromDir(dir: string): Map<string, string> {
 // Public API
 // ---------------------------------------------------------------------------
 
+export interface ReadPersonalitiesOptions {
+  /** Override home personalities directory. */
+  homeDir?: string;
+  /** Project root whose `.orchid/personalities/` directory is overlaid. */
+  projectDir?: string;
+}
+
+/**
+ * Read and merge personalities without seeding files or changing globals.
+ *
+ * Each invocation returns a new map. Project personalities overlay home
+ * personalities with the same name.
+ */
+export function readPersonalities(
+  options?: ReadPersonalitiesOptions,
+): Map<string, string> {
+  const homeDir = options?.homeDir ?? HOME_PERSONALITIES_DIR;
+  const home = loadFromDir(homeDir);
+  if (!options?.projectDir) {
+    return home;
+  }
+
+  const project = loadFromDir(
+    path.join(options.projectDir, '.orchid', 'personalities'),
+  );
+  return new Map([...home, ...project]);
+}
+
 /**
  * Seed default personality files into the given home directory.
  * Copies bundled defaults if the target file doesn't already exist.
@@ -109,10 +137,9 @@ export function seedPersonalitiesDir(homeDir: string = HOME_PERSONALITIES_DIR): 
  * @param options.homeDir  Override personalities directory
  * @param options.projectDir  Project root (not the personalities subdir)
  */
-export function loadPersonalities(options?: {
-  homeDir?: string;
-  projectDir?: string;
-}): Map<string, string> {
+export function loadPersonalities(
+  options?: ReadPersonalitiesOptions,
+): Map<string, string> {
   const homeDir = options?.homeDir ?? HOME_PERSONALITIES_DIR;
 
   // Ensure defaults are present before loading
@@ -128,19 +155,8 @@ export function loadPersonalities(options?: {
     lastPersonalityProjectDir = undefined;
   }
 
-  const home = loadFromDir(homeDir);
   const projectDir = options?.projectDir ?? lastPersonalityProjectDir;
-  if (projectDir) {
-    const projectPersonalityDir = path.join(
-      projectDir,
-      '.orchid',
-      'personalities',
-    );
-    const project = loadFromDir(projectPersonalityDir);
-    personalityRegistry = new Map([...home, ...project]);
-  } else {
-    personalityRegistry = home;
-  }
+  personalityRegistry = readPersonalities({ homeDir, projectDir });
   return personalityRegistry;
 }
 
