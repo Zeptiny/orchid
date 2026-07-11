@@ -647,65 +647,34 @@ describe('MCP Server Status', () => {
 
 // ─── Markdown Rendering ──────────────────────────────────────────────────────
 
-describe('Markdown Content Parsing', () => {
-  it('code blocks are detected by triple backtick', () => {
-    const text = '```typescript\nconst x = 1;\n```';
-    expect(text.startsWith('```')).toBe(true);
+describe('Markdown Content Stack', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  const markdownPath = path.resolve(
+    __dirname,
+    '../../src/renderer/components/MarkdownContent.tsx',
+  );
+
+  it('MarkdownContent uses react-markdown + remark-gfm + rehype-highlight', () => {
+    const source = fs.readFileSync(markdownPath, 'utf-8');
+    expect(source).toContain("from 'react-markdown'");
+    expect(source).toContain("from 'remark-gfm'");
+    expect(source).toContain("from 'rehype-highlight'");
+    expect(source).toContain('remarkPlugins');
+    expect(source).toContain('rehypePlugins');
   });
 
-  it('inline code is detected by single backtick', () => {
-    const text = 'Use `console.log()` to debug';
-    const match = text.match(/`([^`]+)`/);
-    expect(match).not.toBeNull();
-    expect(match![1]).toBe('console.log()');
+  it('links open in a new window with noopener', () => {
+    const source = fs.readFileSync(markdownPath, 'utf-8');
+    expect(source).toContain('target="_blank"');
+    expect(source).toContain('rel="noopener noreferrer"');
   });
 
-  it('bold text is detected by double asterisk', () => {
-    const text = 'This is **bold** text';
-    const match = text.match(/\*\*(.+?)\*\*/);
-    expect(match).not.toBeNull();
-    expect(match![1]).toBe('bold');
-  });
-
-  it('italic text is detected by single asterisk', () => {
-    const text = 'This is *italic* text';
-    const match = text.match(/\*(.+?)\*/);
-    expect(match).not.toBeNull();
-    expect(match![1]).toBe('italic');
-  });
-
-  it('links are detected by markdown syntax', () => {
-    const text = 'Click [here](https://example.com)';
-    const match = text.match(/\[([^\]]+)\]\(([^)]+)\)/);
-    expect(match).not.toBeNull();
-    expect(match![1]).toBe('here');
-    expect(match![2]).toBe('https://example.com');
-  });
-
-  it('headers are detected by hash prefix', () => {
-    expect('# Heading 1'.match(/^(#{1,3})\s+(.+)$/)).not.toBeNull();
-    expect('## Heading 2'.match(/^(#{1,3})\s+(.+)$/)).not.toBeNull();
-    expect('### Heading 3'.match(/^(#{1,3})\s+(.+)$/)).not.toBeNull();
-  });
-
-  it('unordered lists are detected by dash prefix', () => {
-    expect('- Item 1'.match(/^[\s]*[-*+]\s/)).not.toBeNull();
-    expect('* Item 1'.match(/^[\s]*[-*+]\s/)).not.toBeNull();
-  });
-
-  it('ordered lists are detected by number prefix', () => {
-    expect('1. Item 1'.match(/^[\s]*\d+\.\s/)).not.toBeNull();
-    expect('2. Item 2'.match(/^[\s]*\d+\.\s/)).not.toBeNull();
-  });
-
-  it('blockquotes are detected by angle bracket prefix', () => {
-    expect('> Quote'.startsWith('> ')).toBe(true);
-  });
-
-  it('horizontal rules are detected', () => {
-    expect('---'.match(/^(-{3,}|_{3,}|\*{3,})$/)).not.toBeNull();
-    expect('___'.match(/^(-{3,}|_{3,}|\*{3,})$/)).not.toBeNull();
-    expect('***'.match(/^(-{3,}|_{3,}|\*{3,})$/)).not.toBeNull();
+  it('preserves fenced-code language label', () => {
+    const source = fs.readFileSync(markdownPath, 'utf-8');
+    expect(source).toContain('markdown-code-lang');
+    expect(source).toContain('language-');
   });
 });
 
