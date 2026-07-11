@@ -45,6 +45,10 @@ interface InputAreaProps {
 
 type SubPicker = '/theme' | '/personality' | '/model' | '/sessions' | null;
 
+/** Single-line composer height — keep in sync with `.composer-textarea` CSS. */
+const TEXTAREA_MIN_HEIGHT_PX = 34;
+const TEXTAREA_MAX_HEIGHT_PX = 160;
+
 export function InputArea({
   status,
   model,
@@ -186,7 +190,7 @@ export function InputArea({
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
       if (textareaRef.current) {
-        textareaRef.current.style.height = '34px';
+        textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
       }
       textareaRef.current?.focus();
     });
@@ -290,8 +294,18 @@ export function InputArea({
   const resizeTextarea = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
+    // Empty fields often report scrollHeight taller than one visual line
+    // (padding / placeholder metrics). Force the compact single-line height
+    // so startup matches the post-send size.
+    if (!el.value) {
+      el.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
+      return;
+    }
     el.style.height = 'auto';
-    const next = Math.min(Math.max(el.scrollHeight, 34), 160);
+    const next = Math.min(
+      Math.max(el.scrollHeight, TEXTAREA_MIN_HEIGHT_PX),
+      TEXTAREA_MAX_HEIGHT_PX,
+    );
     el.style.height = `${next}px`;
   }, []);
 
@@ -355,7 +369,7 @@ export function InputArea({
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
       if (textareaRef.current) {
-        textareaRef.current.style.height = '34px';
+        textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
       }
     });
   }, [input, isStreaming, onSend, workspaceBound, onPickProjectDir]);

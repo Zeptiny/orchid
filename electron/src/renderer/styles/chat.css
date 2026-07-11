@@ -4593,7 +4593,9 @@ button.inspector-row:hover {
   flex: 1 1 auto;
   min-width: 0;
   width: 100%;
+  /* Default single-line size before JS auto-resize runs (matches InputArea constants). */
   min-height: 34px;
+  height: 34px;
   max-height: 160px;
   border: 1px solid var(--border-default);
   border-radius: 16px;
@@ -4606,6 +4608,7 @@ button.inspector-row:hover {
   outline: none;
   resize: none;
   overflow-y: auto;
+  box-sizing: border-box;
 }
 .composer-textarea::placeholder {
   color: var(--text-secondary);
