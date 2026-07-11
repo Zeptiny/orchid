@@ -458,7 +458,6 @@ function buildHistoryStreamItems(opts: {
  * per finished chain with model + cumulative usage + sub attribution.
  */
 function buildMultiChainHistoryStreamItems(opts: {
-  messages: Message[];
   toolBlocks: ToolBlock[];
   status: ChatStatus;
   liveUsage: Usage | null;
@@ -469,7 +468,6 @@ function buildMultiChainHistoryStreamItems(opts: {
   expandedChainIndexes: ReadonlySet<number>;
 }): HistoryBuildResult {
   const {
-    messages,
     toolBlocks,
     status,
     liveUsage,
@@ -492,9 +490,8 @@ function buildMultiChainHistoryStreamItems(opts: {
   const emittedToolIds = new Set<string>();
   const liveById = new Map(toolBlocks.map((b) => [b.id, b]));
 
-  // Slice flat messages into per-chain ranges. Terminal chains use stored
-  // lengths; the last ACTIVE (or sole live) chain consumes the remainder so
-  // in-flight tool/assistant messages appear before finalize.
+  // Each chain body comes from chain.messages (authoritative storage). Live
+  // tools/text for the active turn still render via buildLiveTailItems.
   for (let chainIndex = 0; chainIndex < sessionChains.length; chainIndex++) {
     const chain = sessionChains[chainIndex];
     const isLastChain = chainIndex === sessionChains.length - 1;
