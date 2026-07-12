@@ -224,6 +224,23 @@ export function ChatView() {
     applySessionMessages(null);
   }, [session, chat, applySessionMessages]);
 
+  // Project-row New Chat: make that project the window's draft workspace, then
+  // clear selection. The first message creates a new session there while any
+  // previous conversation keeps running in its own project.
+  const handleProjectSessionCreate = useCallback(async (projectDir: string) => {
+    const gen = ++sessionSwitchGen.current;
+    const workspace = await session.setWorkspace(projectDir);
+    if (!workspace?.cwd || gen !== sessionSwitchGen.current) return;
+    chat.setMessages([]);
+    await session.enterDraft();
+    if (gen !== sessionSwitchGen.current) return;
+    applySessionMessages(null);
+    setToast({
+      severity: 'info',
+      message: `New chat in project: ${workspace.cwd}`,
+    });
+  }, [session, chat, applySessionMessages]);
+
   // Auto-select the most recent session on first list load so the UI isn't
   // stuck with an empty pane while sessions exist in the sidebar.
   useEffect(() => {
@@ -593,6 +610,9 @@ export function ChatView() {
         projectPickerCreatesDraft={Boolean(session.activeSession?.chains.length)}
         onRefreshSessions={session.refresh}
         onSessionCreate={handleSessionCreate}
+        onProjectSessionCreate={(projectDir) => {
+          void handleProjectSessionCreate(projectDir);
+        }}
         onSessionDelete={handleSessionDelete}
         onSessionSelect={handleSessionSelect}
         activities={activity.activities}

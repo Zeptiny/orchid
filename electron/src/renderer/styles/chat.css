@@ -4410,13 +4410,24 @@
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 5px;
-  padding: 6px 7px 3px;
+  gap: 1px;
+  padding: 3px 4px 1px;
   color: var(--text-secondary);
   font-size: 10px;
   font-weight: 700;
 }
+.session-project-header .session-project-toggle {
+  flex: 1 1 auto;
+  width: auto;
+}
 .session-project-header .badge {
+  flex: 0 0 auto;
+}
+.session-project-folder {
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+.session-project-create {
   flex: 0 0 auto;
 }
 .session-project-expand {

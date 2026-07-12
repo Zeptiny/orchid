@@ -27,6 +27,10 @@ supersedes their old “remaining work” status.
   per-project `View N more` / `Show recent 5` control. Search shows all
   matching sessions. An older selected session remains visible in its bounded
   group so the user never loses their place.
+- Each project header is independently collapsible and has a plus action to
+  start a draft explicitly bound to that project. Global New Chat still uses
+  the currently selected project; without a selected project it remains only a
+  draft until the user chooses a folder.
 - The workspace chip is the visible project action. On a non-empty session it
   reads `New chat`, explains that it starts a chat in another project, and
   opens a draft there without changing the old conversation.

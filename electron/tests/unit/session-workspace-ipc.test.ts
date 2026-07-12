@@ -302,6 +302,38 @@ describe('session workspace IPC', () => {
     expect(result.cwd).toBe(fs.realpathSync(tmpProject));
   });
 
+  it('set_workspace starts a target-project draft from a non-empty session', async () => {
+    mocks.sessionManager.create('test/model', { cwd: otherProject });
+    mocks.sessionManager.getActive()!.chains.push({});
+
+    const setWs = mocks.handlers.get(IPC_CHANNELS.SESSION_SET_WORKSPACE);
+    const result = await setWs!({ sender: sender(4) }, { cwd: tmpProject });
+
+    expect(mocks.sessionManager.clearActive).toHaveBeenCalled();
+    expect(mocks.sessionManager.changeCwd).not.toHaveBeenCalled();
+    expect(mocks.sessionManager.getActive()).toBeNull();
+    expect(result).toMatchObject({
+      cwd: fs.realpathSync(tmpProject),
+      source: 'draft',
+      status: 'valid',
+    });
+  });
+
+  it('clear_active keeps the selected project for the next New Chat draft', async () => {
+    mocks.sessionManager.create('test/model', { cwd: tmpProject });
+    const clear = mocks.handlers.get(IPC_CHANNELS.SESSION_CLEAR_ACTIVE);
+    expect(clear).toBeDefined();
+
+    await clear!({ sender: sender(4) });
+
+    const getWorkspace = mocks.handlers.get(IPC_CHANNELS.SESSION_GET_WORKSPACE)!;
+    await expect(getWorkspace({ sender: sender(4) })).resolves.toMatchObject({
+      cwd: fs.realpathSync(tmpProject),
+      source: 'draft',
+      status: 'valid',
+    });
+  });
+
   it('pick_project_dir uses dialog and binds when user selects a folder', async () => {
     mocks.dialogResult.canceled = false;
     mocks.dialogResult.filePaths = [tmpProject];

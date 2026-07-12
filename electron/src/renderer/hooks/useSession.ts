@@ -269,7 +269,12 @@ export function useSession(): UseSessionReturn {
     try {
       const info = await window.orchid.session.setWorkspace({ cwd });
       setWorkspace(info);
-      if (activeSession && info.cwd) {
+      // Binding a new project from a non-empty conversation starts a draft in
+      // main. Keep the old conversation out of the center pane rather than
+      // making it look as though it moved projects.
+      if (activeSession?.chains.length) {
+        setActiveSession(null);
+      } else if (activeSession && info.cwd) {
         setActiveSession((prev) => (prev ? { ...prev, cwd: info.cwd } : null));
       }
       return info;

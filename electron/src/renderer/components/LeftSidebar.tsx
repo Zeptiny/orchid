@@ -38,6 +38,8 @@ interface LeftSidebarProps {
   workspace?: WorkspaceInfo | null;
   /** Open folder picker (binds workspace + sticky default). */
   onPickProjectDir?: () => void;
+  /** Start a new draft explicitly bound to one visible project group. */
+  onProjectSessionCreate?: (projectDir: string) => void;
   /** A project pick starts a draft instead of moving the selected session. */
   projectPickerCreatesDraft?: boolean;
   /** Global work across every project/window. Optional for ConfigView reuse. */
@@ -67,6 +69,7 @@ export function LeftSidebar({
   onOpenSettings,
   workspace = null,
   onPickProjectDir,
+  onProjectSessionCreate,
   projectPickerCreatesDraft = false,
   activities = [],
   onStopSession,
@@ -213,6 +216,7 @@ export function LeftSidebar({
             onSelect={onSessionSelect}
             isUnbound={isUnbound}
             onPickProjectDir={onPickProjectDir}
+            onProjectSessionCreate={onProjectSessionCreate}
             isSearching={query.trim().length > 0}
           />
         )}
@@ -320,6 +324,7 @@ interface ProjectSessionListProps {
   onRefresh: () => void;
   isUnbound: boolean;
   onPickProjectDir?: () => void;
+  onProjectSessionCreate?: (projectDir: string) => void;
   isSearching: boolean;
 }
 
@@ -333,11 +338,15 @@ function ProjectSessionList({
   onRefresh,
   isUnbound,
   onPickProjectDir,
+  onProjectSessionCreate,
   isSearching,
 }: ProjectSessionListProps) {
   const listId = useId();
   const listRef = useRef<HTMLDivElement>(null);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(
     () => new Set(),
   );
   const activityBySession = useMemo(
@@ -347,15 +356,24 @@ function ProjectSessionList({
   const visibleProjectGroups = useMemo(
     () => projectGroups.map((group) => {
       const isExpanded = isSearching || expandedProjects.has(group.key);
-      const visibleSessions = previewProjectSessions(
+      // Search is global: it temporarily opens every group so a matching
+      // session is never hidden behind a collapsed project.
+      const isCollapsed = !isSearching && collapsedProjects.has(group.key);
+      const previewSessions = previewProjectSessions(
         group.sessions,
         isExpanded,
         PROJECT_SESSION_PREVIEW_LIMIT,
         activeSessionId,
       );
-      return { ...group, isExpanded, visibleSessions };
+      return {
+        ...group,
+        isExpanded,
+        isCollapsed,
+        previewSessions,
+        visibleSessions: isCollapsed ? [] : previewSessions,
+      };
     }),
-    [activeSessionId, expandedProjects, isSearching, projectGroups],
+    [activeSessionId, collapsedProjects, expandedProjects, isSearching, projectGroups],
   );
   const flatSessions = useMemo(
     () => visibleProjectGroups.flatMap((group) => group.visibleSessions),
@@ -439,17 +457,48 @@ function ProjectSessionList({
       <div className="session-group-title">Projects</div>
       {visibleProjectGroups.map((project) => {
         const counts = countProjectActivity(project, activities);
-        const hiddenCount = project.sessions.length - project.visibleSessions.length;
+        const hiddenCount = project.sessions.length - project.previewSessions.length;
         return (
           <div key={project.key} className="session-group session-project-group" role="group" aria-label={project.label}>
-            <div className="session-project-header" title={project.path ?? project.label}>
-              <Icon name="folder" size={12} className="session-project-chevron" />
-              <span className="session-project-label truncate">{project.label}</span>
-              {counts.working > 0 && <span className="badge badge-xs badge-warning">{counts.working} working</span>}
-              {counts.attention > 0 && <span className="badge badge-xs badge-error">{counts.attention}</span>}
-              {counts.unread > 0 && <span className="badge badge-xs badge-success">{counts.unread}</span>}
+            <div className="session-project-header">
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs session-project-toggle"
+                onClick={() => {
+                  setCollapsedProjects((previous) => {
+                    const next = new Set(previous);
+                    if (next.has(project.key)) next.delete(project.key);
+                    else next.add(project.key);
+                    return next;
+                  });
+                }}
+                aria-expanded={!project.isCollapsed}
+                title={`${project.isCollapsed ? 'Show' : 'Hide'} sessions in ${project.path ?? project.label}`}
+              >
+                <Icon
+                  name={project.isCollapsed ? 'chevronRight' : 'chevronDown'}
+                  size={12}
+                  className="session-project-chevron"
+                />
+                <Icon name="folder" size={12} className="session-project-folder" />
+                <span className="session-project-label truncate">{project.label}</span>
+                {counts.working > 0 && <span className="badge badge-xs badge-warning">{counts.working} working</span>}
+                {counts.attention > 0 && <span className="badge badge-xs badge-error">{counts.attention}</span>}
+                {counts.unread > 0 && <span className="badge badge-xs badge-success">{counts.unread}</span>}
+              </button>
+              {project.path && onProjectSessionCreate && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs btn-square session-project-create"
+                  onClick={() => onProjectSessionCreate(project.path!)}
+                  title={`New chat in ${project.label}`}
+                  aria-label={`New chat in ${project.label}`}
+                >
+                  <Icon name="plus" size={13} />
+                </button>
+              )}
             </div>
-            {project.visibleSessions.map((session) => {
+            {!project.isCollapsed && project.visibleSessions.map((session) => {
               const index = sessionIndex++;
               return (
                 <SessionRow
@@ -469,7 +518,7 @@ function ProjectSessionList({
                 />
               );
             })}
-            {!isSearching && project.sessions.length > PROJECT_SESSION_PREVIEW_LIMIT && (
+            {!project.isCollapsed && !isSearching && project.sessions.length > PROJECT_SESSION_PREVIEW_LIMIT && (
               <button
                 type="button"
                 className="btn btn-ghost btn-xs session-project-expand"
