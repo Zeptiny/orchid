@@ -450,6 +450,14 @@ export function forceStopSession(sessionId: string): boolean {
     return cancelledSubagents.length > 0;
   }
 
+  // Already finalized (done/error/cancel) — only dispose residual work.
+  if (existing.finalized) {
+    existing.agentCancelled = true;
+    nextAgentGeneration(sessionId);
+    disposeActiveAgent(sessionId, existing);
+    return true;
+  }
+
   const ownerWebContents =
     webContentsForWindowId(existing.windowId) ?? null;
   existing.agentCancelled = true;
@@ -1584,7 +1592,7 @@ export function registerChatIPC(): void {
           response: partial,
           error: null,
           interruptState: 'confirmSubagents',
-          cwd: resolveUiWorkspaceCwd(windowId),
+          cwd: existing.cwd,
         });
       }
 
@@ -1607,7 +1615,7 @@ export function registerChatIPC(): void {
           response: '',
           error: null,
           interruptState: 'idle',
-          cwd: resolveUiWorkspaceCwd(windowId),
+          cwd: existing.cwd,
       });
       return { status: 'cancelled' };
     }

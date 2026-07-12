@@ -55,7 +55,21 @@ export function completeSessionActivity(
 }
 
 export function removeSessionActivity(sessionId: string): void {
+  const previous = sessionActivityStore.get(sessionId);
   sessionActivityStore.remove(sessionId);
+  if (!previous) return;
+  // Tombstone: idle + seen + no bg so list filters out and renderers prune.
+  broadcast({
+    ...previous,
+    state: 'idle',
+    phase: null,
+    detail: null,
+    unread: false,
+    canCancel: false,
+    backgroundProcessCount: 0,
+    completedAt: Date.now(),
+    updatedAt: Date.now(),
+  });
 }
 
 export function registerSessionActivityIPC(): void {

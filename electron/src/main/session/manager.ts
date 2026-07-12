@@ -16,10 +16,10 @@
  * - Auto-naming: After first exchange, if name starts with "Session ",
  *   call the generateTitle callback for a 3-6 word title
  *
- * SessionManager itself does not cancel subagents on switch. IPC layer
- * (session:load / forceAbortChat) cancels running subagents for multi-cwd
- * safety so a global SubagentManager cannot keep writing chains into the
- * newly active session. Background commands continue running.
+ * SessionManager itself does not cancel work on switch. Selecting a session
+ * is view navigation only: chat actors, subagents, and background commands
+ * stay addressed by their own session id. Callers that must stop work use
+ * forceAbortSession / forceStopSession / chat:cancel explicitly.
  */
 import { randomUUID } from 'node:crypto';
 import type { Session } from '../../shared/types/session';
@@ -256,15 +256,13 @@ export class SessionManager {
   }
 
   /**
-   * Load a session from disk and set it as active.
+   * Load a session from disk (or reuse the in-memory copy) and set it as the
+   * selected session for the owner. Does not cancel concurrent work.
    *
-   * Does not cancel subagents itself — callers (session:load IPC /
-   * forceAbortChat) cancel running subagents before switching so the global
-   * manager cannot attach prior-session chains to the new active session.
+   * When another owner already has this session selected, reuses the live
+   * in-memory session and TodoStore so a mid-turn re-select does not wipe
+   * live todos. Otherwise reloads from disk.
    * Returns null if the session file doesn't exist or fails to parse.
-   *
-   * Rebinds the live TodoStore from the session snapshot so tools and UI
-   * share session-isolated state (Python ContextVar parity).
    */
   switchTo(id: string, ownerId?: string): Session | null {
     const owner = this.ownerKey(ownerId);

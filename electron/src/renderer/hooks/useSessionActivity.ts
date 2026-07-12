@@ -13,6 +13,14 @@ export interface UseSessionActivityReturn {
   markSeen: (sessionId: string) => Promise<void>;
 }
 
+function isVisibleActivity(activity: SessionActivity): boolean {
+  return (
+    activity.state !== 'idle' ||
+    activity.unread ||
+    activity.backgroundProcessCount > 0
+  );
+}
+
 function mergeActivity(
   current: ReadonlyMap<string, SessionActivity>,
   incoming: SessionActivity,
@@ -22,6 +30,10 @@ function mergeActivity(
     return new Map(current);
   }
   const next = new Map(current);
+  if (!isVisibleActivity(incoming)) {
+    next.delete(incoming.sessionId);
+    return next;
+  }
   next.set(incoming.sessionId, incoming);
   return next;
 }
@@ -33,12 +45,14 @@ function orderedActivities(map: ReadonlyMap<string, SessionActivity>): SessionAc
     waiting: 2,
     idle: 3,
   };
-  return [...map.values()].sort((a, b) => {
-    const statePriority = priority[a.state] - priority[b.state];
-    if (statePriority !== 0) return statePriority;
-    if (a.unread !== b.unread) return a.unread ? -1 : 1;
-    return b.updatedAt - a.updatedAt;
-  });
+  return [...map.values()]
+    .filter(isVisibleActivity)
+    .sort((a, b) => {
+      const statePriority = priority[a.state] - priority[b.state];
+      if (statePriority !== 0) return statePriority;
+      if (a.unread !== b.unread) return a.unread ? -1 : 1;
+      return b.updatedAt - a.updatedAt;
+    });
 }
 
 /**

@@ -7,7 +7,7 @@
  * - load(), create(), delete(), rename() actions
  * - Loading/error states (interaction states)
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Session } from '../../shared/types/session';
 import type { SessionSummary } from '../../shared/types/ipc-boundary';
 import type { WorkspaceInfo } from '../../shared/types/ipc';
@@ -74,6 +74,8 @@ export function useSession(): UseSessionReturn {
   const [listState, setListState] = useState<SessionListState>({ status: 'loading' });
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  /** Monotonic generation so out-of-order session:load responses are dropped. */
+  const loadGenerationRef = useRef(0);
 
   const refresh = useCallback(async () => {
     if (!window.orchid?.session?.list) {
@@ -139,14 +141,19 @@ export function useSession(): UseSessionReturn {
   }, [refresh]);
 
   // Lazy create: first chat:send with no active session creates one in main
-  // and pushes SESSION_CREATED so the sidebar gains a list entry.
+  // and pushes SESSION_CREATED so the sidebar gains a list entry. Only adopt
+  // when this window is still in draft (no active session) so a concurrent
+  // promotion cannot steal selection after the user navigated elsewhere.
   useEffect(() => {
     if (!window.orchid?.session?.onCreated) {
       return undefined;
     }
 
     const unsubscribe = window.orchid.session.onCreated((event) => {
-      setActiveSession(event.session);
+      setActiveSession((prev) => {
+        if (prev != null) return prev;
+        return event.session;
+      });
       void refresh();
       void getWorkspace();
     });
@@ -189,9 +196,14 @@ export function useSession(): UseSessionReturn {
       return null;
     }
 
+    const generation = ++loadGenerationRef.current;
     setIsLoading(true);
     try {
       const session = await window.orchid.session.load({ id });
+      // Drop stale responses when a newer load (or draft) superseded this one.
+      if (generation !== loadGenerationRef.current) {
+        return session;
+      }
       setActiveSession(session);
       // Load does not rewrite sticky default; refresh workspace from session.
       void getWorkspace();
@@ -200,7 +212,9 @@ export function useSession(): UseSessionReturn {
       console.error('Failed to load session:', err);
       return null;
     } finally {
-      setIsLoading(false);
+      if (generation === loadGenerationRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [getWorkspace]);
 
@@ -234,6 +248,7 @@ export function useSession(): UseSessionReturn {
   }, [refresh]);
 
   const enterDraft = useCallback(async () => {
+    loadGenerationRef.current += 1;
     if (window.orchid?.session?.clearActive) {
       await window.orchid.session.clearActive();
     }

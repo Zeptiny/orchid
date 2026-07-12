@@ -329,6 +329,7 @@ describe('wait_for_subagent', () => {
 
 describe('interrupt_subagents', () => {
   let manager: SubagentManager;
+  const sessionCtx = { cwd: '/tmp/project', sessionId: 'sess-a' };
 
   beforeEach(() => {
     manager = new SubagentManager();
@@ -336,12 +337,15 @@ describe('interrupt_subagents', () => {
 
   it('should cancel a running subagent by ID', async () => {
     const { handler } = buildInterruptTool(manager);
-    const record = manager.spawn('test', 'task', codeReviewerAgent);
+    const record = manager.spawn('test', 'task', codeReviewerAgent, {
+      sessionId: 'sess-a',
+    });
     manager.markRunning(record.id);
 
-    const result = (await handler({
-      subagent_ids: [record.id],
-    })) as SubagentToolResult;
+    const result = (await handler(
+      { subagent_ids: [record.id] },
+      sessionCtx,
+    )) as SubagentToolResult;
 
     expect(result.display).toContain('Interrupted 1 subagent(s)');
     expect(result.content).toContain('Interrupted');
@@ -349,16 +353,21 @@ describe('interrupt_subagents', () => {
     expect(record.state).toBe(SubagentState.INTERRUPTED);
   });
 
-  it('should cancel all running subagents when IDs empty', async () => {
+  it('should cancel all running subagents in this session when IDs empty', async () => {
     const { handler } = buildInterruptTool(manager);
-    const a = manager.spawn('a', 'task 1', codeReviewerAgent);
-    const b = manager.spawn('b', 'task 2', codeReviewerAgent);
+    const a = manager.spawn('a', 'task 1', codeReviewerAgent, {
+      sessionId: 'sess-a',
+    });
+    const b = manager.spawn('b', 'task 2', codeReviewerAgent, {
+      sessionId: 'sess-a',
+    });
     manager.markRunning(a.id);
     manager.markRunning(b.id);
 
-    const result = (await handler({
-      subagent_ids: [],
-    })) as SubagentToolResult;
+    const result = (await handler(
+      { subagent_ids: [] },
+      sessionCtx,
+    )) as SubagentToolResult;
 
     expect(result.display).toContain('Interrupted 2 subagent(s)');
     expect(result.content).toContain(a.id);
@@ -367,14 +376,38 @@ describe('interrupt_subagents', () => {
     expect(b.state).toBe(SubagentState.INTERRUPTED);
   });
 
+  it('empty list must not cancel subagents owned by another session', async () => {
+    const { handler } = buildInterruptTool(manager);
+    const mine = manager.spawn('mine', 'task', codeReviewerAgent, {
+      sessionId: 'sess-a',
+    });
+    const peer = manager.spawn('peer', 'task', codeReviewerAgent, {
+      sessionId: 'sess-b',
+    });
+    manager.markRunning(mine.id);
+    manager.markRunning(peer.id);
+
+    const result = (await handler(
+      { subagent_ids: [] },
+      sessionCtx,
+    )) as SubagentToolResult;
+
+    expect(result.display).toContain('Interrupted 1 subagent(s)');
+    expect(mine.state).toBe(SubagentState.INTERRUPTED);
+    expect(peer.state).toBe(SubagentState.RUNNING);
+  });
+
   it('should report already finished subagents', async () => {
     const { handler } = buildInterruptTool(manager);
-    const record = manager.spawn('test', 'task', codeReviewerAgent);
+    const record = manager.spawn('test', 'task', codeReviewerAgent, {
+      sessionId: 'sess-a',
+    });
     manager.markCompleted(record.id, 'done');
 
-    const result = (await handler({
-      subagent_ids: [record.id],
-    })) as SubagentToolResult;
+    const result = (await handler(
+      { subagent_ids: [record.id] },
+      sessionCtx,
+    )) as SubagentToolResult;
 
     expect(result.display).toBe('No subagents interrupted');
     expect(result.content).toContain('Already finished');
@@ -384,9 +417,10 @@ describe('interrupt_subagents', () => {
   it('should report not found subagents', async () => {
     const { handler } = buildInterruptTool(manager);
 
-    const result = (await handler({
-      subagent_ids: ['nonexistent-id'],
-    })) as SubagentToolResult;
+    const result = (await handler(
+      { subagent_ids: ['nonexistent-id'] },
+      sessionCtx,
+    )) as SubagentToolResult;
 
     expect(result.display).toBe('No subagents interrupted');
     expect(result.content).toContain('Not found');
@@ -395,14 +429,21 @@ describe('interrupt_subagents', () => {
 
   it('should handle mix of cancelled, already done, and not found', async () => {
     const { handler } = buildInterruptTool(manager);
-    const running = manager.spawn('running', 'task', codeReviewerAgent);
+    const running = manager.spawn('running', 'task', codeReviewerAgent, {
+      sessionId: 'sess-a',
+    });
     manager.markRunning(running.id);
-    const completed = manager.spawn('completed', 'task', codeReviewerAgent);
+    const completed = manager.spawn('completed', 'task', codeReviewerAgent, {
+      sessionId: 'sess-a',
+    });
     manager.markCompleted(completed.id, 'done');
 
-    const result = (await handler({
-      subagent_ids: [running.id, completed.id, 'missing-id'],
-    })) as SubagentToolResult;
+    const result = (await handler(
+      {
+        subagent_ids: [running.id, completed.id, 'missing-id'],
+      },
+      sessionCtx,
+    )) as SubagentToolResult;
 
     expect(result.content).toContain('Interrupted');
     expect(result.content).toContain(running.id);
@@ -414,12 +455,15 @@ describe('interrupt_subagents', () => {
 
   it('should report no running subagents when all are terminal', async () => {
     const { handler } = buildInterruptTool(manager);
-    const record = manager.spawn('test', 'task', codeReviewerAgent);
+    const record = manager.spawn('test', 'task', codeReviewerAgent, {
+      sessionId: 'sess-a',
+    });
     manager.markCompleted(record.id, 'done');
 
-    const result = (await handler({
-      subagent_ids: [],
-    })) as SubagentToolResult;
+    const result = (await handler(
+      { subagent_ids: [] },
+      sessionCtx,
+    )) as SubagentToolResult;
 
     expect(result.display).toContain('No running subagents');
     expect(result.content).toContain('No running subagents found');
@@ -427,12 +471,15 @@ describe('interrupt_subagents', () => {
 
   it('should cancel pending (not yet running) subagents', async () => {
     const { handler } = buildInterruptTool(manager);
-    const pending = manager.spawn('pending', 'task', codeReviewerAgent);
+    const pending = manager.spawn('pending', 'task', codeReviewerAgent, {
+      sessionId: 'sess-a',
+    });
     // Don't mark as running — it's still PENDING
 
-    const result = (await handler({
-      subagent_ids: [pending.id],
-    })) as SubagentToolResult;
+    const result = (await handler(
+      { subagent_ids: [pending.id] },
+      sessionCtx,
+    )) as SubagentToolResult;
 
     expect(result.display).toContain('Interrupted 1 subagent(s)');
     expect(pending.state).toBe(SubagentState.INTERRUPTED);

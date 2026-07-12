@@ -616,10 +616,18 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
           ...(options?.model ? { model: options.model } : {}),
         });
-        if (result?.sessionId) {
+        // Only adopt send resolution when the user is still viewing this turn's
+        // session (or still in draft). Navigation mid-send must not retarget
+        // stream filters to the previous session.
+        const stillViewingSendTarget =
+          !activeSessionIdRef.current ||
+          !result?.sessionId ||
+          activeSessionIdRef.current === result.sessionId ||
+          streamSessionIdRef.current === result.sessionId;
+        if (result?.sessionId && stillViewingSendTarget) {
           streamSessionIdRef.current = result.sessionId;
         }
-        if (result?.turnId) {
+        if (result?.turnId && stillViewingSendTarget) {
           // Preserve any already-observed sequence for this same turn. Main
           // may emit its first state event before the invoke promise resolves.
           if (streamTurnIdRef.current !== result.turnId) {
