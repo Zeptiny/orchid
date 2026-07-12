@@ -205,10 +205,14 @@ describe('interrupt_subagents with flush', () => {
   it('should handle mix of found, not found, and already done with flush', async () => {
     const { handler } = buildInterruptTool(manager);
 
-    const running = manager.spawn('running', 'task', codeReviewerAgent);
+    const running = manager.spawn('running', 'task', codeReviewerAgent, {
+      sessionId: 'sess-a',
+    });
     manager.markRunning(running.id);
 
-    const completed = manager.spawn('completed', 'task', codeReviewerAgent);
+    const completed = manager.spawn('completed', 'task', codeReviewerAgent, {
+      sessionId: 'sess-a',
+    });
     manager.markCompleted(completed.id, 'done');
 
     // Set up a pending wait on the running subagent

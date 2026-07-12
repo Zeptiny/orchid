@@ -48,7 +48,7 @@
   - Mas isso ainda poderia ser evitado via comandos. Com sistema de permissão e o usuário aprovando todos os comandos, a responsabilidade fica com o usuário
 - Também já adicionar o reconhecimento de diretórios que um comando / ferramenta irá afetar
   - Perguntar ao usuário se pode editar / visualziar arquivos fora do diretório atual
-    - Ignorado no yolo 
+    - Ignorado no yolo
 
 ### Subagentes
 - Agente BTW/lateral (Fazer uma pergunta sem interromper o fluxo principal)

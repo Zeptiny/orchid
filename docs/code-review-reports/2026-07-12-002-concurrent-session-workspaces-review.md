@@ -134,10 +134,10 @@ Focused verification: **151 tests passed across 7 suites**, TypeScript typecheck
 
 Findings below are the full set reported by personas (61 raw persona findings), **merged** into a single actionable list. Status:
 
-- **Fixed** — addressed in the review pass or a later follow-up commit on this branch  
-- **Partial** — core issue mitigated; residual edge remains (see notes)  
-- **Open** — still needs work  
-- **Advisory** — report-only / follow-up design  
+- **Fixed** — addressed in the review pass or a later follow-up commit on this branch
+- **Partial** — core issue mitigated; residual edge remains (see notes)
+- **Open** — still needs work
+- **Advisory** — report-only / follow-up design
 
 Confidence anchors: 75+ shown as primary; lower-confidence notes appear under residual risks where relevant.
 
@@ -245,26 +245,26 @@ Full write-up: run artifact `agent-native.md`.
 
 From `docs/solutions/` and related plans (see run artifact `learnings.md`):
 
-1. **Five scopes:** Application → Project → Session → Window/view → Turn — every async op needs explicit ids.  
-2. **Selected ≠ running** — navigation must not cancel or retarget.  
-3. **Never `process.chdir`** — freeze cwd on `ToolExecutionContext`.  
-4. **Provider keys:** runtime snapshots exclude keychain; `hydrateProjectRuntime()` one-turn only.  
-5. **MCP cancel/teardown:** do not skip close on abort (Python MCP CancelledError lesson).  
-6. **Auto-name / activity / todos** always key by session id, never “whatever is selected.”  
+1. **Five scopes:** Application → Project → Session → Window/view → Turn — every async op needs explicit ids.
+2. **Selected ≠ running** — navigation must not cancel or retarget.
+3. **Never `process.chdir`** — freeze cwd on `ToolExecutionContext`.
+4. **Provider keys:** runtime snapshots exclude keychain; `hydrateProjectRuntime()` one-turn only.
+5. **MCP cancel/teardown:** do not skip close on abort (Python MCP CancelledError lesson).
+6. **Auto-name / activity / todos** always key by session id, never “whatever is selected.”
 7. Historical Electron gap: remaining process-wide “active” globals are high severity under concurrency.
 
 ---
 
 ## 8. Residual risks (not elevated to findings or unconfirmed)
 
-- Git worktree isolation intentionally out of scope — same-project concurrent file races.  
-- Multi-window stream fanout incomplete (F-17).  
-- Unbounded project runtime / history growth under long uptime (MCP retirement addressed by F-20/F-31).  
-- Snapshot vs live event races under rapid multi-click switching.  
-- Absolute-path tool sandbox gap noted as pre-existing (R20-class).  
-- Shared `SubagentManager` across per-turn registries depends on correct `sessionId` filtering.  
-- `forceAbortChat(windowId)` only aborts selected session — background sessions on that window untouched (correct for concurrent model if callers are updated).  
-- Directory-tree cache single-slot thrash (not cross-contamination).  
+- Git worktree isolation intentionally out of scope — same-project concurrent file races.
+- Multi-window stream fanout incomplete (F-17).
+- Unbounded project runtime / history growth under long uptime (MCP retirement addressed by F-20/F-31).
+- Snapshot vs live event races under rapid multi-click switching.
+- Absolute-path tool sandbox gap noted as pre-existing (R20-class).
+- Shared `SubagentManager` across per-turn registries depends on correct `sessionId` filtering.
+- `forceAbortChat(windowId)` only aborts selected session — background sessions on that window untouched (correct for concurrent model if callers are updated).
+- Directory-tree cache single-slot thrash (not cross-contamination).
 - Handoff doc mixes completion update with long historical “in progress” sections — agents must read the 2026-07-12 completion section first.
 
 ---
@@ -273,30 +273,30 @@ From `docs/solutions/` and related plans (see run artifact `learnings.md`):
 
 Priority additions (all covered by the final remediation passes):
 
-1. **`session:load` does not abort** background chat/subagents.  
-2. **Navigate mid-turn** + `chat:snapshot({ sessionId })` rehydrate with tools/sequence.  
-3. **`chat:stop(A)` while B concurrent** — B still completes.  
-4. **`hydrateProjectRuntime`** observable on chat:send and subagent path (not identity mock).  
-5. **`useChat`:** ignore non-selected `sessionId`; sequence gating; hydrate vs live race.  
-6. **Activity:** list/mark_seen/broadcast; delete tombstone; chat-driven working→complete.  
-7. **Empty interrupt** only cancels current `sessionId` (added for manager path; keep regression).  
-8. **Delete working session** aborts agent. *(implementation fixed in `76339bd`; add regression test)*  
-9. **TodoStore** preserved across re-select of in-memory running session.  
+1. **`session:load` does not abort** background chat/subagents.
+2. **Navigate mid-turn** + `chat:snapshot({ sessionId })` rehydrate with tools/sequence.
+3. **`chat:stop(A)` while B concurrent** — B still completes.
+4. **`hydrateProjectRuntime`** observable on chat:send and subagent path (not identity mock).
+5. **`useChat`:** ignore non-selected `sessionId`; sequence gating; hydrate vs live race.
+6. **Activity:** list/mark_seen/broadcast; delete tombstone; chat-driven working→complete.
+7. **Empty interrupt** only cancels current `sessionId` (added for manager path; keep regression).
+8. **Delete working session** aborts agent. *(implementation fixed in `76339bd`; add regression test)*
+9. **TodoStore** preserved across re-select of in-memory running session.
 10. Retarget/rename tests that still describe “session switch abort”.
 
 ---
 
 ## 10. Recommended fix order
 
-1. **F-09** TodoStore live preserve on `switchTo`  
-2. ~~**F-10** Delete aborts working session~~ — **Fixed** (`76339bd`)  
-3. **F-11** `chat:send` runtime from bound `session.cwd`  
-4. **F-12** residual (fail closed without runtime) / **F-21** sessionId fail-closed  
-5. **F-13** / **F-14** residual (per-session serialize) / **F-15** bg command stop  
-6. **F-16** residual / **F-27** hydrateSnapshot selected-session affinity  
-7. **F-22–F-26** Concurrent isolation test suite  
-8. **F-19** tool registry cache (~~F-20 / F-31 MCP retirement — **Fixed**~~)  
-9. Update **`electron/CLAUDE.md`** for concurrent model  
+1. **F-09** TodoStore live preserve on `switchTo`
+2. ~~**F-10** Delete aborts working session~~ — **Fixed** (`76339bd`)
+3. **F-11** `chat:send` runtime from bound `session.cwd`
+4. **F-12** residual (fail closed without runtime) / **F-21** sessionId fail-closed
+5. **F-13** / **F-14** residual (per-session serialize) / **F-15** bg command stop
+6. **F-16** residual / **F-27** hydrateSnapshot selected-session affinity
+7. **F-22–F-26** Concurrent isolation test suite
+8. **F-19** tool registry cache (~~F-20 / F-31 MCP retirement — **Fixed**~~)
+9. Update **`electron/CLAUDE.md`** for concurrent model
 
 ---
 
