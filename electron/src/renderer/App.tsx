@@ -1,9 +1,5 @@
 /**
- * App root — theme provider + ChatView layout + Preferences + Onboarding.
- *
- * U19 provides the shell with theme switching.
- * U20 replaces SpikeChat with the full ChatStream + Sidebar.
- * U24 adds Preferences modal and Onboarding first-run flow.
+ * App root — theme provider + ChatView layout + ConfigView + Onboarding.
  */
 import { useState, useEffect, useCallback } from 'react';
 import { ChatView } from './components/ChatView';

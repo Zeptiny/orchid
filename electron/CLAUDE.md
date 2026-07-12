@@ -35,8 +35,7 @@ src/
 │   │       ├── agent-machine.ts      # Core agent loop (idle→streaming→toolExec→idle)
 │   │       ├── subagent-machine.ts   # Subagent lifecycle
 │   │       ├── session-machine.ts    # Session-level orchestration
-│   │       ├── interrupt-machine.ts  # Two-phase Esc cancellation
-│   │       └── spike-agent-machine.ts
+│   │       └── interrupt-machine.ts  # Two-phase Esc cancellation
 │   ├── llm/                 # LLM integration
 │   │   ├── orchestrator.ts  # streamChat() — async generator yielding StreamEvents
 │   │   ├── providers.ts     # resolveModelRef() — alias/model → AI SDK provider
@@ -131,9 +130,9 @@ src/
 │   │   ├── MarkdownContent.tsx # Markdown rendering
 │   │   ├── CommandPalette.tsx # Cmd+K command palette
 │   │   ├── ContextGrid.tsx  # Context window usage visualization
-│   │   ├── SpikeChat.tsx    # Legacy chat component
+│   │   ├── ConfigView.tsx   # Full-screen configuration UI
 │   │   ├── ToolWidgets/     # Tool call/result UI widgets
-│   │   ├── Preferences/     # Settings modal
+│   │   ├── Preferences/     # Settings tab panels (used by ConfigView)
 │   │   └── Onboarding/      # First-run setup wizard
 │   ├── hooks/
 │   │   ├── useChat.ts       # Chat state machine (messages, streaming, send/cancel)

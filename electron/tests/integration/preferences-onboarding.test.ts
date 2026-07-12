@@ -338,10 +338,8 @@ describe('Preferences & Onboarding File Structure', () => {
     expect(fs.existsSync(path.join(componentsDir, 'Preferences'))).toBe(true);
   });
 
-  it('PreferencesWindow.tsx exists', () => {
-    expect(
-      fs.existsSync(path.join(componentsDir, 'Preferences', 'PreferencesWindow.tsx')),
-    ).toBe(true);
+  it('ConfigView.tsx exists', () => {
+    expect(fs.existsSync(path.join(componentsDir, 'ConfigView.tsx'))).toBe(true);
   });
 
   it('ProvidersTab.tsx exists', () => {
@@ -390,15 +388,14 @@ describe('Preferences & Onboarding File Structure', () => {
     ).toBe(true);
   });
 
-  it('chat.css contains preferences styles', () => {
+  it('chat.css contains configuration styles', () => {
     const cssPath = path.resolve(__dirname, '../../src/renderer/styles/chat.css');
     const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.pref-overlay');
-    expect(css).toContain('.pref-window');
-    expect(css).toContain('.pref-tabs');
-    expect(css).toContain('.pref-tab');
-    expect(css).toContain('.pref-tabpanel');
-    expect(css).toContain('.pref-dialog');
+    expect(css).toContain('.config-main-header');
+    expect(css).toContain('.config-tabs');
+    expect(css).toContain('.config-tab');
+    expect(css).toContain('.config-body');
+    expect(css).toContain('.config-form');
   });
 
   it('chat.css contains onboarding styles', () => {
