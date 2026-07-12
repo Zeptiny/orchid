@@ -10,7 +10,10 @@ import { getConfig } from '../config/loader';
 import { resolveModelRef } from '../llm/providers';
 import { createProviderModel } from '../llm/providers-factory';
 import { getSessionManager } from '../ipc/session';
-import { getProjectMCPManager } from '../mcp/project-registry';
+import {
+  acquireProjectMCPManager,
+  releaseProjectMCPManager,
+} from '../mcp/project-registry';
 import { createBuiltinToolRegistry } from '../tools';
 import {
   getProjectRuntimeRegistry,
@@ -88,7 +91,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       params.projectRuntime ?? getProjectRuntimeRegistry().get(parentCwd);
     const runtime = await hydrateProjectRuntime(baseRuntime);
     const config = runtime.config;
-    const mcpManager = getProjectMCPManager(baseRuntime);
+    const mcpManager = acquireProjectMCPManager(baseRuntime);
     const registry = createBuiltinToolRegistry({
       agents: new Map(runtime.agents),
       skills: new Map(runtime.skills),
@@ -164,7 +167,11 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       modelInstance,
     });
 
-    yield* stream;
+    try {
+      yield* stream;
+    } finally {
+      releaseProjectMCPManager(baseRuntime);
+    }
   };
 }
 

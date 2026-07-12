@@ -236,6 +236,10 @@ export function registerSessionIPC(): void {
 
     const manager = getSessionManager();
     const wasActive = manager.getActive(String(event.sender.id))?.id === parsed.data.id;
+    // A deleted background session must not keep spending provider/tool work or
+    // recreate activity after it disappears from the catalog.
+    const { forceStopSession } = await import('./chat');
+    forceStopSession(parsed.data.id);
     const deleted = manager.delete(parsed.data.id);
     if (deleted) {
       removeSessionActivity(parsed.data.id);

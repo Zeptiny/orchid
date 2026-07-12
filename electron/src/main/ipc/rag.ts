@@ -17,6 +17,7 @@ import {
 } from '../rag/indexer';
 import { resolveWindowWorkspace } from './session';
 import { isWorkspaceBound } from '../project/workspace';
+import { getProjectRuntimeRegistry } from '../project/runtime';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -112,6 +113,9 @@ export function registerRAGIPC(): void {
       force,
       undefined,
       (progress) => broadcastProgress(projectPath, progress),
+      {
+        config: getProjectRuntimeRegistry().get(projectPath).config,
+      },
     );
   });
 

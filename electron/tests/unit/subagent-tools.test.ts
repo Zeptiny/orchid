@@ -278,6 +278,24 @@ describe('wait_for_subagent', () => {
     expect(result.content).toContain('nonexistent-id-2');
   });
 
+  it('does not expose a subagent owned by another session', async () => {
+    const { handler } = buildWaitTool(manager);
+    const peer = manager.spawn('peer', 'private task', codeReviewerAgent, {
+      sessionId: 'sess-b',
+    });
+    manager.markCompleted(peer.id, 'private result');
+
+    const result = (await handler(
+      { subagent_ids: [peer.id] },
+      { cwd: '/tmp/project', sessionId: 'sess-a' },
+    )) as SubagentToolResult;
+
+    expect(result.content).toContain('No subagents found');
+    expect(result.content).toContain(peer.id);
+    expect(result.content).not.toContain('private task');
+    expect(result.content).not.toContain('private result');
+  });
+
   it('should include task in the output', async () => {
     const { handler } = buildWaitTool(manager);
     const record = manager.spawn('test', 'Review the auth module', codeReviewerAgent);
@@ -425,6 +443,22 @@ describe('interrupt_subagents', () => {
     expect(result.display).toBe('No subagents interrupted');
     expect(result.content).toContain('Not found');
     expect(result.content).toContain('nonexistent-id');
+  });
+
+  it('does not interrupt an explicit subagent owned by another session', async () => {
+    const { handler } = buildInterruptTool(manager);
+    const peer = manager.spawn('peer', 'task', codeReviewerAgent, {
+      sessionId: 'sess-b',
+    });
+    manager.markRunning(peer.id);
+
+    const result = (await handler(
+      { subagent_ids: [peer.id] },
+      sessionCtx,
+    )) as SubagentToolResult;
+
+    expect(result.content).toContain('Not found');
+    expect(peer.state).toBe(SubagentState.RUNNING);
   });
 
   it('should handle mix of cancelled, already done, and not found', async () => {

@@ -28,6 +28,7 @@ function broadcast(activity: SessionActivity): void {
   }
 }
 
+/** Update and broadcast one session's global activity state. */
 export function publishSessionActivity(
   sessionId: string,
   patch: SessionActivityUpdate,
@@ -40,6 +41,7 @@ export function publishSessionActivity(
   return activity;
 }
 
+/** Mark a session terminal, preserving its current background-process count. */
 export function completeSessionActivity(
   sessionId: string,
   unread: boolean,

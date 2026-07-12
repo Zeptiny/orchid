@@ -57,7 +57,14 @@ export const ragIndexHandler: ToolHandler = async (
 
     case 'index': {
       // Run via worker (no custom embedder) so indexing leaves the main thread free.
-      const result = await indexProject(projectPath, undefined, false);
+      const result = await indexProject(
+        projectPath,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        { config: ctx.projectRuntime?.config },
+      );
       const lines = [
         'RAG Index Complete:',
         `  Files scanned: ${result.filesScanned}`,

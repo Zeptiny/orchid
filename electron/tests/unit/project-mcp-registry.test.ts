@@ -65,4 +65,18 @@ describe('ProjectMCPManagerRegistry', () => {
     expect(mocks.instances[0]!.shutdown).toHaveBeenCalledTimes(1);
     expect(mocks.instances[1]!.shutdown).toHaveBeenCalledTimes(1);
   });
+
+  it('retires a superseded project configuration after its turn lease releases', async () => {
+    const registry = new ProjectMCPManagerRegistry();
+    const project = runtime('/projects/a', 'alpha');
+    registry.acquire(project);
+    const manager = mocks.instances.at(-1)!;
+
+    registry.invalidateProject('/projects/a');
+    expect(manager.shutdown).not.toHaveBeenCalled();
+
+    registry.release(project);
+    await Promise.resolve();
+    expect(manager.shutdown).toHaveBeenCalledTimes(1);
+  });
 });

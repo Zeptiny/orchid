@@ -20,7 +20,7 @@ import { Sidebar } from './Sidebar';
 import { LeftSidebar } from './LeftSidebar';
 import { CommandPalette } from './CommandPalette';
 import { ShortcutsHelp } from './ShortcutsHelp';
-import { SessionHeader } from './SessionHeader';
+import { SessionHeader } from './session-header';
 
 /** Flatten every chain's messages for the center pane (chronological). */
 function messagesFromSession(loaded: Session): Message[] {
@@ -363,13 +363,14 @@ export function ChatView() {
         ...(preferredModel ? { model: preferredModel } : {}),
         ...(session.activeSession?.id
           ? { sessionId: session.activeSession.id }
-          : {}),
+          : { draftGeneration: session.draftGeneration }),
       });
     },
     [
       chat,
       session.activeSession?.id,
       session.activeSession?.model,
+      session.draftGeneration,
       currentModel,
       workspaceBound,
       notify,

@@ -9,7 +9,11 @@
  * The registry is a singleton (one instance in the main process).
  */
 import { ToolRegistry } from './registry';
-import type { ToolDefinition, ToolExecutionContext, ToolHandler } from './types';
+import {
+  type ToolDefinition,
+  type ToolExecutionContext,
+  type ToolHandler,
+} from './types';
 import type { Agent } from '../../shared/types/agent';
 import type { Skill } from '../../shared/types/skill';
 import type { MCPManager } from '../mcp/manager';
@@ -44,7 +48,8 @@ import { buildDelegateTool } from './subagent/delegate';
 import { buildWaitTool } from './subagent/wait';
 import { buildInterruptTool } from './subagent/interrupt';
 import { SubagentManager } from '../agents/manager';
-import { getModelForTier } from '../config/loader';
+import { getModelForTier } from '../llm/providers';
+import { getModelForTier as getLegacyModelForTier } from '../config/loader';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 
 /** Singleton registry instance for the main process */
@@ -190,7 +195,9 @@ function buildWebFetchSummarizer(
       '</page_content>';
 
     const record = manager.spawn('web fetch summary', task, summarizerAgent, {
-      model: getModelForTier(agent.tier),
+      model: context.projectRuntime
+        ? getModelForTier(context.projectRuntime.config, agent.tier)
+        : getLegacyModelForTier(agent.tier),
       sessionId: context.sessionId,
       cwd: context.cwd,
       projectRuntime: context.projectRuntime,

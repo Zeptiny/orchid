@@ -12,7 +12,8 @@ import type { Agent } from '../../../shared/types/agent';
 import { AgentType, AgentTier, TIER_DESCRIPTIONS } from '../../../shared/types/agent';
 import type { ToolDefinition, ToolHandler } from '../types';
 import type { SubagentManager } from '../../agents/manager';
-import { getModelForTier } from '../../config/loader';
+import { getModelForTier } from '../../llm/providers';
+import { getModelForTier as getLegacyModelForTier } from '../../config/loader';
 import { getSessionManager } from '../../ipc/session';
 
 /**
@@ -122,7 +123,9 @@ export function buildDelegateTool(
     }
 
     // Resolve model from tier via config
-    const model = getModelForTier(resolvedTier);
+    const model = ctx?.projectRuntime
+      ? getModelForTier(ctx.projectRuntime.config, resolvedTier)
+      : getLegacyModelForTier(resolvedTier);
 
     // Attribute to the frozen parent turn. Never discover ownership from the
     // process's currently selected session after another session is opened.

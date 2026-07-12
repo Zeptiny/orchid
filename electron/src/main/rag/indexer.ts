@@ -12,6 +12,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { getConfig } from '../config/loader';
+import type { Config } from '../config/schema';
 import { chunkFile } from './chunker';
 import { createEmbedderFromConfig, type IEmbedder } from './embedder';
 import { RAGStore } from './store';
@@ -29,6 +30,8 @@ export interface RagWorkerStartData {
   projectPath: string;
   force?: boolean;
   paths?: string[];
+  /** Frozen, secret-free project configuration captured by the caller. */
+  config?: Config;
 }
 
 /** Messages the index worker posts back to the parent. */
@@ -106,6 +109,8 @@ export interface IndexProjectOptions {
    * tests, or when a custom Embedder instance is supplied).
    */
   inline?: boolean;
+  /** Frozen project configuration for this indexing turn. */
+  config?: Config;
 }
 
 /**
@@ -160,9 +165,16 @@ export async function indexProject(
         force,
         embedder,
         trackProgress,
+        options?.config,
       );
     }
-    return await runIndexInWorker(projectPath, paths, force, trackProgress);
+    return await runIndexInWorker(
+      projectPath,
+      paths,
+      force,
+      trackProgress,
+      options?.config,
+    );
   } finally {
     activeIndexes.delete(key);
   }
@@ -180,8 +192,9 @@ export async function runIndexProjectImpl(
   force?: boolean,
   embedder?: IEmbedder,
   progressCallback?: RAGIndexProgressCallback,
+  config?: Config,
 ): Promise<IndexResult> {
-  const cfg = getConfig();
+  const cfg = config ?? getConfig();
   if (!projectPath) {
     throw new Error('projectPath is required; pass the active workspace cwd');
   }
@@ -415,6 +428,7 @@ async function runIndexInWorker(
   paths: string[] | undefined,
   force: boolean | undefined,
   progressCallback?: RAGIndexProgressCallback,
+  config?: Config,
 ): Promise<IndexResult> {
   const workerPath = path.join(__dirname, 'index-worker.js');
   if (!fs.existsSync(workerPath)) {
@@ -422,13 +436,21 @@ async function runIndexInWorker(
     console.warn(
       `RAG worker not found at ${workerPath}; running index inline on the main thread`,
     );
-    return runIndexProjectImpl(projectPath, paths, force, undefined, progressCallback);
+    return runIndexProjectImpl(
+      projectPath,
+      paths,
+      force,
+      undefined,
+      progressCallback,
+      config,
+    );
   }
 
   const startData: RagWorkerStartData = {
     projectPath,
     force: force === true,
     paths,
+    config,
   };
 
   return new Promise<IndexResult>((resolve, reject) => {

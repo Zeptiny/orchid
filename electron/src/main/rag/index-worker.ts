@@ -23,9 +23,12 @@ async function run(): Promise<void> {
     throw new Error('RAG worker: projectPath is required');
   }
 
-  // Fresh isolate — load config for this project (home + project layers).
-  ConfigManager.reset();
-  ConfigManager.load({ projectDir: projectPath });
+  // Legacy callers may omit a frozen runtime config. Preserve the previous
+  // project-layer load in that compatibility path only.
+  if (!data.config) {
+    ConfigManager.reset();
+    ConfigManager.load({ projectDir: projectPath });
+  }
 
   post({
     type: 'progress',
@@ -49,6 +52,7 @@ async function run(): Promise<void> {
     (progress) => {
       post({ type: 'progress', progress });
     },
+    data.config,
   );
 
   post({

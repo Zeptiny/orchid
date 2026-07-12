@@ -30,7 +30,10 @@ import {
 import { importESM } from '../utils/esm-import';
 import { getBackgroundStore } from '../tools/process/background-store';
 import type { MCPManager } from '../mcp/manager';
-import { getProjectMCPManager } from '../mcp/project-registry';
+import {
+  acquireProjectMCPManager,
+  releaseProjectMCPManager,
+} from '../mcp/project-registry';
 import { createBuiltinToolRegistry, getSubagentManager } from '../tools';
 import type { ToolRegistry } from '../tools/registry';
 import type {
@@ -72,6 +75,7 @@ const chatSendSchema = z.object({
   sessionId: z.string().uuid().optional(),
   /** Preferred model when lazy-creating a session from draft mode. */
   model: z.string().optional(),
+  draftGeneration: z.number().int().nonnegative().optional(),
 });
 
 const chatCancelSchema = z.object({
@@ -139,6 +143,8 @@ type ActiveAgent = {
   unsubscribe: () => void;
   interruptUnsubscribe: () => void;
   interruptResetTimer: ReturnType<typeof setTimeout> | null;
+  /** Runtime whose MCP manager lease is held until this actor is disposed. */
+  mcpRuntime: ProjectRuntime;
 };
 
 const activeAgents = new Map<string, ActiveAgent>();
@@ -170,6 +176,7 @@ function disposeActiveAgent(sessionId: string, active: ActiveAgent): void {
   active.abortController.abort();
   active.actor.stop();
   active.interruptActor.stop();
+  releaseProjectMCPManager(active.mcpRuntime);
 }
 
 /**
@@ -521,6 +528,7 @@ function ensureActiveSession(
   webContents: WebContents,
   preferredModel?: string,
   requestedSessionId?: string,
+  draftGeneration?: number,
 ): {
   ok: true;
   cwd: string;
@@ -580,7 +588,7 @@ function ensureActiveSession(
   // Draft was promoted into the new session.
   clearDraftCwd(windowId);
   if (canSend(webContents)) {
-    webContents.send(IPC_CHANNELS.SESSION_CREATED, { session });
+    webContents.send(IPC_CHANNELS.SESSION_CREATED, { session, draftGeneration });
   }
   return { ok: true, cwd: workspace.cwd, session, runtime };
 }
@@ -674,18 +682,6 @@ function emitSessionUpdated(webContents: WebContents, sessionId: string): void {
     }
   } catch {
     // non-fatal
-  }
-}
-
-/**
- * Resolve active workspace cwd for UI chrome (CHAT_STATE).
- * Prefers active session → draft → sticky; never process.cwd().
- */
-function resolveUiWorkspaceCwd(windowId: string): string | null {
-  try {
-    return resolveWindowWorkspace(windowId).cwd;
-  } catch {
-    return null;
   }
 }
 
@@ -898,6 +894,7 @@ export function registerChatIPC(): void {
       webContents,
       preferredModel,
       requestedSessionId,
+      parsed.data.draftGeneration,
     );
     if (!sessionGate.ok) {
       return sessionGate.result;
@@ -920,7 +917,7 @@ export function registerChatIPC(): void {
     const runtime = await hydrateProjectRuntime(sessionGate.runtime);
     const config = runtime.config;
     const agents = [...runtime.agents.values()];
-    const mcpManager = getProjectMCPManager(sessionGate.runtime);
+    const mcpManager = acquireProjectMCPManager(sessionGate.runtime);
     const turnRegistry = createBuiltinToolRegistry({
       agents: new Map(runtime.agents),
       skills: new Map(runtime.skills),
@@ -1048,6 +1045,7 @@ export function registerChatIPC(): void {
       unsubscribe: () => subscription?.unsubscribe(),
       interruptUnsubscribe: () => interruptSubscription?.unsubscribe(),
       interruptResetTimer: null,
+      mcpRuntime: sessionGate.runtime,
     };
     activeAgents.set(sessionId, activeAgent);
 

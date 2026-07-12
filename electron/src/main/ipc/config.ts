@@ -41,6 +41,7 @@ import {
   getLastAppliedProjectDir,
 } from '../project/layers';
 import { clearProjectRuntimeRegistry } from '../project/runtime';
+import { invalidateAllProjectMCPManagers } from '../mcp/project-registry';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -326,6 +327,7 @@ export function registerConfigIPC(): void {
       // Every project runtime inherits home configuration. Clear the immutable
       // snapshots so only already-running turns retain the previous config.
       clearProjectRuntimeRegistry();
+      invalidateAllProjectMCPManagers();
       // Drop model-metadata cache so picker limits reflect new overrides.
       clearModelMetadataCache();
 

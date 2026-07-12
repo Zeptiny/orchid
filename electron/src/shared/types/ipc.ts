@@ -80,6 +80,8 @@ export interface ChatSendMessage {
    * Ignored when an active session already exists.
    */
   model?: string;
+  /** Renderer draft generation; prevents stale lazy-create events stealing selection. */
+  draftGeneration?: number;
 }
 
 export interface ChatCancelMessage {
@@ -284,6 +286,8 @@ export interface SessionMarkSeenMessage {
 /** Fired when main creates a session (e.g. first message from draft mode). */
 export interface SessionCreatedEvent {
   session: Session;
+  /** Present for lazy draft promotion initiated by chat:send. */
+  draftGeneration?: number;
 }
 
 /**
@@ -447,8 +451,11 @@ export interface OrchidAPI {
      * Updates sticky default like an intentional pick.
      */
     setWorkspace: (message: SessionSetWorkspaceMessage) => Promise<WorkspaceInfo>;
-    /** Change cwd on the active session and update sticky default. */
-    changeCwd: (message: SessionChangeCwdMessage) => Promise<Session>;
+    /**
+     * Change cwd on an empty active session. Non-empty conversations remain
+     * bound and return null after opening a project-bound draft instead.
+     */
+    changeCwd: (message: SessionChangeCwdMessage) => Promise<Session | null>;
     /** Process-wide sessions currently working, waiting, needing attention, or unread. */
     listActivity: () => Promise<SessionActivity[]>;
     /** Mark an off-screen completion as viewed. */

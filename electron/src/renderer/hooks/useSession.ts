@@ -55,6 +55,8 @@ export interface UseSessionReturn {
   setWorkspace: (cwd: string) => Promise<WorkspaceInfo | null>;
   /** Change cwd on a session and update sticky default. */
   changeCwd: (id: string, cwd: string) => Promise<Session | null>;
+  /** Monotonic draft-navigation identity for lazy chat creation events. */
+  draftGeneration: number;
   /** Refresh the session list. */
   refresh: () => Promise<void>;
   /** Whether a session is currently loading. */
@@ -76,6 +78,14 @@ export function useSession(): UseSessionReturn {
   const [isLoading, setIsLoading] = useState(false);
   /** Monotonic generation so out-of-order session:load responses are dropped. */
   const loadGenerationRef = useRef(0);
+  const draftGenerationRef = useRef(0);
+  const [draftGeneration, setDraftGeneration] = useState(0);
+  const advanceDraftGeneration = useCallback(() => {
+    const next = draftGenerationRef.current + 1;
+    draftGenerationRef.current = next;
+    setDraftGeneration(next);
+    return next;
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!window.orchid?.session?.list) {
@@ -152,6 +162,12 @@ export function useSession(): UseSessionReturn {
     const unsubscribe = window.orchid.session.onCreated((event) => {
       setActiveSession((prev) => {
         if (prev != null) return prev;
+        if (
+          event.draftGeneration != null &&
+          event.draftGeneration !== draftGenerationRef.current
+        ) {
+          return prev;
+        }
         return event.session;
       });
       void refresh();
@@ -197,6 +213,7 @@ export function useSession(): UseSessionReturn {
     }
 
     const generation = ++loadGenerationRef.current;
+    advanceDraftGeneration();
     setIsLoading(true);
     try {
       const session = await window.orchid.session.load({ id });
@@ -216,7 +233,7 @@ export function useSession(): UseSessionReturn {
         setIsLoading(false);
       }
     }
-  }, [getWorkspace]);
+  }, [getWorkspace, advanceDraftGeneration]);
 
   const create = useCallback(async () => {
     if (!window.orchid?.session?.create) {
@@ -249,18 +266,20 @@ export function useSession(): UseSessionReturn {
 
   const enterDraft = useCallback(async () => {
     loadGenerationRef.current += 1;
+    advanceDraftGeneration();
     if (window.orchid?.session?.clearActive) {
       await window.orchid.session.clearActive();
     }
     setActiveSession(null);
     void getWorkspace();
-  }, [getWorkspace]);
+  }, [getWorkspace, advanceDraftGeneration]);
 
   const pickProjectDir = useCallback(async (): Promise<WorkspaceInfo | null> => {
     if (!window.orchid?.session?.pickProjectDir) {
       return null;
     }
     try {
+      advanceDraftGeneration();
       const info = await window.orchid.session.pickProjectDir();
       setWorkspace(info);
       // The main process turns a non-empty session into a draft in the new
@@ -275,13 +294,14 @@ export function useSession(): UseSessionReturn {
       console.error('Failed to pick project directory:', err);
       return null;
     }
-  }, [activeSession]);
+  }, [activeSession, advanceDraftGeneration]);
 
   const setWorkspacePath = useCallback(async (cwd: string): Promise<WorkspaceInfo | null> => {
     if (!window.orchid?.session?.setWorkspace) {
       return null;
     }
     try {
+      advanceDraftGeneration();
       const info = await window.orchid.session.setWorkspace({ cwd });
       setWorkspace(info);
       // Binding a new project from a non-empty conversation starts a draft in
@@ -297,7 +317,7 @@ export function useSession(): UseSessionReturn {
       console.error('Failed to set workspace:', err);
       return null;
     }
-  }, [activeSession]);
+  }, [activeSession, advanceDraftGeneration]);
 
   const changeCwd = useCallback(
     async (id: string, cwd: string): Promise<Session | null> => {
@@ -407,6 +427,7 @@ export function useSession(): UseSessionReturn {
     pickProjectDir,
     setWorkspace: setWorkspacePath,
     changeCwd,
+    draftGeneration,
     refresh,
     isLoading,
   };

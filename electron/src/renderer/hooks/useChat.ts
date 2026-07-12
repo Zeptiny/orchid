@@ -100,6 +100,8 @@ export interface ChatSendOptions {
   model?: string;
   /** Explicit session owner; omitted only while composing an unsaved draft. */
   sessionId?: string;
+  /** Current draft navigation generation, echoed with lazy SESSION_CREATED. */
+  draftGeneration?: number;
 }
 
 export interface UseChatReturn extends ChatState {
@@ -615,6 +617,9 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           message: trimmed,
           ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
           ...(options?.model ? { model: options.model } : {}),
+          ...(options?.draftGeneration != null
+            ? { draftGeneration: options.draftGeneration }
+            : {}),
         });
         // Only adopt send resolution when the user is still viewing this turn's
         // session (or still in draft). Navigation mid-send must not retarget

@@ -24,8 +24,12 @@ function projectServers(runtime: ProjectRuntime): Record<string, MCPServerConfig
 }
 
 export class ProjectMCPManagerRegistry {
-  private byProject = new Map<string, MCPManager>();
-  private readonly managers = new Set<MCPManager>();
+  private readonly byProject = new Map<string, {
+    manager: MCPManager;
+    projectDir: string;
+    leases: number;
+    stale: boolean;
+  }>();
 
   private projectKey(runtime: ProjectRuntime): string {
     return JSON.stringify({
@@ -44,11 +48,15 @@ export class ProjectMCPManagerRegistry {
   get(runtime: ProjectRuntime): MCPManager {
     const key = this.projectKey(runtime);
     const existing = this.byProject.get(key);
-    if (existing) return existing;
+    if (existing) return existing.manager;
 
     const manager = new MCPManager();
-    this.byProject.set(key, manager);
-    this.managers.add(manager);
+    this.byProject.set(key, {
+      manager,
+      projectDir: runtime.projectDir,
+      leases: 0,
+      stale: false,
+    });
 
     const servers = projectServers(runtime);
     if (Object.keys(servers).length > 0) {
@@ -66,12 +74,55 @@ export class ProjectMCPManagerRegistry {
     return manager;
   }
 
+  /** Retain a manager for a running turn until its actor is disposed. */
+  acquire(runtime: ProjectRuntime): MCPManager {
+    const key = this.projectKey(runtime);
+    const manager = this.get(runtime);
+    const entry = this.byProject.get(key);
+    if (entry) entry.leases += 1;
+    return manager;
+  }
+
+  /** Release a running-turn lease and retire any superseded manager. */
+  release(runtime: ProjectRuntime): void {
+    const key = this.projectKey(runtime);
+    const entry = this.byProject.get(key);
+    if (!entry) return;
+    entry.leases = Math.max(0, entry.leases - 1);
+    this.retireIfUnused(key, entry);
+  }
+
+  /** Mark a project's historical configurations stale without interrupting turns. */
+  invalidateProject(projectDir: string): void {
+    for (const [key, entry] of this.byProject) {
+      if (entry.projectDir !== projectDir) continue;
+      entry.stale = true;
+      this.retireIfUnused(key, entry);
+    }
+  }
+
+  /** Mark every cached configuration stale after a home-config change. */
+  invalidateAll(): void {
+    for (const [key, entry] of this.byProject) {
+      entry.stale = true;
+      this.retireIfUnused(key, entry);
+    }
+  }
+
+  private retireIfUnused(
+    key: string,
+    entry: { manager: MCPManager; leases: number; stale: boolean },
+  ): void {
+    if (!entry.stale || entry.leases > 0) return;
+    this.byProject.delete(key);
+    void entry.manager.shutdown().catch(() => {});
+  }
+
   /** Close all project-owned transports at application shutdown. */
   async shutdownAll(): Promise<void> {
     await Promise.allSettled(
-      [...this.managers].map((manager) => manager.shutdown()),
+      [...this.byProject.values()].map(({ manager }) => manager.shutdown()),
     );
-    this.managers.clear();
     this.byProject.clear();
   }
 }
@@ -80,6 +131,26 @@ const projectMCPManagers = new ProjectMCPManagerRegistry();
 
 export function getProjectMCPManager(runtime: ProjectRuntime): MCPManager {
   return projectMCPManagers.get(runtime);
+}
+
+/** Retain a project MCP manager for one live main/subagent turn. */
+export function acquireProjectMCPManager(runtime: ProjectRuntime): MCPManager {
+  return projectMCPManagers.acquire(runtime);
+}
+
+/** Release a manager retained by a completed or interrupted turn. */
+export function releaseProjectMCPManager(runtime: ProjectRuntime): void {
+  projectMCPManagers.release(runtime);
+}
+
+/** Retire stale managers after one project's runtime is invalidated. */
+export function invalidateProjectMCPManagers(projectDir: string): void {
+  projectMCPManagers.invalidateProject(projectDir);
+}
+
+/** Retire stale managers after global runtime invalidation. */
+export function invalidateAllProjectMCPManagers(): void {
+  projectMCPManagers.invalidateAll();
 }
 
 export async function shutdownProjectMCPManagers(): Promise<void> {

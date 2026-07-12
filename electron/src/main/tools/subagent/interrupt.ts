@@ -80,7 +80,7 @@ export function buildInterruptTool(
 
     for (const sid of subagent_ids) {
       const record = manager.getRecord(sid);
-      if (!record) {
+      if (!record || (record.sessionId ?? null) !== (ctx?.sessionId ?? null)) {
         notFound.push(sid);
       } else if (TERMINAL_STATES.has(record.state)) {
         alreadyDone.push(sid);

@@ -23,7 +23,7 @@ import {
   truncatePathDisplay,
 } from '../utils/session-workspace';
 import { Icon } from './Icon';
-import { SessionActivitySection } from './SessionActivitySection';
+import { SessionActivitySection } from './session-activity-section';
 
 interface LeftSidebarProps {
   isCollapsed: boolean;

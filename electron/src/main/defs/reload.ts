@@ -13,6 +13,10 @@ import { loadAgents } from '../agents/registry';
 import { loadSkills } from '../skills/registry';
 import { loadPersonalities } from '../personality/registry';
 import { getProjectRuntimeRegistry } from '../project/runtime';
+import {
+  invalidateAllProjectMCPManagers,
+  invalidateProjectMCPManagers,
+} from '../mcp/project-registry';
 
 /**
  * Force-reload definitions for the current workspace (or home-only when unbound).
@@ -22,9 +26,11 @@ export function reloadDefinitionRegistries(projectDir: string | null): void {
     // A project definition only changes this project's next-turn snapshot.
     // Existing turns intentionally retain their captured runtime.
     getProjectRuntimeRegistry().invalidate(projectDir);
+    invalidateProjectMCPManagers(projectDir);
   } else {
     // Global definitions are inherited by every project runtime.
     getProjectRuntimeRegistry().clear();
+    invalidateAllProjectMCPManagers();
     loadAgents({ homeDir: HOME_AGENTS_DIR });
     loadSkills({ homeDir: HOME_SKILLS_DIR });
     loadPersonalities({ homeDir: HOME_PERSONALITIES_DIR });
