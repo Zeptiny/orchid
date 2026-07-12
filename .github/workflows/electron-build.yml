@@ -82,7 +82,7 @@ jobs:
         run: |
           echo "Before prune: $(du -sh node_modules | cut -f1)"
           rm -rf node_modules/.cache \
-                 node_modules/typescript node_modules/@types \
+                 node_modules/typescript \
                  node_modules/vitest node_modules/vite node_modules/@vitejs \
                  node_modules/esbuild \
                  node_modules/tailwindcss node_modules/@tailwindcss node_modules/daisyui \
