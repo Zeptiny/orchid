@@ -66,7 +66,7 @@ export function buildListTool(
     }
 
     const scope = normalizeAgentScopeId(ctx.agentScopeId);
-    const all = resolveTodoStore(store).list(parsedStatus);
+    const all = resolveTodoStore(store, ctx).list(parsedStatus);
     const tasks = filterTodosForScope(all, scope);
 
     if (tasks.length === 0) {

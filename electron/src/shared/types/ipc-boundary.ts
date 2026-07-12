@@ -24,6 +24,34 @@ export interface SessionSummary {
   readonly updatedAt: number;
 }
 
+export type SessionExecutionState =
+  | 'idle'
+  | 'working'
+  | 'waiting'
+  | 'needs_attention';
+
+export type SessionActivityPhase =
+  | 'agent'
+  | 'tool'
+  | 'subagent'
+  | 'command'
+  | null;
+
+/** Process-wide execution status for one independently running session. */
+export interface SessionActivity {
+  readonly sessionId: string;
+  readonly cwd: string | null;
+  readonly state: SessionExecutionState;
+  readonly phase: SessionActivityPhase;
+  readonly detail: string | null;
+  readonly startedAt: number | null;
+  readonly updatedAt: number;
+  readonly completedAt: number | null;
+  readonly unread: boolean;
+  readonly backgroundProcessCount: number;
+  readonly canCancel: boolean;
+}
+
 // ── Config ──────────────────────────────────────────────────────────────────
 
 export interface ModelMetadata {

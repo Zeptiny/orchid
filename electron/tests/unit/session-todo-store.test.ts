@@ -68,4 +68,36 @@ describe('SessionManager TodoStore isolation', () => {
     manager.clearActive();
     expect(manager.getActiveTodoStore().list()).toHaveLength(0);
   });
+
+  it('resolves and persists todos by frozen tool session rather than current selection', async () => {
+    const a = manager.create('default/mimo-v2.5');
+    const b = manager.create('default/mimo-v2.5');
+    const resolvedSessions: string[] = [];
+    const persistedSessions: string[] = [];
+    const { handler: create } = buildCreateTool(
+      (ctx) => {
+        resolvedSessions.push(ctx.sessionId ?? 'missing');
+        return manager.getTodoStore(ctx.sessionId!);
+      },
+      (ctx) => {
+        persistedSessions.push(ctx.sessionId ?? 'missing');
+        manager.persistTodos(ctx.sessionId!);
+      },
+    );
+
+    // B is selected, but an in-flight A turn must still write into A.
+    await create(
+      { title: 'Task in A' },
+      { cwd: tmpDir, sessionId: a.id, agentScopeId: 'main' },
+    );
+    await create(
+      { title: 'Task in B' },
+      { cwd: tmpDir, sessionId: b.id, agentScopeId: 'main' },
+    );
+
+    expect(resolvedSessions).toEqual([a.id, b.id]);
+    expect(persistedSessions).toEqual([a.id, b.id]);
+    expect(manager.getTodoStore(a.id).list().map((todo) => todo.title)).toEqual(['Task in A']);
+    expect(manager.getTodoStore(b.id).list().map((todo) => todo.title)).toEqual(['Task in B']);
+  });
 });

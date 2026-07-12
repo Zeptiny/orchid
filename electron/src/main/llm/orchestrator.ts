@@ -39,6 +39,7 @@ import type { Config } from '../config/schema';
 import type { ToolRegistry } from '../tools/registry';
 import { ToolRegistry as ToolRegistryClass } from '../tools/registry';
 import type { MCPManager } from '../mcp/manager';
+import type { ProjectRuntime } from '../project/runtime';
 import { toApiMessages } from './history';
 import {
   executeToolCall,
@@ -89,6 +90,8 @@ export interface StreamChatParams {
   mcpManager: MCPManager | null;
   /** Session ID for tool output offloading. */
   sessionId?: string;
+  /** Immutable project config/definitions captured when this turn began. */
+  projectRuntime?: ProjectRuntime;
   /**
    * Agent scope within the session (`main` or subagent id).
    * Propagated into tool dispatch for todos / background isolation.
@@ -174,6 +177,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     registry,
     mcpManager,
     sessionId,
+    projectRuntime,
     agentScopeId,
     abortSignal,
     modelInstance,
@@ -268,8 +272,11 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     timeoutSeconds: config.command_timeout,
     cwd: context.cwd,
     agentScopeId,
+    projectRuntime,
   }, {
-    skills: getSkillsRegistry(),
+    skills: projectRuntime
+      ? new Map(projectRuntime.skills)
+      : getSkillsRegistry(),
     allowedSkills: agent.allowed_skills,
   });
 

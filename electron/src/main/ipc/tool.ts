@@ -53,7 +53,7 @@ function resolveToolExecuteContext(windowId: string): ToolExecutionContext | nul
     if (!isWorkspaceBound(info) || info.cwd == null) {
       return null;
     }
-    const active = getSessionManager().getActive();
+    const active = getSessionManager().getActive(windowId);
     return {
       cwd: info.cwd,
       sessionId: active?.id,

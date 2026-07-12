@@ -62,7 +62,7 @@ export function buildUpdateTool(
     };
 
     const scope = normalizeAgentScopeId(ctx.agentScopeId);
-    const todoStore = resolveTodoStore(store);
+    const todoStore = resolveTodoStore(store, ctx);
     const existing = todoStore.get(id);
     if (!existing) {
       return {
@@ -109,7 +109,7 @@ export function buildUpdateTool(
     }
 
     if (notifyChanged) {
-      await notifyChanged();
+      await notifyChanged(ctx);
     }
 
     // Build change summary

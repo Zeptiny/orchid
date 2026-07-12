@@ -18,6 +18,9 @@ import {
 import type {
   OrchidAPI,
   ChatSendMessage,
+  ChatCancelMessage,
+  ChatStopMessage,
+  ChatSnapshotMessage,
   ChatChunkEvent,
   ChatThinkingEvent,
   ChatStateEvent,
@@ -37,6 +40,8 @@ import type {
   SessionSetWorkspaceMessage,
   SessionWorkspaceChangedEvent,
   SessionTodosChangedEvent,
+  SessionActivityChangedEvent,
+  SessionMarkSeenMessage,
   WorkspaceInfo,
   ToolExecuteMessage,
   AgentSpawnMessage,
@@ -95,8 +100,14 @@ const orchidAPI: OrchidAPI = {
     send: (message: ChatSendMessage) =>
       invoke(IPC_CHANNELS.CHAT_SEND, message),
 
-    cancel: () =>
-      invoke(IPC_CHANNELS.CHAT_CANCEL),
+    cancel: (message?: ChatCancelMessage) =>
+      invoke(IPC_CHANNELS.CHAT_CANCEL, message ?? {}),
+
+    stop: (message: ChatStopMessage) =>
+      invoke(IPC_CHANNELS.CHAT_STOP, message),
+
+    snapshot: (message?: ChatSnapshotMessage) =>
+      invoke(IPC_CHANNELS.CHAT_SNAPSHOT, message ?? {}),
 
     onChunk: (callback: (event: ChatChunkEvent) => void) =>
       on(IPC_CHANNELS.CHAT_CHUNK, (...args) => callback(args[0] as ChatChunkEvent)),
@@ -177,6 +188,12 @@ const orchidAPI: OrchidAPI = {
     changeCwd: (message: SessionChangeCwdMessage) =>
       invoke(IPC_CHANNELS.SESSION_CHANGE_CWD, message),
 
+    listActivity: () =>
+      invoke(IPC_CHANNELS.SESSION_ACTIVITY_LIST),
+
+    markSeen: (message: SessionMarkSeenMessage) =>
+      invoke(IPC_CHANNELS.SESSION_ACTIVITY_MARK_SEEN, message),
+
     onRenamed: (callback: (event: SessionRenamedEvent) => void) =>
       on(IPC_CHANNELS.SESSION_RENAMED, (...args) => callback(args[0] as SessionRenamedEvent)),
 
@@ -197,6 +214,11 @@ const orchidAPI: OrchidAPI = {
     onTodosChanged: (callback: (event: SessionTodosChangedEvent) => void) =>
       on(IPC_CHANNELS.SESSION_TODOS_CHANGED, (...args) =>
         callback(args[0] as SessionTodosChangedEvent),
+      ),
+
+    onActivityChanged: (callback: (event: SessionActivityChangedEvent) => void) =>
+      on(IPC_CHANNELS.SESSION_ACTIVITY_CHANGED, (...args) =>
+        callback(args[0] as SessionActivityChangedEvent),
       ),
   },
 

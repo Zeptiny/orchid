@@ -22,6 +22,7 @@ import { ChainStatus } from '../../shared/types/chain';
 import type { Message, Usage } from '../../shared/types/message';
 import { MessageType } from '../../shared/types/message';
 import type { StreamEvent } from '../llm/orchestrator';
+import type { ProjectRuntime } from '../project/runtime';
 import { addUsage, hasUsage } from '../../shared/usage';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
 import { SubagentStatus } from '../../shared/types/subagent';
@@ -64,6 +65,8 @@ export type SubagentStreamRunner = (params: {
   cwd?: string;
   /** This subagent's scope id (record.id) for todos / bg / prompt isolation. */
   agentScopeId: string;
+  /** Immutable parent project snapshot for config, tools, and definitions. */
+  projectRuntime?: ProjectRuntime;
 }) => AsyncGenerator<StreamEvent>;
 
 export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
@@ -103,6 +106,7 @@ export interface SubagentRecord {
    * (global manager + getActive() would otherwise attach chains to the new session).
    */
   readonly sessionId: string | null;
+  readonly projectRuntime?: ProjectRuntime;
   /** Abort controller for the in-flight run. */
   abortController: AbortController | null;
   /** Pending completion promise resolvers. */
@@ -163,6 +167,8 @@ export class SubagentManager {
       sessionId?: string;
       /** Frozen parent-turn workspace cwd for tools/prompt. */
       cwd?: string;
+      /** Immutable parent project snapshot. */
+      projectRuntime?: ProjectRuntime;
     } = {},
   ): SubagentRecord {
     const id = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -188,6 +194,7 @@ export class SubagentManager {
       model: options.model ?? null,
       parentChainIndex: options.parentChainIndex ?? null,
       sessionId: options.sessionId ?? null,
+      projectRuntime: options.projectRuntime,
       abortController: null,
       _resolveWait: [],
       _runPromise: null,
@@ -347,7 +354,7 @@ export class SubagentManager {
     return flushed;
   }
 
-  getStates(): Array<{
+  getStates(sessionId?: string | null): Array<{
     id: string;
     name: string;
     type: string;
@@ -365,6 +372,9 @@ export class SubagentManager {
     }> = [];
 
     for (const record of this._subagents.values()) {
+      if (sessionId !== undefined && record.sessionId !== sessionId) {
+        continue;
+      }
       states.push({
         id: record.id,
         name: record.agent.name,
@@ -434,6 +444,7 @@ export class SubagentManager {
         sessionId: record.sessionId ?? undefined,
         cwd,
         agentScopeId: record.id,
+        projectRuntime: record.projectRuntime,
       });
 
       for await (const event of stream) {
@@ -650,5 +661,3 @@ function makeEmptyChain(sessionKey: string, model: string, agent: Agent): Chain 
     endTime: null,
   };
 }
-
-

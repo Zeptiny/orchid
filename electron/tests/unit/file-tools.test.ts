@@ -20,6 +20,8 @@ import { editHandler } from '../../src/main/tools/filesystem/edit';
 import { writeHandler } from '../../src/main/tools/filesystem/write';
 import { readDirectoryHandler } from '../../src/main/tools/filesystem/read-directory';
 import { globHandler } from '../../src/main/tools/filesystem/glob';
+import type { Config } from '../../src/main/config/schema';
+import type { ProjectRuntime } from '../../src/main/project/runtime';
 import {
   registerPostWriteCallback,
   clearPostWriteCallbacks,
@@ -31,8 +33,16 @@ import type { ToolExecutionContext } from '../../src/main/tools/types';
 
 let tmpDir: string;
 
-function toolCtx(cwd?: string): ToolExecutionContext {
-  return { cwd: cwd ?? tmpDir };
+function toolCtx(
+  cwd?: string,
+  projectConfig?: Partial<Config>,
+): ToolExecutionContext {
+  return {
+    cwd: cwd ?? tmpDir,
+    projectRuntime: projectConfig
+      ? { config: projectConfig as Config } as ProjectRuntime
+      : undefined,
+  };
 }
 
 function createTmpDir(): string {
@@ -114,6 +124,18 @@ describe('read tool', () => {
     expect(result.content).toContain('Showing lines 1-1000 of 2000');
     expect(result.content).toContain('1 | line 1');
     expect(result.content).toContain('1000 | line 1000');
+  });
+
+  it('uses the frozen project read limit instead of global config', async () => {
+    const filePath = writeFile('project-limit.txt', generateLines(10));
+
+    const result = await readHandler(
+      { file_path: filePath },
+      toolCtx(undefined, { read_line_limit: 2 }),
+    );
+
+    expect(result.content).toContain('Showing lines 1-2 of 10');
+    expect(result.content).not.toContain('3 | line 3');
   });
 
   it('should detect and skip binary files', async () => {
@@ -439,6 +461,19 @@ describe('read_directory tool', () => {
 
     expect(result.content).toContain('visible.txt');
     expect(result.content).toContain('.hidden-file');
+  });
+
+  it('uses the frozen project ignored directories', async () => {
+    writeFile('visible.txt', 'visible');
+    writeFile('generated/secret.txt', 'secret');
+
+    const result = await readDirectoryHandler(
+      { directory_path: tmpDir },
+      toolCtx(undefined, { directory_tree_depth: 4, ignored_dirs: ['generated'] }),
+    );
+
+    expect(result.content).toContain('visible.txt');
+    expect(result.content).not.toContain('generated');
   });
 });
 

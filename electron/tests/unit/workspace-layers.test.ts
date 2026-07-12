@@ -107,7 +107,8 @@ beforeEach(() => {
     'Home work body',
   );
 
-  // Project A: config override + project-only agent/skill + overlay general
+  // Project A: config override + project-only agent/skill. The planted
+  // `general` file verifies that reserved internal agents cannot be overlaid.
   writeJson(path.join(projectA, '.orchid.json'), {
     default_model: 'project-a/model',
     command_timeout: 99,
@@ -213,12 +214,12 @@ describe('applyWorkspaceProjectLayers — agents & skills', () => {
     const result = applyOpts(projectA);
     expect(result.applied).toBe(true);
 
-    // Project overlay wins for general
+    // Reserved internal agents remain owned by the home layer.
     const general = getAgent('general');
     expect(general).toBeDefined();
-    expect(general!.description).toBe('Project A general');
-    expect(general!.tier).toBe(AgentTier.CROWN);
-    expect(general!.allowed_tools).toEqual(['read', 'grep']);
+    expect(general!.description).toBe('Home general');
+    expect(general!.tier).toBe(AgentTier.BLOOM);
+    expect(general!.allowed_tools).toEqual(['read']);
 
     // Project-only agent
     expect(getAgent('proj-a-agent')).toBeDefined();

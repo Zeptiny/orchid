@@ -9,7 +9,7 @@
  * The registry is a singleton (one instance in the main process).
  */
 import { ToolRegistry } from './registry';
-import type { ToolDefinition, ToolHandler } from './types';
+import type { ToolDefinition, ToolExecutionContext, ToolHandler } from './types';
 import type { Agent } from '../../shared/types/agent';
 import type { Skill } from '../../shared/types/skill';
 import type { MCPManager } from '../mcp/manager';
@@ -86,39 +86,49 @@ export function getSkillsRegistry(): Map<string, Skill> {
 }
 
 /**
- * Resolve the session-scoped TodoStore.
+ * Resolve the session-scoped TodoStore from the turn context.
  * Falls back to the process-local store when session manager is unavailable
  * (isolated unit tests).
  */
-function resolveActiveTodoStore(): TodoStore {
-  try {
-    // Lazy require avoids circular init: tools ↔ session IPC.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createRequire } = require('node:module') as typeof import('node:module');
-    const req = createRequire(__filename);
-    const session = req('../ipc/session') as typeof import('../ipc/session');
-    return session.getSessionManager().getActiveTodoStore();
-  } catch (err) {
-    // Expected in isolated unit tests without session IPC; log otherwise.
-    if (process.env.NODE_ENV !== 'test' && process.env.VITEST === undefined) {
-      console.warn(
-        '[tools] resolveActiveTodoStore fell back to process-local store:',
-        err instanceof Error ? err.message : err,
-      );
+function createSessionTodoStoreResolver(
+  fallbackStore: TodoStore,
+): (ctx: ToolExecutionContext) => TodoStore {
+  return (ctx: ToolExecutionContext) => {
+    try {
+      // Lazy require avoids circular init: tools ↔ session IPC.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createRequire } = require('node:module') as typeof import('node:module');
+      const req = createRequire(__filename);
+      const session = req('../ipc/session') as typeof import('../ipc/session');
+      const manager = session.getSessionManager();
+      if (ctx.sessionId) {
+        return manager.getTodoStore(ctx.sessionId);
+      }
+      return manager.getActiveTodoStore();
+    } catch (err) {
+      // Expected in isolated unit tests without session IPC; log otherwise.
+      if (process.env.NODE_ENV !== 'test' && process.env.VITEST === undefined) {
+        console.warn(
+          '[tools] resolveSessionTodoStore fell back to process-local store:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+      return fallbackStore;
     }
-    return builtinContext.todoStore;
-  }
+  };
 }
 
-function notifyTodosChanged(): void {
+function notifyTodosChanged(ctx: ToolExecutionContext): void {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { createRequire } = require('node:module') as typeof import('node:module');
     const req = createRequire(__filename);
     const session = req('../ipc/session') as typeof import('../ipc/session');
     const manager = session.getSessionManager();
-    manager.persistActiveTodos();
-    const sessionId = manager.getActive()?.id ?? null;
+    const sessionId = ctx.sessionId ?? manager.getActive()?.id ?? null;
+    if (sessionId) {
+      manager.persistTodos(sessionId);
+    }
     // Dynamic require so unit tests that import tools without Electron still load.
     const { BrowserWindow } = req('electron') as typeof import('electron');
     for (const win of BrowserWindow.getAllWindows()) {
@@ -137,10 +147,11 @@ function notifyTodosChanged(): void {
 }
 
 function registerBuiltTool(
+  registry: ToolRegistry,
   definition: ToolDefinition,
   handler: ToolHandler,
 ): void {
-  toolRegistry.register(definition, handler);
+  registry.register(definition, handler);
 }
 
 /**
@@ -182,6 +193,7 @@ function buildWebFetchSummarizer(
       model: getModelForTier(agent.tier),
       sessionId: context.sessionId,
       cwd: context.cwd,
+      projectRuntime: context.projectRuntime,
     });
     const records = await manager.wait([record.id]);
     const completed = records.get(record.id);
@@ -202,60 +214,86 @@ function buildWebFetchSummarizer(
  * This function is intentionally idempotent: it clears the registry, merges any
  * new dynamic context, and then re-registers the full built-in tool surface.
  */
-export function registerBuiltinTools(options: BuiltinToolOptions = {}): void {
-  Object.assign(builtinContext, options);
-  toolRegistry.reset();
-
-  registerBuiltTool(readDefinition, readHandler);
-  registerBuiltTool(editDefinition, editHandler);
-  registerBuiltTool(writeDefinition, writeHandler);
-  registerBuiltTool(readDirectoryDefinition, readDirectoryHandler);
-  registerBuiltTool(globDefinition, globHandler);
-  registerBuiltTool(grepToolDefinition, grepHandler);
-  registerBuiltTool(ragSearchDefinition, ragSearchHandler);
-  registerBuiltTool(ragIndexDefinition, ragIndexHandler);
-  registerBuiltTool(executeCommandToolDefinition, executeCommandHandler);
-  registerBuiltTool(readOutputToolDefinition, readOutputHandler);
-  registerBuiltTool(sendInputToolDefinition, sendInputHandler);
-  registerBuiltTool(terminateCommandToolDefinition, terminateCommandHandler);
-  registerAstTools(toolRegistry);
+function registerBuiltinToolsInto(
+  registry: ToolRegistry,
+  context: BuiltinToolContext,
+): void {
+  registerBuiltTool(registry, readDefinition, readHandler);
+  registerBuiltTool(registry, editDefinition, editHandler);
+  registerBuiltTool(registry, writeDefinition, writeHandler);
+  registerBuiltTool(registry, readDirectoryDefinition, readDirectoryHandler);
+  registerBuiltTool(registry, globDefinition, globHandler);
+  registerBuiltTool(registry, grepToolDefinition, grepHandler);
+  registerBuiltTool(registry, ragSearchDefinition, ragSearchHandler);
+  registerBuiltTool(registry, ragIndexDefinition, ragIndexHandler);
+  registerBuiltTool(registry, executeCommandToolDefinition, executeCommandHandler);
+  registerBuiltTool(registry, readOutputToolDefinition, readOutputHandler);
+  registerBuiltTool(registry, sendInputToolDefinition, sendInputHandler);
+  registerBuiltTool(registry, terminateCommandToolDefinition, terminateCommandHandler);
+  registerAstTools(registry);
 
   // Session-scoped store via getter (Python ContextVar parity). notifyChanged
   // snapshots into the session file and pushes SESSION_TODOS_CHANGED to the UI.
-  const todoCreate = buildCreateTool(resolveActiveTodoStore, notifyTodosChanged);
-  registerBuiltTool(todoCreate.definition, todoCreate.handler);
-  const todoUpdate = buildUpdateTool(resolveActiveTodoStore, notifyTodosChanged);
-  registerBuiltTool(todoUpdate.definition, todoUpdate.handler);
-  const todoList = buildListTool(resolveActiveTodoStore);
-  registerBuiltTool(todoList.definition, todoList.handler);
-  const todoDelete = buildDeleteTool(resolveActiveTodoStore, notifyTodosChanged);
-  registerBuiltTool(todoDelete.definition, todoDelete.handler);
+  const todoStore = createSessionTodoStoreResolver(context.todoStore);
+  const todoCreate = buildCreateTool(todoStore, notifyTodosChanged);
+  registerBuiltTool(registry, todoCreate.definition, todoCreate.handler);
+  const todoUpdate = buildUpdateTool(todoStore, notifyTodosChanged);
+  registerBuiltTool(registry, todoUpdate.definition, todoUpdate.handler);
+  const todoList = buildListTool(todoStore);
+  registerBuiltTool(registry, todoList.definition, todoList.handler);
+  const todoDelete = buildDeleteTool(todoStore, notifyTodosChanged);
+  registerBuiltTool(registry, todoDelete.definition, todoDelete.handler);
 
   const webFetch = buildWebFetchTool({
     summarize: buildWebFetchSummarizer(
-      builtinContext.agents,
-      builtinContext.subagentManager,
+      context.agents,
+      context.subagentManager,
     ),
   });
-  registerBuiltTool(webFetch.definition, webFetch.handler);
+  registerBuiltTool(registry, webFetch.definition, webFetch.handler);
 
   const delegate = buildDelegateTool(
-    builtinContext.agents,
-    builtinContext.subagentManager,
+    context.agents,
+    context.subagentManager,
   );
-  registerBuiltTool(delegate.definition, delegate.handler);
-  const wait = buildWaitTool(builtinContext.subagentManager);
-  registerBuiltTool(wait.definition, wait.handler);
-  const interrupt = buildInterruptTool(builtinContext.subagentManager);
-  registerBuiltTool(interrupt.definition, interrupt.handler);
+  registerBuiltTool(registry, delegate.definition, delegate.handler);
+  const wait = buildWaitTool(context.subagentManager);
+  registerBuiltTool(registry, wait.definition, wait.handler);
+  const interrupt = buildInterruptTool(context.subagentManager);
+  registerBuiltTool(registry, interrupt.definition, interrupt.handler);
 
-  const skill = buildSkillTool(builtinContext.skills);
-  registerBuiltTool(skill.definition, skill.handler);
+  const skill = buildSkillTool(context.skills);
+  registerBuiltTool(registry, skill.definition, skill.handler);
 
   const mcpResource = buildMcpResourceTool(
-    builtinContext.mcpManager ?? fallbackMcpManager,
+    context.mcpManager ?? fallbackMcpManager,
   );
-  registerBuiltTool(mcpResource.definition, mcpResource.handler);
+  registerBuiltTool(registry, mcpResource.definition, mcpResource.handler);
+}
+
+/** Build a dedicated, immutable-definition registry for one project runtime. */
+export function createBuiltinToolRegistry(
+  options: BuiltinToolOptions = {},
+): ToolRegistry {
+  const context: BuiltinToolContext = {
+    ...builtinContext,
+    ...options,
+  };
+  const registry = new ToolRegistry();
+  registerBuiltinToolsInto(registry, context);
+  return registry;
+}
+
+/**
+ * Register all built-in tools in the legacy process-wide registry.
+ *
+ * New concurrent turns should use createBuiltinToolRegistry() so definitions
+ * from another project cannot replace their own registry mid-turn.
+ */
+export function registerBuiltinTools(options: BuiltinToolOptions = {}): void {
+  Object.assign(builtinContext, options);
+  toolRegistry.reset();
+  registerBuiltinToolsInto(toolRegistry, builtinContext);
 }
 
 export { ToolRegistry } from './registry';

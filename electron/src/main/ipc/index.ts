@@ -6,6 +6,10 @@
 import { registerChatIPC, unregisterChatIPC } from './chat';
 import { registerConfigIPC, unregisterConfigIPC } from './config';
 import { registerSessionIPC, unregisterSessionIPC } from './session';
+import {
+  registerSessionActivityIPC,
+  unregisterSessionActivityIPC,
+} from './session-activity';
 import { registerToolIPC, unregisterToolIPC } from './tool';
 import { registerAgentIPC, unregisterAgentIPC } from './agent';
 import {
@@ -30,6 +34,7 @@ export function registerAllIPC(): void {
   registerChatIPC();
   registerConfigIPC();
   registerSessionIPC();
+  registerSessionActivityIPC();
   registerToolIPC();
   registerAgentIPC();
   registerDefinitionsIPC();
@@ -47,6 +52,7 @@ export function unregisterAllIPC(): void {
   unregisterChatIPC();
   unregisterConfigIPC();
   unregisterSessionIPC();
+  unregisterSessionActivityIPC();
   unregisterToolIPC();
   unregisterAgentIPC();
   unregisterDefinitionsIPC();

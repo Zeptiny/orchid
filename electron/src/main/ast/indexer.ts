@@ -51,28 +51,41 @@ const SKIP_DIRS = new Set([
 // State
 // ---------------------------------------------------------------------------
 
-let _sessionInitialized = false;
-let _indexing = false;
-/** Latest progress while a run is active (for late UI subscribers / tab switches). */
-let _lastProgress: ASTIndexProgress | null = null;
+/** Projects with a complete AST index available for index-dependent tools. */
+const initializedProjects = new Set<string>();
+/** In-flight runs keyed by project. Independent projects may index concurrently. */
+const activeIndexes = new Map<string, ASTIndexProgress>();
 
-export function isIndexing(): boolean {
-  return _indexing;
+function projectKey(projectPath: string): string {
+  return path.resolve(projectPath);
+}
+
+export function isIndexing(projectPath?: string): boolean {
+  return projectPath == null
+    ? activeIndexes.size > 0
+    : activeIndexes.has(projectKey(projectPath));
 }
 
 /** Snapshot for remounting UIs mid-index. */
-export function getIndexState(): {
+export function getIndexState(projectPath?: string): {
   indexing: boolean;
   progress: ASTIndexProgress | null;
 } {
+  if (projectPath != null) {
+    const progress = activeIndexes.get(projectKey(projectPath)) ?? null;
+    return { indexing: progress != null, progress };
+  }
+  const progress = activeIndexes.size === 1
+    ? (activeIndexes.values().next().value ?? null)
+    : null;
   return {
-    indexing: _indexing,
-    progress: _indexing ? _lastProgress : null,
+    indexing: activeIndexes.size > 0,
+    progress,
   };
 }
 
-function noteProgress(progress: ASTIndexProgress): void {
-  _lastProgress = progress;
+function noteProgress(projectPath: string, progress: ASTIndexProgress): void {
+  activeIndexes.set(projectKey(projectPath), progress);
 }
 
 // ---------------------------------------------------------------------------
@@ -103,9 +116,13 @@ function makeIndexResult(): ASTIndexResult {
  * get_function) parse files directly and do not call this.
  */
 export async function ensureIndexed(projectPath?: string): Promise<void> {
-  if (_sessionInitialized) return;
-  if (_indexing) {
-    while (_indexing && !_sessionInitialized) {
+  if (!projectPath) {
+    throw new Error('projectPath is required; pass the active workspace cwd');
+  }
+  const key = projectKey(projectPath);
+  if (initializedProjects.has(key)) return;
+  if (activeIndexes.has(key)) {
+    while (activeIndexes.has(key) && !initializedProjects.has(key)) {
       await sleep(100);
     }
     return;
@@ -170,14 +187,17 @@ export interface IndexProjectOptions {
 export async function indexProject(
   opts: IndexProjectOptions = {},
 ): Promise<ASTIndexResult> {
-  if (_indexing) {
+  if (!opts.projectPath) {
+    throw new Error('projectPath is required; pass the active workspace cwd');
+  }
+  const key = projectKey(opts.projectPath);
+  if (activeIndexes.has(key)) {
     console.warn('AST indexing already in progress, skipping');
     const empty = makeIndexResult();
     empty.errors = ['Indexing already in progress'];
     return empty;
   }
-  _indexing = true;
-  _lastProgress = {
+  activeIndexes.set(key, {
     phase: 'discovering',
     done: 0,
     total: 0,
@@ -186,9 +206,9 @@ export async function indexProject(
     symbolsExtracted: 0,
     filesDeleted: 0,
     elapsedSeconds: 0,
-  };
+  });
   const trackProgress: ASTIndexProgressCallback = (progress) => {
-    noteProgress(progress);
+    noteProgress(opts.projectPath!, progress);
     try {
       opts.progressCallback?.(progress);
     } catch {
@@ -201,11 +221,8 @@ export async function indexProject(
         ...opts,
         progressCallback: trackProgress,
       });
-      _sessionInitialized = true;
+      initializedProjects.add(key);
       return result;
-    }
-    if (!opts.projectPath) {
-      throw new Error('projectPath is required; pass the active workspace cwd');
     }
     const result = await runIndexInWorker(
       opts.projectPath,
@@ -214,11 +231,10 @@ export async function indexProject(
     );
     // Worker set its own session flag; mark main-process session as ready too
     // so ensureIndexed() short-circuits after a successful run.
-    _sessionInitialized = true;
+    initializedProjects.add(key);
     return result;
   } finally {
-    _indexing = false;
-    _lastProgress = null;
+    activeIndexes.delete(key);
   }
 }
 
@@ -369,9 +385,6 @@ export async function runIndexProjectImpl(opts: {
   }
 
   result.durationSeconds = elapsed();
-  // Only meaningful when running inline on main; worker path sets this on parent.
-  _sessionInitialized = true;
-
   store.recordIndex(result.durationSeconds);
 
   console.log(
@@ -607,6 +620,6 @@ async function extractSymbols(filePath: string, content: string): Promise<Symbol
  * Reset the session initialization state (for testing).
  */
 export function resetSession(): void {
-  _sessionInitialized = false;
-  _indexing = false;
+  initializedProjects.clear();
+  activeIndexes.clear();
 }

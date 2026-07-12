@@ -4033,7 +4033,6 @@
   gap: 4px;
   flex-shrink: 0;
 }
-
 /* Mock .panel-body: padding 8px */
 .panel-body {
   min-height: 0;
@@ -4042,6 +4041,123 @@
   overflow-y: auto;
   padding: 8px;
   flex: 1 1 0;
+}
+
+/* Global activity stays visible above the scrollable session catalog. */
+.session-activity {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-default);
+  padding: 6px 8px;
+  min-width: 0;
+}
+.session-activity-heading {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 2px 4px;
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.session-activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 144px;
+  overflow-y: auto;
+}
+.session-activity-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+}
+.session-activity-select {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.session-activity-select:hover {
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+.session-activity-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+}
+.session-activity-name {
+  font-size: 11px;
+  font-weight: 600;
+}
+.session-activity-meta,
+.session-activity-status {
+  color: var(--text-secondary);
+  font-size: 9px;
+}
+.session-activity-status {
+  display: flex;
+  max-width: 88px;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  overflow: hidden;
+  text-align: right;
+  white-space: nowrap;
+}
+.session-activity-stop {
+  flex: 0 0 auto;
+  align-self: center;
+}
+.left-panel-activity-count {
+  position: relative;
+}
+
+/* Selected-session identity belongs above the scrollable conversation. */
+.session-header {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 7px 14px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--text-primary) 7%, transparent);
+  background: var(--bg-primary);
+}
+.session-header-title {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.session-header-project {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.session-header-separator {
+  color: var(--text-tertiary);
+}
+.session-header-path {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 10px;
 }
 
 /* Mock .panel-footer: padding 6px 8px */
@@ -4289,6 +4405,23 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.session-project-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 7px 3px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+}
+.session-project-header .badge {
+  flex: 0 0 auto;
+}
+.session-project-expand {
+  justify-content: flex-start;
+  margin: 1px 7px 4px;
 }
 .session-row {
   position: relative;

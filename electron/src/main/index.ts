@@ -10,7 +10,7 @@
  */
 import { app, BrowserWindow, Menu } from 'electron';
 import * as path from 'path';
-import { registerAllIPC, unregisterAllIPC, setMCPManagerRef } from './ipc';
+import { registerAllIPC, unregisterAllIPC } from './ipc';
 import {
   ensureHomeConfig,
   ConfigManager,
@@ -22,20 +22,17 @@ import {
 import { loadAgents, seedAgentsDir } from './agents/registry';
 import { loadSkills, seedSkillsDir } from './skills/registry';
 import { loadPersonalities, seedPersonalitiesDir } from './personality/registry';
-import { MCPManager } from './mcp';
+import { shutdownProjectMCPManagers } from './mcp/project-registry';
 import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
 import { initFileLogging, closeFileLogging } from './logging';
 import { registerBuiltinTools } from './tools';
 import { getBackgroundStore } from './tools/process/background-store';
 import { wireSubagentRuntime } from './agents/wire-subagents';
-import { applyWorkspaceProjectLayers } from './project/layers';
-import { canonicalizeProjectDirectory } from './project/path';
 import { getConfig } from './config/loader';
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null;
-let mcpManager: MCPManager | null = null;
 /** Periodic reclaim of USER-owned bg command stdin after idle timeout. */
 let bgIdleOwnershipTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -98,56 +95,18 @@ app.whenReady().then(async () => {
     seedPersonalitiesDir(HOME_PERSONALITIES_DIR);
     loadPersonalities();
 
-    // 3. Load config + project layers.
-    // Do NOT merge process.cwd() as a product project root (R2/R7).
-    // When sticky default_project_dir is valid, apply project .orchid.json
-    // and project agents/skills immediately (R5).
+    // 3. Initialize legacy global state from home only. A project runtime is
+    // captured at turn start, so startup must not choose one project's layers
+    // as the process-wide default for every concurrent session.
     ConfigManager.reset();
-    // Home-only pass to discover sticky default (HOME_CONFIG_DIR has no .orchid.json).
-    const homeConfig = ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
-    const stickyCanonical =
-      homeConfig.default_project_dir != null && homeConfig.default_project_dir !== ''
-        ? canonicalizeProjectDirectory(homeConfig.default_project_dir)
-        : null;
+    ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
+    const agents = loadAgents();
+    const skills = loadSkills();
 
-    let config = homeConfig;
-    let agents;
-    let skills;
-    if (stickyCanonical != null) {
-      const applied = applyWorkspaceProjectLayers(stickyCanonical);
-      config = applied.config;
-      // apply always reloads agents/skills when applied; fall back only if skipped.
-      agents =
-        applied.agents ??
-        loadAgents({
-          projectDir: path.join(stickyCanonical, '.orchid', 'agents'),
-        });
-      skills =
-        applied.skills ??
-        loadSkills({
-          projectDir: path.join(stickyCanonical, '.orchid', 'skills'),
-        });
-    } else {
-      // Unbound workspace: home agents/skills only (empty project overlay).
-      // Avoid process.cwd() project dirs as product default (R2).
-      const emptyProjectAgents = path.join(
-        HOME_CONFIG_DIR,
-        '.orchid-no-project',
-        'agents',
-      );
-      const emptyProjectSkills = path.join(
-        HOME_CONFIG_DIR,
-        '.orchid-no-project',
-        'skills',
-      );
-      agents = loadAgents({ projectDir: emptyProjectAgents });
-      skills = loadSkills({ projectDir: emptyProjectSkills });
-    }
-
-    // 4. Initialize MCP servers (async, non-blocking for window)
-    mcpManager = new MCPManager();
-    setMCPManagerRef(mcpManager);
-    registerBuiltinTools({ agents, skills, mcpManager });
+    // 4. Register the legacy tool surface. Each turn creates its own project
+    // MCP manager from its frozen ProjectRuntime, rather than sharing this
+    // startup workspace's connections with every other project.
+    registerBuiltinTools({ agents, skills, mcpManager: null });
     // Start subagent stream runner + session persistence for token usage
     wireSubagentRuntime();
 
@@ -169,16 +128,6 @@ app.whenReady().then(async () => {
         // Config / store may be unavailable during teardown
       }
     }, 10_000);
-
-    // Start MCP in background — don't block window creation
-    mcpManager
-      .startAll(config.mcp_servers as Record<string, import('./mcp/schema').MCPServerConfig>, {
-        perServerTimeout: config.mcp_per_server_timeout * 1000,
-        startupTimeout: config.mcp_startup_timeout * 1000,
-      })
-      .catch((err) => {
-        console.warn('MCP initialization failed (non-fatal):', err);
-      });
 
     // 6. Remove default File/Edit/View/Window menu bar (Linux/Windows)
     Menu.setApplicationMenu(null);
@@ -244,11 +193,7 @@ app.on('before-quit', async (event) => {
     unregisterAllIPC();
 
     // 2. Shut down MCP transports
-    if (mcpManager) {
-      await mcpManager.shutdown();
-      mcpManager = null;
-      setMCPManagerRef(null);
-    }
+    await shutdownProjectMCPManagers();
 
     // 3. Destroy auto-updater
     destroyUpdater();

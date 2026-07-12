@@ -2,7 +2,7 @@
  * Project-scoped session sidebar helpers — U6.
  */
 import { describe, it, expect } from 'vitest';
-import type { SessionSummary } from '../../src/shared/types/ipc-boundary';
+import type { SessionActivity, SessionSummary } from '../../src/shared/types/ipc-boundary';
 import {
   normalizeWorkspaceKey,
   pathsEqual,
@@ -11,6 +11,8 @@ import {
   groupSessionsByDate,
   groupSessionsByProject,
   buildPrimarySessions,
+  countProjectActivity,
+  previewProjectSessions,
   truncatePathDisplay,
 } from '../../src/renderer/utils/session-workspace';
 
@@ -128,6 +130,54 @@ describe('groupSessionsByProject', () => {
     const groups = groupSessionsByProject(sessions);
     expect(groups[0]?.label).toBe('alpha');
     expect(groups.find((g) => g.label === 'Other / Unknown')?.sessions).toHaveLength(1);
+  });
+});
+
+describe('previewProjectSessions', () => {
+  const sessions = [
+    summary({ id: 'old', name: 'Old', updatedAt: 1 }),
+    summary({ id: 'new', name: 'New', updatedAt: 3 }),
+    summary({ id: 'middle', name: 'Middle', updatedAt: 2 }),
+  ];
+
+  it('shows the most recent bounded preview until a project is expanded', () => {
+    expect(previewProjectSessions(sessions, false, 2).map((session) => session.id))
+      .toEqual(['new', 'middle']);
+    expect(previewProjectSessions(sessions, true, 2).map((session) => session.id))
+      .toEqual(['new', 'middle', 'old']);
+  });
+
+  it('keeps an older selected session in the bounded preview', () => {
+    expect(previewProjectSessions(sessions, false, 2, 'old').map((session) => session.id))
+      .toEqual(['new', 'old']);
+  });
+});
+
+describe('countProjectActivity', () => {
+  it('aggregates work, attention, and unread state without using selected workspace', () => {
+    const group = {
+      path: '/proj/alpha',
+      sessions: [summary({ id: 'a', name: 'A', cwd: '/proj/alpha' })],
+    };
+    const activity = (partial: Partial<SessionActivity> & Pick<SessionActivity, 'sessionId'>): SessionActivity => ({
+      sessionId: partial.sessionId,
+      cwd: partial.cwd ?? null,
+      state: partial.state ?? 'idle',
+      phase: partial.phase ?? null,
+      detail: partial.detail ?? null,
+      startedAt: partial.startedAt ?? null,
+      updatedAt: partial.updatedAt ?? 1,
+      completedAt: partial.completedAt ?? null,
+      unread: partial.unread ?? false,
+      backgroundProcessCount: partial.backgroundProcessCount ?? 0,
+      canCancel: partial.canCancel ?? false,
+    });
+
+    expect(countProjectActivity(group, [
+      activity({ sessionId: 'a', state: 'working' }),
+      activity({ sessionId: 'unknown', cwd: '/proj/alpha/', state: 'needs_attention', unread: true }),
+      activity({ sessionId: 'other', cwd: '/proj/beta', state: 'working', unread: true }),
+    ])).toEqual({ working: 1, attention: 1, unread: 1 });
   });
 });
 

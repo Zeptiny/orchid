@@ -16,10 +16,6 @@ import type { StreamEvent } from '../llm/orchestrator';
 import type { Agent } from '../../shared/types/agent';
 import type { Config } from '../config/schema';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import { getConfig } from '../config/loader';
-import { getRuntimeConfig } from '../config/runtime';
-import { listAgents } from '../agents/registry';
-import { appendPersonality } from '../personality/registry';
 import { resolveModelRef } from '../llm/providers';
 import { createProviderModel } from '../llm/providers-factory';
 import { MessageRole, MessageType } from '../../shared/types/message';
@@ -33,9 +29,18 @@ import {
 } from './session';
 import { importESM } from '../utils/esm-import';
 import { getBackgroundStore } from '../tools/process/background-store';
-import { getMCPManagerRef } from './mcp';
-import { getSubagentManager } from '../tools';
-import type { ChatErrorKind, ChatSendResult } from '../../shared/types/ipc';
+import type { MCPManager } from '../mcp/manager';
+import { getProjectMCPManager } from '../mcp/project-registry';
+import { createBuiltinToolRegistry, getSubagentManager } from '../tools';
+import type { ToolRegistry } from '../tools/registry';
+import type {
+  ChatErrorKind,
+  ChatSendResult,
+  ChatSnapshot,
+  ChatSnapshotState,
+  ChatStreamSegmentSnapshot,
+  ChatToolCallSnapshot,
+} from '../../shared/types/ipc';
 import {
   clearAllChatHistory,
   getChatHistory,
@@ -49,16 +54,36 @@ import {
   makeUserMessage,
 } from '../llm/message-factories';
 import { clearDraftCwd, isWorkspaceBound } from '../project/workspace';
-import { applyWorkspaceProjectLayers } from '../project/layers';
 import type { ToolExecutionContext } from '../tools/types';
+import {
+  getProjectRuntimeRegistry,
+  hydrateProjectRuntime,
+  type ProjectRuntime,
+} from '../project/runtime';
+import {
+  completeSessionActivity,
+  publishSessionActivity,
+} from './session-activity';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
 const chatSendSchema = z.object({
   message: z.string().min(1, 'Message must be non-empty'),
-  sessionId: z.string().optional(),
+  sessionId: z.string().uuid().optional(),
   /** Preferred model when lazy-creating a session from draft mode. */
   model: z.string().optional(),
+});
+
+const chatCancelSchema = z.object({
+  sessionId: z.string().uuid().optional(),
+});
+
+const chatSnapshotSchema = z.object({
+  sessionId: z.string().uuid().optional(),
+});
+
+const chatStopSchema = z.object({
+  sessionId: z.string().uuid(),
 });
 
 const bgCommandSnapshotSchema = z.object({
@@ -69,6 +94,16 @@ const bgCommandSnapshotSchema = z.object({
 // ── Active actor tracking ────────────────────────────────────────────────────
 
 type ActiveAgent = {
+  /** Stable execution owner; all persistence and events are addressed by it. */
+  sessionId: string;
+  /** Window that initiated the turn (used only as an event destination). */
+  windowId: string;
+  /** Chain/turn identity used to order snapshot and stream events. */
+  turnId: string;
+  /** Project working directory frozen when this turn began. */
+  cwd: string;
+  /** Epoch timestamp for live elapsed-time displays. */
+  startedAt: number;
   actor: ActorRefFrom<typeof agentMachine>;
   interruptActor: ActorRefFrom<typeof interruptMachine>;
   abortController: AbortController;
@@ -95,6 +130,12 @@ type ActiveAgent = {
   finalized: boolean;
   /** Monotonic generation for this window; stale agents must not emit IPC. */
   generation: number;
+  /** Per-turn sequence used to order live events against snapshots. */
+  eventSequence: number;
+  /** Current tool cards, kept outside the renderer so a session can rehydrate. */
+  toolCalls: Map<string, ChatToolCallSnapshot>;
+  /** Chronological live timeline (text, thinking, and tools) for rehydration. */
+  streamSegments: ChatStreamSegmentSnapshot[];
   unsubscribe: () => void;
   interruptUnsubscribe: () => void;
   interruptResetTimer: ReturnType<typeof setTimeout> | null;
@@ -103,22 +144,22 @@ type ActiveAgent = {
 const activeAgents = new Map<string, ActiveAgent>();
 
 /**
- * Per-window generation counter. Incremented on every new chat:send and on
+ * Per-session generation counter. Incremented on every new chat:send and on
  * forceAbort so stale actor/interrupt subscriptions can drop events even if
  * they fire after the agent was replaced or torn down.
  */
 const agentGenerations = new Map<string, number>();
 
-function nextAgentGeneration(windowId: string): number {
-  const gen = (agentGenerations.get(windowId) ?? 0) + 1;
-  agentGenerations.set(windowId, gen);
+function nextAgentGeneration(sessionId: string): number {
+  const gen = (agentGenerations.get(sessionId) ?? 0) + 1;
+  agentGenerations.set(sessionId, gen);
   return gen;
 }
 
-function disposeActiveAgent(windowId: string, active: ActiveAgent): void {
+function disposeActiveAgent(sessionId: string, active: ActiveAgent): void {
   // Only clear the map slot if we still own it (a newer agent may have replaced us).
-  if (activeAgents.get(windowId) === active) {
-    activeAgents.delete(windowId);
+  if (activeAgents.get(sessionId) === active) {
+    activeAgents.delete(sessionId);
   }
   active.unsubscribe();
   active.interruptUnsubscribe();
@@ -135,21 +176,124 @@ function disposeActiveAgent(windowId: string, active: ActiveAgent): void {
  * Whether this agent may still stream IPC to the renderer.
  * Drops events from cancelled, finalized, replaced, or generation-stale agents.
  */
-function canEmitStreamEvents(windowId: string, active: ActiveAgent): boolean {
+function canEmitStreamEvents(sessionId: string, active: ActiveAgent): boolean {
   return (
     !active.agentCancelled &&
     !active.finalized &&
-    activeAgents.get(windowId) === active &&
-    agentGenerations.get(windowId) === active.generation
+    activeAgents.get(sessionId) === active &&
+    agentGenerations.get(sessionId) === active.generation
   );
 }
 
 /** True when this agent still occupies the window's active slot (may be cancelled). */
-function isCurrentAgent(windowId: string, active: ActiveAgent): boolean {
+function isCurrentAgent(sessionId: string, active: ActiveAgent): boolean {
   return (
-    activeAgents.get(windowId) === active &&
-    agentGenerations.get(windowId) === active.generation
+    activeAgents.get(sessionId) === active &&
+    agentGenerations.get(sessionId) === active.generation
   );
+}
+
+function nextEventIdentity(active: ActiveAgent) {
+  active.eventSequence += 1;
+  return {
+    sessionId: active.sessionId,
+    turnId: active.turnId,
+    sequence: active.eventSequence,
+  };
+}
+
+function sendTurnEvent(
+  webContents: WebContents,
+  active: ActiveAgent,
+  channel: string,
+  payload: Record<string, unknown>,
+): void {
+  const identity = nextEventIdentity(active);
+  if (canSend(webContents)) {
+    webContents.send(channel, { ...identity, ...payload });
+  }
+}
+
+function appendTextSegment(
+  active: ActiveAgent,
+  kind: 'text' | 'thinking',
+  content: string,
+): void {
+  const last = active.streamSegments.at(-1);
+  if (last?.kind === kind) {
+    active.streamSegments[active.streamSegments.length - 1] = {
+      ...last,
+      content: last.content + content,
+    };
+    return;
+  }
+  active.streamSegments.push({ kind, id: crypto.randomUUID(), content });
+}
+
+function ensureToolSnapshot(
+  active: ActiveAgent,
+  toolCallId: string,
+  toolName: string,
+): ChatToolCallSnapshot {
+  const existing = active.toolCalls.get(toolCallId);
+  if (existing) return existing;
+  const next: ChatToolCallSnapshot = {
+    toolCallId,
+    toolName,
+    status: 'generating',
+    partialArgs: '',
+    args: '',
+    result: null,
+    error: null,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+  };
+  active.toolCalls.set(toolCallId, next);
+  active.streamSegments.push({ kind: 'tool', toolCallId });
+  return next;
+}
+
+function updateToolSnapshot(
+  active: ActiveAgent,
+  toolCallId: string,
+  toolName: string,
+  patch: Partial<ChatToolCallSnapshot>,
+): ChatToolCallSnapshot {
+  const existing = ensureToolSnapshot(active, toolCallId, toolName);
+  const next = { ...existing, ...patch, toolCallId };
+  active.toolCalls.set(toolCallId, next);
+  return next;
+}
+
+function snapshotState(active: ActiveAgent): ChatSnapshotState {
+  const state = String(active.actor.getSnapshot().value);
+  if (state === 'error') return 'error';
+  if (state === 'idle') return 'idle';
+  return 'streaming';
+}
+
+function snapshotForAgent(active: ActiveAgent): ChatSnapshot {
+  const context = active.actor.getSnapshot().context as AgentContext;
+  const interruptState = active.interruptActor.getSnapshot().value as
+    | 'idle'
+    | 'confirmAgent'
+    | 'confirmSubagents';
+  return {
+    sessionId: active.sessionId,
+    turnId: active.turnId,
+    sequence: active.eventSequence,
+    state: snapshotState(active),
+    response: context.response ?? '',
+    thinking: context.thinking ?? '',
+    toolCalls: [...active.toolCalls.values()].map((tool) => ({ ...tool })),
+    streamSegments: active.streamSegments.map((segment) => ({ ...segment })),
+    usage: (context.usage as Usage | null) ?? null,
+    error: context.error ?? null,
+    interruptState,
+    cwd: active.cwd,
+    startedAt: active.startedAt,
+    interrupted: active.agentCancelled,
+  };
 }
 
 /**
@@ -220,28 +364,29 @@ function webContentsForWindowId(windowId: string): WebContents | null {
  * mint a duplicate INTERRUPTED chain.
  */
 export function forceAbortChat(windowId: string): void {
-  // Multi-cwd safety: cancel all non-terminal subagents so they cannot keep
-  // streaming tools or writing chains into a newly selected session after
-  // switch/clear. Runs even when there is no active agent (subagents may
-  // outlive the parent turn). onChange + sessionId-scoped persist still write
-  // the interrupted state back to each record's owning session.
+  const sessionId = getSessionManager().getActive(windowId)?.id;
+  if (sessionId) forceAbortSession(sessionId);
+}
+
+/** Abort exactly one session without affecting work in any other session. */
+export function forceAbortSession(sessionId: string): void {
   try {
-    getSubagentManager().cancelRunning();
+    getSubagentManager().cancelRunning(sessionId);
   } catch (err) {
     console.debug(
-      'forceAbortChat subagent cancel failed (non-fatal):',
+      'forceAbortSession subagent cancel failed (non-fatal):',
       err,
     );
   }
 
-  const existing = activeAgents.get(windowId);
+  const existing = activeAgents.get(sessionId);
   if (!existing) return;
 
   // Already finalized (done/error/cancel) — only dispose; do not re-persist.
   if (existing.finalized) {
     existing.agentCancelled = true;
-    nextAgentGeneration(windowId);
-    disposeActiveAgent(windowId, existing);
+    nextAgentGeneration(sessionId);
+    disposeActiveAgent(sessionId, existing);
     return;
   }
 
@@ -254,9 +399,9 @@ export function forceAbortChat(windowId: string): void {
       const fullHistory = [...existing.messages, ...existing.turnMessages];
       if (fullHistory.length > 0) {
         try {
-          const wc = webContentsForWindowId(windowId);
+          const wc = webContentsForWindowId(existing.windowId);
           persistTurnConversation(
-            windowId,
+            sessionId,
             fullHistory,
             turnMessagesFromAgent(existing),
             ChainStatus.INTERRUPTED,
@@ -274,15 +419,80 @@ export function forceAbortChat(windowId: string): void {
     }
   } catch (err) {
     console.debug(
-      'forceAbortChat persistence attempt failed (non-fatal):',
+      'forceAbortSession persistence attempt failed (non-fatal):',
       err,
     );
   }
 
   existing.agentCancelled = true;
   existing.finalized = true;
-  nextAgentGeneration(windowId);
-  disposeActiveAgent(windowId, existing);
+  completeSessionActivity(
+    sessionId,
+    getSessionManager().getActive(existing.windowId)?.id !== sessionId,
+  );
+  nextAgentGeneration(sessionId);
+  disposeActiveAgent(sessionId, existing);
+}
+
+/**
+ * Immediately stop one session for the global Activity surface.
+ *
+ * Unlike Esc cancellation, this does not require confirmation clicks. It keeps
+ * all writes and terminal events on the stopped session's originating window.
+ */
+export function forceStopSession(sessionId: string): boolean {
+  const existing = activeAgents.get(sessionId);
+  const cancelledSubagents = getSubagentManager().cancelRunning(sessionId);
+  if (!existing) {
+    if (cancelledSubagents.length > 0) {
+      completeSessionActivity(sessionId, true);
+    }
+    return cancelledSubagents.length > 0;
+  }
+
+  const ownerWebContents =
+    webContentsForWindowId(existing.windowId) ?? null;
+  existing.agentCancelled = true;
+  existing.finalized = true;
+  const context = existing.actor.getSnapshot().context as AgentContext;
+  existing.actor.send({ type: 'CANCEL' });
+  flushPartialTurnContent(existing, context);
+  const fullHistory = [...existing.messages, ...existing.turnMessages];
+  if (fullHistory.length > 0) {
+    persistTurnConversation(
+      sessionId,
+      fullHistory,
+      turnMessagesFromAgent(existing),
+      ChainStatus.INTERRUPTED,
+      existing.agent,
+      existing.model,
+      ownerWebContents ?? undefined,
+    );
+  }
+  completeSessionActivity(
+    sessionId,
+    getSessionManager().getActive(existing.windowId)?.id !== sessionId,
+  );
+
+  if (ownerWebContents) {
+    sendTurnEvent(ownerWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
+      type: 'done',
+      response: context.response ?? '',
+      interrupted: true,
+      usage: context.usage ?? null,
+    });
+    sendTurnEvent(ownerWebContents, existing, IPC_CHANNELS.CHAT_STATE, {
+      state: 'idle',
+      response: context.response ?? '',
+      error: null,
+      interruptState: 'idle',
+      cwd: existing.cwd,
+    });
+  }
+
+  nextAgentGeneration(sessionId);
+  disposeActiveAgent(sessionId, existing);
+  return true;
 }
 
 function canSend(webContents: WebContents): boolean {
@@ -302,10 +512,31 @@ function canSend(webContents: WebContents): boolean {
 function ensureActiveSession(
   webContents: WebContents,
   preferredModel?: string,
-): { ok: true; cwd: string } | { ok: false; result: ChatSendResult } {
+  requestedSessionId?: string,
+): {
+  ok: true;
+  cwd: string;
+  session: import('../../shared/types/session').Session;
+  runtime: ProjectRuntime;
+} | { ok: false; result: ChatSendResult } {
   const windowId = String(webContents.id);
   const manager = getSessionManager();
-  const active = manager.getActive();
+  let active = manager.getActive(windowId);
+  if (requestedSessionId) {
+    if (active?.id !== requestedSessionId) {
+      active = manager.switchTo(requestedSessionId, windowId);
+    }
+    if (!active) {
+      return {
+        ok: false,
+        result: {
+          status: 'error',
+          error: 'The requested session no longer exists.',
+          kind: 'session_not_found',
+        },
+      };
+    }
+  }
   const workspace = resolveWindowWorkspace(windowId);
 
   if (!isWorkspaceBound(workspace) || workspace.cwd == null) {
@@ -320,9 +551,9 @@ function ensureActiveSession(
     };
   }
 
-  // R5: keep project config/agents/skills aligned with the resolved workspace
-  // (e.g. after New Chat returns to sticky default following a different session).
-  applyWorkspaceProjectLayers(workspace.cwd);
+  // Resolve once at turn start. The returned snapshot is independent from
+  // whatever project another window selects while this turn is running.
+  const runtime = getProjectRuntimeRegistry().get(workspace.cwd);
 
   if (active) {
     // Legacy sessions may have null/empty cwd while the window workspace is
@@ -330,21 +561,20 @@ function ensureActiveSession(
     if (!active.cwd || active.cwd.trim() === '') {
       manager.changeCwd(active.id, workspace.cwd);
     }
-    return { ok: true, cwd: workspace.cwd };
+    return { ok: true, cwd: workspace.cwd, session: active, runtime };
   }
 
-  const config = getConfig();
   const model =
     (preferredModel && preferredModel.trim()) ||
-    config.default_model ||
+    runtime.config.default_model ||
     '';
-  const session = manager.create(model, { cwd: workspace.cwd });
+  const session = manager.create(model, { cwd: workspace.cwd }, windowId);
   // Draft was promoted into the new session.
   clearDraftCwd(windowId);
   if (canSend(webContents)) {
     webContents.send(IPC_CHANNELS.SESSION_CREATED, { session });
   }
-  return { ok: true, cwd: workspace.cwd };
+  return { ok: true, cwd: workspace.cwd, session, runtime };
 }
 
 function classifyErrorKind(title: string | null | undefined, detail: string): ChatErrorKind {
@@ -389,7 +619,7 @@ function turnMessagesFromAgent(agent: ActiveAgent): Message[] {
  *   creates one via persistTurn when startChain was skipped).
  */
 function persistTurnConversation(
-  windowId: string,
+  sessionId: string,
   fullHistory: Message[],
   turnMessages: Message[],
   status: ChainStatus,
@@ -397,7 +627,7 @@ function persistTurnConversation(
   model?: string,
   webContents?: WebContents,
 ): void {
-  setChatHistory(windowId, fullHistory);
+  setChatHistory(sessionId, fullHistory);
   try {
     const sessionManager = getSessionManager();
     const updated = sessionManager.persistTurn({
@@ -407,7 +637,7 @@ function persistTurnConversation(
       agentName: agent.name,
       agentType: agent.type,
       agentTier: agent.tier,
-    });
+    }, sessionId);
     if (updated && webContents && canSend(webContents)) {
       webContents.send(IPC_CHANNELS.SESSION_UPDATED, { session: updated });
     }
@@ -417,9 +647,9 @@ function persistTurnConversation(
 }
 
 /** Flatten all session chains — never only the active/last chain. */
-function historyFromActiveSession(): Message[] {
+function historyFromSession(sessionId: string): Message[] {
   try {
-    const session = getSessionManager().getActive();
+    const session = getSessionManager().getSession(sessionId);
     if (!session) return [];
     return flattenSessionMessages(session);
   } catch {
@@ -428,9 +658,9 @@ function historyFromActiveSession(): Message[] {
 }
 
 /** Notify renderer of live session (multi-chain) state after startChain. */
-function emitSessionUpdated(webContents: WebContents): void {
+function emitSessionUpdated(webContents: WebContents, sessionId: string): void {
   try {
-    const session = getSessionManager().getActive();
+    const session = getSessionManager().getSession(sessionId);
     if (session && canSend(webContents)) {
       webContents.send(IPC_CHANNELS.SESSION_UPDATED, { session });
     }
@@ -464,6 +694,8 @@ function createStreamFn(
   config: Config,
   messages: Message[],
   turnCtx: ToolExecutionContext,
+  registry: ToolRegistry,
+  mcpManager: MCPManager,
   turnModel?: string | null,
 ) {
   // Freeze for the whole multi-step agent loop — mid-turn session switch must
@@ -508,9 +740,10 @@ function createStreamFn(
       systemPrompt: params.systemPrompt,
       context,
       config,
-      registry: (await import('../tools')).toolRegistry,
-      mcpManager: getMCPManagerRef(),
+      registry,
+      mcpManager,
       sessionId: frozenSessionId,
+      projectRuntime: turnCtx.projectRuntime,
       agentScopeId: frozenAgentScopeId,
       abortSignal: params.abortSignal,
       modelInstance,
@@ -526,11 +759,13 @@ function createStreamFn(
  * Creates an ExecuteFn compatible with the agent machine.
  * Dispatches to the tool registry with the frozen turn context.
  */
-function createExecuteFn(turnCtx: ToolExecutionContext) {
+function createExecuteFn(
+  turnCtx: ToolExecutionContext,
+  registry: ToolRegistry,
+) {
   return async (toolName: string, args: string) => {
-    const { toolRegistry } = await import('../tools');
     const { normalizeToolHandlerResult } = await import('../tools/result');
-    const tool = toolRegistry.get(toolName);
+    const tool = registry.get(toolName);
     if (!tool) {
       return { content: `Tool '${toolName}' not found`, isError: true };
     }
@@ -539,7 +774,7 @@ function createExecuteFn(turnCtx: ToolExecutionContext) {
       const parsedArgs = JSON.parse(args);
 
       // Validate args against the tool's Zod schema before execution
-      const validation = toolRegistry.validate(toolName, parsedArgs);
+      const validation = registry.validate(toolName, parsedArgs);
       if (!validation.ok) {
         return { content: validation.error, isError: true };
       }
@@ -551,6 +786,17 @@ function createExecuteFn(turnCtx: ToolExecutionContext) {
       return { content: `Tool execution failed: ${errorMessage}`, isError: true };
     }
   };
+}
+
+function appendProjectPersonality(
+  agentSystemPrompt: string,
+  runtime: ProjectRuntime,
+): string {
+  const name = runtime.config.personality;
+  const personality = name ? runtime.personalities.get(name) : undefined;
+  return personality
+    ? `${agentSystemPrompt}\n\n## Personality\n\n${personality}\n`
+    : agentSystemPrompt;
 }
 
 // ── Auto-naming callback factory ─────────────────────────────────────────────
@@ -629,33 +875,60 @@ export function registerChatIPC(): void {
       throw new Error(`Invalid chat:send payload: ${parsed.error.message}`);
     }
 
-    const { message, model: preferredModel } = parsed.data;
+    const {
+      message,
+      model: preferredModel,
+      sessionId: requestedSessionId,
+    } = parsed.data;
 
     // Cancel any existing actor for this window
     const windowId = String(webContents.id);
-    const existing = activeAgents.get(windowId);
-
     // Lazy session create + workspace gate (R2/R3): require valid workspace;
     // create with that cwd; if unbound, fail without streaming.
-    // Must run before getConfig() so project layers from the resolved workspace
-    // are applied and the turn freezes post-rebind config.
-    const sessionGate = ensureActiveSession(webContents, preferredModel);
+    // Resolves the session and captures its project runtime before actor setup.
+    const sessionGate = ensureActiveSession(
+      webContents,
+      preferredModel,
+      requestedSessionId,
+    );
     if (!sessionGate.ok) {
       return sessionGate.result;
     }
+    const sessionId = sessionGate.session.id;
+    const existing = activeAgents.get(sessionId);
+    publishSessionActivity(sessionId, {
+      cwd: sessionGate.cwd,
+      state: 'working',
+      phase: 'agent',
+      detail: 'Generating response',
+      startedAt: Date.now(),
+      completedAt: null,
+      unread: false,
+      canCancel: true,
+    });
 
-    // Capture config after ensureActiveSession (layers may have reloaded it).
-    const config = await getRuntimeConfig();
+    // Freeze all project-bound definitions for the turn. Other windows may
+    // navigate to different projects while this actor is still streaming.
+    const runtime = await hydrateProjectRuntime(sessionGate.runtime);
+    const config = runtime.config;
+    const agents = [...runtime.agents.values()];
+    const mcpManager = getProjectMCPManager(sessionGate.runtime);
+    const turnRegistry = createBuiltinToolRegistry({
+      agents: new Map(runtime.agents),
+      skills: new Map(runtime.skills),
+      subagentManager: getSubagentManager(),
+      mcpManager,
+    });
 
     // Prefer live window history; fall back to flattened session chains.
     // If a prior agent is still streaming, forceAbort persists its partial
     // turn as INTERRUPTED (turn-local) before we open a new chain — never
     // dispose without persist (multi-chain orphan user-only INTERRUPTED).
     if (existing) {
-      forceAbortChat(windowId);
+      forceAbortSession(sessionId);
     }
     const existingMessages: Message[] =
-      getChatHistory(windowId) ?? historyFromActiveSession();
+      getChatHistory(sessionId) ?? historyFromSession(sessionId);
 
     // Build message history: existing messages + new user message
     const userMessage = makeUserMessage(message);
@@ -663,7 +936,6 @@ export function registerChatIPC(): void {
     const messages = [...existingMessages, userMessage];
 
     // Get or create agent (default to "general" agent)
-    const agents = listAgents();
     const agent = agents.find((a) => a.name === 'general') ?? agents[0] ?? {
       name: 'general',
       type: 'subagent' as const,
@@ -677,10 +949,11 @@ export function registerChatIPC(): void {
     // Freeze turn tool/prompt context + model at send time (R6): mid-turn
     // session switch must not rebind tools, model, or working_directory.
     const sessionManager = getSessionManager();
-    const activeSession = sessionManager.getActive();
+    const activeSession = sessionGate.session;
     const turnCtx: ToolExecutionContext = {
       cwd: sessionGate.cwd,
-      sessionId: activeSession?.id,
+      sessionId,
+      projectRuntime: runtime,
       agentScopeId: 'main',
     };
     const turnModel = activeSession?.model ?? config.default_model ?? null;
@@ -688,29 +961,39 @@ export function registerChatIPC(): void {
 
     // Multi-chain: open a new ACTIVE chain for this user turn (Python `_start_chain`).
     // Subagent parent_chain_index attributes to this chain while it is active.
+    let turnId: string = crypto.randomUUID();
     try {
-      sessionManager.startChain({
+      const chain = sessionManager.startChain({
         model: turnModelId,
         agentName: agent.name,
         agentType: agent.type,
         agentTier: agent.tier,
         messages: [userMessage],
-      });
-      emitSessionUpdated(webContents);
+      }, sessionId);
+      turnId = chain?.id ?? turnId;
+      emitSessionUpdated(webContents, sessionId);
     } catch (err) {
       console.debug('startChain failed (non-fatal):', err);
     }
 
     // Create the agent actor with message history.
-    // Append the configured personality (from ~/.orchid/personalities/) like Python.
+    // Personality is read from the captured project snapshot, never the
+    // mutable global registry used by the settings surface.
     const abortController = new AbortController();
     const baseSystemPrompt = agent.system_prompt || 'You are a helpful assistant.';
     const actor = createActor(agentMachine, {
       input: {
         agent,
-        systemPrompt: appendPersonality(baseSystemPrompt, config.personality),
-        streamFn: createStreamFn(config, messages, turnCtx, turnModel),
-        executeFn: createExecuteFn(turnCtx),
+        systemPrompt: appendProjectPersonality(baseSystemPrompt, runtime),
+        streamFn: createStreamFn(
+          config,
+          messages,
+          turnCtx,
+          turnRegistry,
+          mcpManager,
+          turnModel,
+        ),
+        executeFn: createExecuteFn(turnCtx, turnRegistry),
       },
     });
 
@@ -728,8 +1011,14 @@ export function registerChatIPC(): void {
     let lastStreamingToolCallId: string | null = null;
     const lastStreamingToolArgLength = new Map<string, number>();
     let lastToolUpdateSequence = 0;
-    const generation = nextAgentGeneration(windowId);
+    let lastActivityKey = 'streaming:agent:Generating response';
+    const generation = nextAgentGeneration(sessionId);
     const activeAgent: ActiveAgent = {
+      sessionId,
+      windowId,
+      turnId,
+      cwd: turnCtx.cwd,
+      startedAt: Date.now(),
       actor,
       interruptActor,
       abortController,
@@ -745,11 +1034,14 @@ export function registerChatIPC(): void {
       agentCancelled: false,
       finalized: false,
       generation,
+      eventSequence: 0,
+      toolCalls: new Map(),
+      streamSegments: [],
       unsubscribe: () => subscription?.unsubscribe(),
       interruptUnsubscribe: () => interruptSubscription?.unsubscribe(),
       interruptResetTimer: null,
     };
-    activeAgents.set(windowId, activeAgent);
+    activeAgents.set(sessionId, activeAgent);
 
     /** Snapshot any response text that arrived before the next tool into turnMessages. */
     const flushResponseSegment = (fullResponse: string, attachUsage: Usage | null = null) => {
@@ -810,7 +1102,7 @@ export function registerChatIPC(): void {
       const turnExtras = [...activeAgent.turnMessages];
       const fullHistory = [...messages, ...turnExtras];
       persistTurnConversation(
-        windowId,
+        sessionId,
         fullHistory,
         turnMessagesFromAgent(activeAgent),
         opts.interrupted ? ChainStatus.INTERRUPTED : ChainStatus.COMPLETED,
@@ -819,9 +1111,13 @@ export function registerChatIPC(): void {
         webContents,
       );
       activeAgent.messages = fullHistory;
+      completeSessionActivity(
+        sessionId,
+        getSessionManager().getActive(windowId)?.id !== sessionId,
+      );
 
-      if (opts.sendDone && canSend(webContents)) {
-        webContents.send(IPC_CHANNELS.CHAT_DONE, {
+      if (opts.sendDone) {
+        sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_DONE, {
           type: 'done',
           response: opts.response,
           interrupted: opts.interrupted,
@@ -834,7 +1130,7 @@ export function registerChatIPC(): void {
         const sessionManager = getSessionManager();
         const generateTitle = createGenerateTitleCallback(config, fullHistory);
         sessionManager
-          .autoNameActive(generateTitle)
+          .autoName(sessionId, generateTitle)
           .then((updated) => {
             if (updated && canSend(webContents)) {
               webContents.send(IPC_CHANNELS.SESSION_RENAMED, {
@@ -852,7 +1148,7 @@ export function registerChatIPC(): void {
     // Track interrupt machine state changes and forward to renderer
     interruptSubscription = interruptActor.subscribe((interruptSnapshot) => {
       // Drop events from replaced/aborted agents (session switch, newer turn).
-      if (!isCurrentAgent(windowId, activeAgent)) {
+      if (!isCurrentAgent(sessionId, activeAgent)) {
         return;
       }
 
@@ -876,45 +1172,60 @@ export function registerChatIPC(): void {
         activeAgent.interruptResetTimer = interruptResetTimer;
       } else if (activeAgent.agentCancelled) {
         queueMicrotask(() => {
-          if (activeAgents.get(windowId) === activeAgent) {
-            disposeActiveAgent(windowId, activeAgent);
+          if (activeAgents.get(sessionId) === activeAgent) {
+            disposeActiveAgent(sessionId, activeAgent);
           }
         });
       }
 
       // Re-send CHAT_STATE with updated interrupt state
       const context = actor.getSnapshot().context as AgentContext;
-      if (canSend(webContents)) {
-        webContents.send(IPC_CHANNELS.CHAT_STATE, {
+      sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_STATE, {
           state: actor.getSnapshot().value,
           response: context.response,
           error: context.error,
           interruptState,
           cwd: turnCtx.cwd,
-        });
-      }
+      });
     });
 
     // Subscribe to state changes and stream chunks to renderer
     subscription = actor.subscribe((snapshot) => {
       // Drop late events from cancelled, finalized, or generation-stale agents so
       // CHAT_CHUNK cannot leak across session switches / overlapping turns.
-      if (!canEmitStreamEvents(windowId, activeAgent)) {
+      if (!canEmitStreamEvents(sessionId, activeAgent)) {
         return;
       }
 
       const context = snapshot.context as AgentContext;
+      const activityPhase = snapshot.value === 'toolExecuting' ? 'tool' : 'agent';
+      const activityDetail =
+        activityPhase === 'tool'
+          ? `Running ${context.currentToolCall?.toolName ?? 'tool'}`
+          : context.streamingToolCall?.toolName
+            ? `Preparing ${context.streamingToolCall.toolName}`
+            : 'Generating response';
+      const activityKey = `${String(snapshot.value)}:${activityPhase}:${activityDetail}`;
+      if (activityKey !== lastActivityKey) {
+        lastActivityKey = activityKey;
+        publishSessionActivity(sessionId, {
+          cwd: turnCtx.cwd,
+          state: 'working',
+          phase: activityPhase,
+          detail: activityDetail,
+          canCancel: true,
+        });
+      }
 
       // Send incremental text updates
       if (context.response.length > lastSentLength) {
         const newContent = context.response.slice(lastSentLength);
         lastSentLength = context.response.length;
-        if (canSend(webContents)) {
-          webContents.send(IPC_CHANNELS.CHAT_CHUNK, {
+        appendTextSegment(activeAgent, 'text', newContent);
+        sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_CHUNK, {
             type: 'chunk',
             data: newContent,
-          });
-        }
+        });
       }
 
       // Send incremental reasoning/thinking updates → Thought widgets
@@ -922,12 +1233,11 @@ export function registerChatIPC(): void {
       if (thinking.length > lastThinkingLength) {
         const newThinking = thinking.slice(lastThinkingLength);
         lastThinkingLength = thinking.length;
-        if (canSend(webContents)) {
-          webContents.send(IPC_CHANNELS.CHAT_THINKING, {
+        appendTextSegment(activeAgent, 'thinking', newThinking);
+        sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_THINKING, {
             type: 'thinking',
             data: newThinking,
-          });
-        }
+        });
       }
 
       // Send state transitions (includes interrupt machine state)
@@ -935,25 +1245,21 @@ export function registerChatIPC(): void {
         | 'idle'
         | 'confirmAgent'
         | 'confirmSubagents';
-      if (canSend(webContents)) {
-        webContents.send(IPC_CHANNELS.CHAT_STATE, {
+      sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_STATE, {
           state: snapshot.value,
           response: context.response,
           error: context.error,
           interruptState,
           cwd: turnCtx.cwd,
-        });
-      }
+      });
 
       // Forward usage data to renderer when it changes
       if (context.usage && context.usage !== lastUsage) {
         lastUsage = context.usage;
-        if (canSend(webContents)) {
-          webContents.send(IPC_CHANNELS.CHAT_USAGE, {
+        sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_USAGE, {
             type: 'usage',
             usage: context.usage,
-          });
-        }
+        });
       }
 
       // Forward tool call streaming events to renderer
@@ -963,20 +1269,23 @@ export function registerChatIPC(): void {
           // New tool call started streaming
           lastStreamingToolCallId = stc.toolCallId;
           lastStreamingToolArgLength.set(stc.toolCallId, 0);
-          if (canSend(webContents)) {
-            webContents.send(IPC_CHANNELS.CHAT_TOOL_CALL_START, {
+          ensureToolSnapshot(activeAgent, stc.toolCallId, stc.toolName);
+          sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_START, {
               type: 'tool_call_start',
               toolCallId: stc.toolCallId,
               toolName: stc.toolName,
-            });
-          }
+          });
         }
         // Send only the new delta. The machine stores accumulated args.
         const previousLength = lastStreamingToolArgLength.get(stc.toolCallId) ?? 0;
         const argsDelta = stc.partialArgs.slice(previousLength);
-        if (argsDelta && canSend(webContents)) {
+        if (argsDelta) {
           lastStreamingToolArgLength.set(stc.toolCallId, stc.partialArgs.length);
-          webContents.send(IPC_CHANNELS.CHAT_TOOL_CALL_DELTA, {
+          const current = ensureToolSnapshot(activeAgent, stc.toolCallId, stc.toolName);
+          updateToolSnapshot(activeAgent, stc.toolCallId, stc.toolName, {
+            partialArgs: current.partialArgs + argsDelta,
+          });
+          sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_DELTA, {
             type: 'tool_call_delta',
             toolCallId: stc.toolCallId,
             argsDelta,
@@ -995,17 +1304,26 @@ export function registerChatIPC(): void {
         const update = context.toolLifecycleUpdate;
         lastToolUpdateSequence = update.sequence;
 
-        if (canSend(webContents)) {
-          webContents.send(IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, {
-            type: 'tool_call_update',
-            toolCallId: update.toolCallId,
-            toolName: update.toolName,
+        updateToolSnapshot(activeAgent, update.toolCallId, update.toolName ?? 'unknown', {
+          toolName: update.toolName ?? 'unknown',
+          status: update.status,
+          args: update.args ?? '',
+          result: update.result ?? null,
+          error: update.error ?? null,
+          finishedAt:
+            update.status === 'completed' || update.status === 'failed'
+              ? new Date().toISOString()
+              : null,
+        });
+        sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, {
+          type: 'tool_call_update',
+          toolCallId: update.toolCallId,
+          toolName: update.toolName,
             status: update.status,
             args: update.args,
             result: update.result,
             error: update.error,
-          });
-        }
+        });
 
         // Record tool call/result messages once per lifecycle event.
         // Flush any assistant text that streamed *before* this tool so history
@@ -1082,7 +1400,7 @@ export function registerChatIPC(): void {
           sendDone: true,
         });
         queueMicrotask(() => {
-          disposeActiveAgent(windowId, activeAgent);
+          disposeActiveAgent(sessionId, activeAgent);
         });
       }
 
@@ -1091,19 +1409,24 @@ export function registerChatIPC(): void {
         activeAgent.finalized = true;
         const detail = context.error ?? 'Unknown error';
         const title = context.errorTitle ?? 'Stream Error';
-        if (canSend(webContents)) {
-          webContents.send(IPC_CHANNELS.CHAT_ERROR, {
-            type: 'error',
-            error: detail,
-            title,
-            kind: classifyErrorKind(title, detail),
-          });
-        }
+        sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_ERROR, {
+          type: 'error',
+          error: detail,
+          title,
+          kind: classifyErrorKind(title, detail),
+        });
+        publishSessionActivity(sessionId, {
+          cwd: turnCtx.cwd,
+          state: 'needs_attention',
+          phase: 'agent',
+          detail: title || detail,
+          canCancel: false,
+        });
         // Persist turn so far: only uncommitted assistant text (same as cancel/finalize).
         flushPartialTurnContent(activeAgent, context);
         const fullHistory = [...messages, ...activeAgent.turnMessages];
         persistTurnConversation(
-          windowId,
+          sessionId,
           fullHistory,
           turnMessagesFromAgent(activeAgent),
           ChainStatus.FAILED,
@@ -1112,7 +1435,7 @@ export function registerChatIPC(): void {
           webContents,
         );
         queueMicrotask(() => {
-          disposeActiveAgent(windowId, activeAgent);
+          disposeActiveAgent(sessionId, activeAgent);
         });
       }
     });
@@ -1122,30 +1445,69 @@ export function registerChatIPC(): void {
     interruptActor.start();
 
     // Immediate state so the renderer gets cwd/model chrome before first chunk
-    if (canSend(webContents)) {
-      webContents.send(IPC_CHANNELS.CHAT_STATE, {
-        state: 'streaming',
-        response: '',
-        error: null,
-        interruptState: 'idle',
-        cwd: turnCtx.cwd,
-      });
-    }
+    sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_STATE, {
+      state: 'streaming',
+      response: '',
+      error: null,
+      interruptState: 'idle',
+      cwd: turnCtx.cwd,
+    });
 
     actor.send({ type: 'USER_INPUT', message });
 
-    return { status: 'started' };
+    return { status: 'started', sessionId, turnId };
+  });
+
+  // chat:snapshot — atomically hydrate a renderer that returns to a running session.
+  // This is deliberately read-only: it never changes the sender window's selection.
+  ipcMain.handle(IPC_CHANNELS.CHAT_SNAPSHOT, async (event, payload: unknown) => {
+    const parsed = chatSnapshotSchema.safeParse(payload ?? {});
+    if (!parsed.success) {
+      throw new Error(`Invalid chat:snapshot payload: ${parsed.error.message}`);
+    }
+    const windowId = String(event.sender.id);
+    const sessionId =
+      parsed.data.sessionId ?? getSessionManager().getActive(windowId)?.id;
+    if (!sessionId) return null;
+    const active = activeAgents.get(sessionId);
+    return active ? snapshotForAgent(active) : null;
+  });
+
+  // chat:stop — immediate targeted cancellation from the global Activity list.
+  ipcMain.handle(IPC_CHANNELS.CHAT_STOP, async (_event, payload: unknown) => {
+    const parsed = chatStopSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid chat:stop payload: ${parsed.error.message}`);
+    }
+    return {
+      status: forceStopSession(parsed.data.sessionId)
+        ? 'stopped'
+        : 'no_active_stream',
+    };
   });
 
   // chat:cancel — three-phase Esc: hint → cancel agent → cancel subagents
-  ipcMain.handle(IPC_CHANNELS.CHAT_CANCEL, async (event) => {
+  ipcMain.handle(IPC_CHANNELS.CHAT_CANCEL, async (event, payload: unknown) => {
     const webContents: WebContents = event.sender;
     const windowId = String(webContents.id);
-    const existing = activeAgents.get(windowId);
+    const parsed = chatCancelSchema.safeParse(payload ?? {});
+    if (!parsed.success) {
+      throw new Error(`Invalid chat:cancel payload: ${parsed.error.message}`);
+    }
+    const sessionId =
+      parsed.data.sessionId ?? getSessionManager().getActive(windowId)?.id;
+    if (!sessionId) return { status: 'no_active_stream' };
+    const existing = activeAgents.get(sessionId);
 
     if (!existing) {
       return { status: 'no_active_stream' };
     }
+
+    // A global activity row may stop work owned by another window. Route turn
+    // events back to that session's renderer so the requester never receives
+    // a different session's chunks, completion, or interrupt state.
+    const streamWebContents =
+      webContentsForWindowId(existing.windowId) ?? webContents;
 
     const interruptSnapshot = existing.interruptActor.getSnapshot();
     const interruptState = interruptSnapshot.value as
@@ -1198,30 +1560,32 @@ export function registerChatIPC(): void {
         // existing.messages already includes the user message for this turn
         const fullHistory = [...existing.messages, ...existing.turnMessages];
         persistTurnConversation(
-          windowId,
+          sessionId,
           fullHistory,
           turnMessagesFromAgent(existing),
           ChainStatus.INTERRUPTED,
           existing.agent,
           existing.model,
-          webContents,
+          streamWebContents,
+        );
+        completeSessionActivity(
+          sessionId,
+          getSessionManager().getActive(existing.windowId)?.id !== sessionId,
         );
 
-        if (canSend(webContents)) {
-          webContents.send(IPC_CHANNELS.CHAT_DONE, {
-            type: 'done',
-            response: partial,
-            interrupted: true,
-            usage,
-          });
-          webContents.send(IPC_CHANNELS.CHAT_STATE, {
-            state: 'idle',
-            response: partial,
-            error: null,
-            interruptState: 'confirmSubagents',
-            cwd: resolveUiWorkspaceCwd(windowId),
-          });
-        }
+        sendTurnEvent(streamWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
+          type: 'done',
+          response: partial,
+          interrupted: true,
+          usage,
+        });
+        sendTurnEvent(streamWebContents, existing, IPC_CHANNELS.CHAT_STATE, {
+          state: 'idle',
+          response: partial,
+          error: null,
+          interruptState: 'confirmSubagents',
+          cwd: resolveUiWorkspaceCwd(windowId),
+        });
       }
 
       // Future: detect running subagents. For now always expose the phase briefly
@@ -1236,17 +1600,15 @@ export function registerChatIPC(): void {
 
     // Third Esc while confirming subagents → cancel subagents and dispose
     if (interruptState === 'confirmSubagents') {
-      getSubagentManager().cancelRunning();
-      disposeActiveAgent(windowId, existing);
-      if (canSend(webContents)) {
-        webContents.send(IPC_CHANNELS.CHAT_STATE, {
+      getSubagentManager().cancelRunning(sessionId);
+      disposeActiveAgent(sessionId, existing);
+      sendTurnEvent(streamWebContents, existing, IPC_CHANNELS.CHAT_STATE, {
           state: 'idle',
           response: '',
           error: null,
           interruptState: 'idle',
           cwd: resolveUiWorkspaceCwd(windowId),
-        });
-      }
+      });
       return { status: 'cancelled' };
     }
 
@@ -1278,6 +1640,8 @@ export function registerChatIPC(): void {
 export function unregisterChatIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_SEND);
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_CANCEL);
+  ipcMain.removeHandler(IPC_CHANNELS.CHAT_STOP);
+  ipcMain.removeHandler(IPC_CHANNELS.CHAT_SNAPSHOT);
   ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_SNAPSHOT);
 
   // Cancel all active agents

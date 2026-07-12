@@ -58,7 +58,7 @@ export const ragSearchHandler: ToolHandler = async (
     top_k?: number;
     file_pattern?: string;
   };
-  const cfg = getConfig();
+  const cfg = ctx.projectRuntime?.config ?? getConfig();
   const projectPath = ctx.cwd;
 
   const store = new RAGStore(projectPath);

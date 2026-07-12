@@ -61,27 +61,39 @@ const DEFAULT_IGNORED_DIRS = new Set([
 // Module-level state
 // ---------------------------------------------------------------------------
 
-let _indexing = false;
-/** Latest progress while a run is active (for late UI subscribers / tab switches). */
-let _lastProgress: RAGIndexProgress | null = null;
+/** In-flight runs keyed by project. Independent projects may index concurrently. */
+const activeIndexes = new Map<string, RAGIndexProgress>();
 
-export function isIndexing(): boolean {
-  return _indexing;
+function projectKey(projectPath: string): string {
+  return path.resolve(projectPath);
+}
+
+export function isIndexing(projectPath?: string): boolean {
+  return projectPath == null
+    ? activeIndexes.size > 0
+    : activeIndexes.has(projectKey(projectPath));
 }
 
 /** Snapshot for remounting UIs mid-index. */
-export function getIndexState(): {
+export function getIndexState(projectPath?: string): {
   indexing: boolean;
   progress: RAGIndexProgress | null;
 } {
+  if (projectPath != null) {
+    const progress = activeIndexes.get(projectKey(projectPath)) ?? null;
+    return { indexing: progress != null, progress };
+  }
+  const progress = activeIndexes.size === 1
+    ? (activeIndexes.values().next().value ?? null)
+    : null;
   return {
-    indexing: _indexing,
-    progress: _indexing ? _lastProgress : null,
+    indexing: activeIndexes.size > 0,
+    progress,
   };
 }
 
-function noteProgress(progress: RAGIndexProgress): void {
-  _lastProgress = progress;
+function noteProgress(projectPath: string, progress: RAGIndexProgress): void {
+  activeIndexes.set(projectKey(projectPath), progress);
 }
 
 // ---------------------------------------------------------------------------
@@ -110,15 +122,18 @@ export async function indexProject(
   progressCallback?: RAGIndexProgressCallback,
   options?: IndexProjectOptions,
 ): Promise<IndexResult> {
-  if (_indexing) {
+  if (!projectPath) {
+    throw new Error('projectPath is required; pass the active workspace cwd');
+  }
+  const key = projectKey(projectPath);
+  if (activeIndexes.has(key)) {
     return {
       filesScanned: 0, filesIndexed: 0, filesSkipped: 0,
       filesDeleted: 0, chunksCreated: 0, errors: ['Indexing already in progress'],
       durationSeconds: 0,
     };
   }
-  _indexing = true;
-  _lastProgress = {
+  activeIndexes.set(key, {
     phase: 'discovering',
     done: 0,
     total: 0,
@@ -127,9 +142,9 @@ export async function indexProject(
     chunksCreated: 0,
     filesDeleted: 0,
     elapsedSeconds: 0,
-  };
+  });
   const trackProgress: RAGIndexProgressCallback = (progress) => {
-    noteProgress(progress);
+    noteProgress(projectPath, progress);
     try {
       progressCallback?.(progress);
     } catch {
@@ -147,13 +162,9 @@ export async function indexProject(
         trackProgress,
       );
     }
-    if (!projectPath) {
-      throw new Error('projectPath is required; pass the active workspace cwd');
-    }
     return await runIndexInWorker(projectPath, paths, force, trackProgress);
   } finally {
-    _indexing = false;
-    _lastProgress = null;
+    activeIndexes.delete(key);
   }
 }
 

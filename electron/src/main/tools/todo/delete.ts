@@ -36,7 +36,7 @@ export function buildDeleteTool(
   const handler: ToolHandler = async (input: unknown, ctx): Promise<TodoToolResult> => {
     const { id } = input as { id: string };
     const scope = normalizeAgentScopeId(ctx.agentScopeId);
-    const todoStore = resolveTodoStore(store);
+    const todoStore = resolveTodoStore(store, ctx);
     const existing = todoStore.get(id);
     if (!existing) {
       return {
@@ -63,7 +63,7 @@ export function buildDeleteTool(
     }
 
     if (notifyChanged) {
-      await notifyChanged();
+      await notifyChanged(ctx);
     }
 
     return {

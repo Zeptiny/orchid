@@ -23,6 +23,7 @@ import type {
 } from './definitions';
 import type {
   SessionSummary,
+  SessionActivity,
   Config,
   ModelMetadata,
   DiscoveredModel,
@@ -52,6 +53,7 @@ export type {
 
 export type {
   SessionSummary,
+  SessionActivity,
   Config,
   ModelMetadata,
   DiscoveredModel,
@@ -81,22 +83,80 @@ export interface ChatSendMessage {
 }
 
 export interface ChatCancelMessage {
-  /** Optional session ID (uses active session if omitted). */
+  /** Optional session ID (uses the sender window's selected session if omitted). */
   sessionId?: string;
 }
 
-export interface ChatChunkEvent {
+/** Request the latest in-flight state for one session without changing selection. */
+export interface ChatSnapshotMessage {
+  /** Optional session ID (uses the sender window's selected session if omitted). */
+  sessionId?: string;
+}
+
+/** Immediate, targeted cancellation used by the global Activity surface. */
+export interface ChatStopMessage {
+  sessionId: string;
+}
+
+export type ChatSnapshotState = 'idle' | 'streaming' | 'error';
+
+export interface ChatToolCallSnapshot {
+  toolCallId: string;
+  toolName: string;
+  status: 'generating' | 'running' | 'completed' | 'failed';
+  partialArgs: string;
+  args: string;
+  result: string | null;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export type ChatStreamSegmentSnapshot =
+  | { kind: 'tool'; toolCallId: string }
+  | { kind: 'text'; id: string; content: string }
+  | { kind: 'thinking'; id: string; content: string };
+
+/** Atomic in-flight view used when a renderer returns to a running session. */
+export interface ChatSnapshot {
+  sessionId: string;
+  turnId: string;
+  /** Last stream event included by this snapshot. Older queued events are stale. */
+  sequence: number;
+  state: ChatSnapshotState;
+  response: string;
+  thinking: string;
+  toolCalls: ChatToolCallSnapshot[];
+  streamSegments: ChatStreamSegmentSnapshot[];
+  usage: Usage | null;
+  error: string | null;
+  interruptState: 'idle' | 'confirmAgent' | 'confirmSubagents';
+  cwd: string | null;
+  startedAt: number | null;
+  interrupted: boolean;
+}
+
+interface ChatEventIdentity {
+  /** Session whose runtime emitted this event. */
+  sessionId: string;
+  /** Stable chain/turn id used to order live events and snapshots. */
+  turnId: string;
+  /** Monotonic per-turn event sequence. Events at or below a snapshot are stale. */
+  sequence: number;
+}
+
+export interface ChatChunkEvent extends ChatEventIdentity {
   type: 'chunk';
   data: string;
 }
 
 /** Reasoning/thinking stream delta (models that emit reasoning-delta). */
-export interface ChatThinkingEvent {
+export interface ChatThinkingEvent extends ChatEventIdentity {
   type: 'thinking';
   data: string;
 }
 
-export interface ChatStateEvent {
+export interface ChatStateEvent extends ChatEventIdentity {
   state: string;
   response: string;
   error: string | null;
@@ -106,7 +166,7 @@ export interface ChatStateEvent {
   cwd?: string | null;
 }
 
-export interface ChatDoneEvent {
+export interface ChatDoneEvent extends ChatEventIdentity {
   type: 'done';
   response: string;
   /** True when the turn ended due to user Esc cancellation. */
@@ -117,7 +177,7 @@ export interface ChatDoneEvent {
 
 export type ChatErrorKind = 'stream' | 'rate-limit' | 'auth' | 'generic';
 
-export interface ChatErrorEvent {
+export interface ChatErrorEvent extends ChatEventIdentity {
   type: 'error';
   error: string;
   /** Short banner title (e.g. "Authentication failed"). */
@@ -126,24 +186,24 @@ export interface ChatErrorEvent {
   kind?: ChatErrorKind;
 }
 
-export interface ChatUsageEvent {
+export interface ChatUsageEvent extends ChatEventIdentity {
   type: 'usage';
   usage: Usage;
 }
 
-export interface ChatToolCallStartEvent {
+export interface ChatToolCallStartEvent extends ChatEventIdentity {
   type: 'tool_call_start';
   toolCallId: string;
   toolName: string;
 }
 
-export interface ChatToolCallDeltaEvent {
+export interface ChatToolCallDeltaEvent extends ChatEventIdentity {
   type: 'tool_call_delta';
   toolCallId: string;
   argsDelta: string;
 }
 
-export interface ChatToolCallUpdateEvent {
+export interface ChatToolCallUpdateEvent extends ChatEventIdentity {
   type: 'tool_call_update';
   toolCallId: string;
   toolName?: string;
@@ -213,6 +273,14 @@ export interface SessionTodosChangedEvent {
   sessionId: string | null;
 }
 
+export interface SessionActivityChangedEvent {
+  activity: SessionActivity;
+}
+
+export interface SessionMarkSeenMessage {
+  id: string;
+}
+
 /** Fired when main creates a session (e.g. first message from draft mode). */
 export interface SessionCreatedEvent {
   session: Session;
@@ -263,6 +331,10 @@ export interface SessionWorkspaceChangedEvent {
 /** Result of chat:send (started stream or structured gate failure). */
 export interface ChatSendResult {
   status: string;
+  /** Session that owns the started turn (present when status is started). */
+  sessionId?: string;
+  /** Turn/chain identity for ordering live events. */
+  turnId?: string;
   /** Human-readable error when status is not started. */
   error?: string;
   /** Machine-readable failure kind (e.g. unbound_workspace). */
@@ -326,7 +398,11 @@ export interface UpdaterErrorEvent {
 export interface OrchidAPI {
   chat: {
     send: (message: ChatSendMessage) => Promise<ChatSendResult>;
-    cancel: () => Promise<{ status: string }>;
+    cancel: (message?: ChatCancelMessage) => Promise<{ status: string }>;
+    /** Immediately stop exactly one session without staged Esc confirmation. */
+    stop: (message: ChatStopMessage) => Promise<{ status: string }>;
+    /** Read a running session's in-flight state without changing window selection. */
+    snapshot: (message?: ChatSnapshotMessage) => Promise<ChatSnapshot | null>;
     onChunk: (callback: (event: ChatChunkEvent) => void) => () => void;
     onThinking: (callback: (event: ChatThinkingEvent) => void) => () => void;
     onState: (callback: (event: ChatStateEvent) => void) => () => void;
@@ -373,6 +449,10 @@ export interface OrchidAPI {
     setWorkspace: (message: SessionSetWorkspaceMessage) => Promise<WorkspaceInfo>;
     /** Change cwd on the active session and update sticky default. */
     changeCwd: (message: SessionChangeCwdMessage) => Promise<Session>;
+    /** Process-wide sessions currently working, waiting, needing attention, or unread. */
+    listActivity: () => Promise<SessionActivity[]>;
+    /** Mark an off-screen completion as viewed. */
+    markSeen: (message: SessionMarkSeenMessage) => Promise<SessionActivity | null>;
     onRenamed: (callback: (event: SessionRenamedEvent) => void) => () => void;
     /** Session auto-created on first message from draft mode. */
     onCreated: (callback: (event: SessionCreatedEvent) => void) => () => void;
@@ -384,6 +464,7 @@ export interface OrchidAPI {
     onSubagentsChanged: (callback: () => void) => () => void;
     /** Todo store mutated — refresh todos sidebar. */
     onTodosChanged: (callback: (event: SessionTodosChangedEvent) => void) => () => void;
+    onActivityChanged: (callback: (event: SessionActivityChangedEvent) => void) => () => void;
   };
 
   tool: {
@@ -462,6 +543,8 @@ export const IPC_CHANNELS = {
   // Chat
   CHAT_SEND: 'chat:send',
   CHAT_CANCEL: 'chat:cancel',
+  CHAT_STOP: 'chat:stop',
+  CHAT_SNAPSHOT: 'chat:snapshot',
   CHAT_CHUNK: 'chat:chunk',
   CHAT_THINKING: 'chat:thinking',
   CHAT_STATE: 'chat:state',
@@ -507,6 +590,9 @@ export const IPC_CHANNELS = {
   SESSION_SUBAGENTS_CHANGED: 'session:subagents_changed',
   /** Fired when the active session's todo store mutates (tool create/update/delete). */
   SESSION_TODOS_CHANGED: 'session:todos_changed',
+  SESSION_ACTIVITY_LIST: 'session:activity_list',
+  SESSION_ACTIVITY_MARK_SEEN: 'session:activity_mark_seen',
+  SESSION_ACTIVITY_CHANGED: 'session:activity_changed',
 
   // Tool
   TOOL_EXECUTE: 'tool:execute',
@@ -563,6 +649,8 @@ export type IPCChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.CHAT_SEND,
   IPC_CHANNELS.CHAT_CANCEL,
+  IPC_CHANNELS.CHAT_STOP,
+  IPC_CHANNELS.CHAT_SNAPSHOT,
   IPC_CHANNELS.CONFIG_GET,
   IPC_CHANNELS.CONFIG_SAVE,
   IPC_CHANNELS.CONFIG_MODEL_METADATA,
@@ -579,6 +667,8 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.SESSION_PICK_PROJECT_DIR,
   IPC_CHANNELS.SESSION_SET_WORKSPACE,
   IPC_CHANNELS.SESSION_CHANGE_CWD,
+  IPC_CHANNELS.SESSION_ACTIVITY_LIST,
+  IPC_CHANNELS.SESSION_ACTIVITY_MARK_SEEN,
   IPC_CHANNELS.TOOL_EXECUTE,
   IPC_CHANNELS.AGENT_LIST,
   IPC_CHANNELS.AGENT_SPAWN,
@@ -623,6 +713,7 @@ export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
   IPC_CHANNELS.SESSION_WORKSPACE_CHANGED,
   IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED,
   IPC_CHANNELS.SESSION_TODOS_CHANGED,
+  IPC_CHANNELS.SESSION_ACTIVITY_CHANGED,
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
   IPC_CHANNELS.UPDATER_STATUS_UPDATE,

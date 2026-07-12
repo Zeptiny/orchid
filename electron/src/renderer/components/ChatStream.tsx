@@ -469,7 +469,6 @@ function buildMultiChainHistoryStreamItems(opts: {
   expandedChainIndexes: ReadonlySet<number>;
 }): HistoryBuildResult {
   const {
-    messages,
     toolBlocks,
     status,
     liveUsage,

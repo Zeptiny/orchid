@@ -40,9 +40,10 @@ function resolveAstProjectPath(windowId?: string): string | null {
   return null;
 }
 
-function broadcastProgress(progress: ASTIndexProgress): void {
+function broadcastProgress(projectPath: string, progress: ASTIndexProgress): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
+    if (resolveAstProjectPath(String(win.webContents.id)) !== projectPath) continue;
     win.webContents.send(IPC_CHANNELS.AST_PROGRESS, progress);
   }
 }
@@ -66,7 +67,10 @@ export function registerASTIPC(): void {
   });
 
   // ast:index_state — in-flight run snapshot for remounting UIs
-  ipcMain.handle(IPC_CHANNELS.AST_INDEX_STATE, async () => getIndexState());
+  ipcMain.handle(IPC_CHANNELS.AST_INDEX_STATE, async (event) => {
+    const projectPath = resolveAstProjectPath(String(event.sender.id));
+    return getIndexState(projectPath ?? undefined);
+  });
 
   // ast:index — trigger AST indexing in a worker; stream progress to all windows
   ipcMain.handle(IPC_CHANNELS.AST_INDEX, async (event, payload: unknown) => {
@@ -76,18 +80,6 @@ export function registerASTIPC(): void {
     }
 
     const { force } = parsed.data;
-
-    if (isIndexing()) {
-      return {
-        filesScanned: 0,
-        filesIndexed: 0,
-        filesSkipped: 0,
-        filesDeleted: 0,
-        symbolsExtracted: 0,
-        errors: ['Indexing already in progress'],
-        durationSeconds: 0,
-      };
-    }
 
     const projectPath = resolveAstProjectPath(String(event.sender.id));
     if (!projectPath) {
@@ -102,10 +94,22 @@ export function registerASTIPC(): void {
       };
     }
 
+    if (isIndexing(projectPath)) {
+      return {
+        filesScanned: 0,
+        filesIndexed: 0,
+        filesSkipped: 0,
+        filesDeleted: 0,
+        symbolsExtracted: 0,
+        errors: ['Indexing already in progress'],
+        durationSeconds: 0,
+      };
+    }
+
     return indexProject({
       force,
       projectPath,
-      progressCallback: broadcastProgress,
+      progressCallback: (progress) => broadcastProgress(projectPath, progress),
     });
   });
 }

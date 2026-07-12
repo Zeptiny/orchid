@@ -107,6 +107,7 @@ vi.mock('../../src/main/rag/store', () => ({
 
 vi.mock('../../src/main/rag/embedder', () => ({
   Embedder: MockEmbedder,
+  createEmbedderFromConfig: async () => new MockEmbedder(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -220,6 +221,22 @@ describe('RAG indexing concurrency guard', () => {
     expect(firstResult.filesScanned).toBeGreaterThanOrEqual(0);
   });
 
+  it('allows a different project to index while this project is indexing', async () => {
+    const projectB = makeTmpDir();
+    try {
+      writeFile(tmpDir, 'a.ts', 'const a = 1;\n');
+      writeFile(projectB, 'b.ts', 'const b = 2;\n');
+
+      const firstProject = ragIndexProject(tmpDir);
+      const otherProject = await ragIndexProject(projectB);
+
+      expect(otherProject.filesScanned).toBeGreaterThan(0);
+      await firstProject;
+    } finally {
+      fs.rmSync(projectB, { recursive: true, force: true });
+    }
+  });
+
   it('flag resets after successful completion', async () => {
     writeFile(tmpDir, 'test.ts', 'const x = 1;\n');
 
@@ -299,6 +316,22 @@ describe('AST indexing concurrency guard', () => {
     // First call completes normally
     const firstResult = await firstPromise;
     expect(firstResult.filesScanned).toBeGreaterThanOrEqual(0);
+  });
+
+  it('allows a different project to index while this project is indexing', async () => {
+    const projectB = makeTmpDir();
+    try {
+      writeFile(tmpDir, 'a.ts', 'const a = 1;\n');
+      writeFile(projectB, 'b.ts', 'const b = 2;\n');
+
+      const firstProject = astIndexProject({ projectPath: tmpDir, inline: true });
+      const otherProject = await astIndexProject({ projectPath: projectB, inline: true });
+
+      expect(otherProject.filesScanned).toBeGreaterThan(0);
+      await firstProject;
+    } finally {
+      fs.rmSync(projectB, { recursive: true, force: true });
+    }
   });
 
   it('flag resets after successful completion', async () => {

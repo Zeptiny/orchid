@@ -248,8 +248,11 @@ export function useSession(): UseSessionReturn {
     try {
       const info = await window.orchid.session.pickProjectDir();
       setWorkspace(info);
-      // Active session cwd may have been updated by the pick.
-      if (activeSession && info.cwd) {
+      // The main process turns a non-empty session into a draft in the new
+      // project. Do not make the old conversation appear to have moved.
+      if (activeSession?.chains.length) {
+        setActiveSession(null);
+      } else if (activeSession && info.cwd) {
         setActiveSession((prev) => (prev ? { ...prev, cwd: info.cwd } : null));
       }
       return info;

@@ -15,6 +15,7 @@ import { getConfig, atomicWriteJson, HOME_CONFIG_PATH } from '../config/loader';
 import { withConfigSaveLock } from '../ipc/config';
 import type { WorkspaceInfo, WorkspaceSource } from '../../shared/types/ipc';
 import { inspectProjectDirectory } from './path';
+import { clearProjectRuntimeRegistry } from './runtime';
 
 // ---------------------------------------------------------------------------
 // Types — shared IPC contract (single source of truth)
@@ -107,6 +108,9 @@ export async function updateStickyDefaultProjectDir(
 
     home.default_project_dir = dir;
     atomicWriteJson(HOME_CONFIG_PATH, home);
+    // Project snapshots inherit home configuration. Future turns should load
+    // the persisted sticky-default change while current turns stay frozen.
+    clearProjectRuntimeRegistry();
   });
 }
 

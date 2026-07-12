@@ -124,8 +124,12 @@ export function buildDelegateTool(
     // Resolve model from tier via config
     const model = getModelForTier(resolvedTier);
 
-    // Attribute usage to the active parent chain when available
-    const session = getSessionManager().getActive();
+    // Attribute to the frozen parent turn. Never discover ownership from the
+    // process's currently selected session after another session is opened.
+    const sessionManager = getSessionManager();
+    const session = ctx?.sessionId
+      ? sessionManager.getSession(ctx.sessionId)
+      : sessionManager.getActive();
     let parentChainIndex: number | undefined;
     if (session) {
       const idx = session.activeChainId
@@ -143,6 +147,7 @@ export function buildDelegateTool(
       // Prefer frozen turn context sessionId over live getActive() (mid-turn switch).
       sessionId: ctx?.sessionId ?? session?.id,
       cwd: ctx?.cwd,
+      projectRuntime: ctx?.projectRuntime,
     });
 
     return {

@@ -26,6 +26,8 @@ import {
   executeTerminateCommand,
   terminateCommandHandler,
 } from '../../src/main/tools/process/terminate-command';
+import type { Config } from '../../src/main/config/schema';
+import type { ProjectRuntime } from '../../src/main/project/runtime';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -203,6 +205,28 @@ describe('grep tool', () => {
 
     expect(result.content).toContain('Hello');
     expect(result.content).toContain('world');
+  });
+
+  it('uses frozen project grep limits and ignored directories', async () => {
+    writeFile('src/a.ts', 'function first() {}');
+    writeFile('src/b.ts', 'function second() {}');
+    writeFile('generated/ignored.ts', 'function hidden() {}');
+
+    const result = await grepHandler(
+      { pattern: 'function', directory_path: '.' },
+      {
+        cwd: tmpDir,
+        projectRuntime: {
+          config: {
+            grep_max_results: 1,
+            ignored_dirs: ['generated'],
+          } as Config,
+        } as ProjectRuntime,
+      },
+    );
+
+    expect(result.content).toContain('truncated to 1');
+    expect(result.content).not.toContain('generated/ignored.ts');
   });
 });
 

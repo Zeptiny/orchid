@@ -164,8 +164,13 @@ vi.mock('../../src/main/project/layers', () => ({
   resetLastAppliedProjectDir: vi.fn(),
 }));
 
-vi.mock('../../src/main/ipc/chat', () => ({
-  forceAbortChat: vi.fn(),
+vi.mock('../../src/main/project/runtime', () => ({
+  getProjectRuntimeRegistry: vi.fn(() => ({
+    get: vi.fn(() => ({
+      config: { default_model: 'test/model' },
+    })),
+  })),
+  clearProjectRuntimeRegistry: vi.fn(),
 }));
 
 vi.mock('../../src/main/ipc/chat-history', () => ({
@@ -214,17 +219,12 @@ beforeEach(async () => {
 
   workspace.clearAllDraftCwds();
 
-  // createRequire bypasses Vitest mocks — wire the mocked forceAbortChat in.
-  const { forceAbortChat } = await import('../../src/main/ipc/chat');
-  sessionIpc.__setAbortChatForTests(forceAbortChat as (windowId: string) => void);
-
   // Re-register handlers cleanly
   sessionIpc.unregisterSessionIPC();
   sessionIpc.registerSessionIPC();
 });
 
 afterEach(() => {
-  sessionIpc.__setAbortChatForTests(null);
   sessionIpc.unregisterSessionIPC();
   workspace.clearAllDraftCwds();
   mocks.handlers.clear();
@@ -288,17 +288,6 @@ describe('session workspace IPC', () => {
     expect(events).toHaveLength(1);
   });
 
-  it('set_workspace aborts in-flight chat on successful rebind', async () => {
-    const { forceAbortChat } = await import('../../src/main/ipc/chat');
-    const setWs = mocks.handlers.get(IPC_CHANNELS.SESSION_SET_WORKSPACE);
-    const s = sender(3);
-    vi.mocked(forceAbortChat).mockClear();
-
-    await setWs!({ sender: s }, { cwd: tmpProject });
-
-    expect(forceAbortChat).toHaveBeenCalledWith('3');
-  });
-
   it('set_workspace updates active session cwd when a session is active', async () => {
     mocks.sessionManager.create('test/model', { cwd: otherProject });
     expect(mocks.sessionManager.getActive()).not.toBeNull();
@@ -328,23 +317,28 @@ describe('session workspace IPC', () => {
     expect(result.cwd).toBe(fs.realpathSync(tmpProject));
   });
 
-  it('pick_project_dir aborts in-flight chat when user selects a folder', async () => {
-    const { forceAbortChat } = await import('../../src/main/ipc/chat');
+  it('pick_project_dir turns a non-empty session into a draft instead of moving it', async () => {
+    mocks.sessionManager.create('test/model', { cwd: otherProject });
+    mocks.sessionManager.getActive()!.chains.push({});
     mocks.dialogResult.canceled = false;
     mocks.dialogResult.filePaths = [tmpProject];
     const pick = mocks.handlers.get(IPC_CHANNELS.SESSION_PICK_PROJECT_DIR);
-    vi.mocked(forceAbortChat).mockClear();
 
-    await pick!({ sender: sender(5) });
+    const result = await pick!({ sender: sender(5) });
 
-    expect(forceAbortChat).toHaveBeenCalledWith('5');
+    expect(mocks.sessionManager.clearActive).toHaveBeenCalled();
+    expect(mocks.sessionManager.changeCwd).not.toHaveBeenCalled();
+    expect(mocks.sessionManager.getActive()).toBeNull();
+    expect(result).toMatchObject({
+      cwd: fs.realpathSync(tmpProject),
+      source: 'draft',
+      status: 'valid',
+    });
   });
 
   it('pick_project_dir cancelled returns current workspace without sticky update', async () => {
-    const { forceAbortChat } = await import('../../src/main/ipc/chat');
     mocks.dialogResult.canceled = true;
     mocks.configState.default_project_dir = null;
-    vi.mocked(forceAbortChat).mockClear();
 
     const pick = mocks.handlers.get(IPC_CHANNELS.SESSION_PICK_PROJECT_DIR);
     const before = fs.readFileSync(mocks.homeConfigPath, 'utf-8');
@@ -356,8 +350,6 @@ describe('session workspace IPC', () => {
       status: 'unbound',
     });
     expect(fs.readFileSync(mocks.homeConfigPath, 'utf-8')).toBe(before);
-    // Cancel must not abort chat / rebind
-    expect(forceAbortChat).not.toHaveBeenCalled();
   });
 
   it('session:load does not rewrite sticky default_project_dir', async () => {
@@ -396,9 +388,11 @@ describe('session workspace IPC', () => {
     await setWs({ sender: sender(9) }, { cwd: tmpProject });
 
     const session = await create!({ sender: sender(9) });
-    expect(mocks.sessionManager.create).toHaveBeenCalledWith('test/model', {
-      cwd: fs.realpathSync(tmpProject),
-    });
+    expect(mocks.sessionManager.create).toHaveBeenCalledWith(
+      'test/model',
+      { cwd: fs.realpathSync(tmpProject) },
+      '9',
+    );
     expect(session.cwd).toBe(fs.realpathSync(tmpProject));
   });
 
@@ -420,19 +414,21 @@ describe('session workspace IPC', () => {
     expect(homeRaw.default_project_dir).toBe(fs.realpathSync(tmpProject));
   });
 
-  it('session:change_cwd aborts in-flight chat before rebind', async () => {
-    const { forceAbortChat } = await import('../../src/main/ipc/chat');
+  it('session:change_cwd turns a non-empty conversation into a draft', async () => {
     mocks.sessionManager.create('test/model', { cwd: fs.realpathSync(otherProject) });
     const active = mocks.sessionManager.getActive()!;
+    active.chains.push({});
     const changeCwd = mocks.handlers.get(IPC_CHANNELS.SESSION_CHANGE_CWD);
-    vi.mocked(forceAbortChat).mockClear();
 
-    await changeCwd!(
+    const result = await changeCwd!(
       { sender: sender(10) },
       { id: active.id, cwd: tmpProject },
     );
 
-    expect(forceAbortChat).toHaveBeenCalledWith('10');
+    expect(result).toBeNull();
+    expect(mocks.sessionManager.changeCwd).not.toHaveBeenCalled();
+    expect(mocks.sessionManager.clearActive).toHaveBeenCalled();
+    expect(mocks.sessionManager.getActive()).toBeNull();
   });
 
   it('draft takes priority over sticky default', async () => {

@@ -6,17 +6,23 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
-import type { SessionSummary } from '../../shared/types/ipc-boundary';
+import type {
+  SessionActivity,
+  SessionSummary,
+} from '../../shared/types/ipc-boundary';
 import type { WorkspaceInfo } from '../../shared/types/ipc';
 import type { SessionListState } from '../hooks/useSession';
 import { formatShortcut, useRovingListIndex } from '../keyboard';
 import {
-  buildPrimarySessions,
-  groupSessionsByDate,
+  countProjectActivity,
+  filterSessionsByQuery,
   groupSessionsByProject,
+  previewProjectSessions,
+  PROJECT_SESSION_PREVIEW_LIMIT,
   truncatePathDisplay,
 } from '../utils/session-workspace';
 import { Icon } from './Icon';
+import { SessionActivitySection } from './SessionActivitySection';
 
 interface LeftSidebarProps {
   isCollapsed: boolean;
@@ -32,6 +38,12 @@ interface LeftSidebarProps {
   workspace?: WorkspaceInfo | null;
   /** Open folder picker (binds workspace + sticky default). */
   onPickProjectDir?: () => void;
+  /** A project pick starts a draft instead of moving the selected session. */
+  projectPickerCreatesDraft?: boolean;
+  /** Global work across every project/window. Optional for ConfigView reuse. */
+  activities?: readonly SessionActivity[];
+  /** Immediate targeted stop from an Activity row. */
+  onStopSession?: (sessionId: string) => void;
 }
 
 /**
@@ -40,9 +52,8 @@ interface LeftSidebarProps {
  * session rows min-height 30px, pad 5px 7px, gap 1px
  * No daisyUI menu (avoids horizontal dividers between items).
  *
- * U6: defaults to current-workspace sessions; other projects expand,
- * then each project directory is its own dropdown; search is global;
- * workspace chip is always visible. Session titles ellipsize (no x-scroll).
+ * Project groups are always visible, show recent work first, and expand
+ * independently; search remains global and session titles never scroll.
  */
 export function LeftSidebar({
   isCollapsed,
@@ -56,22 +67,11 @@ export function LeftSidebar({
   onOpenSettings,
   workspace = null,
   onPickProjectDir,
+  projectPickerCreatesDraft = false,
+  activities = [],
+  onStopSession,
 }: LeftSidebarProps) {
   const [query, setQuery] = useState('');
-  const [showOtherProjects, setShowOtherProjects] = useState(false);
-  /** Expanded other-project directory keys (collapsed by default). */
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
-    () => new Set(),
-  );
-
-  const toggleProjectExpanded = (key: string) => {
-    setExpandedProjects((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
 
   const sessions =
     sessionListState.status === 'ready' || sessionListState.status === 'partial'
@@ -87,31 +87,9 @@ export function LeftSidebar({
       workspace.status === 'missing' ||
       workspace.cwd == null);
 
-  const {
-    primary,
-    other,
-    otherCount,
-    isSearching,
-    otherIds,
-  } = useMemo(
-    () =>
-      buildPrimarySessions({
-        sessions,
-        currentWorkspace,
-        query,
-        activeSessionId,
-      }),
-    [sessions, currentWorkspace, query, activeSessionId],
-  );
-
-  const groupedPrimary = useMemo(
-    () => groupSessionsByDate(primary),
-    [primary],
-  );
-
-  const otherProjectGroups = useMemo(
-    () => groupSessionsByProject(other),
-    [other],
+  const projectGroups = useMemo(
+    () => groupSessionsByProject(filterSessionsByQuery(sessions, query)),
+    [sessions, query],
   );
 
   if (isCollapsed) {
@@ -138,13 +116,25 @@ export function LeftSidebar({
             className="btn btn-ghost btn-sm btn-circle"
             onClick={onPickProjectDir}
             title={
-              currentWorkspace
+              projectPickerCreatesDraft
+                ? 'Start a new chat in another project'
+                : currentWorkspace
                 ? `Workspace: ${currentWorkspace}`
                 : 'Open project folder'
             }
             type="button"
           >
             <Icon name="folder" size={14} />
+          </button>
+        )}
+        {activities.length > 0 && (
+          <button
+            className="btn btn-ghost btn-sm btn-circle left-panel-activity-count"
+            onClick={onToggle}
+            title={`${activities.length} session${activities.length === 1 ? '' : 's'} need attention or are running`}
+            type="button"
+          >
+            <span className="status status-xs status-warning" />
           </button>
         )}
         <div className="left-panel-collapsed-spacer" />
@@ -184,11 +174,19 @@ export function LeftSidebar({
         </div>
       </div>
 
+      <SessionActivitySection
+        activities={activities}
+        sessions={sessions}
+        onSelect={onSessionSelect}
+        onStop={onStopSession ?? (() => {})}
+      />
+
       <div className="panel-body">
         <WorkspaceChip
           workspace={workspace}
           isUnbound={isUnbound}
           onPickProjectDir={onPickProjectDir}
+          projectPickerCreatesDraft={projectPickerCreatesDraft}
         />
 
         <div className="session-search">
@@ -205,25 +203,17 @@ export function LeftSidebar({
         {isUnbound && sessions.length === 0 ? (
           <UnboundEmptyState onPickProjectDir={onPickProjectDir} />
         ) : (
-          <SessionList
+          <ProjectSessionList
             state={sessionListState}
-            groupedSessions={groupedPrimary}
-            otherProjectGroups={
-              !isSearching && showOtherProjects ? otherProjectGroups : []
-            }
-            otherCount={otherCount}
-            showOtherProjects={showOtherProjects}
-            onToggleOtherProjects={() => setShowOtherProjects((v) => !v)}
-            expandedProjects={expandedProjects}
-            onToggleProject={toggleProjectExpanded}
-            isSearching={isSearching}
-            otherIds={otherIds}
+            projectGroups={projectGroups}
+            activities={activities}
             activeSessionId={activeSessionId}
             onDelete={onSessionDelete}
             onRefresh={onRefreshSessions}
             onSelect={onSessionSelect}
             isUnbound={isUnbound}
             onPickProjectDir={onPickProjectDir}
+            isSearching={query.trim().length > 0}
           />
         )}
       </div>
@@ -248,10 +238,12 @@ function WorkspaceChip({
   workspace,
   isUnbound,
   onPickProjectDir,
+  projectPickerCreatesDraft,
 }: {
   workspace: WorkspaceInfo | null;
   isUnbound: boolean;
   onPickProjectDir?: () => void;
+  projectPickerCreatesDraft: boolean;
 }) {
   const cwd = workspace?.cwd ?? null;
   const label = isUnbound
@@ -272,9 +264,15 @@ function WorkspaceChip({
           type="button"
           className="btn btn-ghost btn-xs workspace-chip-change"
           onClick={onPickProjectDir}
-          title={isUnbound ? 'Open folder' : 'Change project folder'}
+          title={
+            projectPickerCreatesDraft
+              ? 'Start a new chat in another project'
+              : isUnbound
+                ? 'Open folder'
+                : 'Choose project folder'
+          }
         >
-          {isUnbound ? 'Open' : 'Change'}
+          {projectPickerCreatesDraft ? 'New chat' : isUnbound ? 'Open' : 'Choose'}
         </button>
       )}
     </div>
@@ -305,296 +303,204 @@ function UnboundEmptyState({
   );
 }
 
-// ── Session list ─────────────────────────────────────────────────────────────
+// ── Always-visible project groups ───────────────────────────────────────────
 
-interface SessionListProps {
+interface ProjectSessionListProps {
   state: SessionListState;
-  groupedSessions: Array<{ label: string; sessions: SessionSummary[] }>;
-  otherProjectGroups: Array<{
+  projectGroups: Array<{
     key: string;
     label: string;
     path: string | null;
     sessions: SessionSummary[];
   }>;
-  otherCount: number;
-  showOtherProjects: boolean;
-  onToggleOtherProjects: () => void;
-  expandedProjects: Set<string>;
-  onToggleProject: (key: string) => void;
-  isSearching: boolean;
-  otherIds: Set<string>;
+  activities: readonly SessionActivity[];
   activeSessionId: string | null;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onRefresh: () => void;
   isUnbound: boolean;
   onPickProjectDir?: () => void;
+  isSearching: boolean;
 }
 
-function SessionList({
+function ProjectSessionList({
   state,
-  groupedSessions,
-  otherProjectGroups,
-  otherCount,
-  showOtherProjects,
-  onToggleOtherProjects,
-  expandedProjects,
-  onToggleProject,
-  isSearching,
-  otherIds,
+  projectGroups,
+  activities,
   activeSessionId,
   onSelect,
   onDelete,
   onRefresh,
   isUnbound,
   onPickProjectDir,
-}: SessionListProps) {
+  isSearching,
+}: ProjectSessionListProps) {
   const listId = useId();
   const listRef = useRef<HTMLDivElement>(null);
-
-  const flatSessions = useMemo(() => {
-    const items: SessionSummary[] = [];
-    for (const group of groupedSessions) {
-      items.push(...group.sessions);
-    }
-    if (!isSearching && showOtherProjects) {
-      for (const project of otherProjectGroups) {
-        // Only keyboard-navigate sessions inside expanded project dropdowns.
-        if (expandedProjects.has(project.key)) {
-          items.push(...project.sessions);
-        }
-      }
-    }
-    return items;
-  }, [
-    groupedSessions,
-    isSearching,
-    showOtherProjects,
-    otherProjectGroups,
-    expandedProjects,
-  ]);
-
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const activityBySession = useMemo(
+    () => new Map(activities.map((activity) => [activity.sessionId, activity])),
+    [activities],
+  );
+  const visibleProjectGroups = useMemo(
+    () => projectGroups.map((group) => {
+      const isExpanded = isSearching || expandedProjects.has(group.key);
+      const visibleSessions = previewProjectSessions(
+        group.sessions,
+        isExpanded,
+        PROJECT_SESSION_PREVIEW_LIMIT,
+        activeSessionId,
+      );
+      return { ...group, isExpanded, visibleSessions };
+    }),
+    [activeSessionId, expandedProjects, isSearching, projectGroups],
+  );
+  const flatSessions = useMemo(
+    () => visibleProjectGroups.flatMap((group) => group.visibleSessions),
+    [visibleProjectGroups],
+  );
   const preferredIndex = useMemo(() => {
-    if (!activeSessionId) return 0;
-    const idx = flatSessions.findIndex((s) => s.id === activeSessionId);
-    return idx >= 0 ? idx : 0;
+    const index = flatSessions.findIndex((session) => session.id === activeSessionId);
+    return index >= 0 ? index : 0;
   }, [flatSessions, activeSessionId]);
-
   const { activeIndex, setActiveIndex, onListKeyDown } = useRovingListIndex({
     length: flatSessions.length,
     preferredIndex,
   });
 
-  // Keep the highlighted row visible when moving with arrows.
   useEffect(() => {
-    const el = listRef.current?.querySelector<HTMLElement>(
-      `[data-session-index="${activeIndex}"]`,
-    );
-    el?.scrollIntoView({ block: 'nearest' });
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-session-index="${activeIndex}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
   }, [activeIndex]);
 
   if (state.status === 'loading') {
-    return (
-      <div className="session-list-state">
-        <span className="loading loading-spinner loading-sm" />
-      </div>
-    );
+    return <div className="session-list-state"><span className="loading loading-spinner loading-sm" /></div>;
   }
-
   if (state.status === 'error') {
     return (
       <div className="session-list-error">
         <div>{state.error}</div>
-        <button className="btn btn-error btn-xs" onClick={onRefresh} type="button">
-          Retry
-        </button>
+        <button className="btn btn-error btn-xs" onClick={onRefresh} type="button">Retry</button>
       </div>
     );
   }
-
-  const hasPrimary = groupedSessions.length > 0;
-  const hasOther = otherCount > 0;
-
-  if (!hasPrimary && !hasOther) {
+  if (projectGroups.length === 0) {
     return (
       <div className="session-list">
-        <div className="session-group-title">Sessions</div>
+        <div className="session-group-title">Projects</div>
         <div className="session-list-empty">
           {isUnbound ? (
             <>
               <p>No sessions yet. Open a folder to begin.</p>
               {onPickProjectDir && (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-xs mt-2"
-                  onClick={onPickProjectDir}
-                >
+                <button type="button" className="btn btn-primary btn-xs mt-2" onClick={onPickProjectDir}>
                   <Icon name="folder" size={12} />
                   Open folder
                 </button>
               )}
             </>
-          ) : (
-            'No sessions yet'
-          )}
+          ) : 'No sessions yet'}
         </div>
       </div>
     );
   }
 
-  const activeOptionId =
-    flatSessions[activeIndex] != null
-      ? `${listId}-opt-${flatSessions[activeIndex].id}`
-      : undefined;
-
+  const activeOptionId = flatSessions[activeIndex]
+    ? `${listId}-opt-${flatSessions[activeIndex]!.id}`
+    : undefined;
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     onListKeyDown(event);
     if (event.defaultPrevented) return;
-
     const current = flatSessions[activeIndex];
     if (!current) return;
-
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       onSelect(current.id);
-      return;
-    }
-    // Delete only (not Backspace) to avoid surprising edits while focusing the list.
-    if (event.key === 'Delete') {
+    } else if (event.key === 'Delete') {
       event.preventDefault();
       onDelete(current.id);
     }
   };
 
   let sessionIndex = 0;
-
   return (
     <div
       ref={listRef}
       className="session-list"
       role="listbox"
-      aria-label="Sessions"
+      aria-label="Sessions grouped by project"
       aria-activedescendant={activeOptionId}
       tabIndex={0}
       onKeyDown={handleKeyDown}
     >
-      {!hasPrimary && !isSearching && (
-        <div className="session-list-empty">
-          {isUnbound
-            ? 'No project selected — showing other projects below.'
-            : 'No sessions in this project'}
-        </div>
-      )}
-
-      {groupedSessions.map((group) => (
-        <div key={group.label} className="session-group" role="group" aria-label={group.label}>
-          <div className="session-group-title">{group.label}</div>
-          {group.sessions.map((session) => {
-            const index = sessionIndex++;
-            return (
-              <SessionRow
-                key={session.id}
-                optionId={`${listId}-opt-${session.id}`}
-                sessionIndex={index}
-                session={session}
-                isActive={session.id === activeSessionId}
-                isKeyboardActive={index === activeIndex}
-                showPathHint={isSearching && otherIds.has(session.id)}
-                onSelect={(id) => {
-                  setActiveIndex(index);
-                  onSelect(id);
-                }}
-                onDelete={onDelete}
-              />
-            );
-          })}
-        </div>
-      ))}
-
-      {!isSearching && hasOther && (
-        <div className="session-other-projects">
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs session-other-toggle"
-            onClick={onToggleOtherProjects}
-          >
-            <Icon
-              name={showOtherProjects ? 'chevronDown' : 'chevronRight'}
-              size={12}
-            />
-            {showOtherProjects
-              ? 'Hide other projects'
-              : `Show other projects (${otherCount})`}
-          </button>
-
-          {showOtherProjects &&
-            otherProjectGroups.map((project) => {
-              const isExpanded = expandedProjects.has(project.key);
-              const count = project.sessions.length;
+      <div className="session-group-title">Projects</div>
+      {visibleProjectGroups.map((project) => {
+        const counts = countProjectActivity(project, activities);
+        const hiddenCount = project.sessions.length - project.visibleSessions.length;
+        return (
+          <div key={project.key} className="session-group session-project-group" role="group" aria-label={project.label}>
+            <div className="session-project-header" title={project.path ?? project.label}>
+              <Icon name="folder" size={12} className="session-project-chevron" />
+              <span className="session-project-label truncate">{project.label}</span>
+              {counts.working > 0 && <span className="badge badge-xs badge-warning">{counts.working} working</span>}
+              {counts.attention > 0 && <span className="badge badge-xs badge-error">{counts.attention}</span>}
+              {counts.unread > 0 && <span className="badge badge-xs badge-success">{counts.unread}</span>}
+            </div>
+            {project.visibleSessions.map((session) => {
+              const index = sessionIndex++;
               return (
-                <div
-                  key={project.key}
-                  className="session-group session-project-group"
-                  role="group"
-                  aria-label={project.label}
-                >
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-xs session-project-toggle"
-                    onClick={() => onToggleProject(project.key)}
-                    aria-expanded={isExpanded}
-                    title={project.path ?? project.label}
-                  >
-                    <Icon
-                      name={isExpanded ? 'chevronDown' : 'chevronRight'}
-                      size={12}
-                      className="session-project-chevron"
-                    />
-                    <span className="session-project-label truncate">
-                      {project.label}
-                    </span>
-                    <span className="session-project-count">{count}</span>
-                  </button>
-                  {isExpanded &&
-                    groupSessionsByDate(project.sessions).map((dateGroup) => (
-                      <div key={`${project.key}-${dateGroup.label}`}>
-                        {project.sessions.length > 3 && (
-                          <div className="session-group-title session-date-sub">
-                            {dateGroup.label}
-                          </div>
-                        )}
-                        {dateGroup.sessions.map((session) => {
-                          const index = sessionIndex++;
-                          return (
-                            <SessionRow
-                              key={session.id}
-                              optionId={`${listId}-opt-${session.id}`}
-                              sessionIndex={index}
-                              session={session}
-                              isActive={session.id === activeSessionId}
-                              isKeyboardActive={index === activeIndex}
-                              showPathHint={Boolean(session.cwd)}
-                              onSelect={(id) => {
-                                setActiveIndex(index);
-                                onSelect(id);
-                              }}
-                              onDelete={onDelete}
-                            />
-                          );
-                        })}
-                      </div>
-                    ))}
-                </div>
+                <SessionRow
+                  key={session.id}
+                  optionId={`${listId}-opt-${session.id}`}
+                  sessionIndex={index}
+                  session={session}
+                  activity={activityBySession.get(session.id)}
+                  isActive={session.id === activeSessionId}
+                  isKeyboardActive={index === activeIndex}
+                  showPathHint={false}
+                  onSelect={(id) => {
+                    setActiveIndex(index);
+                    onSelect(id);
+                  }}
+                  onDelete={onDelete}
+                />
               );
             })}
-        </div>
-      )}
+            {!isSearching && project.sessions.length > PROJECT_SESSION_PREVIEW_LIMIT && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs session-project-expand"
+                onClick={() => {
+                  setExpandedProjects((previous) => {
+                    const next = new Set(previous);
+                    if (next.has(project.key)) next.delete(project.key);
+                    else next.add(project.key);
+                    return next;
+                  });
+                }}
+              >
+                <Icon
+                  name={project.isExpanded ? 'chevronUp' : 'chevronDown'}
+                  size={12}
+                />
+                {project.isExpanded
+                  ? `Show recent ${PROJECT_SESSION_PREVIEW_LIMIT}`
+                  : `View ${hiddenCount} more`}
+              </button>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 function SessionRow({
   session,
+  activity,
   optionId,
   sessionIndex,
   isActive,
@@ -604,6 +510,7 @@ function SessionRow({
   onDelete,
 }: {
   session: SessionSummary;
+  activity?: SessionActivity;
   optionId: string;
   sessionIndex: number;
   isActive: boolean;
@@ -633,6 +540,32 @@ function SessionRow({
         onClick={() => onSelect(session.id)}
         title={session.cwd ?? session.name}
       >
+        {activity && (
+          <span
+            className={`status status-xs ${
+              activity.state === 'needs_attention'
+                ? 'status-error'
+                : activity.state === 'working'
+                  ? 'status-warning'
+                  : activity.state === 'waiting'
+                    ? 'status-info'
+                    : activity.unread
+                      ? 'status-success'
+                      : 'status-neutral'
+            }`}
+            title={
+              activity.state === 'needs_attention'
+                ? 'Needs attention'
+                : activity.state === 'working'
+                  ? 'Working'
+                  : activity.state === 'waiting'
+                    ? 'Waiting'
+                    : activity.unread
+                      ? 'Completed unread'
+                      : 'Idle'
+            }
+          />
+        )}
         <span className="session-item-main min-w-0">
           <span className="session-item-name truncate" title={session.name}>
             {session.name}
@@ -641,7 +574,7 @@ function SessionRow({
             <span className="session-item-path mono truncate">{pathHint}</span>
           )}
         </span>
-        {isActive && <span className="badge badge-xs badge-success">active</span>}
+        {isActive && <span className="badge badge-xs badge-ghost">selected</span>}
       </button>
       <button
         className="btn btn-ghost btn-xs btn-square session-item-delete"
