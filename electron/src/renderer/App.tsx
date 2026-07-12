@@ -131,11 +131,12 @@ function App() {
 
   return (
     <div className="app-root" data-theme={theme}>
-      {configOpen ? (
-        <ConfigView onClose={() => setConfigOpen(false)} />
-      ) : (
+      {/* Keep ChatView mounted under Config so selection/draft state is not
+          wiped and the first session is not auto-selected again on close. */}
+      <div className={configOpen ? 'hidden' : 'contents'} aria-hidden={configOpen}>
         <ChatView />
-      )}
+      </div>
+      {configOpen && <ConfigView onClose={() => setConfigOpen(false)} />}
       <OnboardingScreen
         isOpen={onboardingOpen && onboardingChecked}
         onComplete={async (config) => {

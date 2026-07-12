@@ -212,14 +212,25 @@ export function ChatView() {
     [session, chat, applySessionMessages],
   );
 
-  // New chat: enter draft mode (no disk file). Session is created on first send.
+  // New chat: draft in the currently selected project. Never open a folder
+  // picker here — inherit session.cwd → workspace.cwd → sticky default.
+  // Without a bound project, stay draft-unbound until the user picks a folder.
   const handleSessionCreate = useCallback(async () => {
     const gen = ++sessionSwitchGen.current;
     chat.setMessages([]);
-    await session.enterDraft();
-    if (gen !== sessionSwitchGen.current) {
-      return;
+    const inheritCwd =
+      session.activeSession?.cwd?.trim() ||
+      (session.workspace?.status === 'valid' ? session.workspace.cwd : null);
+    if (inheritCwd) {
+      const workspace = await session.setWorkspace(inheritCwd);
+      if (gen !== sessionSwitchGen.current) return;
+      if (!workspace?.cwd) {
+        applySessionMessages(null);
+        return;
+      }
     }
+    await session.enterDraft();
+    if (gen !== sessionSwitchGen.current) return;
     // Ensure empty pane after draft clear (enterDraft does not load messages).
     applySessionMessages(null);
   }, [session, chat, applySessionMessages]);
@@ -239,6 +250,18 @@ export function ChatView() {
       severity: 'info',
       message: `New chat in project: ${workspace.cwd}`,
     });
+  }, [session, chat, applySessionMessages]);
+
+  // Project header click: select the project itself (draft bound to it) without
+  // loading the first session in that group.
+  const handleProjectSelect = useCallback(async (projectDir: string) => {
+    const gen = ++sessionSwitchGen.current;
+    const workspace = await session.setWorkspace(projectDir);
+    if (!workspace?.cwd || gen !== sessionSwitchGen.current) return;
+    chat.setMessages([]);
+    await session.enterDraft();
+    if (gen !== sessionSwitchGen.current) return;
+    applySessionMessages(null);
   }, [session, chat, applySessionMessages]);
 
   // Auto-select the most recent session on first list load so the UI isn't
@@ -602,6 +625,10 @@ export function ChatView() {
     >
       <LeftSidebar
         activeSessionId={session.activeSession?.id ?? null}
+        selectedProjectPath={
+          session.activeSession?.cwd ??
+          (session.workspace?.status === 'valid' ? session.workspace.cwd : null)
+        }
         isCollapsed={leftSidebarCollapsed}
         onOpenSettings={openSettings}
         onPickProjectDir={() => {
@@ -609,9 +636,14 @@ export function ChatView() {
         }}
         projectPickerCreatesDraft={Boolean(session.activeSession?.chains.length)}
         onRefreshSessions={session.refresh}
-        onSessionCreate={handleSessionCreate}
+        onSessionCreate={() => {
+          void handleSessionCreate();
+        }}
         onProjectSessionCreate={(projectDir) => {
           void handleProjectSessionCreate(projectDir);
+        }}
+        onProjectSelect={(projectDir) => {
+          void handleProjectSelect(projectDir);
         }}
         onSessionDelete={handleSessionDelete}
         onSessionSelect={handleSessionSelect}

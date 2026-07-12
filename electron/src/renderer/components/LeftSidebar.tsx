@@ -17,6 +17,7 @@ import {
   countProjectActivity,
   filterSessionsByQuery,
   groupSessionsByProject,
+  normalizeWorkspaceKey,
   previewProjectSessions,
   PROJECT_SESSION_PREVIEW_LIMIT,
   truncatePathDisplay,
@@ -36,6 +37,14 @@ interface LeftSidebarProps {
   onOpenSettings: () => void;
   /** Current workspace (draft → session → sticky → unbound). */
   workspace?: WorkspaceInfo | null;
+  /**
+   * Project path selected when no conversation is open (draft / project focus).
+   * When set and activeSessionId is null, the matching project group is highlighted
+   * instead of the first session row.
+   */
+  selectedProjectPath?: string | null;
+  /** Select a project group (clears conversation selection; keeps draft bound). */
+  onProjectSelect?: (projectDir: string) => void;
   /** Open folder picker (binds workspace + sticky default). */
   onPickProjectDir?: () => void;
   /** Start a new draft explicitly bound to one visible project group. */
@@ -68,6 +77,8 @@ export function LeftSidebar({
   onRefreshSessions,
   onOpenSettings,
   workspace = null,
+  selectedProjectPath = null,
+  onProjectSelect,
   onPickProjectDir,
   onProjectSessionCreate,
   projectPickerCreatesDraft = false,
@@ -119,9 +130,7 @@ export function LeftSidebar({
             className="btn btn-ghost btn-sm btn-circle"
             onClick={onPickProjectDir}
             title={
-              projectPickerCreatesDraft
-                ? 'Start a new chat in another project'
-                : currentWorkspace
+              currentWorkspace
                 ? `Workspace: ${currentWorkspace}`
                 : 'Open project folder'
             }
@@ -189,6 +198,7 @@ export function LeftSidebar({
           workspace={workspace}
           isUnbound={isUnbound}
           onPickProjectDir={onPickProjectDir}
+          onNewChatInProject={onSessionCreate}
           projectPickerCreatesDraft={projectPickerCreatesDraft}
         />
 
@@ -211,9 +221,11 @@ export function LeftSidebar({
             projectGroups={projectGroups}
             activities={activities}
             activeSessionId={activeSessionId}
+            selectedProjectPath={selectedProjectPath}
             onDelete={onSessionDelete}
             onRefresh={onRefreshSessions}
             onSelect={onSessionSelect}
+            onProjectSelect={onProjectSelect}
             isUnbound={isUnbound}
             onPickProjectDir={onPickProjectDir}
             onProjectSessionCreate={onProjectSessionCreate}
@@ -242,11 +254,14 @@ function WorkspaceChip({
   workspace,
   isUnbound,
   onPickProjectDir,
+  onNewChatInProject,
   projectPickerCreatesDraft,
 }: {
   workspace: WorkspaceInfo | null;
   isUnbound: boolean;
   onPickProjectDir?: () => void;
+  /** New chat in the current project (no directory dialog). */
+  onNewChatInProject?: () => void;
   projectPickerCreatesDraft: boolean;
 }) {
   const cwd = workspace?.cwd ?? null;
@@ -259,24 +274,34 @@ function WorkspaceChip({
     ? 'Choose a project folder to scope sessions and tools'
     : (cwd ?? undefined);
 
+  // On a non-empty session the chip offers "New chat" in *this* project.
+  // Folder picking is only for unbound / explicit project change.
+  const showNewChat =
+    projectPickerCreatesDraft && Boolean(onNewChatInProject) && !isUnbound && Boolean(cwd);
+  const showPick = Boolean(onPickProjectDir) && !showNewChat;
+
   return (
     <div className="workspace-chip" title={title}>
       <Icon name="folder" size={12} className="workspace-chip-icon" />
       <span className="workspace-chip-path mono truncate">{label}</span>
-      {onPickProjectDir && (
+      {showNewChat && (
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs workspace-chip-change"
+          onClick={onNewChatInProject}
+          title="Start a new chat in this project"
+        >
+          New chat
+        </button>
+      )}
+      {showPick && (
         <button
           type="button"
           className="btn btn-ghost btn-xs workspace-chip-change"
           onClick={onPickProjectDir}
-          title={
-            projectPickerCreatesDraft
-              ? 'Start a new chat in another project'
-              : isUnbound
-                ? 'Open folder'
-                : 'Choose project folder'
-          }
+          title={isUnbound ? 'Open folder' : 'Choose project folder'}
         >
-          {projectPickerCreatesDraft ? 'New chat' : isUnbound ? 'Open' : 'Choose'}
+          {isUnbound ? 'Open' : 'Choose'}
         </button>
       )}
     </div>
@@ -319,7 +344,9 @@ interface ProjectSessionListProps {
   }>;
   activities: readonly SessionActivity[];
   activeSessionId: string | null;
+  selectedProjectPath: string | null;
   onSelect: (id: string) => void;
+  onProjectSelect?: (projectDir: string) => void;
   onDelete: (id: string) => void;
   onRefresh: () => void;
   isUnbound: boolean;
@@ -333,7 +360,9 @@ function ProjectSessionList({
   projectGroups,
   activities,
   activeSessionId,
+  selectedProjectPath,
   onSelect,
+  onProjectSelect,
   onDelete,
   onRefresh,
   isUnbound,
@@ -353,6 +382,8 @@ function ProjectSessionList({
     () => new Map(activities.map((activity) => [activity.sessionId, activity])),
     [activities],
   );
+  const selectedProjectKey = normalizeWorkspaceKey(selectedProjectPath);
+  const projectOnlySelection = activeSessionId == null && selectedProjectKey != null;
   const visibleProjectGroups = useMemo(
     () => projectGroups.map((group) => {
       const isExpanded = isSearching || expandedProjects.has(group.key);
@@ -379,20 +410,25 @@ function ProjectSessionList({
     () => visibleProjectGroups.flatMap((group) => group.visibleSessions),
     [visibleProjectGroups],
   );
+  // Prefer the active session when present. When only a project is selected
+  // (draft / settings), do not fall back to the first session row — that made
+  // New Chat and Settings look like they auto-selected a conversation.
   const preferredIndex = useMemo(() => {
-    const index = flatSessions.findIndex((session) => session.id === activeSessionId);
-    return index >= 0 ? index : 0;
+    if (!activeSessionId) return -1;
+    return flatSessions.findIndex((session) => session.id === activeSessionId);
   }, [flatSessions, activeSessionId]);
   const { activeIndex, setActiveIndex, onListKeyDown } = useRovingListIndex({
     length: flatSessions.length,
-    preferredIndex,
+    preferredIndex: preferredIndex >= 0 ? preferredIndex : 0,
   });
+  const keyboardSessionActive = preferredIndex >= 0 || activeSessionId != null;
 
   useEffect(() => {
+    if (!keyboardSessionActive || activeIndex < 0) return;
     listRef.current
       ?.querySelector<HTMLElement>(`[data-session-index="${activeIndex}"]`)
       ?.scrollIntoView({ block: 'nearest' });
-  }, [activeIndex]);
+  }, [activeIndex, keyboardSessionActive]);
 
   if (state.status === 'loading') {
     return <div className="session-list-state"><span className="loading loading-spinner loading-sm" /></div>;
@@ -426,9 +462,12 @@ function ProjectSessionList({
     );
   }
 
-  const activeOptionId = flatSessions[activeIndex]
-    ? `${listId}-opt-${flatSessions[activeIndex]!.id}`
-    : undefined;
+  const activeOptionId =
+    keyboardSessionActive && flatSessions[activeIndex]
+      ? `${listId}-opt-${flatSessions[activeIndex]!.id}`
+      : projectOnlySelection
+        ? `${listId}-project-${selectedProjectKey}`
+        : undefined;
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     onListKeyDown(event);
     if (event.defaultPrevented) return;
@@ -458,13 +497,36 @@ function ProjectSessionList({
       {visibleProjectGroups.map((project) => {
         const counts = countProjectActivity(project, activities);
         const hiddenCount = project.sessions.length - project.previewSessions.length;
+        const projectKey = normalizeWorkspaceKey(project.path);
+        const isProjectSelected =
+          projectOnlySelection &&
+          projectKey != null &&
+          projectKey === selectedProjectKey;
         return (
-          <div key={project.key} className="session-group session-project-group" role="group" aria-label={project.label}>
+          <div
+            key={project.key}
+            className={`session-group session-project-group ${
+              isProjectSelected ? 'session-project-group-selected' : ''
+            }`}
+            role="group"
+            aria-label={project.label}
+          >
             <div className="session-project-header">
               <button
                 type="button"
-                className="btn btn-ghost btn-xs session-project-toggle"
+                id={
+                  projectKey != null
+                    ? `${listId}-project-${projectKey}`
+                    : undefined
+                }
+                className={`btn btn-ghost btn-xs session-project-toggle ${
+                  isProjectSelected ? 'session-project-toggle-selected' : ''
+                }`}
                 onClick={() => {
+                  if (project.path && onProjectSelect) {
+                    onProjectSelect(project.path);
+                    return;
+                  }
                   setCollapsedProjects((previous) => {
                     const next = new Set(previous);
                     if (next.has(project.key)) next.delete(project.key);
@@ -473,18 +535,39 @@ function ProjectSessionList({
                   });
                 }}
                 aria-expanded={!project.isCollapsed}
-                title={`${project.isCollapsed ? 'Show' : 'Hide'} sessions in ${project.path ?? project.label}`}
+                aria-selected={isProjectSelected}
+                title={
+                  project.path && onProjectSelect
+                    ? `Select project ${project.label} (draft / new chat)`
+                    : `${project.isCollapsed ? 'Show' : 'Hide'} sessions in ${project.path ?? project.label}`
+                }
               >
-                <Icon
-                  name={project.isCollapsed ? 'chevronRight' : 'chevronDown'}
-                  size={12}
+                <span
                   className="session-project-chevron"
-                />
+                  role="presentation"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setCollapsedProjects((previous) => {
+                      const next = new Set(previous);
+                      if (next.has(project.key)) next.delete(project.key);
+                      else next.add(project.key);
+                      return next;
+                    });
+                  }}
+                >
+                  <Icon
+                    name={project.isCollapsed ? 'chevronRight' : 'chevronDown'}
+                    size={12}
+                  />
+                </span>
                 <Icon name="folder" size={12} className="session-project-folder" />
                 <span className="session-project-label truncate">{project.label}</span>
                 {counts.working > 0 && <span className="badge badge-xs badge-warning">{counts.working} working</span>}
                 {counts.attention > 0 && <span className="badge badge-xs badge-error">{counts.attention}</span>}
                 {counts.unread > 0 && <span className="badge badge-xs badge-success">{counts.unread}</span>}
+                {isProjectSelected && (
+                  <span className="badge badge-xs badge-ghost">project</span>
+                )}
               </button>
               {project.path && onProjectSessionCreate && (
                 <button
@@ -508,7 +591,9 @@ function ProjectSessionList({
                   session={session}
                   activity={activityBySession.get(session.id)}
                   isActive={session.id === activeSessionId}
-                  isKeyboardActive={index === activeIndex}
+                  isKeyboardActive={
+                    keyboardSessionActive && index === activeIndex
+                  }
                   showPathHint={false}
                   onSelect={(id) => {
                     setActiveIndex(index);
