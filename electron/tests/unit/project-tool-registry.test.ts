@@ -4,6 +4,7 @@ import { AgentTier, AgentType } from '../../src/shared/types/agent';
 import type { Skill } from '../../src/shared/types/skill';
 import { createBuiltinToolRegistry } from '../../src/main/tools';
 import { SubagentManager } from '../../src/main/agents/manager';
+import type { ToolExecutionContext } from '../../src/main/tools/types';
 
 function subagent(name: string, description: string): Agent {
   return {
@@ -51,17 +52,29 @@ describe('project-scoped tool registries', () => {
     expect(aSkill).toBeDefined();
     expect(bSkill).toBeDefined();
 
+    const runtimeContext = {
+      cwd: '/tmp',
+      sessionId: 'session-test',
+      agentScopeId: 'main',
+      projectRuntime: {
+        projectDir: '/tmp',
+        config: { default_model: 'test/model', tier_models: { bloom: 'test/model' } },
+        agents: new Map(),
+        skills: new Map(),
+        personalities: new Map(),
+      },
+    } as ToolExecutionContext;
     const aSpawn = await aDelegate!.handler(
       { name: 'A task', task: 'Inspect project A', type: 'a-worker' },
-      { cwd: '/tmp', agentScopeId: 'main' },
+      runtimeContext,
     );
     const aCannotSpawnB = await aDelegate!.handler(
       { name: 'Wrong task', task: 'Inspect project B', type: 'b-worker' },
-      { cwd: '/tmp', agentScopeId: 'main' },
+      runtimeContext,
     );
     const bSpawn = await bDelegate!.handler(
       { name: 'B task', task: 'Inspect project B', type: 'b-worker' },
-      { cwd: '/tmp', agentScopeId: 'main' },
+      runtimeContext,
     );
     const aSkillResult = await aSkill!.handler(
       { name: 'a-skill' },

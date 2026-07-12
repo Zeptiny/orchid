@@ -17,6 +17,7 @@ import { toolRegistry } from '../tools';
 import type { ToolExecutionContext } from '../tools/types';
 import { getSessionManager, resolveWindowWorkspace } from './session';
 import { isWorkspaceBound } from '../project/workspace';
+import { getProjectRuntimeRegistry } from '../project/runtime';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -58,6 +59,7 @@ function resolveToolExecuteContext(windowId: string): ToolExecutionContext | nul
       cwd: info.cwd,
       sessionId: active?.id,
       agentScopeId: 'main',
+      projectRuntime: getProjectRuntimeRegistry().get(info.cwd),
     };
   } catch {
     return null;

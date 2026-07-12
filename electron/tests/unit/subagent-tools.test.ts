@@ -18,6 +18,7 @@ import { buildDelegateTool } from '../../src/main/tools/subagent/delegate';
 import { buildWaitTool } from '../../src/main/tools/subagent/wait';
 import { buildInterruptTool } from '../../src/main/tools/subagent/interrupt';
 import type { SubagentToolResult } from '../../src/main/tools/subagent/delegate';
+import type { ToolExecutionContext } from '../../src/main/tools/types';
 
 // ── Mock getModelForTier ─────────────────────────────────────────────────────
 // Mock the config loader so tests don't need a real config on disk.
@@ -62,6 +63,27 @@ function makeAgentMap(): Map<string, Agent> {
   return map;
 }
 
+const toolContext = {
+  cwd: '/tmp',
+  sessionId: 'session-test',
+  agentScopeId: 'main',
+  projectRuntime: {
+    projectDir: '/tmp',
+    config: {
+      default_model: 'model-default',
+      tier_models: {
+        seed: 'model-for-seed',
+        sprout: 'model-for-sprout',
+        bloom: 'model-for-bloom',
+        crown: 'model-for-crown',
+      },
+    },
+    agents: new Map(),
+    skills: new Map(),
+    personalities: new Map(),
+  },
+} as ToolExecutionContext;
+
 // ── delegate_to_subagent ─────────────────────────────────────────────────────
 
 describe('delegate_to_subagent', () => {
@@ -81,7 +103,7 @@ describe('delegate_to_subagent', () => {
       name: 'review auth',
       task: 'Review the authentication module for security issues',
       type: 'code-reviewer',
-    })) as SubagentToolResult;
+    }, toolContext)) as SubagentToolResult;
 
     expect(result.display).toContain('Subagent');
     expect(result.display).toContain('review auth');
@@ -105,7 +127,7 @@ describe('delegate_to_subagent', () => {
       name: 'explore files',
       task: 'List all TypeScript files',
       type: 'file-explorer',
-    });
+    }, toolContext);
 
     const records = manager.allRecords();
     // file-explorer has tier SEED, model should be model-for-seed
@@ -120,7 +142,7 @@ describe('delegate_to_subagent', () => {
       task: 'Complex architecture review',
       type: 'file-explorer', // default tier is seed
       tier: 'crown', // override to crown
-    });
+    }, toolContext);
 
     const records = manager.allRecords();
     expect(records[0].model).toBe('model-for-crown');
@@ -207,7 +229,7 @@ describe('delegate_to_subagent', () => {
       name: 'test',
       task: 'test task',
       type: 'code-reviewer', // tier: crown
-    });
+    }, toolContext);
 
     const records = manager.allRecords();
     expect(records[0].model).toBe('model-for-crown');

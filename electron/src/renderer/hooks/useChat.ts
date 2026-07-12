@@ -124,6 +124,31 @@ export interface UseChatReturn extends ChatState {
   hydrateSnapshot: (snapshot: ChatSnapshot | null) => void;
 }
 
+export interface ChatEventAffinity {
+  selectedSessionId: string | null;
+  streamSessionId: string | null;
+  streamTurnId: string | null;
+  lastSequence: number;
+}
+
+export function acceptChatEvent(
+  affinity: ChatEventAffinity,
+  event: { sessionId: string; turnId: string; sequence: number },
+  isSending: boolean,
+): boolean {
+  if (affinity.selectedSessionId && event.sessionId !== affinity.selectedSessionId) return false;
+  if (!affinity.selectedSessionId && affinity.streamSessionId && event.sessionId !== affinity.streamSessionId) return false;
+  if (!affinity.selectedSessionId && !affinity.streamSessionId) {
+    if (!isSending) return false;
+    affinity.streamSessionId = event.sessionId;
+  }
+  if (affinity.streamTurnId && affinity.streamTurnId !== event.turnId) return false;
+  if (affinity.streamTurnId === event.turnId && event.sequence <= affinity.lastSequence) return false;
+  affinity.streamTurnId = event.turnId;
+  affinity.lastSequence = event.sequence;
+  return true;
+}
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useChat(activeSessionId: string | null = null): UseChatReturn {
@@ -198,26 +223,17 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     turnId: string;
     sequence: number;
   }): boolean => {
-    const selected = activeSessionIdRef.current;
-    if (selected && event.sessionId !== selected) return false;
-    const draftStream = streamSessionIdRef.current;
-    if (!selected && draftStream && event.sessionId !== draftStream) return false;
-    if (!selected && !draftStream) {
-      if (!isSendingRef.current) return false;
-      streamSessionIdRef.current = event.sessionId;
-    }
-    const sequence =
-      typeof event.sequence === 'number'
-        ? event.sequence
-        : lastSequenceRef.current + 1;
-    const currentTurn = streamTurnIdRef.current;
-    if (currentTurn && currentTurn !== event.turnId) return false;
-    if (currentTurn === event.turnId && sequence <= lastSequenceRef.current) {
-      return false;
-    }
-    streamTurnIdRef.current = event.turnId;
-    lastSequenceRef.current = sequence;
-    return true;
+    const affinity: ChatEventAffinity = {
+      selectedSessionId: activeSessionIdRef.current,
+      streamSessionId: streamSessionIdRef.current,
+      streamTurnId: streamTurnIdRef.current,
+      lastSequence: lastSequenceRef.current,
+    };
+    const accepted = acceptChatEvent(affinity, event, isSendingRef.current);
+    streamSessionIdRef.current = affinity.streamSessionId;
+    streamTurnIdRef.current = affinity.streamTurnId;
+    lastSequenceRef.current = affinity.lastSequence;
+    return accepted;
   }, []);
 
   /**
@@ -759,6 +775,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
   const hydrateSnapshot = useCallback((snapshot: ChatSnapshot | null) => {
     if (!snapshot) return;
+    if (snapshot.sessionId !== activeSessionIdRef.current) return;
 
     // A stream event delivered after the snapshot is newer and already owns
     // the local view. Never rewind it with a stale IPC response.

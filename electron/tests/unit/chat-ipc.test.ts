@@ -317,6 +317,7 @@ vi.mock('../../src/main/llm/providers-factory', () => ({
 vi.mock('../../src/main/tools', () => ({
   toolRegistry: mocks.toolRegistry,
   createBuiltinToolRegistry: vi.fn(() => mocks.toolRegistry),
+  getBuiltinToolRegistryForRuntime: vi.fn(() => mocks.toolRegistry),
   getSubagentManager: vi.fn(() => mocks.subagentManager),
 }));
 

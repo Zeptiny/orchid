@@ -266,11 +266,8 @@ export class SessionManager {
    */
   switchTo(id: string, ownerId?: string): Session | null {
     const owner = this.ownerKey(ownerId);
-    const sharedByAnotherOwner = [...this._selectedByOwner.entries()].some(
-      ([candidateOwner, selectedId]) => candidateOwner !== owner && selectedId === id,
-    );
     let session: Session | null;
-    if (sharedByAnotherOwner) {
+    if (this._sessions.has(id)) {
       session = this.ensureSession(id);
     } else {
       const loaded = storageLoadSession(id, this._storageOpts);

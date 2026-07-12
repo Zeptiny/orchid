@@ -14,7 +14,7 @@ import {
   acquireProjectMCPManager,
   releaseProjectMCPManager,
 } from '../mcp/project-registry';
-import { createBuiltinToolRegistry } from '../tools';
+import { getBuiltinToolRegistryForRuntime } from '../tools';
 import {
   getProjectRuntimeRegistry,
   hydrateProjectRuntime,
@@ -70,8 +70,15 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     /** Immutable project config/definitions captured by the parent turn. */
     projectRuntime?: ProjectRuntime;
   }): AsyncGenerator<StreamEvent> {
-    const sessionId =
-      params.sessionId ?? getSessionManager().getActive()?.id;
+    const sessionId = params.sessionId;
+    if (!sessionId) {
+      yield {
+        type: 'error',
+        title: 'Missing session',
+        detail: 'Subagent cannot run without an explicit parent session id.',
+      };
+      return;
+    }
 
     // Prefer frozen parent-turn cwd; only fall back if spawn omitted it.
     const parentCwd =
@@ -92,7 +99,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     const runtime = await hydrateProjectRuntime(baseRuntime);
     const config = runtime.config;
     const mcpManager = acquireProjectMCPManager(baseRuntime);
-    const registry = createBuiltinToolRegistry({
+    const registry = getBuiltinToolRegistryForRuntime(baseRuntime, {
       agents: new Map(runtime.agents),
       skills: new Map(runtime.skills),
       mcpManager,

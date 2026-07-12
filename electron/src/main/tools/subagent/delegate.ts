@@ -13,7 +13,6 @@ import { AgentType, AgentTier, TIER_DESCRIPTIONS } from '../../../shared/types/a
 import type { ToolDefinition, ToolHandler } from '../types';
 import type { SubagentManager } from '../../agents/manager';
 import { getModelForTier } from '../../llm/providers';
-import { getModelForTier as getLegacyModelForTier } from '../../config/loader';
 import { getSessionManager } from '../../ipc/session';
 
 /**
@@ -123,16 +122,19 @@ export function buildDelegateTool(
     }
 
     // Resolve model from tier via config
-    const model = ctx?.projectRuntime
-      ? getModelForTier(ctx.projectRuntime.config, resolvedTier)
-      : getLegacyModelForTier(resolvedTier);
+    if (!ctx?.projectRuntime || !ctx.sessionId) {
+      return {
+        display: 'Subagent delegation requires a session runtime',
+        content: 'Error: delegate_to_subagent requires a frozen project runtime and session id.',
+        isError: true,
+      };
+    }
+    const model = getModelForTier(ctx.projectRuntime.config, resolvedTier);
 
     // Attribute to the frozen parent turn. Never discover ownership from the
     // process's currently selected session after another session is opened.
     const sessionManager = getSessionManager();
-    const session = ctx?.sessionId
-      ? sessionManager.getSession(ctx.sessionId)
-      : sessionManager.getActive();
+    const session = sessionManager.getSession(ctx.sessionId);
     let parentChainIndex: number | undefined;
     if (session) {
       const idx = session.activeChainId
@@ -148,9 +150,9 @@ export function buildDelegateTool(
       model,
       parentChainIndex,
       // Prefer frozen turn context sessionId over live getActive() (mid-turn switch).
-      sessionId: ctx?.sessionId ?? session?.id,
-      cwd: ctx?.cwd,
-      projectRuntime: ctx?.projectRuntime,
+      sessionId: ctx.sessionId,
+      cwd: ctx.cwd,
+      projectRuntime: ctx.projectRuntime,
     });
 
     return {

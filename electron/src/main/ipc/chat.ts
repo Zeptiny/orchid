@@ -34,7 +34,7 @@ import {
   acquireProjectMCPManager,
   releaseProjectMCPManager,
 } from '../mcp/project-registry';
-import { createBuiltinToolRegistry, getSubagentManager } from '../tools';
+import { getBuiltinToolRegistryForRuntime, getSubagentManager } from '../tools';
 import type { ToolRegistry } from '../tools/registry';
 import type {
   ChatErrorKind,
@@ -56,7 +56,7 @@ import {
   makeToolResultMessage,
   makeUserMessage,
 } from '../llm/message-factories';
-import { clearDraftCwd, isWorkspaceBound } from '../project/workspace';
+import { clearDraftCwd } from '../project/workspace';
 import type { ToolExecutionContext } from '../tools/types';
 import {
   getProjectRuntimeRegistry,
@@ -148,6 +148,7 @@ type ActiveAgent = {
 };
 
 const activeAgents = new Map<string, ActiveAgent>();
+const sessionsStarting = new Set<string>();
 
 /**
  * Per-session generation counter. Incremented on every new chat:send and on
@@ -216,8 +217,18 @@ function sendTurnEvent(
   payload: Record<string, unknown>,
 ): void {
   const identity = nextEventIdentity(active);
-  if (canSend(webContents)) {
-    webContents.send(channel, { ...identity, ...payload });
+  const recipients = new Map<number, WebContents>();
+  recipients.set(webContents.id, webContents);
+  const allWebContents = electronWebContents.getAllWebContents?.() ?? [];
+  for (const candidate of allWebContents) {
+    if (getSessionManager().getActive(String(candidate.id))?.id === active.sessionId) {
+      recipients.set(candidate.id, candidate);
+    }
+  }
+  for (const recipient of recipients.values()) {
+    if (canSend(recipient)) {
+      recipient.send(channel, { ...identity, ...payload });
+    }
   }
 }
 
@@ -377,6 +388,7 @@ export function forceAbortChat(windowId: string): void {
 
 /** Abort exactly one session without affecting work in any other session. */
 export function forceAbortSession(sessionId: string): void {
+  getBackgroundStore().terminateSession(sessionId);
   try {
     getSubagentManager().cancelRunning(sessionId);
   } catch (err) {
@@ -448,6 +460,7 @@ export function forceAbortSession(sessionId: string): void {
  * all writes and terminal events on the stopped session's originating window.
  */
 export function forceStopSession(sessionId: string): boolean {
+  getBackgroundStore().terminateSession(sessionId);
   const existing = activeAgents.get(sessionId);
   const cancelledSubagents = getSubagentManager().cancelRunning(sessionId);
   if (!existing) {
@@ -555,7 +568,9 @@ function ensureActiveSession(
   }
   const workspace = resolveWindowWorkspace(windowId);
 
-  if (!isWorkspaceBound(workspace) || workspace.cwd == null) {
+  const boundCwd = active?.cwd?.trim() || workspace.cwd;
+
+  if (boundCwd == null || boundCwd === '') {
     return {
       ok: false,
       result: {
@@ -569,28 +584,28 @@ function ensureActiveSession(
 
   // Resolve once at turn start. The returned snapshot is independent from
   // whatever project another window selects while this turn is running.
-  const runtime = getProjectRuntimeRegistry().get(workspace.cwd);
+  const runtime = getProjectRuntimeRegistry().get(boundCwd);
 
   if (active) {
     // Legacy sessions may have null/empty cwd while the window workspace is
     // bound via sticky/draft. Persist that cwd onto the session before tools run.
     if (!active.cwd || active.cwd.trim() === '') {
-      manager.changeCwd(active.id, workspace.cwd);
+      manager.changeCwd(active.id, boundCwd);
     }
-    return { ok: true, cwd: workspace.cwd, session: active, runtime };
+    return { ok: true, cwd: boundCwd, session: active, runtime };
   }
 
   const model =
     (preferredModel && preferredModel.trim()) ||
     runtime.config.default_model ||
     '';
-  const session = manager.create(model, { cwd: workspace.cwd }, windowId);
+  const session = manager.create(model, { cwd: boundCwd }, windowId);
   // Draft was promoted into the new session.
   clearDraftCwd(windowId);
   if (canSend(webContents)) {
     webContents.send(IPC_CHANNELS.SESSION_CREATED, { session, draftGeneration });
   }
-  return { ok: true, cwd: workspace.cwd, session, runtime };
+  return { ok: true, cwd: boundCwd, session, runtime };
 }
 
 function classifyErrorKind(title: string | null | undefined, detail: string): ChatErrorKind {
@@ -900,7 +915,30 @@ export function registerChatIPC(): void {
       return sessionGate.result;
     }
     const sessionId = sessionGate.session.id;
+    if (sessionsStarting.has(sessionId)) {
+      return {
+        status: 'error',
+        error: 'A turn is already starting for this session.',
+        kind: 'session_busy',
+      };
+    }
+    sessionsStarting.add(sessionId);
     const existing = activeAgents.get(sessionId);
+
+    // Freeze all project-bound definitions for the turn. Other windows may
+    // navigate to different projects while this actor is still streaming.
+    let runtime: ProjectRuntime;
+    try {
+      runtime = await hydrateProjectRuntime(sessionGate.runtime);
+    } catch (error) {
+      sessionsStarting.delete(sessionId);
+      completeSessionActivity(sessionId, false);
+      return {
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error),
+        kind: 'runtime_hydration_failed',
+      };
+    }
     publishSessionActivity(sessionId, {
       cwd: sessionGate.cwd,
       state: 'working',
@@ -911,14 +949,10 @@ export function registerChatIPC(): void {
       unread: false,
       canCancel: true,
     });
-
-    // Freeze all project-bound definitions for the turn. Other windows may
-    // navigate to different projects while this actor is still streaming.
-    const runtime = await hydrateProjectRuntime(sessionGate.runtime);
     const config = runtime.config;
     const agents = [...runtime.agents.values()];
     const mcpManager = acquireProjectMCPManager(sessionGate.runtime);
-    const turnRegistry = createBuiltinToolRegistry({
+    const turnRegistry = getBuiltinToolRegistryForRuntime(sessionGate.runtime, {
       agents: new Map(runtime.agents),
       skills: new Map(runtime.skills),
       subagentManager: getSubagentManager(),
@@ -1048,6 +1082,7 @@ export function registerChatIPC(): void {
       mcpRuntime: sessionGate.runtime,
     };
     activeAgents.set(sessionId, activeAgent);
+    sessionsStarting.delete(sessionId);
 
     /** Snapshot any response text that arrived before the next tool into turnMessages. */
     const flushResponseSegment = (fullResponse: string, attachUsage: Usage | null = null) => {
@@ -1529,6 +1564,7 @@ export function registerChatIPC(): void {
 
     // Second Esc while confirming agent → cancel the stream and persist partial.
     if (interruptState === 'confirmAgent') {
+      getBackgroundStore().terminateSession(sessionId);
       existing.agentCancelled = true;
       const context = existing.actor.getSnapshot().context as AgentContext;
       existing.actor.send({ type: 'CANCEL' });
@@ -1606,6 +1642,7 @@ export function registerChatIPC(): void {
 
     // Third Esc while confirming subagents → cancel subagents and dispose
     if (interruptState === 'confirmSubagents') {
+      getBackgroundStore().terminateSession(sessionId);
       getSubagentManager().cancelRunning(sessionId);
       disposeActiveAgent(sessionId, existing);
       sendTurnEvent(streamWebContents, existing, IPC_CHANNELS.CHAT_STATE, {
@@ -1664,6 +1701,7 @@ export function unregisterChatIPC(): void {
     agent.interruptActor.stop();
   }
   activeAgents.clear();
+  sessionsStarting.clear();
   agentGenerations.clear();
   clearAllChatHistory();
 }

@@ -1064,7 +1064,7 @@ describe('SessionManager switching', () => {
     expect(manager.getActive()!.name).toBe('Session 1');
   });
 
-  it('switchTo reloads from disk (captures external changes)', () => {
+  it('switchTo preserves the live in-memory session over stale disk state', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create('gpt-4o');
 
@@ -1076,9 +1076,12 @@ describe('SessionManager switching', () => {
     };
     saveSession(modified, storageOpts);
 
-    // SwitchTo reloads from disk
+    manager.getTodoStore(session.id).create('Live todo');
+
+    // Re-selecting must not replace state still owned by running tools.
     const switched = manager.switchTo(session.id);
-    expect(switched!.name).toBe('Externally Modified');
+    expect(switched!.name).toBe(session.name);
+    expect(manager.getTodoStore(session.id).list()[0]?.title).toBe('Live todo');
   });
 });
 
