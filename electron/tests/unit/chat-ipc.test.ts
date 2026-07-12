@@ -93,7 +93,7 @@ const mocks = vi.hoisted(() => {
     }),
     create: vi.fn((model: string, options?: { cwd?: string | null }) => {
       activeSession = {
-        id: 'lazy-session-id',
+        id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
         name: 'Session draft',
         model,
         cwd: options?.cwd ?? null,
@@ -268,6 +268,8 @@ const mocks = vi.hoisted(() => {
     subagentManager: {
       cancelRunning: vi.fn(() => []),
     },
+    publishSessionActivity: vi.fn(),
+    completeSessionActivity: vi.fn(),
     electronWebContents,
     runtimeRegistry,
     toolRegistry,
@@ -346,6 +348,11 @@ vi.mock('../../src/main/project/layers', () => ({
 vi.mock('../../src/main/project/runtime', () => ({
   getProjectRuntimeRegistry: () => mocks.runtimeRegistry,
   hydrateProjectRuntime: async <T>(runtime: T) => runtime,
+}));
+
+vi.mock('../../src/main/ipc/session-activity', () => ({
+  publishSessionActivity: mocks.publishSessionActivity,
+  completeSessionActivity: mocks.completeSessionActivity,
 }));
 
 vi.mock('../../src/main/project/workspace', () => ({
@@ -440,20 +447,29 @@ describe('chat IPC', () => {
     );
     await waitForDoneCount(send, 1);
 
+    expect(mocks.publishSessionActivity).toHaveBeenCalledWith(
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      expect.objectContaining({ state: 'working', phase: 'agent' }),
+    );
+    expect(mocks.completeSessionActivity).toHaveBeenCalledWith(
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      false,
+    );
+
     expect(mocks.sessionManager.create).toHaveBeenCalledTimes(1);
     expect(mocks.sessionManager.create).toHaveBeenCalledWith(
       'preferred/model',
       { cwd: mocks.workspace._testProjectDir },
       '99',
     );
-    expect(mocks.sessionManager.getActive()?.id).toBe('lazy-session-id');
+    expect(mocks.sessionManager.getActive()?.id).toBe('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
     expect(mocks.sessionManager.getActive()?.cwd).toBe(mocks.workspace._testProjectDir);
     expect(mocks.workspace.clearDraftCwd).toHaveBeenCalledWith('99');
 
     const created = channelEvents(send, IPC_CHANNELS.SESSION_CREATED);
     expect(created).toHaveLength(1);
     expect(created[0][1]).toMatchObject({
-      session: { id: 'lazy-session-id', model: 'preferred/model' },
+      session: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', model: 'preferred/model' },
     });
 
     // Second send reuses the active session — no second create
@@ -769,9 +785,12 @@ describe('chat IPC', () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
-    const snapshot = await chatSnapshot!({ sender: webContents }, {});
+    const snapshot = await chatSnapshot!(
+      { sender: webContents },
+      { sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+    );
     expect(snapshot).toMatchObject({
-      sessionId: 'lazy-session-id',
+      sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
       state: 'streaming',
       response: 'Live partial response',
       thinking: '',
@@ -781,6 +800,12 @@ describe('chat IPC', () => {
     });
     expect(snapshot.turnId).toEqual(expect.any(String));
     expect(snapshot.sequence).toEqual(expect.any(Number));
+    expect(
+      await chatSnapshot!(
+        { sender: webContents },
+        { sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+      ),
+    ).toBeNull();
 
     releaseStream!();
     await sendPromise;
@@ -911,8 +936,8 @@ describe('chat IPC', () => {
       });
     },
   );
-  it('forceAbortChat stops further CHAT_CHUNK emission (session switch)', async () => {
-    // Stream yields one chunk, pauses (session switch window), then more content.
+  it('explicit window abort stops further CHAT_CHUNK emission', async () => {
+    // Stream yields one chunk, pauses during an explicit abort window, then more content.
     let releaseSecondHalf: (() => void) | undefined;
     const secondHalf = new Promise<void>((resolve) => {
       releaseSecondHalf = resolve;
@@ -946,7 +971,7 @@ describe('chat IPC', () => {
       chunksBefore.some(([, p]) => (p as { data: string }).data.includes('Session-A-chunk')),
     ).toBe(true);
 
-    // Simulate session:load / session:create abort path
+    // Explicitly abort the selected session through the legacy window shim.
     chatIpc.forceAbortChat(String(webContents.id));
 
     // Let the stream continue after abort — stale content must not be forwarded
@@ -966,7 +991,7 @@ describe('chat IPC', () => {
     expect(donesAfterAbort).toHaveLength(0);
   });
 
-  it('forceAbortChat prevents old agent chunks from interleaving with a new turn', async () => {
+  it('replacement send aborts old activity before publishing the new turn', async () => {
     let releaseOldStream: (() => void) | undefined;
     const oldStreamGate = new Promise<void>((resolve) => {
       releaseOldStream = resolve;
@@ -1003,10 +1028,16 @@ describe('chat IPC', () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
-    // Session switch aborts old agent, then a new turn starts on the same window
-    chatIpc.forceAbortChat(String(webContents.id));
+    mocks.publishSessionActivity.mockClear();
+    mocks.completeSessionActivity.mockClear();
+
+    // Replacement send owns the abort and must finish old activity first.
     await chatSend!({ sender: webContents }, { message: 'new' });
     await waitForDoneCount(send, 1);
+
+    expect(mocks.completeSessionActivity.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.publishSessionActivity.mock.invocationCallOrder[0]!,
+    );
 
     // Old stream resumes after the new turn — must not emit stale chunks
     releaseOldStream!();

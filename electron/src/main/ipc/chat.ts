@@ -67,6 +67,7 @@ import {
   completeSessionActivity,
   publishSessionActivity,
 } from './session-activity';
+import { appendProjectPersonality } from '../project/personality';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -807,17 +808,6 @@ function createExecuteFn(
   };
 }
 
-function appendProjectPersonality(
-  agentSystemPrompt: string,
-  runtime: ProjectRuntime,
-): string {
-  const name = runtime.config.personality;
-  const personality = name ? runtime.personalities.get(name) : undefined;
-  return personality
-    ? `${agentSystemPrompt}\n\n## Personality\n\n${personality}\n`
-    : agentSystemPrompt;
-}
-
 // ── Auto-naming callback factory ─────────────────────────────────────────────
 
 /**
@@ -939,6 +929,9 @@ export function registerChatIPC(): void {
         kind: 'runtime_hydration_failed',
       };
     }
+    if (existing) {
+      forceAbortSession(sessionId);
+    }
     publishSessionActivity(sessionId, {
       cwd: sessionGate.cwd,
       state: 'working',
@@ -963,9 +956,6 @@ export function registerChatIPC(): void {
     // If a prior agent is still streaming, forceAbort persists its partial
     // turn as INTERRUPTED (turn-local) before we open a new chain — never
     // dispose without persist (multi-chain orphan user-only INTERRUPTED).
-    if (existing) {
-      forceAbortSession(sessionId);
-    }
     const existingMessages: Message[] =
       getChatHistory(sessionId) ?? historyFromSession(sessionId);
 

@@ -21,6 +21,7 @@ import {
   type ProjectRuntime,
 } from '../project/runtime';
 import type { SubagentStreamRunner } from './manager';
+import { appendProjectPersonality } from '../project/personality';
 
 /** Tools that must never run inside a subagent (no nested delegation). */
 const SUBAGENT_FORBIDDEN_TOOLS = new Set([
@@ -180,15 +181,4 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       releaseProjectMCPManager(baseRuntime);
     }
   };
-}
-
-function appendProjectPersonality(
-  agentSystemPrompt: string,
-  runtime: ProjectRuntime,
-): string {
-  const name = runtime.config.personality;
-  const personality = name ? runtime.personalities.get(name) : undefined;
-  return personality
-    ? `${agentSystemPrompt}\n\n## Personality\n\n${personality}\n`
-    : agentSystemPrompt;
 }

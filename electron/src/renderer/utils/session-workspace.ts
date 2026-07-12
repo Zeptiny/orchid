@@ -202,12 +202,13 @@ export function groupSessionsByProject(
 
   const groups: ProjectGroup[] = [];
   for (const [key, list] of map) {
+    list.sort((a, b) => b.updatedAt - a.updatedAt);
     const path = key === '' ? null : (list[0]?.cwd ?? null);
     groups.push({
       key: key === '' ? '__unknown__' : key,
       label: path ? basenamelike(path) : 'Other / Unknown',
       path,
-      sessions: previewProjectSessions(list, true),
+      sessions: list,
     });
   }
 

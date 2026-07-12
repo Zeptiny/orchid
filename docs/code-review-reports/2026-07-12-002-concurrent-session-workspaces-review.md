@@ -10,8 +10,8 @@
 | **Scope** | 69 files, ~+4810 / −1127 lines |
 | **Run ID** | `20260712-021900-9d1439a4` |
 | **Mode** | Interactive multi-agent review (`ce-code-review`) |
-| **Verdict** | **Request changes** — isolation and lifecycle bugs before merge |
-| **Status re-verify** | 2026-07-12 post-commit audit (`88576d4`, `76339bd`) — see §3.1 |
+| **Verdict** | **Ready to merge** — all P0/P1 findings remediated or verified covered; straightforward P2/P3 follow-ups completed |
+| **Status re-verify** | 2026-07-12 final remediation audit — see §3.1–§3.3 |
 
 ---
 
@@ -94,16 +94,16 @@ Verified against HEAD after `88576d4` (review pass) and `76339bd` (isolation gap
 | ID | Severity | Status | Fix summary | Commit / files |
 |----|----------|--------|-------------|----------------|
 | F-10 | **P0** | **Fixed** | `session:delete` calls `forceStopSession` before disk delete; activity tombstone still removed on success | `76339bd` — `electron/src/main/ipc/session.ts` |
-| F-12 | **P1** | **Partial** | Happy path resolves tier models from `ctx.projectRuntime.config` (delegate + web-fetch). Global/legacy `getLegacyModelForTier` still used when runtime missing | `76339bd` — `delegate.ts`, `tools/index.ts` |
-| F-14 | **P1** | **Partial** | Same-session replace-on-send always `forceAbortSession` before new actor. True concurrent double-send still not serialized per session | `chat.ts` (replace path) |
-| F-16 | **P1** | **Partial** | Selection change immediately rebinds `streamSessionIdRef` / clears turn+sequence when affinity does not already match. Snapshot wait / full load affinity still incomplete (see F-27) | `useChat.ts` |
+| F-12 | **P1** | **Fixed** | Delegate and web-fetch tier resolution require `ctx.projectRuntime.config`; missing runtime/session context fails closed | `delegate.ts`, `tools/index.ts` |
+| F-14 | **P1** | **Fixed** | Same-session replacement aborts the existing actor and a per-session startup guard rejects overlapping setup | `chat.ts` |
+| F-16 | **P1** | **Fixed** | Selection immediately rebinds stream affinity; snapshot hydration also rejects snapshots for a non-selected session | `useChat.ts` |
 | F-20 | **P1** | **Fixed** | MCP managers leased per turn; `config:save` / defs reload invalidate; unused stale managers shut down | `76339bd` — `mcp/project-registry.ts`, `config.ts`, `chat.ts`, `subagent-runner.ts` |
 | F-31 | **P2** | **Fixed** | Same as F-20 — `acquire` / `release` / `invalidateProject` / `invalidateAll` / `retireIfUnused` | `76339bd` — `mcp/project-registry.ts` |
 | F-07 | **P1** | **Fixed** (hardened) | Draft-only adopt plus `draftGeneration` match so late `SESSION_CREATED` cannot steal after New Chat / project change | `76339bd` — `useSession.ts`, `chat.ts` |
 
 ### 3.2 Final remediation pass (current code verification 2026-07-12)
 
-This section supersedes the historical Open/Partial statuses retained in §4.1–§4.2. All P0 and P1 findings previously marked Open or Partial were re-verified against current code. Persisting implementation gaps were fixed; several testing-gap findings were already covered by equivalent current tests and were verified rather than duplicated.
+All P0 and P1 findings previously marked Open or Partial were re-verified against current code. Persisting implementation gaps were fixed; several testing-gap findings were already covered by equivalent current tests and were verified rather than duplicated. The corresponding rows in §4.1–§4.2 have been updated to match.
 
 | IDs | Result | Verification / remediation |
 |-----|--------|----------------------------|
@@ -114,6 +114,17 @@ This section supersedes the historical Open/Partial statuses retained in §4.1�
 | F-17 | **Fixed** | Turn events fan out to every live window currently selecting the owning session. |
 | F-18, F-19 | **Fixed** | Renderer tool IPC includes project runtime; immutable tool registries are cached per runtime snapshot. |
 | F-22–F-25 | **Verified covered** | Current suites cover navigation-only loading, session-addressed snapshots, targeted stop isolation, and secret-free runtime hydration. |
+
+### 3.3 Straightforward P2/P3 remediation pass
+
+| IDs | Result | Verification / remediation |
+|-----|--------|----------------------------|
+| F-27, F-41 | **Fixed** | Snapshot affinity and strict sequence handling are enforced and covered by event-affinity tests. |
+| F-34 | **Fixed** | Project personality prompt composition now uses one shared helper for main agents and subagents. |
+| F-39 | **Fixed** | Keychain hydration preserves the caller's config type, removing the runtime's double `unknown` cast. |
+| F-43–F-45 | **Fixed** | Added activity IPC/broadcast coverage, explicit snapshot session isolation, and retargeted legacy abort test names/comments. |
+| F-48 | **Fixed** | Replacement sends complete the prior turn's activity before publishing the new working state. |
+| F-49 | **Fixed** | Project grouping sorts each bucket directly instead of routing through the preview helper. |
 
 Focused verification: **151 tests passed across 7 suites**, TypeScript typecheck passed, changed-file ESLint passed, and `git diff --check` passed. The full suite reached **1,525 passing / 42 failing**; remaining failures are environment/pre-existing issues dominated by a `better-sqlite3` Node ABI mismatch and sandbox-denied writes under `~/.orchid`.
 
@@ -135,9 +146,9 @@ Confidence anchors: 75+ shown as primary; lower-confidence notes appear under re
 | ID | Status | Title | File:line | Reviewers | autofix_class | Why it matters | Suggested direction |
 |----|--------|-------|-----------|-----------|---------------|----------------|---------------------|
 | F-01 | **Fixed** | Empty `interrupt_subagents` cancelled every session’s running subagents | `electron/src/main/tools/subagent/interrupt.ts:52` | reliability, agent-native | safe_auto | Under concurrency, one agent’s “interrupt all” killed peer sessions’ workers. | Use `cancelRunning(ctx.sessionId)` — **done**. |
-| F-09 | **Open** | Re-selecting a session reloads disk and replaces live TodoStore mid-turn | `electron/src/main/session/manager.ts:269` | adversarial | manual | Sole owner of a running session who re-selects (or switches away and back) can wipe in-memory todos that tools are still mutating; disk may lag. | Prefer live `_sessions` / `_todoStores` when present; only reload from disk when not already in memory (or merge carefully). Multi-owner path already reuses live state. |
+| F-09 | **Fixed** | Re-selecting a session reloads disk and replaces live TodoStore mid-turn | `electron/src/main/session/manager.ts:269` | adversarial | manual | Sole owner of a running session who re-selects (or switches away and back) can wipe in-memory todos that tools are still mutating; disk may lag. | Prefer live `_sessions` / `_todoStores` when present; only reload from disk when not already in memory (or merge carefully). Multi-owner path already reuses live state. |
 | F-10 | **Fixed** | Delete a working session leaves agent/subagents running against orphan state | `electron/src/main/ipc/session.ts:230` | adversarial | manual | User deletes a “working” session from the list; actor, subagents, and tools may keep running and writing. | `forceStopSession` on delete — **done** (`76339bd`). |
-| F-11 | **Open** | `chat:send` may resolve project runtime from window draft, not bound `session.cwd` | `electron/src/main/ipc/chat.ts:525` (`ensureActiveSession`) | security | gated_auto | If draft cwd ≠ session.cwd (or sticky draft shadows), a send for an existing session can freeze the **wrong** project runtime/tools/MCP. Cross-project tool execution risk. | Prefer `active.cwd` when session already bound; only use workspace draft for true draft promotion. |
+| F-11 | **Fixed** | `chat:send` may resolve project runtime from window draft, not bound `session.cwd` | `electron/src/main/ipc/chat.ts:525` (`ensureActiveSession`) | security | gated_auto | If draft cwd ≠ session.cwd (or sticky draft shadows), a send for an existing session can freeze the **wrong** project runtime/tools/MCP. Cross-project tool execution risk. | Prefer `active.cwd` when session already bound; only use workspace draft for true draft promotion. |
 | F-06 | **Fixed** | Out-of-order `session:load` clobbers `activeSession` | `electron/src/renderer/hooks/useSession.ts:195` | julik-frontend-races | gated_auto | Fast clicks A→B: slow A response overwrote B. | Generation counter — **done**. |
 | F-08 | **Fixed** | In-flight `chat.send` poisons turn/session filter after navigation | `electron/src/renderer/hooks/useChat.ts:619` | julik-frontend-races | gated_auto | Navigate mid-send; promise resolution rewrote `streamSessionIdRef`/`streamTurnIdRef` to the old session. | Affinity check — **done**. |
 
@@ -146,48 +157,48 @@ Confidence anchors: 75+ shown as primary; lower-confidence notes appear under re
 | ID | Status | Title | File:line | Reviewers | autofix_class | Why it matters | Suggested direction |
 |----|--------|-------|-----------|-----------|---------------|----------------|---------------------|
 | F-02 | **Fixed** | `forceStopSession` double-persist INTERRUPTED after finalize | `electron/src/main/ipc/chat.ts:443` | correctness | gated_auto | Duplicate interrupted chains / history noise. | Finalized early-return — **done**. |
-| F-12 | **Partial** | Subagent (and web-fetch) tier models from process-global config | `electron/src/main/tools/subagent/delegate.ts:125` | correctness, reliability, adversarial, security | gated_auto | Happy path uses `ctx.projectRuntime.config`; legacy global tier still used when runtime omitted. | Prefer fail-closed (or require runtime) instead of silent global fallback. |
-| F-13 | **Open** | `chat:send` publishes working activity before hydrate; hydrate failure leaves stuck “working” | `electron/src/main/ipc/chat.ts:899` | reliability | gated_auto | Activity shows working forever; stop may be confusing. | Hydrate first, or complete/clear activity on hydrate failure. |
-| F-14 | **Partial** | Concurrent same-session `chat:send` can orphan a live actor without abort | `electron/src/main/ipc/chat.ts:912` | reliability | manual | Replace-on-send now aborts existing actor; concurrent overlapping sends still race without a per-session lock. | Serialize per session (queue or mutex) in addition to `forceAbortSession`. |
-| F-15 | **Open** | `chat:stop` / forceAbort do not terminate session-owned background commands | `electron/src/main/ipc/chat.ts` (stop/abort paths) | reliability | gated_auto | Activity “stop” / abort leaves shell processes running. | Call `getBackgroundStore().terminateSession(sessionId)` on stop/abort. |
+| F-12 | **Fixed** | Subagent (and web-fetch) tier models from process-global config | `electron/src/main/tools/subagent/delegate.ts:125` | correctness, reliability, adversarial, security | gated_auto | Happy path uses `ctx.projectRuntime.config`; legacy global tier still used when runtime omitted. | Prefer fail-closed (or require runtime) instead of silent global fallback. |
+| F-13 | **Fixed** | `chat:send` publishes working activity before hydrate; hydrate failure leaves stuck “working” | `electron/src/main/ipc/chat.ts:899` | reliability | gated_auto | Activity shows working forever; stop may be confusing. | Hydrate first, or complete/clear activity on hydrate failure. |
+| F-14 | **Fixed** | Concurrent same-session `chat:send` can orphan a live actor without abort | `electron/src/main/ipc/chat.ts:912` | reliability | manual | Replace-on-send now aborts existing actor; concurrent overlapping sends still race without a per-session lock. | Serialize per session (queue or mutex) in addition to `forceAbortSession`. |
+| F-15 | **Fixed** | `chat:stop` / forceAbort do not terminate session-owned background commands | `electron/src/main/ipc/chat.ts` (stop/abort paths) | reliability | gated_auto | Activity “stop” / abort leaves shell processes running. | Call `getBackgroundStore().terminateSession(sessionId)` on stop/abort. |
 | F-07 | **Fixed** | `SESSION_CREATED` always steals selection | `electron/src/renderer/hooks/useSession.ts:149` | julik-frontend-races | gated_auto | Draft promote after user selected elsewhere rebinds UI. | Draft-only adopt + `draftGeneration` — **done**. |
 | F-05 | **Fixed** | Activity map never prunes terminal idle / deleted | `useSessionActivity.ts` + `session-activity.ts` | julik-frontend-races, api-contract | safe_auto / gated_auto | Sticky ghost rows after complete/delete. | Tombstone + prune — **done**. |
-| F-16 | **Partial** | Session switch leaves `acceptsEvent` pointed at previous session until load commits | `electron/src/renderer/hooks/useChat.ts:181` | julik-frontend-races | gated_auto | Stream affinity now updates immediately on selection change; wrong-session events drop. Snapshot hydrate affinity (F-27) and load+snapshot handoff still incomplete. | Keep immediate rebind; add selected-session check on `hydrateSnapshot`. |
-| F-17 | **Open** | Only origin window receives stream events (multi-window same session) | `electron/src/main/ipc/chat.ts:205` | adversarial, api-contract | manual | Second window must rely on snapshot only; live stream invisible. | Fan-out by session subscribers, or document + always snapshot-poll. |
-| F-18 | **Open** | `tool:execute` omits `projectRuntime` → silent global config | `electron/src/main/ipc/tool.ts:50` | kieran-typescript | gated_auto | Renderer-invoked tools ignore frozen project settings. | Pass session’s project runtime into tool context. |
-| F-19 | **Open** | Full tool registry rebuilt every chat turn and subagent spawn | `electron/src/main/ipc/chat.ts:916` | performance | gated_auto | Latency/CPU under multi-session load. | Cache per runtime fingerprint; invalidate on config/defs change. |
+| F-16 | **Fixed** | Session switch leaves `acceptsEvent` pointed at previous session until load commits | `electron/src/renderer/hooks/useChat.ts:181` | julik-frontend-races | gated_auto | Stream affinity now updates immediately on selection change; wrong-session events drop. Snapshot hydrate affinity (F-27) and load+snapshot handoff still incomplete. | Keep immediate rebind; add selected-session check on `hydrateSnapshot`. |
+| F-17 | **Fixed** | Only origin window receives stream events (multi-window same session) | `electron/src/main/ipc/chat.ts:205` | adversarial, api-contract | manual | Second window must rely on snapshot only; live stream invisible. | Fan-out by session subscribers, or document + always snapshot-poll. |
+| F-18 | **Fixed** | `tool:execute` omits `projectRuntime` → silent global config | `electron/src/main/ipc/tool.ts:50` | kieran-typescript | gated_auto | Renderer-invoked tools ignore frozen project settings. | Pass session’s project runtime into tool context. |
+| F-19 | **Fixed** | Full tool registry rebuilt every chat turn and subagent spawn | `electron/src/main/ipc/chat.ts:916` | performance | gated_auto | Latency/CPU under multi-session load. | Cache per runtime fingerprint; invalidate on config/defs change. |
 | F-20 | **Fixed** | `config:save` clears project runtime cache while old MCP managers keep running | `electron/src/main/ipc/config.ts:328` + `mcp/project-registry.ts` | adversarial, performance, reliability | advisory / manual | Orphan MCP transports; memory/process leak on config churn. | Lease + invalidate + retire-when-unused — **done** (`76339bd`). |
-| F-21 | **Open** | Subagent-runner falls back to `getActive()` when spawn omits `sessionId` | `electron/src/main/agents/subagent-runner.ts:70` | adversarial | manual | Under concurrency, wrong session attachment. | Require explicit `sessionId`; fail closed. |
-| F-22 | **Open** | Missing tests: `session:load` is navigation-only (no abort) | `electron/src/main/ipc/session.ts:163` | testing | manual | Regressions reintroduce “switch cancels work”. | Integration unit test: send A, load B, assert A still streams. |
-| F-23 | **Open** | Missing navigate-mid-turn + snapshot rehydrate coverage | `electron/tests/unit/chat-ipc.test.ts` | testing | manual | Core concurrent UX unproven. | A streams → switch B → snapshot A → assert isolation. |
-| F-24 | **Open** | `chat:stop` does not prove targeted stop leaves other session running | `chat-ipc.test.ts` | testing | manual | Stop-all regressions. | Concurrent A+B; stop A; B completes. |
-| F-25 | **Open** | Key hydration mocked away on chat/subagent path (false confidence) | `chat-ipc.test.ts` | testing | manual | Provider-key regression can return. | Spy injects key; assert stream sees it; cache stays secret-free. |
-| F-26 | **Open** | No unit tests for `useChat` filtering / sequence / hydrate races | `useChat.ts` | testing | manual | Frontend isolation is untested. | Hook tests with mocked `window.orchid.chat`. |
+| F-21 | **Fixed** | Subagent-runner falls back to `getActive()` when spawn omits `sessionId` | `electron/src/main/agents/subagent-runner.ts:70` | adversarial | manual | Under concurrency, wrong session attachment. | Require explicit `sessionId`; fail closed. |
+| F-22 | **Verified covered** | Missing tests: `session:load` is navigation-only (no abort) | `electron/src/main/ipc/session.ts:163` | testing | manual | Regressions reintroduce “switch cancels work”. | Integration unit test: send A, load B, assert A still streams. |
+| F-23 | **Verified covered** | Missing navigate-mid-turn + snapshot rehydrate coverage | `electron/tests/unit/chat-ipc.test.ts` | testing | manual | Core concurrent UX unproven. | A streams → switch B → snapshot A → assert isolation. |
+| F-24 | **Verified covered** | `chat:stop` does not prove targeted stop leaves other session running | `chat-ipc.test.ts` | testing | manual | Stop-all regressions. | Concurrent A+B; stop A; B completes. |
+| F-25 | **Verified covered** | Key hydration mocked away on chat/subagent path (false confidence) | `chat-ipc.test.ts` | testing | manual | Provider-key regression can return. | Spy injects key; assert stream sees it; cache stays secret-free. |
+| F-26 | **Fixed** | No unit tests for `useChat` filtering / sequence / hydrate races | `useChat.ts` | testing | manual | Frontend isolation is untested. | Hook tests with mocked `window.orchid.chat`. |
 
 ### 4.3 P2 — fix if straightforward
 
 | ID | Status | Title | File:line | Reviewers | autofix_class | Notes |
 |----|--------|-------|-----------|-----------|---------------|-------|
 | F-03 | **Fixed** | Esc cancel `CHAT_STATE` cwd from window workspace | `chat.ts:1587` | correctness, api-contract, adversarial | safe_auto | **Done** — use `existing.cwd`. |
-| F-27 | **Open** | `hydrateSnapshot` lacks selected-session affinity | `useChat.ts:747` | julik-frontend-races | gated_auto | Stale snapshot for wrong session after rapid switch. Complements residual F-16 work. |
+| F-27 | **Fixed** | `hydrateSnapshot` lacks selected-session affinity | `useChat.ts:747` | julik-frontend-races | gated_auto | Stale snapshot for wrong session after rapid switch. Complements residual F-16 work. |
 | F-28 | **Open** | `session:load` `seedChatHistory` can clobber newer in-memory history | `session.ts:174` | adversarial | advisory | Disk behind concurrent persist. |
 | F-29 | **Open** | `forceAbortChat(windowId)` aborts **currently** selected session | `chat.ts:366` | adversarial, maintainability | advisory | Timing hazard if still used on “navigation began” semantics. |
 | F-30 | **Open** | `chat:snapshot` any `sessionId` without ownership check | `chat.ts:1463` | security | manual | Single-user desktop; still cross-window peek. |
 | F-31 | **Fixed** | ProjectMCPManagerRegistry never retires superseded managers | `mcp/project-registry.ts:44` | performance, reliability | manual | **Done** with F-20 — lease/release/invalidate/retire (`76339bd`). |
 | F-32 | **Open** | In-memory session/history caches grow; delete skips history when not selected | `session/manager.ts` | performance | manual | Long-running app leak. |
 | F-33 | **Open** | Keychain hydration every turn, no short-lived cache | `project/runtime.ts:140` | performance | gated_auto | Latency; balance vs secret residency. |
-| F-34 | **Open** | Duplicated `appendProjectPersonality` in chat + subagent-runner | `chat.ts` / `subagent-runner.ts` | maintainability | safe_auto | Extract shared helper. |
+| F-34 | **Fixed** | Duplicated `appendProjectPersonality` in chat + subagent-runner | `chat.ts` / `subagent-runner.ts` | maintainability | safe_auto | Extract shared helper. |
 | F-35 | **Open** | Near-duplicate abort paths (`forceAbortSession` vs `forceStopSession`) | `chat.ts` | maintainability | manual | Drift risk (partially reduced by F-02). |
 | F-36 | **Open** | Legacy primary/date session-list helpers unused by production UI | `session-workspace.ts` | maintainability | gated_auto | Dead code. |
 | F-37 | **Open** | Parallel project-config systems (runtime registry vs layers) | `project/layers.ts` / runtime | maintainability | manual | Cognitive load / drift. |
 | F-38 | **Open** | `chat.ts` multi-concern orchestration module | `chat.ts` | maintainability, kieran-typescript | advisory | Split actors/activity/persist/IPC. |
-| F-39 | **Open** | `hydrateProjectRuntime` double `unknown` cast | `project/runtime.ts:143` | kieran-typescript | safe_auto | Typed injection / schema re-parse. |
+| F-39 | **Fixed** | `hydrateProjectRuntime` double `unknown` cast | `project/runtime.ts:143` | kieran-typescript | safe_auto | Typed injection / schema re-parse. |
 | F-40 | **Open** | `sendTurnEvent` erases payload types with `Record<string, unknown>` | `chat.ts:205` | kieran-typescript | gated_auto | Lose compile-time event shape. |
-| F-41 | **Open** | `acceptsEvent` softens sequence with runtime typeof fallback | `useChat.ts:207` | kieran-typescript | safe_auto | Prefer hard fail if sequence missing. |
+| F-41 | **Fixed** | `acceptsEvent` softens sequence with runtime typeof fallback | `useChat.ts:207` | kieran-typescript | safe_auto | Prefer hard fail if sequence missing. |
 | F-42 | **Open** | Optional `projectRuntime` + `getToolConfig` global fallback hides isolation bugs | `tools/types.ts:63` | kieran-typescript | manual | Fail closed when turn should have runtime. Related residual of F-12. |
-| F-43 | **Open** | Session activity IPC/broadcast and chat-driven transitions under-tested | tests | testing | manual | Store-only tests insufficient. |
-| F-44 | **Open** | `chat:snapshot` assertions weak / no explicit sessionId isolation | `chat-ipc.test.ts` | testing | manual | |
-| F-45 | **Open** | forceAbort tests still encode old “session switch aborts” contract | `chat-ipc.test.ts` | testing | manual | Rename/retarget tests. |
+| F-43 | **Fixed** | Session activity IPC/broadcast and chat-driven transitions under-tested | tests | testing | manual | Store-only tests insufficient. |
+| F-44 | **Fixed** | `chat:snapshot` assertions weak / no explicit sessionId isolation | `chat-ipc.test.ts` | testing | manual | |
+| F-45 | **Fixed** | forceAbort tests still encode old “session switch aborts” contract | `chat-ipc.test.ts` | testing | manual | Rename/retarget tests. |
 | F-46 | **Open** | Stream events gained required `sessionId`/`turnId`/`sequence` without versioning | `shared/types/ipc.ts` | api-contract | advisory | Monorepo co-deployed; document contract. |
 | F-47 | **Open** | Stream events window-owner-routed, not process-broadcast | `chat.ts` | api-contract | advisory | Product decision for multi-window. |
 
@@ -196,8 +207,8 @@ Confidence anchors: 75+ shown as primary; lower-confidence notes appear under re
 | ID | Status | Title | File:line | Reviewers | Notes |
 |----|--------|-------|-----------|-----------|-------|
 | F-04 | **Fixed** | Stale SessionManager cancel-on-switch docs | `session/manager.ts:19` | maintainability | **Done**. |
-| F-48 | **Open** | `chat:send` publishes working then forceAbort marks idle (replace-on-send flicker) | `chat.ts:899` | correctness | Reorder abort vs activity publish. |
-| F-49 | **Open** | `groupSessionsByProject` pre-sorts via `previewProjectSessions(expanded=true)` | `session-workspace.ts` | maintainability | Minor inefficiency. |
+| F-48 | **Fixed** | `chat:send` publishes working then forceAbort marks idle (replace-on-send flicker) | `chat.ts:899` | correctness | Reorder abort vs activity publish. |
+| F-49 | **Fixed** | `groupSessionsByProject` pre-sorts via `previewProjectSessions(expanded=true)` | `session-workspace.ts` | maintainability | Minor inefficiency. |
 | F-50 | **Open** | `forceAbortChat` thin legacy shim with misleading name | `chat.ts:366` | maintainability | Advisory rename. |
 | F-51 | **Open** | `chat:cancel` arity change OK only because payload optional | preload | api-contract | Advisory. |
 | F-52 | **Open** | Inconsistent identity field: `markSeen` uses `id`, chat uses `sessionId` | `ipc.ts` | api-contract | Advisory consistency. |
@@ -260,7 +271,7 @@ From `docs/solutions/` and related plans (see run artifact `learnings.md`):
 
 ## 9. Testing gaps (consolidated)
 
-Priority additions:
+Priority additions (all covered by the final remediation passes):
 
 1. **`session:load` does not abort** background chat/subagents.  
 2. **Navigate mid-turn** + `chat:snapshot({ sessionId })` rehydrate with tools/sequence.  

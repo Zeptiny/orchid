@@ -140,11 +140,9 @@ export function clearProjectRuntimeRegistry(): void {
 export async function hydrateProjectRuntime(
   runtime: ProjectRuntime,
 ): Promise<ProjectRuntime> {
-  const config = await injectKeychainKeys(
-    runtime.config as unknown as Record<string, unknown>,
-  );
+  const config = await injectKeychainKeys(runtime.config);
   return Object.freeze({
     ...runtime,
-    config: config as unknown as Config,
+    config,
   });
 }
