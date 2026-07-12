@@ -1,7 +1,7 @@
 /**
  * Skill Parity Tests — U28.
  *
- * Verifies that all 15 skills from the Python TUI are ported to the TS/Electron app.
+ * Protects the complete built-in skill inventory established by the desktop migration.
  * Tests STRUCTURE (all skills load, correct metadata), not behavior.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';

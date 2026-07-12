@@ -1,11 +1,7 @@
 __pycache__/
-.venv/
-*.egg-info/
 .agents/
 node_modules/
 .playwright-mcp/
-.pytest_cache/
-.ruff_cache/
 .commandcode/
 .opencode/
 .codex/

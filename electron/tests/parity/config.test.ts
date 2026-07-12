@@ -1,7 +1,7 @@
 /**
  * Config Parity Tests — U28.
  *
- * Verifies that all 22 config fields from the Python TUI are ported to the TS/Electron app.
+ * Protects the configuration contract established by the desktop migration.
  * Tests STRUCTURE (fields exist, types correct, defaults match), not behavior.
  */
 import { describe, it, expect } from 'vitest';
@@ -37,7 +37,7 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
   { field: 'background_command_idle_timeout', type: 'number', defaultValue: 900.0, envOverride: 'ORCHID_BG_CMD_IDLE_TIMEOUT' },
   // Electron-only: AI SDK tool-loop cap (Python is unbounded)
   { field: 'max_tool_steps', type: 'number', defaultValue: 100, envOverride: 'ORCHID_MAX_TOOL_STEPS' },
-  // Electron-only UI preference (not in Python TUI)
+  // Desktop UI preference outside the migrated core configuration contract.
   { field: 'always_expand_tool_groups', type: 'boolean', defaultValue: false },
 ];
 

@@ -1,7 +1,7 @@
 /**
  * Personality loading tests — seed, load, list, append.
  *
- * Mirrors Python `src/orchid/personality/__init__.py` behaviour.
+ * Protects personality loading behavior preserved by the desktop migration.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';

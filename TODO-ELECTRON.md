@@ -6,7 +6,6 @@
 - Verify if remote embeddings model works correctly
 - Subagents vieweing
 - Do not re-parse markdown every update
-- Permitir textual serve (Atualmente tem problema com AST)
 - Controle de concorrência para travamento de arquivos
 - LSP
 - SSH / Remote Connection

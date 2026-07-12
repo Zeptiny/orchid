@@ -1,7 +1,7 @@
 /**
  * Agent Parity Tests — U28.
  *
- * Verifies that all 26 agents from the Python TUI are ported to the TS/Electron app.
+ * Protects the complete built-in agent inventory established by the desktop migration.
  * Tests STRUCTURE (all agents load, correct metadata), not behavior.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';

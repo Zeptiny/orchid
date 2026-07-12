@@ -1,7 +1,7 @@
 /**
  * Tool Parity Tests — U28.
  *
- * Verifies that all 27 tools from the Python TUI are ported to the TS/Electron app.
+ * Protects the complete built-in tool inventory established by the desktop migration.
  * Tests STRUCTURE only (definitions exist, schemas valid, handlers present), not behavior.
  *
  * Tool categories:

@@ -6,7 +6,7 @@ This is the Electron desktop client for Orchid, an AI-powered coding assistant.
 
 Orchid is a cross-platform (macOS, Windows, Linux) desktop application built with Electron 33 + React 19 + TypeScript 5.7. It provides an agentic chat interface where an LLM can read/edit files, execute commands, search code, and delegate to subagents — all via MCP-compatible tools.
 
-The project was ported from a Python codebase (`src/orchid/`) and mirrors its architecture.
+The Electron application is Orchid's sole runtime. Its main-process architecture keeps the domain boundaries established during the retired Python prototype, while all maintained implementation lives under this directory.
 
 ## Tech Stack
 
@@ -341,7 +341,7 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 - **Vitest** with `tests/**/*.test.ts` pattern
 - Unit tests: `tests/unit/` — individual modules
 - Integration tests: `tests/integration/` — component/UI flows
-- Parity tests: `tests/parity/` — verify TS matches Python behavior
+- Contract tests: `tests/parity/` — protect the migrated tool, agent, skill, command, and configuration inventories
 - Mock `window.orchid` for renderer tests
 - Use `vi.mock()` for module mocking
 
