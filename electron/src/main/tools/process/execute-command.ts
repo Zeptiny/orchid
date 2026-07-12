@@ -14,9 +14,10 @@ import * as path from 'node:path';
 import { parse as shellParse } from 'shell-quote';
 import { z } from 'zod';
 import { getConfig } from '../../config/loader';
+import type { Config } from '../../config/schema';
 import { getBackgroundStore, ENV_SUPPRESSION } from './background-store';
 import type { ToolDefinition, ToolHandler } from '../types';
-import { resolveToolPath } from '../types';
+import { getToolConfig, resolveToolPath } from '../types';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -150,7 +151,11 @@ export async function executeCommand(
   shell?: boolean,
   background?: boolean,
   interactive?: boolean,
-  options?: { sessionId?: string; agentScopeId?: string },
+  options?: {
+    sessionId?: string;
+    agentScopeId?: string;
+    config?: Pick<Config, 'command_timeout'>;
+  },
 ): Promise<{ display: string; content: string; isError?: boolean }> {
   if (description === undefined) description = command;
   // Caller (handler) should pass an absolute cwd; '.' remains for direct unit tests.
@@ -204,7 +209,7 @@ export async function executeCommand(
 
   // -- foreground path ------------------------------------------------------
   if (timeout === undefined) {
-    timeout = getConfig().command_timeout;
+    timeout = options?.config?.command_timeout ?? getConfig().command_timeout;
   }
   const timeoutMs = timeout * 1000;
 
@@ -331,6 +336,10 @@ export const executeCommandHandler: ToolHandler = async (input: unknown, ctx) =>
     shell,
     background,
     interactive,
-    { sessionId: ctx.sessionId, agentScopeId: ctx.agentScopeId ?? 'main' },
+    {
+      sessionId: ctx.sessionId,
+      agentScopeId: ctx.agentScopeId ?? 'main',
+      config: getToolConfig(ctx),
+    },
   );
 };

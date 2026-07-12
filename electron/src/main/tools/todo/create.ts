@@ -5,7 +5,7 @@
  * their scope id so peers and main do not share ownership by default.
  */
 import { z } from 'zod';
-import type { ToolDefinition, ToolHandler } from '../types';
+import type { ToolDefinition, ToolExecutionContext, ToolHandler } from '../types';
 import type { TodoStore } from './store';
 import {
   isMainAgentScope,
@@ -26,13 +26,16 @@ export interface TodoToolResult {
 }
 
 /** Callback type for notifying the UI of todo changes. */
-export type NotifyTodoChanged = () => void | Promise<void>;
+export type NotifyTodoChanged = (ctx: ToolExecutionContext) => void | Promise<void>;
 
-/** Fixed store or lazy resolver (session-scoped active store). */
-export type TodoStoreSource = TodoStore | (() => TodoStore);
+/** Fixed store or a resolver scoped to the explicit tool execution context. */
+export type TodoStoreSource = TodoStore | ((ctx: ToolExecutionContext) => TodoStore);
 
-export function resolveTodoStore(source: TodoStoreSource): TodoStore {
-  return typeof source === 'function' ? source() : source;
+export function resolveTodoStore(
+  source: TodoStoreSource,
+  ctx: ToolExecutionContext,
+): TodoStore {
+  return typeof source === 'function' ? source(ctx) : source;
 }
 
 /**
@@ -92,10 +95,10 @@ export function buildCreateTool(
     };
 
     const owner = resolveCreateOwner(ctx.agentScopeId, subagent_id);
-    const todo = resolveTodoStore(store).create(title, owner);
+    const todo = resolveTodoStore(store, ctx).create(title, owner);
 
     if (notifyChanged) {
-      await notifyChanged();
+      await notifyChanged(ctx);
     }
 
     return {

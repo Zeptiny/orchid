@@ -8,6 +8,7 @@ import { useChat } from '../hooks/useChat';
 import { useSession } from '../hooks/useSession';
 import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
+import { useSessionActivity } from '../hooks/useSessionActivity';
 import { useGlobalShortcuts } from '../keyboard';
 import type { Message } from '../../shared/types/message';
 import type { Session } from '../../shared/types/session';
@@ -19,6 +20,7 @@ import { Sidebar } from './Sidebar';
 import { LeftSidebar } from './LeftSidebar';
 import { CommandPalette } from './CommandPalette';
 import { ShortcutsHelp } from './ShortcutsHelp';
+import { SessionHeader } from './session-header';
 
 /** Flatten every chain's messages for the center pane (chronological). */
 function messagesFromSession(loaded: Session): Message[] {
@@ -32,10 +34,11 @@ interface Toast {
 }
 
 export function ChatView() {
-  const chat = useChat();
   const session = useSession();
+  const chat = useChat(session.activeSession?.id ?? null);
   const subagents = useSubagents(session.activeSession?.id ?? null);
   const todos = useTodos(session.activeSession?.id ?? null);
+  const activity = useSessionActivity();
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
@@ -57,6 +60,19 @@ export function ChatView() {
   // Guards against out-of-order session:load responses overwriting a newer pick.
   const sessionSwitchGen = useRef(0);
   const didAutoSelect = useRef(false);
+
+  useEffect(() => {
+    const sessionId = session.activeSession?.id;
+    if (!sessionId) return undefined;
+    const markSeen = () => {
+      if (document.visibilityState === 'visible') {
+        void activity.markSeen(sessionId);
+      }
+    };
+    markSeen();
+    window.addEventListener('focus', markSeen);
+    return () => window.removeEventListener('focus', markSeen);
+  }, [session.activeSession?.id, activity.markSeen]);
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => !prev);
@@ -183,19 +199,68 @@ export function ChatView() {
         return;
       }
       applySessionMessages(loadedSession);
+
+      // Returning to a running session needs the main process's latest state,
+      // not only persisted chain messages. The snapshot's sequence lets the
+      // hook reject delayed events that were already included in this view.
+      const snapshot = await chat.getSnapshot(loadedSession.id);
+      if (gen !== sessionSwitchGen.current) {
+        return;
+      }
+      chat.hydrateSnapshot(snapshot);
     },
     [session, chat, applySessionMessages],
   );
 
-  // New chat: enter draft mode (no disk file). Session is created on first send.
+  // New chat: draft in the currently selected project. Never open a folder
+  // picker here — inherit session.cwd → workspace.cwd → sticky default.
+  // Without a bound project, stay draft-unbound until the user picks a folder.
   const handleSessionCreate = useCallback(async () => {
     const gen = ++sessionSwitchGen.current;
     chat.setMessages([]);
-    await session.enterDraft();
-    if (gen !== sessionSwitchGen.current) {
-      return;
+    const inheritCwd =
+      session.activeSession?.cwd?.trim() ||
+      (session.workspace?.status === 'valid' ? session.workspace.cwd : null);
+    if (inheritCwd) {
+      const workspace = await session.setWorkspace(inheritCwd);
+      if (gen !== sessionSwitchGen.current) return;
+      if (!workspace?.cwd) {
+        applySessionMessages(null);
+        return;
+      }
     }
+    await session.enterDraft();
+    if (gen !== sessionSwitchGen.current) return;
     // Ensure empty pane after draft clear (enterDraft does not load messages).
+    applySessionMessages(null);
+  }, [session, chat, applySessionMessages]);
+
+  // Project-row New Chat: make that project the window's draft workspace, then
+  // clear selection. The first message creates a new session there while any
+  // previous conversation keeps running in its own project.
+  const handleProjectSessionCreate = useCallback(async (projectDir: string) => {
+    const gen = ++sessionSwitchGen.current;
+    const workspace = await session.setWorkspace(projectDir);
+    if (!workspace?.cwd || gen !== sessionSwitchGen.current) return;
+    chat.setMessages([]);
+    await session.enterDraft();
+    if (gen !== sessionSwitchGen.current) return;
+    applySessionMessages(null);
+    setToast({
+      severity: 'info',
+      message: `New chat in project: ${workspace.cwd}`,
+    });
+  }, [session, chat, applySessionMessages]);
+
+  // Project header click: select the project itself (draft bound to it) without
+  // loading the first session in that group.
+  const handleProjectSelect = useCallback(async (projectDir: string) => {
+    const gen = ++sessionSwitchGen.current;
+    const workspace = await session.setWorkspace(projectDir);
+    if (!workspace?.cwd || gen !== sessionSwitchGen.current) return;
+    chat.setMessages([]);
+    await session.enterDraft();
+    if (gen !== sessionSwitchGen.current) return;
     applySessionMessages(null);
   }, [session, chat, applySessionMessages]);
 
@@ -267,11 +332,19 @@ export function ChatView() {
     session.workspace == null || session.workspace.status === 'valid';
 
   const handlePickProjectDir = useCallback(async () => {
+    const startsDraft = Boolean(session.activeSession?.chains.length);
     const info = await session.pickProjectDir();
     if (info?.status === 'valid' && info.cwd) {
-      notify(`Project folder: ${info.cwd}`, 'info');
+      if (startsDraft) {
+        ++sessionSwitchGen.current;
+        chat.setMessages([]);
+        applySessionMessages(null);
+        notify(`New chat in project: ${info.cwd}`, 'info');
+      } else {
+        notify(`Project folder: ${info.cwd}`, 'info');
+      }
     }
-  }, [session, notify]);
+  }, [session, chat, applySessionMessages, notify]);
 
   const handleSend = useCallback(
     async (message: string) => {
@@ -286,11 +359,18 @@ export function ChatView() {
       }
       const preferredModel =
         session.activeSession?.model || currentModel || undefined;
-      await chat.send(message, preferredModel ? { model: preferredModel } : undefined);
+      await chat.send(message, {
+        ...(preferredModel ? { model: preferredModel } : {}),
+        ...(session.activeSession?.id
+          ? { sessionId: session.activeSession.id }
+          : { draftGeneration: session.draftGeneration }),
+      });
     },
     [
       chat,
+      session.activeSession?.id,
       session.activeSession?.model,
+      session.draftGeneration,
       currentModel,
       workspaceBound,
       notify,
@@ -546,15 +626,32 @@ export function ChatView() {
     >
       <LeftSidebar
         activeSessionId={session.activeSession?.id ?? null}
+        selectedProjectPath={
+          session.activeSession?.cwd ??
+          (session.workspace?.status === 'valid' ? session.workspace.cwd : null)
+        }
         isCollapsed={leftSidebarCollapsed}
         onOpenSettings={openSettings}
         onPickProjectDir={() => {
           void handlePickProjectDir();
         }}
+        projectPickerCreatesDraft={Boolean(session.activeSession?.chains.length)}
         onRefreshSessions={session.refresh}
-        onSessionCreate={handleSessionCreate}
+        onSessionCreate={() => {
+          void handleSessionCreate();
+        }}
+        onProjectSessionCreate={(projectDir) => {
+          void handleProjectSessionCreate(projectDir);
+        }}
+        onProjectSelect={(projectDir) => {
+          void handleProjectSelect(projectDir);
+        }}
         onSessionDelete={handleSessionDelete}
         onSessionSelect={handleSessionSelect}
+        activities={activity.activities}
+        onStopSession={(sessionId) => {
+          void chat.stop(sessionId);
+        }}
         onToggle={toggleLeftSidebar}
         sessionListState={session.listState}
         workspace={session.workspace}
@@ -578,6 +675,10 @@ export function ChatView() {
             </button>
           </div>
         )}
+        <SessionHeader
+          session={session.activeSession}
+          workspace={session.workspace}
+        />
         <ChatStream
           messages={chat.messages}
           streamingContent={chat.streamingContent}

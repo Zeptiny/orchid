@@ -38,10 +38,10 @@ import {
 } from '../config/keychain';
 import { getRuntimeConfig } from '../config/runtime';
 import {
-  applyWorkspaceProjectLayers,
   getLastAppliedProjectDir,
-  resetLastAppliedProjectDir,
 } from '../project/layers';
+import { clearProjectRuntimeRegistry } from '../project/runtime';
+import { invalidateAllProjectMCPManagers } from '../mcp/project-registry';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -322,24 +322,18 @@ export function registerConfigIPC(): void {
       const configToSave = { ...validated, providers: providersWithoutKeys };
       atomicWriteJson(HOME_CONFIG_PATH, configToSave);
 
-      // Capture sticky before reset — validated config is about to leave the cache.
-      // Without re-applying project layers, lastAppliedProjectDir can stay on a
-      // stale project while the in-memory config is home-only / wrong overlays.
-      const sticky = configToSave.default_project_dir;
-
       // Reset the cached config so next load picks up changes
       ConfigManager.reset();
-      resetLastAppliedProjectDir();
+      // Every project runtime inherits home configuration. Clear the immutable
+      // snapshots so only already-running turns retain the previous config.
+      clearProjectRuntimeRegistry();
+      invalidateAllProjectMCPManagers();
       // Drop model-metadata cache so picker limits reflect new overrides.
       clearModelMetadataCache();
 
-      if (sticky != null && sticky !== '') {
-        // Re-merge project .orchid.json + agents/skills for the sticky workspace.
-        applyWorkspaceProjectLayers(sticky);
-      } else {
-        // Home-only load — never fall back to process.cwd() as project root (R2).
-        ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
-      }
+      // Keep the process-wide compatibility cache home-only. Project overlays
+      // are independently resolved for the session/turn that needs them.
+      ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
 
       await deleteRemovedProviderKeys(currentProviders, providersWithoutKeys);
 

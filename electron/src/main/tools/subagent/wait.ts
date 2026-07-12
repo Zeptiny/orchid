@@ -35,7 +35,7 @@ export function buildWaitTool(
     category: 'subagent',
   };
 
-  const handler: ToolHandler = async (input: unknown, _ctx): Promise<SubagentToolResult> => {
+  const handler: ToolHandler = async (input: unknown, ctx): Promise<SubagentToolResult> => {
     const { subagent_ids } = input as { subagent_ids: string[] };
 
     // Validate non-empty
@@ -47,8 +47,18 @@ export function buildWaitTool(
       };
     }
 
-    // Wait for all specified subagents to reach terminal state
-    const records = await manager.wait(subagent_ids);
+    // Explicit IDs are untrusted model input. Keep the same ownership boundary
+    // as the empty-list interrupt path: a session may only observe its own
+    // subagents. Legacy direct callers without a session can only observe
+    // legacy unscoped records.
+    const ownedIds = subagent_ids.filter(
+      (id) => (manager.getRecord(id)?.sessionId ?? null) === (ctx?.sessionId ?? null),
+    );
+
+    // Wait only for records the caller owns. This must happen after filtering:
+    // waiting for a peer record would otherwise block this turn and expose its
+    // terminal state through timing even if its result were omitted.
+    const records = await manager.wait(ownedIds);
 
     // Persist latest subagent chains onto each owning session (not blindly active)
     try {

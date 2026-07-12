@@ -16,9 +16,8 @@
  */
 import * as fs from 'node:fs';
 import { z } from 'zod';
-import { getConfig } from '../../config/loader';
 import type { ToolDefinition, ToolHandler } from '../types';
-import { resolveToolPath } from '../types';
+import { getToolConfig, resolveToolPath } from '../types';
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 
@@ -69,7 +68,7 @@ function isBinaryFile(filePath: string): boolean {
 export const readHandler: ToolHandler = async (input: unknown, ctx) => {
   const { file_path: rawPath, offset = 1, limit } = input as ReadInput;
   const file_path = resolveToolPath(ctx.cwd, rawPath);
-  const effectiveLimit = limit ?? getConfig().read_line_limit;
+  const effectiveLimit = limit ?? getToolConfig(ctx).read_line_limit;
 
   try {
     // Binary check

@@ -9,6 +9,9 @@
  */
 import * as path from 'node:path';
 import { z } from 'zod';
+import { getConfig } from '../config/loader';
+import type { Config } from '../config/schema';
+import type { ProjectRuntime } from '../project/runtime';
 
 /**
  * Defines a tool's metadata and schema.
@@ -56,11 +59,24 @@ export interface ToolExecutionContext {
   cwd: string;
   /** Session id when available (bg process ownership, output offload). */
   sessionId?: string;
+  /** Immutable project definitions captured when the parent turn began. */
+  projectRuntime?: ProjectRuntime;
   /**
    * Agent scope within the session (`"main"` or subagent id).
    * Isolates todos and background commands so peer agents cannot see each other.
    */
   agentScopeId?: string;
+}
+
+/**
+ * Resolve configuration for one tool invocation.
+ *
+ * Turns carry a frozen project runtime, so a tool must prefer that snapshot
+ * over the legacy process-wide ConfigManager. The fallback keeps direct tool
+ * callers and legacy IPC surfaces compatible.
+ */
+export function getToolConfig(ctx: ToolExecutionContext): Config {
+  return ctx.projectRuntime?.config ?? getConfig();
 }
 
 /**

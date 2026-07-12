@@ -1,9 +1,5 @@
 /**
- * App root — theme provider + ChatView layout + Preferences + Onboarding.
- *
- * U19 provides the shell with theme switching.
- * U20 replaces SpikeChat with the full ChatStream + Sidebar.
- * U24 adds Preferences modal and Onboarding first-run flow.
+ * App root — theme provider + ChatView layout + ConfigView + Onboarding.
  */
 import { useState, useEffect, useCallback } from 'react';
 import { ChatView } from './components/ChatView';
@@ -131,11 +127,12 @@ function App() {
 
   return (
     <div className="app-root" data-theme={theme}>
-      {configOpen ? (
-        <ConfigView onClose={() => setConfigOpen(false)} />
-      ) : (
+      {/* Keep ChatView mounted under Config so selection/draft state is not
+          wiped and the first session is not auto-selected again on close. */}
+      <div className={configOpen ? 'hidden' : 'contents'} aria-hidden={configOpen}>
         <ChatView />
-      )}
+      </div>
+      {configOpen && <ConfigView onClose={() => setConfigOpen(false)} />}
       <OnboardingScreen
         isOpen={onboardingOpen && onboardingChecked}
         onComplete={async (config) => {

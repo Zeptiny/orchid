@@ -17,6 +17,7 @@ import {
 } from '../rag/indexer';
 import { resolveWindowWorkspace } from './session';
 import { isWorkspaceBound } from '../project/workspace';
+import { getProjectRuntimeRegistry } from '../project/runtime';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -41,9 +42,10 @@ function resolveRagProjectPath(windowId?: string): string | null {
   return null;
 }
 
-function broadcastProgress(progress: RAGIndexProgress): void {
+function broadcastProgress(projectPath: string, progress: RAGIndexProgress): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
+    if (resolveRagProjectPath(String(win.webContents.id)) !== projectPath) continue;
     win.webContents.send(IPC_CHANNELS.RAG_PROGRESS, progress);
   }
 }
@@ -66,7 +68,10 @@ export function registerRAGIPC(): void {
   });
 
   // rag:index_state — in-flight run snapshot for remounting UIs
-  ipcMain.handle(IPC_CHANNELS.RAG_INDEX_STATE, async () => getIndexState());
+  ipcMain.handle(IPC_CHANNELS.RAG_INDEX_STATE, async (event) => {
+    const projectPath = resolveRagProjectPath(String(event.sender.id));
+    return getIndexState(projectPath ?? undefined);
+  });
 
   // rag:index — trigger RAG indexing in a worker; stream progress to all windows
   ipcMain.handle(IPC_CHANNELS.RAG_INDEX, async (event, payload: unknown) => {
@@ -76,18 +81,6 @@ export function registerRAGIPC(): void {
     }
 
     const { force } = parsed.data;
-
-    if (isIndexing()) {
-      return {
-        filesScanned: 0,
-        filesIndexed: 0,
-        filesSkipped: 0,
-        filesDeleted: 0,
-        chunksCreated: 0,
-        errors: ['Indexing already in progress'],
-        durationSeconds: 0,
-      };
-    }
 
     const projectPath = resolveRagProjectPath(String(event.sender.id));
     if (!projectPath) {
@@ -102,7 +95,28 @@ export function registerRAGIPC(): void {
       };
     }
 
-    return indexProject(projectPath, undefined, force, undefined, broadcastProgress);
+    if (isIndexing(projectPath)) {
+      return {
+        filesScanned: 0,
+        filesIndexed: 0,
+        filesSkipped: 0,
+        filesDeleted: 0,
+        chunksCreated: 0,
+        errors: ['Indexing already in progress'],
+        durationSeconds: 0,
+      };
+    }
+
+    return indexProject(
+      projectPath,
+      undefined,
+      force,
+      undefined,
+      (progress) => broadcastProgress(projectPath, progress),
+      {
+        config: getProjectRuntimeRegistry().get(projectPath).config,
+      },
+    );
   });
 
   // rag:clear — clear the RAG index

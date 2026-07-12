@@ -5,6 +5,9 @@ const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const streamResponses: string[] = [];
   const streamEventSequences: Array<Array<Record<string, unknown>>> = [];
+  const electronWebContents = {
+    fromId: vi.fn(() => null),
+  };
 
   let activeSession: {
     id: string;
@@ -21,6 +24,67 @@ const mocks = vi.hoisted(() => {
 
   let workspaceBound = true;
   const testProjectDir = '/tmp/orchid-chat-ipc-project';
+  const workspaceByWindow = new Map<string, string>();
+  const generalAgent = {
+    name: 'general',
+    type: 'subagent' as const,
+    tier: 'bloom' as const,
+    description: 'General-purpose agent',
+    system_prompt: 'You are a helpful assistant.',
+    allowed_tools: ['*'],
+    allowed_skills: ['*'],
+  };
+  const runtimeByCwd = new Map<string, {
+    config: Record<string, unknown>;
+    agents: Map<string, typeof generalAgent>;
+    skills: Map<string, unknown>;
+    personalities: Map<string, string>;
+  }>();
+  const runtimeRegistry = {
+    get: vi.fn((cwd: string) => {
+      const existing = runtimeByCwd.get(cwd);
+      if (existing) return { projectDir: cwd, ...existing };
+      return {
+        projectDir: cwd,
+        config: {
+          default_model: 'test/model',
+          tier_models: { bloom: 'test/model' },
+          command_timeout: 30,
+          llm_stream_retries: 0,
+        },
+        agents: new Map([['general', generalAgent]]),
+        skills: new Map(),
+        personalities: new Map(),
+      };
+    }),
+    _set: (cwd: string, runtime: {
+      config?: Record<string, unknown>;
+      agents?: Map<string, typeof generalAgent>;
+      skills?: Map<string, unknown>;
+      personalities?: Map<string, string>;
+    }) => {
+      runtimeByCwd.set(cwd, {
+        config: runtime.config ?? {
+          default_model: 'test/model',
+          tier_models: { bloom: 'test/model' },
+          command_timeout: 30,
+          llm_stream_retries: 0,
+        },
+        agents: runtime.agents ?? new Map([['general', generalAgent]]),
+        skills: runtime.skills ?? new Map(),
+        personalities: runtime.personalities ?? new Map(),
+      });
+    },
+    _reset: () => {
+      runtimeByCwd.clear();
+      runtimeRegistry.get.mockClear();
+    },
+  };
+  const toolRegistry = {
+    filter: vi.fn(() => []),
+    get: vi.fn(() => null),
+    validate: vi.fn(() => ({ ok: true as const, data: {} })),
+  };
 
   const sessionManager = {
     getActive: vi.fn(() => activeSession),
@@ -29,7 +93,7 @@ const mocks = vi.hoisted(() => {
     }),
     create: vi.fn((model: string, options?: { cwd?: string | null }) => {
       activeSession = {
-        id: 'lazy-session-id',
+        id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
         name: 'Session draft',
         model,
         cwd: options?.cwd ?? null,
@@ -120,10 +184,12 @@ const mocks = vi.hoisted(() => {
       return sessionManager.persistTurn(params);
     }),
     autoNameActive: vi.fn(async () => activeSession),
+    autoName: vi.fn(async () => activeSession),
     /** Test helper: reset between cases */
     _reset: () => {
       activeSession = null;
       workspaceBound = true;
+      workspaceByWindow.clear();
       sessionManager.getActive.mockClear();
       sessionManager.create.mockClear();
       sessionManager.changeCwd.mockClear();
@@ -132,6 +198,7 @@ const mocks = vi.hoisted(() => {
       sessionManager.persistTurn.mockClear();
       sessionManager.syncActiveChain.mockClear();
       sessionManager.autoNameActive.mockClear();
+      sessionManager.autoName.mockClear();
     },
     /** Test helper: seed an active session without going through create(). */
     _setActive: (session: typeof activeSession) => {
@@ -140,12 +207,12 @@ const mocks = vi.hoisted(() => {
   };
 
   const workspace = {
-    resolveWorkspace: vi.fn((_windowId: string, _options?: unknown) => {
+    resolveWorkspace: vi.fn((windowId: string, _options?: unknown) => {
       if (!workspaceBound) {
         return { cwd: null, source: 'unbound' as const, status: 'unbound' as const };
       }
       return {
-        cwd: testProjectDir,
+        cwd: workspaceByWindow.get(windowId) ?? testProjectDir,
         source: 'default' as const,
         status: 'valid' as const,
       };
@@ -162,6 +229,9 @@ const mocks = vi.hoisted(() => {
     resolveWorkspaceFromParts: vi.fn(),
     _setBound: (bound: boolean) => {
       workspaceBound = bound;
+    },
+    _setWindowCwd: (windowId: string, cwd: string) => {
+      workspaceByWindow.set(windowId, cwd);
     },
     _testProjectDir: testProjectDir,
   };
@@ -194,28 +264,24 @@ const mocks = vi.hoisted(() => {
       }
       yield { type: 'finish', finishReason: 'stop' };
     }),
-    listAgents: vi.fn(() => [
-      {
-        name: 'general',
-        type: 'subagent',
-        tier: 'bloom',
-        description: 'General-purpose agent',
-        system_prompt: 'You are a helpful assistant.',
-        allowed_tools: ['*'],
-        allowed_skills: ['*'],
-      },
-    ]),
+    listAgents: vi.fn(() => [generalAgent]),
     subagentManager: {
       cancelRunning: vi.fn(() => []),
     },
+    publishSessionActivity: vi.fn(),
+    completeSessionActivity: vi.fn(),
+    electronWebContents,
+    runtimeRegistry,
+    toolRegistry,
   };
 });
 
 vi.mock('electron', () => ({
   ipcMain: mocks.ipcMain,
-  webContents: {
-    fromId: vi.fn(() => null),
+  BrowserWindow: {
+    getAllWindows: vi.fn(() => []),
   },
+  webContents: mocks.electronWebContents,
 }));
 
 vi.mock('../../src/main/config/loader', () => ({
@@ -251,10 +317,9 @@ vi.mock('../../src/main/llm/providers-factory', () => ({
 }));
 
 vi.mock('../../src/main/tools', () => ({
-  toolRegistry: {
-    filter: vi.fn(() => []),
-    get: vi.fn(() => null),
-  },
+  toolRegistry: mocks.toolRegistry,
+  createBuiltinToolRegistry: vi.fn(() => mocks.toolRegistry),
+  getBuiltinToolRegistryForRuntime: vi.fn(() => mocks.toolRegistry),
   getSubagentManager: vi.fn(() => mocks.subagentManager),
 }));
 
@@ -278,6 +343,16 @@ vi.mock('../../src/main/project/layers', () => ({
   })),
   getLastAppliedProjectDir: vi.fn(() => null),
   resetLastAppliedProjectDir: vi.fn(),
+}));
+
+vi.mock('../../src/main/project/runtime', () => ({
+  getProjectRuntimeRegistry: () => mocks.runtimeRegistry,
+  hydrateProjectRuntime: async <T>(runtime: T) => runtime,
+}));
+
+vi.mock('../../src/main/ipc/session-activity', () => ({
+  publishSessionActivity: mocks.publishSessionActivity,
+  completeSessionActivity: mocks.completeSessionActivity,
 }));
 
 vi.mock('../../src/main/project/workspace', () => ({
@@ -318,6 +393,21 @@ async function waitForDoneCount(send: ReturnType<typeof vi.fn>, count: number) {
   throw new Error(`Timed out waiting for ${count} chat:done events`);
 }
 
+function makeSession(id: string, cwd = mocks.workspace._testProjectDir) {
+  return {
+    id,
+    name: `Session ${id.slice(0, 8)}`,
+    model: 'test/model',
+    cwd,
+    chains: [],
+    activeChainId: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    subagentChains: [],
+    todoStore: { tasks: [] },
+  };
+}
+
 describe('chat IPC', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -325,6 +415,9 @@ describe('chat IPC', () => {
     mocks.streamResponses.length = 0;
     mocks.streamEventSequences.length = 0;
     mocks.subagentManager.cancelRunning.mockClear();
+    mocks.runtimeRegistry._reset();
+    mocks.electronWebContents.fromId.mockReset();
+    mocks.electronWebContents.fromId.mockReturnValue(null);
     mocks.sessionManager._reset();
 
     chatIpc = await import('../../src/main/ipc/chat');
@@ -354,18 +447,29 @@ describe('chat IPC', () => {
     );
     await waitForDoneCount(send, 1);
 
+    expect(mocks.publishSessionActivity).toHaveBeenCalledWith(
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      expect.objectContaining({ state: 'working', phase: 'agent' }),
+    );
+    expect(mocks.completeSessionActivity).toHaveBeenCalledWith(
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      false,
+    );
+
     expect(mocks.sessionManager.create).toHaveBeenCalledTimes(1);
-    expect(mocks.sessionManager.create).toHaveBeenCalledWith('preferred/model', {
-      cwd: mocks.workspace._testProjectDir,
-    });
-    expect(mocks.sessionManager.getActive()?.id).toBe('lazy-session-id');
+    expect(mocks.sessionManager.create).toHaveBeenCalledWith(
+      'preferred/model',
+      { cwd: mocks.workspace._testProjectDir },
+      '99',
+    );
+    expect(mocks.sessionManager.getActive()?.id).toBe('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
     expect(mocks.sessionManager.getActive()?.cwd).toBe(mocks.workspace._testProjectDir);
     expect(mocks.workspace.clearDraftCwd).toHaveBeenCalledWith('99');
 
     const created = channelEvents(send, IPC_CHANNELS.SESSION_CREATED);
     expect(created).toHaveLength(1);
     expect(created[0][1]).toMatchObject({
-      session: { id: 'lazy-session-id', model: 'preferred/model' },
+      session: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', model: 'preferred/model' },
     });
 
     // Second send reuses the active session — no second create
@@ -457,6 +561,83 @@ describe('chat IPC', () => {
     };
     expect(call.context?.cwd).toBe(mocks.workspace._testProjectDir);
     expect(call.sessionId).toBe('turn-ctx-session');
+  });
+
+  it('captures independent project config, agents, and personality for each turn', async () => {
+    const projectA = '/tmp/orchid-project-a';
+    const projectB = '/tmp/orchid-project-b';
+    const sessionA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const sessionB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    mocks.workspace._setWindowCwd('111', projectA);
+    mocks.workspace._setWindowCwd('112', projectB);
+    mocks.runtimeRegistry._set(projectA, {
+      config: {
+        default_model: 'project-a/model',
+        tier_models: { bloom: 'project-a/model' },
+        command_timeout: 30,
+        llm_stream_retries: 0,
+        personality: 'voice',
+      },
+      agents: new Map([['general', {
+        name: 'general',
+        type: 'subagent' as const,
+        tier: 'bloom' as const,
+        description: 'Project A agent',
+        system_prompt: 'Project A prompt.',
+        allowed_tools: ['*'],
+        allowed_skills: ['*'],
+      }]]),
+      personalities: new Map([['voice', 'Project A voice.']]),
+    });
+    mocks.runtimeRegistry._set(projectB, {
+      config: {
+        default_model: 'project-b/model',
+        tier_models: { bloom: 'project-b/model' },
+        command_timeout: 30,
+        llm_stream_retries: 0,
+        personality: 'voice',
+      },
+      agents: new Map([['general', {
+        name: 'general',
+        type: 'subagent' as const,
+        tier: 'bloom' as const,
+        description: 'Project B agent',
+        system_prompt: 'Project B prompt.',
+        allowed_tools: ['*'],
+        allowed_skills: ['*'],
+      }]]),
+      personalities: new Map([['voice', 'Project B voice.']]),
+    });
+    mocks.streamResponses.push('A done', 'B done');
+
+    const sendA = vi.fn();
+    const sendB = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+    expect(chatSend).toBeDefined();
+
+    mocks.sessionManager._setActive(makeSession(sessionA, projectA));
+    await chatSend!({ sender: { id: 111, send: sendA } }, { message: 'A' });
+    await waitForDoneCount(sendA, 1);
+
+    mocks.sessionManager._setActive(makeSession(sessionB, projectB));
+    await chatSend!({ sender: { id: 112, send: sendB } }, { message: 'B' });
+    await waitForDoneCount(sendB, 1);
+
+    const first = mocks.streamChat.mock.calls[0]?.[0] as {
+      config: { default_model: string };
+      agent: { description: string };
+      systemPrompt: string;
+      context: { cwd: string };
+    };
+    const second = mocks.streamChat.mock.calls[1]?.[0] as typeof first;
+    expect(first.config.default_model).toBe('project-a/model');
+    expect(first.agent.description).toBe('Project A agent');
+    expect(first.systemPrompt).toContain('Project A voice.');
+    expect(first.context.cwd).toBe(projectA);
+    expect(second.config.default_model).toBe('project-b/model');
+    expect(second.agent.description).toBe('Project B agent');
+    expect(second.systemPrompt).toContain('Project B voice.');
+    expect(second.context.cwd).toBe(projectB);
   });
 
   it('does not replay the previous assistant response when a new turn starts', async () => {
@@ -574,6 +755,59 @@ describe('chat IPC', () => {
     expect(payload.response).toContain('Partial');
     expect(payload.response).not.toContain('[Interrupted by user]');
 
+    await sendPromise;
+  });
+
+  it('returns a session-addressed live snapshot for a running turn', async () => {
+    let releaseStream: (() => void) | undefined;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+
+    const send = vi.fn();
+    const webContents = { id: 49, send };
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+    const chatSnapshot = mocks.handlers.get(IPC_CHANNELS.CHAT_SNAPSHOT);
+    expect(chatSend).toBeDefined();
+    expect(chatSnapshot).toBeDefined();
+
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'Live partial response' };
+      await streamGate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const sendPromise = chatSend!({ sender: webContents }, { message: 'Keep going' });
+
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline) {
+      if (channelEvents(send, IPC_CHANNELS.CHAT_CHUNK).length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const snapshot = await chatSnapshot!(
+      { sender: webContents },
+      { sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+    );
+    expect(snapshot).toMatchObject({
+      sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      state: 'streaming',
+      response: 'Live partial response',
+      thinking: '',
+      toolCalls: [],
+      error: null,
+      interrupted: false,
+    });
+    expect(snapshot.turnId).toEqual(expect.any(String));
+    expect(snapshot.sequence).toEqual(expect.any(Number));
+    expect(
+      await chatSnapshot!(
+        { sender: webContents },
+        { sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+      ),
+    ).toBeNull();
+
+    releaseStream!();
     await sendPromise;
   });
 
@@ -702,8 +936,8 @@ describe('chat IPC', () => {
       });
     },
   );
-  it('forceAbortChat stops further CHAT_CHUNK emission (session switch)', async () => {
-    // Stream yields one chunk, pauses (session switch window), then more content.
+  it('explicit window abort stops further CHAT_CHUNK emission', async () => {
+    // Stream yields one chunk, pauses during an explicit abort window, then more content.
     let releaseSecondHalf: (() => void) | undefined;
     const secondHalf = new Promise<void>((resolve) => {
       releaseSecondHalf = resolve;
@@ -737,7 +971,7 @@ describe('chat IPC', () => {
       chunksBefore.some(([, p]) => (p as { data: string }).data.includes('Session-A-chunk')),
     ).toBe(true);
 
-    // Simulate session:load / session:create abort path
+    // Explicitly abort the selected session through the legacy window shim.
     chatIpc.forceAbortChat(String(webContents.id));
 
     // Let the stream continue after abort — stale content must not be forwarded
@@ -757,7 +991,7 @@ describe('chat IPC', () => {
     expect(donesAfterAbort).toHaveLength(0);
   });
 
-  it('forceAbortChat prevents old agent chunks from interleaving with a new turn', async () => {
+  it('replacement send aborts old activity before publishing the new turn', async () => {
     let releaseOldStream: (() => void) | undefined;
     const oldStreamGate = new Promise<void>((resolve) => {
       releaseOldStream = resolve;
@@ -794,10 +1028,16 @@ describe('chat IPC', () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
-    // Session switch aborts old agent, then a new turn starts on the same window
-    chatIpc.forceAbortChat(String(webContents.id));
+    mocks.publishSessionActivity.mockClear();
+    mocks.completeSessionActivity.mockClear();
+
+    // Replacement send owns the abort and must finish old activity first.
     await chatSend!({ sender: webContents }, { message: 'new' });
     await waitForDoneCount(send, 1);
+
+    expect(mocks.completeSessionActivity.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.publishSessionActivity.mock.invocationCallOrder[0]!,
+    );
 
     // Old stream resumes after the new turn — must not emit stale chunks
     releaseOldStream!();
@@ -812,6 +1052,137 @@ describe('chat IPC', () => {
 
     const responses = doneEvents(send).map(([, p]) => (p as { response: string }).response);
     expect(responses).toEqual(['NEW-TURN']);
+  });
+
+  it('cancels only the requested running session and preserves another window stream', async () => {
+    const sessionA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const sessionB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    let releaseA: (() => void) | undefined;
+    let releaseB: (() => void) | undefined;
+    const aGate = new Promise<void>((resolve) => { releaseA = resolve; });
+    const bGate = new Promise<void>((resolve) => { releaseB = resolve; });
+
+    mocks.streamChat
+      .mockImplementationOnce(async function* () {
+        yield { type: 'content', text: 'A-first' };
+        await aGate;
+        yield { type: 'content', text: 'A-stale-tail' };
+        yield { type: 'finish', finishReason: 'stop' };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: 'content', text: 'B-first' };
+        await bGate;
+        yield { type: 'content', text: 'B-finished' };
+        yield { type: 'finish', finishReason: 'stop' };
+      });
+
+    const sendA = vi.fn();
+    const sendB = vi.fn();
+    const windowA = { id: 301, send: sendA };
+    const windowB = { id: 302, send: sendB };
+    mocks.electronWebContents.fromId.mockImplementation((id: number) => {
+      if (id === windowA.id) return windowA;
+      if (id === windowB.id) return windowB;
+      return null;
+    });
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+    const chatCancel = mocks.handlers.get(IPC_CHANNELS.CHAT_CANCEL);
+    expect(chatSend).toBeDefined();
+    expect(chatCancel).toBeDefined();
+
+    mocks.sessionManager._setActive(makeSession(sessionA));
+    const aSendPromise = chatSend!({ sender: windowA }, { message: 'run A' });
+    const firstDeadline = Date.now() + 1000;
+    while (Date.now() < firstDeadline) {
+      if (channelEvents(sendA, IPC_CHANNELS.CHAT_CHUNK).length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    mocks.sessionManager._setActive(makeSession(sessionB));
+    const bSendPromise = chatSend!({ sender: windowB }, { message: 'run B' });
+    const secondDeadline = Date.now() + 1000;
+    while (Date.now() < secondDeadline) {
+      if (channelEvents(sendB, IPC_CHANNELS.CHAT_CHUNK).length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    expect(await chatCancel!({ sender: windowB }, { sessionId: sessionA })).toEqual({
+      status: 'confirming',
+    });
+    expect(await chatCancel!({ sender: windowB }, { sessionId: sessionA })).toEqual({
+      status: 'confirming_subagents',
+    });
+    expect(await chatCancel!({ sender: windowB }, { sessionId: sessionA })).toEqual({
+      status: 'cancelled',
+    });
+    expect(mocks.subagentManager.cancelRunning).toHaveBeenCalledWith(sessionA);
+
+    releaseB!();
+    await bSendPromise;
+    await waitForDoneCount(sendB, 1);
+
+    releaseA!();
+    await aSendPromise;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const aChunks = channelEvents(sendA, IPC_CHANNELS.CHAT_CHUNK).map(
+      ([, event]) => event as { sessionId: string; data: string },
+    );
+    const bChunks = channelEvents(sendB, IPC_CHANNELS.CHAT_CHUNK).map(
+      ([, event]) => event as { sessionId: string; data: string },
+    );
+    expect(aChunks.some((event) => event.data === 'A-stale-tail')).toBe(false);
+    expect(aChunks.every((event) => event.sessionId === sessionA)).toBe(true);
+    expect(bChunks.every((event) => event.sessionId === sessionB)).toBe(true);
+    expect(bChunks.some((event) => event.data === 'B-finished')).toBe(true);
+
+    expect(doneEvents(sendA).map(([, event]) => (event as { sessionId: string }).sessionId))
+      .toContain(sessionA);
+    expect(doneEvents(sendB).map(([, event]) => (event as { sessionId: string }).sessionId))
+      .toEqual([sessionB]);
+  });
+
+  it('immediately stops one session for the global activity surface', async () => {
+    const sessionId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'Before stop' };
+      await gate;
+      yield { type: 'content', text: 'Must not leak' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const windowA = { id: 350, send };
+    mocks.electronWebContents.fromId.mockImplementation((id: number) =>
+      id === windowA.id ? windowA : null,
+    );
+    mocks.sessionManager._setActive(makeSession(sessionId));
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+    const chatStop = mocks.handlers.get(IPC_CHANNELS.CHAT_STOP);
+    expect(chatSend).toBeDefined();
+    expect(chatStop).toBeDefined();
+
+    const sendPromise = chatSend!({ sender: windowA }, { message: 'Stop me' });
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline) {
+      if (channelEvents(send, IPC_CHANNELS.CHAT_CHUNK).length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    expect(await chatStop!({ sender: { id: 351, send: vi.fn() } }, { sessionId }))
+      .toEqual({ status: 'stopped' });
+    expect(mocks.subagentManager.cancelRunning).toHaveBeenCalledWith(sessionId);
+    expect(doneEvents(send).map(([, event]) => (event as { sessionId: string }).sessionId))
+      .toContain(sessionId);
+
+    release!();
+    await sendPromise;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(channelEvents(send, IPC_CHANNELS.CHAT_CHUNK).some(([, event]) =>
+      (event as { data: string }).data === 'Must not leak',
+    )).toBe(false);
   });
 
   it('multi-chain: startChain + persistTurn turn-local + SESSION_UPDATED on each send', async () => {

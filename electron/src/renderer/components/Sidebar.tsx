@@ -90,7 +90,9 @@ export function Sidebar({
   return (
     <aside className="right-panel">
       <div className="panel-header">
-        <h1 className="title truncate">{title}</h1>
+        <div className="min-w-0">
+          <h1 className="title truncate">{title}</h1>
+        </div>
         <button
           className="btn btn-ghost btn-sm btn-circle"
           onClick={onToggle}

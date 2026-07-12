@@ -7,7 +7,7 @@
  * - load(), create(), delete(), rename() actions
  * - Loading/error states (interaction states)
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Session } from '../../shared/types/session';
 import type { SessionSummary } from '../../shared/types/ipc-boundary';
 import type { WorkspaceInfo } from '../../shared/types/ipc';
@@ -55,6 +55,8 @@ export interface UseSessionReturn {
   setWorkspace: (cwd: string) => Promise<WorkspaceInfo | null>;
   /** Change cwd on a session and update sticky default. */
   changeCwd: (id: string, cwd: string) => Promise<Session | null>;
+  /** Monotonic draft-navigation identity for lazy chat creation events. */
+  draftGeneration: number;
   /** Refresh the session list. */
   refresh: () => Promise<void>;
   /** Whether a session is currently loading. */
@@ -74,6 +76,16 @@ export function useSession(): UseSessionReturn {
   const [listState, setListState] = useState<SessionListState>({ status: 'loading' });
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  /** Monotonic generation so out-of-order session:load responses are dropped. */
+  const loadGenerationRef = useRef(0);
+  const draftGenerationRef = useRef(0);
+  const [draftGeneration, setDraftGeneration] = useState(0);
+  const advanceDraftGeneration = useCallback(() => {
+    const next = draftGenerationRef.current + 1;
+    draftGenerationRef.current = next;
+    setDraftGeneration(next);
+    return next;
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!window.orchid?.session?.list) {
@@ -139,14 +151,25 @@ export function useSession(): UseSessionReturn {
   }, [refresh]);
 
   // Lazy create: first chat:send with no active session creates one in main
-  // and pushes SESSION_CREATED so the sidebar gains a list entry.
+  // and pushes SESSION_CREATED so the sidebar gains a list entry. Only adopt
+  // when this window is still in draft (no active session) so a concurrent
+  // promotion cannot steal selection after the user navigated elsewhere.
   useEffect(() => {
     if (!window.orchid?.session?.onCreated) {
       return undefined;
     }
 
     const unsubscribe = window.orchid.session.onCreated((event) => {
-      setActiveSession(event.session);
+      setActiveSession((prev) => {
+        if (prev != null) return prev;
+        if (
+          event.draftGeneration != null &&
+          event.draftGeneration !== draftGenerationRef.current
+        ) {
+          return prev;
+        }
+        return event.session;
+      });
       void refresh();
       void getWorkspace();
     });
@@ -189,9 +212,15 @@ export function useSession(): UseSessionReturn {
       return null;
     }
 
+    const generation = ++loadGenerationRef.current;
+    advanceDraftGeneration();
     setIsLoading(true);
     try {
       const session = await window.orchid.session.load({ id });
+      // Drop stale responses when a newer load (or draft) superseded this one.
+      if (generation !== loadGenerationRef.current) {
+        return session;
+      }
       setActiveSession(session);
       // Load does not rewrite sticky default; refresh workspace from session.
       void getWorkspace();
@@ -200,9 +229,11 @@ export function useSession(): UseSessionReturn {
       console.error('Failed to load session:', err);
       return null;
     } finally {
-      setIsLoading(false);
+      if (generation === loadGenerationRef.current) {
+        setIsLoading(false);
+      }
     }
-  }, [getWorkspace]);
+  }, [getWorkspace, advanceDraftGeneration]);
 
   const create = useCallback(async () => {
     if (!window.orchid?.session?.create) {
@@ -234,22 +265,28 @@ export function useSession(): UseSessionReturn {
   }, [refresh]);
 
   const enterDraft = useCallback(async () => {
+    loadGenerationRef.current += 1;
+    advanceDraftGeneration();
     if (window.orchid?.session?.clearActive) {
       await window.orchid.session.clearActive();
     }
     setActiveSession(null);
     void getWorkspace();
-  }, [getWorkspace]);
+  }, [getWorkspace, advanceDraftGeneration]);
 
   const pickProjectDir = useCallback(async (): Promise<WorkspaceInfo | null> => {
     if (!window.orchid?.session?.pickProjectDir) {
       return null;
     }
     try {
+      advanceDraftGeneration();
       const info = await window.orchid.session.pickProjectDir();
       setWorkspace(info);
-      // Active session cwd may have been updated by the pick.
-      if (activeSession && info.cwd) {
+      // The main process turns a non-empty session into a draft in the new
+      // project. Do not make the old conversation appear to have moved.
+      if (activeSession?.chains.length) {
+        setActiveSession(null);
+      } else if (activeSession && info.cwd) {
         setActiveSession((prev) => (prev ? { ...prev, cwd: info.cwd } : null));
       }
       return info;
@@ -257,16 +294,22 @@ export function useSession(): UseSessionReturn {
       console.error('Failed to pick project directory:', err);
       return null;
     }
-  }, [activeSession]);
+  }, [activeSession, advanceDraftGeneration]);
 
   const setWorkspacePath = useCallback(async (cwd: string): Promise<WorkspaceInfo | null> => {
     if (!window.orchid?.session?.setWorkspace) {
       return null;
     }
     try {
+      advanceDraftGeneration();
       const info = await window.orchid.session.setWorkspace({ cwd });
       setWorkspace(info);
-      if (activeSession && info.cwd) {
+      // Binding a new project from a non-empty conversation starts a draft in
+      // main. Keep the old conversation out of the center pane rather than
+      // making it look as though it moved projects.
+      if (activeSession?.chains.length) {
+        setActiveSession(null);
+      } else if (activeSession && info.cwd) {
         setActiveSession((prev) => (prev ? { ...prev, cwd: info.cwd } : null));
       }
       return info;
@@ -274,7 +317,7 @@ export function useSession(): UseSessionReturn {
       console.error('Failed to set workspace:', err);
       return null;
     }
-  }, [activeSession]);
+  }, [activeSession, advanceDraftGeneration]);
 
   const changeCwd = useCallback(
     async (id: string, cwd: string): Promise<Session | null> => {
@@ -384,6 +427,7 @@ export function useSession(): UseSessionReturn {
     pickProjectDir,
     setWorkspace: setWorkspacePath,
     changeCwd,
+    draftGeneration,
     refresh,
     isLoading,
   };

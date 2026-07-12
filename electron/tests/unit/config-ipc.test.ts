@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => {
     injectKeychainKeys: vi.fn(async (cfg: Record<string, unknown>) => cfg),
     redactConfig: vi.fn((cfg: Record<string, unknown>) => cfg),
     redactApiKey: vi.fn((key: string) => key.length <= 8 ? '****' : `${key.slice(0, 3)}...${key.slice(-4)}`),
+    clearProjectRuntimeRegistry: vi.fn(),
   };
 });
 
@@ -87,6 +88,10 @@ vi.mock('../../src/main/project/layers', () => ({
   getLastAppliedProjectDir: vi.fn(() => null),
 }));
 
+vi.mock('../../src/main/project/runtime', () => ({
+  clearProjectRuntimeRegistry: mocks.clearProjectRuntimeRegistry,
+}));
+
 vi.mock('../../src/main/config/keychain', () => ({
   encryptAndStore: mocks.encryptAndStore,
   retrieveAndDecrypt: mocks.retrieveAndDecrypt,
@@ -124,6 +129,7 @@ beforeEach(async () => {
   mocks.deleteKey.mockClear();
   mocks.injectKeychainKeys.mockReset().mockImplementation(async (cfg) => cfg);
   mocks.redactConfig.mockReset().mockImplementation((cfg) => cfg);
+  mocks.clearProjectRuntimeRegistry.mockClear();
 
   // Fresh default config state for each test
   configState = defaults() as unknown as Record<string, unknown>;
@@ -269,24 +275,26 @@ describe('config:save concurrency lock (P1-3)', () => {
 });
 
 describe('config:save workspace layer reset', () => {
-  it('resets lastApplied and re-applies sticky project layers when set', async () => {
+  it('clears inherited project runtime snapshots after the home config changes', async () => {
+    await callSave({ theme: 'runtime-cache-test' });
+
+    expect(mocks.clearProjectRuntimeRegistry).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-apply one project globally when sticky is set', async () => {
     const layers = await import('../../src/main/project/layers');
-    vi.mocked(layers.resetLastAppliedProjectDir).mockClear();
     vi.mocked(layers.applyWorkspaceProjectLayers).mockClear();
 
-    const sticky = '/tmp/orchid-sticky-project';
-    configState.default_project_dir = sticky;
+    configState.default_project_dir = '/tmp/orchid-sticky-project';
 
     await callSave({ theme: 'layer-test' });
 
-    expect(layers.resetLastAppliedProjectDir).toHaveBeenCalled();
-    expect(layers.applyWorkspaceProjectLayers).toHaveBeenCalledWith(sticky);
+    expect(layers.applyWorkspaceProjectLayers).not.toHaveBeenCalled();
   });
 
-  it('resets lastApplied and loads home-only when sticky is null', async () => {
+  it('reloads the compatibility cache from home configuration only', async () => {
     const layers = await import('../../src/main/project/layers');
     const loader = await import('../../src/main/config/loader');
-    vi.mocked(layers.resetLastAppliedProjectDir).mockClear();
     vi.mocked(layers.applyWorkspaceProjectLayers).mockClear();
     vi.mocked(loader.ConfigManager.load).mockClear();
 
@@ -294,7 +302,6 @@ describe('config:save workspace layer reset', () => {
 
     await callSave({ theme: 'home-only' });
 
-    expect(layers.resetLastAppliedProjectDir).toHaveBeenCalled();
     expect(layers.applyWorkspaceProjectLayers).not.toHaveBeenCalled();
     expect(loader.ConfigManager.load).toHaveBeenCalledWith({
       projectDir: '/tmp/orchid-test-home',

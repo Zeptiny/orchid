@@ -11,8 +11,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
 import { getConfig } from '../../config/loader';
+import type { Config } from '../../config/schema';
 import type { ToolDefinition, ToolHandler } from '../types';
-import { resolveToolPath } from '../types';
+import { getToolConfig, resolveToolPath } from '../types';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -216,9 +217,10 @@ export async function executeGrep(
   includePattern?: string,
   caseInsensitive?: boolean,
   maxResults?: number,
+  config?: Pick<Config, 'grep_max_results' | 'ignored_dirs'>,
 ): Promise<{ display: string; content: string; isError?: boolean }> {
   if (maxResults === undefined) {
-    maxResults = getConfig().grep_max_results;
+    maxResults = config?.grep_max_results ?? getConfig().grep_max_results;
   }
 
   // Compile regex
@@ -255,7 +257,7 @@ export async function executeGrep(
   }
 
   // Build ignored set
-  const ignored = new Set(getConfig().ignored_dirs);
+  const ignored = new Set(config?.ignored_dirs ?? getConfig().ignored_dirs);
 
   // Compile file filter regex
   let fileRegex: RegExp | null = null;
@@ -341,5 +343,13 @@ export const grepHandler: ToolHandler = async (input: unknown, ctx) => {
   const { pattern, directory_path, include_pattern, case_insensitive, max_results } =
     input as GrepInput;
   const resolvedDir = resolveToolPath(ctx.cwd, directory_path);
-  return executeGrep(pattern, resolvedDir, include_pattern, case_insensitive, max_results);
+  const config = getToolConfig(ctx);
+  return executeGrep(
+    pattern,
+    resolvedDir,
+    include_pattern,
+    case_insensitive,
+    max_results,
+    config,
+  );
 };

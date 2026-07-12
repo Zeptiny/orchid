@@ -105,12 +105,15 @@ async function getDirectoryTree(cwd: string, config: Config): Promise<string> {
  * Subagent states for the prompt.
  * Main sees all running/recent subagents; subagents see none (no peer visibility).
  */
-function mapSubagents(agentScopeId: string): SubagentState[] {
+function mapSubagents(
+  sessionId: string | null | undefined,
+  agentScopeId: string,
+): SubagentState[] {
   if (!isMainAgentScope(agentScopeId)) {
     return [];
   }
   try {
-    return getSubagentManager().getStates().map((s) => ({
+    return getSubagentManager().getStates(sessionId).map((s) => ({
       id: s.id,
       name: s.name,
       type: s.type,
@@ -208,7 +211,10 @@ export async function buildSystemPromptContext(
         const { createRequire } = require('node:module') as typeof import('node:module');
         const req = createRequire(__filename);
         const session = req('../ipc/session') as typeof import('../ipc/session');
-        const store = session.getSessionManager().getActiveTodoStore();
+        const manager = session.getSessionManager();
+        const store = sessionId
+          ? manager.getTodoStore(sessionId)
+          : manager.getActiveTodoStore();
         return store.list().map(
           (t): TodoItem => ({
             id: t.id,
@@ -243,7 +249,7 @@ export async function buildSystemPromptContext(
   return {
     cwd,
     directoryTree: await getDirectoryTree(cwd, config),
-    subagents: mapSubagents(agentScopeId),
+    subagents: mapSubagents(sessionId, agentScopeId),
     todos: scopedTodos,
     backgroundCommands: mapBackgroundCommands(sessionId, agentScopeId),
   };

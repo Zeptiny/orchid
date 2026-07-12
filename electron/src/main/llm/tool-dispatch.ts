@@ -24,6 +24,7 @@ import {
 import { makeToolResultMessage } from './message-factories';
 import { normalizeToolHandlerResult } from '../tools/result';
 import type { ToolExecutionContext } from '../tools/types';
+import type { ProjectRuntime } from '../project/runtime';
 
 // ---------------------------------------------------------------------------
 // Constants — match Python client.py:44, 48-56
@@ -62,6 +63,8 @@ export interface ToolDispatchOptions {
   cwd?: string;
   /** Agent scope (`main` or subagent id) for todos / bg command isolation. */
   agentScopeId?: string;
+  /** Immutable project definitions captured when this turn began. */
+  projectRuntime?: ProjectRuntime;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +133,7 @@ export async function executeToolCall(
   const toolCtx: ToolExecutionContext = {
     cwd: options.cwd,
     sessionId: options.sessionId,
+    projectRuntime: options.projectRuntime,
     agentScopeId: options.agentScopeId,
   };
 

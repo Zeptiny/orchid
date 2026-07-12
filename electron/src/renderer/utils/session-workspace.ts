@@ -4,7 +4,10 @@
  * Path comparison uses a normalized absolute key (trailing-slash stripped,
  * separators folded). Exact-path membership only (R10) — no parent/child.
  */
-import type { SessionSummary } from '../../shared/types/ipc-boundary';
+import type {
+  SessionActivity,
+  SessionSummary,
+} from '../../shared/types/ipc-boundary';
 
 /** Normalize a cwd for equality comparison; null/empty → null (unknown). */
 export function normalizeWorkspaceKey(
@@ -122,6 +125,65 @@ export interface ProjectGroup {
   sessions: SessionSummary[];
 }
 
+export interface ProjectActivityCounts {
+  working: number;
+  attention: number;
+  unread: number;
+}
+
+/** Number of recent sessions visible before a project group is expanded. */
+export const PROJECT_SESSION_PREVIEW_LIMIT = 5;
+
+/**
+ * Return the newest project sessions for a compact sidebar group, or every
+ * session after the user explicitly expands that project.
+ */
+export function previewProjectSessions(
+  sessions: readonly SessionSummary[],
+  expanded: boolean,
+  limit = PROJECT_SESSION_PREVIEW_LIMIT,
+  selectedSessionId?: string | null,
+): SessionSummary[] {
+  const newestFirst = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt);
+  if (expanded) return newestFirst;
+
+  const preview = newestFirst.slice(0, limit);
+  const selected = selectedSessionId
+    ? newestFirst.find((session) => session.id === selectedSessionId)
+    : undefined;
+  if (!selected || preview.some((session) => session.id === selected.id)) {
+    return preview;
+  }
+
+  // Keep the bounded list while retaining the session the center pane shows.
+  return [...preview.slice(0, Math.max(0, limit - 1)), selected];
+}
+
+/** Aggregate execution indicators for a project group without using selection. */
+export function countProjectActivity(
+  group: Pick<ProjectGroup, 'path' | 'sessions'>,
+  activities: readonly SessionActivity[],
+): ProjectActivityCounts {
+  const ids = new Set(group.sessions.map((session) => session.id));
+  const projectKey = normalizeWorkspaceKey(group.path);
+  const counts: ProjectActivityCounts = { working: 0, attention: 0, unread: 0 };
+
+  for (const activity of activities) {
+    const belongsBySession = ids.has(activity.sessionId);
+    const belongsByProject =
+      !belongsBySession &&
+      projectKey != null &&
+      normalizeWorkspaceKey(activity.cwd) === projectKey;
+    if (!belongsBySession && !belongsByProject) continue;
+    if (activity.state === 'working' || activity.state === 'waiting') {
+      counts.working += 1;
+    }
+    if (activity.state === 'needs_attention') counts.attention += 1;
+    if (activity.unread) counts.unread += 1;
+  }
+  return counts;
+}
+
 /**
  * Group sessions by their cwd directory. Null cwd → "Other / Unknown".
  * Groups ordered by most-recent session within the group.
@@ -140,6 +202,7 @@ export function groupSessionsByProject(
 
   const groups: ProjectGroup[] = [];
   for (const [key, list] of map) {
+    list.sort((a, b) => b.updatedAt - a.updatedAt);
     const path = key === '' ? null : (list[0]?.cwd ?? null);
     groups.push({
       key: key === '' ? '__unknown__' : key,

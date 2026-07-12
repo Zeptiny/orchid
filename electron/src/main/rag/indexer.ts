@@ -12,6 +12,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { getConfig } from '../config/loader';
+import type { Config } from '../config/schema';
 import { chunkFile } from './chunker';
 import { createEmbedderFromConfig, type IEmbedder } from './embedder';
 import { RAGStore } from './store';
@@ -29,6 +30,8 @@ export interface RagWorkerStartData {
   projectPath: string;
   force?: boolean;
   paths?: string[];
+  /** Frozen, secret-free project configuration captured by the caller. */
+  config?: Config;
 }
 
 /** Messages the index worker posts back to the parent. */
@@ -61,27 +64,39 @@ const DEFAULT_IGNORED_DIRS = new Set([
 // Module-level state
 // ---------------------------------------------------------------------------
 
-let _indexing = false;
-/** Latest progress while a run is active (for late UI subscribers / tab switches). */
-let _lastProgress: RAGIndexProgress | null = null;
+/** In-flight runs keyed by project. Independent projects may index concurrently. */
+const activeIndexes = new Map<string, RAGIndexProgress>();
 
-export function isIndexing(): boolean {
-  return _indexing;
+function projectKey(projectPath: string): string {
+  return path.resolve(projectPath);
+}
+
+export function isIndexing(projectPath?: string): boolean {
+  return projectPath == null
+    ? activeIndexes.size > 0
+    : activeIndexes.has(projectKey(projectPath));
 }
 
 /** Snapshot for remounting UIs mid-index. */
-export function getIndexState(): {
+export function getIndexState(projectPath?: string): {
   indexing: boolean;
   progress: RAGIndexProgress | null;
 } {
+  if (projectPath != null) {
+    const progress = activeIndexes.get(projectKey(projectPath)) ?? null;
+    return { indexing: progress != null, progress };
+  }
+  const progress = activeIndexes.size === 1
+    ? (activeIndexes.values().next().value ?? null)
+    : null;
   return {
-    indexing: _indexing,
-    progress: _indexing ? _lastProgress : null,
+    indexing: activeIndexes.size > 0,
+    progress,
   };
 }
 
-function noteProgress(progress: RAGIndexProgress): void {
-  _lastProgress = progress;
+function noteProgress(projectPath: string, progress: RAGIndexProgress): void {
+  activeIndexes.set(projectKey(projectPath), progress);
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +109,8 @@ export interface IndexProjectOptions {
    * tests, or when a custom Embedder instance is supplied).
    */
   inline?: boolean;
+  /** Frozen project configuration for this indexing turn. */
+  config?: Config;
 }
 
 /**
@@ -110,15 +127,18 @@ export async function indexProject(
   progressCallback?: RAGIndexProgressCallback,
   options?: IndexProjectOptions,
 ): Promise<IndexResult> {
-  if (_indexing) {
+  if (!projectPath) {
+    throw new Error('projectPath is required; pass the active workspace cwd');
+  }
+  const key = projectKey(projectPath);
+  if (activeIndexes.has(key)) {
     return {
       filesScanned: 0, filesIndexed: 0, filesSkipped: 0,
       filesDeleted: 0, chunksCreated: 0, errors: ['Indexing already in progress'],
       durationSeconds: 0,
     };
   }
-  _indexing = true;
-  _lastProgress = {
+  activeIndexes.set(key, {
     phase: 'discovering',
     done: 0,
     total: 0,
@@ -127,9 +147,9 @@ export async function indexProject(
     chunksCreated: 0,
     filesDeleted: 0,
     elapsedSeconds: 0,
-  };
+  });
   const trackProgress: RAGIndexProgressCallback = (progress) => {
-    noteProgress(progress);
+    noteProgress(projectPath, progress);
     try {
       progressCallback?.(progress);
     } catch {
@@ -145,15 +165,18 @@ export async function indexProject(
         force,
         embedder,
         trackProgress,
+        options?.config,
       );
     }
-    if (!projectPath) {
-      throw new Error('projectPath is required; pass the active workspace cwd');
-    }
-    return await runIndexInWorker(projectPath, paths, force, trackProgress);
+    return await runIndexInWorker(
+      projectPath,
+      paths,
+      force,
+      trackProgress,
+      options?.config,
+    );
   } finally {
-    _indexing = false;
-    _lastProgress = null;
+    activeIndexes.delete(key);
   }
 }
 
@@ -169,8 +192,9 @@ export async function runIndexProjectImpl(
   force?: boolean,
   embedder?: IEmbedder,
   progressCallback?: RAGIndexProgressCallback,
+  config?: Config,
 ): Promise<IndexResult> {
-  const cfg = getConfig();
+  const cfg = config ?? getConfig();
   if (!projectPath) {
     throw new Error('projectPath is required; pass the active workspace cwd');
   }
@@ -404,6 +428,7 @@ async function runIndexInWorker(
   paths: string[] | undefined,
   force: boolean | undefined,
   progressCallback?: RAGIndexProgressCallback,
+  config?: Config,
 ): Promise<IndexResult> {
   const workerPath = path.join(__dirname, 'index-worker.js');
   if (!fs.existsSync(workerPath)) {
@@ -411,13 +436,21 @@ async function runIndexInWorker(
     console.warn(
       `RAG worker not found at ${workerPath}; running index inline on the main thread`,
     );
-    return runIndexProjectImpl(projectPath, paths, force, undefined, progressCallback);
+    return runIndexProjectImpl(
+      projectPath,
+      paths,
+      force,
+      undefined,
+      progressCallback,
+      config,
+    );
   }
 
   const startData: RagWorkerStartData = {
     projectPath,
     force: force === true,
     paths,
+    config,
   };
 
   return new Promise<IndexResult>((resolve, reject) => {

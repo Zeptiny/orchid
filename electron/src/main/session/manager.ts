@@ -16,10 +16,10 @@
  * - Auto-naming: After first exchange, if name starts with "Session ",
  *   call the generateTitle callback for a 3-6 word title
  *
- * SessionManager itself does not cancel subagents on switch. IPC layer
- * (session:load / forceAbortChat) cancels running subagents for multi-cwd
- * safety so a global SubagentManager cannot keep writing chains into the
- * newly active session. Background commands continue running.
+ * SessionManager itself does not cancel work on switch. Selecting a session
+ * is view navigation only: chat actors, subagents, and background commands
+ * stay addressed by their own session id. Callers that must stop work use
+ * forceAbortSession / forceStopSession / chat:cancel explicitly.
  */
 import { randomUUID } from 'node:crypto';
 import type { Session } from '../../shared/types/session';
@@ -82,9 +82,16 @@ export interface SessionManagerOptions {
 // ---------------------------------------------------------------------------
 
 export class SessionManager {
-  private _active: Session | null = null;
-  /** Live todo store for the active session (source of truth between saves). */
-  private _activeTodoStore: TodoStore = new TodoStore();
+  /** Legacy owner used by existing single-window callers and parity tests. */
+  private static readonly DEFAULT_OWNER = '__default__';
+  /** One authoritative in-memory runtime per loaded session. */
+  private _sessions = new Map<string, Session>();
+  /** Mutable todo stores are owned by session id, never by the selected window. */
+  private _todoStores = new Map<string, TodoStore>();
+  /** Selection is view state: each window/owner may point at a different session. */
+  private _selectedByOwner = new Map<string, string>();
+  /** Empty compatibility store returned when the default owner has no selection. */
+  private _emptyTodoStore: TodoStore = new TodoStore();
   private _generateTitle: GenerateTitleCallback | null = null;
   private _storageOpts: StorageOptions | undefined;
 
@@ -99,9 +106,49 @@ export class SessionManager {
     this._storageOpts = options?.storage;
   }
 
-  /** Get the currently active session, or null if none. */
-  getActive(): Session | null {
-    return this._active;
+  private ownerKey(ownerId?: string): string {
+    return ownerId ?? SessionManager.DEFAULT_OWNER;
+  }
+
+  /** Load a session into the shared runtime cache without selecting it. */
+  private ensureSession(id: string): Session | null {
+    const cached = this._sessions.get(id);
+    if (cached) return cached;
+
+    const loaded = storageLoadSession(id, this._storageOpts);
+    if (!loaded) return null;
+    const todos = TodoStore.fromData(loaded.todoStore ?? { tasks: [] });
+    const session = { ...loaded, todoStore: todos.toData() };
+    this._sessions.set(id, session);
+    this._todoStores.set(id, todos);
+    return session;
+  }
+
+  private replaceSession(session: Session): Session {
+    this._sessions.set(session.id, session);
+    return session;
+  }
+
+  private selectedSessionId(ownerId?: string): string | null {
+    return this._selectedByOwner.get(this.ownerKey(ownerId)) ?? null;
+  }
+
+  private isSelectedByAnyOwner(sessionId: string): boolean {
+    for (const selectedId of this._selectedByOwner.values()) {
+      if (selectedId === sessionId) return true;
+    }
+    return false;
+  }
+
+  /** Get the session selected by an owner/window, or null if none. */
+  getActive(ownerId?: string): Session | null {
+    const id = this.selectedSessionId(ownerId);
+    return id ? this.ensureSession(id) : null;
+  }
+
+  /** Get an explicit session runtime without changing any window selection. */
+  getSession(id: string): Session | null {
+    return this.ensureSession(id);
   }
 
   /**
@@ -111,35 +158,52 @@ export class SessionManager {
    * can resolve without null checks. Mutations must call persistActiveTodos()
    * (or saveActive()) so the snapshot lands on the session file.
    */
-  getActiveTodoStore(): TodoStore {
-    return this._activeTodoStore;
+  getActiveTodoStore(ownerId?: string): TodoStore {
+    const sessionId = this.selectedSessionId(ownerId);
+    return sessionId ? this.getTodoStore(sessionId) : this._emptyTodoStore;
+  }
+
+  /** Resolve the mutable todo store owned by an explicit session. */
+  getTodoStore(sessionId: string): TodoStore {
+    this.ensureSession(sessionId);
+    let store = this._todoStores.get(sessionId);
+    if (!store) {
+      store = new TodoStore();
+      this._todoStores.set(sessionId, store);
+    }
+    return store;
   }
 
   /**
    * Snapshot the live todo store into the active session and save to disk.
    * No-op when there is no active session.
    */
-  persistActiveTodos(): void {
-    if (!this._active) {
-      return;
-    }
-    this._active = {
-      ...this._active,
-      todoStore: this._activeTodoStore.toData(),
-      updatedAt: new Date().toISOString(),
-    };
-    storageSaveSession(this._active, this._storageOpts);
+  persistActiveTodos(ownerId?: string): void {
+    const sessionId = this.selectedSessionId(ownerId);
+    if (sessionId) this.persistTodos(sessionId);
   }
 
-  /** Embed live todos into the active session object before any save. */
-  private flushTodosIntoActive(): void {
-    if (!this._active) {
-      return;
-    }
-    this._active = {
-      ...this._active,
-      todoStore: this._activeTodoStore.toData(),
+  /** Persist the todo store belonging to an explicit session. */
+  persistTodos(sessionId: string): void {
+    const session = this.ensureSession(sessionId);
+    if (!session) return;
+    const updated = {
+      ...session,
+      todoStore: this.getTodoStore(sessionId).toData(),
+      updatedAt: new Date().toISOString(),
     };
+    this.replaceSession(updated);
+    storageSaveSession(updated, this._storageOpts);
+  }
+
+  /** Embed a session's live todos into its in-memory snapshot before a save. */
+  private flushTodos(sessionId: string): Session | null {
+    const session = this.ensureSession(sessionId);
+    if (!session) return null;
+    return this.replaceSession({
+      ...session,
+      todoStore: this.getTodoStore(sessionId).toData(),
+    });
   }
 
   /**
@@ -148,9 +212,9 @@ export class SessionManager {
    * Used for draft/new-chat mode: the UI has no active session until the
    * first message is sent (which calls create()).
    */
-  clearActive(): void {
-    this._active = null;
-    this._activeTodoStore = new TodoStore();
+  clearActive(ownerId?: string): void {
+    this._selectedByOwner.delete(this.ownerKey(ownerId));
+    if (ownerId === undefined) this._emptyTodoStore = new TodoStore();
   }
 
   /**
@@ -163,7 +227,7 @@ export class SessionManager {
    * @param options - Optional create options. `cwd` is caller-supplied only
    *   (absolute path or null); never silently defaults to process.cwd().
    */
-  create(model: string, options?: CreateSessionOptions): Session {
+  create(model: string, options?: CreateSessionOptions, ownerId?: string): Session {
     const now = new Date().toISOString();
     // Unbound by default; only set cwd when the caller explicitly provides one.
     // Valid absolute dirs are canonicalized; invalid non-null paths store as
@@ -184,35 +248,38 @@ export class SessionManager {
       subagentChains: [],
       todoStore: { tasks: [] },
     };
-    this._activeTodoStore = new TodoStore();
-    this._active = session;
+    this._sessions.set(session.id, session);
+    this._todoStores.set(session.id, new TodoStore());
+    this._selectedByOwner.set(this.ownerKey(ownerId), session.id);
     storageSaveSession(session, this._storageOpts);
     return session;
   }
 
   /**
-   * Load a session from disk and set it as active.
+   * Load a session from disk (or reuse the in-memory copy) and set it as the
+   * selected session for the owner. Does not cancel concurrent work.
    *
-   * Does not cancel subagents itself — callers (session:load IPC /
-   * forceAbortChat) cancel running subagents before switching so the global
-   * manager cannot attach prior-session chains to the new active session.
+   * When another owner already has this session selected, reuses the live
+   * in-memory session and TodoStore so a mid-turn re-select does not wipe
+   * live todos. Otherwise reloads from disk.
    * Returns null if the session file doesn't exist or fails to parse.
-   *
-   * Rebinds the live TodoStore from the session snapshot so tools and UI
-   * share session-isolated state (Python ContextVar parity).
    */
-  switchTo(id: string): Session | null {
-    const session = storageLoadSession(id, this._storageOpts);
-    if (!session) {
-      return null;
+  switchTo(id: string, ownerId?: string): Session | null {
+    const owner = this.ownerKey(ownerId);
+    let session: Session | null;
+    if (this._sessions.has(id)) {
+      session = this.ensureSession(id);
+    } else {
+      const loaded = storageLoadSession(id, this._storageOpts);
+      if (!loaded) return null;
+      const todos = TodoStore.fromData(loaded.todoStore ?? { tasks: [] });
+      session = { ...loaded, todoStore: todos.toData() };
+      this._sessions.set(id, session);
+      this._todoStores.set(id, todos);
     }
-    this._activeTodoStore = TodoStore.fromData(session.todoStore ?? { tasks: [] });
-    // Keep session.todoStore in sync with the hydrated live store.
-    this._active = {
-      ...session,
-      todoStore: this._activeTodoStore.toData(),
-    };
-    return this._active;
+    if (!session) return null;
+    this._selectedByOwner.set(owner, id);
+    return session;
   }
 
   /**
@@ -222,9 +289,10 @@ export class SessionManager {
    */
   delete(id: string): boolean {
     const result = storageDeleteSession(id, this._storageOpts);
-    if (this._active?.id === id) {
-      this._active = null;
-      this._activeTodoStore = new TodoStore();
+    this._sessions.delete(id);
+    this._todoStores.delete(id);
+    for (const [owner, selectedId] of this._selectedByOwner) {
+      if (selectedId === id) this._selectedByOwner.delete(owner);
     }
     return result;
   }
@@ -235,12 +303,12 @@ export class SessionManager {
    * No-op if the session is not the active session.
    */
   rename(id: string, name: string): void {
-    if (!this._active || this._active.id !== id) {
-      return;
-    }
-    this.flushTodosIntoActive();
-    this._active = { ...this._active, name, updatedAt: new Date().toISOString() };
-    storageSaveSession(this._active, this._storageOpts);
+    if (!this.isSelectedByAnyOwner(id)) return;
+    const session = this.flushTodos(id);
+    if (!session) return;
+    const updated = { ...session, name, updatedAt: new Date().toISOString() };
+    this.replaceSession(updated);
+    storageSaveSession(updated, this._storageOpts);
   }
 
   /**
@@ -250,12 +318,12 @@ export class SessionManager {
    * Matches Python SessionManager.change_model().
    */
   changeModel(id: string, model: string): void {
-    if (!this._active || this._active.id !== id) {
-      return;
-    }
-    this.flushTodosIntoActive();
-    this._active = { ...this._active, model, updatedAt: new Date().toISOString() };
-    storageSaveSession(this._active, this._storageOpts);
+    if (!this.isSelectedByAnyOwner(id)) return;
+    const session = this.flushTodos(id);
+    if (!session) return;
+    const updated = { ...session, model, updatedAt: new Date().toISOString() };
+    this.replaceSession(updated);
+    storageSaveSession(updated, this._storageOpts);
   }
 
   /**
@@ -269,22 +337,25 @@ export class SessionManager {
    * @throws Error if the session is not active or the path is invalid
    */
   changeCwd(id: string, cwd: string): Session {
-    if (!this._active || this._active.id !== id) {
+    if (!this.isSelectedByAnyOwner(id)) {
       throw new Error(`Cannot change cwd: session ${id} is not active`);
     }
+    const session = this.ensureSession(id);
+    if (!session) throw new Error(`Cannot change cwd: session ${id} was not found`);
     const inspection = inspectProjectDirectory(cwd);
     if (inspection.status !== 'valid' || inspection.path == null) {
       const reason = inspection.reason ?? 'invalid project directory';
       throw new Error(`Cannot change cwd: ${reason}`);
     }
-    this.flushTodosIntoActive();
-    this._active = {
-      ...this._active,
+    const withTodos = this.flushTodos(id) ?? session;
+    const updated = {
+      ...withTodos,
       cwd: inspection.path,
       updatedAt: new Date().toISOString(),
     };
-    storageSaveSession(this._active, this._storageOpts);
-    return this._active;
+    this.replaceSession(updated);
+    storageSaveSession(updated, this._storageOpts);
+    return updated;
   }
 
   /**
@@ -293,12 +364,11 @@ export class SessionManager {
    * No-op if no active session.
    * Matches Python SessionManager.save_active().
    */
-  saveActive(): void {
-    if (!this._active) {
-      return;
-    }
-    this.flushTodosIntoActive();
-    storageSaveSession(this._active, this._storageOpts);
+  saveActive(ownerId?: string): void {
+    const sessionId = this.selectedSessionId(ownerId);
+    if (!sessionId) return;
+    const session = this.flushTodos(sessionId);
+    if (session) storageSaveSession(session, this._storageOpts);
   }
 
   /**
@@ -324,17 +394,19 @@ export class SessionManager {
    * Resolve the chain currently open for writes.
    * Prefer activeChainId when it points at an ACTIVE chain; else first ACTIVE.
    */
-  private findActiveChain(): Chain | null {
-    if (!this._active) return null;
-    const activeId = this._active.activeChainId;
+  private findActiveChain(sessionId?: string): Chain | null {
+    const targetId = sessionId ?? this.selectedSessionId();
+    const session = targetId ? this.ensureSession(targetId) : null;
+    if (!session) return null;
+    const activeId = session.activeChainId;
     if (activeId) {
-      const byId = this._active.chains.find(
+      const byId = session.chains.find(
         (c) => c.id === activeId && c.status === ChainStatus.ACTIVE,
       );
       if (byId) return byId;
     }
     return (
-      this._active.chains.find((c) => c.status === ChainStatus.ACTIVE) ?? null
+      session.chains.find((c) => c.status === ChainStatus.ACTIVE) ?? null
     );
   }
 
@@ -351,14 +423,14 @@ export class SessionManager {
     agentType?: string;
     agentTier?: string;
     messages?: readonly Message[];
-  }): Chain | null {
-    if (!this._active) {
-      return null;
-    }
+  }, sessionId?: string): Chain | null {
+    const targetId = sessionId ?? this.selectedSessionId();
+    const session = targetId ? this.ensureSession(targetId) : null;
+    if (!session) return null;
 
     const now = new Date().toISOString();
     // Freeze any leftover ACTIVE chain before opening a new one.
-    let chains = this._active.chains.map((c) => {
+    let chains = session.chains.map((c) => {
       if (c.status !== ChainStatus.ACTIVE) return c;
       return {
         ...c,
@@ -369,10 +441,10 @@ export class SessionManager {
 
     const chain: Chain = {
       id: randomUUID(),
-      sessionId: this._active.id,
+      sessionId: session.id,
       messages: params?.messages ? [...params.messages] : [],
       status: ChainStatus.ACTIVE,
-      model: params?.model ?? this._active.model,
+      model: params?.model ?? session.model,
       agentName: params?.agentName ?? 'general',
       agentType: params?.agentType ?? 'subagent',
       agentTier: params?.agentTier ?? 'bloom',
@@ -382,14 +454,15 @@ export class SessionManager {
     };
     chains = [...chains, chain];
 
-    this._active = {
-      ...this._active,
+    const updated = {
+      ...session,
       chains,
       activeChainId: chain.id,
-      todoStore: this._activeTodoStore.toData(),
+      todoStore: this.getTodoStore(session.id).toData(),
       updatedAt: now,
     };
-    storageSaveSession(this._active, this._storageOpts);
+    this.replaceSession(updated);
+    storageSaveSession(updated, this._storageOpts);
     return chain;
   }
 
@@ -397,12 +470,15 @@ export class SessionManager {
    * Replace messages on the current ACTIVE chain only (turn-local write).
    * Does not create chains and does not finish the chain.
    */
-  updateActiveChainMessages(messages: readonly Message[]): Session | null {
-    if (!this._active) {
-      return null;
-    }
+  updateActiveChainMessages(
+    messages: readonly Message[],
+    sessionId?: string,
+  ): Session | null {
+    const targetId = sessionId ?? this.selectedSessionId();
+    const session = targetId ? this.ensureSession(targetId) : null;
+    if (!session) return null;
 
-    const existing = this.findActiveChain();
+    const existing = this.findActiveChain(session.id);
     if (!existing) {
       return null;
     }
@@ -412,19 +488,20 @@ export class SessionManager {
       ...existing,
       messages: [...messages],
     };
-    const chains = this._active.chains.map((c) =>
+    const chains = session.chains.map((c) =>
       c.id === chain.id ? chain : c,
     );
 
-    this._active = {
-      ...this._active,
+    const updated = {
+      ...session,
       chains,
       activeChainId: chain.id,
-      todoStore: this._activeTodoStore.toData(),
+      todoStore: this.getTodoStore(session.id).toData(),
       updatedAt: now,
     };
-    storageSaveSession(this._active, this._storageOpts);
-    return this._active;
+    this.replaceSession(updated);
+    storageSaveSession(updated, this._storageOpts);
+    return updated;
   }
 
   /**
@@ -433,17 +510,18 @@ export class SessionManager {
    */
   finishActiveChain(
     status: ChainStatus = ChainStatus.COMPLETED,
+    sessionId?: string,
   ): Session | null {
-    if (!this._active) {
-      return null;
-    }
+    const targetId = sessionId ?? this.selectedSessionId();
+    const session = targetId ? this.ensureSession(targetId) : null;
+    if (!session) return null;
 
     const terminal =
       status === ChainStatus.ACTIVE ? ChainStatus.COMPLETED : status;
-    const existing = this.findActiveChain();
+    const existing = this.findActiveChain(session.id);
 
     if (!existing) {
-      return this._active;
+      return session;
     }
 
     const now = new Date().toISOString();
@@ -452,19 +530,20 @@ export class SessionManager {
       status: terminal,
       endTime: now,
     };
-    const chains = this._active.chains.map((c) =>
+    const chains = session.chains.map((c) =>
       c.id === chain.id ? chain : c,
     );
 
-    this._active = {
-      ...this._active,
+    const updated = {
+      ...session,
       chains,
       activeChainId: null,
-      todoStore: this._activeTodoStore.toData(),
+      todoStore: this.getTodoStore(session.id).toData(),
       updatedAt: now,
     };
-    storageSaveSession(this._active, this._storageOpts);
-    return this._active;
+    this.replaceSession(updated);
+    storageSaveSession(updated, this._storageOpts);
+    return updated;
   }
 
   /**
@@ -481,13 +560,13 @@ export class SessionManager {
     agentName?: string;
     agentType?: string;
     agentTier?: string;
-  }): Session | null {
-    if (!this._active) {
-      return null;
-    }
+  }, sessionId?: string): Session | null {
+    const targetId = sessionId ?? this.selectedSessionId();
+    let session = targetId ? this.ensureSession(targetId) : null;
+    if (!session) return null;
 
     const status = params.status ?? ChainStatus.COMPLETED;
-    const active = this.findActiveChain();
+    const active = this.findActiveChain(session.id);
 
     if (!active) {
       this.startChain({
@@ -496,14 +575,15 @@ export class SessionManager {
         agentType: params.agentType,
         agentTier: params.agentTier,
         messages: params.messages,
-      });
+      }, session.id);
+      session = this.ensureSession(session.id);
     } else {
       if (params.model || params.agentName || params.agentType || params.agentTier) {
         const activeId = active.id;
         const now = new Date().toISOString();
-        this._active = {
-          ...this._active,
-          chains: this._active.chains.map((c) =>
+        session = this.replaceSession({
+          ...session,
+          chains: session.chains.map((c) =>
             c.id === activeId
               ? {
                   ...c,
@@ -515,15 +595,16 @@ export class SessionManager {
               : c,
           ),
           updatedAt: now,
-        };
+        });
       }
-      this.updateActiveChainMessages(params.messages);
+      this.updateActiveChainMessages(params.messages, session.id);
+      session = this.ensureSession(session.id);
     }
 
     if (status === ChainStatus.ACTIVE) {
-      return this._active;
+      return session;
     }
-    return this.finishActiveChain(status);
+    return this.finishActiveChain(status, targetId ?? undefined);
   }
 
   /**
@@ -540,8 +621,8 @@ export class SessionManager {
     agentName?: string;
     agentType?: string;
     agentTier?: string;
-  }): Session | null {
-    return this.persistTurn(params);
+  }, sessionId?: string): Session | null {
+    return this.persistTurn(params, sessionId);
   }
 
   /**
@@ -560,7 +641,7 @@ export class SessionManager {
     subagentChains: Session['subagentChains'],
     sessionId?: string,
   ): Session | null {
-    const targetId = sessionId ?? this._active?.id;
+    const targetId = sessionId ?? this.selectedSessionId();
     if (!targetId) {
       return null;
     }
@@ -568,15 +649,17 @@ export class SessionManager {
     const now = new Date().toISOString();
     const chains = [...subagentChains];
 
-    if (this._active?.id === targetId) {
-      this._active = {
-        ...this._active,
+    const cached = this._sessions.get(targetId);
+    if (cached) {
+      const updated = {
+        ...cached,
         subagentChains: chains,
-        todoStore: this._activeTodoStore.toData(),
+        todoStore: this.getTodoStore(targetId).toData(),
         updatedAt: now,
       };
-      storageSaveSession(this._active, this._storageOpts);
-      return this._active;
+      this.replaceSession(updated);
+      storageSaveSession(updated, this._storageOpts);
+      return updated;
     }
 
     // Non-active owner: patch on disk so a late flush cannot clobber the
@@ -610,29 +693,44 @@ export class SessionManager {
    * @returns The session (possibly with updated name), or null if no
    *   active session or naming not applicable.
    */
-  async autoNameActive(generateTitle?: GenerateTitleCallback): Promise<Session | null> {
+  async autoNameActive(
+    generateTitle?: GenerateTitleCallback,
+    ownerId?: string,
+  ): Promise<Session | null> {
+    const sessionId = this.selectedSessionId(ownerId);
+    return sessionId ? this.autoName(sessionId, generateTitle) : null;
+  }
+
+  /** Auto-name an explicitly addressed session without consulting selection. */
+  async autoName(
+    sessionId: string,
+    generateTitle?: GenerateTitleCallback,
+  ): Promise<Session | null> {
     const callback = generateTitle ?? this._generateTitle;
-    if (!this._active) {
-      return null;
-    }
-    if (!this._active.name.startsWith('Session ')) {
-      return this._active;
-    }
+    const session = this.ensureSession(sessionId);
+    if (!session) return null;
+    if (!session.name.startsWith('Session ')) return session;
     if (!callback) {
-      return this._active;
+      return session;
     }
 
     try {
-      const title = await callback(this._active);
+      const title = await callback(session);
       if (title && title.length < 80) {
-        this._active = { ...this._active, name: title, updatedAt: new Date().toISOString() };
-        storageSaveSession(this._active, this._storageOpts);
+        const updated = {
+          ...session,
+          name: title,
+          updatedAt: new Date().toISOString(),
+        };
+        this.replaceSession(updated);
+        storageSaveSession(updated, this._storageOpts);
+        return updated;
       }
     } catch (err) {
       // Auto-naming failure is non-fatal (matching Python)
       console.debug('Auto-naming failed, keeping default name:', err);
     }
 
-    return this._active;
+    return this.ensureSession(sessionId);
   }
 }

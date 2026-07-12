@@ -1064,7 +1064,7 @@ describe('SessionManager switching', () => {
     expect(manager.getActive()!.name).toBe('Session 1');
   });
 
-  it('switchTo reloads from disk (captures external changes)', () => {
+  it('switchTo preserves the live in-memory session over stale disk state', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create('gpt-4o');
 
@@ -1076,9 +1076,108 @@ describe('SessionManager switching', () => {
     };
     saveSession(modified, storageOpts);
 
-    // SwitchTo reloads from disk
+    manager.getTodoStore(session.id).create('Live todo');
+
+    // Re-selecting must not replace state still owned by running tools.
     const switched = manager.switchTo(session.id);
-    expect(switched!.name).toBe('Externally Modified');
+    expect(switched!.name).toBe(session.name);
+    expect(manager.getTodoStore(session.id).list()[0]?.title).toBe('Live todo');
+  });
+});
+
+// ===========================================================================
+// Concurrent window/session ownership
+// ===========================================================================
+
+describe('SessionManager concurrent owners', () => {
+  it('keeps a distinct selected session for each window owner', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const sessionA = manager.create('gpt-4o', undefined, 'window-a');
+    const sessionB = manager.create(
+      'anthropic/claude-3.5-sonnet',
+      undefined,
+      'window-b',
+    );
+
+    expect(manager.getActive('window-a')?.id).toBe(sessionA.id);
+    expect(manager.getActive('window-b')?.id).toBe(sessionB.id);
+
+    manager.clearActive('window-a');
+    expect(manager.getActive('window-a')).toBeNull();
+    expect(manager.getActive('window-b')?.id).toBe(sessionB.id);
+  });
+
+  it('writes chains to the explicitly addressed session', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const sessionA = manager.create('gpt-4o', undefined, 'window-a');
+    const sessionB = manager.create('gpt-4o', undefined, 'window-b');
+
+    const userA = makeMessage({ id: 'owner-a-user', content: 'Question A' });
+    const answerA = makeMessage({
+      id: 'owner-a-answer',
+      role: 'assistant',
+      content: 'Answer A',
+    });
+    manager.startChain({ messages: [userA] }, sessionA.id);
+    manager.persistTurn(
+      { messages: [userA, answerA], status: ChainStatus.COMPLETED },
+      sessionA.id,
+    );
+
+    expect(manager.getSession(sessionA.id)?.chains).toHaveLength(1);
+    expect(manager.getSession(sessionA.id)?.chains[0]?.messages).toEqual([
+      userA,
+      answerA,
+    ]);
+    expect(manager.getSession(sessionB.id)?.chains).toHaveLength(0);
+  });
+
+  it('keeps todo stores isolated by session and persists the addressed store', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const sessionA = manager.create('gpt-4o', undefined, 'window-a');
+    const sessionB = manager.create('gpt-4o', undefined, 'window-b');
+
+    manager.getTodoStore(sessionA.id).create('A only');
+    manager.getTodoStore(sessionB.id).create('B only');
+    manager.persistTodos(sessionA.id);
+    manager.persistTodos(sessionB.id);
+
+    expect(manager.getTodoStore(sessionA.id).list().map((todo) => todo.title)).toEqual([
+      'A only',
+    ]);
+    expect(manager.getTodoStore(sessionB.id).list().map((todo) => todo.title)).toEqual([
+      'B only',
+    ]);
+    expect(loadSession(sessionA.id, storageOpts)?.todoStore.tasks[0]?.title).toBe(
+      'A only',
+    );
+    expect(loadSession(sessionB.id, storageOpts)?.todoStore.tasks[0]?.title).toBe(
+      'B only',
+    );
+  });
+
+  it('shares one in-memory runtime when two windows select the same session', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create('gpt-4o', undefined, 'window-a');
+
+    manager.switchTo(session.id, 'window-b');
+    const fromA = manager.getTodoStore(session.id);
+    const fromB = manager.getTodoStore(session.id);
+
+    expect(fromB).toBe(fromA);
+    fromA.create('Shared update');
+    expect(fromB.list().map((todo) => todo.title)).toEqual(['Shared update']);
+  });
+
+  it('clears every owner selecting a deleted session', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create('gpt-4o', undefined, 'window-a');
+    manager.switchTo(session.id, 'window-b');
+
+    manager.delete(session.id);
+
+    expect(manager.getActive('window-a')).toBeNull();
+    expect(manager.getActive('window-b')).toBeNull();
   });
 });
 

@@ -378,14 +378,15 @@ export function providerKeychainKey(providerAlias: string): string {
  * @param options  Optional path overrides for testing.
  * @returns A new config object with keychain keys injected.
  */
-export async function injectKeychainKeys(
-  config: Record<string, unknown>,
+export async function injectKeychainKeys<T extends object>(
+  config: T,
   options?: KeychainOptions,
-): Promise<Record<string, unknown>> {
-  const providers = config['providers'];
+): Promise<T> {
+  const source = config as Record<string, unknown>;
+  const providers = source['providers'];
   if (typeof providers !== 'object' || providers === null) return config;
 
-  const result = { ...config };
+  const result: Record<string, unknown> = { ...source };
   const providersCopy: Record<string, unknown> = {};
 
   for (const [alias, entry] of Object.entries(providers as Record<string, unknown>)) {
@@ -409,7 +410,7 @@ export async function injectKeychainKeys(
   }
 
   result['providers'] = providersCopy;
-  return result;
+  return result as T;
 }
 
 // ---------------------------------------------------------------------------

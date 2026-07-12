@@ -17,9 +17,8 @@
 import * as fs from 'node:fs';
 import * as pathModule from 'node:path';
 import { z } from 'zod';
-import { getConfig } from '../../config/loader';
 import type { ToolDefinition, ToolHandler } from '../types';
-import { resolveToolPath } from '../types';
+import { getToolConfig, resolveToolPath } from '../types';
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 
@@ -108,8 +107,9 @@ function directoryTree(
 export const readDirectoryHandler: ToolHandler = async (input: unknown, ctx) => {
   const { directory_path: rawDir, max_depth, include_hidden = false } = input as ReadDirectoryInput;
   const directory_path = resolveToolPath(ctx.cwd, rawDir);
-  const effectiveMaxDepth = max_depth ?? getConfig().directory_tree_depth;
-  const ignoredDirs = new Set(getConfig().ignored_dirs);
+  const config = getToolConfig(ctx);
+  const effectiveMaxDepth = max_depth ?? config.directory_tree_depth;
+  const ignoredDirs = new Set(config.ignored_dirs);
 
   try {
     const result = directoryTree(

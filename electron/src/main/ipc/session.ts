@@ -22,61 +22,8 @@ import {
   updateStickyDefaultProjectDir,
   type WorkspaceInfo,
 } from '../project/workspace';
-import { applyWorkspaceProjectLayers } from '../project/layers';
-
-/**
- * Lazily resolve forceAbortChat to avoid a circular init dependency:
- * chat.ts → getSessionManager (session.ts) → forceAbortChat (chat.ts).
- *
- * Uses createRequire so resolution works under both Electron CJS and Vitest.
- * Falls back silently if chat is unavailable (unit tests with partial graph).
- *
- * forceAbortChat also cancels running subagents for the active session
- * (multi-cwd safety). When chat cannot load, cancel via tools directly.
- *
- * Unit tests may inject via `__setAbortChatForTests` because createRequire
- * bypasses Vitest's module mock graph.
- */
-let abortChatOverride: ((windowId: string) => void) | null = null;
-
-/** @internal — unit tests only */
-export function __setAbortChatForTests(
-  fn: ((windowId: string) => void) | null,
-): void {
-  abortChatOverride = fn;
-}
-
-function abortChatForWindow(windowId: string): void {
-  if (abortChatOverride) {
-    abortChatOverride(windowId);
-    return;
-  }
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createRequire } = require('node:module') as typeof import('node:module');
-    const req = createRequire(__filename);
-    const chat = req('./chat') as typeof import('./chat');
-    chat.forceAbortChat(windowId);
-  } catch {
-    // chat module not loadable (circular init race or isolated unit test) —
-    // still cancel running subagents so a session switch cannot leave them
-    // writing into the next active session.
-    cancelRunningSubagentsForActiveSession();
-  }
-}
-
-/** Best-effort cancel of all in-flight subagents (session switch fallback). */
-function cancelRunningSubagentsForActiveSession(): void {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createRequire } = require('node:module') as typeof import('node:module');
-    const req = createRequire(__filename);
-    const tools = req('../tools') as typeof import('../tools');
-    tools.getSubagentManager().cancelRunning();
-  } catch {
-    // tools / manager unavailable in isolated unit tests
-  }
-}
+import { getProjectRuntimeRegistry } from '../project/runtime';
+import { removeSessionActivity } from './session-activity';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -135,7 +82,7 @@ export function flattenSessionMessages(session: Session): Message[] {
  * Resolve workspace for a window using draft + active session + sticky default.
  */
 export function resolveWindowWorkspace(windowId: string): WorkspaceInfo {
-  const active = getSessionManager().getActive();
+  const active = getSessionManager().getActive(windowId);
   return resolveWorkspace(windowId, {
     sessionCwd: active?.cwd ?? null,
     stickyDefault: getConfig().default_project_dir,
@@ -155,23 +102,23 @@ export async function bindProjectDirectory(
 ): Promise<WorkspaceInfo> {
   const canonical = requireValidProjectDirectory(dir);
 
-  // Intentional rebind: drop in-flight stream before cwd/layers change so
-  // tools/prompt cannot keep running against the previous workspace.
-  abortChatForWindow(windowId);
-
   await updateStickyDefaultProjectDir(canonical);
 
   const manager = getSessionManager();
-  const active = manager.getActive();
+  const active = manager.getActive(windowId);
   if (active) {
-    manager.changeCwd(active.id, canonical);
-    clearDraftCwd(windowId);
+    if (active.chains.length === 0) {
+      manager.changeCwd(active.id, canonical);
+      clearDraftCwd(windowId);
+    } else {
+      // A conversation remains bound to the project it started in. Picking a
+      // different folder opens a draft there without moving or cancelling it.
+      manager.clearActive(windowId);
+      setDraftCwd(windowId, canonical);
+    }
   } else {
     setDraftCwd(windowId, canonical);
   }
-
-  // R5: reload project config + agents/skills immediately (does not kill bg cmds).
-  applyWorkspaceProjectLayers(canonical);
 
   return resolveWindowWorkspace(windowId);
 }
@@ -213,11 +160,9 @@ export function registerSessionIPC(): void {
       return manager.load(id);
     }
 
-    // Drop any in-flight stream so chunks from the previous session cannot
-    // leak into the newly selected session's UI.
-    abortChatForWindow(windowId);
-
-    const session = manager.switchTo(id);
+    // Selecting a session is view navigation. Work in the previously selected
+    // session continues and remains addressed by its own session id.
+    const session = manager.switchTo(id, windowId);
 
     // Session owns workspace now — clear draft so it doesn't shadow session.cwd.
     // Sticky default is intentionally NOT updated on load (R4).
@@ -226,18 +171,15 @@ export function registerSessionIPC(): void {
     // Seed history with ALL chains (matches renderer flatten) so the next
     // chat:send continues the full conversation, not only the active chain.
     if (session) {
-      seedChatHistory(windowId, flattenSessionMessages(session));
+      seedChatHistory(session.id, flattenSessionMessages(session));
     } else {
-      clearChatHistory(windowId);
+      clearChatHistory(id);
     }
 
-    // R5: align project layers with the workspace now shown (session cwd,
-    // or sticky/draft fallback for legacy unbound sessions). Does not rewrite
-    // sticky default; does not terminate background commands.
+    // Project config and definitions are resolved from each turn's captured
+    // runtime. Selecting a session must not replace process-wide layers that
+    // another running session could still depend on.
     const workspace = resolveWindowWorkspace(windowId);
-    if (isWorkspaceBound(workspace) && workspace.cwd) {
-      applyWorkspaceProjectLayers(workspace.cwd);
-    }
 
     emitWorkspaceChanged(event.sender, workspace);
     return session;
@@ -248,10 +190,8 @@ export function registerSessionIPC(): void {
   // for tests and any callers that need an immediate empty session file.
   // Requires a valid workspace (draft or sticky); never process.cwd().
   ipcMain.handle(IPC_CHANNELS.SESSION_CREATE, async (event) => {
-    const config = getConfig();
     const manager = getSessionManager();
     const windowId = String(event.sender.id);
-    abortChatForWindow(windowId);
 
     const workspace = resolveWindowWorkspace(windowId);
     if (!isWorkspaceBound(workspace) || workspace.cwd == null) {
@@ -260,11 +200,15 @@ export function registerSessionIPC(): void {
       );
     }
 
-    applyWorkspaceProjectLayers(workspace.cwd);
-    const session = manager.create(config.default_model, { cwd: workspace.cwd });
+    const config = getProjectRuntimeRegistry().get(workspace.cwd).config;
+    const session = manager.create(
+      config.default_model,
+      { cwd: workspace.cwd },
+      windowId,
+    );
     // Draft was promoted into the session.
     clearDraftCwd(windowId);
-    clearChatHistory(windowId);
+    clearChatHistory(session.id);
     event.sender.send(IPC_CHANNELS.SESSION_CREATED, { session });
     emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
     return session;
@@ -275,14 +219,10 @@ export function registerSessionIPC(): void {
   ipcMain.handle(IPC_CHANNELS.SESSION_CLEAR_ACTIVE, async (event) => {
     const manager = getSessionManager();
     const windowId = String(event.sender.id);
-    abortChatForWindow(windowId);
-    manager.clearActive();
-    clearChatHistory(windowId);
-    // R5: re-apply layers for the workspace the UI now shows (draft or sticky).
+    const selected = manager.getActive(windowId);
+    if (selected?.cwd) setDraftCwd(windowId, selected.cwd);
+    manager.clearActive(windowId);
     const workspace = resolveWindowWorkspace(windowId);
-    if (isWorkspaceBound(workspace) && workspace.cwd) {
-      applyWorkspaceProjectLayers(workspace.cwd);
-    }
     emitWorkspaceChanged(event.sender, workspace);
     return { status: 'cleared' };
   });
@@ -295,17 +235,19 @@ export function registerSessionIPC(): void {
     }
 
     const manager = getSessionManager();
-    const wasActive = manager.getActive()?.id === parsed.data.id;
+    const wasActive = manager.getActive(String(event.sender.id))?.id === parsed.data.id;
+    // A deleted background session must not keep spending provider/tool work or
+    // recreate activity after it disappears from the catalog.
+    const { forceStopSession } = await import('./chat');
+    forceStopSession(parsed.data.id);
     const deleted = manager.delete(parsed.data.id);
+    if (deleted) {
+      removeSessionActivity(parsed.data.id);
+    }
     if (deleted && wasActive) {
       const windowId = String(event.sender.id);
-      abortChatForWindow(windowId);
-      clearChatHistory(windowId);
-      const workspace = resolveWindowWorkspace(windowId);
-      if (isWorkspaceBound(workspace) && workspace.cwd) {
-        applyWorkspaceProjectLayers(workspace.cwd);
-      }
-      emitWorkspaceChanged(event.sender, workspace);
+      clearChatHistory(parsed.data.id);
+      emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
     }
     return { status: deleted ? 'deleted' : 'not_found' };
   });
@@ -338,7 +280,7 @@ export function registerSessionIPC(): void {
 
     const manager = getSessionManager();
     manager.changeModel(parsed.data.id, parsed.data.model);
-    const active = manager.getActive();
+    const active = manager.getSession(parsed.data.id);
     if (!active || active.id !== parsed.data.id) {
       return { status: 'not_active' };
     }
@@ -386,7 +328,9 @@ export function registerSessionIPC(): void {
     return workspace;
   });
 
-  // session:change_cwd — validate + SessionManager.changeCwd + sticky update
+  // session:change_cwd — legacy route retained for empty-session drafts.
+  // A conversation that already has messages stays bound; choosing a new
+  // folder opens a draft rather than mutating the old conversation.
   ipcMain.handle(IPC_CHANNELS.SESSION_CHANGE_CWD, async (event, payload: unknown) => {
     const parsed = sessionChangeCwdSchema.safeParse(payload);
     if (!parsed.success) {
@@ -394,24 +338,16 @@ export function registerSessionIPC(): void {
     }
 
     const windowId = String(event.sender.id);
-    // Intentional rebind: abort in-flight chat before cwd/layers change
-    // (same policy as session:load / set_workspace / pick_project_dir).
-    abortChatForWindow(windowId);
-
     const manager = getSessionManager();
-    const session = manager.changeCwd(parsed.data.id, parsed.data.cwd);
-
-    // Intentional change → update sticky default (R4).
-    if (session.cwd) {
-      await updateStickyDefaultProjectDir(session.cwd);
-      // R5: reload project config + agents/skills for the new cwd.
-      applyWorkspaceProjectLayers(session.cwd);
+    const active = manager.getActive(windowId);
+    if (!active || active.id !== parsed.data.id) {
+      throw new Error('Cannot change project for a session that is not selected.');
     }
-    clearDraftCwd(windowId);
 
-    const workspace = resolveWindowWorkspace(windowId);
+    const hadConversation = active.chains.length > 0;
+    const workspace = await bindProjectDirectory(windowId, parsed.data.cwd);
     emitWorkspaceChanged(event.sender, workspace);
-    return session;
+    return hadConversation ? null : manager.getActive(windowId);
   });
 }
 

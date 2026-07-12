@@ -6,6 +6,10 @@
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { MCPManager } from '../mcp/manager';
+import { getProjectMCPManager } from '../mcp/project-registry';
+import { getProjectRuntimeRegistry } from '../project/runtime';
+import { isWorkspaceBound } from '../project/workspace';
+import { resolveWindowWorkspace } from './session';
 
 // ── MCP manager reference (injected at startup) ─────────────────────────────
 
@@ -26,12 +30,14 @@ export function getMCPManagerRef(): MCPManager | null {
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerMCPIPC(): void {
-  // mcp:status — return status of all MCP servers
-  ipcMain.handle(IPC_CHANNELS.MCP_STATUS, async () => {
-    if (!mcpManagerRef) {
+  // mcp:status — resolve the sender's project instead of a process-global manager.
+  ipcMain.handle(IPC_CHANNELS.MCP_STATUS, async (event) => {
+    const workspace = resolveWindowWorkspace(String(event.sender.id));
+    if (!isWorkspaceBound(workspace) || !workspace.cwd) {
       return [];
     }
-    return mcpManagerRef.getStatus();
+    const runtime = getProjectRuntimeRegistry().get(workspace.cwd);
+    return getProjectMCPManager(runtime).getStatus();
   });
 }
 

@@ -231,7 +231,23 @@ export function ConfigView({ onClose }: ConfigViewProps) {
   );
 
   const handleSessionCreate = useCallback(async () => {
-    // Draft mode — no empty session file; first message creates the session.
+    // Draft in the currently selected project — do not open a folder picker.
+    const inheritCwd =
+      session.activeSession?.cwd?.trim() ||
+      (session.workspace?.status === 'valid' ? session.workspace.cwd : null);
+    if (inheritCwd) {
+      await session.setWorkspace(inheritCwd);
+    }
+    await session.enterDraft();
+  }, [session]);
+
+  const handleProjectSelect = useCallback(async (projectDir: string) => {
+    await session.setWorkspace(projectDir);
+    await session.enterDraft();
+  }, [session]);
+
+  const handleProjectSessionCreate = useCallback(async (projectDir: string) => {
+    await session.setWorkspace(projectDir);
     await session.enterDraft();
   }, [session]);
 
@@ -242,13 +258,25 @@ export function ConfigView({ onClose }: ConfigViewProps) {
     >
       <LeftSidebar
         activeSessionId={session.activeSession?.id ?? null}
+        selectedProjectPath={
+          session.activeSession?.cwd ??
+          (session.workspace?.status === 'valid' ? session.workspace.cwd : null)
+        }
         isCollapsed={leftCollapsed}
         onOpenSettings={() => {}}
         onPickProjectDir={() => {
           void session.pickProjectDir();
         }}
         onRefreshSessions={session.refresh}
-        onSessionCreate={handleSessionCreate}
+        onSessionCreate={() => {
+          void handleSessionCreate();
+        }}
+        onProjectSelect={(projectDir) => {
+          void handleProjectSelect(projectDir);
+        }}
+        onProjectSessionCreate={(projectDir) => {
+          void handleProjectSessionCreate(projectDir);
+        }}
         onSessionDelete={session.deleteSession}
         onSessionSelect={handleSessionSelect}
         onToggle={() => setLeftCollapsed((prev) => !prev)}

@@ -37,19 +37,26 @@ export function buildInterruptTool(
       subagent_ids: z
         .array(z.string())
         .describe(
-          'List of subagent IDs to interrupt. Pass an empty list to interrupt all running subagents.',
+          'List of subagent IDs to interrupt. Pass an empty list to interrupt all running subagents in this session.',
         ),
     }),
     actionLabel: 'Interrupting...',
     category: 'subagent',
   };
 
-  const handler: ToolHandler = async (input: unknown, _ctx): Promise<SubagentToolResult> => {
+  const handler: ToolHandler = async (input: unknown, ctx): Promise<SubagentToolResult> => {
     const { subagent_ids } = input as { subagent_ids: string[] };
 
-    // Empty list → cancel all running
+    // Empty list → cancel all running in this session only (never process-wide).
     if (!subagent_ids || subagent_ids.length === 0) {
-      const cancelled = manager.cancelRunning();
+      if (!ctx.sessionId) {
+        return {
+          display: 'No running subagents to interrupt',
+          content:
+            'No session context available; cannot interrupt subagents without a session id.',
+        };
+      }
+      const cancelled = manager.cancelRunning(ctx.sessionId);
       // Flush any remaining pending state callbacks for clean state transitions
       manager.flushStateCallbacks();
 
@@ -73,7 +80,7 @@ export function buildInterruptTool(
 
     for (const sid of subagent_ids) {
       const record = manager.getRecord(sid);
-      if (!record) {
+      if (!record || (record.sessionId ?? null) !== (ctx?.sessionId ?? null)) {
         notFound.push(sid);
       } else if (TERMINAL_STATES.has(record.state)) {
         alreadyDone.push(sid);

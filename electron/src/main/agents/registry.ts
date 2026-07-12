@@ -142,6 +142,40 @@ function seedDefaults(sourceDir: string, targetDir: string): void {
 // Public API
 // ---------------------------------------------------------------------------
 
+export interface ReadAgentsOptions {
+  /** Override home agents directory (default: `~/.orchid/agents/`). */
+  homeDir?: string;
+  /** Project agents directory (for example `<workspace>/.orchid/agents`). */
+  projectDir?: string;
+}
+
+/**
+ * Read and merge agent definitions without changing process-wide state.
+ *
+ * Each invocation returns a new map. Project agents overlay home agents,
+ * except for reserved/internal home definitions which cannot be shadowed.
+ */
+export function readAgents(
+  options?: ReadAgentsOptions,
+): Map<string, Agent> {
+  const homeDir = options?.homeDir ?? HOME_AGENTS_DIR;
+
+  const homeAgents = loadAgentsFromDir(homeDir);
+  const projectAgents = options?.projectDir
+    ? loadAgentsFromDir(options.projectDir)
+    : new Map<string, Agent>();
+
+  const merged = new Map<string, Agent>(homeAgents);
+  for (const [name, agent] of projectAgents) {
+    const home = homeAgents.get(name);
+    if (home?.type === AgentType.INTERNAL) continue;
+    if (RESERVED_INTERNAL_AGENT_NAMES.has(name)) continue;
+    merged.set(name, agent);
+  }
+
+  return merged;
+}
+
 /**
  * Load all agents by merging home and project agent directories.
  *
@@ -153,26 +187,10 @@ function seedDefaults(sourceDir: string, targetDir: string): void {
  * @param options.projectDir  Project agents directory (e.g. `<workspace>/.orchid/agents`).
  *   When omitted, only home agents load — never invents process.cwd().
  */
-export function loadAgents(options?: {
-  homeDir?: string;
-  projectDir?: string;
-}): Map<string, Agent> {
-  const homeDir = options?.homeDir ?? HOME_AGENTS_DIR;
-
-  const homeAgents = loadAgentsFromDir(homeDir);
-  const projectAgents = options?.projectDir
-    ? loadAgentsFromDir(options.projectDir)
-    : new Map<string, Agent>();
-
-  // Merge: project overlays home, except reserved/internal home agents
-  // (e.g. general, web-fetch) which must not be shadowed by project files.
-  const merged = new Map<string, Agent>(homeAgents);
-  for (const [name, agent] of projectAgents) {
-    const home = homeAgents.get(name);
-    if (home?.type === AgentType.INTERNAL) continue;
-    if (RESERVED_INTERNAL_AGENT_NAMES.has(name)) continue;
-    merged.set(name, agent);
-  }
+export function loadAgents(
+  options?: ReadAgentsOptions,
+): Map<string, Agent> {
+  const merged = readAgents(options);
   agentRegistry = merged;
 
   // Rebuild dynamic tool descriptions with the latest agent registry.
