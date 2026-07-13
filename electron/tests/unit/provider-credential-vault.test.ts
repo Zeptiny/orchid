@@ -121,33 +121,14 @@ describe('CredentialVault', () => {
     expect(raw).not.toContain('sk-new-key-123456');
   });
 
-  it('atomically rotates OAuth tokens and deletes every generation on disconnect', async () => {
+  it('deletes every stored generation for a connection on disconnect', async () => {
     const vault = createVault();
-    const oauthBinding = { ...binding, authMethod: 'oauth' as const, driverId: 'chatgpt-codex' };
-    const handle = await vault.storeOAuthTokens(oauthBinding, {
-      accessToken: 'access-token-one',
-      refreshToken: 'refresh-token-one',
-      expiresAt: '2026-07-12T01:00:00.000Z',
-      tokenType: 'Bearer',
+    const handle = await vault.storeApiKey(binding, 'sk-disconnect-key-123456');
+    expect(await vault.readSecret(handle, binding)).toEqual({
+      kind: 'api-key',
+      apiKey: 'sk-disconnect-key-123456',
     });
-
-    await vault.rotateOAuthTokens(handle, oauthBinding, {
-      accessToken: 'access-token-two',
-      refreshToken: 'refresh-token-two',
-      expiresAt: '2026-07-12T02:00:00.000Z',
-      tokenType: 'Bearer',
-    });
-    expect(await vault.readSecret(handle, oauthBinding)).toEqual({
-      kind: 'oauth',
-      accessToken: 'access-token-two',
-      refreshToken: 'refresh-token-two',
-      expiresAt: '2026-07-12T02:00:00.000Z',
-      tokenType: 'Bearer',
-    });
-    expect(await vault.getMetadata(handle)).toMatchObject({ generation: 2, connectionId: CONNECTION_ID });
-    expect(fs.readFileSync(credentialsPath, 'utf8')).not.toMatch(/access-token|refresh-token/);
-
     await vault.deleteConnectionCredentials(CONNECTION_ID);
-    await expect(vault.readSecret(handle, oauthBinding)).rejects.toThrow(/unknown/i);
+    await expect(vault.readSecret(handle, binding)).rejects.toThrow(/unknown/i);
   });
 });

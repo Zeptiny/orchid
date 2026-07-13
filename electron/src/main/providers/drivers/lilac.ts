@@ -42,9 +42,8 @@ export interface LilacStatusData extends Record<string, unknown> {
   readonly models: readonly LilacModelStatus[];
 }
 
-function apiKeyForLilac(credential: { readonly kind: string; readonly apiKey?: string; readonly accessToken?: string }): string {
+function apiKeyForLilac(credential: { readonly kind: string; readonly apiKey?: string }): string {
   if (credential.kind === 'api-key' && credential.apiKey) return credential.apiKey;
-  if (credential.kind === 'oauth' && credential.accessToken) return credential.accessToken;
   throw new Error('Lilac requires an API key credential');
 }
 

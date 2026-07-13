@@ -85,7 +85,6 @@ import {
   CredentialVault,
   _clearCredentialVaultWriteChains,
 } from '../../src/main/providers/credentials/vault';
-import { CredentialRefreshCoordinator } from '../../src/main/providers/credentials/refresh';
 import { createCompatibleLanguageModel } from '../../src/main/providers/drivers/compatible';
 import { createOpenCodeGoLanguageModel } from '../../src/main/providers/drivers/opencode-go';
 import { ProviderDriverRegistry } from '../../src/main/providers/drivers/registry';
@@ -467,7 +466,7 @@ describe('provider end-to-end public contracts', () => {
     ]);
   });
 
-  it('AE3 refreshes an expired subscription credential once and isolates refresh failure to its connection', async () => {
+  it('AE3 isolates stored credentials so disconnecting one connection cannot affect another', async () => {
     const root = makeTempDirectory();
     const connections = new ConnectionStore({ providersPath: path.join(root, 'providers.json') });
     const vault = new CredentialVault({
@@ -476,74 +475,57 @@ describe('provider end-to-end public contracts', () => {
       now: () => FIXTURE_NOW,
     });
     const work = await connections.create({
-      providerId: 'chatgpt-codex',
-      name: 'Work subscription',
+      providerId: 'openai',
+      name: 'Work OpenAI',
       protocol: 'openai-compatible',
-      authMethod: 'oauth',
+      authMethod: 'api-key',
       credential: { kind: 'none' },
-      modelIds: ['gpt-5.2-codex'],
+      modelIds: ['gpt-5.2-pro'],
       health: 'ready',
     });
     const personal = await connections.create({
-      providerId: 'chatgpt-codex',
-      name: 'Personal subscription',
+      providerId: 'openai',
+      name: 'Personal OpenAI',
       protocol: 'openai-compatible',
-      authMethod: 'oauth',
+      authMethod: 'api-key',
       credential: { kind: 'none' },
-      modelIds: ['gpt-5.2-codex'],
+      modelIds: ['gpt-5.2-pro'],
       health: 'ready',
     });
     const workBinding = {
       connectionId: work.id,
       driverId: work.providerId,
-      authMethod: 'oauth' as const,
-      origin: null,
+      authMethod: 'api-key' as const,
+      origin: 'https://api.openai.com',
     };
     const personalBinding = {
       connectionId: personal.id,
       driverId: personal.providerId,
-      authMethod: 'oauth' as const,
-      origin: null,
+      authMethod: 'api-key' as const,
+      origin: 'https://api.openai.com',
     };
-    const workHandle = await vault.storeOAuthTokens(workBinding, {
-      accessToken: 'expired-work-access',
-      refreshToken: 'work-refresh',
-      expiresAt: '2026-07-13T11:00:00.000Z',
-      tokenType: 'Bearer',
-    });
-    const personalHandle = await vault.storeOAuthTokens(personalBinding, {
-      accessToken: 'expired-personal-access',
-      refreshToken: 'personal-refresh',
-      expiresAt: '2026-07-13T11:00:00.000Z',
-      tokenType: 'Bearer',
-    });
+    const workHandle = await vault.storeApiKey(workBinding, 'sk-work-key-123456');
+    const personalHandle = await vault.storeApiKey(personalBinding, 'sk-personal-key-123456');
     await connections.update(work.id, { credential: { kind: 'stored', handle: workHandle } });
     await connections.update(personal.id, { credential: { kind: 'stored', handle: personalHandle } });
-    const refresh = new CredentialRefreshCoordinator({ vault, connections });
-    const refreshTokens = vi.fn(async () => ({
-      accessToken: 'rotated-work-access',
-      refreshToken: 'rotated-work-refresh',
-      expiresAt: '2026-07-13T13:00:00.000Z',
-      tokenType: 'Bearer',
-    }));
 
-    await Promise.all([
-      refresh.refreshConnection(work.id, refreshTokens),
-      refresh.refreshConnection(work.id, refreshTokens),
-    ]);
-    expect(refreshTokens).toHaveBeenCalledTimes(1);
-    expect(await vault.readSecret(workHandle, workBinding)).toMatchObject({
-      kind: 'oauth',
-      accessToken: 'rotated-work-access',
-      refreshToken: 'rotated-work-refresh',
+    await vault.deleteConnectionCredentials(personal.id);
+    await connections.update(personal.id, {
+      health: 'disconnected',
+      credential: { kind: 'none' },
     });
 
-    await expect(refresh.refreshConnection(personal.id, async () => {
-      throw new Error('upstream revoked');
-    })).rejects.toThrow(/revoked/i);
+    await expect(vault.readSecret(personalHandle, personalBinding)).rejects.toThrow(/unknown/i);
+    await expect(vault.readSecret(workHandle, workBinding)).resolves.toEqual({
+      kind: 'api-key',
+      apiKey: 'sk-work-key-123456',
+    });
     expect(await connections.get(work.id)).toMatchObject({ health: 'ready' });
-    expect(await connections.get(personal.id)).toMatchObject({ health: 'needs_attention' });
-    expect(JSON.stringify(await connections.list())).not.toMatch(/rotated-work|personal-refresh/);
+    expect(await connections.get(personal.id)).toMatchObject({
+      health: 'disconnected',
+      credential: { kind: 'none' },
+    });
+    expect(JSON.stringify(await connections.list())).not.toMatch(/sk-work-key|sk-personal-key/);
   });
 
   it('AE4/AE5 rejects tampering and keeps a frozen price immutable across catalog promotion', async () => {

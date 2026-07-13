@@ -7,7 +7,6 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  ProviderAuthStartResult,
   ProviderConnectionCreateMessage,
   ProviderConnectionIdMessage,
   ProviderConnectionUpdateMessage,
@@ -63,10 +62,6 @@ export interface UseProvidersReturn {
   readonly refreshStatus: (
     message: ProviderStatusRefreshMessage,
   ) => Promise<ProviderStatusView | null>;
-  readonly authStart: (message: ProviderConnectionIdMessage) => Promise<ProviderAuthStartResult>;
-  readonly authComplete: (
-    message: ProviderConnectionIdMessage & { flowId: string },
-  ) => Promise<ProviderMutationResult>;
 }
 
 const INITIAL_STATE: ProvidersState = {
@@ -275,18 +270,6 @@ export function useProviders(): UseProvidersReturn {
     [runMutation],
   );
 
-  const authStart = useCallback(
-    (message: ProviderConnectionIdMessage) =>
-      runMutation((providers) => providers.authStart(message)),
-    [runMutation],
-  );
-
-  const authComplete = useCallback(
-    (message: ProviderConnectionIdMessage & { flowId: string }) =>
-      runMutation((providers) => providers.authComplete(message), applyMutation),
-    [applyMutation, runMutation],
-  );
-
   const clearError = useCallback(() => {
     if (!mountedRef.current) return;
     setState((previous) => ({ ...previous, error: null }));
@@ -314,7 +297,5 @@ export function useProviders(): UseProvidersReturn {
     disconnectConnection,
     modelList,
     refreshStatus,
-    authStart,
-    authComplete,
   };
 }

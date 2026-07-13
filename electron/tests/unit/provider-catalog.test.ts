@@ -149,7 +149,7 @@ describe('provider catalog trust', () => {
     })).toThrow(/requires app version/i);
 
     const unauthorized = createCatalog();
-    unauthorized.providers[0].supportedAuthMethods = ['oauth'];
+    unauthorized.providers[0].supportedAuthMethods = ['none'];
     const unauthorizedBytes = Buffer.from(JSON.stringify(unauthorized), 'utf8');
     expect(() => validateSignedCatalog({
       ...input,

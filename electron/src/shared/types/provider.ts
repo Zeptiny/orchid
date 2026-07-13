@@ -42,7 +42,6 @@ export type ProviderLifecycle = z.infer<typeof providerLifecycleSchema>;
 export const providerAuthMethodSchema = z.enum([
   'api-key',
   'environment',
-  'oauth',
   'none',
 ]);
 

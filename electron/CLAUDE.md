@@ -54,7 +54,7 @@ src/
 │   │   ├── resolver.ts      # Resolve {connectionId, modelId} against connections/catalog
 │   │   ├── connection-store.ts # Non-secret connection metadata
 │   │   ├── drivers/         # Code-owned origins, auth, protocols, adapters, status parsing
-│   │   ├── credentials/     # Encrypted vault, OAuth flows, refresh coordination
+│   │   ├── credentials/     # Encrypted vault for API-key secrets
 │   │   ├── catalog/         # Signed bundled/cached catalog and updater
 │   │   ├── status/          # Provider status cache/service
 │   │   └── accounting/      # Append-only attempt ledger and cost calculation
@@ -251,7 +251,7 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 ### LLM Provider Resolution
 - Model identity is always a typed `{ connectionId, modelId }`; slash-delimited model IDs remain opaque and are never parsed as provider aliases
 - Connections store non-secret provider/auth/protocol metadata in `~/.orchid/connections.json`; secrets stay behind opaque handles in the encrypted credential vault
-- `ProviderRuntime.resolveExecution()` resolves one catalog snapshot, validates the credential binding, refreshes expiring OAuth credentials when supported, constructs the code-owned driver adapter, and freezes accounting/provenance for the request
+- `ProviderRuntime.resolveExecution()` resolves one catalog snapshot, validates the credential binding, constructs the code-owned driver adapter, and freezes accounting/provenance for the request
 - Remote catalogs may describe models and pricing but cannot supply executable modules, origins, auth rules, headers, or credential routing
 - Generic OpenAI- and Anthropic-compatible connections are explicit custom-endpoint drivers; specialized drivers own their origins in code
 
@@ -380,7 +380,7 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 
 - Never expose Node.js APIs to renderer
 - All IPC channels are allowlisted — new channels must be added to both `ALLOWED_INVOKE_CHANNELS` and `ALLOWED_EVENT_CHANNELS`
-- API keys and OAuth tokens never cross into the renderer; encrypted vault handles or explicitly named environment variables bind credentials to connection, driver, auth method, and origin
+- API keys never cross into the renderer except as a one-shot write-only submission; encrypted vault handles or explicitly named environment variables bind credentials to connection, driver, auth method, and origin
 - `contextIsolation: true` and `sandbox: true` enforced in BrowserWindow
 - Tool execution runs in main process with timeout guards
 - RAG/AST indexes use SQLite (no network access for local embeddings)

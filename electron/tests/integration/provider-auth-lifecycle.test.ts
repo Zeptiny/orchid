@@ -13,7 +13,6 @@ const mockSafeStorage = {
 vi.mock('electron', () => ({ safeStorage: mockSafeStorage }));
 
 let vaultModule: typeof import('../../src/main/providers/credentials/vault');
-let refreshModule: typeof import('../../src/main/providers/credentials/refresh');
 let connectionStoreModule: typeof import('../../src/main/providers/connection-store');
 let tempDir: string;
 
@@ -26,7 +25,6 @@ beforeEach(async () => {
   mockSafeStorage.decryptString.mockImplementation((value: Buffer) => value.toString('utf8').replace(/^encrypted:/, ''));
   vi.doMock('electron', () => ({ safeStorage: mockSafeStorage }));
   vaultModule = await import('../../src/main/providers/credentials/vault');
-  refreshModule = await import('../../src/main/providers/credentials/refresh');
   connectionStoreModule = await import('../../src/main/providers/connection-store');
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-provider-auth-lifecycle-'));
 });
@@ -38,132 +36,115 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function createOAuthConnection(name: string) {
+async function createApiKeyConnection(name: string) {
   const connections = new connectionStoreModule.ConnectionStore({
     providersPath: path.join(tempDir, 'providers.json'),
   });
   const connection = await connections.create({
-    providerId: 'chatgpt-codex',
+    providerId: 'openai',
     name,
     protocol: 'openai-compatible',
-    authMethod: 'oauth',
+    authMethod: 'api-key',
     credential: { kind: 'none' },
-    modelIds: ['gpt-5.2-codex'],
+    modelIds: ['gpt-5.2-pro'],
     health: 'ready',
-    endpoint: 'https://api.openai.com/v1',
   });
   return { connections, connection };
 }
 
-describe('connection-scoped credential refresh lifecycle', () => {
-  it('uses the trusted driver origin instead of editable connection metadata for refresh binding', async () => {
-    const { connections, connection } = await createOAuthConnection('Trusted origin');
+describe('connection-scoped API-key credential lifecycle', () => {
+  it('binds stored API keys to the trusted driver origin rather than editable connection metadata', async () => {
+    const { connections, connection } = await createApiKeyConnection('Trusted origin');
     const vault = new vaultModule.CredentialVault({ credentialsPath: path.join(tempDir, 'credentials.json') });
-    const trustedOrigin = 'https://chatgpt.com/backend-api';
+    const trustedOrigin = 'https://api.openai.com';
     const trustedBinding = {
       connectionId: connection.id,
       driverId: connection.providerId,
-      authMethod: 'oauth' as const,
+      authMethod: 'api-key' as const,
       origin: trustedOrigin,
     };
-    const handle = await vault.storeOAuthTokens(trustedBinding, {
-      accessToken: 'old-access-token-123456',
-      refreshToken: 'old-refresh-token-123456',
-      expiresAt: '2026-07-12T00:00:00.000Z',
-      tokenType: 'Bearer',
-    });
+    const handle = await vault.storeApiKey(trustedBinding, 'sk-trusted-origin-123456');
     await connections.update(connection.id, { credential: { kind: 'stored', handle } });
-    const refresh = new refreshModule.CredentialRefreshCoordinator({ vault, connections });
 
-    await refresh.refreshConnection(connection.id, async () => ({
-      accessToken: 'new-access-token-123456',
-      refreshToken: 'new-refresh-token-123456',
-      expiresAt: '2026-07-12T02:00:00.000Z',
-      tokenType: 'Bearer',
-    }), { origin: trustedOrigin });
-
-    await expect(vault.readSecret(handle, trustedBinding)).resolves.toMatchObject({
-      accessToken: 'new-access-token-123456',
+    await expect(vault.readSecret(handle, trustedBinding)).resolves.toEqual({
+      kind: 'api-key',
+      apiKey: 'sk-trusted-origin-123456',
     });
+    await expect(vault.readSecret(handle, {
+      ...trustedBinding,
+      origin: 'https://attacker.example.test',
+    })).rejects.toThrow(/binding/i);
   });
 
-  it('single-flights concurrent refreshes, rotates tokens, and never writes them into connection metadata', async () => {
-    const { connections, connection } = await createOAuthConnection('Work');
+  it('replaces a connection API key atomically and never writes secrets into connection metadata', async () => {
+    const { connections, connection } = await createApiKeyConnection('Work');
     const vault = new vaultModule.CredentialVault({ credentialsPath: path.join(tempDir, 'credentials.json') });
     const binding = {
       connectionId: connection.id,
       driverId: connection.providerId,
-      authMethod: 'oauth' as const,
-      origin: connection.endpoint ?? null,
+      authMethod: 'api-key' as const,
+      origin: 'https://api.openai.com',
     };
-    const handle = await vault.storeOAuthTokens(binding, {
-      accessToken: 'old-access-token-123456',
-      refreshToken: 'old-refresh-token-123456',
-      expiresAt: '2026-07-12T00:00:00.000Z',
-      tokenType: 'Bearer',
-    });
-    await connections.update(connection.id, { credential: { kind: 'stored', handle } });
-    const refresh = new refreshModule.CredentialRefreshCoordinator({ vault, connections });
-    const refreshTokens = vi.fn(async () => ({
-      accessToken: 'new-access-token-123456',
-      refreshToken: 'new-refresh-token-123456',
-      expiresAt: '2026-07-12T02:00:00.000Z',
-      tokenType: 'Bearer',
-    }));
+    const first = await vault.replaceConnectionApiKey(binding, 'sk-old-key-123456');
+    await connections.update(connection.id, { credential: { kind: 'stored', handle: first } });
+    const second = await vault.replaceConnectionApiKey(binding, 'sk-new-key-123456');
+    await connections.update(connection.id, { credential: { kind: 'stored', handle: second } });
 
-    const [first, second] = await Promise.all([
-      refresh.refreshConnection(connection.id, refreshTokens),
-      refresh.refreshConnection(connection.id, refreshTokens),
-    ]);
-
-    expect(refreshTokens).toHaveBeenCalledTimes(1);
-    expect(first).toEqual(second);
-    expect(await vault.readSecret(handle, binding)).toMatchObject({
-      accessToken: 'new-access-token-123456',
-      refreshToken: 'new-refresh-token-123456',
+    await expect(vault.readSecret(first, binding)).rejects.toThrow(/unknown/i);
+    await expect(vault.readSecret(second, binding)).resolves.toEqual({
+      kind: 'api-key',
+      apiKey: 'sk-new-key-123456',
     });
     const persistedConnections = fs.readFileSync(path.join(tempDir, 'providers.json'), 'utf8');
     const persistedCredentials = fs.readFileSync(path.join(tempDir, 'credentials.json'), 'utf8');
-    expect(persistedConnections).not.toMatch(/access-token|refresh-token/);
-    expect(persistedCredentials).not.toMatch(/new-access-token|new-refresh-token/);
+    expect(persistedConnections).not.toMatch(/sk-old-key|sk-new-key/);
+    expect(persistedCredentials).not.toMatch(/sk-old-key|sk-new-key/);
   });
 
-  it('marks only the failed connection needs_attention and disconnect deletes all local secrets', async () => {
-    const { connections, connection: work } = await createOAuthConnection('Work');
+  it('disconnect deletes only the targeted connection secrets', async () => {
+    const { connections, connection: work } = await createApiKeyConnection('Work');
     const personal = await connections.create({
-      providerId: 'chatgpt-codex',
+      providerId: 'openai',
       name: 'Personal',
       protocol: 'openai-compatible',
-      authMethod: 'oauth',
+      authMethod: 'api-key',
       credential: { kind: 'none' },
-      modelIds: ['gpt-5.2-codex'],
+      modelIds: ['gpt-5.2-pro'],
       health: 'ready',
-      endpoint: 'https://api.openai.com/v1',
     });
     const vault = new vaultModule.CredentialVault({ credentialsPath: path.join(tempDir, 'credentials.json') });
-    const workBinding = { connectionId: work.id, driverId: work.providerId, authMethod: 'oauth' as const, origin: work.endpoint ?? null };
-    const personalBinding = { connectionId: personal.id, driverId: personal.providerId, authMethod: 'oauth' as const, origin: personal.endpoint ?? null };
-    const workHandle = await vault.storeOAuthTokens(workBinding, {
-      accessToken: 'work-access-token-123456', refreshToken: 'work-refresh-token-123456', expiresAt: '2026-07-12T00:00:00.000Z', tokenType: 'Bearer',
-    });
-    const personalHandle = await vault.storeOAuthTokens(personalBinding, {
-      accessToken: 'personal-access-token-123456', refreshToken: 'personal-refresh-token-123456', expiresAt: '2026-07-12T00:00:00.000Z', tokenType: 'Bearer',
-    });
+    const workBinding = {
+      connectionId: work.id,
+      driverId: work.providerId,
+      authMethod: 'api-key' as const,
+      origin: 'https://api.openai.com',
+    };
+    const personalBinding = {
+      connectionId: personal.id,
+      driverId: personal.providerId,
+      authMethod: 'api-key' as const,
+      origin: 'https://api.openai.com',
+    };
+    const workHandle = await vault.storeApiKey(workBinding, 'sk-work-key-123456');
+    const personalHandle = await vault.storeApiKey(personalBinding, 'sk-personal-key-123456');
     await connections.update(work.id, { credential: { kind: 'stored', handle: workHandle } });
     await connections.update(personal.id, { credential: { kind: 'stored', handle: personalHandle } });
-    const refresh = new refreshModule.CredentialRefreshCoordinator({ vault, connections });
 
-    await expect(refresh.refreshConnection(work.id, async () => {
-      throw new Error('upstream revoked');
-    })).rejects.toThrow(/revoked/i);
-    expect((await connections.get(work.id))?.health).toBe('needs_attention');
-    expect((await connections.get(personal.id))?.health).toBe('ready');
+    await vault.deleteConnectionCredentials(personal.id);
+    await connections.update(personal.id, {
+      health: 'disconnected',
+      credential: { kind: 'none' },
+    });
 
-    await refresh.disconnectConnection(personal.id);
     await expect(vault.readSecret(personalHandle, personalBinding)).rejects.toThrow(/unknown/i);
+    await expect(vault.readSecret(workHandle, workBinding)).resolves.toEqual({
+      kind: 'api-key',
+      apiKey: 'sk-work-key-123456',
+    });
     expect(await connections.get(personal.id)).toMatchObject({
       health: 'disconnected',
       credential: { kind: 'none' },
     });
+    expect((await connections.get(work.id))?.health).toBe('ready');
   });
 });

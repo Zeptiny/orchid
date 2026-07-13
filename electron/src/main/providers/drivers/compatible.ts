@@ -80,15 +80,13 @@ export async function createCompatibleLanguageModel(
   }).messages(input.modelId);
 }
 
-function apiKeyForDriver(credential: { kind: string; apiKey?: string; accessToken?: string }): string {
+function apiKeyForDriver(credential: { kind: string; apiKey?: string }): string {
   if (credential.kind === 'api-key') return credential.apiKey ?? '';
-  if (credential.kind === 'oauth') return credential.accessToken ?? '';
   return '';
 }
 
 function apiKeyForEmbedding(credential: DriverCredential): string | undefined {
   if (credential.kind === 'api-key') return credential.apiKey;
-  if (credential.kind === 'oauth') return credential.accessToken;
   return undefined;
 }
 

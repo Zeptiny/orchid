@@ -10,7 +10,7 @@ Implement drivers under `src/main/providers/drivers/` and register them in `driv
 - whether a user may supply an endpoint; and
 - a code-owned API origin for built-in providers, or `null` for generic providers.
 
-`ProviderDriverRegistry` validates the selected connection, provider definition, auth method, protocol, and endpoint before it asks the driver to create an AI SDK model. Do not add name-based routing, URL inference, or an OpenAI fallback. Remote catalog data must never add a driver, OAuth issuer, callback, request origin, module, or credential destination.
+`ProviderDriverRegistry` validates the selected connection, provider definition, auth method, protocol, and endpoint before it asks the driver to create an AI SDK model. Do not add name-based routing, URL inference, or an OpenAI fallback. Remote catalog data must never add a driver, request origin, module, or credential destination.
 
 | Driver | Auth | Protocol | Request destination ownership |
 | --- | --- | --- | --- |
@@ -22,9 +22,8 @@ Implement drivers under `src/main/providers/drivers/` and register them in `driv
 | Lilac | API key, environment | OpenAI-compatible | Code: `https://api.getlilac.com/v1` |
 | Neuralwatt | API key, environment | OpenAI-compatible | Code: `https://api.neuralwatt.com/v1` |
 | Generic OpenAI/Anthropic-compatible | API key, environment, or none | Declared compatible protocol | User-entered, validated endpoint |
-| ChatGPT/Codex and Grok subscription | OAuth | Driver-specific compatible protocol | Build/release-owned only when separately enabled |
 
-The current default registry deliberately keeps the ChatGPT/Codex and Grok subscription release configurations disabled. Their presence in trusted code is not release enablement.
+Orchid does not ship OAuth or subscription-login providers. Authentication is API key, environment reference, or none.
 
 ## Endpoint and credential rules
 
@@ -32,12 +31,9 @@ Built-in drivers reject connection endpoint overrides. Generic endpoints must be
 
 Credentials stay in the main process:
 
-- API keys and OAuth token pairs are encrypted by Electron `safeStorage` in the credential vault. `basic_text` and unavailable encryption are not acceptable persistent storage.
+- API keys are encrypted by Electron `safeStorage` in the credential vault. `basic_text` and unavailable encryption are not acceptable persistent storage.
 - An API key crosses IPC only in a one-shot secret-submission request and is never returned. Renderer state must clear it after settlement.
 - Environment references contain only a validated variable name. Resolve the value only immediately before a trusted request; never send it to the renderer.
-- OAuth state, PKCE verifier, callback handling, refresh tokens, access tokens, and account headers are main-process-only. Do not put any of them in catalog data, status data, accounting evidence, logs, fixtures, or DTOs.
-
-Subscription drivers additionally require release-owned endpoints, registration metadata, safe static headers, a semantic integration version, terms-review version, and a current live-contract fixture version. Never copy a third-party client ID into Orchid code or fixture data.
 
 ## Protocol, status, and cost hooks
 
@@ -47,7 +43,7 @@ Provider-specific response parsing belongs beside the driver and must preserve o
 
 1. Provider-reported monetary charge wins.
 2. A frozen, authoritative token or energy formula may calculate a charge.
-3. Otherwise persist `unknown`; subscription quota, credits, or a missing charge are never zero cost.
+3. Otherwise persist `unknown`; quota, credits, or a missing charge are never zero cost.
 
 Use exact decimal strings for money and preserve the request's frozen catalog/status snapshot. For Neuralwatt, record reported request cost before considering energy; energy calculation requires authoritative charged energy, multiplier evidence, applicable rate, and currency. Do not substitute token pricing when those inputs are incomplete.
 

@@ -100,10 +100,10 @@ describe('ProviderDriverRegistry', () => {
     }]);
 
     await expect(registry.createLanguageModel({
-      connection: { ...connection, authMethod: 'oauth' },
+      connection: { ...connection, authMethod: 'environment' },
       provider,
       model: { ...provider.models[0], source: 'catalog' },
-      credential: { kind: 'oauth', accessToken: 'not-used' },
+      credential: { kind: 'api-key', apiKey: 'not-used' },
     })).rejects.toThrow(/auth/i);
     expect(createLanguageModel).not.toHaveBeenCalled();
   });
@@ -152,102 +152,6 @@ describe('ProviderDriverRegistry', () => {
     }));
     expect(createLanguageModel).toHaveBeenCalledWith(expect.objectContaining({
       credential: { kind: 'api-key', apiKey: 'vault-key' },
-    }));
-  });
-
-  it('refreshes an expired OAuth credential before constructing a subscription adapter', async () => {
-    const { ProviderDriverRegistry } = await import('../../src/main/providers/drivers/registry');
-    const { ProviderRuntime } = await import('../../src/main/providers');
-    const oauthConnection: ProviderConnection = {
-      ...connection,
-      providerId: 'chatgpt-codex',
-      authMethod: 'oauth',
-      credential: { kind: 'stored', handle: connection.credential.kind === 'stored'
-        ? connection.credential.handle
-        : '55555555-5555-4555-8555-555555555555' },
-    };
-    const oauthProvider: ProviderDefinition = {
-      ...provider,
-      id: 'chatgpt-codex',
-      supportedAuthMethods: ['oauth'],
-    };
-    let rotated = false;
-    const refreshOAuthTokens = vi.fn(async () => ({
-      accessToken: 'fresh-access',
-      refreshToken: 'fresh-refresh',
-      expiresAt: '2026-07-13T14:00:00.000Z',
-      tokenType: 'Bearer',
-    }));
-    const createLanguageModel = vi.fn(async () => ({ kind: 'subscription-model' }));
-    const registry = new ProviderDriverRegistry([{
-      id: 'chatgpt-codex',
-      supportedAuthMethods: ['oauth'],
-      supportedProtocols: ['openai-compatible'],
-      allowsCustomEndpoint: false,
-      origin: 'https://subscription.example.test/v1',
-      refreshOAuthTokens,
-      createLanguageModel,
-    }]);
-    const vault = {
-      readSecret: vi.fn(async () => rotated
-        ? {
-            kind: 'oauth' as const,
-            accessToken: 'fresh-access',
-            refreshToken: 'fresh-refresh',
-            expiresAt: '2026-07-13T14:00:00.000Z',
-            tokenType: 'Bearer',
-          }
-        : {
-            kind: 'oauth' as const,
-            accessToken: 'expired-access',
-            refreshToken: 'expired-refresh',
-            expiresAt: '2026-07-13T11:00:00.000Z',
-            tokenType: 'Bearer',
-          }),
-    };
-    const credentialRefresh = {
-      refreshConnection: vi.fn(async (_connectionId, refresher) => {
-        await refresher({
-          connection: oauthConnection,
-          tokens: {
-            accessToken: 'expired-access',
-            refreshToken: 'expired-refresh',
-            expiresAt: '2026-07-13T11:00:00.000Z',
-            tokenType: 'Bearer',
-          },
-        });
-        rotated = true;
-        return { handle: oauthConnection.credential.kind === 'stored'
-          ? oauthConnection.credential.handle
-          : '', metadata: {} };
-      }),
-    };
-    const runtime = new ProviderRuntime({
-      catalog: { getProviderDefinitions: () => [oauthProvider] },
-      connections: { list: async () => [oauthConnection] },
-      vault,
-      registry,
-      credentialRefresh,
-      now: () => new Date('2026-07-13T12:00:00.000Z'),
-    });
-
-    await runtime.resolveLanguageModel({
-      connectionId: oauthConnection.id,
-      modelId: 'gpt-test',
-    });
-
-    expect(credentialRefresh.refreshConnection).toHaveBeenCalledTimes(1);
-    expect(credentialRefresh.refreshConnection).toHaveBeenCalledWith(
-      oauthConnection.id,
-      expect.any(Function),
-      { origin: 'https://subscription.example.test/v1' },
-    );
-    expect(refreshOAuthTokens).toHaveBeenCalledWith(expect.objectContaining({
-      connection: oauthConnection,
-      tokens: expect.objectContaining({ refreshToken: 'expired-refresh' }),
-    }));
-    expect(createLanguageModel).toHaveBeenCalledWith(expect.objectContaining({
-      credential: { kind: 'oauth', accessToken: 'fresh-access' },
     }));
   });
 

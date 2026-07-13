@@ -15,9 +15,9 @@ describe('provider onboarding and disconnected UX', () => {
     type ProviderAPI = OrchidAPI['providers'];
     const methods: Array<keyof ProviderAPI> = [
       'list', 'create', 'update', 'submitApiKey', 'validate', 'disable', 'enable',
-      'disconnect', 'modelList', 'refreshStatus', 'authStart', 'authComplete',
+      'disconnect', 'modelList', 'refreshStatus',
     ];
-    expect(methods).toHaveLength(12);
+    expect(methods).toHaveLength(10);
   });
 
   it('opens onboarding based on usable connections, not session presence', () => {

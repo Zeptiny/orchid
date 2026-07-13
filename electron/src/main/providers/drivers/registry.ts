@@ -9,9 +9,6 @@ import { createCompatibleProviderDrivers, validateGenericEndpoint } from './comp
 import { createOpenCodeGoProviderDriver } from './opencode-go';
 import { createLilacProviderDriver } from './lilac';
 import { createNeuralwattProviderDriver } from './neuralwatt';
-import { createCodexSubscriptionDriver } from './codex';
-import { createGrokSubscriptionDriver } from './grok-subscription';
-import type { SubscriptionReleaseConfiguration } from './subscription';
 import { ProviderResolutionError } from '../../llm/middleware/error-classification';
 
 /** Trusted registry; only this code can introduce adapter or origin behavior. */
@@ -89,30 +86,12 @@ export class ProviderDriverRegistry {
   }
 }
 
-const DISABLED_SUBSCRIPTION_RELEASE: SubscriptionReleaseConfiguration = Object.freeze({
-  enabled: false,
-});
-
-/** Build/release code may inject approved subscription registration metadata. */
-export interface DefaultProviderDriverRegistryOptions {
-  readonly codexRelease?: SubscriptionReleaseConfiguration;
-  readonly grokRelease?: SubscriptionReleaseConfiguration;
-}
-
-export function createDefaultProviderDriverRegistry(
-  options: DefaultProviderDriverRegistryOptions = {},
-): ProviderDriverRegistry {
+export function createDefaultProviderDriverRegistry(): ProviderDriverRegistry {
   return new ProviderDriverRegistry([
     ...createNativeProviderDrivers(),
     ...createCompatibleProviderDrivers(),
     createOpenCodeGoProviderDriver(),
     createLilacProviderDriver(),
     createNeuralwattProviderDriver(),
-    createCodexSubscriptionDriver({
-      release: options.codexRelease ?? DISABLED_SUBSCRIPTION_RELEASE,
-    }),
-    createGrokSubscriptionDriver({
-      release: options.grokRelease ?? DISABLED_SUBSCRIPTION_RELEASE,
-    }),
   ]);
 }

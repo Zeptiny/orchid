@@ -9,7 +9,7 @@ import { environmentVariableSchema } from '../../../shared/types/provider';
 export const PROVIDER_CREDENTIALS_PATH = path.join(HOME_CONFIG_DIR, 'credentials.json');
 
 const timestampSchema = z.string().datetime({ offset: true });
-const storedAuthMethodSchema = z.enum(['api-key', 'oauth']);
+const storedAuthMethodSchema = z.enum(['api-key']);
 
 const credentialBindingInputSchema = z.object({
   connectionId: z.string().uuid(),
@@ -30,17 +30,8 @@ const apiKeySecretSchema = z.object({
   apiKey: z.string().min(1),
 }).strict();
 
-const oauthSecretSchema = z.object({
-  kind: z.literal('oauth'),
-  accessToken: z.string().min(1),
-  refreshToken: z.string().min(1),
-  expiresAt: timestampSchema,
-  tokenType: z.string().min(1),
-}).strict();
-
 const credentialSecretSchema = z.discriminatedUnion('kind', [
   apiKeySecretSchema,
-  oauthSecretSchema,
 ]);
 
 const credentialRecordSchema = z.object({
@@ -74,7 +65,6 @@ type CredentialDocument = z.infer<typeof credentialDocumentSchema>;
 
 export type CredentialBinding = z.infer<typeof credentialBindingSchema>;
 export type ApiKeySecret = z.infer<typeof apiKeySecretSchema>;
-export type OAuthTokens = Omit<z.infer<typeof oauthSecretSchema>, 'kind'>;
 export type CredentialSecret = z.infer<typeof credentialSecretSchema>;
 
 export interface CredentialMetadata {
@@ -177,7 +167,7 @@ export function getSecureStorageAvailability(
 export function normalizeCredentialBinding(input: {
   readonly connectionId: string;
   readonly driverId: string;
-  readonly authMethod: 'api-key' | 'oauth';
+  readonly authMethod: 'api-key';
   readonly origin: string | null;
 }): CredentialBinding {
   const parsed = credentialBindingInputSchema.parse(input);
@@ -308,13 +298,6 @@ export class CredentialVault {
     });
   }
 
-  async storeOAuthTokens(bindingInput: CredentialBinding, tokens: OAuthTokens): Promise<string> {
-    return this.storeSecret(bindingInput, {
-      kind: 'oauth',
-      ...oauthSecretSchema.omit({ kind: true }).parse(tokens),
-    });
-  }
-
   async readSecret(handle: string, bindingInput: CredentialBinding): Promise<CredentialSecret> {
     const binding = normalizeCredentialBinding(bindingInput);
     const record = readDocument(this.credentialsPath).entries.find((entry) => entry.handle === handle);
@@ -333,39 +316,6 @@ export class CredentialVault {
     return readDocument(this.credentialsPath).entries
       .filter((entry) => connectionId === undefined || entry.binding.connectionId === connectionId)
       .map(metadata);
-  }
-
-  async rotateOAuthTokens(
-    handle: string,
-    bindingInput: CredentialBinding,
-    tokens: OAuthTokens,
-  ): Promise<CredentialMetadata> {
-    const binding = normalizeCredentialBinding(bindingInput);
-    const secret: CredentialSecret = {
-      kind: 'oauth',
-      ...oauthSecretSchema.omit({ kind: true }).parse(tokens),
-    };
-    this.assertSecureStorage();
-    return withVaultWriteLock(this.credentialsPath, () => {
-      const document = readDocument(this.credentialsPath);
-      const index = document.entries.findIndex((entry) => entry.handle === handle);
-      if (index === -1) throw new CredentialVaultError(`Unknown credential handle '${handle}'`);
-      const existing = document.entries[index]!;
-      this.assertBinding(existing, binding);
-      if (existing.binding.authMethod !== 'oauth') {
-        throw new CredentialBindingError('Only OAuth credentials can rotate OAuth tokens');
-      }
-      const updated: CredentialRecord = {
-        ...existing,
-        generation: existing.generation + 1,
-        encryptedPayload: this.encryptSecret(secret),
-        updatedAt: this.now().toISOString(),
-      };
-      const entries = [...document.entries];
-      entries[index] = updated;
-      atomicWriteJson(this.credentialsPath, { version: 1, entries });
-      return metadata(updated);
-    });
   }
 
   async deleteConnectionCredentials(connectionId: string): Promise<number> {

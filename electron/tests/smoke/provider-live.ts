@@ -25,7 +25,6 @@ const path = require('node:path');
 const CATALOG_PATH = path.resolve(__dirname, '../../assets/providers/catalog.json');
 const REQUEST_TIMEOUT_MS = 20_000;
 const ENVIRONMENT_REFERENCE_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
-const SUBSCRIPTION_PROVIDER_IDS = ['chatgpt-codex', 'grok-subscription'];
 const GENERIC_PROVIDER_IDS = ['generic-openai-compatible', 'generic-anthropic-compatible'];
 
 const MODEL_LIST_PROBES = {
@@ -85,17 +84,6 @@ function catalogProvider(catalog, providerId) {
   if (!provider)
     throw new SmokeFailure(`Provider '${providerId}' is absent from the bundled catalog`);
   return provider;
-}
-
-function assertSubscriptionReleasesRemainDisabled(catalog) {
-  for (const providerId of SUBSCRIPTION_PROVIDER_IDS) {
-    const provider = catalogProvider(catalog, providerId);
-    if (provider.lifecycle !== 'disabled') {
-      throw new SmokeFailure(
-        `${providerId} is not release-disabled. Do not run an OAuth/subscription smoke until Orchid-owned registration, terms review, and a current contract fixture are approved.`,
-      );
-    }
-  }
 }
 
 function targetsFromEnvironment() {
@@ -227,11 +215,6 @@ async function smokeNeuralwatt() {
 }
 
 async function smokeProvider(catalog, providerId) {
-  if (SUBSCRIPTION_PROVIDER_IDS.includes(providerId)) {
-    throw new SmokeFailure(
-      `${providerId} is a subscription/OAuth integration and is disabled for this release; it is intentionally not contacted.`,
-    );
-  }
   if (GENERIC_PROVIDER_IDS.includes(providerId)) {
     throw new SmokeFailure(
       `${providerId} is user-endpoint-specific and has no Orchid release-owned live contract probe.`,
@@ -251,19 +234,13 @@ async function main() {
     console.log(
       'Provider live smoke skipped: set ORCHID_PROVIDER_LIVE_SMOKE=1 to permit any provider network request.',
     );
-    console.log(
-      'ChatGPT/Codex and Grok subscription/OAuth lifecycle releases remain disabled and are not contacted.',
-    );
     return;
   }
 
   const catalog = loadCatalog();
-  assertSubscriptionReleasesRemainDisabled(catalog);
   const targets = targetsFromEnvironment();
   for (const providerId of targets) await smokeProvider(catalog, providerId);
-  console.log(
-    'ChatGPT/Codex and Grok subscription/OAuth lifecycle releases are disabled for this release and were not contacted.',
-  );
+  console.log(`Provider live smoke passed for: ${targets.join(', ')}`);
 }
 
 main().catch((error) => {

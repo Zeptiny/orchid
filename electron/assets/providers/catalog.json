@@ -16,358 +16,584 @@
     {
       "id": "openai",
       "displayName": "OpenAI",
-      "supportedAuthMethods": ["api-key", "environment"],
-      "supportedProtocols": ["openai-compatible"],
+      "supportedAuthMethods": [
+        "api-key",
+        "environment"
+      ],
+      "supportedProtocols": [
+        "openai-compatible"
+      ],
       "allowsCustomModels": false,
       "lifecycle": "active",
-      "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" },
+      "provenance": {
+        "source": "models.dev",
+        "observedAt": "2026-07-13T01:04:20.000Z"
+      },
       "models": [
         {
           "id": "gpt-5.2-pro",
           "displayName": "GPT-5.2 Pro",
           "protocol": "openai-compatible",
           "capabilities": {
-            "inputModalities": ["text", "image"],
-            "outputModalities": ["text"],
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
             "tools": true,
             "reasoning": true
           },
-          "limits": { "contextTokens": 400000, "outputTokens": 128000 },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
             "effectiveAt": "2026-07-13T01:04:20.000Z",
             "rates": {
-              "input": { "amount": "21", "per": 1000000, "unit": "tokens" },
-              "output": { "amount": "168", "per": 1000000, "unit": "tokens" }
+              "input": {
+                "amount": "21",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "168",
+                "per": 1000000,
+                "unit": "tokens"
+              }
             },
-            "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T01:04:20.000Z"
+            }
           },
-          "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
-        }
-      ]
-    },
-    {
-      "id": "chatgpt-codex",
-      "displayName": "ChatGPT/Codex",
-      "supportedAuthMethods": ["oauth"],
-      "supportedProtocols": ["openai-compatible"],
-      "allowsCustomModels": false,
-      "lifecycle": "disabled",
-      "provenance": { "source": "catalog", "observedAt": "2026-07-13T01:04:20.000Z" },
-      "models": [
-        {
-          "id": "gpt-5.2-codex",
-          "displayName": "GPT-5.2 Codex",
-          "protocol": "openai-compatible",
-          "capabilities": {
-            "inputModalities": ["text", "image"],
-            "outputModalities": ["text"],
-            "tools": true,
-            "reasoning": true
-          },
-          "limits": { "contextTokens": 400000, "outputTokens": 128000 },
-          "lifecycle": "disabled",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T01:04:20.000Z",
-            "rates": {},
-            "provenance": { "source": "catalog", "observedAt": "2026-07-13T01:04:20.000Z" }
-          },
-          "provenance": { "source": "catalog", "observedAt": "2026-07-13T01:04:20.000Z" }
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T01:04:20.000Z"
+          }
         }
       ]
     },
     {
       "id": "anthropic",
       "displayName": "Anthropic",
-      "supportedAuthMethods": ["api-key", "environment"],
-      "supportedProtocols": ["anthropic-messages"],
+      "supportedAuthMethods": [
+        "api-key",
+        "environment"
+      ],
+      "supportedProtocols": [
+        "anthropic-messages"
+      ],
       "allowsCustomModels": false,
       "lifecycle": "active",
-      "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" },
+      "provenance": {
+        "source": "models.dev",
+        "observedAt": "2026-07-13T01:04:20.000Z"
+      },
       "models": [
         {
           "id": "claude-opus-4-5",
           "displayName": "Claude Opus 4.5",
           "protocol": "anthropic-messages",
           "capabilities": {
-            "inputModalities": ["text", "image", "pdf"],
-            "outputModalities": ["text"],
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
             "tools": true,
             "reasoning": true
           },
-          "limits": { "contextTokens": 200000, "outputTokens": 64000 },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 64000
+          },
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
             "effectiveAt": "2026-07-13T01:04:20.000Z",
             "rates": {
-              "input": { "amount": "5", "per": 1000000, "unit": "tokens" },
-              "output": { "amount": "25", "per": 1000000, "unit": "tokens" },
-              "cacheRead": { "amount": "0.5", "per": 1000000, "unit": "tokens" },
-              "cacheWrite": { "amount": "6.25", "per": 1000000, "unit": "tokens" }
+              "input": {
+                "amount": "5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "6.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
             },
-            "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T01:04:20.000Z"
+            }
           },
-          "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T01:04:20.000Z"
+          }
         }
       ]
     },
     {
       "id": "google-gemini",
       "displayName": "Google Gemini",
-      "supportedAuthMethods": ["api-key", "environment"],
-      "supportedProtocols": ["google-generative-ai"],
+      "supportedAuthMethods": [
+        "api-key",
+        "environment"
+      ],
+      "supportedProtocols": [
+        "google-generative-ai"
+      ],
       "allowsCustomModels": false,
       "lifecycle": "active",
-      "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" },
+      "provenance": {
+        "source": "models.dev",
+        "observedAt": "2026-07-13T01:04:20.000Z"
+      },
       "models": [
         {
           "id": "gemini-2.5-pro",
           "displayName": "Gemini 2.5 Pro",
           "protocol": "google-generative-ai",
           "capabilities": {
-            "inputModalities": ["text", "image", "audio", "video", "pdf"],
-            "outputModalities": ["text"],
+            "inputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
             "tools": true,
             "reasoning": true
           },
-          "limits": { "contextTokens": 1048576, "outputTokens": 65536 },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
             "effectiveAt": "2026-07-13T01:04:20.000Z",
             "rates": {
-              "input": { "amount": "1.25", "per": 1000000, "unit": "tokens" },
-              "output": { "amount": "10", "per": 1000000, "unit": "tokens" },
-              "cacheRead": { "amount": "0.125", "per": 1000000, "unit": "tokens" }
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
             },
             "contextTiers": [
               {
                 "overContextTokens": 200000,
                 "rates": {
-                  "input": { "amount": "2.5", "per": 1000000, "unit": "tokens" },
-                  "output": { "amount": "15", "per": 1000000, "unit": "tokens" },
-                  "cacheRead": { "amount": "0.25", "per": 1000000, "unit": "tokens" }
+                  "input": {
+                    "amount": "2.5",
+                    "per": 1000000,
+                    "unit": "tokens"
+                  },
+                  "output": {
+                    "amount": "15",
+                    "per": 1000000,
+                    "unit": "tokens"
+                  },
+                  "cacheRead": {
+                    "amount": "0.25",
+                    "per": 1000000,
+                    "unit": "tokens"
+                  }
                 }
               }
             ],
-            "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T01:04:20.000Z"
+            }
           },
-          "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T01:04:20.000Z"
+          }
         }
       ]
     },
     {
       "id": "xai",
       "displayName": "xAI",
-      "supportedAuthMethods": ["api-key", "environment"],
-      "supportedProtocols": ["xai"],
+      "supportedAuthMethods": [
+        "api-key",
+        "environment"
+      ],
+      "supportedProtocols": [
+        "xai"
+      ],
       "allowsCustomModels": false,
       "lifecycle": "active",
-      "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" },
+      "provenance": {
+        "source": "models.dev",
+        "observedAt": "2026-07-13T01:04:20.000Z"
+      },
       "models": [
         {
           "id": "grok-4.3",
           "displayName": "Grok 4.3",
           "protocol": "xai",
           "capabilities": {
-            "inputModalities": ["text", "image", "pdf"],
-            "outputModalities": ["text"],
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
             "tools": true,
             "reasoning": true
           },
-          "limits": { "contextTokens": 1000000, "outputTokens": 30000 },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 30000
+          },
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
             "effectiveAt": "2026-07-13T01:04:20.000Z",
             "rates": {
-              "input": { "amount": "1.25", "per": 1000000, "unit": "tokens" },
-              "output": { "amount": "2.5", "per": 1000000, "unit": "tokens" },
-              "cacheRead": { "amount": "0.2", "per": 1000000, "unit": "tokens" }
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              }
             },
-            "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T01:04:20.000Z"
+            }
           },
-          "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
-        }
-      ]
-    },
-    {
-      "id": "grok-subscription",
-      "displayName": "Grok subscription",
-      "supportedAuthMethods": ["oauth"],
-      "supportedProtocols": ["xai"],
-      "allowsCustomModels": false,
-      "lifecycle": "disabled",
-      "provenance": { "source": "catalog", "observedAt": "2026-07-13T01:04:20.000Z" },
-      "models": [
-        {
-          "id": "grok-4.3",
-          "displayName": "Grok 4.3",
-          "protocol": "xai",
-          "capabilities": {
-            "inputModalities": ["text", "image", "pdf"],
-            "outputModalities": ["text"],
-            "tools": true,
-            "reasoning": true
-          },
-          "limits": { "contextTokens": 1000000, "outputTokens": 30000 },
-          "lifecycle": "disabled",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T01:04:20.000Z",
-            "rates": {},
-            "provenance": { "source": "catalog", "observedAt": "2026-07-13T01:04:20.000Z" }
-          },
-          "provenance": { "source": "catalog", "observedAt": "2026-07-13T01:04:20.000Z" }
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T01:04:20.000Z"
+          }
         }
       ]
     },
     {
       "id": "opencode-go",
       "displayName": "OpenCode Go",
-      "supportedAuthMethods": ["api-key", "environment"],
-      "supportedProtocols": ["openai-compatible", "anthropic-messages"],
+      "supportedAuthMethods": [
+        "api-key",
+        "environment"
+      ],
+      "supportedProtocols": [
+        "openai-compatible",
+        "anthropic-messages"
+      ],
       "allowsCustomModels": false,
       "lifecycle": "active",
-      "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" },
+      "provenance": {
+        "source": "models.dev",
+        "observedAt": "2026-07-13T01:04:20.000Z"
+      },
       "models": [
         {
           "id": "deepseek-v4-flash",
           "displayName": "DeepSeek V4 Flash",
           "protocol": "openai-compatible",
           "capabilities": {
-            "inputModalities": ["text"],
-            "outputModalities": ["text"],
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
             "tools": true,
             "reasoning": true
           },
-          "limits": { "contextTokens": 1000000, "outputTokens": 384000 },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 384000
+          },
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
             "effectiveAt": "2026-07-13T01:04:20.000Z",
             "rates": {
-              "input": { "amount": "0.14", "per": 1000000, "unit": "tokens" },
-              "output": { "amount": "0.28", "per": 1000000, "unit": "tokens" },
-              "cacheRead": { "amount": "0.0028", "per": 1000000, "unit": "tokens" }
+              "input": {
+                "amount": "0.14",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.28",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.0028",
+                "per": 1000000,
+                "unit": "tokens"
+              }
             },
-            "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T01:04:20.000Z"
+            }
           },
-          "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T01:04:20.000Z"
+          }
         },
         {
           "id": "claude-sonnet-4-5",
           "displayName": "Claude Sonnet 4.5",
           "protocol": "anthropic-messages",
           "capabilities": {
-            "inputModalities": ["text", "image", "pdf"],
-            "outputModalities": ["text"],
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
             "tools": true,
             "reasoning": true
           },
-          "limits": { "contextTokens": 200000, "outputTokens": 64000 },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 64000
+          },
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
             "effectiveAt": "2026-07-13T01:04:20.000Z",
             "rates": {},
-            "provenance": { "source": "catalog", "observedAt": "2026-07-13T01:04:20.000Z" }
+            "provenance": {
+              "source": "catalog",
+              "observedAt": "2026-07-13T01:04:20.000Z"
+            }
           },
-          "provenance": { "source": "catalog", "observedAt": "2026-07-13T01:04:20.000Z" }
+          "provenance": {
+            "source": "catalog",
+            "observedAt": "2026-07-13T01:04:20.000Z"
+          }
         }
       ]
     },
     {
       "id": "lilac",
       "displayName": "Lilac",
-      "supportedAuthMethods": ["api-key", "environment"],
-      "supportedProtocols": ["openai-compatible"],
+      "supportedAuthMethods": [
+        "api-key",
+        "environment"
+      ],
+      "supportedProtocols": [
+        "openai-compatible"
+      ],
       "allowsCustomModels": false,
       "lifecycle": "active",
-      "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" },
+      "provenance": {
+        "source": "models.dev",
+        "observedAt": "2026-07-13T01:04:20.000Z"
+      },
       "models": [
         {
           "id": "moonshotai/kimi-k2.6",
           "displayName": "Kimi K2.6",
           "protocol": "openai-compatible",
           "capabilities": {
-            "inputModalities": ["text", "image"],
-            "outputModalities": ["text"],
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
             "tools": true,
             "reasoning": true
           },
-          "limits": { "contextTokens": 262144, "outputTokens": 262144 },
+          "limits": {
+            "contextTokens": 262144,
+            "outputTokens": 262144
+          },
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
             "effectiveAt": "2026-07-13T01:04:20.000Z",
             "rates": {
-              "input": { "amount": "0.7", "per": 1000000, "unit": "tokens" },
-              "output": { "amount": "3.5", "per": 1000000, "unit": "tokens" },
-              "cacheRead": { "amount": "0.2", "per": 1000000, "unit": "tokens" }
+              "input": {
+                "amount": "0.7",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "3.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              }
             },
-            "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T01:04:20.000Z"
+            }
           },
-          "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T01:04:20.000Z"
+          }
         }
       ]
     },
     {
       "id": "neuralwatt",
       "displayName": "Neuralwatt",
-      "supportedAuthMethods": ["api-key", "environment"],
-      "supportedProtocols": ["openai-compatible"],
+      "supportedAuthMethods": [
+        "api-key",
+        "environment"
+      ],
+      "supportedProtocols": [
+        "openai-compatible"
+      ],
       "allowsCustomModels": false,
       "lifecycle": "active",
-      "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" },
+      "provenance": {
+        "source": "models.dev",
+        "observedAt": "2026-07-13T01:04:20.000Z"
+      },
       "models": [
         {
           "id": "kimi-k2.6-flex",
           "displayName": "Kimi K2.6 Flex",
           "protocol": "openai-compatible",
           "capabilities": {
-            "inputModalities": ["text", "image"],
-            "outputModalities": ["text"],
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
             "tools": true,
             "reasoning": true
           },
-          "limits": { "contextTokens": 262128, "outputTokens": 262128 },
+          "limits": {
+            "contextTokens": 262128,
+            "outputTokens": 262128
+          },
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
             "effectiveAt": "2026-07-13T01:04:20.000Z",
             "rates": {
-              "input": { "amount": "0.345", "per": 1000000, "unit": "tokens" },
-              "output": { "amount": "1.61", "per": 1000000, "unit": "tokens" },
-              "cacheRead": { "amount": "0.08625", "per": 1000000, "unit": "tokens" }
+              "input": {
+                "amount": "0.345",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.61",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.08625",
+                "per": 1000000,
+                "unit": "tokens"
+              }
             },
-            "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T01:04:20.000Z"
+            }
           },
-          "provenance": { "source": "models.dev", "observedAt": "2026-07-13T01:04:20.000Z" }
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T01:04:20.000Z"
+          }
         }
       ]
     },
     {
       "id": "generic-openai-compatible",
       "displayName": "Generic OpenAI-compatible",
-      "supportedAuthMethods": ["api-key", "environment", "none"],
-      "supportedProtocols": ["openai-compatible"],
+      "supportedAuthMethods": [
+        "api-key",
+        "environment",
+        "none"
+      ],
+      "supportedProtocols": [
+        "openai-compatible"
+      ],
       "allowsCustomModels": true,
       "lifecycle": "active",
-      "provenance": { "source": "catalog", "observedAt": "2026-07-13T01:04:20.000Z" },
+      "provenance": {
+        "source": "catalog",
+        "observedAt": "2026-07-13T01:04:20.000Z"
+      },
       "models": []
     },
     {
       "id": "generic-anthropic-compatible",
       "displayName": "Generic Anthropic-compatible",
-      "supportedAuthMethods": ["api-key", "environment", "none"],
-      "supportedProtocols": ["anthropic-messages"],
+      "supportedAuthMethods": [
+        "api-key",
+        "environment",
+        "none"
+      ],
+      "supportedProtocols": [
+        "anthropic-messages"
+      ],
       "allowsCustomModels": true,
       "lifecycle": "active",
-      "provenance": { "source": "catalog", "observedAt": "2026-07-13T01:04:20.000Z" },
+      "provenance": {
+        "source": "catalog",
+        "observedAt": "2026-07-13T01:04:20.000Z"
+      },
       "models": []
     }
   ]

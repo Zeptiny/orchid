@@ -26,11 +26,9 @@ export interface TrustedCatalogProviderPolicy {
  */
 export const TRUSTED_CATALOG_PROVIDER_POLICIES: readonly TrustedCatalogProviderPolicy[] = [
   { id: 'openai', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: false },
-  { id: 'chatgpt-codex', authMethods: ['oauth'], protocols: ['openai-compatible'], allowsCustomModels: false },
   { id: 'anthropic', authMethods: ['api-key', 'environment'], protocols: ['anthropic-messages'], allowsCustomModels: false },
   { id: 'google-gemini', authMethods: ['api-key', 'environment'], protocols: ['google-generative-ai'], allowsCustomModels: false },
   { id: 'xai', authMethods: ['api-key', 'environment'], protocols: ['xai'], allowsCustomModels: false },
-  { id: 'grok-subscription', authMethods: ['oauth'], protocols: ['xai'], allowsCustomModels: false },
   { id: 'opencode-go', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible', 'anthropic-messages'], allowsCustomModels: false },
   { id: 'lilac', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: false },
   { id: 'neuralwatt', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: false },

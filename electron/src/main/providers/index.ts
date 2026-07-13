@@ -14,9 +14,7 @@ import { catalogToProviderDefinitions } from './catalog/schema';
 import {
   CredentialVault,
   normalizeCredentialBinding,
-  type CredentialSecret,
 } from './credentials/vault';
-import type { CredentialRefreshCoordinator } from './credentials/refresh';
 import { ProviderDriverRegistry, createDefaultProviderDriverRegistry } from './drivers/registry';
 import { validateGenericEndpoint } from './drivers/compatible';
 import type {
@@ -35,8 +33,6 @@ export interface ProviderRuntimeOptions {
   readonly vault: Pick<CredentialVault, 'readSecret'>;
   readonly status?: Pick<ProviderStatusService, 'get'>;
   readonly registry?: ProviderDriverRegistry;
-  readonly credentialRefresh?: Pick<CredentialRefreshCoordinator, 'refreshConnection'>;
-  readonly now?: () => Date;
 }
 
 export interface ResolvedProviderExecution {
@@ -54,8 +50,6 @@ export class ProviderRuntime {
   private readonly vault: Pick<CredentialVault, 'readSecret'>;
   private readonly status: Pick<ProviderStatusService, 'get'> | undefined;
   private readonly registry: ProviderDriverRegistry;
-  private readonly credentialRefresh: ProviderRuntimeOptions['credentialRefresh'];
-  private readonly now: () => Date;
 
   constructor(options: ProviderRuntimeOptions) {
     this.catalog = options.catalog;
@@ -63,8 +57,6 @@ export class ProviderRuntime {
     this.vault = options.vault;
     this.status = options.status;
     this.registry = options.registry ?? createDefaultProviderDriverRegistry();
-    this.credentialRefresh = options.credentialRefresh;
-    this.now = options.now ?? (() => new Date());
   }
 
   async resolveLanguageModel(selection: ModelSelection): Promise<LanguageModelV4> {
@@ -157,7 +149,6 @@ export class ProviderRuntime {
     driver: ProviderDriver,
   ): Promise<
     | { readonly kind: 'api-key'; readonly apiKey: string }
-    | { readonly kind: 'oauth'; readonly accessToken: string }
     | { readonly kind: 'none' }
   > {
     if (connection.credential.kind === 'none') {
@@ -179,7 +170,7 @@ export class ProviderRuntime {
       return { kind: 'api-key', apiKey };
     }
 
-    if (connection.authMethod !== 'api-key' && connection.authMethod !== 'oauth') {
+    if (connection.authMethod !== 'api-key') {
       throw new ProviderResolutionError(`Stored credentials are not valid for '${connection.authMethod}' authentication`);
     }
     const origin = driver.allowsCustomEndpoint
@@ -191,42 +182,13 @@ export class ProviderRuntime {
       authMethod: connection.authMethod,
       origin,
     });
-    let secret = await this.vault.readSecret(connection.credential.handle, binding);
-    if (secret.kind === 'oauth' && this.oauthNeedsRefresh(secret.expiresAt)) {
-      if (!driver.refreshOAuthTokens || !this.credentialRefresh) {
-        throw new ProviderResolutionError(
-          `Connection '${connection.name}' has expired OAuth credentials and cannot refresh in this release`,
-        );
-      }
-      await this.credentialRefresh.refreshConnection(
-        connection.id,
-        ({ connection: refreshConnection, tokens }) => driver.refreshOAuthTokens!({
-          connection: refreshConnection,
-          tokens,
-        }),
-        { origin },
+    const secret = await this.vault.readSecret(connection.credential.handle, binding);
+    if (secret.kind !== 'api-key') {
+      throw new ProviderResolutionError(
+        `Connection '${connection.name}' does not have a stored API key credential`,
       );
-      secret = await this.vault.readSecret(connection.credential.handle, binding);
-      if (secret.kind !== 'oauth') {
-        throw new ProviderResolutionError(
-          `Connection '${connection.name}' did not retain OAuth credentials after refresh`,
-        );
-      }
     }
-    return this.driverCredentialFromSecret(secret);
-  }
-
-  private oauthNeedsRefresh(expiresAt: string): boolean {
-    const expiry = Date.parse(expiresAt);
-    return !Number.isFinite(expiry) || expiry <= this.now().getTime() + 60_000;
-  }
-
-  private driverCredentialFromSecret(secret: CredentialSecret):
-    | { readonly kind: 'api-key'; readonly apiKey: string }
-    | { readonly kind: 'oauth'; readonly accessToken: string } {
-    return secret.kind === 'api-key'
-      ? { kind: 'api-key', apiKey: secret.apiKey }
-      : { kind: 'oauth', accessToken: secret.accessToken };
+    return { kind: 'api-key', apiKey: secret.apiKey };
   }
 
   private describeResolutionFailure(kind: string, reason: string): string {

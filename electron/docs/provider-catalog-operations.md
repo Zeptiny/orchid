@@ -6,7 +6,7 @@ The provider catalog is signed, data-only metadata. It is not a driver distribut
 
 Publish a UTF-8 `catalog.json`, its detached base64 Ed25519 signature at `catalog.json.sig`, and the signing key ID in `x-orchid-catalog-key-id` on either response. The app verifies the exact downloaded bytes before parsing them. Any whitespace or serialization change after signing invalidates the signature.
 
-The catalog must contain a positive, monotonically increasing `catalogVersion`, issuance/expiry timestamps, compatible app range, provenance, declarative provider/model metadata, pricing, capabilities, limits, and lifecycle. It must not contain drivers, modules, endpoints, OAuth URLs, callbacks, or credential destinations. Runtime trust also rejects provider IDs, auth methods, and protocols outside the code-owned trusted policy.
+The catalog must contain a positive, monotonically increasing `catalogVersion`, issuance/expiry timestamps, compatible app range, provenance, declarative provider/model metadata, pricing, capabilities, limits, and lifecycle. It must not contain drivers, modules, endpoints, or credential destinations. Runtime trust also rejects provider IDs, auth methods, and protocols outside the code-owned trusted policy.
 
 The checked-in release keyring is intentionally empty, so remote refresh is disabled until release engineering embeds public verification keys in the application. This is the secure development default; do not work around it with a renderer-provided or remotely delivered key.
 
@@ -21,7 +21,7 @@ Run operator commands from `electron/`.
    npm run catalog:seed -- --input /secure/path/models-dev-api.json --output /secure/path/catalog.json --captured-at 2026-07-13T00:00:00.000Z --catalog-version 42
    ```
 
-   The seed tool is a research/import tool, not a runtime dependency. It emits only its supported `models.dev` providers; reapply Orchid-owned subscription/generic entries and reviewed lifecycle metadata before publication rather than replacing the bundled catalog blindly.
+   The seed tool is a research/import tool, not a runtime dependency. It emits only its supported `models.dev` providers; reapply Orchid-owned generic entries and reviewed lifecycle metadata before publication rather than replacing the bundled catalog blindly.
 
 3. Review provenance, model protocol/capability/limit/pricing changes, app compatibility, expiry, and lifecycle changes. Verify that no executable or credential-routing fields were introduced.
 4. Run the structural check:

@@ -106,8 +106,7 @@ export function ProvidersTab() {
         onUpdate={providers.updateConnection}
         onSubmitApiKey={providers.submitApiKey}
         onValidate={providers.validateConnection}
-        onAuthStart={providers.authStart}
-        onAuthComplete={providers.authComplete}
+
         onComplete={completeConnection}
       />
     </div>

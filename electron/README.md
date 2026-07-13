@@ -21,4 +21,4 @@ Read these before changing provider code or enabling a catalog entry:
 - [Catalog operations](docs/provider-catalog-operations.md)
 - [Release checklist](docs/provider-release-checklist.md)
 
-The default release has no configured provider and keeps ChatGPT/Codex and Grok subscription integrations disabled until release-owned registrations and current contract checks are approved. Lilac's supply-discount fields remain unavailable unless the authoritative live contract provides them.
+The default release has no configured provider. Authentication uses API keys or environment references only; Lilac's supply-discount fields remain unavailable unless the authoritative live contract provides them.

@@ -3,12 +3,10 @@
  *
  * The wizard collects only renderer-safe connection intent. API keys exist in
  * component state for the one submit invocation and are cleared as soon as
- * that invocation settles; OAuth tokens and credential handles never enter
- * this component.
+ * that invocation settles; credential handles never enter this component.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  ProviderAuthStartResult,
   ProviderConnectionCreateMessage,
   ProviderConnectionIdMessage,
   ProviderConnectionUpdateMessage,
@@ -48,17 +46,7 @@ export interface ConnectionWizardProps {
     message: ProviderSubmitApiKeyMessage,
   ) => Promise<ProviderMutationResult>;
   readonly onValidate: (message: ProviderConnectionIdMessage) => Promise<ProviderMutationResult>;
-  readonly onAuthStart: (message: ProviderConnectionIdMessage) => Promise<ProviderAuthStartResult>;
-  readonly onAuthComplete?: (
-    message: ProviderConnectionIdMessage & { flowId: string },
-  ) => Promise<ProviderMutationResult>;
   readonly onComplete?: (result: ProviderConnectionCompletion) => void | Promise<void>;
-}
-
-interface PendingOAuthFlow {
-  readonly connectionId: string;
-  readonly flowId: string;
-  readonly message: string;
 }
 
 function modelAvailable(model: ProviderModelView): boolean {
@@ -109,8 +97,6 @@ export function ConnectionWizard({
   onUpdate,
   onSubmitApiKey,
   onValidate,
-  onAuthStart,
-  onAuthComplete,
   onComplete,
 }: ConnectionWizardProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -134,7 +120,6 @@ export function ConnectionWizard({
   const [environmentVariable, setEnvironmentVariable] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [pendingConnection, setPendingConnection] = useState<ProviderConnectionView | null>(null);
-  const [oauthFlow, setOauthFlow] = useState<PendingOAuthFlow | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -186,7 +171,6 @@ export function ConnectionWizard({
     setEnvironmentVariable('');
     setApiKey('');
     setPendingConnection(null);
-    setOauthFlow(null);
     setFeedback(null);
     setError(null);
   }, []);
@@ -212,7 +196,6 @@ export function ConnectionWizard({
     setEnvironmentVariable(connection.environmentVariable ?? '');
     setApiKey('');
     setPendingConnection(connection);
-    setOauthFlow(null);
     setFeedback(connection.health === 'needs_attention'
       ? 'Reconnect this connection with its existing trusted provider settings.'
       : connection.health === 'disconnected'
@@ -390,18 +373,6 @@ export function ConnectionWizard({
     return true;
   };
 
-  const startOAuth = async (connection: ProviderConnectionView): Promise<void> => {
-    const result = await onAuthStart({ connectionId: connection.id });
-    setFeedback(result.message);
-    if (result.status === 'pending' && result.flowId) {
-      setOauthFlow({ connectionId: connection.id, flowId: result.flowId, message: result.message });
-      return;
-    }
-    // An unavailable release-gated integration leaves the draft connection
-    // intact so its safe explanation remains visible in connection settings.
-    setPendingConnection(connection);
-  };
-
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (submittingRef.current) return;
@@ -442,36 +413,10 @@ export function ConnectionWizard({
         return;
       }
 
-      if (authMethod === 'oauth') {
-        await startOAuth(connection);
-        return;
-      }
-
       const validated = await onValidate({ connectionId: connection.id });
       await finishIfReady(validated, built.selectionModelId);
     } catch (submitError) {
       setError(describeError(submitError));
-    } finally {
-      submittingRef.current = false;
-      setSubmitting(false);
-    }
-  };
-
-  const completeOAuth = async () => {
-    if (submittingRef.current || !oauthFlow || !onAuthComplete || !pendingConnection) return;
-    submittingRef.current = true;
-    setSubmitting(true);
-    setError(null);
-    try {
-      const completed = await onAuthComplete({
-        connectionId: oauthFlow.connectionId,
-        flowId: oauthFlow.flowId,
-      });
-      const validated = await onValidate({ connectionId: completed.connection.id });
-      const modelId = usesCustomModel ? customModelId.trim() : selectedModelId;
-      await finishIfReady(validated, modelId);
-    } catch (completionError) {
-      setError(describeError(completionError));
     } finally {
       submittingRef.current = false;
       setSubmitting(false);
@@ -483,7 +428,7 @@ export function ConnectionWizard({
   return (
     <dialog
       ref={dialogRef}
-      className="modal modal-open"
+      className="modal modal-open provider-connection-wizard"
       open
       aria-modal="true"
       aria-labelledby="provider-connection-wizard-title"
@@ -492,10 +437,10 @@ export function ConnectionWizard({
         close();
       }}
     >
-      <div className="modal-box max-h-[90vh] max-w-3xl overflow-y-auto">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 id="provider-connection-wizard-title" className="text-xl font-semibold">
+      <div className="modal-box">
+        <header className="provider-wizard-header">
+          <div className="min-w-0">
+            <h2 id="provider-connection-wizard-title" className="text-base font-semibold tracking-tight">
               {existingConnection ? `Reconnect ${existingConnection.name}` : 'Connect a provider'}
             </h2>
             <p className="mt-1 text-sm text-base-content/70">
@@ -512,350 +457,330 @@ export function ConnectionWizard({
           >
             <Icon name="x" size={16} />
           </button>
-        </div>
+        </header>
 
         {availableDefinitions.length === 0 ? (
-          <div role="alert" className="alert alert-warning mt-6">
-            <Icon name="alert" size={16} />
-            <span>No enabled provider presets are available in this build.</span>
+          <div className="provider-wizard-body">
+            <div role="alert" className="alert alert-warning">
+              <Icon name="alert" size={16} />
+              <span>No enabled provider presets are available in this build.</span>
+            </div>
           </div>
         ) : (
-          <form className="mt-6 space-y-5" onSubmit={submit}>
-            <fieldset className="fieldset">
-              <legend className="fieldset-legend">Provider and connection</legend>
-              <label className="label" htmlFor="provider-wizard-preset">
-                Provider preset
-              </label>
-              <select
-                id="provider-wizard-preset"
-                className="select w-full"
-                value={providerId}
-                onChange={(event) => selectDefinition(event.target.value)}
-                disabled={submitting || pendingConnection !== null}
-              >
-                {definitions.map((definition) => (
-                  <option
-                    key={definition.id}
-                    value={definition.id}
-                    disabled={!definition.available}
-                  >
-                    {definition.displayName}
-                    {definition.available ? '' : ' — unavailable'}
-                  </option>
-                ))}
-              </select>
-              {selectedDefinition?.unavailableReason && (
-                <p className="label text-warning">{selectedDefinition.unavailableReason}</p>
-              )}
-
-              <label className="label mt-3" htmlFor="provider-wizard-name">
-                Connection name
-              </label>
-              <input
-                ref={nameInputRef}
-                id="provider-wizard-name"
-                className="input w-full"
-                value={connectionName}
-                onChange={(event) => setConnectionName(event.target.value)}
-                placeholder="e.g. Work account"
-                disabled={metadataLocked}
-                required
-              />
-              <p className="label">This name distinguishes accounts for the same provider.</p>
-            </fieldset>
-
-            <div className="grid gap-5 md:grid-cols-2">
+          <form className="flex min-h-0 flex-1 flex-col" onSubmit={submit}>
+            <div className="provider-wizard-body">
               <fieldset className="fieldset">
-                <legend className="fieldset-legend">Protocol</legend>
-                <label className="label" htmlFor="provider-wizard-protocol">
-                  Connection protocol
+                <legend className="fieldset-legend">Provider and connection</legend>
+                <label className="label" htmlFor="provider-wizard-preset">
+                  Provider preset
                 </label>
                 <select
-                  id="provider-wizard-protocol"
+                  id="provider-wizard-preset"
                   className="select w-full"
-                value={protocol}
-                onChange={(event) => selectProtocol(event.target.value as ProviderProtocol)}
-                disabled={submitting || pendingConnection !== null}
+                  value={providerId}
+                  onChange={(event) => selectDefinition(event.target.value)}
+                  disabled={submitting || pendingConnection !== null}
                 >
-                  {(selectedDefinition?.supportedProtocols ?? []).map((candidate) => (
-                    <option key={candidate} value={candidate}>
-                      {protocolLabel(candidate)}
+                  {definitions.map((definition) => (
+                    <option
+                      key={definition.id}
+                      value={definition.id}
+                      disabled={!definition.available}
+                    >
+                      {definition.displayName}
+                      {definition.available ? '' : ' — unavailable'}
                     </option>
                   ))}
                 </select>
-              </fieldset>
+                {selectedDefinition?.unavailableReason && (
+                  <p className="label text-warning">{selectedDefinition.unavailableReason}</p>
+                )}
 
-              <fieldset className="fieldset">
-                <legend className="fieldset-legend">Initial model</legend>
-                <label className="label" htmlFor="provider-wizard-model">
-                  Model
-                </label>
-                <select
-                  id="provider-wizard-model"
-                  className="select w-full"
-                value={selectedModelId}
-                onChange={(event) => setSelectedModelId(event.target.value)}
-                disabled={metadataLocked}
-                >
-                  {catalogModels.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.displayName}
-                    </option>
-                  ))}
-                  {selectedDefinition?.allowsCustomModels && (
-                    <option value={CUSTOM_MODEL_VALUE}>Custom model…</option>
-                  )}
-                </select>
-                <p className="label">The initial selection remains scoped to this connection.</p>
-              </fieldset>
-            </div>
-
-            {usesCustomModel && (
-              <fieldset className="fieldset rounded-box border border-base-300 p-4">
-                <legend className="fieldset-legend">Custom model metadata</legend>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div>
-                    <label className="label" htmlFor="provider-wizard-custom-model-id">
-                      Model ID
-                    </label>
-                    <input
-                      id="provider-wizard-custom-model-id"
-                      className="input w-full"
-                      value={customModelId}
-                      onChange={(event) => setCustomModelId(event.target.value)}
-                      placeholder="provider/model-id"
-                      disabled={metadataLocked}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="label" htmlFor="provider-wizard-custom-model-name">
-                      Display name
-                    </label>
-                    <input
-                      id="provider-wizard-custom-model-name"
-                      className="input w-full"
-                      value={customModelName}
-                      onChange={(event) => setCustomModelName(event.target.value)}
-                      placeholder="Optional friendly name"
-                      disabled={metadataLocked}
-                    />
-                  </div>
-                  <div>
-                    <label className="label" htmlFor="provider-wizard-context-limit">
-                      Context limit
-                    </label>
-                    <input
-                      id="provider-wizard-context-limit"
-                      className="input w-full"
-                      inputMode="numeric"
-                      value={customContextLimit}
-                      onChange={(event) => setCustomContextLimit(event.target.value)}
-                      placeholder="Unknown"
-                      disabled={metadataLocked}
-                    />
-                  </div>
-                  <div>
-                    <label className="label" htmlFor="provider-wizard-output-limit">
-                      Output limit
-                    </label>
-                    <input
-                      id="provider-wizard-output-limit"
-                      className="input w-full"
-                      inputMode="numeric"
-                      value={customOutputLimit}
-                      onChange={(event) => setCustomOutputLimit(event.target.value)}
-                      placeholder="Unknown"
-                      disabled={metadataLocked}
-                    />
-                  </div>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-4">
-                  <label className="label cursor-pointer gap-2">
-                    <input
-                      className="checkbox checkbox-sm"
-                      type="checkbox"
-                      checked={customTools}
-                      onChange={(event) => setCustomTools(event.target.checked)}
-                      disabled={metadataLocked}
-                    />
-                    <span>Supports tools</span>
-                  </label>
-                  <label className="label cursor-pointer gap-2">
-                    <input
-                      className="checkbox checkbox-sm"
-                      type="checkbox"
-                      checked={customReasoning}
-                      onChange={(event) => setCustomReasoning(event.target.checked)}
-                      disabled={metadataLocked}
-                    />
-                    <span>Supports reasoning</span>
-                  </label>
-                </div>
-                <p className="label">
-                  This metadata is explicitly user-provided; Orchid does not infer it from an
-                  endpoint.
-                </p>
-              </fieldset>
-            )}
-
-            {supportsCustomEndpoint && (
-              <fieldset className="fieldset">
-                <legend className="fieldset-legend">Custom endpoint</legend>
-                <label className="label" htmlFor="provider-wizard-endpoint">
-                  Base URL
+                <label className="label mt-3" htmlFor="provider-wizard-name">
+                  Connection name
                 </label>
                 <input
-                  id="provider-wizard-endpoint"
+                  ref={nameInputRef}
+                  id="provider-wizard-name"
                   className="input w-full"
-                  type="url"
-                  value={endpoint}
-                  onChange={(event) => setEndpoint(event.target.value)}
-                  placeholder="https://provider.example/v1"
+                  value={connectionName}
+                  onChange={(event) => setConnectionName(event.target.value)}
+                  placeholder="e.g. Work account"
                   disabled={metadataLocked}
                   required
                 />
-                <label className="label mt-2 cursor-pointer justify-start gap-2">
-                  <input
-                    type="checkbox"
-                    className="checkbox checkbox-sm"
-                    checked={allowInsecureHttp}
-                    onChange={(event) => setAllowInsecureHttp(event.target.checked)}
-                    disabled={metadataLocked}
-                  />
-                  <span>Allow this non-loopback HTTP endpoint</span>
-                </label>
-                <p className="label">
-                  Use HTTPS whenever possible. Orchid validates the endpoint before binding any
-                  credential.
-                </p>
+                <p className="label">This name distinguishes accounts for the same provider.</p>
               </fieldset>
-            )}
 
-            <fieldset className="fieldset">
-              <legend className="fieldset-legend">Authentication</legend>
-              <label className="label" htmlFor="provider-wizard-auth">
-                Method
-              </label>
-              <select
-                id="provider-wizard-auth"
-                className="select w-full"
-                value={authMethod}
-                onChange={(event) => {
-                  setAuthMethod(event.target.value as ProviderAuthMethod);
-                  setApiKey('');
-                  setEnvironmentVariable('');
-                  setOauthFlow(null);
-                  setError(null);
-                }}
-                disabled={submitting || pendingConnection !== null}
-              >
-                {(selectedDefinition?.supportedAuthMethods ?? []).map((method) => (
-                  <option key={method} value={method}>
-                    {authMethodLabel(method)}
-                  </option>
-                ))}
-              </select>
+              <div className="grid gap-4 md:grid-cols-2">
+                <fieldset className="fieldset">
+                  <legend className="fieldset-legend">Protocol</legend>
+                  <label className="label" htmlFor="provider-wizard-protocol">
+                    Connection protocol
+                  </label>
+                  <select
+                    id="provider-wizard-protocol"
+                    className="select w-full"
+                    value={protocol}
+                    onChange={(event) => selectProtocol(event.target.value as ProviderProtocol)}
+                    disabled={submitting || pendingConnection !== null}
+                  >
+                    {(selectedDefinition?.supportedProtocols ?? []).map((candidate) => (
+                      <option key={candidate} value={candidate}>
+                        {protocolLabel(candidate)}
+                      </option>
+                    ))}
+                  </select>
+                </fieldset>
 
-              {authMethod === 'api-key' && (
-                <>
-                  {apiKeyPersistenceAvailable ? (
-                    <>
-                      <label className="label mt-3" htmlFor="provider-wizard-api-key">
-                        API key
+                <fieldset className="fieldset">
+                  <legend className="fieldset-legend">Initial model</legend>
+                  <label className="label" htmlFor="provider-wizard-model">
+                    Model
+                  </label>
+                  <select
+                    id="provider-wizard-model"
+                    className="select w-full"
+                    value={selectedModelId}
+                    onChange={(event) => setSelectedModelId(event.target.value)}
+                    disabled={metadataLocked}
+                  >
+                    {catalogModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.displayName}
+                      </option>
+                    ))}
+                    {selectedDefinition?.allowsCustomModels && (
+                      <option value={CUSTOM_MODEL_VALUE}>Custom model…</option>
+                    )}
+                  </select>
+                  <p className="label">The initial selection remains scoped to this connection.</p>
+                </fieldset>
+              </div>
+
+              {usesCustomModel && (
+                <fieldset className="fieldset">
+                  <legend className="fieldset-legend">Custom model metadata</legend>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="label" htmlFor="provider-wizard-custom-model-id">
+                        Model ID
                       </label>
                       <input
-                        id="provider-wizard-api-key"
-                        type="password"
-                        autoComplete="off"
+                        id="provider-wizard-custom-model-id"
                         className="input w-full"
-                        value={apiKey}
-                        onChange={(event) => setApiKey(event.target.value)}
-                        placeholder="Paste once; it is never shown again"
-                        disabled={submitting}
-                        required={!pendingConnection}
+                        value={customModelId}
+                        onChange={(event) => setCustomModelId(event.target.value)}
+                        placeholder="provider/model-id"
+                        disabled={metadataLocked}
+                        required
                       />
-                      <p className="label">
-                        Submitted once to secure storage, then immediately cleared from this form.
-                      </p>
-                    </>
-                  ) : (
-                    <div role="alert" className="alert alert-warning mt-3">
-                      <Icon name="alert" size={16} />
-                      <span>
-                        Secure credential storage is unavailable
-                        {secureStorage.reason ? ` (${secureStorage.reason})` : ''}.
-                        {selectedDefinition?.supportedAuthMethods.includes('environment')
-                          ? ' Use an environment variable reference instead.'
-                          : ' Choose an available authentication method or restore secure storage before continuing.'}
-                      </span>
                     </div>
-                  )}
-                </>
+                    <div>
+                      <label className="label" htmlFor="provider-wizard-custom-model-name">
+                        Display name
+                      </label>
+                      <input
+                        id="provider-wizard-custom-model-name"
+                        className="input w-full"
+                        value={customModelName}
+                        onChange={(event) => setCustomModelName(event.target.value)}
+                        placeholder="Optional friendly name"
+                        disabled={metadataLocked}
+                      />
+                    </div>
+                    <div>
+                      <label className="label" htmlFor="provider-wizard-context-limit">
+                        Context limit
+                      </label>
+                      <input
+                        id="provider-wizard-context-limit"
+                        className="input w-full"
+                        inputMode="numeric"
+                        value={customContextLimit}
+                        onChange={(event) => setCustomContextLimit(event.target.value)}
+                        placeholder="Unknown"
+                        disabled={metadataLocked}
+                      />
+                    </div>
+                    <div>
+                      <label className="label" htmlFor="provider-wizard-output-limit">
+                        Output limit
+                      </label>
+                      <input
+                        id="provider-wizard-output-limit"
+                        className="input w-full"
+                        inputMode="numeric"
+                        value={customOutputLimit}
+                        onChange={(event) => setCustomOutputLimit(event.target.value)}
+                        placeholder="Unknown"
+                        disabled={metadataLocked}
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-4">
+                    <label className="label cursor-pointer gap-2">
+                      <input
+                        className="checkbox checkbox-sm"
+                        type="checkbox"
+                        checked={customTools}
+                        onChange={(event) => setCustomTools(event.target.checked)}
+                        disabled={metadataLocked}
+                      />
+                      <span>Supports tools</span>
+                    </label>
+                    <label className="label cursor-pointer gap-2">
+                      <input
+                        className="checkbox checkbox-sm"
+                        type="checkbox"
+                        checked={customReasoning}
+                        onChange={(event) => setCustomReasoning(event.target.checked)}
+                        disabled={metadataLocked}
+                      />
+                      <span>Supports reasoning</span>
+                    </label>
+                  </div>
+                  <p className="label">
+                    This metadata is explicitly user-provided; Orchid does not infer it from an
+                    endpoint.
+                  </p>
+                </fieldset>
               )}
 
-              {authMethod === 'environment' && (
-                <>
-                  <label className="label mt-3" htmlFor="provider-wizard-environment">
-                    Environment variable
+              {supportsCustomEndpoint && (
+                <fieldset className="fieldset">
+                  <legend className="fieldset-legend">Custom endpoint</legend>
+                  <label className="label" htmlFor="provider-wizard-endpoint">
+                    Base URL
                   </label>
                   <input
-                    id="provider-wizard-environment"
+                    id="provider-wizard-endpoint"
                     className="input w-full"
-                    value={environmentVariable}
-                    onChange={(event) => setEnvironmentVariable(event.target.value.toUpperCase())}
-                    placeholder="PROVIDER_API_KEY"
-                    autoCapitalize="characters"
-                    autoComplete="off"
+                    type="url"
+                    value={endpoint}
+                    onChange={(event) => setEndpoint(event.target.value)}
+                    placeholder="https://provider.example/v1"
                     disabled={metadataLocked}
                     required
                   />
+                  <label className="label mt-2 cursor-pointer justify-start gap-2">
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-sm"
+                      checked={allowInsecureHttp}
+                      onChange={(event) => setAllowInsecureHttp(event.target.checked)}
+                      disabled={metadataLocked}
+                    />
+                    <span>Allow this non-loopback HTTP endpoint</span>
+                  </label>
                   <p className="label">
-                    Orchid resolves the variable in the main process; its value never enters
-                    renderer state.
+                    Use HTTPS whenever possible. Orchid validates the endpoint before binding any
+                    credential.
                   </p>
-                </>
+                </fieldset>
               )}
 
-              {authMethod === 'oauth' && (
-                <div role="alert" className="alert alert-info mt-3">
-                  <Icon name="globe" size={16} />
-                  <span>
-                    Subscription sign-in uses a versioned, release-gated browser or device flow.
-                    Tokens never enter the renderer.
-                  </span>
+              <fieldset className="fieldset">
+                <legend className="fieldset-legend">Authentication</legend>
+                <label className="label" htmlFor="provider-wizard-auth">
+                  Method
+                </label>
+                <select
+                  id="provider-wizard-auth"
+                  className="select w-full"
+                  value={authMethod}
+                  onChange={(event) => {
+                    setAuthMethod(event.target.value as ProviderAuthMethod);
+                    setApiKey('');
+                    setEnvironmentVariable('');
+                    setError(null);
+                  }}
+                  disabled={submitting || pendingConnection !== null}
+                >
+                  {(selectedDefinition?.supportedAuthMethods ?? []).map((method) => (
+                    <option key={method} value={method}>
+                      {authMethodLabel(method)}
+                    </option>
+                  ))}
+                </select>
+
+                {authMethod === 'api-key' && (
+                  <>
+                    {apiKeyPersistenceAvailable ? (
+                      <>
+                        <label className="label mt-3" htmlFor="provider-wizard-api-key">
+                          API key
+                        </label>
+                        <input
+                          id="provider-wizard-api-key"
+                          type="password"
+                          autoComplete="off"
+                          className="input w-full"
+                          value={apiKey}
+                          onChange={(event) => setApiKey(event.target.value)}
+                          placeholder="Paste once; it is never shown again"
+                          disabled={submitting}
+                          required={!pendingConnection}
+                        />
+                        <p className="label">
+                          Submitted once to secure storage, then immediately cleared from this form.
+                        </p>
+                      </>
+                    ) : (
+                      <div role="alert" className="alert alert-warning mt-3">
+                        <Icon name="alert" size={16} />
+                        <span>
+                          Secure credential storage is unavailable
+                          {secureStorage.reason ? ` (${secureStorage.reason})` : ''}.
+                          {selectedDefinition?.supportedAuthMethods.includes('environment')
+                            ? ' Use an environment variable reference instead.'
+                            : ' Choose an available authentication method or restore secure storage before continuing.'}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {authMethod === 'environment' && (
+                  <>
+                    <label className="label mt-3" htmlFor="provider-wizard-environment">
+                      Environment variable
+                    </label>
+                    <input
+                      id="provider-wizard-environment"
+                      className="input w-full"
+                      value={environmentVariable}
+                      onChange={(event) => setEnvironmentVariable(event.target.value.toUpperCase())}
+                      placeholder="PROVIDER_API_KEY"
+                      autoCapitalize="characters"
+                      autoComplete="off"
+                      disabled={metadataLocked}
+                      required
+                    />
+                    <p className="label">
+                      Orchid resolves the variable in the main process; its value never enters
+                      renderer state.
+                    </p>
+                  </>
+                )}
+
+              </fieldset>
+
+              {feedback && (
+                <div role="status" aria-live="polite" className="alert alert-info">
+                  <Icon name="alertCircle" size={16} />
+                  <span>{feedback}</span>
                 </div>
               )}
-            </fieldset>
+              {error && (
+                <div role="alert" aria-live="assertive" className="alert alert-error">
+                  <Icon name="alertCircle" size={16} />
+                  <span>{error}</span>
+                </div>
+              )}
+            </div>
 
-            {feedback && (
-              <div role="status" aria-live="polite" className="alert alert-info">
-                <Icon name="alertCircle" size={16} />
-                <span>{feedback}</span>
-              </div>
-            )}
-            {error && (
-              <div role="alert" aria-live="assertive" className="alert alert-error">
-                <Icon name="alertCircle" size={16} />
-                <span>{error}</span>
-              </div>
-            )}
-
-            {oauthFlow && onAuthComplete && (
-              <div className="alert alert-info flex-wrap">
-                <span>{oauthFlow.message}</span>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => void completeOAuth()}
-                  disabled={submitting}
-                >
-                  I’ve completed sign in
-                </button>
-              </div>
-            )}
-
-            <div className="modal-action mt-7">
+            <div className="provider-wizard-actions">
               <button
                 type="button"
                 className="btn btn-ghost"
@@ -914,8 +839,6 @@ function authMethodLabel(method: ProviderAuthMethod): string {
       return 'API key';
     case 'environment':
       return 'Environment variable';
-    case 'oauth':
-      return 'Subscription sign-in';
     case 'none':
       return 'No credential';
   }

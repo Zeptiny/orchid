@@ -190,12 +190,6 @@ const orchidAPI: OrchidAPI = {
 
     refreshStatus: (message: ProviderStatusRefreshMessage) =>
       invoke(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH, message),
-
-    authStart: (message: ProviderConnectionIdMessage) =>
-      invoke(IPC_CHANNELS.PROVIDERS_AUTH_START, message),
-
-    authComplete: (message: ProviderConnectionIdMessage & { flowId: string }) =>
-      invoke(IPC_CHANNELS.PROVIDERS_AUTH_COMPLETE, message),
   },
 
   session: {

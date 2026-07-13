@@ -2,14 +2,13 @@
  * Provider IPC — connection-centered, intent-only renderer boundary.
  *
  * The renderer may select a catalog preset, name a connection, and submit a
- * one-shot credential. It never receives a credential handle, API key, OAuth
- * token, driver origin, or executable driver configuration.
+ * one-shot credential. It never receives a credential handle, API key,
+ * driver origin, or executable driver configuration.
  */
 import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type {
-  ProviderAuthStartResult,
   ProviderConnectionView,
   ProviderDefinitionView,
   ProviderModelOption,
@@ -113,8 +112,6 @@ const statusRefreshSchema = z.object({
   providerId: z.string().trim().min(1),
   connectionId: idSchema.optional(),
 }).strict();
-const authCompleteSchema = connectionIdSchema.extend({ flowId: z.string().uuid() }).strict();
-
 // ── Main-process dependency boundary ────────────────────────────────────────
 
 interface ProviderIPCServices {
@@ -157,9 +154,7 @@ function unavailableProviderReason(
   registry: ProviderDriverRegistry,
 ): string | null {
   if (!lifecycleAvailable(definition.lifecycle)) {
-    return definition.supportedAuthMethods.includes('oauth')
-      ? 'This versioned subscription integration is not enabled in this release.'
-      : 'This provider is disabled by the current catalog.';
+    return 'This provider is disabled by the current catalog.';
   }
   if (!registry.get(definition.id)) return 'This build does not include a trusted driver for this provider.';
   return null;
@@ -360,7 +355,7 @@ function credentialOrigin(connection: ProviderConnection, current = services()):
 }
 
 function credentialBinding(connection: ProviderConnection, current = services()) {
-  if (connection.authMethod !== 'api-key' && connection.authMethod !== 'oauth') {
+  if (connection.authMethod !== 'api-key') {
     throw new Error(`Connection '${connection.name}' does not use a stored credential`);
   }
   return normalizeCredentialBinding({
@@ -708,33 +703,6 @@ export function registerProviderIPC(): void {
     const observation = await refreshStatus(parsed.data.providerId, parsed.data.connectionId);
     return observation ? statusView(observation) : null;
   });
-
-  ipcMain.handle(IPC_CHANNELS.PROVIDERS_AUTH_START, async (_event, payload: unknown) => {
-    const parsed = connectionIdSchema.safeParse(payload);
-    if (!parsed.success) throw new Error('Invalid providers:auth_start payload');
-    const connection = await requireConnection(parsed.data.connectionId);
-    if (connection.authMethod !== 'oauth') {
-      throw new Error(`Connection '${connection.name}' does not use OAuth`);
-    }
-    // Subscription drivers remain release-gated until Orchid-owned client
-    // registration and current contract checks are supplied at build time.
-    return {
-      status: 'unavailable',
-      message: 'This versioned subscription integration is not enabled in this release. Choose another provider or reconnect after a release enables it.',
-      flowId: null,
-    } satisfies ProviderAuthStartResult;
-  });
-
-  ipcMain.handle(IPC_CHANNELS.PROVIDERS_AUTH_COMPLETE, async (_event, payload: unknown) => {
-    const parsed = authCompleteSchema.safeParse(payload);
-    if (!parsed.success) throw new Error('Invalid providers:auth_complete payload');
-    const current = services();
-    const connection = await requireConnection(parsed.data.connectionId);
-    return {
-      connection: connectionView(connection, current.catalog.getProviderDefinitions()),
-      message: 'No OAuth flow is active for this release-gated connection.',
-    } satisfies ProviderMutationResult;
-  });
 }
 
 export function unregisterProviderIPC(): void {
@@ -748,8 +716,6 @@ export function unregisterProviderIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_DISCONNECT);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_MODEL_LIST);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH);
-  ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_AUTH_START);
-  ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_AUTH_COMPLETE);
 }
 
 function genericOrigin(connection: ProviderConnection, current: ProviderIPCServices): string | null {

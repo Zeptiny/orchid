@@ -33,7 +33,6 @@ import { ProviderCatalogStore } from './providers/catalog/store';
 import { ProviderCatalogUpdater, createHttpCatalogTransport } from './providers/catalog/updater';
 import type { CatalogKeyring } from './providers/catalog/trust';
 import { CredentialVault } from './providers/credentials/vault';
-import { CredentialRefreshCoordinator } from './providers/credentials/refresh';
 import { ConnectionStore } from './providers/connection-store';
 import { initializeProviderRuntime, resetProviderRuntime } from './providers';
 import { ProviderStatusScheduler, ProviderStatusService } from './providers/status/service';
@@ -111,14 +110,12 @@ function initializeProviderRuntimeServices(
   status?: ProviderStatusService,
 ): void {
   const connections = new ConnectionStore();
-  const credentialRefresh = new CredentialRefreshCoordinator({ vault, connections });
   providerConnectionStore = connections;
   initializeProviderRuntime({
     catalog,
     vault,
     connections,
     status,
-    credentialRefresh,
   });
 }
 

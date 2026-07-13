@@ -2,10 +2,6 @@
 
 Use this as a release gate for provider behavior. It is not permission to enable a provider merely because code exists.
 
-## Current subscription state
-
-The bundled catalog currently marks `chatgpt-codex` and `grok-subscription` as `disabled`, and the default registry supplies disabled release configurations. Keep both disabled unless every subscription gate below is met. Do not enable either through catalog data alone.
-
 ## Baseline gates
 
 - [ ] A fresh profile has no configured connection or selected model; no provider is silently chosen.
@@ -33,7 +29,6 @@ The bundled catalog currently marks `chatgpt-codex` and `grok-subscription` as `
 | OpenCode Go | A current fixture for each catalog-declared protocol; routing is selected solely from frozen model metadata. |
 | Neuralwatt | Request-cost header takes precedence; energy calculation has charged energy, rate, multiplier evidence, and currency; otherwise cost is unknown. Quota status remains informational. |
 | Lilac | See the mandatory live supply-discount gate below. |
-| ChatGPT/Codex and Grok subscription | All OAuth and compatibility gates below; otherwise retain disabled lifecycle and release configuration. |
 
 ### Mandatory Lilac supply-discount live gate
 
@@ -44,26 +39,16 @@ The bundled catalog currently marks `chatgpt-codex` and `grok-subscription` as `
 
 If this contract fails, do not release-enable or advertise Lilac supply-discount support. Preserve unavailable/stale behavior and leave other providers usable; do not estimate a replacement discount.
 
-### Mandatory subscription gate
-
-- [ ] Orchid-owned, approved public-client registration exists for the target integration; no third-party/OpenCode client identifier is copied.
-- [ ] The release record names a semantic integration version, terms-review version/date, and current live-contract fixture version.
-- [ ] Build-owned HTTPS request, authorization, token, and (when applicable) device-authorisation endpoints pass validation; static request headers are reviewed and cannot override authorization/cookie/host headers.
-- [ ] Browser callback/device flow, state/PKCE, cancellation, timeout, token refresh single-flight, account/entitlement handling, and connection-scoped failure/reconnect behavior pass deterministic fixtures.
-- [ ] A current opt-in live smoke test proves the approved auth/protocol contract. Subscription quota without a provider monetary charge remains unknown cost, never zero.
-
-If any item fails, keep the affected subscription integration disabled. A contract failure may require reconnection for one provider connection but must not break standard API-key drivers or local-only Orchid.
-
 ## Accounting and status gates
 
 - [ ] Each model invocation inserts a durable pending attempt before network I/O; AI SDK retries remain disabled so retry middleware is observable.
 - [ ] Reported cost wins over calculated cost; decimal totals reconcile by currency from immutable rows; unknown-cost counts remain distinct from zero.
-- [ ] Provider evidence, status cache, logs, IPC snapshots, session files, and bundles contain no API key, OAuth token, authorization code, account identifier, or raw request body.
+- [ ] Provider evidence, status cache, logs, IPC snapshots, session files, and bundles contain no API key, account identifier, or raw request body.
 - [ ] Status TTL/manual minimum/`Retry-After` behavior is exercised. Status failure or staleness never disables, delays, reroutes, or recommends against a usable inference request.
 - [ ] Disconnect finalizes/cancels active attempts before deleting stored credentials; disable blocks only new work and allows frozen work to finish.
 
 ## Release record and sign-off
 
-For each release-enabled provider, record: catalog version and signing key ID; driver/integration version; fixture source and capture date; live-smoke result; OAuth registration and terms approval where applicable; status/cost contract result; release owner; and rollback contact.
+For each release-enabled provider, record: catalog version and signing key ID; driver/integration version; fixture source and capture date; live-smoke result; status/cost contract result; release owner; and rollback contact.
 
 Block the release when any required live contract is stale or failing. The deterministic fixture suite remains the CI gate, while live smoke tests establish freshness for providers that are actually release-enabled.

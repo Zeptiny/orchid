@@ -41,11 +41,9 @@ describe('provider catalog operator tools', () => {
     expect(result.stale).toBe(false);
     expect(result.catalog.providers.map((provider) => provider.id)).toEqual([
       'openai',
-      'chatgpt-codex',
       'anthropic',
       'google-gemini',
       'xai',
-      'grok-subscription',
       'opencode-go',
       'lilac',
       'neuralwatt',

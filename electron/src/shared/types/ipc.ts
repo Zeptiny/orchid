@@ -284,7 +284,7 @@ export interface ProviderDefinitionView {
 
 /**
  * A redacted connection view. `credentialHandle`, encrypted payloads, API
- * keys, and OAuth token values are intentionally not part of this type.
+  * keys are intentionally not part of this type.
  */
 export interface ProviderConnectionView {
   id: string;
@@ -391,13 +391,6 @@ export interface ProviderModelOption {
 export interface ProviderMutationResult {
   connection: ProviderConnectionView;
   message: string | null;
-}
-
-/** Subscription OAuth stays main-process owned; disabled releases report a reason. */
-export interface ProviderAuthStartResult {
-  status: 'pending' | 'unavailable';
-  message: string;
-  flowId: string | null;
 }
 
 // ── Session API ──────────────────────────────────────────────────────────────
@@ -605,10 +598,6 @@ export interface OrchidAPI {
     modelList: (message?: ProviderConnectionIdMessage) => Promise<readonly ProviderModelOption[]>;
     /** Refresh informational status only; it never changes connection health. */
     refreshStatus: (message: ProviderStatusRefreshMessage) => Promise<ProviderStatusView | null>;
-    /** Starts a release-approved OAuth flow, or returns a safe unavailable state. */
-    authStart: (message: ProviderConnectionIdMessage) => Promise<ProviderAuthStartResult>;
-    /** Polls/completes a main-process-owned OAuth flow without renderer token input. */
-    authComplete: (message: ProviderConnectionIdMessage & { flowId: string }) => Promise<ProviderMutationResult>;
   };
 
   session: {
@@ -765,8 +754,6 @@ export const IPC_CHANNELS = {
   PROVIDERS_DISCONNECT: 'providers:disconnect',
   PROVIDERS_MODEL_LIST: 'providers:model_list',
   PROVIDERS_STATUS_REFRESH: 'providers:status_refresh',
-  PROVIDERS_AUTH_START: 'providers:auth_start',
-  PROVIDERS_AUTH_COMPLETE: 'providers:auth_complete',
 
   // Session
   SESSION_LIST: 'session:list',
@@ -872,8 +859,6 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.PROVIDERS_DISCONNECT,
   IPC_CHANNELS.PROVIDERS_MODEL_LIST,
   IPC_CHANNELS.PROVIDERS_STATUS_REFRESH,
-  IPC_CHANNELS.PROVIDERS_AUTH_START,
-  IPC_CHANNELS.PROVIDERS_AUTH_COMPLETE,
   IPC_CHANNELS.SESSION_LIST,
   IPC_CHANNELS.SESSION_LOAD,
   IPC_CHANNELS.SESSION_CREATE,
