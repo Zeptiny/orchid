@@ -10,6 +10,7 @@ import { resolveModelSelection } from './resolver';
 import type { ConnectionStore } from './connection-store';
 import type { ProviderCatalogSnapshot, ProviderCatalogStore } from './catalog/store';
 import type { CatalogPricing } from './catalog/schema';
+import { catalogToProviderDefinitions } from './catalog/schema';
 import {
   CredentialVault,
   normalizeCredentialBinding,
@@ -94,7 +95,10 @@ export class ProviderRuntime {
     readonly snapshot: FrozenProviderRequestSnapshot;
   }> {
     const connections = await this.connections.list();
-    const definitions = this.catalog.getProviderDefinitions();
+    const catalogSnapshot = this.catalog.load?.();
+    const definitions = catalogSnapshot
+      ? catalogToProviderDefinitions(catalogSnapshot.catalog)
+      : this.catalog.getProviderDefinitions();
     const resolution = resolveModelSelection(selection, connections, definitions);
     if (resolution.kind !== 'resolved') {
       throw new ProviderResolutionError(this.describeResolutionFailure(resolution.kind, resolution.reason));
@@ -108,12 +112,14 @@ export class ProviderRuntime {
         model: resolution.model,
         credential,
       },
-      snapshot: this.freezeSnapshot(resolution),
+      snapshot: this.freezeSnapshot(resolution, catalogSnapshot),
     };
   }
 
-  private freezeSnapshot(resolution: Extract<ReturnType<typeof resolveModelSelection>, { kind: 'resolved' }>): FrozenProviderRequestSnapshot {
-    const catalogSnapshot = this.catalog.load?.();
+  private freezeSnapshot(
+    resolution: Extract<ReturnType<typeof resolveModelSelection>, { kind: 'resolved' }>,
+    catalogSnapshot: ProviderCatalogSnapshot | undefined,
+  ): FrozenProviderRequestSnapshot {
     const catalogProvider = catalogSnapshot?.catalog.providers.find(
       (provider) => provider.id === resolution.provider.id,
     );
@@ -198,6 +204,7 @@ export class ProviderRuntime {
           connection: refreshConnection,
           tokens,
         }),
+        { origin },
       );
       secret = await this.vault.readSecret(connection.credential.handle, binding);
       if (secret.kind !== 'oauth') {

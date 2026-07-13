@@ -1,9 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fetchLilacStatus } from '../../src/main/providers/drivers/lilac';
+import { fetchNeuralwattQuotaStatus } from '../../src/main/providers/drivers/neuralwatt';
 import { ProviderStatusCache } from '../../src/main/providers/status/cache';
 import { ProviderStatusService, type ProviderStatusSource } from '../../src/main/providers/status/service';
 
 describe('provider status contracts', () => {
+  it.each([
+    ['Lilac', (fetch: typeof globalThis.fetch) => fetchLilacStatus({ fetch, timeoutMs: 5 })],
+    ['Neuralwatt', (fetch: typeof globalThis.fetch) => fetchNeuralwattQuotaStatus({
+      apiKey: 'test-key', fetch, timeoutMs: 5,
+    })],
+  ])('aborts %s status requests when the request deadline expires', async (_name, request) => {
+    const fetch = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      if (!signal) return reject(new Error('missing abort signal'));
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    })) as unknown as typeof globalThis.fetch;
+
+    await expect(request(fetch)).rejects.toMatchObject({ name: 'TimeoutError' });
+  });
+
   it('uses Lilac’s public five-minute status contract and keeps status informational', async () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify({
       updated_at: '2026-07-12T12:00:00.000Z',

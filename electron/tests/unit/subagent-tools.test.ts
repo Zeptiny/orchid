@@ -230,6 +230,22 @@ describe('delegate_to_subagent', () => {
     const records = manager.allRecords();
     expect(records[0].selection).toEqual(tierSelections.crown);
   });
+
+  it('inherits the parent turn selection instead of rebinding to the worker tier', async () => {
+    const { handler } = buildDelegateTool(agents, manager);
+    const parentSelection = {
+      connectionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      modelId: 'parent/vendor/model',
+    };
+
+    await handler({
+      name: 'same provider',
+      task: 'Use the parent provider identity',
+      type: 'file-explorer',
+    }, { ...toolContext, selection: parentSelection });
+
+    expect(manager.allRecords()[0].selection).toEqual(parentSelection);
+  });
 });
 
 // ── wait_for_subagent ────────────────────────────────────────────────────────

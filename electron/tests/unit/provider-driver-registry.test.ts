@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ProviderConnection, ProviderDefinition } from '../../src/shared/types/provider';
 import type { ProviderCatalogSnapshot } from '../../src/main/providers/catalog/store';
 import type { ProviderStatusObservation } from '../../src/main/providers/status/cache';
+import { catalogToProviderDefinitions } from '../../src/main/providers/catalog/schema';
+import { createCatalogFixture } from '../fixtures/provider-catalog/catalog-fixture';
 
 const connection: ProviderConnection = {
   id: '44444444-4444-4444-8444-444444444444',
@@ -24,6 +26,67 @@ const provider: ProviderDefinition = {
 };
 
 describe('ProviderDriverRegistry', () => {
+  it('uses one catalog snapshot across selection resolution and frozen accounting', async () => {
+    const { ProviderDriverRegistry } = await import('../../src/main/providers/drivers/registry');
+    const { ProviderRuntime } = await import('../../src/main/providers');
+    const firstCatalog = createCatalogFixture(1);
+    const secondCatalog = createCatalogFixture(2);
+    secondCatalog.providers[0].models[0].displayName = 'Changed after credential wait';
+    secondCatalog.providers[0].models[0].pricing.rates.input.amount = '99';
+    const firstSnapshot = {
+      source: 'bundled' as const,
+      stale: false,
+      catalog: firstCatalog,
+    };
+    const secondSnapshot = {
+      source: 'cache' as const,
+      stale: false,
+      catalog: secondCatalog,
+    };
+    let currentSnapshot = firstSnapshot as ProviderCatalogSnapshot;
+    let releaseCredential!: () => void;
+    const credentialWait = new Promise<void>((resolve) => { releaseCredential = resolve; });
+    const load = vi.fn(() => currentSnapshot);
+    const runtime = new ProviderRuntime({
+      catalog: {
+        getProviderDefinitions: () => catalogToProviderDefinitions(firstCatalog),
+        load,
+      },
+      connections: { list: async () => [connection] },
+      vault: {
+        readSecret: vi.fn(async () => {
+          await credentialWait;
+          return { kind: 'api-key' as const, apiKey: 'vault-key' };
+        }),
+      },
+      registry: new ProviderDriverRegistry([{
+        id: 'openai',
+        supportedAuthMethods: ['api-key'],
+        supportedProtocols: ['openai-compatible'],
+        allowsCustomEndpoint: false,
+        origin: 'https://api.openai.com/v1',
+        createLanguageModel: vi.fn(async () => ({ kind: 'model' })),
+      }]),
+    });
+
+    const resolution = runtime.resolveExecution({
+      connectionId: connection.id,
+      modelId: 'gpt-test/1',
+    });
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    currentSnapshot = secondSnapshot as ProviderCatalogSnapshot;
+    releaseCredential();
+
+    await expect(resolution).resolves.toMatchObject({
+      snapshot: {
+        catalogVersion: 1,
+        catalogSource: 'bundled',
+        pricing: { rates: { input: { amount: '1.250000' } } },
+      },
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects unsupported auth/protocol pairs before credential retrieval or adapter construction', async () => {
     const { ProviderDriverRegistry } = await import('../../src/main/providers/drivers/registry');
     const createLanguageModel = vi.fn();
@@ -174,6 +237,11 @@ describe('ProviderDriverRegistry', () => {
     });
 
     expect(credentialRefresh.refreshConnection).toHaveBeenCalledTimes(1);
+    expect(credentialRefresh.refreshConnection).toHaveBeenCalledWith(
+      oauthConnection.id,
+      expect.any(Function),
+      { origin: 'https://subscription.example.test/v1' },
+    );
     expect(refreshOAuthTokens).toHaveBeenCalledWith(expect.objectContaining({
       connection: oauthConnection,
       tokens: expect.objectContaining({ refreshToken: 'expired-refresh' }),
@@ -207,9 +275,21 @@ describe('ProviderDriverRegistry', () => {
         issuedAt: '2026-07-12T12:00:00.000Z',
         providers: [{
           id: 'lilac',
+          displayName: 'Lilac',
+          supportedAuthMethods: ['api-key'],
+          supportedProtocols: ['openai-compatible'],
+          allowsCustomModels: false,
+          lifecycle: 'active',
           provenance: { source: 'catalog', observedAt: '2026-07-12T12:00:00.000Z' },
           models: [{
             id: 'moonshotai/kimi-k2.6',
+            displayName: 'Kimi K2.6',
+            protocol: 'openai-compatible',
+            capabilities: {
+              inputModalities: ['text'], outputModalities: ['text'], tools: true, reasoning: false,
+            },
+            limits: { contextTokens: 128000, outputTokens: 16384 },
+            lifecycle: 'active',
             provenance: { source: 'catalog', observedAt: '2026-07-12T12:00:00.000Z' },
             pricing: {
               currency: 'USD',

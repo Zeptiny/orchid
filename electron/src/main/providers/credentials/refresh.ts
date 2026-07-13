@@ -25,6 +25,11 @@ export interface CredentialRefreshResult {
   readonly metadata: CredentialMetadata;
 }
 
+export interface CredentialRefreshOptions {
+  /** Trusted driver destination used for the same vault binding as execution. */
+  readonly origin?: string | null;
+}
+
 export interface DisconnectResult {
   readonly deletedCredentialCount: number;
   /** U5 drivers add provider-specific revocation URLs/instructions. */
@@ -48,10 +53,11 @@ export class CredentialRefreshCoordinator {
   refreshConnection(
     connectionId: string,
     refreshTokens: OAuthTokenRefresher,
+    options: CredentialRefreshOptions = {},
   ): Promise<CredentialRefreshResult> {
     const existing = this.inFlight.get(connectionId);
     if (existing) return existing;
-    const task = this.performRefresh(connectionId, refreshTokens);
+    const task = this.performRefresh(connectionId, refreshTokens, options);
     this.inFlight.set(connectionId, task);
     task.then(
       () => {
@@ -78,6 +84,7 @@ export class CredentialRefreshCoordinator {
   private async performRefresh(
     connectionId: string,
     refreshTokens: OAuthTokenRefresher,
+    options: CredentialRefreshOptions,
   ): Promise<CredentialRefreshResult> {
     const connection = await this.connections.get(connectionId);
     if (!connection) throw new Error(`Unknown provider connection '${connectionId}'`);
@@ -88,7 +95,9 @@ export class CredentialRefreshCoordinator {
       connectionId: connection.id,
       driverId: connection.providerId,
       authMethod: 'oauth',
-      origin: connection.endpoint ?? null,
+      origin: options.origin !== undefined
+        ? options.origin
+        : connection.endpoint ?? null,
     });
     try {
       const secret = await this.vault.readSecret(connection.credential.handle, binding);

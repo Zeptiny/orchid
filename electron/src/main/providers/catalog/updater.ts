@@ -7,6 +7,7 @@ import {
 
 /** Code-owned origin used only after release engineering embeds a public key. */
 export const ORCHID_CATALOG_URL = 'https://catalog.orchid.app/providers/catalog.json';
+export const CATALOG_REQUEST_TIMEOUT_MS = 15_000;
 
 export type RemoteCatalogResponse = CatalogPromotionInput;
 
@@ -57,7 +58,12 @@ interface FetchResponse {
   text(): Promise<string>;
 }
 
-type FetchLike = (url: string, init: { redirect: 'error'; cache: 'no-store'; headers: Record<string, string> }) => Promise<FetchResponse>;
+type FetchLike = (url: string, init: {
+  redirect: 'error';
+  cache: 'no-store';
+  headers: Record<string, string>;
+  signal: AbortSignal;
+}) => Promise<FetchResponse>;
 
 function signatureUrlFor(catalogUrl: string): string {
   const url = new URL(catalogUrl);
@@ -75,6 +81,7 @@ function signatureUrlFor(catalogUrl: string): string {
 export function createHttpCatalogTransport(
   catalogUrl = ORCHID_CATALOG_URL,
   fetchImpl: FetchLike = globalThis.fetch as unknown as FetchLike,
+  timeoutMs = CATALOG_REQUEST_TIMEOUT_MS,
 ): CatalogTransport {
   const signatureUrl = signatureUrlFor(catalogUrl);
   return {
@@ -83,6 +90,7 @@ export function createHttpCatalogTransport(
         redirect: 'error' as const,
         cache: 'no-store' as const,
         headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(timeoutMs),
       };
       const [catalogResponse, signatureResponse] = await Promise.all([
         fetchImpl(catalogUrl, init),

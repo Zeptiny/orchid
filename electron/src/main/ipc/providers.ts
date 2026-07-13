@@ -581,12 +581,19 @@ export function registerProviderIPC(): void {
     const candidate = { ...existing, ...patch } as ProviderConnection;
     requireStaticConnectionSupport(candidate, current);
 
-    // A stored generic secret is origin-bound. An origin change must erase it
-    // before the renderer can make the new endpoint executable.
+    // Generic credentials are destination-bound. An origin change must erase
+    // a stored secret or require the renderer to explicitly reconfirm the
+    // environment reference in the same intent before the endpoint is usable.
     const endpointChanged = parsed.data.endpoint !== undefined
       && genericOrigin(existing, current) !== genericOrigin(candidate, current);
     if (endpointChanged && existing.credential.kind === 'stored') {
       await current.vault.deleteConnectionCredentials(existing.id);
+      Object.assign(patch, { credential: { kind: 'none' as const }, health: 'draft' });
+    } else if (
+      endpointChanged
+      && existing.credential.kind === 'environment'
+      && parsed.data.environmentVariable === undefined
+    ) {
       Object.assign(patch, { credential: { kind: 'none' as const }, health: 'draft' });
     }
     const updated = await current.connections.update(existing.id, patch);

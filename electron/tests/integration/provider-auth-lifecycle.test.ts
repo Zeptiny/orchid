@@ -56,6 +56,37 @@ async function createOAuthConnection(name: string) {
 }
 
 describe('connection-scoped credential refresh lifecycle', () => {
+  it('uses the trusted driver origin instead of editable connection metadata for refresh binding', async () => {
+    const { connections, connection } = await createOAuthConnection('Trusted origin');
+    const vault = new vaultModule.CredentialVault({ credentialsPath: path.join(tempDir, 'credentials.json') });
+    const trustedOrigin = 'https://chatgpt.com/backend-api';
+    const trustedBinding = {
+      connectionId: connection.id,
+      driverId: connection.providerId,
+      authMethod: 'oauth' as const,
+      origin: trustedOrigin,
+    };
+    const handle = await vault.storeOAuthTokens(trustedBinding, {
+      accessToken: 'old-access-token-123456',
+      refreshToken: 'old-refresh-token-123456',
+      expiresAt: '2026-07-12T00:00:00.000Z',
+      tokenType: 'Bearer',
+    });
+    await connections.update(connection.id, { credential: { kind: 'stored', handle } });
+    const refresh = new refreshModule.CredentialRefreshCoordinator({ vault, connections });
+
+    await refresh.refreshConnection(connection.id, async () => ({
+      accessToken: 'new-access-token-123456',
+      refreshToken: 'new-refresh-token-123456',
+      expiresAt: '2026-07-12T02:00:00.000Z',
+      tokenType: 'Bearer',
+    }), { origin: trustedOrigin });
+
+    await expect(vault.readSecret(handle, trustedBinding)).resolves.toMatchObject({
+      accessToken: 'new-access-token-123456',
+    });
+  });
+
   it('single-flights concurrent refreshes, rotates tokens, and never writes them into connection metadata', async () => {
     const { connections, connection } = await createOAuthConnection('Work');
     const vault = new vaultModule.CredentialVault({ credentialsPath: path.join(tempDir, 'credentials.json') });

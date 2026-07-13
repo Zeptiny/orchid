@@ -15,6 +15,7 @@ export const LILAC_INFERENCE_BASE_URL = 'https://api.getlilac.com/v1';
 export const LILAC_STATUS_URL = 'https://api.getlilac.com/status?window=5m';
 export const LILAC_STATUS_TTL_MS = 5 * 60_000;
 export const LILAC_STATUS_MINIMUM_MANUAL_REFRESH_MS = 30_000;
+export const LILAC_STATUS_REQUEST_TIMEOUT_MS = 15_000;
 
 export type LilacSupplyState = 'low' | 'medium' | 'high' | 'surplus';
 
@@ -161,15 +162,20 @@ export interface FetchLilacStatusOptions {
   readonly fetch?: typeof globalThis.fetch;
   readonly now?: () => Date;
   readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
 }
 
 /** Fetch public Lilac performance/supply metadata without sending user credentials. */
 export async function fetchLilacStatus(options: FetchLilacStatusOptions = {}): Promise<ProviderStatusObservation> {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const now = options.now ?? (() => new Date());
+  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? LILAC_STATUS_REQUEST_TIMEOUT_MS);
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, timeoutSignal])
+    : timeoutSignal;
   const response = await fetchImpl(LILAC_STATUS_URL, {
     headers: { accept: 'application/json' },
-    signal: options.signal,
+    signal,
   });
   if (!response.ok) {
     throw new StatusRefreshError(`Lilac status request failed with HTTP ${response.status}`, {

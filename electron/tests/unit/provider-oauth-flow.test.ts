@@ -153,6 +153,22 @@ describe('OAuthFlowManager browser callback flow', () => {
     expect(closeBrowserCallbackServer).toHaveBeenCalledTimes(1);
     expect(manager.browserFlowCount()).toBe(0);
   });
+
+  it('expires an abandoned browser flow without waiting for a callback', async () => {
+    const { manager } = createManager();
+    const flow = await manager.startBrowserFlow({
+      binding,
+      authorizationEndpoint: 'https://auth.example.test/authorize',
+      clientId: 'orchid-client',
+      scopes: [],
+      expiresInMs: 5,
+      exchangeAuthorizationCode: async () => tokens,
+    });
+
+    await expect(flow.completion).rejects.toThrow(/expired/i);
+    expect(manager.browserFlowCount()).toBe(0);
+    expect(closeBrowserCallbackServer).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('OAuthFlowManager device flow', () => {

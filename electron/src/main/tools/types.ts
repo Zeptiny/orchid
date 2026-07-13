@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { getConfig } from '../config/loader';
 import type { Config } from '../config/schema';
 import type { ProjectRuntime } from '../project/runtime';
+import type { ModelSelection } from '../../shared/types/provider';
 
 /**
  * Defines a tool's metadata and schema.
@@ -61,6 +62,8 @@ export interface ToolExecutionContext {
   sessionId?: string;
   /** Immutable project definitions captured when the parent turn began. */
   projectRuntime?: ProjectRuntime;
+  /** Connection/model identity frozen by the parent turn. */
+  selection?: ModelSelection;
   /**
    * Agent scope within the session (`"main"` or subagent id).
    * Isolates todos and background commands so peer agents cannot see each other.

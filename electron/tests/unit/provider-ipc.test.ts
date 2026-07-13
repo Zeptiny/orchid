@@ -288,6 +288,43 @@ describe('provider IPC', () => {
     });
   });
 
+  it('requires explicit environment-variable reconfirmation when a generic origin changes', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000033';
+    memory.records.set(id, {
+      id,
+      providerId: 'generic-openai-compatible',
+      name: 'Environment fixture',
+      protocol: 'openai-compatible',
+      authMethod: 'environment',
+      credential: { kind: 'environment', variable: 'FIXTURE_API_KEY' },
+      modelIds: ['fixture-model'],
+      customModels: [{
+        id: 'fixture-model',
+        displayName: 'Fixture model',
+        protocol: 'openai-compatible',
+        capabilities: {
+          inputModalities: ['text'], outputModalities: ['text'], tools: true, reasoning: false,
+        },
+        limits: { contextTokens: 4096, outputTokens: 1024 },
+      }],
+      endpoint: 'https://one.example/v1',
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const invalidated = await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
+      connectionId: id,
+      endpoint: 'https://two.example/v1',
+    });
+
+    expect(memory.vault.deleteConnectionCredentials).not.toHaveBeenCalled();
+    expect(invalidated).toMatchObject({
+      connection: { credentialKind: 'none', health: 'needs_attention' },
+    });
+  });
+
   it('disables only new work while reporting that a frozen turn can finish', async () => {
     const memory = memoryServices();
     const id = '00000000-0000-4000-8000-000000000041';

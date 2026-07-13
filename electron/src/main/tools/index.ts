@@ -1,12 +1,9 @@
 /**
  * Tool registry — exports and singleton access.
  *
- * Usage:
- *   import { toolRegistry } from './tools';
- *   toolRegistry.register(myToolDefinition, myHandler);
- *
- * Each tool module exports a ToolDefinition and async handler.
- * The registry is a singleton (one instance in the main process).
+ * Each tool module exports a ToolDefinition and async handler. Agent turns use
+ * `getBuiltinToolRegistryForRuntime()` so project agents, skills, and MCP tools
+ * are frozen per runtime; the singleton supports compatibility IPC surfaces.
  */
 import { ToolRegistry } from './registry';
 import {
@@ -51,7 +48,7 @@ import { SubagentManager } from '../agents/manager';
 import { getTierModelSelection } from '../config/loader';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 
-/** Singleton registry instance for the main process */
+/** Compatibility registry for non-turn IPC and isolated callers. */
 export const toolRegistry = new ToolRegistry();
 
 interface BuiltinToolContext {

@@ -26,7 +26,7 @@ import {
   resolveWindowWorkspace,
 } from './session';
 import { getBackgroundStore } from '../tools/process/background-store';
-import { getSubagentManager, toolRegistry } from '../tools';
+import { getBuiltinToolRegistryForRuntime, getSubagentManager } from '../tools';
 import type {
   ChatErrorKind,
   ChatSendResult,
@@ -60,7 +60,10 @@ import {
 } from './session-activity';
 import { appendProjectPersonality } from '../project/personality';
 import { buildSystemPromptContext } from '../llm/build-prompt-context';
-import { getProjectMCPManager } from '../mcp/project-registry';
+import {
+  acquireProjectMCPManager,
+  releaseProjectMCPManager,
+} from '../mcp/project-registry';
 import { getProviderRuntime } from '../providers';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { getProviderAccountingStore } from '../providers/accounting/store';
@@ -141,6 +144,8 @@ type ActiveAgent = {
   unsubscribe: () => void;
   interruptUnsubscribe: () => void;
   interruptResetTimer: ReturnType<typeof setTimeout> | null;
+  /** Releases turn-scoped resources exactly once when the actor is disposed. */
+  releaseResources: () => void;
 };
 
 const activeAgents = new Map<string, ActiveAgent>();
@@ -173,6 +178,7 @@ function disposeActiveAgent(sessionId: string, active: ActiveAgent): void {
   active.abortController.abort();
   active.actor.stop();
   active.interruptActor.stop();
+  active.releaseResources();
 }
 
 /**
@@ -549,7 +555,7 @@ function canSend(webContents: WebContents): boolean {
  *
  * @returns ok + session cwd, or a structured failure for the send gate
  */
-function ensureActiveSession(
+export function ensureActiveSession(
   webContents: WebContents,
   preferredModel?: ModelSelection | null,
   requestedSessionId?: string,
@@ -615,6 +621,13 @@ function ensureActiveSession(
     // bound via sticky/draft. Persist that cwd onto the session before tools run.
     if (!active.cwd || active.cwd.trim() === '') {
       manager.changeCwd(active.id, boundCwd);
+    }
+    if (preferredModel && (
+      active.selection?.connectionId !== preferredModel.connectionId
+      || active.selection.modelId !== preferredModel.modelId
+    )) {
+      manager.changeModel(active.id, preferredModel, preferredModel.modelId);
+      active = manager.getSession(active.id) ?? { ...active, selection: preferredModel };
     }
     return { ok: true, cwd: boundCwd, session: active, runtime };
   }
@@ -740,6 +753,8 @@ function createProviderStreamFn(input: {
   readonly sessionId: string;
   readonly modelInstance: LanguageModelV4;
   readonly accounting: ProviderAttemptAccountingContext;
+  readonly registry: ReturnType<typeof getBuiltinToolRegistryForRuntime>;
+  readonly mcpManager: ReturnType<typeof acquireProjectMCPManager>;
 }) {
   return async function* ({
     agent,
@@ -763,8 +778,8 @@ function createProviderStreamFn(input: {
       systemPrompt,
       context,
       config: input.runtime.config,
-      registry: toolRegistry,
-      mcpManager: getProjectMCPManager(input.runtime),
+      registry: input.registry,
+      mcpManager: input.mcpManager,
       sessionId: input.sessionId,
       projectRuntime: input.runtime,
       agentScopeId: 'main',
@@ -919,6 +934,7 @@ export function registerChatIPC(): void {
       sessionId,
       projectRuntime: runtime,
       agentScopeId: 'main',
+      selection: turnSelection,
     };
 
     // Multi-chain: open a new ACTIVE chain for this user turn (Python `_start_chain`).
@@ -953,28 +969,53 @@ export function registerChatIPC(): void {
       turnId,
       snapshot: providerSnapshot,
     };
-    const actor = createActor(agentMachine, {
-      input: {
-        agent,
-        systemPrompt: appendProjectPersonality(baseSystemPrompt, runtime),
-        streamFn: createProviderStreamFn({
-          messages,
-          runtime,
-          sessionId,
-          modelInstance,
-          accounting,
-        }),
-        // streamChat executes tool calls inside the shared AI SDK loop; this
-        // callback remains required by the state machine for its legacy API.
-        executeFn: async () => ({
-          content: 'Tool execution is handled by the provider stream.',
-          isError: true,
-        }),
-      },
-    });
-
-    // Create the interrupt machine actor for two-phase Esc confirmation
-    const interruptActor = createActor(interruptMachine);
+    const mcpManager = acquireProjectMCPManager(runtime);
+    let resourcesReleased = false;
+    const releaseResources = () => {
+      if (resourcesReleased) return;
+      resourcesReleased = true;
+      releaseProjectMCPManager(runtime);
+    };
+    let actor: ReturnType<typeof createActor<typeof agentMachine>>;
+    let interruptActor: ReturnType<typeof createActor<typeof interruptMachine>>;
+    try {
+      const turnRegistry = getBuiltinToolRegistryForRuntime(runtime, {
+        agents: new Map(runtime.agents),
+        skills: new Map(runtime.skills),
+        mcpManager,
+      });
+      actor = createActor(agentMachine, {
+        input: {
+          agent,
+          systemPrompt: appendProjectPersonality(baseSystemPrompt, runtime),
+          streamFn: createProviderStreamFn({
+            messages,
+            runtime,
+            sessionId,
+            modelInstance,
+            accounting,
+            registry: turnRegistry,
+            mcpManager,
+          }),
+          // streamChat executes tool calls inside the shared AI SDK loop; this
+          // callback remains required by the state machine for its legacy API.
+          executeFn: async () => ({
+            content: 'Tool execution is handled by the provider stream.',
+            isError: true,
+          }),
+        },
+      });
+      interruptActor = createActor(interruptMachine);
+    } catch (error) {
+      releaseResources();
+      sessionsStarting.delete(sessionId);
+      completeSessionActivity(sessionId, false);
+      return {
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error),
+        kind: 'runtime_hydration_failed',
+      };
+    }
 
     // Track response for incremental updates
     let lastSentLength = 0;
@@ -1016,6 +1057,7 @@ export function registerChatIPC(): void {
       unsubscribe: () => subscription?.unsubscribe(),
       interruptUnsubscribe: () => interruptSubscription?.unsubscribe(),
       interruptResetTimer: null,
+      releaseResources,
     };
     activeAgents.set(sessionId, activeAgent);
     sessionsStarting.delete(sessionId);
@@ -1417,20 +1459,30 @@ export function registerChatIPC(): void {
       }
     });
 
-    // Start the actor and send user input
-    actor.start();
-    interruptActor.start();
+    try {
+      // Start the actor and send user input
+      actor.start();
+      interruptActor.start();
 
-    // Immediate state so the renderer gets cwd/model chrome before first chunk
-    sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_STATE, {
-      state: 'streaming',
-      response: '',
-      error: null,
-      interruptState: 'idle',
-      cwd: turnCtx.cwd,
-    });
+      // Immediate state so the renderer gets cwd/model chrome before first chunk
+      sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_STATE, {
+        state: 'streaming',
+        response: '',
+        error: null,
+        interruptState: 'idle',
+        cwd: turnCtx.cwd,
+      });
 
-    actor.send({ type: 'USER_INPUT', message });
+      actor.send({ type: 'USER_INPUT', message });
+    } catch (error) {
+      disposeActiveAgent(sessionId, activeAgent);
+      completeSessionActivity(sessionId, false);
+      return {
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error),
+        kind: 'runtime_hydration_failed',
+      };
+    }
 
     return { status: 'started', sessionId, turnId };
   });

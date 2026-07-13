@@ -52,6 +52,14 @@ describe('provider onboarding and disconnected UX', () => {
     expect(wizard).not.toContain('credential.handle');
   });
 
+  it('guards provider submission synchronously and keeps composer gates reactive', () => {
+    const wizard = source('components', 'Providers', 'ConnectionWizard.tsx');
+    const composer = source('components', 'InputArea.tsx');
+    expect(wizard).toContain('if (submittingRef.current) return');
+    expect(wizard).toContain('submittingRef.current = true');
+    expect(composer).toMatch(/modelSelected,[\s\S]*onOpenProviders,[\s\S]*providerAvailable,[\s\S]*workspaceBound,/);
+  });
+
   it('renders Lilac supply discount and Neuralwatt quota as informational status', () => {
     const status = source('components', 'Providers', 'ProviderStatus.tsx');
     expect(status).toContain('Subscription discount');

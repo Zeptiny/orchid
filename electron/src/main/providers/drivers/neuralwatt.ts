@@ -14,6 +14,7 @@ export const NEURALWATT_API_ORIGIN = 'https://api.neuralwatt.com/v1';
 export const NEURALWATT_QUOTA_URL = `${NEURALWATT_API_ORIGIN}/quota`;
 export const NEURALWATT_STATUS_TTL_MS = 5 * 60_000;
 export const NEURALWATT_STATUS_MINIMUM_MANUAL_REFRESH_MS = 30_000;
+export const NEURALWATT_STATUS_REQUEST_TIMEOUT_MS = 15_000;
 
 export interface NeuralwattBillingEvidence {
   /** Provider-reported request charge; U7 gives this precedence over formulae. */
@@ -172,15 +173,20 @@ export async function fetchNeuralwattQuotaStatus(options: {
   readonly fetch?: typeof globalThis.fetch;
   readonly now?: () => Date;
   readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
 }): Promise<ProviderStatusObservation> {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const now = options.now ?? (() => new Date());
+  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? NEURALWATT_STATUS_REQUEST_TIMEOUT_MS);
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, timeoutSignal])
+    : timeoutSignal;
   const response = await fetchImpl(NEURALWATT_QUOTA_URL, {
     headers: {
       accept: 'application/json',
       authorization: `Bearer ${options.apiKey}`,
     },
-    signal: options.signal,
+    signal,
   });
   if (!response.ok) {
     throw new StatusRefreshError(`Neuralwatt quota request failed with HTTP ${response.status}`, {

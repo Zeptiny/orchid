@@ -111,6 +111,7 @@ interface PendingBrowserFlow {
   readonly exchangeAuthorizationCode: BrowserOAuthFlowInput['exchangeAuthorizationCode'];
   readonly listener: LoopbackCallbackServer;
   readonly deferred: Deferred<OAuthFlowCompletion>;
+  readonly expiryTimer: ReturnType<typeof setTimeout>;
   used: boolean;
 }
 
@@ -306,8 +307,12 @@ export class OAuthFlowManager {
       exchangeAuthorizationCode: input.exchangeAuthorizationCode,
       listener,
       deferred: completion,
+      expiryTimer: setTimeout(() => {
+        void this.expireBrowserFlow(state).catch(() => undefined);
+      }, Math.max(0, expiresAt - this.now().getTime())),
       used: false,
     };
+    pending.expiryTimer.unref?.();
     this.browserFlows.set(state, pending);
 
     endpoint.searchParams.set('response_type', 'code');
@@ -343,7 +348,7 @@ export class OAuthFlowManager {
   async cancelBrowserFlow(state: string): Promise<void> {
     const pending = this.browserFlows.get(state);
     if (!pending) return;
-    this.browserFlows.delete(state);
+    this.deleteBrowserFlow(pending);
     pending.deferred.reject(new Error('OAuth flow cancelled'));
     await pending.listener.close();
   }
@@ -431,7 +436,7 @@ export class OAuthFlowManager {
     code: string,
   ): Promise<OAuthFlowCompletion> {
     if (this.now().getTime() >= pending.expiresAt) {
-      this.browserFlows.delete(pending.state);
+      this.deleteBrowserFlow(pending);
       const error = new Error('OAuth callback state expired');
       pending.deferred.reject(error);
       throw error;
@@ -454,13 +459,27 @@ export class OAuthFlowManager {
         handle,
         metadata: await this.vault.getMetadata(handle),
       };
-      this.browserFlows.delete(pending.state);
+      this.deleteBrowserFlow(pending);
       pending.deferred.resolve(completion);
       return completion;
     } catch (error) {
-      this.browserFlows.delete(pending.state);
+      this.deleteBrowserFlow(pending);
       pending.deferred.reject(error);
       throw error;
     }
+  }
+
+  private deleteBrowserFlow(pending: PendingBrowserFlow): void {
+    if (this.browserFlows.get(pending.state) !== pending) return;
+    this.browserFlows.delete(pending.state);
+    clearTimeout(pending.expiryTimer);
+  }
+
+  private async expireBrowserFlow(state: string): Promise<void> {
+    const pending = this.browserFlows.get(state);
+    if (!pending) return;
+    this.deleteBrowserFlow(pending);
+    pending.deferred.reject(new Error('OAuth flow expired'));
+    await pending.listener.close();
   }
 }

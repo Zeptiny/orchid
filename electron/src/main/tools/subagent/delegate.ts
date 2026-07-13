@@ -129,7 +129,8 @@ export function buildDelegateTool(
         isError: true,
       };
     }
-    const selection = getTierModelSelection(ctx.projectRuntime.config, resolvedTier);
+    const selection = ctx.selection
+      ?? getTierModelSelection(ctx.projectRuntime.config, resolvedTier);
 
     // Attribute to the frozen parent turn. Never discover ownership from the
     // process's currently selected session after another session is opened.

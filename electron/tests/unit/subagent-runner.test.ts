@@ -45,8 +45,18 @@ const mocks = vi.hoisted(() => ({
     todos: [],
     backgroundCommands: [],
   })),
-  toolRegistry: {},
+  toolRegistry: {
+    filter: vi.fn(() => [
+      { definition: { name: 'read_file' } },
+      { definition: { name: 'delegate_to_subagent' } },
+      { definition: { name: 'wait_for_subagent' } },
+      { definition: { name: 'interrupt_subagents' } },
+    ]),
+  },
   mcpManager: {},
+  acquireProjectMCPManager: vi.fn(),
+  releaseProjectMCPManager: vi.fn(),
+  getBuiltinToolRegistryForRuntime: vi.fn(),
 }));
 
 vi.mock('../../src/main/config/loader', () => ({
@@ -79,11 +89,12 @@ vi.mock('../../src/main/llm/build-prompt-context', () => ({
 }));
 
 vi.mock('../../src/main/mcp/project-registry', () => ({
-  getProjectMCPManager: () => mocks.mcpManager,
+  acquireProjectMCPManager: mocks.acquireProjectMCPManager,
+  releaseProjectMCPManager: mocks.releaseProjectMCPManager,
 }));
 
 vi.mock('../../src/main/tools', () => ({
-  toolRegistry: mocks.toolRegistry,
+  getBuiltinToolRegistryForRuntime: mocks.getBuiltinToolRegistryForRuntime,
 }));
 
 vi.mock('../../src/main/llm/message-factories', () => ({
@@ -131,6 +142,8 @@ describe('createSubagentStreamRunner', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getConfig.mockReturnValue({ default_project_dir: null });
+    mocks.acquireProjectMCPManager.mockReturnValue(mocks.mcpManager);
+    mocks.getBuiltinToolRegistryForRuntime.mockReturnValue(mocks.toolRegistry);
   });
 
   it('rejects a missing parent session before resolving a runtime', async () => {
@@ -210,7 +223,32 @@ describe('createSubagentStreamRunner', () => {
       modelInstance: expect.any(Object),
       sessionId: 'session-4',
       agentScopeId: 'scope-4',
+      registry: mocks.toolRegistry,
+      mcpManager: mocks.mcpManager,
+      agent: expect.objectContaining({ allowed_tools: ['read_file'] }),
     }));
+    expect(mocks.acquireProjectMCPManager).toHaveBeenCalledTimes(1);
+    expect(mocks.releaseProjectMCPManager).toHaveBeenCalledTimes(1);
     expect(mocks.runtimeRegistry.get).not.toHaveBeenCalled();
+  });
+
+  it('releases the MCP lease when turn-local registry construction fails', async () => {
+    mocks.getBuiltinToolRegistryForRuntime.mockImplementationOnce(() => {
+      throw new Error('registry construction failed');
+    });
+
+    await expect(collect(createSubagentStreamRunner()({
+      task: 'Inspect the project',
+      agent,
+      selection,
+      abortSignal: new AbortController().signal,
+      agentScopeId: 'scope-5',
+      sessionId: 'session-5',
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+    }))).rejects.toThrow(/registry construction failed/i);
+
+    expect(mocks.acquireProjectMCPManager).toHaveBeenCalledTimes(1);
+    expect(mocks.releaseProjectMCPManager).toHaveBeenCalledTimes(1);
   });
 });

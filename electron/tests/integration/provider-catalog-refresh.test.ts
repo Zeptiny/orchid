@@ -2,9 +2,12 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderCatalogStore } from '../../src/main/providers/catalog/store';
-import { ProviderCatalogUpdater } from '../../src/main/providers/catalog/updater';
+import {
+  createHttpCatalogTransport,
+  ProviderCatalogUpdater,
+} from '../../src/main/providers/catalog/updater';
 import { type CatalogKeyring } from '../../src/main/providers/catalog/trust';
 import { CATALOG_NOW as NOW, createCatalogFixture as createCatalog } from '../fixtures/provider-catalog/catalog-fixture';
 
@@ -50,6 +53,24 @@ function createStore(keyring: CatalogKeyring): ProviderCatalogStore {
 }
 
 describe('ProviderCatalogStore refresh lifecycle', () => {
+  it('aborts catalog and signature downloads when the request deadline expires', async () => {
+    const fetch = vi.fn((_url: string, init: { signal: AbortSignal }) => new Promise<never>((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+    }));
+    const transport = createHttpCatalogTransport(
+      'https://catalog.example.test/catalog.json',
+      fetch,
+      5,
+    );
+
+    await expect(transport.fetchCatalog()).rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
   it('atomically promotes a valid higher-version signed catalog and exposes it only after validation', async () => {
     const remote = signedCatalog(2);
     const store = createStore(remote.keyring);

@@ -117,6 +117,7 @@ export function ConnectionWizard({
   const nameInputRef = useRef<HTMLInputElement>(null);
   const wasOpenRef = useRef(false);
   const previousTargetIdRef = useRef<string | null>(null);
+  const submittingRef = useRef(false);
   const [providerId, setProviderId] = useState('');
   const [connectionName, setConnectionName] = useState('');
   const [protocol, setProtocol] = useState<ProviderProtocol>('openai-compatible');
@@ -403,12 +404,14 @@ export function ConnectionWizard({
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (submittingRef.current) return;
     const built = buildCreateMessage();
     if ('error' in built) {
       setError(built.error);
       return;
     }
 
+    submittingRef.current = true;
     setSubmitting(true);
     setError(null);
     setFeedback(null);
@@ -449,12 +452,14 @@ export function ConnectionWizard({
     } catch (submitError) {
       setError(describeError(submitError));
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
 
   const completeOAuth = async () => {
-    if (!oauthFlow || !onAuthComplete || !pendingConnection) return;
+    if (submittingRef.current || !oauthFlow || !onAuthComplete || !pendingConnection) return;
+    submittingRef.current = true;
     setSubmitting(true);
     setError(null);
     try {
@@ -468,6 +473,7 @@ export function ConnectionWizard({
     } catch (completionError) {
       setError(describeError(completionError));
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };

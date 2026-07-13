@@ -393,7 +393,16 @@ export function InputArea({
         textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
       }
     });
-  }, [input, isStreaming, onSend, workspaceBound, onPickProjectDir]);
+  }, [
+    input,
+    isStreaming,
+    modelSelected,
+    onOpenProviders,
+    onPickProjectDir,
+    onSend,
+    providerAvailable,
+    workspaceBound,
+  ]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

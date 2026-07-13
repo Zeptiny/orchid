@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
 import type { FrozenProviderRequestSnapshot } from '../../src/shared/types/accounting';
 import { ProviderAccountingStore } from '../../src/main/providers/accounting/store';
 
@@ -118,5 +119,28 @@ describe('ProviderAccountingStore', () => {
     expect(store.getAttempt('disconnect-own')).toMatchObject({ outcome: 'interrupted' });
     expect(store.getAttempt('disconnect-sibling')).toMatchObject({ outcome: 'pending' });
     store.close();
+  });
+
+  it('fails closed when persisted accounting JSON is corrupt or structurally incomplete', () => {
+    const store = createStore();
+    const dbPath = path.join(tempDir!, 'accounting.db');
+    store.insertPending({
+      attemptId: 'corrupt-snapshot',
+      sessionId: 'session-1',
+      chainId: null,
+      turnId: null,
+      sdkCallId: null,
+      snapshot: snapshot(),
+    });
+    store.close();
+
+    const db = new Database(dbPath);
+    db.prepare('UPDATE provider_attempts SET snapshot_json = ? WHERE attempt_id = ?')
+      .run('{"providerId":"anthropic"}', 'corrupt-snapshot');
+    db.close();
+
+    const restored = new ProviderAccountingStore({ dbPath });
+    expect(() => restored.getAttempt('corrupt-snapshot')).toThrow(/invalid snapshot/i);
+    restored.close();
   });
 });

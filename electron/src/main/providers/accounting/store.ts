@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
 import Decimal from 'decimal.js';
+import { z } from 'zod';
 import {
   type FrozenProviderRequestSnapshot,
   type KnownCostTotals,
@@ -10,6 +11,7 @@ import {
 } from '../../../shared/types/accounting';
 import { HOME_CONFIG_DIR } from '../../config/loader';
 import { redactLogString } from '../../logging';
+import { providerProtocolSchema } from '../../../shared/types/provider';
 import { ACCOUNTING_SCHEMA_SQL, ACCOUNTING_SCHEMA_VERSION } from './schema';
 import type { AttemptCostResolution } from './cost';
 
@@ -57,13 +59,74 @@ function json(value: unknown): string {
   return JSON.stringify(sanitize(value));
 }
 
-function parseJson<T>(value: string | null | undefined, fallback: T): T {
-  if (!value) return fallback;
+const decimalTextSchema = z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/);
+const pricingRateSnapshotSchema = z.object({
+  amount: decimalTextSchema,
+  per: z.number().int().positive(),
+  unit: z.enum(['tokens', 'requests', 'characters', 'energy']),
+});
+const frozenProviderRequestSnapshotSchema = z.object({
+  providerId: z.string().min(1),
+  providerDisplayName: z.string().min(1),
+  connectionId: z.string().uuid(),
+  connectionName: z.string().min(1),
+  modelId: z.string().min(1),
+  protocol: providerProtocolSchema,
+  modelSource: z.enum(['catalog', 'connection']),
+  catalogVersion: z.number().int().nonnegative().nullable(),
+  catalogSource: z.enum(['bundled', 'cache', 'none']),
+  catalogObservedAt: z.string().datetime().nullable(),
+  pricing: z.object({
+    currency: z.string().regex(/^[A-Z]{3}$/),
+    effectiveAt: z.string().datetime(),
+    rates: z.object({
+      input: pricingRateSnapshotSchema.optional(),
+      output: pricingRateSnapshotSchema.optional(),
+      cacheRead: pricingRateSnapshotSchema.optional(),
+      cacheWrite: pricingRateSnapshotSchema.optional(),
+      reasoning: pricingRateSnapshotSchema.optional(),
+      energy: pricingRateSnapshotSchema.optional(),
+    }),
+    inclusion: z.object({
+      cacheRead: z.enum(['subset-of-input', 'additional', 'unknown']),
+      cacheWrite: z.enum(['subset-of-input', 'additional', 'unknown']),
+      reasoning: z.enum(['subset-of-output', 'additional', 'unknown']),
+    }),
+    provenance: z.record(z.unknown()),
+  }).nullable(),
+  fieldProvenance: z.record(z.unknown()),
+  statusObservation: z.record(z.unknown()).nullable(),
+});
+const normalizedProviderUsageSchema = z.object({
+  inputTokens: z.number().nonnegative().optional(),
+  outputTokens: z.number().nonnegative().optional(),
+  totalTokens: z.number().nonnegative().optional(),
+  cacheReadTokens: z.number().nonnegative().optional(),
+  cacheWriteTokens: z.number().nonnegative().optional(),
+  reasoningTokens: z.number().nonnegative().optional(),
+  energyKwhConsumed: decimalTextSchema.optional(),
+  energyKwhCharged: decimalTextSchema.optional(),
+  pricingMultiplier: decimalTextSchema.optional(),
+});
+const providerEvidenceSchema = z.record(z.unknown());
+
+function parseJson<TSchema extends z.ZodTypeAny>(
+  value: string | null | undefined,
+  label: string,
+  schema: TSchema,
+): z.infer<TSchema> {
+  if (value == null) throw new Error(`Provider accounting row is missing ${label}`);
+  let parsed: unknown;
   try {
-    return JSON.parse(value) as T;
-  } catch {
-    return fallback;
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(`Provider accounting row contains invalid ${label} JSON`, { cause: error });
   }
+  const result = schema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(`Provider accounting row contains invalid ${label}: ${result.error.message}`);
+  }
+  return result.data;
 }
 
 function ensureParentDirectory(dbPath: string): void {
@@ -102,12 +165,14 @@ function rowToRecord(row: AttemptRow): ProviderAttemptRecord {
     chainId: row.chain_id,
     turnId: row.turn_id,
     sdkCallId: row.sdk_call_id,
-    snapshot: parseJson<FrozenProviderRequestSnapshot>(row.snapshot_json, {} as FrozenProviderRequestSnapshot),
+    snapshot: parseJson(row.snapshot_json, 'snapshot', frozenProviderRequestSnapshotSchema),
     outcome: row.outcome,
     startedAt: row.started_at,
     completedAt: row.completed_at,
-    usage: parseJson<NormalizedProviderUsage | null>(row.usage_json, null),
-    providerEvidence: parseJson<Readonly<Record<string, unknown>>>(row.provider_evidence_json, {}),
+    usage: row.usage_json === null
+      ? null
+      : parseJson(row.usage_json, 'usage', normalizedProviderUsageSchema),
+    providerEvidence: parseJson(row.provider_evidence_json, 'provider evidence', providerEvidenceSchema),
     costState: row.cost_state,
     costSource: row.cost_source,
     currency: row.currency,

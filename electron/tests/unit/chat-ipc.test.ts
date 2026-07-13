@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => {
     updatedAt: string;
     subagentChains: unknown[];
     todoStore: { tasks: unknown[] };
+    selection?: { connectionId: string; modelId: string } | null;
+    modelLabel?: string;
   } | null = null;
 
   let workspaceBound = true;
@@ -144,6 +146,19 @@ const mocks = vi.hoisted(() => {
       activeSession = { ...activeSession, cwd };
       return activeSession;
     }),
+    changeModel: vi.fn((
+      id: string,
+      selection: { connectionId: string; modelId: string },
+      modelLabel: string,
+    ) => {
+      if (!activeSession || activeSession.id !== id) {
+        throw new Error(`Cannot change model: session ${id} is not active`);
+      }
+      activeSession = { ...activeSession, selection, model: modelLabel, modelLabel };
+      return activeSession;
+    }),
+    getSession: vi.fn((id: string) => activeSession?.id === id ? activeSession : null),
+    switchTo: vi.fn((id: string) => activeSession?.id === id ? activeSession : null),
     startChain: vi.fn((params?: { messages?: unknown[] }) => {
       if (!activeSession) return null;
       const chain = {
@@ -224,6 +239,9 @@ const mocks = vi.hoisted(() => {
       sessionManager.getActive.mockClear();
       sessionManager.create.mockClear();
       sessionManager.changeCwd.mockClear();
+      sessionManager.changeModel.mockClear();
+      sessionManager.getSession.mockClear();
+      sessionManager.switchTo.mockClear();
       sessionManager.clearActive.mockClear();
       sessionManager.startChain.mockClear();
       sessionManager.persistTurn.mockClear();
@@ -368,7 +386,8 @@ vi.mock('../../src/main/llm/build-prompt-context', () => ({
 }));
 
 vi.mock('../../src/main/mcp/project-registry', () => ({
-  getProjectMCPManager: () => mocks.mcpManager,
+  acquireProjectMCPManager: vi.fn(() => mocks.mcpManager),
+  releaseProjectMCPManager: vi.fn(),
 }));
 
 vi.mock('../../src/main/ipc/session', () => ({
@@ -415,6 +434,43 @@ vi.mock('../../src/main/project/workspace', () => ({
 }));
 
 let chatIpc: typeof import('../../src/main/ipc/chat');
+
+describe('chat session selection gate', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.runtimeRegistry._reset();
+    mocks.sessionManager._reset();
+    chatIpc = await import('../../src/main/ipc/chat');
+  });
+
+  it('persists an explicit send selection before resolving an existing session turn', () => {
+    const previous = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'old/provider/model',
+    };
+    const preferred = {
+      connectionId: '22222222-2222-4222-8222-222222222222',
+      modelId: 'new/provider/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'),
+      selection: previous,
+      modelLabel: previous.modelId,
+    });
+
+    const result = chatIpc.ensureActiveSession(
+      { id: 906, send: vi.fn() } as never,
+      preferred,
+    );
+
+    expect(result).toMatchObject({ ok: true, session: { selection: preferred } });
+    expect(mocks.sessionManager.changeModel).toHaveBeenCalledWith(
+      'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      preferred,
+      preferred.modelId,
+    );
+  });
+});
 
 function doneEvents(send: ReturnType<typeof vi.fn>) {
   return send.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.CHAT_DONE);

@@ -17,11 +17,21 @@ import {
 import type { SubagentStreamRunner } from './manager';
 import { makeUserMessage } from '../llm/message-factories';
 import { buildSystemPromptContext } from '../llm/build-prompt-context';
-import { getProjectMCPManager } from '../mcp/project-registry';
-import { toolRegistry } from '../tools';
+import {
+  acquireProjectMCPManager,
+  releaseProjectMCPManager,
+} from '../mcp/project-registry';
+import { getBuiltinToolRegistryForRuntime } from '../tools';
 import { getProviderRuntime } from '../providers';
 import { getProviderAccountingStore } from '../providers/accounting/store';
 import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
+
+/** Delegated workers cannot recursively fan out or control sibling workers. */
+const SUBAGENT_FORBIDDEN_TOOLS = new Set([
+  'delegate_to_subagent',
+  'wait_for_subagent',
+  'interrupt_subagents',
+]);
 
 /**
  * Fallback cwd when spawn did not pass a frozen parent-turn path.
@@ -139,20 +149,38 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       turnId: params.turnId ?? params.agentScopeId,
       snapshot: providerSnapshot,
     };
-    yield* streamChat({
-      messages: [makeUserMessage(params.task)],
-      agent: params.agent,
-      systemPrompt: params.agent.system_prompt || 'You are a helpful assistant.',
-      context,
-      config,
-      registry: toolRegistry,
-      mcpManager: getProjectMCPManager(runtime),
-      sessionId,
-      projectRuntime: runtime,
-      agentScopeId: params.agentScopeId,
-      abortSignal: params.abortSignal,
-      modelInstance,
-      accounting,
-    });
+    const mcpManager = acquireProjectMCPManager(runtime);
+    try {
+      const registry = getBuiltinToolRegistryForRuntime(runtime, {
+        agents: new Map(runtime.agents),
+        skills: new Map(runtime.skills),
+        mcpManager,
+      });
+      const allowedPatterns = params.agent.allowed_tools.length > 0
+        ? [...params.agent.allowed_tools]
+        : ['*'];
+      const allowedTools = registry
+        .filter(allowedPatterns)
+        .map((tool) => tool.definition.name)
+        .filter((name) => !SUBAGENT_FORBIDDEN_TOOLS.has(name));
+      const agentForRun: Agent = { ...params.agent, allowed_tools: allowedTools };
+      yield* streamChat({
+        messages: [makeUserMessage(params.task)],
+        agent: agentForRun,
+        systemPrompt: params.agent.system_prompt || 'You are a helpful assistant.',
+        context,
+        config,
+        registry,
+        mcpManager,
+        sessionId,
+        projectRuntime: runtime,
+        agentScopeId: params.agentScopeId,
+        abortSignal: params.abortSignal,
+        modelInstance,
+        accounting,
+      });
+    } finally {
+      releaseProjectMCPManager(runtime);
+    }
   };
 }
