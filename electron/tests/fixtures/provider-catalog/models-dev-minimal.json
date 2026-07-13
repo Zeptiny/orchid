@@ -1,0 +1,27 @@
+{
+  "openai": {
+    "id": "openai",
+    "name": "OpenAI",
+    "models": {
+      "model/z": {
+        "id": "model/z",
+        "name": "Model Z",
+        "tool_call": true,
+        "reasoning": true,
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 131072,
+          "output": 8192
+        },
+        "cost": {
+          "input": 1.25,
+          "output": 5,
+          "cache_read": 0.25
+        }
+      }
+    }
+  }
+}
