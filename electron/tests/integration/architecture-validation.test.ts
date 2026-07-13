@@ -13,6 +13,8 @@
  * simulations that only prove the JavaScript runtime works.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { createActor } from 'xstate';
 import {
   SubagentManager,
@@ -573,5 +575,115 @@ describe('Architecture Properties (real modules)', () => {
       expect(isUserScrolledUp).toBe(false);
       expect(shouldAutoScroll(isUserScrolledUp)).toBe(true);
     });
+  });
+});
+
+describe('Provider architecture invariants (U9)', () => {
+  const sourceRoot = path.resolve(__dirname, '../../src');
+  const read = (...parts: string[]) => fs.readFileSync(path.join(sourceRoot, ...parts), 'utf8');
+
+  function sourceFiles(directory: string): string[] {
+    return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) return sourceFiles(entryPath);
+      return /\.tsx?$/.test(entry.name) ? [entryPath] : [];
+    });
+  }
+
+  it('has no shipping default provider or alias-derived adapter fallback', () => {
+    const config = read('main', 'config', 'schema.ts');
+    const runtime = read('main', 'providers', 'index.ts');
+    const toolSources = [
+      read('main', 'tools', 'index.ts'),
+      read('main', 'tools', 'subagent', 'delegate.ts'),
+    ].join('\n');
+
+    expect(config).toContain('default_model: modelSelectionSchema.nullable().default(null)');
+    expect(runtime).toContain('resolveModelSelection(selection, connections, definitions)');
+    expect(runtime).not.toContain('default_model');
+    expect(runtime).not.toContain('createOpenAICompatible');
+    expect(runtime).not.toContain('createOpenAI(');
+    expect(toolSources).toContain('getTierModelSelection');
+    expect(toolSources).not.toMatch(/llm\/providers/);
+  });
+
+  it('removes obsolete compatibility modules and their production imports', () => {
+    const obsoletePaths = [
+      ['main', 'llm', 'providers.ts'],
+      ['main', 'llm', 'providers-factory.ts'],
+      ['renderer', 'components', 'Onboarding', 'ProviderDetector.tsx'],
+    ];
+
+    for (const parts of obsoletePaths) {
+      expect(fs.existsSync(path.join(sourceRoot, ...parts))).toBe(false);
+    }
+
+    const legacyImport = /(?:from\s*|import\s*\(|require\()\s*['"][^'"]*(?:\/llm\/providers(?:-factory)?|\/Onboarding\/ProviderDetector)['"]/;
+    const offenders = sourceFiles(sourceRoot).filter((filePath) =>
+      legacyImport.test(fs.readFileSync(filePath, 'utf8')),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('rejects plaintext credential persistence rather than restoring a legacy fallback', () => {
+    const vault = read('main', 'providers', 'credentials', 'vault.ts');
+    const legacyKeychain = read('main', 'config', 'keychain.ts');
+
+    expect(vault).toContain("if (backend === 'basic_text') return { available: false, reason: 'basic_text' }");
+    expect(vault).toContain('this.storage.encryptString(JSON.stringify(secret))');
+    expect(vault).not.toMatch(/encryptedPayload:\s*JSON\.stringify/);
+    expect(legacyKeychain).toContain('plaintext credential persistence is disabled');
+    expect(legacyKeychain).toContain("if (parsed.encrypted !== true)");
+    expect(legacyKeychain).toContain('Never revive a legacy plaintext fallback');
+  });
+
+  it('keeps renderer provider operations intent-only and credential-safe', () => {
+    const ipc = read('shared', 'types', 'ipc.ts');
+    const providerIpc = read('main', 'ipc', 'providers.ts');
+    const preload = read('preload', 'index.ts');
+
+    expect(ipc).toContain('ProviderSubmitApiKeyMessage');
+    const connectionView = ipc.match(
+      /export interface ProviderConnectionView \{([\s\S]*?)\n\}/,
+    )?.[1];
+    expect(connectionView).toBeDefined();
+    expect(connectionView).not.toContain('credentialHandle');
+    expect(connectionView).not.toContain('encrypted');
+    expect(connectionView).not.toContain('apiKey');
+    expect(providerIpc).toContain('Invalid providers:submit_api_key payload');
+    expect(providerIpc).toContain('replaceConnectionApiKey');
+    expect(preload).toContain('submitApiKey');
+    expect(preload).not.toContain('readCredential');
+  });
+
+  it('binds generic credentials to an origin and invalidates them before rebinding', () => {
+    const providerIpc = read('main', 'ipc', 'providers.ts');
+    const vault = read('main', 'providers', 'credentials', 'vault.ts');
+
+    expect(providerIpc).toContain('genericOrigin(existing, current) !== genericOrigin(candidate, current)');
+    expect(providerIpc).toContain('deleteConnectionCredentials(existing.id)');
+    expect(vault).toContain('replaceConnectionApiKey');
+    expect(vault).toContain('normalizeCredentialBinding');
+  });
+
+  it('records every provider call through the durable accounting middleware with no SDK retry layer', () => {
+    const middleware = read('main', 'providers', 'accounting', 'middleware.ts');
+    const orchestrator = read('main', 'llm', 'orchestrator.ts');
+    const store = read('main', 'providers', 'accounting', 'store.ts');
+
+    expect(middleware).toContain('insertPending');
+    expect(middleware).toContain('finalize');
+    expect(orchestrator).toMatch(/maxRetries:\s*0/);
+    expect(store).toContain('interruptPendingForConnection');
+  });
+
+  it('retains Lilac supply-discount fields without using them to gate requests', () => {
+    const lilac = read('main', 'providers', 'drivers', 'lilac.ts');
+    const status = read('main', 'providers', 'status', 'service.ts');
+
+    expect(lilac).toContain('current_subscription_discount_percent');
+    expect(lilac).toContain('current_subscription_credit_multiplier');
+    expect(lilac).toContain('current_subscription_supply_state');
+    expect(status).toContain('never mutates a connection or selects a model');
   });
 });

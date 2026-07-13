@@ -144,6 +144,11 @@ vi.mock('../../src/main/config/loader', () => ({
   get HOME_CONFIG_PATH() {
     return mocks.homeConfigPath || path.join(os.tmpdir(), 'orchid-ws-test-home-config.json');
   },
+  get HOME_CONFIG_DIR() {
+    return path.dirname(
+      mocks.homeConfigPath || path.join(os.tmpdir(), 'orchid-ws-test-home-config.json'),
+    );
+  },
   ConfigManager: {
     load: vi.fn(),
     save: vi.fn(),

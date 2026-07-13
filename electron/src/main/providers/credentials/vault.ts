@@ -267,6 +267,47 @@ export class CredentialVault {
     return this.storeSecret(bindingInput, { kind: 'api-key', apiKey: trimmed });
   }
 
+  /**
+   * Atomically replace every stored credential generation for one connection.
+   *
+   * This is used by the one-shot IPC API-key flow. It prevents a reconnect
+   * from leaving a stale usable key on disk while retaining the all-or-nothing
+   * write property: encryption happens before the credential document changes.
+   */
+  async replaceConnectionApiKey(bindingInput: CredentialBinding, apiKey: string): Promise<string> {
+    const binding = normalizeCredentialBinding(bindingInput);
+    const trimmed = apiKey.trim();
+    if (!trimmed) throw new CredentialVaultError('API key must not be empty');
+    if (binding.authMethod !== 'api-key') {
+      throw new CredentialBindingError('Only API-key bindings can replace an API key');
+    }
+    this.assertSecureStorage();
+    const encryptedPayload = this.encryptSecret({ kind: 'api-key', apiKey: trimmed });
+    return withVaultWriteLock(this.credentialsPath, () => {
+      const document = readDocument(this.credentialsPath);
+      const now = this.now().toISOString();
+      const record = credentialRecordSchema.parse({
+        handle: this.idFactory(),
+        generation: 1,
+        binding,
+        encryptedPayload,
+        createdAt: now,
+        updatedAt: now,
+      });
+      if (document.entries.some((entry) => entry.handle === record.handle)) {
+        throw new CredentialVaultError(`Duplicate credential handle '${record.handle}'`);
+      }
+      const retained = document.entries.filter(
+        (entry) => entry.binding.connectionId !== binding.connectionId,
+      );
+      atomicWriteJson(this.credentialsPath, {
+        version: 1,
+        entries: [...retained, record],
+      });
+      return record.handle;
+    });
+  }
+
   async storeOAuthTokens(bindingInput: CredentialBinding, tokens: OAuthTokens): Promise<string> {
     return this.storeSecret(bindingInput, {
       kind: 'oauth',

@@ -23,6 +23,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "test": "vitest run",
+    "test:providers:live": "node --experimental-strip-types tests/smoke/provider-live.ts",
     "rebuild:native": "./scripts/rebuild-native.sh",
     "package": "npm run build && npm run rebuild:native && electron-builder --config electron-builder.yml",
     "package:mac": "npm run build && npm run rebuild:native && electron-builder --config electron-builder.yml --mac",
@@ -31,13 +32,18 @@
     "package:all": "npm run build && npm run rebuild:native && electron-builder --config electron-builder.yml --mac --win --linux"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.12",
+    "@ai-sdk/google": "^4.0.12",
     "@ai-sdk/openai": "^4.0.0",
     "@ai-sdk/openai-compatible": "^3.0.0",
     "@ai-sdk/provider": "^4.0.0",
+    "@ai-sdk/xai": "^4.0.10",
     "@huggingface/tokenizers": "^0.1.3",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "ai": "^7.0.0",
+    "better-sqlite3": "^12.0.0",
+    "decimal.js": "^10.6.0",
     "electron-updater": "^6.3.0",
     "minimatch": "^10.2.5",
     "node-pty": "^1.0.0",
@@ -51,7 +57,6 @@
     "zod": "^3.23.0"
   },
   "optionalDependencies": {
-    "better-sqlite3": "^12.0.0",
     "onnxruntime-node": "^1.20.0"
   },
   "devDependencies": {

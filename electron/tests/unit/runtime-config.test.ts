@@ -19,12 +19,10 @@ describe('getRuntimeConfig', () => {
     mocks.getConfig.mockReturnValue(stored);
 
     const { getRuntimeConfig } = await import('../../src/main/config/runtime');
-    const { resolveModelRef } = await import('../../src/main/llm/providers');
     const result = await getRuntimeConfig();
 
     expect(mocks.getConfig).toHaveBeenCalledOnce();
     expect(result).toBe(stored);
     expect(result.providers).toEqual({});
-    expect(() => resolveModelRef('legacy/model', result)).toThrow('typed model selection');
   });
 });

@@ -12,7 +12,7 @@ import type { Agent } from '../../../shared/types/agent';
 import { AgentType, AgentTier, TIER_DESCRIPTIONS } from '../../../shared/types/agent';
 import type { ToolDefinition, ToolHandler } from '../types';
 import type { SubagentManager } from '../../agents/manager';
-import { getModelForTier } from '../../llm/providers';
+import { getTierModelSelection } from '../../config/loader';
 import { getSessionManager } from '../../ipc/session';
 
 /**
@@ -129,7 +129,7 @@ export function buildDelegateTool(
         isError: true,
       };
     }
-    const selection = getModelForTier(ctx.projectRuntime.config, resolvedTier);
+    const selection = getTierModelSelection(ctx.projectRuntime.config, resolvedTier);
 
     // Attribute to the frozen parent turn. Never discover ownership from the
     // process's currently selected session after another session is opened.

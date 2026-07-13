@@ -103,9 +103,9 @@ function sanitizeConfigLayer(data: Record<string, unknown>): {
 
     if (k === 'rag' && isPlainObject(v)) {
       const rag = { ...v };
-      // API embedding aliases relied on the same retired provider alias
-      // resolver as chat. Until U4 introduces connection-scoped embedding
-      // selections, preserve local ONNX behavior instead of issuing a request.
+      // Legacy API embedding aliases relied on the retired provider alias
+      // resolver. Typed connection-scoped selections are retained for U4;
+      // string aliases are reset to local ONNX rather than inferred.
       if (typeof rag.embedding_api_model === 'string') {
         delete rag.embedding_api_model;
         resetLegacyProviderState = true;
@@ -328,8 +328,16 @@ export function getConfig(): Config {
   return ConfigManager.load();
 }
 
-/** Get the model for a specific tier, falling back to default_model. */
-export function getModelForTier(tier: string): ModelSelection | null {
-  const cfg = getConfig();
-  return cfg.tier_models[tier] ?? cfg.default_model;
+/**
+ * Read a typed selection from one already-frozen config snapshot.
+ *
+ * This deliberately chooses only among connection-scoped selections that are
+ * already present in the supplied config. It does not parse legacy aliases,
+ * discover providers, or construct a transport.
+ */
+export function getTierModelSelection(
+  config: Pick<Config, 'tier_models' | 'default_model'>,
+  tier: string,
+): ModelSelection | null {
+  return config.tier_models[tier] ?? config.default_model;
 }

@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ModelMetadata } from '../../shared/types/ipc-boundary';
+import type { ProviderModelOption } from '../../shared/types/ipc';
 import { withCurrentModelOption } from '../utils/models';
 import { Icon } from './Icon';
 
@@ -13,6 +14,10 @@ interface ModelPickerProps {
   className?: string;
   disabled?: boolean;
   emptyMessage?: string;
+  /** Optional renderer-owned labels for opaque selection keys. */
+  optionLabels?: Readonly<Record<string, string>>;
+  /** Optional typed metadata for connection-scoped options. */
+  optionDetails?: Readonly<Record<string, ProviderModelOption>>;
 }
 
 /** Shared searchable model picker used by chat and configuration. */
@@ -26,6 +31,8 @@ export function ModelPicker({
   className = '',
   disabled = false,
   emptyMessage = 'No models configured',
+  optionLabels,
+  optionDetails,
 }: ModelPickerProps) {
   const pickerRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -59,7 +66,9 @@ export function ModelPicker({
   }, [open]);
 
   useEffect(() => {
-    if (!open || !window.orchid?.config?.modelMetadata) return;
+    // Connection-scoped provider options carry their own catalog metadata.
+    // Legacy/local string options retain the old compatibility lookup.
+    if (!open || optionLabels || optionDetails || !window.orchid?.config?.modelMetadata) return;
     let cancelled = false;
     // Always refresh when opened so overrides saved in Preferences appear
     // without requiring an app restart (main-process cache is cleared on save).
@@ -79,7 +88,7 @@ export function ModelPicker({
     return () => {
       cancelled = true;
     };
-  }, [modelOptions, open]);
+  }, [modelOptions, open, optionLabels, optionDetails]);
 
   const selectModel = (model: string) => {
     onChange(model);
@@ -99,12 +108,12 @@ export function ModelPicker({
         aria-expanded={open}
         aria-controls={menuId}
         aria-label={label}
-        title={value || label}
+        title={(optionLabels?.[value] ?? value) || label}
         disabled={disabled}
         onClick={() => setOpen((previous) => !previous)}
       >
         <Icon name="cpu" size={13} className="shrink-0 opacity-70" />
-        <span className="model-picker-trigger-label">{displayModelId(value)}</span>
+        <span className="model-picker-trigger-label">{optionLabels?.[value] ?? displayModelId(value)}</span>
         <Icon
           name="chevronDown"
           size={12}
@@ -123,7 +132,7 @@ export function ModelPicker({
             <div>
               <div className="model-picker-title">Models</div>
             </div>
-            <span className="model-picker-current">{value || 'None selected'}</span>
+            <span className="model-picker-current">{(optionLabels?.[value] ?? value) || 'None selected'}</span>
           </div>
 
           <label className="input input-sm model-picker-search">
@@ -157,14 +166,26 @@ export function ModelPicker({
               <tbody>
                 {filteredModels.map((model) => {
                   const modelMetadata = metadata[model];
+                  const detail = optionDetails?.[model];
+                  const contextLimit = detail
+                    ? detail.model.limits?.contextTokens ?? null
+                    : modelMetadata?.max_input_tokens ?? null;
+                  const outputLimit = detail
+                    ? detail.model.limits?.outputTokens ?? null
+                    : modelMetadata?.max_output_tokens ?? null;
+                  const supportsVision = detail
+                    ? detail.model.capabilities?.inputModalities.includes('image') ?? null
+                    : modelMetadata?.supports_vision ?? null;
                   const selected = model === value;
+                  const unavailable = detail?.available === false;
                   return (
                     <tr
                       key={model}
                       role="option"
                       tabIndex={0}
                       aria-selected={selected}
-                      className={selected ? 'model-picker-row is-selected' : 'model-picker-row'}
+                      className={`${selected ? 'model-picker-row is-selected' : 'model-picker-row'}${unavailable ? ' opacity-60' : ''}`}
+                      aria-disabled={unavailable || undefined}
                       onClick={() => selectModel(model)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
@@ -175,15 +196,24 @@ export function ModelPicker({
                     >
                       <td>
                         <div className="model-picker-model-name" title={model}>
-                          {displayModelId(model)}
+                          {optionLabels?.[model] ?? displayModelId(model)}
                         </div>
+                        {detail && (
+                          <div className="text-xs text-base-content/60">
+                            {unavailable
+                              ? detail.unavailableReason ?? 'Unavailable'
+                              : detail.model.source === 'connection'
+                                ? 'User-defined model'
+                                : 'Catalog model'}
+                          </div>
+                        )}
                       </td>
-                      <td>{modelMetadata ? formatTokenLimit(modelMetadata.max_input_tokens) : '…'}</td>
-                      <td>{modelMetadata ? formatTokenLimit(modelMetadata.max_output_tokens) : '…'}</td>
+                      <td>{contextLimit === null ? (detail ? '—' : '…') : formatTokenLimit(contextLimit)}</td>
+                      <td>{outputLimit === null ? (detail ? '—' : '…') : formatTokenLimit(outputLimit)}</td>
                       <td>
-                        {modelMetadata ? (
-                          <span className={modelMetadata.supports_vision ? 'text-success' : 'opacity-50'}>
-                            {modelMetadata.supports_vision ? 'Yes' : 'No'}
+                        {supportsVision !== null ? (
+                          <span className={supportsVision ? 'text-success' : 'opacity-50'}>
+                            {supportsVision ? 'Yes' : 'No'}
                           </span>
                         ) : (
                           '…'

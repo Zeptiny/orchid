@@ -32,7 +32,7 @@ export {
   ensureHomeConfig,
   ConfigManager,
   getConfig,
-  getModelForTier,
+  getTierModelSelection,
   atomicWriteJson,
   HOME_CONFIG_DIR,
   HOME_CONFIG_PATH,

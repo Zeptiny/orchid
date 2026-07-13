@@ -8,6 +8,8 @@ import { OnboardingScreen } from './components/Onboarding/OnboardingScreen';
 import { applyTheme, THEMES, type ThemeName, THEME_NAMES } from './themes';
 import './styles/chat.css';
 
+type SettingsTab = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag' | 'skills' | 'agents' | 'personalities';
+
 // ─── Theme Context ───────────────────────────────────────────────────────────
 
 interface ThemeContextValue {
@@ -32,6 +34,7 @@ export function useTheme(): ThemeContextValue {
 function App() {
   const [theme, setThemeState] = useState<ThemeName>('default');
   const [configOpen, setConfigOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
 
@@ -64,12 +67,15 @@ function App() {
 
     async function checkOnboarding() {
       try {
-        if (window.orchid?.session?.list) {
+        if (window.orchid?.providers?.list) {
+          const overview = await window.orchid.providers.list();
+          // U8: provider onboarding is driven by connection readiness, never
+          // by whether the user already has local sessions or history.
+          setOnboardingOpen(!overview.connections.some((connection) => connection.health === 'ready'));
+        } else if (window.orchid?.session?.list) {
+          // Compatibility fallback only for an older preload during dev.
           const sessions = await window.orchid.session.list();
-          // Show onboarding if no sessions exist (first launch)
-          if (sessions.length === 0) {
-            setOnboardingOpen(true);
-          }
+          setOnboardingOpen(sessions.length === 0);
         }
       } catch {
         // Non-fatal — skip onboarding check
@@ -81,9 +87,11 @@ function App() {
     checkOnboarding();
   }, []);
 
-  // Listen for `orchid:open-settings` event (from /settings command)
+  // Listen for `orchid:open-settings` event (from /settings and provider gates).
   useEffect(() => {
-    const handleOpenSettings = () => {
+    const handleOpenSettings = (event: Event) => {
+      const tab = (event as CustomEvent<{ tab?: SettingsTab }>).detail?.tab;
+      if (tab) setSettingsTab(tab);
       setConfigOpen(true);
     };
     window.addEventListener('orchid:open-settings', handleOpenSettings);
@@ -132,7 +140,12 @@ function App() {
       <div className={configOpen ? 'hidden' : 'contents'} aria-hidden={configOpen}>
         <ChatView />
       </div>
-      {configOpen && <ConfigView onClose={() => setConfigOpen(false)} />}
+      {configOpen && (
+        <ConfigView
+          initialTab={settingsTab}
+          onClose={() => setConfigOpen(false)}
+        />
+      )}
       <OnboardingScreen
         isOpen={onboardingOpen && onboardingChecked}
         onComplete={() => setOnboardingOpen(false)}

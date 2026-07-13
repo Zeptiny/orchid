@@ -50,6 +50,7 @@ import {
 import { parseToolExecuteOutput } from '../tools/result';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
+import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
 import { buildContextSnapshot } from './context-snapshot';
 import { importESM } from '../utils/esm-import';
 import { buildSkillTool } from '../tools/skill/skill';
@@ -101,6 +102,8 @@ export interface StreamChatParams {
   abortSignal?: AbortSignal;
   /** The AI SDK model instance to use for streaming. */
   modelInstance: LanguageModelV4;
+  /** Frozen durable-attempt context for every provider invocation. */
+  accounting?: ProviderAttemptAccountingContext;
 }
 
 interface LatestContextUsage {
@@ -181,6 +184,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     agentScopeId,
     abortSignal,
     modelInstance,
+    accounting,
   } = params;
 
   // Dynamic import — `ai` is ESM-only but Electron main compiles to CJS
@@ -283,6 +287,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   // ── Compose middleware ──
   const middleware = createMiddlewareStack({
     retry: { maxRetries: config.llm_stream_retries },
+    ...(accounting ? { accounting } : {}),
   });
 
   // Wrap model with middleware
@@ -363,6 +368,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       tools: Object.keys(tools).length > 0 ? tools : undefined,
       stopWhen: isStepCount(maxSteps),
       abortSignal: combinedAbort,
+      // Retry ownership belongs to Orchid's accounting-aware middleware.
+      maxRetries: 0,
       onStepFinish: async ({ usage, request, toolCalls, toolResults }) => {
         if (usage) {
           const cachedTokens = usage.inputTokenDetails?.cacheReadTokens ?? 0;

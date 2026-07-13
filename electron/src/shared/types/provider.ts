@@ -29,6 +29,16 @@ export const providerProtocolSchema = z.enum([
 
 export type ProviderProtocol = z.infer<typeof providerProtocolSchema>;
 
+export const providerLifecycleSchema = z.enum([
+  'active',
+  'preview',
+  'deprecated',
+  'disabled',
+  'retired',
+]);
+
+export type ProviderLifecycle = z.infer<typeof providerLifecycleSchema>;
+
 export const providerAuthMethodSchema = z.enum([
   'api-key',
   'environment',
@@ -95,9 +105,36 @@ export const providerModelDefinitionSchema = z.object({
   id: z.string().trim().min(1),
   displayName: z.string().trim().min(1),
   protocol: providerProtocolSchema,
+  lifecycle: providerLifecycleSchema.optional(),
+  capabilities: z.object({
+    inputModalities: z.array(z.enum(['text', 'image', 'audio', 'video', 'pdf'])).min(1),
+    outputModalities: z.array(z.enum(['text', 'image', 'audio', 'video', 'pdf'])).min(1),
+    tools: z.boolean(),
+    reasoning: z.boolean(),
+  }).strict().optional(),
+  limits: z.object({
+    contextTokens: z.number().int().positive().nullable(),
+    outputTokens: z.number().int().positive().nullable(),
+  }).strict().optional(),
 }).strict();
 
 export type ProviderModelDefinition = z.infer<typeof providerModelDefinitionSchema>;
+
+/** User-declared metadata for a custom compatible model, never inferred. */
+export const customConnectionModelSchema = providerModelDefinitionSchema.extend({
+  capabilities: z.object({
+    inputModalities: z.array(z.enum(['text', 'image', 'audio', 'video', 'pdf'])).min(1),
+    outputModalities: z.array(z.enum(['text', 'image', 'audio', 'video', 'pdf'])).min(1),
+    tools: z.boolean(),
+    reasoning: z.boolean(),
+  }).strict(),
+  limits: z.object({
+    contextTokens: z.number().int().positive().nullable(),
+    outputTokens: z.number().int().positive().nullable(),
+  }).strict(),
+}).strict();
+
+export type CustomConnectionModel = z.infer<typeof customConnectionModelSchema>;
 
 export const providerDefinitionSchema = z.object({
   id: z.string().trim().min(1),
@@ -106,6 +143,7 @@ export const providerDefinitionSchema = z.object({
   supportedProtocols: z.array(providerProtocolSchema).min(1),
   models: z.array(providerModelDefinitionSchema),
   allowsCustomModels: z.boolean(),
+  lifecycle: providerLifecycleSchema.optional(),
 }).strict();
 
 export type ProviderDefinition = z.infer<typeof providerDefinitionSchema>;
@@ -120,8 +158,12 @@ export const providerConnectionSchema = z.object({
   credential: credentialReferenceSchema,
   /** Explicit user models for a generic connection. Never inferred from an alias. */
   modelIds: z.array(z.string().trim().min(1)),
+  /** Optional richer metadata for user-defined compatible models. */
+  customModels: z.array(customConnectionModelSchema).optional(),
   health: connectionHealthSchema,
   endpoint: providerEndpointSchema.nullable().optional(),
+  /** Explicit user acknowledgement required for a non-loopback HTTP endpoint. */
+  allowInsecureHttp: z.boolean().optional(),
 }).strict();
 
 export type ProviderConnection = z.infer<typeof providerConnectionSchema>;
@@ -181,8 +223,10 @@ export type ProviderResolution =
         | 'unknown-connection'
         | 'connection-not-ready'
         | 'unknown-provider'
+        | 'provider-disabled'
         | 'unsupported-connection'
         | 'missing-model'
+        | 'model-disabled'
         | 'provider-mismatch';
     };
 

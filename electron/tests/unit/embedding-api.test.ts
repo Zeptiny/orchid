@@ -93,7 +93,7 @@ describe('Config schema with embedding_api_model', () => {
         ...defaults().rag,
         embedding_api_model: 'openai/text-embedding-3-small',
       },
-    })).toThrow(/null/i);
+    })).toThrow(/object/i);
   });
 
   it('accepts null for embedding_api_model', () => {
@@ -102,6 +102,23 @@ describe('Config schema with embedding_api_model', () => {
       rag: { ...defaults().rag, embedding_api_model: null },
     });
     expect(cfg.rag.embedding_api_model).toBeNull();
+  });
+
+  it('accepts a typed connection-scoped API embedding selection', () => {
+    const cfg = configSchema.parse({
+      ...defaults(),
+      rag: {
+        ...defaults().rag,
+        embedding_api_model: {
+          connectionId: '11111111-1111-4111-8111-111111111111',
+          modelId: 'text-embedding-3-small',
+        },
+      },
+    });
+    expect(cfg.rag.embedding_api_model).toEqual({
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'text-embedding-3-small',
+    });
   });
 
   it('rejects deprecated provider model metadata in general config', () => {

@@ -10,7 +10,13 @@
 import type { Session } from './session';
 import type { Agent } from './agent';
 import type { Usage } from './message';
-import type { ModelSelection } from './provider';
+import type {
+  CustomConnectionModel,
+  ModelSelection,
+  ProviderAuthMethod,
+  ProviderLifecycle,
+  ProviderProtocol,
+} from './provider';
 import type {
   AgentSaveMessage,
   DefinitionDeleteMessage,
@@ -239,6 +245,161 @@ export interface ConfigSaveMessage {
   updates: Partial<Config>;
 }
 
+// ── Provider API ─────────────────────────────────────────────────────────────
+
+/**
+ * Renderer-safe provider model metadata. Driver origins, pricing internals,
+ * and catalog signatures stay in the main process.
+ */
+export interface ProviderModelView {
+  id: string;
+  displayName: string;
+  protocol: ProviderProtocol;
+  lifecycle: ProviderLifecycle | null;
+  source: 'catalog' | 'connection';
+  capabilities: {
+    inputModalities: readonly string[];
+    outputModalities: readonly string[];
+    tools: boolean;
+    reasoning: boolean;
+  } | null;
+  limits: {
+    contextTokens: number | null;
+    outputTokens: number | null;
+  } | null;
+}
+
+/** A catalog preset rendered by onboarding and settings. */
+export interface ProviderDefinitionView {
+  id: string;
+  displayName: string;
+  supportedAuthMethods: readonly ProviderAuthMethod[];
+  supportedProtocols: readonly ProviderProtocol[];
+  allowsCustomModels: boolean;
+  lifecycle: ProviderLifecycle | null;
+  available: boolean;
+  unavailableReason: string | null;
+  models: readonly ProviderModelView[];
+}
+
+/**
+ * A redacted connection view. `credentialHandle`, encrypted payloads, API
+ * keys, and OAuth token values are intentionally not part of this type.
+ */
+export interface ProviderConnectionView {
+  id: string;
+  providerId: string;
+  providerDisplayName: string | null;
+  name: string;
+  protocol: ProviderProtocol;
+  authMethod: ProviderAuthMethod;
+  credentialKind: 'stored' | 'environment' | 'none';
+  environmentVariable: string | null;
+  modelIds: readonly string[];
+  customModels: readonly ProviderModelView[];
+  health: 'draft' | 'ready' | 'needs_attention' | 'disabled' | 'disconnected';
+  /** Active frozen turns attributed to this connection; never credential data. */
+  activeTurnCount: number;
+  endpoint: string | null;
+  allowInsecureHttp: boolean;
+}
+
+/** Status data is timestamped and redacted before it crosses IPC. */
+export interface ProviderStatusView {
+  providerId: string;
+  observedAt: string;
+  providerUpdatedAt: string | null;
+  availability: 'available' | 'unavailable' | 'unknown';
+  stale: boolean;
+  data: Readonly<Record<string, unknown>>;
+  error: {
+    kind: 'network' | 'unauthorized' | 'rate-limited' | 'schema' | 'unknown';
+    message: string;
+    statusCode?: number;
+    retryAfterAt?: string;
+  } | null;
+}
+
+export interface ProviderOverview {
+  definitions: readonly ProviderDefinitionView[];
+  connections: readonly ProviderConnectionView[];
+  statuses: readonly ProviderStatusView[];
+  secureStorage: {
+    available: boolean;
+    backend: string | null;
+    reason: 'unavailable' | 'basic_text' | 'error' | null;
+  };
+}
+
+/** Intent-only creation payload; credential handles can never be renderer input. */
+export interface ProviderConnectionCreateMessage {
+  providerId: string;
+  name: string;
+  protocol: ProviderProtocol;
+  authMethod: ProviderAuthMethod;
+  modelIds: readonly string[];
+  customModels?: readonly CustomConnectionModel[];
+  endpoint?: string | null;
+  allowInsecureHttp?: boolean;
+  /** Used only with `authMethod: 'environment'`; the value is never resolved here. */
+  environmentVariable?: string;
+}
+
+/** Safe connection fields that may be edited after creation. */
+export interface ProviderConnectionUpdateMessage {
+  connectionId: string;
+  name?: string;
+  modelIds?: readonly string[];
+  customModels?: readonly CustomConnectionModel[];
+  endpoint?: string | null;
+  allowInsecureHttp?: boolean;
+  /** Reconnect an environment-authenticated connection without exposing its value. */
+  environmentVariable?: string;
+}
+
+/** One-shot, write-only API key submission. No result includes the key or handle. */
+export interface ProviderSubmitApiKeyMessage {
+  connectionId: string;
+  apiKey: string;
+}
+
+export interface ProviderConnectionIdMessage {
+  connectionId: string;
+}
+
+export interface ProviderDisconnectMessage extends ProviderConnectionIdMessage {
+  /** Explicit UI confirmation is required before stored credentials are removed. */
+  confirm: true;
+}
+
+export interface ProviderStatusRefreshMessage {
+  providerId: string;
+  /** Required for connection-scoped authenticated status sources. */
+  connectionId?: string;
+}
+
+export interface ProviderModelOption {
+  selection: ModelSelection;
+  connectionName: string;
+  providerId: string;
+  providerDisplayName: string | null;
+  model: ProviderModelView;
+  available: boolean;
+  unavailableReason: string | null;
+}
+
+export interface ProviderMutationResult {
+  connection: ProviderConnectionView;
+  message: string | null;
+}
+
+/** Subscription OAuth stays main-process owned; disabled releases report a reason. */
+export interface ProviderAuthStartResult {
+  status: 'pending' | 'unavailable';
+  message: string;
+  flowId: string | null;
+}
+
 // ── Session API ──────────────────────────────────────────────────────────────
 
 export interface SessionLoadMessage {
@@ -423,6 +584,33 @@ export interface OrchidAPI {
     listPersonalities: () => Promise<string[]>;
   };
 
+  providers: {
+    /** Bundled/catalog provider presets, redacted connections, and status. */
+    list: () => Promise<ProviderOverview>;
+    /** Create a draft connection using only driver-supported metadata. */
+    create: (message: ProviderConnectionCreateMessage) => Promise<ProviderMutationResult>;
+    /** Edit safe connection metadata; credentials require their dedicated flow. */
+    update: (message: ProviderConnectionUpdateMessage) => Promise<ProviderMutationResult>;
+    /** One-shot write-only credential submission. */
+    submitApiKey: (message: ProviderSubmitApiKeyMessage) => Promise<ProviderMutationResult>;
+    /** Validate connection eligibility without returning secret material. */
+    validate: (message: ProviderConnectionIdMessage) => Promise<ProviderMutationResult>;
+    /** Mark a connection unavailable for new turns without deleting it. */
+    disable: (message: ProviderConnectionIdMessage) => Promise<ProviderMutationResult>;
+    /** Re-enable a disabled connection, then revalidate its existing auth. */
+    enable: (message: ProviderConnectionIdMessage) => Promise<ProviderMutationResult>;
+    /** Remove stored credentials after explicit confirmation; preserves connection history. */
+    disconnect: (message: ProviderDisconnectMessage) => Promise<ProviderMutationResult>;
+    /** Connection-scoped typed model options, including unavailable reasons. */
+    modelList: (message?: ProviderConnectionIdMessage) => Promise<readonly ProviderModelOption[]>;
+    /** Refresh informational status only; it never changes connection health. */
+    refreshStatus: (message: ProviderStatusRefreshMessage) => Promise<ProviderStatusView | null>;
+    /** Starts a release-approved OAuth flow, or returns a safe unavailable state. */
+    authStart: (message: ProviderConnectionIdMessage) => Promise<ProviderAuthStartResult>;
+    /** Polls/completes a main-process-owned OAuth flow without renderer token input. */
+    authComplete: (message: ProviderConnectionIdMessage & { flowId: string }) => Promise<ProviderMutationResult>;
+  };
+
   session: {
     list: () => Promise<SessionSummary[]>;
     load: (id: SessionLoadMessage) => Promise<Session | null>;
@@ -565,6 +753,21 @@ export const IPC_CHANNELS = {
   CONFIG_MODEL_METADATA: 'config:model_metadata',
   CONFIG_LIST_PERSONALITIES: 'config:list_personalities',
 
+  // Providers — every response is redacted and every mutation is validated
+  // in the main process. There is deliberately no generic credential-read API.
+  PROVIDERS_LIST: 'providers:list',
+  PROVIDERS_CREATE: 'providers:create',
+  PROVIDERS_UPDATE: 'providers:update',
+  PROVIDERS_SUBMIT_API_KEY: 'providers:submit_api_key',
+  PROVIDERS_VALIDATE: 'providers:validate',
+  PROVIDERS_DISABLE: 'providers:disable',
+  PROVIDERS_ENABLE: 'providers:enable',
+  PROVIDERS_DISCONNECT: 'providers:disconnect',
+  PROVIDERS_MODEL_LIST: 'providers:model_list',
+  PROVIDERS_STATUS_REFRESH: 'providers:status_refresh',
+  PROVIDERS_AUTH_START: 'providers:auth_start',
+  PROVIDERS_AUTH_COMPLETE: 'providers:auth_complete',
+
   // Session
   SESSION_LIST: 'session:list',
   SESSION_LOAD: 'session:load',
@@ -659,6 +862,18 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.CONFIG_SAVE,
   IPC_CHANNELS.CONFIG_MODEL_METADATA,
   IPC_CHANNELS.CONFIG_LIST_PERSONALITIES,
+  IPC_CHANNELS.PROVIDERS_LIST,
+  IPC_CHANNELS.PROVIDERS_CREATE,
+  IPC_CHANNELS.PROVIDERS_UPDATE,
+  IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY,
+  IPC_CHANNELS.PROVIDERS_VALIDATE,
+  IPC_CHANNELS.PROVIDERS_DISABLE,
+  IPC_CHANNELS.PROVIDERS_ENABLE,
+  IPC_CHANNELS.PROVIDERS_DISCONNECT,
+  IPC_CHANNELS.PROVIDERS_MODEL_LIST,
+  IPC_CHANNELS.PROVIDERS_STATUS_REFRESH,
+  IPC_CHANNELS.PROVIDERS_AUTH_START,
+  IPC_CHANNELS.PROVIDERS_AUTH_COMPLETE,
   IPC_CHANNELS.SESSION_LIST,
   IPC_CHANNELS.SESSION_LOAD,
   IPC_CHANNELS.SESSION_CREATE,

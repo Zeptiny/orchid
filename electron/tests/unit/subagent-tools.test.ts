@@ -27,11 +27,6 @@ const tierSelections = {
   crown: { connectionId: '44444444-4444-4444-8444-444444444444', modelId: 'model-for-crown' },
 } as const;
 
-// ── Mock typed tier selection ────────────────────────────────────────────────
-vi.mock('../../src/main/llm/providers', () => ({
-  getModelForTier: (_config: unknown, tier: keyof typeof tierSelections) => tierSelections[tier] ?? null,
-}));
-
 // ── Test fixtures ────────────────────────────────────────────────────────────
 
 const codeReviewerAgent: Agent = {

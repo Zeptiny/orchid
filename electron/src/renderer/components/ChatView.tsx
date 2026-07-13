@@ -9,11 +9,18 @@ import { useSession } from '../hooks/useSession';
 import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
 import { useSessionActivity } from '../hooks/useSessionActivity';
+import { useProviders } from '../hooks/useProviders';
+import {
+  providerModelOptionKey,
+  providerModelOptionLabel,
+  selectionMatchesOption,
+} from '../utils/provider-selection';
 import { useGlobalShortcuts } from '../keyboard';
 import type { Message } from '../../shared/types/message';
 import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus, CommandContext } from '../../shared/types/ipc-boundary';
+import type { ProviderModelOption } from '../../shared/types/ipc';
 import { ChatStream } from './ChatStream';
 import { InputArea } from './InputArea';
 import { Footer } from './Footer';
@@ -40,6 +47,7 @@ export function ChatView() {
   const subagents = useSubagents(session.activeSession?.id ?? null);
   const todos = useTodos(session.activeSession?.id ?? null);
   const activity = useSessionActivity();
+  const providers = useProviders();
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
@@ -50,8 +58,8 @@ export function ChatView() {
   const [currentTheme, setCurrentTheme] = useState('default');
   const [currentPersonality, setCurrentPersonality] = useState('default');
   const [personalityNames, setPersonalityNames] = useState<string[]>([]);
-  const [currentModel, setCurrentModel] = useState('');
   const [currentSelection, setCurrentSelection] = useState<ModelSelection | null>(null);
+  const [providerModelOptions, setProviderModelOptions] = useState<readonly ProviderModelOption[]>([]);
   const [maxContext, setMaxContext] = useState<number | null>(null);
   const [alwaysExpandToolGroups, setAlwaysExpandToolGroups] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -61,6 +69,53 @@ export function ChatView() {
   // Guards against out-of-order session:load responses overwriting a newer pick.
   const sessionSwitchGen = useRef(0);
   const didAutoSelect = useRef(false);
+
+  const connectionStateSignature = useMemo(
+    () => providers.overview?.connections
+      .map((connection) => `${connection.id}:${connection.health}:${connection.modelIds.join(',')}`)
+      .sort()
+      .join('|') ?? '',
+    [providers.overview?.connections],
+  );
+
+  useEffect(() => {
+    if (!providers.overview) {
+      setProviderModelOptions([]);
+      return;
+    }
+    let cancelled = false;
+    void providers.modelList().then((options) => {
+      if (!cancelled) setProviderModelOptions(options);
+    }).catch(() => {
+      if (!cancelled) setProviderModelOptions([]);
+    });
+    return () => { cancelled = true; };
+  }, [connectionStateSignature, providers.modelList, providers.overview]);
+
+  useEffect(() => {
+    const refreshProviders = () => {
+      void providers.refresh();
+    };
+    window.addEventListener('orchid:providers-updated', refreshProviders);
+    return () => window.removeEventListener('orchid:providers-updated', refreshProviders);
+  }, [providers.refresh]);
+
+  useEffect(() => {
+    const applyCreatedSelection = (event: Event) => {
+      const selection = (event as CustomEvent<{ selection?: ModelSelection }>).detail?.selection;
+      if (!selection) return;
+      setCurrentSelection({
+        connectionId: selection.connectionId,
+        modelId: selection.modelId,
+      });
+      if (session.activeSession?.id) {
+        void session.changeModel(session.activeSession.id, selection, selection.modelId);
+      }
+      void providers.refresh();
+    };
+    window.addEventListener('orchid:provider-selection-created', applyCreatedSelection);
+    return () => window.removeEventListener('orchid:provider-selection-created', applyCreatedSelection);
+  }, [providers.refresh, session.activeSession?.id, session.changeModel]);
 
   useEffect(() => {
     const sessionId = session.activeSession?.id;
@@ -106,7 +161,6 @@ export function ChatView() {
           if (config.personality) setCurrentPersonality(config.personality);
           if (config.default_model) {
             setCurrentSelection(config.default_model);
-            setCurrentModel(config.default_model.modelId);
           }
           setAlwaysExpandToolGroups(Boolean(config.always_expand_tool_groups));
         }
@@ -135,9 +189,6 @@ export function ChatView() {
 
   // Keep composer model label in sync when switching sessions
   useEffect(() => {
-    if (session.activeSession?.modelLabel) {
-      setCurrentModel(session.activeSession.modelLabel);
-    }
     setCurrentSelection(session.activeSession?.selection ?? null);
   }, [session.activeSession?.id, session.activeSession?.selection, session.activeSession?.modelLabel]);
 
@@ -316,6 +367,33 @@ export function ChatView() {
   const workspaceBound =
     session.workspace == null || session.workspace.status === 'valid';
 
+  const availableProviderModels = useMemo(
+    () => providerModelOptions.filter((option) => option.available),
+    [providerModelOptions],
+  );
+  const providerModelByKey = useMemo(
+    () => new Map(providerModelOptions.map((option) => [providerModelOptionKey(option), option])),
+    [providerModelOptions],
+  );
+  const providerModelLabels = useMemo(
+    () => Object.fromEntries(providerModelOptions.map((option) => [
+      providerModelOptionKey(option),
+      providerModelOptionLabel(option),
+    ])),
+    [providerModelOptions],
+  );
+  const providerModelDetails = useMemo(
+    () => Object.fromEntries(providerModelOptions.map((option) => [providerModelOptionKey(option), option])),
+    [providerModelOptions],
+  );
+  const preferredSelection = session.activeSession?.selection ?? currentSelection;
+  const selectedProviderModel = preferredSelection
+    ? providerModelOptions.find((option) => selectionMatchesOption(preferredSelection, option)) ?? null
+    : null;
+  const providerAvailable = providers.hasUsableConnection;
+  const modelSelected = selectedProviderModel?.available === true;
+  const providerPickerValue = selectedProviderModel ? providerModelOptionKey(selectedProviderModel) : '';
+
   const handlePickProjectDir = useCallback(async () => {
     const startsDraft = Boolean(session.activeSession?.chains.length);
     const info = await session.pickProjectDir();
@@ -331,6 +409,26 @@ export function ChatView() {
     }
   }, [session, chat, applySessionMessages, notify]);
 
+  const handleSelectProviderModel = useCallback(async (key: string) => {
+    const option = providerModelByKey.get(key);
+    if (!option || !option.available) {
+      notify('That connection and model are not available. Reconnect it or choose another model.', 'warning');
+      return;
+    }
+    const selection: ModelSelection = {
+      connectionId: option.selection.connectionId,
+      modelId: option.selection.modelId,
+    };
+    setCurrentSelection(selection);
+    if (session.activeSession?.id) {
+      await session.changeModel(
+        session.activeSession.id,
+        selection,
+        providerModelOptionLabel(option),
+      );
+    }
+  }, [notify, providerModelByKey, session]);
+
   const handleSend = useCallback(
     async (message: string) => {
       // UI gate (R3): reinforce main-process unbound_workspace rejection.
@@ -342,8 +440,15 @@ export function ChatView() {
         void handlePickProjectDir();
         return;
       }
-      const preferredSelection =
-        session.activeSession?.selection ?? currentSelection;
+      if (!providerAvailable) {
+        notify('Connect a provider in Settings before sending a message.', 'warning');
+        window.dispatchEvent(new CustomEvent('orchid:open-settings', { detail: { tab: 'providers' } }));
+        return;
+      }
+      if (!preferredSelection || !modelSelected) {
+        notify('Select a ready connection and model before sending a message.', 'warning');
+        return;
+      }
       await chat.send(message, {
         ...(preferredSelection ? { model: preferredSelection } : {}),
         ...(session.activeSession?.id
@@ -358,6 +463,9 @@ export function ChatView() {
       session.draftGeneration,
       currentSelection,
       workspaceBound,
+      providerAvailable,
+      modelSelected,
+      preferredSelection,
       notify,
       handlePickProjectDir,
     ],
@@ -532,15 +640,9 @@ export function ChatView() {
         // Non-fatal
       }
     },
-    onSetModel: async (model: string) => {
-      void model;
-      notify('Connect a provider in Settings before choosing a model.', 'warning');
-    },
-    // U1 deliberately exposes no legacy alias candidates. U8 replaces this
-    // with connection-scoped selections from the provider registry.
-    getAvailableModels: () => [],
-    getCurrentModel: () =>
-      session.activeSession?.modelLabel || currentModel || '',
+    onSetModel: handleSelectProviderModel,
+    getAvailableModels: () => availableProviderModels.map(providerModelOptionKey),
+    getCurrentModel: () => providerPickerValue,
     onOpenSettings: () => {
       openSettings();
     },
@@ -565,6 +667,10 @@ export function ChatView() {
   const model = session.activeSession?.selection?.modelId ?? currentSelection?.modelId ?? '';
 
   useEffect(() => {
+    if (selectedProviderModel) {
+      setMaxContext(selectedProviderModel.model.limits?.contextTokens ?? null);
+      return;
+    }
     if (!model || !window.orchid?.config?.modelMetadata) {
       setMaxContext(null);
       return;
@@ -576,7 +682,7 @@ export function ChatView() {
       if (!cancelled) setMaxContext(null);
     });
     return () => { cancelled = true; };
-  }, [model]);
+  }, [model, selectedProviderModel]);
 
   const sessions =
     session.listState.status === 'ready' || session.listState.status === 'partial'
@@ -674,7 +780,9 @@ export function ChatView() {
         />
         <InputArea
           status={chat.status}
-          model={model}
+          model={providerPickerValue}
+          modelLabels={providerModelLabels}
+          modelDetails={providerModelDetails}
           interruptState={chat.interruptState}
           onSend={handleSend}
           onCancel={chat.cancel}
@@ -684,6 +792,11 @@ export function ChatView() {
           currentPersonality={currentPersonality}
           personalityNames={personalityNames}
           workspaceBound={workspaceBound}
+          providerAvailable={providerAvailable}
+          modelSelected={modelSelected}
+          onOpenProviders={() => {
+            window.dispatchEvent(new CustomEvent('orchid:open-settings', { detail: { tab: 'providers' } }));
+          }}
           onPickProjectDir={() => {
             void handlePickProjectDir();
           }}

@@ -48,7 +48,7 @@ import { buildDelegateTool } from './subagent/delegate';
 import { buildWaitTool } from './subagent/wait';
 import { buildInterruptTool } from './subagent/interrupt';
 import { SubagentManager } from '../agents/manager';
-import { getModelForTier } from '../llm/providers';
+import { getTierModelSelection } from '../config/loader';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 
 /** Singleton registry instance for the main process */
@@ -197,7 +197,7 @@ function buildWebFetchSummarizer(
       '</page_content>';
 
     const record = manager.spawn('web fetch summary', task, summarizerAgent, {
-      selection: getModelForTier(context.projectRuntime.config, agent.tier),
+      selection: getTierModelSelection(context.projectRuntime.config, agent.tier),
       sessionId: context.sessionId,
       cwd: context.cwd,
       projectRuntime: context.projectRuntime,

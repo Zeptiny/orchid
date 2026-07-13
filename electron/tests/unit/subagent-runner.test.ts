@@ -11,6 +11,42 @@ const mocks = vi.hoisted(() => ({
   })),
   runtimeRegistry: { get: vi.fn() },
   hydrateProjectRuntime: vi.fn(async <T>(runtime: T) => runtime),
+  modelInstance: { provider: 'trusted-test-driver' },
+  providerRuntime: {
+    resolveLanguageModel: vi.fn(async () => ({ provider: 'trusted-test-driver' })),
+    resolveExecution: vi.fn(async () => ({
+      modelInstance: { provider: 'trusted-test-driver' },
+      snapshot: {
+        providerId: 'openai',
+        providerDisplayName: 'OpenAI',
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        connectionName: 'Work',
+        modelId: 'vendor/path/model',
+        protocol: 'openai-compatible',
+        modelSource: 'catalog',
+        catalogVersion: 1,
+        catalogSource: 'bundled',
+        catalogObservedAt: null,
+        pricing: null,
+        fieldProvenance: {},
+        statusObservation: null,
+      },
+    })),
+  },
+  accountingStore: {},
+  streamChat: vi.fn(async function* () {
+    yield { type: 'content', text: 'delegated result' };
+    yield { type: 'finish', finishReason: 'stop' };
+  }),
+  buildSystemPromptContext: vi.fn(async ({ cwd }: { cwd: string }) => ({
+    cwd,
+    directoryTree: '',
+    subagents: [],
+    todos: [],
+    backgroundCommands: [],
+  })),
+  toolRegistry: {},
+  mcpManager: {},
 }));
 
 vi.mock('../../src/main/config/loader', () => ({
@@ -24,6 +60,34 @@ vi.mock('../../src/main/ipc/session', () => ({
 vi.mock('../../src/main/project/runtime', () => ({
   getProjectRuntimeRegistry: () => mocks.runtimeRegistry,
   hydrateProjectRuntime: mocks.hydrateProjectRuntime,
+}));
+
+vi.mock('../../src/main/providers', () => ({
+  getProviderRuntime: () => mocks.providerRuntime,
+}));
+
+vi.mock('../../src/main/providers/accounting/store', () => ({
+  getProviderAccountingStore: () => mocks.accountingStore,
+}));
+
+vi.mock('../../src/main/llm/orchestrator', () => ({
+  streamChat: mocks.streamChat,
+}));
+
+vi.mock('../../src/main/llm/build-prompt-context', () => ({
+  buildSystemPromptContext: mocks.buildSystemPromptContext,
+}));
+
+vi.mock('../../src/main/mcp/project-registry', () => ({
+  getProjectMCPManager: () => mocks.mcpManager,
+}));
+
+vi.mock('../../src/main/tools', () => ({
+  toolRegistry: mocks.toolRegistry,
+}));
+
+vi.mock('../../src/main/llm/message-factories', () => ({
+  makeUserMessage: (content: string) => ({ role: 'user', content }),
 }));
 
 import { createSubagentStreamRunner } from '../../src/main/agents/subagent-runner';
@@ -125,7 +189,7 @@ describe('createSubagentStreamRunner', () => {
     }]);
   });
 
-  it('preserves a slash-containing typed selection and fails closed without a driver', async () => {
+  it('preserves a slash-containing typed selection through the trusted runtime and stream', async () => {
     const events = await collect(createSubagentStreamRunner()({
       task: 'Inspect the project',
       agent,
@@ -137,11 +201,16 @@ describe('createSubagentStreamRunner', () => {
       projectRuntime: runtime(),
     }));
 
-    expect(events).toEqual([{
-      type: 'error',
-      title: 'Provider driver unavailable',
-      detail: expect.stringContaining('not ready for execution'),
-    }]);
+    expect(events).toEqual([
+      { type: 'content', text: 'delegated result' },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+    expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(selection);
+    expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
+      modelInstance: expect.any(Object),
+      sessionId: 'session-4',
+      agentScopeId: 'scope-4',
+    }));
     expect(mocks.runtimeRegistry.get).not.toHaveBeenCalled();
   });
 });

@@ -1464,10 +1464,12 @@ describe('streamChat', () => {
       messages: unknown[];
       stopWhen: unknown;
       tools: unknown;
+      maxRetries: number;
     };
     expect(call.system).toContain('You are a helpful assistant.');
     expect(call.messages).toEqual([{ role: 'user', content: 'Hello' }]);
     expect(call.stopWhen).toEqual({ type: 'step-count', count: 100 });
+    expect(call.maxRetries).toBe(0);
     // no allowed tools → tools undefined
     expect(call.tools).toBeUndefined();
   });

@@ -29,11 +29,8 @@ export const ragConfigSchema = z.object({
   // Defaults keep RAG from saturating all cores / huge tensors.
   embedding_threads: z.number().int().min(1).max(64).default(2),
   embedding_batch_size: z.number().int().min(1).max(256).default(16),
-  /**
-   * U1 keeps embeddings local-only. U4 replaces this compatibility field with
-   * a typed connection-scoped embedding selection.
-   */
-  embedding_api_model: z.null().default(null),
+  /** Optional API embedder, bound to the same connection/model identity as chat. */
+  embedding_api_model: modelSelectionSchema.nullable().default(null),
 });
 
 /**

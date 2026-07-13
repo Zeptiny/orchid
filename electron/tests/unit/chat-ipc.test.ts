@@ -85,6 +85,37 @@ const mocks = vi.hoisted(() => {
     get: vi.fn(() => null),
     validate: vi.fn(() => ({ ok: true as const, data: {} })),
   };
+  const modelInstance = { provider: 'trusted-test-driver' };
+  const providerRuntime = {
+    resolveLanguageModel: vi.fn(async () => modelInstance),
+    resolveExecution: vi.fn(async () => ({
+      modelInstance,
+      snapshot: {
+        providerId: 'openai',
+        providerDisplayName: 'OpenAI',
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        connectionName: 'Work',
+        modelId: 'vendor/path/model',
+        protocol: 'openai-compatible',
+        modelSource: 'catalog',
+        catalogVersion: 1,
+        catalogSource: 'bundled',
+        catalogObservedAt: null,
+        pricing: null,
+        fieldProvenance: {},
+        statusObservation: null,
+      },
+    })),
+  };
+  const accountingStore = {};
+  const buildSystemPromptContext = vi.fn(async ({ cwd }: { cwd: string }) => ({
+    cwd,
+    directoryTree: '',
+    subagents: [],
+    todos: [],
+    backgroundCommands: [],
+  }));
+  const mcpManager = {};
 
   const sessionManager = {
     getActive: vi.fn(() => activeSession),
@@ -273,6 +304,11 @@ const mocks = vi.hoisted(() => {
     electronWebContents,
     runtimeRegistry,
     toolRegistry,
+    modelInstance,
+    providerRuntime,
+    buildSystemPromptContext,
+    mcpManager,
+    accountingStore,
   };
 });
 
@@ -308,14 +344,6 @@ vi.mock('../../src/main/agents/registry', () => ({
   getAgent: vi.fn(),
 }));
 
-vi.mock('../../src/main/llm/providers', () => ({
-  resolveModelRef: vi.fn(() => ({ provider: 'test', model: 'model' })),
-}));
-
-vi.mock('../../src/main/llm/providers-factory', () => ({
-  createProviderModel: vi.fn(async () => ({})),
-}));
-
 vi.mock('../../src/main/tools', () => ({
   toolRegistry: mocks.toolRegistry,
   createBuiltinToolRegistry: vi.fn(() => mocks.toolRegistry),
@@ -325,6 +353,22 @@ vi.mock('../../src/main/tools', () => ({
 
 vi.mock('../../src/main/llm/orchestrator', () => ({
   streamChat: mocks.streamChat,
+}));
+
+vi.mock('../../src/main/providers', () => ({
+  getProviderRuntime: () => mocks.providerRuntime,
+}));
+
+vi.mock('../../src/main/providers/accounting/store', () => ({
+  getProviderAccountingStore: () => mocks.accountingStore,
+}));
+
+vi.mock('../../src/main/llm/build-prompt-context', () => ({
+  buildSystemPromptContext: mocks.buildSystemPromptContext,
+}));
+
+vi.mock('../../src/main/mcp/project-registry', () => ({
+  getProjectMCPManager: () => mocks.mcpManager,
 }));
 
 vi.mock('../../src/main/ipc/session', () => ({
@@ -1374,7 +1418,7 @@ describe('chat IPC provider gates', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('accepts a typed selection but does not invoke a legacy stream path', async () => {
+  it('routes a typed selection through the trusted runtime and shared stream path', async () => {
     const typedSelection = {
       connectionId: '11111111-1111-4111-8111-111111111111',
       modelId: 'vendor/path/model',
@@ -1402,13 +1446,13 @@ describe('chat IPC provider gates', () => {
     );
 
     expect(result).toMatchObject({ status: 'started' });
-    await waitForChannelCount(send, IPC_CHANNELS.CHAT_ERROR, 1);
-    expect(channelEvents(send, IPC_CHANNELS.CHAT_ERROR).at(-1)?.[1]).toMatchObject({
-      type: 'error',
-      title: 'Provider driver unavailable',
-      error: expect.stringContaining('not ready for execution'),
-    });
-    expect(mocks.streamChat).not.toHaveBeenCalled();
+    await waitForDoneCount(send, 1);
+    expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(typedSelection);
+    expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
+      modelInstance: mocks.modelInstance,
+      sessionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      agentScopeId: 'main',
+    }));
     expect(mocks.toolRegistry.get).not.toHaveBeenCalled();
   });
 });

@@ -1,13 +1,17 @@
 /**
- * First-run onboarding while provider connections are being introduced.
+ * First-run, connection-centered provider onboarding.
  *
- * U1 deliberately keeps onboarding local-only: renderer code must not inspect
- * environment credentials, create legacy provider aliases, or select a model
- * without a connection. U8 replaces this short flow with the connection
- * wizard once main-process provider IPC is available.
+ * The renderer uses only redacted, intent-based provider IPC. It never
+ * inspects environment values, creates legacy aliases, or parses model IDs.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ModelSelection } from '../../../shared/types/provider';
+import { useProviders } from '../../hooks/useProviders';
 import { useFocusTrap } from '../../keyboard';
+import {
+  ConnectionWizard,
+  type ProviderConnectionCompletion,
+} from '../Providers/ConnectionWizard';
 import orchidIcon from '../../assets/orchid-icon.svg';
 
 type StepId = 'welcome' | 'local' | 'done';
@@ -30,7 +34,9 @@ interface OnboardingScreenProps {
 }
 
 export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScreenProps) {
+  const providers = useProviders();
   const [stepIndex, setStepIndex] = useState(0);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const currentStep = STEPS[stepIndex];
 
@@ -45,6 +51,17 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
   const handleComplete = useCallback(() => {
     onComplete();
   }, [onComplete]);
+
+  const handleProviderComplete = useCallback(async (result: ProviderConnectionCompletion) => {
+    if (result.selection) {
+      window.dispatchEvent(new CustomEvent<{ selection: ModelSelection }>(
+        'orchid:provider-selection-created',
+        { detail: { selection: result.selection } },
+      ));
+    }
+    await providers.refresh();
+    onComplete();
+  }, [onComplete, providers.refresh]);
 
   useFocusTrap({ enabled: isOpen, containerRef });
 
@@ -75,7 +92,15 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
               </p>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
-              <button className="btn btn-primary" onClick={goNext} type="button">Get started</button>
+              <button
+                className="btn btn-primary"
+                onClick={() => setWizardOpen(true)}
+                type="button"
+                disabled={!providers.overview}
+              >
+                Connect a provider
+              </button>
+              <button className="btn btn-ghost" onClick={goNext} type="button">Use local features</button>
               <button className="btn btn-ghost" onClick={onSkip} type="button">Skip onboarding</button>
             </div>
           </div>
@@ -96,6 +121,14 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
             </div>
             <div className="flex flex-wrap justify-center gap-2">
               <button className="btn btn-ghost" onClick={goPrev} type="button">Back</button>
+              <button
+                className="btn btn-primary"
+                onClick={() => setWizardOpen(true)}
+                type="button"
+                disabled={!providers.overview}
+              >
+                Connect a provider
+              </button>
               <button className="btn btn-primary" onClick={goNext} type="button">Continue</button>
               <button className="btn btn-ghost" onClick={onSkip} type="button">Skip onboarding</button>
             </div>
@@ -118,8 +151,9 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
   })();
 
   return (
-    <div className="onb-overlay" ref={containerRef}>
-      <div className="onb-container">
+    <>
+      <div className="onb-overlay" ref={containerRef}>
+        <div className="onb-container">
         <div className="flex items-center justify-center gap-5 pb-8 text-sm text-base-content/60">
           {STEPS.map((step, index) => (
             <span key={step.id} className={index === stepIndex ? 'font-semibold text-base-content' : ''}>
@@ -128,12 +162,27 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
           ))}
         </div>
         <div className="flex min-h-80 items-center justify-center">{stepContent}</div>
-        <div className="mt-6 text-center">
-          <button className="btn btn-ghost btn-sm" onClick={onSkip} type="button">
-            Skip onboarding and use local defaults
-          </button>
+          <div className="mt-6 text-center">
+            <button className="btn btn-ghost btn-sm" onClick={onSkip} type="button">
+              Skip onboarding and use local defaults
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+      {providers.overview && (
+        <ConnectionWizard
+          isOpen={wizardOpen}
+          definitions={providers.overview.definitions}
+          secureStorage={providers.overview.secureStorage}
+          onClose={() => setWizardOpen(false)}
+          onCreate={providers.createConnection}
+          onSubmitApiKey={providers.submitApiKey}
+          onValidate={providers.validateConnection}
+          onAuthStart={providers.authStart}
+          onAuthComplete={providers.authComplete}
+          onComplete={handleProviderComplete}
+        />
+      )}
+    </>
   );
 }

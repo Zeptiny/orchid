@@ -25,6 +25,7 @@ import { randomUUID } from 'node:crypto';
 import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Message } from '../../shared/types/message';
+import type { KnownCostTotals } from '../../shared/types/accounting';
 import { ChainStatus, type Chain } from '../../shared/types/chain';
 import {
   canonicalizeProjectDirectory,
@@ -39,6 +40,7 @@ import {
   type StorageOptions,
   type SessionSummary,
 } from './storage';
+import { getProviderAccountingStore } from '../providers/accounting/store';
 
 // ---------------------------------------------------------------------------
 // Create options
@@ -150,6 +152,29 @@ export class SessionManager {
   /** Get an explicit session runtime without changing any window selection. */
   getSession(id: string): Session | null {
     return this.ensureSession(id);
+  }
+
+  /**
+   * Derived monetary totals come only from immutable provider attempt rows;
+   * sessions intentionally retain no mutable cost aggregate.
+   */
+  getProviderCostTotals(id: string): readonly KnownCostTotals[] {
+    if (!this.ensureSession(id)) return [];
+    try {
+      return getProviderAccountingStore().getSessionTotals(id);
+    } catch {
+      // Local-only/session history stays readable if the ledger is unavailable.
+      return [];
+    }
+  }
+
+  /** Derived chain totals are queried from the same immutable ledger. */
+  getChainProviderCostTotals(chainId: string): readonly KnownCostTotals[] {
+    try {
+      return getProviderAccountingStore().getChainTotals(chainId);
+    } catch {
+      return [];
+    }
   }
 
   /**

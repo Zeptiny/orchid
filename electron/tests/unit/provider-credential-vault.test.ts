@@ -100,6 +100,27 @@ describe('CredentialVault', () => {
     })).toEqual({ kind: 'api-key', apiKey: 'sk-secret-api-key-123456' });
   });
 
+  it('atomically replaces stale API-key generations for one connection', async () => {
+    const vault = createVault();
+    const first = await vault.storeApiKey(binding, 'sk-old-key-123456');
+    const other = await vault.storeApiKey({ ...binding, connectionId: OTHER_CONNECTION_ID }, 'sk-other-key-123456');
+
+    const replacement = await vault.replaceConnectionApiKey(binding, 'sk-new-key-123456');
+
+    await expect(vault.readSecret(first, binding)).rejects.toThrow(/unknown/i);
+    expect(await vault.readSecret(replacement, binding)).toEqual({
+      kind: 'api-key',
+      apiKey: 'sk-new-key-123456',
+    });
+    expect(await vault.readSecret(other, { ...binding, connectionId: OTHER_CONNECTION_ID })).toEqual({
+      kind: 'api-key',
+      apiKey: 'sk-other-key-123456',
+    });
+    const raw = fs.readFileSync(credentialsPath, 'utf8');
+    expect(raw).not.toContain('sk-old-key-123456');
+    expect(raw).not.toContain('sk-new-key-123456');
+  });
+
   it('atomically rotates OAuth tokens and deletes every generation on disconnect', async () => {
     const vault = createVault();
     const oauthBinding = { ...binding, authMethod: 'oauth' as const, driverId: 'chatgpt-codex' };

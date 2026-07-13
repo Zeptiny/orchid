@@ -66,6 +66,9 @@ export type SubagentStreamRunner = (params: {
   cwd?: string;
   /** This subagent's scope id (record.id) for todos / bg / prompt isolation. */
   agentScopeId: string;
+  /** Durable child-chain and turn identifiers for provider attempt attribution. */
+  chainId?: string;
+  turnId?: string;
   /** Immutable parent project snapshot for config, tools, and definitions. */
   projectRuntime?: ProjectRuntime;
 }) => AsyncGenerator<StreamEvent>;
@@ -446,6 +449,8 @@ export class SubagentManager {
         sessionId: record.sessionId ?? undefined,
         cwd,
         agentScopeId: record.id,
+        chainId: record.chain?.id,
+        turnId: record.id,
         projectRuntime: record.projectRuntime,
       });
 

@@ -17,6 +17,10 @@ import type { LanguageModelMiddleware } from 'ai';
 import { createRetryMiddleware, type RetryMiddlewareOptions } from './retry';
 import { createThrottleMiddleware, type ThrottleMiddlewareOptions } from './throttle';
 import { createProviderQuirksMiddleware } from './provider-quirks';
+import {
+  createAttemptAccountingMiddleware,
+  type ProviderAttemptAccountingContext,
+} from '../../providers/accounting/middleware';
 
 // Re-export individual middleware
 export { createRetryMiddleware, type RetryMiddlewareOptions } from './retry';
@@ -28,6 +32,10 @@ export {
   TOOL_OUTPUT_INLINE_THRESHOLD,
   TOOLS_WITHOUT_OUTPUT_OFFLOAD,
 } from './provider-quirks';
+export {
+  createAttemptAccountingMiddleware,
+  type ProviderAttemptAccountingContext,
+} from '../../providers/accounting/middleware';
 
 // Re-export error classes for use by other modules
 export {
@@ -52,6 +60,8 @@ export interface MiddlewareStackOptions {
   retry?: RetryMiddlewareOptions;
   /** Throttle middleware options. */
   throttle?: ThrottleMiddlewareOptions;
+  /** Frozen ledger context; omitted only for local/non-provider test streams. */
+  accounting?: ProviderAttemptAccountingContext;
 }
 
 /**
@@ -71,6 +81,9 @@ export function createMiddlewareStack(
   return [
     // 1. Retry (outermost) — catches transient errors before they propagate
     createRetryMiddleware(options.retry),
+
+    // Insert a durable pending row for every inner retry/tool-loop call.
+    ...(options.accounting ? [createAttemptAccountingMiddleware(options.accounting)] : []),
 
     // 2. Provider quirks — handles empty-choices, mid-stream errors
     createProviderQuirksMiddleware(),

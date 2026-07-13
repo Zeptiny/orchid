@@ -7,6 +7,7 @@
  */
 import { useCallback } from 'react';
 import { ModelPicker } from '../ModelPicker';
+import type { ModelSelection } from '../../../shared/types/provider';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -18,7 +19,7 @@ export interface RAGConfig {
   embedding_model: string;
   embedding_threads: number;
   embedding_batch_size: number;
-  embedding_api_model: null;
+  embedding_api_model: ModelSelection | null;
 }
 
 export interface RAGTabProps {

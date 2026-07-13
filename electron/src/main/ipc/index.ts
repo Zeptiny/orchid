@@ -25,6 +25,7 @@ import {
 import { registerRAGIPC, unregisterRAGIPC } from './rag';
 import { registerASTIPC, unregisterASTIPC } from './ast';
 import { registerUpdaterIPC, unregisterUpdaterIPC } from './updater';
+import { registerProviderIPC, unregisterProviderIPC } from './providers';
 
 /**
  * Register all IPC handlers.
@@ -33,6 +34,7 @@ import { registerUpdaterIPC, unregisterUpdaterIPC } from './updater';
 export function registerAllIPC(): void {
   registerChatIPC();
   registerConfigIPC();
+  registerProviderIPC();
   registerSessionIPC();
   registerSessionActivityIPC();
   registerToolIPC();
@@ -51,6 +53,7 @@ export function registerAllIPC(): void {
 export function unregisterAllIPC(): void {
   unregisterChatIPC();
   unregisterConfigIPC();
+  unregisterProviderIPC();
   unregisterSessionIPC();
   unregisterSessionActivityIPC();
   unregisterToolIPC();

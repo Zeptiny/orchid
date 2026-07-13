@@ -27,6 +27,7 @@ import {
   validateConfig,
   loadConfig,
   getConfigDiagnostics,
+  getTierModelSelection,
   ConfigManager,
   isUnsafeKey,
 } from '../../src/main/config';
@@ -112,6 +113,20 @@ describe('schema & defaults', () => {
       crown: null,
     });
     expect(cfg.providers).toEqual({});
+  });
+
+  it('selects a typed tier connection from the supplied config snapshot', () => {
+    const config = {
+      ...defaults(),
+      default_model: PERSONAL_MODEL_SELECTION,
+      tier_models: {
+        ...defaults().tier_models,
+        bloom: WORK_MODEL_SELECTION,
+      },
+    };
+
+    expect(getTierModelSelection(config, 'bloom')).toEqual(WORK_MODEL_SELECTION);
+    expect(getTierModelSelection(config, 'seed')).toEqual(PERSONAL_MODEL_SELECTION);
   });
 
   it('defaults() returns all fields populated', () => {

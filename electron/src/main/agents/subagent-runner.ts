@@ -6,7 +6,7 @@
  */
 import type { Agent } from '../../shared/types/agent';
 import type { ModelSelection } from '../../shared/types/provider';
-import type { StreamEvent } from '../llm/orchestrator';
+import { streamChat, type StreamEvent } from '../llm/orchestrator';
 import { getConfig } from '../config/loader';
 import { getSessionManager } from '../ipc/session';
 import {
@@ -15,6 +15,13 @@ import {
   type ProjectRuntime,
 } from '../project/runtime';
 import type { SubagentStreamRunner } from './manager';
+import { makeUserMessage } from '../llm/message-factories';
+import { buildSystemPromptContext } from '../llm/build-prompt-context';
+import { getProjectMCPManager } from '../mcp/project-registry';
+import { toolRegistry } from '../tools';
+import { getProviderRuntime } from '../providers';
+import { getProviderAccountingStore } from '../providers/accounting/store';
+import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
 
 /**
  * Fallback cwd when spawn did not pass a frozen parent-turn path.
@@ -41,7 +48,8 @@ function resolveParentSessionCwdFallback(sessionId?: string): string | null {
 
 /**
  * Create the production stream runner for subagents.
- * Validates a frozen selection before U4 wires it into a trusted driver.
+ * A child uses the exact frozen selection inherited from its parent turn;
+ * it never parses an alias or consults mutable provider configuration.
  */
 export function createSubagentStreamRunner(): SubagentStreamRunner {
   return async function* subagentStream(params: {
@@ -54,6 +62,9 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     cwd?: string;
     /** This subagent's scope id (record.id) for todos / bg / prompt isolation. */
     agentScopeId: string;
+    /** Durable child-chain and turn ids for provider-attempt attribution. */
+    chainId?: string;
+    turnId?: string;
     /** Immutable project config/definitions captured by the parent turn. */
     projectRuntime?: ProjectRuntime;
   }): AsyncGenerator<StreamEvent> {
@@ -98,13 +109,50 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       return;
     }
 
-    // U4 installs the trusted registry that turns this frozen selection into a
-    // native adapter. U1 must not revive the legacy alias/model parser here.
-    yield {
-      type: 'error',
-      title: 'Provider driver unavailable',
-      detail: 'Provider connections are not ready for execution yet.',
+    let modelInstance;
+    let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
+    let accountingStore: ReturnType<typeof getProviderAccountingStore>;
+    try {
+      accountingStore = getProviderAccountingStore();
+      const execution = await getProviderRuntime().resolveExecution(selection);
+      modelInstance = execution.modelInstance;
+      providerSnapshot = execution.snapshot;
+    } catch (error) {
+      yield {
+        type: 'error',
+        title: 'Provider unavailable',
+        detail: error instanceof Error ? error.message : String(error),
+      };
+      return;
+    }
+
+    const context = await buildSystemPromptContext({
+      cwd: parentCwd,
+      config,
+      sessionId,
+      agentScopeId: params.agentScopeId,
+    });
+    const accounting: ProviderAttemptAccountingContext = {
+      store: accountingStore,
+      sessionId,
+      chainId: params.chainId ?? null,
+      turnId: params.turnId ?? params.agentScopeId,
+      snapshot: providerSnapshot,
     };
-    return;
+    yield* streamChat({
+      messages: [makeUserMessage(params.task)],
+      agent: params.agent,
+      systemPrompt: params.agent.system_prompt || 'You are a helpful assistant.',
+      context,
+      config,
+      registry: toolRegistry,
+      mcpManager: getProjectMCPManager(runtime),
+      sessionId,
+      projectRuntime: runtime,
+      agentScopeId: params.agentScopeId,
+      abortSignal: params.abortSignal,
+      modelInstance,
+      accounting,
+    });
   };
 }

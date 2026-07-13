@@ -12,7 +12,7 @@ import { createActor, type ActorRefFrom } from 'xstate';
 import { z } from 'zod';
 import { agentMachine, type AgentContext } from '../agents/xstate/agent-machine';
 import { interruptMachine } from '../agents/xstate/interrupt-machine';
-import type { StreamEvent } from '../llm/orchestrator';
+import { streamChat, type StreamEvent } from '../llm/orchestrator';
 import type { Agent } from '../../shared/types/agent';
 import { modelSelectionSchema, type ModelSelection } from '../../shared/types/provider';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
@@ -26,7 +26,7 @@ import {
   resolveWindowWorkspace,
 } from './session';
 import { getBackgroundStore } from '../tools/process/background-store';
-import { getSubagentManager } from '../tools';
+import { getSubagentManager, toolRegistry } from '../tools';
 import type {
   ChatErrorKind,
   ChatSendResult,
@@ -59,6 +59,12 @@ import {
   publishSessionActivity,
 } from './session-activity';
 import { appendProjectPersonality } from '../project/personality';
+import { buildSystemPromptContext } from '../llm/build-prompt-context';
+import { getProjectMCPManager } from '../mcp/project-registry';
+import { getProviderRuntime } from '../providers';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
+import { getProviderAccountingStore } from '../providers/accounting/store';
+import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -512,6 +518,23 @@ export function forceStopSession(sessionId: string): boolean {
   return true;
 }
 
+/** Active session IDs whose frozen turn uses the given provider connection. */
+export function activeSessionsForProviderConnection(connectionId: string): readonly string[] {
+  return [...activeAgents.values()]
+    .filter((active) => !active.finalized && active.selection.connectionId === connectionId)
+    .map((active) => active.sessionId);
+}
+
+/**
+ * Destructive disconnect helper. Stops only turns already attributed to this
+ * connection; other connections and frozen completed turns remain untouched.
+ */
+export function stopActiveProviderConnectionTurns(connectionId: string): readonly string[] {
+  const sessionIds = activeSessionsForProviderConnection(connectionId);
+  for (const sessionId of sessionIds) forceStopSession(sessionId);
+  return sessionIds;
+}
+
 function canSend(webContents: WebContents): boolean {
   return typeof webContents.isDestroyed !== 'function' || !webContents.isDestroyed();
 }
@@ -706,26 +729,49 @@ function emitSessionUpdated(webContents: WebContents, sessionId: string): void {
 // ── Stream function (wraps the orchestrator) ─────────────────────────────────
 
 /**
- * The U1 fail-closed stream used until U4 adds trusted driver resolution.
+ * Bind a turn's already-resolved adapter to the orchestrator. The typed
+ * selection, project runtime, message history, and model instance are all
+ * frozen before the actor starts, so a later settings change cannot redirect
+ * credentials, tools, or a retry to another connection.
  */
-function createUnavailableStreamFn(turnSelection: ModelSelection | null) {
-  return async function* (): AsyncGenerator<StreamEvent> {
-    if (turnSelection == null) {
-      yield {
-        type: 'error',
-        title: 'Provider connection required',
-        detail: 'Connect a provider and select a model before sending a message.',
-      };
-      return;
-    }
-
-    // U4 supplies the trusted registry and native adapter. Never recover the
-    // old string alias path while that work is incomplete.
-    yield {
-      type: 'error',
-      title: 'Provider driver unavailable',
-      detail: 'Provider connections are not ready for execution yet.',
-    };
+function createProviderStreamFn(input: {
+  readonly messages: Message[];
+  readonly runtime: ProjectRuntime;
+  readonly sessionId: string;
+  readonly modelInstance: LanguageModelV4;
+  readonly accounting: ProviderAttemptAccountingContext;
+}) {
+  return async function* ({
+    agent,
+    systemPrompt,
+    abortSignal,
+  }: {
+    message: string;
+    agent: Agent;
+    systemPrompt: string;
+    abortSignal: AbortSignal;
+  }): AsyncGenerator<StreamEvent> {
+    const context = await buildSystemPromptContext({
+      cwd: input.runtime.projectDir,
+      config: input.runtime.config,
+      sessionId: input.sessionId,
+      agentScopeId: 'main',
+    });
+    yield* streamChat({
+      messages: input.messages,
+      agent,
+      systemPrompt,
+      context,
+      config: input.runtime.config,
+      registry: toolRegistry,
+      mcpManager: getProjectMCPManager(input.runtime),
+      sessionId: input.sessionId,
+      projectRuntime: input.runtime,
+      agentScopeId: 'main',
+      abortSignal,
+      modelInstance: input.modelInstance,
+      accounting: input.accounting,
+    });
   };
 }
 
@@ -823,6 +869,23 @@ export function registerChatIPC(): void {
         kind: 'provider_required',
       };
     }
+    let modelInstance: LanguageModelV4;
+    let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
+    let accountingStore: ReturnType<typeof getProviderAccountingStore>;
+    try {
+      accountingStore = getProviderAccountingStore();
+      const execution = await getProviderRuntime().resolveExecution(turnSelection);
+      modelInstance = execution.modelInstance;
+      providerSnapshot = execution.snapshot;
+    } catch (error) {
+      sessionsStarting.delete(sessionId);
+      completeSessionActivity(sessionId, false);
+      return {
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error),
+        kind: 'provider_unavailable',
+      };
+    }
     const agents = [...runtime.agents.values()];
     // Prefer live window history; fall back to flattened session chains.
     // If a prior agent is still streaming, forceAbort persists its partial
@@ -861,6 +924,7 @@ export function registerChatIPC(): void {
     // Multi-chain: open a new ACTIVE chain for this user turn (Python `_start_chain`).
     // Subagent parent_chain_index attributes to this chain while it is active.
     let turnId: string = crypto.randomUUID();
+    let chainId: string | null = null;
     try {
       const chain = sessionManager.startChain({
         selection: turnSelection,
@@ -870,6 +934,7 @@ export function registerChatIPC(): void {
         agentTier: agent.tier,
         messages: [userMessage],
       }, sessionId);
+      chainId = chain?.id ?? null;
       turnId = chain?.id ?? turnId;
       emitSessionUpdated(webContents, sessionId);
     } catch (err) {
@@ -881,15 +946,28 @@ export function registerChatIPC(): void {
     // mutable global registry used by the settings surface.
     const abortController = new AbortController();
     const baseSystemPrompt = agent.system_prompt || 'You are a helpful assistant.';
+    const accounting: ProviderAttemptAccountingContext = {
+      store: accountingStore,
+      sessionId,
+      chainId,
+      turnId,
+      snapshot: providerSnapshot,
+    };
     const actor = createActor(agentMachine, {
       input: {
         agent,
         systemPrompt: appendProjectPersonality(baseSystemPrompt, runtime),
-        streamFn: createUnavailableStreamFn(turnSelection),
-        // The fail-closed stream cannot emit tool calls. Keep the machine's
-        // required callback inert until U4 installs a trusted tool registry.
+        streamFn: createProviderStreamFn({
+          messages,
+          runtime,
+          sessionId,
+          modelInstance,
+          accounting,
+        }),
+        // streamChat executes tool calls inside the shared AI SDK loop; this
+        // callback remains required by the state machine for its legacy API.
         executeFn: async () => ({
-          content: 'Provider driver unavailable.',
+          content: 'Tool execution is handled by the provider stream.',
           isError: true,
         }),
       },

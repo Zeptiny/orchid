@@ -277,9 +277,9 @@ Index location: `.orchid/rag/` in the project directory.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `default_model` | `string` | `"default/mimo-v2.5"` | Default model for the agent |
-| `tier_models` | `dict` | all `default/mimo-v2.5` | Tier to model mapping |
-| `providers` | `dict` | OpenCode.ai | LLM provider configuration |
+| `default_model` | `{ connectionId, modelId } \| null` | `null` | Default connection-scoped model selection |
+| `tier_models` | `dict` | all `null` | Tier-to-connection/model selections |
+| `providers` | `dict` | `{}` | Deprecated legacy field; provider connections are managed separately |
 | `mcp_servers` | `dict` | context7 | Configured MCP servers |
 | `theme` | `string` | `"default"` | App visual theme |
 | `personality` | `string` | `"default"` | Active agent personality |
@@ -327,7 +327,8 @@ All config options can be overridden via `ORCHID_`-prefixed environment variable
 ### Settings UI
 
 The `/settings` command opens the configuration view:
-- **Providers** — add/edit/remove LLM providers, configure models
+
+- **Providers** — connect, validate, disable, reconnect, or disconnect provider accounts
 - **MCP Servers** — add/edit/remove MCP servers
 - **Tier Models** — map each agent tier to a specific model
 - **RAG** — configure chunk size, overlap, top_k, embedding model
@@ -342,53 +343,27 @@ Skills, agents, and personalities save immediately to disk (not via the JSON con
 
 ## LLM Providers
 
-### Default Provider
+Orchid starts in local-only mode: it never selects or contacts a default provider. Project browsing, history, indexing, settings, and local commands remain available. Sending an LLM request prompts you to set up a connection.
 
-On first launch, Orchid connects to **OpenCode.ai** (OpenAI-compatible API) with MiMo V2.5:
+### Connect an account
 
-```json
-{
-  "providers": {
-    "default": {
-      "base_url": "https://opencode.ai/zen/go/v1",
-      "models": { "mimo-v2.5": {} }
-    }
-  },
-  "default_model": "default/mimo-v2.5"
-}
-```
+Use onboarding or **Settings → Providers** to choose a bundled provider, name the connection, select its supported authentication method, submit/confirm credentials, validate it, and choose an initial model. A model selection is always tied to both a connection and a model, so two accounts for the same provider remain distinct.
 
-### Local Models (Ollama)
+Supported built-in driver families include OpenAI, Anthropic, Google Gemini, xAI, OpenCode Go, Lilac, Neuralwatt, and user-defined OpenAI- or Anthropic-compatible endpoints. API-key and environment-reference authentication are available where a driver supports them. ChatGPT/Codex and Grok subscription integrations are present in trusted code but disabled for release until Orchid-owned registrations and current contract checks are approved.
 
-```json
-{
-  "providers": {
-    "ollama": {
-      "base_url": "http://localhost:11434/v1",
-      "models": { "qwen3.6:35b-a3b": { "max_input_tokens": 262144 } }
-    }
-  },
-  "default_model": "ollama/qwen3.6:35b-a3b",
-  "tier_models": {
-    "seed": "ollama/qwen3.6:35b-a3b",
-    "sprout": "ollama/qwen3.6:35b-a3b",
-    "bloom": "ollama/qwen3.6:35b-a3b",
-    "crown": "ollama/qwen3.6:35b-a3b"
-  }
-}
-```
+### Credential safety and recovery
 
-### Supported Providers
+- Pasted API keys are one-shot submissions to the Electron main process. They are cleared from the form after submission and are never returned to the renderer.
+- Stored credentials require operating-system secure storage. If it is unavailable (including Linux `basic_text`), use a validated environment-variable reference instead; Orchid never reads that value in the renderer.
+- **Disable** blocks new requests while an already frozen turn may finish. **Disconnect** is destructive: confirm it to cancel active turns, finalize their accounting, remove local stored credentials, and then follow the provider's upstream revocation guidance if needed.
 
-The desktop app uses Vercel AI SDK with `@ai-sdk/openai` for OpenAI-compatible providers:
+### Status and cost
 
-| Provider | Adapter |
-|----------|---------|
-| OpenAI-compatible (default) | `@ai-sdk/openai` with `compatibility: 'compatible'` |
-| Anthropic | `@ai-sdk/anthropic` |
-| Google/Gemini | `@ai-sdk/google` |
-| Groq | `@ai-sdk/groq` |
-| xAI | `@ai-sdk/xai` |
+Provider status is informational. It can show timestamped availability, quota, performance, and stale/unavailable states without blocking or rerouting a request. Lilac surfaces its supply state, subscription discount, and credit multiplier only when its authoritative status source provides them; a fresh matching model observation freezes its explicit multiplier into that request's pricing snapshot, while missing data is shown as unavailable rather than estimated.
+
+Every provider attempt is attributed to the selected connection in an immutable local ledger. Costs are shown as provider-reported, calculated from frozen authoritative rates, or unknown. Subscription quota or an absent charge is never silently treated as zero cost.
+
+For operator and release details, see [the provider driver contract](electron/docs/provider-driver-contract.md), [catalog operations](electron/docs/provider-catalog-operations.md), and [the release checklist](electron/docs/provider-release-checklist.md).
 
 ---
 

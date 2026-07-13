@@ -102,8 +102,8 @@ export function GeneralTab({
         <div className="config-form-grid">
           <div role="alert" className="alert alert-info config-form-grid-full">
             <span>
-              Provider connection and model selection will be available after the
-              connection setup flow is introduced. Local workspace features remain available.
+              Manage provider connections separately in Settings → Providers.
+              Local workspace features remain available when no provider is connected.
             </span>
           </div>
 

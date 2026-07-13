@@ -33,6 +33,14 @@ import { ProviderCatalogStore } from './providers/catalog/store';
 import { ProviderCatalogUpdater, createHttpCatalogTransport } from './providers/catalog/updater';
 import type { CatalogKeyring } from './providers/catalog/trust';
 import { CredentialVault } from './providers/credentials/vault';
+import { ConnectionStore } from './providers/connection-store';
+import { initializeProviderRuntime, resetProviderRuntime } from './providers';
+import { ProviderStatusScheduler, ProviderStatusService } from './providers/status/service';
+import { createLilacStatusSource } from './providers/drivers/lilac';
+import {
+  initializeProviderAccountingStore,
+  resetProviderAccountingStore,
+} from './providers/accounting/store';
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
@@ -41,6 +49,9 @@ let mainWindow: BrowserWindow | null = null;
 let bgIdleOwnershipTimer: ReturnType<typeof setInterval> | null = null;
 let providerCatalogStore: ProviderCatalogStore | null = null;
 let providerCredentialVault: CredentialVault | null = null;
+let providerConnectionStore: ConnectionStore | null = null;
+let providerStatusService: ProviderStatusService | null = null;
+let providerStatusScheduler: ProviderStatusScheduler | null = null;
 
 /**
  * Release engineering replaces this empty development keyring with public
@@ -93,12 +104,62 @@ function initializeProviderCredentialVault(): CredentialVault {
   return vault;
 }
 
+function initializeProviderRuntimeServices(
+  catalog: ProviderCatalogStore,
+  vault: CredentialVault,
+  status?: ProviderStatusService,
+): void {
+  const connections = new ConnectionStore();
+  providerConnectionStore = connections;
+  initializeProviderRuntime({
+    catalog,
+    vault,
+    connections,
+    status,
+  });
+}
+
+function initializeProviderStatusServices(): ProviderStatusService {
+  const service = new ProviderStatusService();
+  const scheduler = new ProviderStatusScheduler(service);
+  scheduler.start([createLilacStatusSource()]);
+  providerStatusService = service;
+  providerStatusScheduler = scheduler;
+  return service;
+}
+
+function initializeProviderAccounting(): void {
+  try {
+    initializeProviderAccountingStore();
+  } catch (error) {
+    // Ledger failure must disable provider attempts, not local-only Orchid.
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Provider accounting is unavailable; provider requests are disabled: ${message}`);
+  }
+}
+
 /** Main-process credential access for trusted drivers only. */
 export function getProviderCredentialVault(): CredentialVault {
   if (!providerCredentialVault) {
     throw new Error('Provider credential vault has not been initialized');
   }
   return providerCredentialVault;
+}
+
+/** Main-process connection metadata storage. Credentials remain in the vault. */
+export function getProviderConnectionStore(): ConnectionStore {
+  if (!providerConnectionStore) {
+    throw new Error('Provider connections have not been initialized');
+  }
+  return providerConnectionStore;
+}
+
+/** Main-process access to informational, redacted provider status only. */
+export function getProviderStatusService(): ProviderStatusService {
+  if (!providerStatusService) {
+    throw new Error('Provider status service has not been initialized');
+  }
+  return providerStatusService;
 }
 
 // ── Window creation ──────────────────────────────────────────────────────────
@@ -155,10 +216,13 @@ app.whenReady().then(async () => {
     ensureHomeConfig();
 
     // 1b. Load the bundled provider catalog before any provider-dependent IPC.
-    initializeProviderCatalog();
+    const catalog = initializeProviderCatalog();
     // Credential persistence remains unavailable until used when the OS secure
     // backend is unavailable; it must never abort local-only Orchid startup.
-    initializeProviderCredentialVault();
+    const vault = initializeProviderCredentialVault();
+    const status = initializeProviderStatusServices();
+    initializeProviderRuntimeServices(catalog, vault, status);
+    initializeProviderAccounting();
 
     // 2. Seed defaults into home dirs (before any load)
     seedAgentsDir(HOME_AGENTS_DIR);
@@ -273,6 +337,12 @@ app.on('before-quit', async (event) => {
     ConfigManager.reset();
     providerCatalogStore = null;
     providerCredentialVault = null;
+    providerConnectionStore = null;
+    providerStatusScheduler?.stop();
+    providerStatusScheduler = null;
+    providerStatusService = null;
+    resetProviderRuntime();
+    resetProviderAccountingStore();
 
     // 4. Now actually quit
     app.exit(0);

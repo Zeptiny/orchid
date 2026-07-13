@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { defaults } from '../../src/main/config/schema';
-import { resolveModelRef } from '../../src/main/llm/providers';
 import { hydrateProjectRuntime, type ProjectRuntime } from '../../src/main/project/runtime';
 
 describe('hydrateProjectRuntime', () => {
@@ -27,9 +26,6 @@ describe('hydrateProjectRuntime', () => {
       modelId: 'vendor/models/gpt-4o',
     });
     expect(hydrated.config.providers).toEqual({});
-    expect(() => resolveModelRef('legacy/test-model', hydrated.config)).toThrow(
-      'typed model selection',
-    );
     expect(Object.isFrozen(hydrated)).toBe(true);
   });
 });

@@ -97,8 +97,8 @@ export interface RAGConfig {
    * Default 16 (was a hard-coded 100).
    */
   embedding_batch_size: number;
-  /** U1 keeps embeddings local-only until U4 adds a typed selection. */
-  embedding_api_model: null;
+  /** Optional connection-scoped API embedding model; null keeps ONNX local. */
+  embedding_api_model: ModelSelection | null;
 }
 
 /** Non-secret notice about provider compatibility state discarded on load. */

@@ -179,10 +179,14 @@ export function catalogToProviderDefinitions(
     supportedAuthMethods: provider.supportedAuthMethods,
     supportedProtocols: provider.supportedProtocols,
     allowsCustomModels: provider.allowsCustomModels,
+    lifecycle: provider.lifecycle,
     models: provider.models.map((model) => ({
       id: model.id,
       displayName: model.displayName,
       protocol: model.protocol,
+      capabilities: model.capabilities,
+      limits: model.limits,
+      lifecycle: model.lifecycle,
     })),
   }));
 }

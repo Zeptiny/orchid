@@ -31,6 +31,12 @@ import type {
   ChatToolCallDeltaEvent,
   ChatToolCallUpdateEvent,
   ConfigSaveMessage,
+  ProviderConnectionCreateMessage,
+  ProviderConnectionUpdateMessage,
+  ProviderSubmitApiKeyMessage,
+  ProviderConnectionIdMessage,
+  ProviderDisconnectMessage,
+  ProviderStatusRefreshMessage,
   SessionLoadMessage,
   SessionDeleteMessage,
   SessionRenamedEvent,
@@ -152,6 +158,44 @@ const orchidAPI: OrchidAPI = {
 
     listPersonalities: () =>
       invoke(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES),
+  },
+
+  providers: {
+    list: () =>
+      invoke(IPC_CHANNELS.PROVIDERS_LIST),
+
+    create: (message: ProviderConnectionCreateMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_CREATE, message),
+
+    update: (message: ProviderConnectionUpdateMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_UPDATE, message),
+
+    submitApiKey: (message: ProviderSubmitApiKeyMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY, message),
+
+    validate: (message: ProviderConnectionIdMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_VALIDATE, message),
+
+    disable: (message: ProviderConnectionIdMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_DISABLE, message),
+
+    enable: (message: ProviderConnectionIdMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_ENABLE, message),
+
+    disconnect: (message: ProviderDisconnectMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_DISCONNECT, message),
+
+    modelList: (message?: ProviderConnectionIdMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_MODEL_LIST, message),
+
+    refreshStatus: (message: ProviderStatusRefreshMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH, message),
+
+    authStart: (message: ProviderConnectionIdMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_AUTH_START, message),
+
+    authComplete: (message: ProviderConnectionIdMessage & { flowId: string }) =>
+      invoke(IPC_CHANNELS.PROVIDERS_AUTH_COMPLETE, message),
   },
 
   session: {

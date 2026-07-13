@@ -8,7 +8,8 @@
  * - Merge: home overlaid by project (project wins on conflict)
  * - Seeding: empty dirs → defaults copied, existing → not overwritten
  * - Skill resources: references/*.md → discovered with descriptions
- * - Tier resolution: getModelForTier(tier) → config.tierModels[tier] || config.defaultModel
+ * - Tier resolution: getTierModelSelection(config, tier) returns a typed
+ *   connection-scoped selection or null
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';

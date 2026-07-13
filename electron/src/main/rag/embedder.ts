@@ -12,6 +12,8 @@
  * - Graceful failure if native module unavailable
  */
 
+import type { ModelSelection } from '../../shared/types/provider';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -294,19 +296,22 @@ export class ApiEmbedder implements IEmbedder {
 /**
  * Create an embedder based on config.
  *
- * U1 always returns a local ONNX {@link Embedder}. A legacy string API model
- * is ignored because it cannot identify a provider connection; U4 replaces it
- * with a typed embedding selection.
+ * A null API selection preserves local ONNX behavior. When a typed selection
+ * is configured, the main-process provider runtime owns its connection,
+ * credential, and code-owned endpoint resolution; legacy alias strings never
+ * reach this function as executable providers.
  */
 export async function createEmbedderFromConfig(): Promise<IEmbedder> {
   let cfgThreads = DEFAULT_THREADS;
   let cfgBatch = DEFAULT_BATCH_SIZE;
   let cfgModel: string | undefined;
+  let cfgApiSelection: ModelSelection | null = null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { getConfig } = require('../config/loader') as typeof import('../config/loader');
     const rag = getConfig().rag;
     cfgModel = rag.embedding_model;
+    cfgApiSelection = rag.embedding_api_model;
     if (typeof rag.embedding_threads === 'number' && rag.embedding_threads > 0) {
       cfgThreads = rag.embedding_threads;
     }
@@ -315,6 +320,20 @@ export async function createEmbedderFromConfig(): Promise<IEmbedder> {
     }
   } catch {
     // config unavailable — use hard defaults
+  }
+
+  if (cfgApiSelection) {
+    // Lazy main-process lookup avoids initializing providers when local ONNX
+    // is selected and keeps the credential-bearing target out of renderer code.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getProviderRuntime } = require('../providers') as typeof import('../providers');
+    const target = await getProviderRuntime().resolveApiEmbeddingTarget(cfgApiSelection);
+    return new ApiEmbedder(
+      target.baseURL,
+      target.apiKey,
+      cfgApiSelection.modelId,
+      cfgBatch,
+    );
   }
 
   return new Embedder({

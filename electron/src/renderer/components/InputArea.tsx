@@ -10,6 +10,7 @@
  */
 import { useRef, useCallback, useEffect, useState, useMemo } from 'react';
 import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
+import type { ProviderModelOption } from '../../shared/types/ipc';
 import type { ChatStatus, InterruptState } from '../hooks/useChat';
 import {
   COMMANDS,
@@ -28,6 +29,9 @@ import { SlashCommandMenu } from './SlashCommandMenu';
 interface InputAreaProps {
   status: ChatStatus;
   model: string;
+  /** Display labels for opaque connection-scoped model picker keys. */
+  modelLabels?: Readonly<Record<string, string>>;
+  modelDetails?: Readonly<Record<string, ProviderModelOption>>;
   /** Staged Esc / cancel-button interrupt phase. */
   interruptState?: InterruptState;
   onSend: (message: string) => Promise<void>;
@@ -41,6 +45,11 @@ interface InputAreaProps {
   /** When false, chat send is gated until a project folder is chosen (R3). */
   workspaceBound?: boolean;
   onPickProjectDir?: () => void;
+  /** A ready connection is required for LLM-backed sends, not local commands. */
+  providerAvailable?: boolean;
+  /** A typed `{ connectionId, modelId }` selection is required for a send. */
+  modelSelected?: boolean;
+  onOpenProviders?: () => void;
 }
 
 type SubPicker = '/theme' | '/personality' | '/model' | '/sessions' | null;
@@ -52,6 +61,8 @@ const TEXTAREA_MAX_HEIGHT_PX = 160;
 export function InputArea({
   status,
   model,
+  modelLabels,
+  modelDetails,
   interruptState = 'idle',
   onSend,
   onCancel,
@@ -62,6 +73,9 @@ export function InputArea({
   personalityNames = [],
   workspaceBound = true,
   onPickProjectDir,
+  providerAvailable = true,
+  modelSelected = true,
+  onOpenProviders,
 }: InputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   /** Blocks rapid double-Enter before parent status re-renders to streaming. */
@@ -357,6 +371,13 @@ export function InputArea({
       onPickProjectDir?.();
       return;
     }
+    if (!providerAvailable && !trimmed.startsWith('/')) {
+      onOpenProviders?.();
+      return;
+    }
+    if (!modelSelected && !trimmed.startsWith('/')) {
+      return;
+    }
     isSendingRef.current = true;
     setInput('');
     setSubPicker(null);
@@ -501,6 +522,7 @@ export function InputArea({
 
   // During confirmSubagents the agent is done — keep input editable for follow-ups.
   const inputDisabled = isStreaming || interruptState === 'confirmAgent';
+  const plainChatBlocked = !workspaceBound || !providerAvailable || !modelSelected;
 
   return (
     <div className="composer-area">
@@ -517,6 +539,28 @@ export function InputArea({
               Open folder
             </button>
           )}
+        </div>
+      )}
+
+      {!providerAvailable && (
+        <div className="composer-workspace-gate" role="status" aria-live="polite">
+          <span>A provider connection is required before Orchid can send an LLM request.</span>
+          {onOpenProviders && (
+            <button
+              type="button"
+              className="btn btn-primary btn-xs"
+              onClick={onOpenProviders}
+            >
+              <Icon name="settings" size={12} />
+              Set up provider
+            </button>
+          )}
+        </div>
+      )}
+
+      {providerAvailable && !modelSelected && (
+        <div className="composer-workspace-gate" role="status" aria-live="polite">
+          <span>Select a connection and model before sending a message.</span>
         </div>
       )}
 
@@ -550,6 +594,10 @@ export function InputArea({
                 ? 'Type a follow-up, or Esc / ■ to cancel subagents…'
                 : !workspaceBound
                   ? 'Choose a project folder first… (or /cd)'
+                  : !providerAvailable
+                    ? 'Set up a provider before chatting…'
+                    : !modelSelected
+                      ? 'Select a connection and model first…'
                   : commandContext
                     ? 'Type a message or /command… (Enter to send)'
                     : 'Type a message… (Enter to send, Shift+Enter for newline)'
@@ -565,6 +613,8 @@ export function InputArea({
           <ModelPicker
             value={model}
             options={availableModels}
+            optionLabels={modelLabels}
+            optionDetails={modelDetails}
             onChange={(next) => void handleSelectModel(next)}
             placement="top"
             label="Select model"
@@ -593,11 +643,11 @@ export function InputArea({
                 }
                 void handleSend();
               }}
-              disabled={!hasInput}
+              disabled={!hasInput || (!showMenu && plainChatBlocked)}
               title={showMenu ? 'Run command' : 'Send'}
               type="button"
               aria-label={showMenu ? 'Run command' : 'Send'}
-              aria-disabled={!hasInput || undefined}
+              aria-disabled={!hasInput || (!showMenu && plainChatBlocked) || undefined}
             >
               <Icon name="arrowUp" size={16} />
             </button>

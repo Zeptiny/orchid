@@ -45,13 +45,14 @@ const TABS: TabDef[] = [
 
 interface ConfigViewProps {
   onClose: () => void;
+  initialTab?: TabId;
 }
 
-export function ConfigView({ onClose }: ConfigViewProps) {
+export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps) {
   const session = useSession();
   const rootRef = useRef<HTMLDivElement>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabId>('general');
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +73,10 @@ export function ConfigView({ onClose }: ConfigViewProps) {
     enabled: true,
     containerRef: rootRef,
   });
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
   const isDirty = Object.keys(draft).length > 0;
   const hasMCPChanges = 'mcp_servers' in draft;
@@ -470,7 +475,12 @@ function renderTab(
         />
       );
     case 'tier-models':
-      return <TierModelsTab />;
+      return (
+        <TierModelsTab
+          tierModels={config.tier_models}
+          onChange={(tier_models) => updateDraft({ tier_models })}
+        />
+      );
     case 'rag':
       return (
         <RAGTab
