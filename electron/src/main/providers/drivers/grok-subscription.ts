@@ -5,6 +5,7 @@ import {
   assertSubscriptionReleaseEnabled,
   createSubscriptionBrowserOAuthDefinition,
   createSubscriptionDeviceOAuthDefinition,
+  createHttpSubscriptionTokenRefreshTransport,
   createSubscriptionRequestHeaders,
   createUnknownSubscriptionCost,
   evaluateSubscriptionReleaseEnablement,
@@ -14,6 +15,7 @@ import {
   type SubscriptionDeviceOAuthDefinition,
   type SubscriptionQuotaUsage,
   type SubscriptionReleaseConfiguration,
+  type SubscriptionTokenRefreshTransport,
   type UnknownSubscriptionCost,
 } from './subscription';
 import type { DriverModelRequest, ProviderDriver } from './types';
@@ -25,6 +27,7 @@ export const GROK_SUBSCRIPTION_OAUTH_SCOPES = ['openid', 'offline_access'] as co
 
 export interface GrokSubscriptionDriverOptions {
   readonly release: SubscriptionReleaseConfiguration;
+  readonly refreshTransport?: SubscriptionTokenRefreshTransport;
 }
 
 function assertGrokRequest(request: DriverModelRequest): asserts request is DriverModelRequest & {
@@ -52,12 +55,18 @@ function assertGrokRequest(request: DriverModelRequest): asserts request is Driv
 /** Instantiate the isolated Grok subscription adapter using the native xAI SDK. */
 export function createGrokSubscriptionDriver(options: GrokSubscriptionDriverOptions): ProviderDriver {
   const releaseStatus = evaluateSubscriptionReleaseEnablement(options.release);
+  const refreshTransport = options.refreshTransport ?? createHttpSubscriptionTokenRefreshTransport();
   return {
     id: GROK_SUBSCRIPTION_DRIVER_ID,
     supportedAuthMethods: ['oauth'],
     supportedProtocols: [GROK_SUBSCRIPTION_PROTOCOL],
     allowsCustomEndpoint: false,
     origin: releaseStatus.enabled ? releaseStatus.endpoints.requestBaseUrl : null,
+    refreshOAuthTokens: ({ tokens }) => refreshGrokSubscriptionTokens({
+      release: options.release,
+      tokens,
+      postForm: refreshTransport.postForm,
+    }),
     createLanguageModel: async (request): Promise<LanguageModelV4> => {
       const release = assertSubscriptionReleaseEnabled(options.release);
       assertGrokRequest(request);

@@ -242,6 +242,49 @@ export interface SubscriptionTokenRefreshTransport {
   }): Promise<SubscriptionTokenRefreshResponse>;
 }
 
+export interface HttpSubscriptionTokenRefreshTransportOptions {
+  readonly fetch?: typeof globalThis.fetch;
+  readonly timeoutMs?: number;
+}
+
+/** Trusted main-process OAuth refresh transport with bounded, redacted errors. */
+export function createHttpSubscriptionTokenRefreshTransport(
+  options: HttpSubscriptionTokenRefreshTransportOptions = {},
+): SubscriptionTokenRefreshTransport {
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  return {
+    postForm: async ({ url, headers, body }) => {
+      const response = await fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body: new URLSearchParams(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) {
+        throw new Error(`Subscription token refresh failed with HTTP ${response.status}`);
+      }
+      const payload: unknown = await response.json();
+      if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+        throw new Error('Subscription token refresh returned an invalid response');
+      }
+      const value = payload as Record<string, unknown>;
+      const accessToken = value['access_token'] ?? value['accessToken'];
+      const refreshToken = value['refresh_token'] ?? value['refreshToken'];
+      const expiresAt = value['expires_at'] ?? value['expiresAt'];
+      const expiresInSeconds = value['expires_in'] ?? value['expiresInSeconds'];
+      const tokenType = value['token_type'] ?? value['tokenType'];
+      return {
+        accessToken: typeof accessToken === 'string' ? accessToken : '',
+        ...(typeof refreshToken === 'string' ? { refreshToken } : {}),
+        ...(typeof expiresAt === 'string' ? { expiresAt } : {}),
+        ...(typeof expiresInSeconds === 'number' ? { expiresInSeconds } : {}),
+        ...(typeof tokenType === 'string' ? { tokenType } : {}),
+      };
+    },
+  };
+}
+
 export interface RefreshSubscriptionOAuthTokensInput {
   readonly release: SubscriptionReleaseConfiguration;
   readonly tokens: OAuthTokens;

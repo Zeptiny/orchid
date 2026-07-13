@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => {
       removeHandler: vi.fn((channel: string) => handlers.delete(channel)),
     },
     interruptPendingForConnection: vi.fn(() => 0),
+    activeSessionsForProviderConnection: vi.fn((): readonly string[] => []),
+    stopActiveProviderConnectionTurns: vi.fn((): readonly string[] => []),
   };
 });
 
@@ -32,6 +34,10 @@ vi.mock('../../src/main/providers/accounting/store', () => ({
   getProviderAccountingStore: () => ({
     interruptPendingForConnection: mocks.interruptPendingForConnection,
   }),
+}));
+vi.mock('../../src/main/ipc/chat', () => ({
+  activeSessionsForProviderConnection: mocks.activeSessionsForProviderConnection,
+  stopActiveProviderConnectionTurns: mocks.stopActiveProviderConnectionTurns,
 }));
 
 let providersIpc: typeof import('../../src/main/ipc/providers');
@@ -142,6 +148,10 @@ function handler(channel: string) {
 beforeEach(async () => {
   mocks.handlers.clear();
   mocks.interruptPendingForConnection.mockClear();
+  mocks.activeSessionsForProviderConnection.mockReset();
+  mocks.activeSessionsForProviderConnection.mockReturnValue([]);
+  mocks.stopActiveProviderConnectionTurns.mockReset();
+  mocks.stopActiveProviderConnectionTurns.mockReturnValue([]);
   providersIpc = await import('../../src/main/ipc/providers');
   providersIpc._setProviderIPCServicesForTests(null);
 });
@@ -276,5 +286,103 @@ describe('provider IPC', () => {
     expect(result).toMatchObject({
       connection: { credentialKind: 'none', health: 'needs_attention' },
     });
+  });
+
+  it('disables only new work while reporting that a frozen turn can finish', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000041';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Active work',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: '00000000-0000-4000-8000-000000000042' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    mocks.activeSessionsForProviderConnection.mockReturnValue(['session-active']);
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const result = await handler(IPC_CHANNELS.PROVIDERS_DISABLE)(null, {
+      connectionId: id,
+    });
+
+    expect(memory.connections.update).toHaveBeenCalledWith(id, { health: 'disabled' });
+    expect(mocks.stopActiveProviderConnectionTurns).not.toHaveBeenCalled();
+    expect(mocks.interruptPendingForConnection).not.toHaveBeenCalled();
+    expect(memory.vault.deleteConnectionCredentials).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      connection: { health: 'disabled', activeTurnCount: 1 },
+      message: expect.stringMatching(/active turn can finish/i),
+    });
+  });
+
+  it('disconnects only after active turns and pending accounting are finalized', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000051';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Destructive disconnect',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: '00000000-0000-4000-8000-000000000052' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    mocks.stopActiveProviderConnectionTurns.mockReturnValue(['session-active']);
+    mocks.interruptPendingForConnection.mockReturnValue(1);
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const result = await handler(IPC_CHANNELS.PROVIDERS_DISCONNECT)(null, {
+      connectionId: id,
+      confirm: true,
+    });
+
+    expect(mocks.stopActiveProviderConnectionTurns).toHaveBeenCalledWith(id);
+    expect(mocks.interruptPendingForConnection).toHaveBeenCalledWith(id);
+    expect(memory.vault.deleteConnectionCredentials).toHaveBeenCalledWith(id);
+    expect(memory.connections.update).toHaveBeenCalledWith(id, {
+      credential: { kind: 'none' },
+      health: 'disconnected',
+    });
+    expect(result).toMatchObject({
+      connection: { health: 'disconnected', credentialKind: 'none' },
+      message: expect.stringMatching(/cancelled 1 active turn.*finalized.*removing stored credentials/i),
+    });
+  });
+
+  it('keeps credentials when active-turn accounting cannot be finalized', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000061';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Accounting unavailable',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: '00000000-0000-4000-8000-000000000062' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    mocks.stopActiveProviderConnectionTurns.mockReturnValue(['session-active']);
+    mocks.interruptPendingForConnection.mockImplementation(() => {
+      throw new Error('ledger unavailable');
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_DISCONNECT)(null, {
+      connectionId: id,
+      confirm: true,
+    })).rejects.toThrow(/credentials were not removed.*ledger unavailable/i);
+
+    expect(memory.vault.deleteConnectionCredentials).not.toHaveBeenCalled();
+    expect(memory.connections.update).not.toHaveBeenCalledWith(id, expect.objectContaining({
+      health: 'disconnected',
+    }));
   });
 });

@@ -9,6 +9,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { generateKeyPairSync, sign } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   IPC_CHANNELS,
@@ -17,6 +18,7 @@ import {
   type ProviderOverview,
 } from '../../src/shared/types/ipc';
 import type { ProviderDefinition } from '../../src/shared/types/provider';
+import type { FrozenProviderRequestSnapshot } from '../../src/shared/types/accounting';
 
 const electron = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -42,6 +44,22 @@ vi.mock('electron', () => ({
   safeStorage: electron.safeStorage,
 }));
 
+vi.mock('../../src/main/utils/esm-import', () => ({
+  importESM: async (specifier: string) => {
+    if (specifier === '@ai-sdk/openai-compatible') {
+      return {
+        createOpenAICompatible: () => (modelId: string) => ({ modelId }),
+      };
+    }
+    if (specifier === '@ai-sdk/anthropic') {
+      return {
+        createAnthropic: () => ({ messages: (modelId: string) => ({ modelId }) }),
+      };
+    }
+    throw new Error(`Unexpected acceptance adapter import '${specifier}'`);
+  },
+}));
+
 // The provider IPC test seam below supplies every runtime service. Avoiding
 // Electron startup keeps this deterministic while preserving the public IPC
 // handler contract.
@@ -54,7 +72,11 @@ vi.mock('../../src/main/index', () => ({
 
 import * as providerIpc from '../../src/main/ipc/providers';
 import { ProviderRuntime } from '../../src/main/providers';
+import { calculateAttemptCost } from '../../src/main/providers/accounting/cost';
 import { ProviderAccountingStore } from '../../src/main/providers/accounting/store';
+import { ProviderCatalogStore } from '../../src/main/providers/catalog/store';
+import { ProviderCatalogUpdater } from '../../src/main/providers/catalog/updater';
+import type { CatalogKeyring } from '../../src/main/providers/catalog/trust';
 import {
   ConnectionStore,
   _clearConnectionStoreWriteChains,
@@ -63,6 +85,9 @@ import {
   CredentialVault,
   _clearCredentialVaultWriteChains,
 } from '../../src/main/providers/credentials/vault';
+import { CredentialRefreshCoordinator } from '../../src/main/providers/credentials/refresh';
+import { createCompatibleLanguageModel } from '../../src/main/providers/drivers/compatible';
+import { createOpenCodeGoLanguageModel } from '../../src/main/providers/drivers/opencode-go';
 import { ProviderDriverRegistry } from '../../src/main/providers/drivers/registry';
 import { fetchLilacStatus } from '../../src/main/providers/drivers/lilac';
 import { resolveModelSelection } from '../../src/main/providers/resolver';
@@ -71,6 +96,10 @@ import {
   ProviderStatusService,
   type ProviderStatusSource,
 } from '../../src/main/providers/status/service';
+import {
+  CATALOG_NOW,
+  createCatalogFixture,
+} from '../fixtures/provider-catalog/catalog-fixture';
 
 const FIXTURE_NOW = new Date('2026-07-13T12:00:00.000Z');
 const LILAC_MODEL_ID = 'moonshotai/kimi-k2.6';
@@ -227,7 +256,7 @@ afterEach(() => {
 });
 
 describe('provider end-to-end public contracts', () => {
-  it('moves a local-only persisted home through redacted IPC setup, restart, typed execution, and immutable attribution', async () => {
+  it('AE1/AE2 moves a local-only persisted home through redacted setup, restart, typed execution, and immutable attribution', async () => {
     const root = makeTempDirectory();
     const fixture = createServices(root);
     providerIpc._setProviderIPCServicesForTests(fixture.services);
@@ -371,7 +400,7 @@ describe('provider end-to-end public contracts', () => {
     ]);
   });
 
-  it('passes Lilac supply-discount data through a local fixture status contract without affecting typed send eligibility', async () => {
+  it('AE9 passes Lilac supply-discount data through a local fixture status contract without affecting typed send eligibility', async () => {
     const root = makeTempDirectory();
     const fixture = createServices(root);
     providerIpc._setProviderIPCServicesForTests(fixture.services);
@@ -437,4 +466,276 @@ describe('provider end-to-end public contracts', () => {
       }),
     ]);
   });
+
+  it('AE3 refreshes an expired subscription credential once and isolates refresh failure to its connection', async () => {
+    const root = makeTempDirectory();
+    const connections = new ConnectionStore({ providersPath: path.join(root, 'providers.json') });
+    const vault = new CredentialVault({
+      credentialsPath: path.join(root, 'credentials.json'),
+      safeStorage: electron.safeStorage,
+      now: () => FIXTURE_NOW,
+    });
+    const work = await connections.create({
+      providerId: 'chatgpt-codex',
+      name: 'Work subscription',
+      protocol: 'openai-compatible',
+      authMethod: 'oauth',
+      credential: { kind: 'none' },
+      modelIds: ['gpt-5.2-codex'],
+      health: 'ready',
+    });
+    const personal = await connections.create({
+      providerId: 'chatgpt-codex',
+      name: 'Personal subscription',
+      protocol: 'openai-compatible',
+      authMethod: 'oauth',
+      credential: { kind: 'none' },
+      modelIds: ['gpt-5.2-codex'],
+      health: 'ready',
+    });
+    const workBinding = {
+      connectionId: work.id,
+      driverId: work.providerId,
+      authMethod: 'oauth' as const,
+      origin: null,
+    };
+    const personalBinding = {
+      connectionId: personal.id,
+      driverId: personal.providerId,
+      authMethod: 'oauth' as const,
+      origin: null,
+    };
+    const workHandle = await vault.storeOAuthTokens(workBinding, {
+      accessToken: 'expired-work-access',
+      refreshToken: 'work-refresh',
+      expiresAt: '2026-07-13T11:00:00.000Z',
+      tokenType: 'Bearer',
+    });
+    const personalHandle = await vault.storeOAuthTokens(personalBinding, {
+      accessToken: 'expired-personal-access',
+      refreshToken: 'personal-refresh',
+      expiresAt: '2026-07-13T11:00:00.000Z',
+      tokenType: 'Bearer',
+    });
+    await connections.update(work.id, { credential: { kind: 'stored', handle: workHandle } });
+    await connections.update(personal.id, { credential: { kind: 'stored', handle: personalHandle } });
+    const refresh = new CredentialRefreshCoordinator({ vault, connections });
+    const refreshTokens = vi.fn(async () => ({
+      accessToken: 'rotated-work-access',
+      refreshToken: 'rotated-work-refresh',
+      expiresAt: '2026-07-13T13:00:00.000Z',
+      tokenType: 'Bearer',
+    }));
+
+    await Promise.all([
+      refresh.refreshConnection(work.id, refreshTokens),
+      refresh.refreshConnection(work.id, refreshTokens),
+    ]);
+    expect(refreshTokens).toHaveBeenCalledTimes(1);
+    expect(await vault.readSecret(workHandle, workBinding)).toMatchObject({
+      kind: 'oauth',
+      accessToken: 'rotated-work-access',
+      refreshToken: 'rotated-work-refresh',
+    });
+
+    await expect(refresh.refreshConnection(personal.id, async () => {
+      throw new Error('upstream revoked');
+    })).rejects.toThrow(/revoked/i);
+    expect(await connections.get(work.id)).toMatchObject({ health: 'ready' });
+    expect(await connections.get(personal.id)).toMatchObject({ health: 'needs_attention' });
+    expect(JSON.stringify(await connections.list())).not.toMatch(/rotated-work|personal-refresh/);
+  });
+
+  it('AE4/AE5 rejects tampering and keeps a frozen price immutable across catalog promotion', async () => {
+    const root = makeTempDirectory();
+    const bundledCatalogPath = path.join(root, 'catalog.json');
+    const cachePath = path.join(root, 'cache', 'catalog.json');
+    fs.writeFileSync(bundledCatalogPath, JSON.stringify(createCatalogFixture(1)), 'utf8');
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const keyring = {
+      acceptance: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+    } satisfies CatalogKeyring;
+    const store = new ProviderCatalogStore({
+      bundledCatalogPath,
+      cachePath,
+      appVersion: '0.1.0',
+      keyring,
+      now: () => new Date(CATALOG_NOW),
+    });
+    const catalog2 = createCatalogFixture(2);
+    const bytes2 = Buffer.from(JSON.stringify(catalog2), 'utf8');
+    const signed2 = {
+      bytes: bytes2,
+      signature: sign(null, bytes2, privateKey),
+      keyId: 'acceptance',
+    };
+    await new ProviderCatalogUpdater(store, {
+      fetchCatalog: async () => signed2,
+    }).refresh();
+    const frozenPricing = structuredClone(store.load().catalog.providers[0]!.models[0]!.pricing);
+
+    await expect(new ProviderCatalogUpdater(store, {
+      fetchCatalog: async () => ({ ...signed2, signature: Buffer.from('tampered') }),
+    }).refresh()).rejects.toThrow();
+    expect(store.load().catalog.catalogVersion).toBe(2);
+
+    const catalog3 = createCatalogFixture(3);
+    catalog3.providers[0]!.models[0]!.pricing.rates.input!.amount = '999';
+    const bytes3 = Buffer.from(JSON.stringify(catalog3), 'utf8');
+    store.promote({
+      bytes: bytes3,
+      signature: sign(null, bytes3, privateKey),
+      keyId: 'acceptance',
+    });
+    expect(frozenPricing?.rates.input?.amount).toBe('1.250000');
+    expect(store.load().catalog.providers[0]!.models[0]!.pricing.rates.input!.amount).toBe('999');
+  });
+
+  it('AE6/AE7/AE10 calculates only authoritative formulas and keeps unknown money separate from zero', () => {
+    const root = makeTempDirectory();
+    const tokenSnapshot = accountingSnapshot();
+    expect(calculateAttemptCost({
+      snapshot: tokenSnapshot,
+      usage: {
+        inputTokens: 1_000,
+        outputTokens: 200,
+        cacheReadTokens: 100,
+        cacheWriteTokens: 10,
+      },
+      evidence: {},
+    })).toMatchObject({ state: 'calculated', source: 'token-formula', amount: '0.0096125' });
+
+    const energySnapshot = accountingSnapshot({
+      providerId: 'neuralwatt',
+      providerDisplayName: 'Neuralwatt',
+      pricing: {
+        currency: 'USD',
+        effectiveAt: FIXTURE_NOW.toISOString(),
+        rates: { energy: { amount: '5', per: 1, unit: 'energy' } },
+        inclusion: { cacheRead: 'unknown', cacheWrite: 'unknown', reasoning: 'unknown' },
+        provenance: { source: 'provider-fixture' },
+      },
+    });
+    expect(calculateAttemptCost({
+      snapshot: energySnapshot,
+      usage: {
+        energyKwhConsumed: '0.02',
+        energyKwhCharged: '0.013',
+        pricingMultiplier: '0.65',
+      },
+      evidence: { accountingMethod: 'energy', energyRateUsdPerKwh: '5', currency: 'USD' },
+    })).toMatchObject({ state: 'calculated', source: 'energy-formula', amount: '0.065' });
+    expect(calculateAttemptCost({
+      snapshot: energySnapshot,
+      usage: { energyKwhCharged: '0.013', pricingMultiplier: '0.65' },
+      evidence: { accountingMethod: 'energy', energyRateUsdPerKwh: '5', currency: 'USD' },
+    })).toMatchObject({ state: 'unknown' });
+
+    const ledger = new ProviderAccountingStore({
+      dbPath: path.join(root, 'accounting.db'),
+      now: () => FIXTURE_NOW,
+    });
+    ledgers.push(ledger);
+    const knownAttemptId = '00000000-0000-4000-8000-000000000500';
+    ledger.insertPending({
+      attemptId: knownAttemptId,
+      sessionId: 'unknown-cost-session',
+      chainId: 'unknown-cost-chain',
+      turnId: 'known-cost-turn',
+      sdkCallId: null,
+      snapshot: tokenSnapshot,
+    });
+    ledger.finalize(knownAttemptId, {
+      outcome: 'succeeded',
+      usage: { inputTokens: 1 },
+      providerEvidence: {},
+      cost: {
+        state: 'reported',
+        source: 'provider-reported',
+        currency: 'USD',
+        amount: '0.25',
+      },
+    });
+    const attemptId = '00000000-0000-4000-8000-000000000501';
+    ledger.insertPending({
+      attemptId,
+      sessionId: 'unknown-cost-session',
+      chainId: 'unknown-cost-chain',
+      turnId: 'unknown-cost-turn',
+      sdkCallId: null,
+      snapshot: tokenSnapshot,
+    });
+    ledger.finalize(attemptId, {
+      outcome: 'succeeded',
+      usage: { inputTokens: 1 },
+      providerEvidence: { quotaUsed: 1, quotaLimit: 10 },
+      cost: { state: 'unknown', source: 'unknown' },
+    });
+    expect(ledger.getSessionTotals('unknown-cost-session')).toEqual([{
+      currency: 'USD',
+      amount: '0.25',
+      recordCount: 1,
+      unknownCount: 1,
+    }]);
+  });
+
+  it('AE8/AE11 constructs each declared compatible protocol without parsing slash-containing model IDs', async () => {
+    const openAiCompatible = await createOpenCodeGoLanguageModel({
+      protocol: 'openai-compatible',
+      modelId: 'deepseek/v4-flash',
+      apiKey: 'fixture-opencode-key',
+    });
+    const anthropicMessages = await createOpenCodeGoLanguageModel({
+      protocol: 'anthropic-messages',
+      modelId: 'minimax/m3',
+      apiKey: 'fixture-opencode-key',
+    });
+    const customAnthropic = await createCompatibleLanguageModel({
+      providerId: 'generic-anthropic-compatible',
+      protocol: 'anthropic-messages',
+      modelId: 'custom/team/model-v1',
+      apiKey: 'fixture-generic-key',
+      endpoint: 'http://127.0.0.1:41415/v1',
+    });
+
+    expect(openAiCompatible.modelId).toBe('deepseek/v4-flash');
+    expect(anthropicMessages.modelId).toBe('minimax/m3');
+    expect(customAnthropic.modelId).toBe('custom/team/model-v1');
+  });
 });
+
+function accountingSnapshot(
+  overrides: Partial<FrozenProviderRequestSnapshot> = {},
+): FrozenProviderRequestSnapshot {
+  return {
+    providerId: 'anthropic',
+    providerDisplayName: 'Anthropic',
+    connectionId: '00000000-0000-4000-8000-000000000401',
+    connectionName: 'Acceptance connection',
+    modelId: 'claude/acceptance',
+    protocol: 'anthropic-messages',
+    modelSource: 'catalog',
+    catalogVersion: 1,
+    catalogSource: 'bundled',
+    catalogObservedAt: FIXTURE_NOW.toISOString(),
+    fieldProvenance: {},
+    statusObservation: null,
+    pricing: {
+      currency: 'USD',
+      effectiveAt: FIXTURE_NOW.toISOString(),
+      rates: {
+        input: { amount: '5', per: 1_000_000, unit: 'tokens' },
+        output: { amount: '25', per: 1_000_000, unit: 'tokens' },
+        cacheRead: { amount: '0.5', per: 1_000_000, unit: 'tokens' },
+        cacheWrite: { amount: '6.25', per: 1_000_000, unit: 'tokens' },
+      },
+      inclusion: {
+        cacheRead: 'subset-of-input',
+        cacheWrite: 'additional',
+        reasoning: 'subset-of-output',
+      },
+      provenance: { source: 'catalog-fixture' },
+    },
+    ...overrides,
+  };
+}

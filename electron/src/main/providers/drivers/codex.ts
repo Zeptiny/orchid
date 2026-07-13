@@ -6,6 +6,7 @@ import {
   assertSubscriptionReleaseEnabled,
   createSubscriptionBrowserOAuthDefinition,
   createSubscriptionDeviceOAuthDefinition,
+  createHttpSubscriptionTokenRefreshTransport,
   createSubscriptionRequestHeaders,
   createUnknownSubscriptionCost,
   evaluateSubscriptionReleaseEnablement,
@@ -15,6 +16,7 @@ import {
   type SubscriptionDeviceOAuthDefinition,
   type SubscriptionQuotaUsage,
   type SubscriptionReleaseConfiguration,
+  type SubscriptionTokenRefreshTransport,
   type UnknownSubscriptionCost,
 } from './subscription';
 import type { DriverModelRequest, ProviderDriver } from './types';
@@ -35,6 +37,7 @@ export interface CodexSubscriptionReleaseConfiguration extends SubscriptionRelea
 export interface CodexSubscriptionDriverOptions {
   readonly release: CodexSubscriptionReleaseConfiguration;
   readonly accountIdForConnection?: (connection: ProviderConnection) => string | null | undefined;
+  readonly refreshTransport?: SubscriptionTokenRefreshTransport;
 }
 
 function assertCodexRequest(request: DriverModelRequest): asserts request is DriverModelRequest & {
@@ -75,12 +78,18 @@ function accountHeaders(
 /** Instantiate the isolated ChatGPT/Codex subscription adapter. */
 export function createCodexSubscriptionDriver(options: CodexSubscriptionDriverOptions): ProviderDriver {
   const releaseStatus = evaluateSubscriptionReleaseEnablement(options.release);
+  const refreshTransport = options.refreshTransport ?? createHttpSubscriptionTokenRefreshTransport();
   return {
     id: CODEX_SUBSCRIPTION_DRIVER_ID,
     supportedAuthMethods: ['oauth'],
     supportedProtocols: [CODEX_SUBSCRIPTION_PROTOCOL],
     allowsCustomEndpoint: false,
     origin: releaseStatus.enabled ? releaseStatus.endpoints.requestBaseUrl : null,
+    refreshOAuthTokens: ({ tokens }) => refreshCodexSubscriptionTokens({
+      release: options.release,
+      tokens,
+      postForm: refreshTransport.postForm,
+    }),
     createLanguageModel: async (request): Promise<LanguageModelV4> => {
       const release = assertSubscriptionReleaseEnabled(options.release);
       assertCodexRequest(request);

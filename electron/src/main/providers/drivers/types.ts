@@ -6,6 +6,7 @@ import type {
   ProviderDefinition,
   ProviderProtocol,
 } from '../../../shared/types/provider';
+import type { OAuthTokens } from '../credentials/vault';
 
 /** Only the request credential needed by an adapter, never a vault record. */
 export type DriverCredential =
@@ -32,6 +33,12 @@ export interface ProviderEmbeddingTarget {
   readonly apiKey: string | undefined;
 }
 
+export interface DriverOAuthRefreshRequest {
+  readonly connection: ProviderConnection;
+  /** Main-process-only token material read from the connection-bound vault. */
+  readonly tokens: OAuthTokens;
+}
+
 /**
  * Trusted driver code owns credentials, request construction, and API origins.
  * Remote catalog data selects only the declared ID/protocol/capability data.
@@ -44,6 +51,8 @@ export interface ProviderDriver {
   /** Code-owned API origin for built-in drivers; null for generic drivers. */
   readonly origin: string | null;
   createLanguageModel(request: DriverModelRequest): Promise<LanguageModelV4>;
+  /** Present only for release-enabled OAuth drivers with a trusted token endpoint. */
+  refreshOAuthTokens?(request: DriverOAuthRefreshRequest): Promise<OAuthTokens>;
   /** Present only when the driver supports Orchid's API embedding transport. */
   createEmbeddingTarget?(request: DriverModelRequest): Promise<ProviderEmbeddingTarget>;
 }

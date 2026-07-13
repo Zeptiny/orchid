@@ -15,9 +15,14 @@ import {
   normalizeCredentialBinding,
   type CredentialSecret,
 } from './credentials/vault';
+import type { CredentialRefreshCoordinator } from './credentials/refresh';
 import { ProviderDriverRegistry, createDefaultProviderDriverRegistry } from './drivers/registry';
 import { validateGenericEndpoint } from './drivers/compatible';
-import type { DriverModelRequest, ProviderEmbeddingTarget } from './drivers/types';
+import type {
+  DriverModelRequest,
+  ProviderDriver,
+  ProviderEmbeddingTarget,
+} from './drivers/types';
 import { ProviderResolutionError } from '../llm/middleware/error-classification';
 import type { ProviderStatusService } from './status/service';
 
@@ -29,6 +34,8 @@ export interface ProviderRuntimeOptions {
   readonly vault: Pick<CredentialVault, 'readSecret'>;
   readonly status?: Pick<ProviderStatusService, 'get'>;
   readonly registry?: ProviderDriverRegistry;
+  readonly credentialRefresh?: Pick<CredentialRefreshCoordinator, 'refreshConnection'>;
+  readonly now?: () => Date;
 }
 
 export interface ResolvedProviderExecution {
@@ -46,6 +53,8 @@ export class ProviderRuntime {
   private readonly vault: Pick<CredentialVault, 'readSecret'>;
   private readonly status: Pick<ProviderStatusService, 'get'> | undefined;
   private readonly registry: ProviderDriverRegistry;
+  private readonly credentialRefresh: ProviderRuntimeOptions['credentialRefresh'];
+  private readonly now: () => Date;
 
   constructor(options: ProviderRuntimeOptions) {
     this.catalog = options.catalog;
@@ -53,6 +62,8 @@ export class ProviderRuntime {
     this.vault = options.vault;
     this.status = options.status;
     this.registry = options.registry ?? createDefaultProviderDriverRegistry();
+    this.credentialRefresh = options.credentialRefresh;
+    this.now = options.now ?? (() => new Date());
   }
 
   async resolveLanguageModel(selection: ModelSelection): Promise<LanguageModelV4> {
@@ -89,7 +100,7 @@ export class ProviderRuntime {
       throw new ProviderResolutionError(this.describeResolutionFailure(resolution.kind, resolution.reason));
     }
     const driver = this.registry.require(resolution.provider.id);
-    const credential = await this.resolveCredential(resolution.connection, driver.origin, driver.allowsCustomEndpoint);
+    const credential = await this.resolveCredential(resolution.connection, driver);
     return {
       request: {
         connection: resolution.connection,
@@ -137,8 +148,7 @@ export class ProviderRuntime {
 
   private async resolveCredential(
     connection: ProviderConnection,
-    codeOwnedOrigin: string | null,
-    allowsCustomEndpoint: boolean,
+    driver: ProviderDriver,
   ): Promise<
     | { readonly kind: 'api-key'; readonly apiKey: string }
     | { readonly kind: 'oauth'; readonly accessToken: string }
@@ -166,17 +176,42 @@ export class ProviderRuntime {
     if (connection.authMethod !== 'api-key' && connection.authMethod !== 'oauth') {
       throw new ProviderResolutionError(`Stored credentials are not valid for '${connection.authMethod}' authentication`);
     }
-    const origin = allowsCustomEndpoint
+    const origin = driver.allowsCustomEndpoint
       ? validateGenericEndpoint(connection.endpoint ?? '').origin
-      : codeOwnedOrigin;
+      : driver.origin;
     const binding = normalizeCredentialBinding({
       connectionId: connection.id,
       driverId: connection.providerId,
       authMethod: connection.authMethod,
       origin,
     });
-    const secret = await this.vault.readSecret(connection.credential.handle, binding);
+    let secret = await this.vault.readSecret(connection.credential.handle, binding);
+    if (secret.kind === 'oauth' && this.oauthNeedsRefresh(secret.expiresAt)) {
+      if (!driver.refreshOAuthTokens || !this.credentialRefresh) {
+        throw new ProviderResolutionError(
+          `Connection '${connection.name}' has expired OAuth credentials and cannot refresh in this release`,
+        );
+      }
+      await this.credentialRefresh.refreshConnection(
+        connection.id,
+        ({ connection: refreshConnection, tokens }) => driver.refreshOAuthTokens!({
+          connection: refreshConnection,
+          tokens,
+        }),
+      );
+      secret = await this.vault.readSecret(connection.credential.handle, binding);
+      if (secret.kind !== 'oauth') {
+        throw new ProviderResolutionError(
+          `Connection '${connection.name}' did not retain OAuth credentials after refresh`,
+        );
+      }
+    }
     return this.driverCredentialFromSecret(secret);
+  }
+
+  private oauthNeedsRefresh(expiresAt: string): boolean {
+    const expiry = Date.parse(expiresAt);
+    return !Number.isFinite(expiry) || expiry <= this.now().getTime() + 60_000;
   }
 
   private driverCredentialFromSecret(secret: CredentialSecret):
