@@ -3,11 +3,13 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ProviderModelOption } from '../../../shared/types/ipc';
 import type { ModelSelection } from '../../../shared/types/provider';
 import { useProviders } from '../../hooks/useProviders';
+import { ModelPicker } from '../ModelPicker';
 import {
   providerModelOptionKey,
   providerModelOptionLabel,
   selectionKey,
 } from '../../utils/provider-selection';
+import { isTextGenerationModel } from '../../utils/models';
 
 interface TierInfo {
   id: string;
@@ -44,7 +46,7 @@ export function TierModelsTab({ tierModels, onChange }: TierModelsTabProps) {
     }
     let cancelled = false;
     void providers.modelList().then((next) => {
-      if (!cancelled) setOptions(next.filter((option) => option.available));
+      if (!cancelled) setOptions(next.filter((option) => option.available && isTextGenerationModel(option.model)));
     }).catch(() => {
       if (!cancelled) setOptions([]);
     });
@@ -53,6 +55,17 @@ export function TierModelsTab({ tierModels, onChange }: TierModelsTabProps) {
 
   const byKey = useMemo(
     () => new Map(options.map((option) => [providerModelOptionKey(option), option])),
+    [options],
+  );
+  const optionLabels = useMemo(
+    () => Object.fromEntries(options.map((option) => [
+      providerModelOptionKey(option),
+      providerModelOptionLabel(option),
+    ])),
+    [options],
+  );
+  const optionDetails = useMemo(
+    () => Object.fromEntries(options.map((option) => [providerModelOptionKey(option), option])),
     [options],
   );
   const hasReadyModels = options.length > 0;
@@ -85,13 +98,19 @@ export function TierModelsTab({ tierModels, onChange }: TierModelsTabProps) {
                     <p className="mt-1 text-xs text-warning">Current selection is unavailable; choose a ready connection.</p>
                   )}
                 </div>
-                <select
-                  className="select select-sm max-w-xs"
-                  aria-label={`${tier.label} tier model`}
+                <ModelPicker
                   value={currentAvailable ? currentKey : ''}
+                  options={options.map(providerModelOptionKey)}
+                  optionLabels={optionLabels}
+                  optionDetails={optionDetails}
+                  additionalOptions={[{ value: '', label: 'Not configured' }]}
+                  label={`${tier.label} tier model`}
+                  align="end"
+                  className="tier-model-picker"
                   disabled={!hasReadyModels}
-                  onChange={(event) => {
-                    const option = byKey.get(event.target.value);
+                  emptyMessage="No ready chat models available"
+                  onChange={(value) => {
+                    const option = byKey.get(value);
                     onChange({
                       ...tierModels,
                       [tier.id]: option
@@ -99,14 +118,7 @@ export function TierModelsTab({ tierModels, onChange }: TierModelsTabProps) {
                         : null,
                     });
                   }}
-                >
-                  <option value="">Not configured</option>
-                  {options.map((option) => (
-                    <option key={providerModelOptionKey(option)} value={providerModelOptionKey(option)}>
-                      {providerModelOptionLabel(option)}
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
             );
           })}

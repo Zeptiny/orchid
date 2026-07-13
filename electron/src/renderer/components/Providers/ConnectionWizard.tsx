@@ -12,6 +12,7 @@ import type {
   ProviderConnectionUpdateMessage,
   ProviderConnectionView,
   ProviderDefinitionView,
+  ProviderModelOption,
   ProviderModelView,
   ProviderMutationResult,
   ProviderOverview,
@@ -24,7 +25,10 @@ import type {
   ProviderProtocol,
 } from '../../../shared/types/provider';
 import { useFocusTrap } from '../../keyboard';
+import { isTextGenerationModel } from '../../utils/models';
 import { Icon } from '../Icon';
+import { ModelPicker } from '../ModelPicker';
+import { SearchableOptionPicker, type SearchableOption } from '../SearchableOptionPicker';
 
 const CUSTOM_MODEL_VALUE = '__custom_model__';
 
@@ -66,7 +70,9 @@ function firstModelId(
   protocol: ProviderProtocol,
 ): string {
   const model = definition?.models.find(
-    (candidate) => candidate.protocol === protocol && modelAvailable(candidate),
+    (candidate) => candidate.protocol === protocol
+      && modelAvailable(candidate)
+      && isTextGenerationModel(candidate),
   );
   if (model) return model.id;
   return definition?.allowsCustomModels ? CUSTOM_MODEL_VALUE : '';
@@ -135,9 +141,39 @@ export function ConnectionWizard({
   const catalogModels = useMemo(
     () =>
       selectedDefinition?.models.filter(
-        (model) => model.protocol === protocol && modelAvailable(model),
+        (model) => model.protocol === protocol && modelAvailable(model) && isTextGenerationModel(model),
       ) ?? [],
     [protocol, selectedDefinition],
+  );
+  const providerPickerOptions = useMemo<readonly SearchableOption[]>(
+    () => definitions.map((definition) => ({
+      value: definition.id,
+      label: definition.displayName,
+      disabled: !definition.available,
+    })),
+    [definitions],
+  );
+  const modelLabels = useMemo(
+    () => Object.fromEntries(catalogModels.map((model) => [model.id, model.displayName])),
+    [catalogModels],
+  );
+  const modelDetails = useMemo<Readonly<Record<string, ProviderModelOption>>>(
+    () => Object.fromEntries(catalogModels.map((model) => [model.id, {
+      selection: { connectionId: 'catalog', modelId: model.id },
+      connectionName: '',
+      providerId: selectedDefinition?.id ?? '',
+      providerDisplayName: selectedDefinition?.displayName ?? null,
+      model,
+      available: true,
+      unavailableReason: null,
+    }])),
+    [catalogModels, selectedDefinition],
+  );
+  const additionalModelOptions = useMemo(
+    () => selectedDefinition?.allowsCustomModels
+      ? [{ value: CUSTOM_MODEL_VALUE, label: 'Custom model…', description: 'Enter a model ID supplied by this endpoint.' }]
+      : [],
+    [selectedDefinition?.allowsCustomModels],
   );
   const supportsCustomEndpoint =
     selectedDefinition?.allowsCustomModels === true &&
@@ -474,24 +510,17 @@ export function ConnectionWizard({
                 <label className="label" htmlFor="provider-wizard-preset">
                   Provider preset
                 </label>
-                <select
+                <SearchableOptionPicker
                   id="provider-wizard-preset"
-                  className="select w-full"
                   value={providerId}
-                  onChange={(event) => selectDefinition(event.target.value)}
+                  options={providerPickerOptions}
+                  onChange={selectDefinition}
+                  label="Select provider preset"
+                  title="Provider presets"
+                  searchPlaceholder="Search providers..."
+                  emptyMessage="No provider presets available"
                   disabled={submitting || pendingConnection !== null}
-                >
-                  {definitions.map((definition) => (
-                    <option
-                      key={definition.id}
-                      value={definition.id}
-                      disabled={!definition.available}
-                    >
-                      {definition.displayName}
-                      {definition.available ? '' : ' — unavailable'}
-                    </option>
-                  ))}
-                </select>
+                />
                 {selectedDefinition?.unavailableReason && (
                   <p className="label text-warning">{selectedDefinition.unavailableReason}</p>
                 )}
@@ -538,22 +567,21 @@ export function ConnectionWizard({
                   <label className="label" htmlFor="provider-wizard-model">
                     Model
                   </label>
-                  <select
+                  <ModelPicker
+                    key={`${selectedDefinition?.id ?? 'provider'}:${protocol}`}
                     id="provider-wizard-model"
-                    className="select w-full"
                     value={selectedModelId}
-                    onChange={(event) => setSelectedModelId(event.target.value)}
+                    options={catalogModels.map((model) => model.id)}
+                    optionLabels={modelLabels}
+                    optionDetails={modelDetails}
+                    additionalOptions={additionalModelOptions}
+                    onChange={setSelectedModelId}
+                    label="Select initial model"
+                    align="start"
+                    className="provider-wizard-model-picker"
                     disabled={metadataLocked}
-                  >
-                    {catalogModels.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.displayName}
-                      </option>
-                    ))}
-                    {selectedDefinition?.allowsCustomModels && (
-                      <option value={CUSTOM_MODEL_VALUE}>Custom model…</option>
-                    )}
-                  </select>
+                    emptyMessage="No catalog models available"
+                  />
                   <p className="label">The initial selection remains scoped to this connection.</p>
                 </fieldset>
               </div>

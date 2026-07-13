@@ -108,7 +108,7 @@ const LILAC_DEFINITION: ProviderDefinition = {
   displayName: 'Lilac',
   supportedAuthMethods: ['api-key', 'environment'],
   supportedProtocols: ['openai-compatible'],
-  allowsCustomModels: false,
+  allowsCustomModels: true,
   lifecycle: 'active',
   models: [
     {

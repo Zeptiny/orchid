@@ -64,8 +64,6 @@ export interface ModelMetadata {
   max_output_tokens: number | null;
   /** Whether the model supports image/vision inputs. */
   supports_vision: boolean;
-  /** Model operating mode: chat (LLM) or embeddings (vector generation). */
-  mode: 'chat' | 'embeddings';
 }
 
 /**

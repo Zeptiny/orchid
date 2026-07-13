@@ -50,11 +50,23 @@ describe('provider catalog operator tools', () => {
       'generic-openai-compatible',
       'generic-anthropic-compatible',
     ]);
-    expect(result.catalog.providers.find((provider) => provider.id === 'lilac')?.models[0])
-      .toMatchObject({
-        id: 'moonshotai/kimi-k2.6',
-        pricing: { rates: { input: { amount: '0.7' } } },
-      });
+    expect(result.catalog.providers.every((provider) => provider.allowsCustomModels)).toBe(true);
+    const bundledModels = result.catalog.providers.flatMap((provider) => provider.models);
+    expect(bundledModels.every((model) => (
+      model.capabilities.outputModalities.every((modality) => modality === 'text' || modality === 'embedding')
+    ))).toBe(true);
+    expect(bundledModels.some((model) => model.capabilities.outputModalities.includes('embedding'))).toBe(true);
+    expect(result.catalog.providers.find((provider) => provider.id === 'lilac')?.models)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'moonshotai/kimi-k2.6',
+          pricing: expect.objectContaining({
+            rates: expect.objectContaining({
+              input: expect.objectContaining({ amount: '0.7' }),
+            }),
+          }),
+        }),
+      ]));
     expect(bytes.toString('utf8')).not.toMatch(/private key|BEGIN.*PRIVATE/i);
   });
 
@@ -79,7 +91,19 @@ describe('provider catalog operator tools', () => {
     expect(seeded.catalog.provenance.contentHash).toBe(
       `sha256:${createHash('sha256').update(fs.readFileSync(FIXTURE)).digest('hex')}`,
     );
-    expect(seeded.catalog.providers[0].models[0].id).toBe('model/z');
+    expect(seeded.catalog.providers[0].models.map((model) => model.id)).toEqual([
+      'embedding-only',
+      'model/z',
+      'z-text',
+    ]);
+    expect(seeded.catalog.providers[0].models.find((model) => model.id === 'embedding-only')?.capabilities.outputModalities)
+      .toEqual(['embedding']);
+    expect(seeded.catalog.providers.map((provider) => provider.id)).toEqual([
+      'openai',
+      'generic-openai-compatible',
+      'generic-anthropic-compatible',
+    ]);
+    expect(seeded.catalog.providers.slice(1).every((provider) => provider.models.length === 0)).toBe(true);
   });
 
   it('signs exact bytes with an operator-supplied Ed25519 key', () => {

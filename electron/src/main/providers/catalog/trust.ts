@@ -25,13 +25,13 @@ export interface TrustedCatalogProviderPolicy {
  * conservative catalog boundary first.
  */
 export const TRUSTED_CATALOG_PROVIDER_POLICIES: readonly TrustedCatalogProviderPolicy[] = [
-  { id: 'openai', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: false },
-  { id: 'anthropic', authMethods: ['api-key', 'environment'], protocols: ['anthropic-messages'], allowsCustomModels: false },
-  { id: 'google-gemini', authMethods: ['api-key', 'environment'], protocols: ['google-generative-ai'], allowsCustomModels: false },
-  { id: 'xai', authMethods: ['api-key', 'environment'], protocols: ['xai'], allowsCustomModels: false },
-  { id: 'opencode-go', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible', 'anthropic-messages'], allowsCustomModels: false },
-  { id: 'lilac', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: false },
-  { id: 'neuralwatt', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: false },
+  { id: 'openai', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: true },
+  { id: 'anthropic', authMethods: ['api-key', 'environment'], protocols: ['anthropic-messages'], allowsCustomModels: true },
+  { id: 'google-gemini', authMethods: ['api-key', 'environment'], protocols: ['google-generative-ai'], allowsCustomModels: true },
+  { id: 'xai', authMethods: ['api-key', 'environment'], protocols: ['xai'], allowsCustomModels: true },
+  { id: 'opencode-go', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible', 'anthropic-messages'], allowsCustomModels: true },
+  { id: 'lilac', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: true },
+  { id: 'neuralwatt', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: true },
   { id: 'generic-openai-compatible', authMethods: ['api-key', 'environment', 'none'], protocols: ['openai-compatible'], allowsCustomModels: true },
   { id: 'generic-anthropic-compatible', authMethods: ['api-key', 'environment', 'none'], protocols: ['anthropic-messages'], allowsCustomModels: true },
 ];

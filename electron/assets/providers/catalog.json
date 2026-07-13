@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "catalogVersion": 1,
-  "issuedAt": "2026-07-13T01:04:20.000Z",
+  "issuedAt": "2026-07-13T22:49:29.519Z",
   "expiresAt": "2027-01-01T00:00:00.000Z",
   "compatibleApp": {
     "minimum": "0.1.0"
@@ -9,8 +9,8 @@
   "provenance": {
     "source": "models.dev",
     "sourceUrl": "https://models.dev/api.json",
-    "capturedAt": "2026-07-13T01:04:20.000Z",
-    "contentHash": "sha256:8157aaa5ff3f76be1ea17e011eae916ff2cce4613afcff2225e03f644dfd9bf5"
+    "capturedAt": "2026-07-13T22:49:29.519Z",
+    "contentHash": "sha256:e79e3f1b9f62a01d9f74f785aa749caf5e712b74d406bc117bb8136b027dd9e4"
   },
   "providers": [
     {
@@ -23,13 +23,1246 @@
       "supportedProtocols": [
         "openai-compatible"
       ],
-      "allowsCustomModels": false,
+      "allowsCustomModels": true,
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T01:04:20.000Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
+        {
+          "id": "gpt-3.5-turbo",
+          "displayName": "GPT-3.5-turbo",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": false,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 16385,
+            "outputTokens": 4096
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-4",
+          "displayName": "GPT-4",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 8192,
+            "outputTokens": 8192
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "30",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "60",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-4-turbo",
+          "displayName": "GPT-4 Turbo",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 128000,
+            "outputTokens": 4096
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "30",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-4.1",
+          "displayName": "GPT-4.1",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 1047576,
+            "outputTokens": 32768
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "8",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-4.1-mini",
+          "displayName": "GPT-4.1 mini",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 1047576,
+            "outputTokens": 32768
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.6",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.1",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-4.1-nano",
+          "displayName": "GPT-4.1 nano",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 1047576,
+            "outputTokens": 32768
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.025",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-4o",
+          "displayName": "GPT-4o",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 128000,
+            "outputTokens": 16384
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-4o-2024-05-13",
+          "displayName": "GPT-4o (2024-05-13)",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 128000,
+            "outputTokens": 4096
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "15",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-4o-2024-08-06",
+          "displayName": "GPT-4o (2024-08-06)",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 128000,
+            "outputTokens": 16384
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-4o-2024-11-20",
+          "displayName": "GPT-4o (2024-11-20)",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 128000,
+            "outputTokens": 16384
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-4o-mini",
+          "displayName": "GPT-4o mini",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 128000,
+            "outputTokens": 16384
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.6",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.075",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5",
+          "displayName": "GPT-5",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5-chat-latest",
+          "displayName": "GPT-5 Chat (latest)",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": false,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5-codex",
+          "displayName": "GPT-5-Codex",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5-mini",
+          "displayName": "GPT-5 Mini",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.025",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5-nano",
+          "displayName": "GPT-5 Nano",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.05",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.005",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5-pro",
+          "displayName": "GPT-5 Pro",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 272000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "120",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.1",
+          "displayName": "GPT-5.1",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.1-chat-latest",
+          "displayName": "GPT-5.1 Chat",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 128000,
+            "outputTokens": 16384
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.1-codex",
+          "displayName": "GPT-5.1 Codex",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.1-codex-max",
+          "displayName": "GPT-5.1 Codex Max",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.1-codex-mini",
+          "displayName": "GPT-5.1 Codex mini",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.025",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.2",
+          "displayName": "GPT-5.2",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.75",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "14",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.175",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.2-chat-latest",
+          "displayName": "GPT-5.2 Chat",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 128000,
+            "outputTokens": 16384
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.75",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "14",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.175",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.2-codex",
+          "displayName": "GPT-5.2 Codex",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.75",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "14",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.175",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
         {
           "id": "gpt-5.2-pro",
           "displayName": "GPT-5.2 Pro",
@@ -52,7 +1285,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T01:04:20.000Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "21",
@@ -67,12 +1300,1204 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T01:04:20.000Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T01:04:20.000Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.3-chat-latest",
+          "displayName": "GPT-5.3 Chat (latest)",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 128000,
+            "outputTokens": 16384
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.75",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "14",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.175",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.3-codex",
+          "displayName": "GPT-5.3 Codex",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.75",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "14",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.175",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.3-codex-spark",
+          "displayName": "GPT-5.3 Codex Spark",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 128000,
+            "outputTokens": 32000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.75",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "14",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.175",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.4",
+          "displayName": "GPT-5.4",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1050000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.4-mini",
+          "displayName": "GPT-5.4 mini",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.75",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.075",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.4-nano",
+          "displayName": "GPT-5.4 nano",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 400000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.02",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.4-pro",
+          "displayName": "GPT-5.4 Pro",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1050000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "30",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "180",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.5",
+          "displayName": "GPT-5.5",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1050000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "30",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.5-pro",
+          "displayName": "GPT-5.5 Pro",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1050000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "30",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "180",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.6",
+          "displayName": "GPT-5.6",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1050000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "30",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "6.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "displayName": "GPT-5.6 Luna",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1050000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "6",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "displayName": "GPT-5.6 Sol",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1050000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "30",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "6.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gpt-5.6-terra",
+          "displayName": "GPT-5.6 Terra",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1050000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "3.125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "o1",
+          "displayName": "o1",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 100000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "60",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "7.5",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "o1-pro",
+          "displayName": "o1-pro",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 100000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "150",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "600",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "o3",
+          "displayName": "o3",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 100000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "8",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "o3-deep-research",
+          "displayName": "o3-deep-research",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 100000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "40",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "o3-mini",
+          "displayName": "o3-mini",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 100000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.55",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "o3-pro",
+          "displayName": "o3-pro",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 100000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "20",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "80",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "o4-mini",
+          "displayName": "o4-mini",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 100000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.275",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "o4-mini-deep-research",
+          "displayName": "o4-mini-deep-research",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 100000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "8",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "text-embedding-3-large",
+          "displayName": "text-embedding-3-large",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "embedding"
+            ],
+            "tools": false,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 8191,
+            "outputTokens": 3072
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.13",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "text-embedding-3-small",
+          "displayName": "text-embedding-3-small",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "embedding"
+            ],
+            "tools": false,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 8191,
+            "outputTokens": 1536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.02",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "text-embedding-ada-002",
+          "displayName": "text-embedding-ada-002",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "embedding"
+            ],
+            "tools": false,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 8192,
+            "outputTokens": 1536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
@@ -87,16 +2512,72 @@
       "supportedProtocols": [
         "anthropic-messages"
       ],
-      "allowsCustomModels": false,
+      "allowsCustomModels": true,
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T01:04:20.000Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
         {
-          "id": "claude-opus-4-5",
-          "displayName": "Claude Opus 4.5",
+          "id": "claude-fable-5",
+          "displayName": "Claude Fable 5",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "50",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "12.5",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "claude-haiku-4-5",
+          "displayName": "Claude Haiku 4.5 (latest)",
           "protocol": "anthropic-messages",
           "capabilities": {
             "inputModalities": [
@@ -117,7 +2598,231 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T01:04:20.000Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "claude-haiku-4-5-20251001",
+          "displayName": "Claude Haiku 4.5",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 64000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "claude-opus-4-1",
+          "displayName": "Claude Opus 4.1 (latest)",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 32000
+          },
+          "lifecycle": "deprecated",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "75",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "1.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "18.75",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "claude-opus-4-1-20250805",
+          "displayName": "Claude Opus 4.1",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 32000
+          },
+          "lifecycle": "deprecated",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "75",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "1.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "18.75",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "claude-opus-4-5",
+          "displayName": "Claude Opus 4.5 (latest)",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 64000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -142,19 +2847,467 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T01:04:20.000Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T01:04:20.000Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "claude-opus-4-5-20251101",
+          "displayName": "Claude Opus 4.5",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 200000,
+            "outputTokens": 64000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "6.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "claude-opus-4-6",
+          "displayName": "Claude Opus 4.6",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "6.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "claude-opus-4-7",
+          "displayName": "Claude Opus 4.7",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "6.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "claude-opus-4-8",
+          "displayName": "Claude Opus 4.8",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "6.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "claude-sonnet-4-5",
+          "displayName": "Claude Sonnet 4.5 (latest)",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 64000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "3.75",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "claude-sonnet-4-5-20250929",
+          "displayName": "Claude Sonnet 4.5",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 64000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "3.75",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "claude-sonnet-4-6",
+          "displayName": "Claude Sonnet 4.6",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "3.75",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "claude-sonnet-5",
+          "displayName": "Claude Sonnet 5",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "10",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
     },
     {
       "id": "google-gemini",
-      "displayName": "Google Gemini",
+      "displayName": "Google",
       "supportedAuthMethods": [
         "api-key",
         "environment"
@@ -162,13 +3315,220 @@
       "supportedProtocols": [
         "google-generative-ai"
       ],
-      "allowsCustomModels": false,
+      "allowsCustomModels": true,
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T01:04:20.000Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
+        {
+          "id": "gemini-2.0-flash",
+          "displayName": "Gemini 2.0 Flash",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 8192
+          },
+          "lifecycle": "deprecated",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.025",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemini-2.0-flash-lite",
+          "displayName": "Gemini 2.0 Flash-Lite",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 8192
+          },
+          "lifecycle": "deprecated",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.075",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemini-2.5-flash",
+          "displayName": "Gemini 2.5 Flash",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.03",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemini-2.5-flash-lite",
+          "displayName": "Gemini 2.5 Flash-Lite",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.01",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
         {
           "id": "gemini-2.5-pro",
           "displayName": "Gemini 2.5 Pro",
@@ -194,7 +3554,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T01:04:20.000Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -212,36 +3572,603 @@
                 "unit": "tokens"
               }
             },
-            "contextTiers": [
-              {
-                "overContextTokens": 200000,
-                "rates": {
-                  "input": {
-                    "amount": "2.5",
-                    "per": 1000000,
-                    "unit": "tokens"
-                  },
-                  "output": {
-                    "amount": "15",
-                    "per": 1000000,
-                    "unit": "tokens"
-                  },
-                  "cacheRead": {
-                    "amount": "0.25",
-                    "per": 1000000,
-                    "unit": "tokens"
-                  }
-                }
-              }
-            ],
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T01:04:20.000Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T01:04:20.000Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemini-3-flash-preview",
+          "displayName": "Gemini 3 Flash Preview",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.05",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemini-3-pro-preview",
+          "displayName": "Gemini 3 Pro Preview",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
+          "lifecycle": "deprecated",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "12",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemini-3.1-flash-lite",
+          "displayName": "Gemini 3.1 Flash Lite",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.025",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemini-3.1-flash-lite-preview",
+          "displayName": "Gemini 3.1 Flash Lite Preview",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
+          "lifecycle": "deprecated",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.025",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemini-3.1-pro-preview",
+          "displayName": "Gemini 3.1 Pro Preview",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "12",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemini-3.1-pro-preview-customtools",
+          "displayName": "Gemini 3.1 Pro Preview Custom Tools",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "12",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemini-3.5-flash",
+          "displayName": "Gemini 3.5 Flash",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "9",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.15",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemini-embedding-001",
+          "displayName": "Gemini Embedding 001",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "embedding"
+            ],
+            "tools": false,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 2048,
+            "outputTokens": 1
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemini-flash-latest",
+          "displayName": "Gemini Flash Latest",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.075",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemini-flash-lite-latest",
+          "displayName": "Gemini Flash-Lite Latest",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.025",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemma-4-26b-a4b-it",
+          "displayName": "Gemma 4 26B A4B IT",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 262144,
+            "outputTokens": 32768
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {},
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "gemma-4-31b-it",
+          "displayName": "Gemma 4 31B IT",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 262144,
+            "outputTokens": 32768
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {},
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
@@ -256,13 +4183,166 @@
       "supportedProtocols": [
         "xai"
       ],
-      "allowsCustomModels": false,
+      "allowsCustomModels": true,
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T01:04:20.000Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
+        {
+          "id": "grok-4.20-0309-non-reasoning",
+          "displayName": "Grok 4.20 (Non-Reasoning)",
+          "protocol": "xai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 30000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "grok-4.20-0309-reasoning",
+          "displayName": "Grok 4.20 (Reasoning)",
+          "protocol": "xai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 30000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "grok-4.20-multi-agent-0309",
+          "displayName": "Grok 4.20 Multi-Agent",
+          "protocol": "xai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": false,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 30000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
         {
           "id": "grok-4.3",
           "displayName": "Grok 4.3",
@@ -286,7 +4366,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T01:04:20.000Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -306,12 +4386,114 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T01:04:20.000Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T01:04:20.000Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "grok-4.5",
+          "displayName": "Grok 4.5",
+          "protocol": "xai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 500000,
+            "outputTokens": 500000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "6",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "grok-build-0.1",
+          "displayName": "Grok Build 0.1",
+          "protocol": "xai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 256000,
+            "outputTokens": 256000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
@@ -324,14 +4506,13 @@
         "environment"
       ],
       "supportedProtocols": [
-        "openai-compatible",
-        "anthropic-messages"
+        "openai-compatible"
       ],
-      "allowsCustomModels": false,
+      "allowsCustomModels": true,
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T01:04:20.000Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
         {
@@ -355,7 +4536,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T01:04:20.000Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.14",
@@ -375,22 +4556,372 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T01:04:20.000Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T01:04:20.000Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
-          "id": "claude-sonnet-4-5",
-          "displayName": "Claude Sonnet 4.5",
-          "protocol": "anthropic-messages",
+          "id": "deepseek-v4-pro",
+          "displayName": "DeepSeek V4 Pro",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 384000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.74",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "3.48",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.0145",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "glm-5",
+          "displayName": "GLM-5",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 202752,
+            "outputTokens": 32768
+          },
+          "lifecycle": "deprecated",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "3.2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "glm-5.1",
+          "displayName": "GLM-5.1",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 202752,
+            "outputTokens": 32768
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.26",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "glm-5.2",
+          "displayName": "GLM-5.2",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 131072
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.26",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "kimi-k2.5",
+          "displayName": "Kimi K2.5",
+          "protocol": "openai-compatible",
           "capabilities": {
             "inputModalities": [
               "text",
               "image",
+              "video"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 262144,
+            "outputTokens": 65536
+          },
+          "lifecycle": "deprecated",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.6",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.1",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "kimi-k2.6",
+          "displayName": "Kimi K2.6",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 262144,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.95",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.16",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "kimi-k2.7-code",
+          "displayName": "Kimi K2.7 Code",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 262144,
+            "outputTokens": 262144
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.95",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.19",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "mimo-v2-omni",
+          "displayName": "MiMo V2 Omni",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "audio",
               "pdf"
             ],
             "outputModalities": [
@@ -400,22 +4931,559 @@
             "reasoning": true
           },
           "limits": {
-            "contextTokens": 200000,
-            "outputTokens": 64000
+            "contextTokens": 262144,
+            "outputTokens": 128000
+          },
+          "lifecycle": "deprecated",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.08",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "mimo-v2-pro",
+          "displayName": "MiMo V2 Pro",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 128000
+          },
+          "lifecycle": "deprecated",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "mimo-v2.5",
+          "displayName": "MiMo V2.5",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 128000
           },
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T01:04:20.000Z",
-            "rates": {},
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.14",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.28",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.0028",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
             "provenance": {
-              "source": "catalog",
-              "observedAt": "2026-07-13T01:04:20.000Z"
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
-            "source": "catalog",
-            "observedAt": "2026-07-13T01:04:20.000Z"
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "mimo-v2.5-pro",
+          "displayName": "MiMo V2.5 Pro",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.74",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "3.48",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.0145",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "minimax-m2.5",
+          "displayName": "MiniMax-M2.5",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 204800,
+            "outputTokens": 65536
+          },
+          "lifecycle": "deprecated",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.03",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "minimax-m2.7",
+          "displayName": "MiniMax-M2.7",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 204800,
+            "outputTokens": 131072
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.06",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "minimax-m3",
+          "displayName": "MiniMax-M3",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 131072
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.06",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "qwen3.5-plus",
+          "displayName": "Qwen3.5 Plus",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 262144,
+            "outputTokens": 65536
+          },
+          "lifecycle": "deprecated",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.02",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "0.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "qwen3.6-plus",
+          "displayName": "Qwen3.6 Plus",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.05",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "0.625",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "qwen3.7-max",
+          "displayName": "Qwen3.7 Max",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "7.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "3.125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "qwen3.7-plus",
+          "displayName": "Qwen3.7 Plus",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.6",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.04",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
@@ -430,13 +5498,110 @@
       "supportedProtocols": [
         "openai-compatible"
       ],
-      "allowsCustomModels": false,
+      "allowsCustomModels": true,
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T01:04:20.000Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
+        {
+          "id": "google/gemma-4-31b-it",
+          "displayName": "Gemma 4 31B IT",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 262100,
+            "outputTokens": 262100
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.11",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.35",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "minimaxai/minimax-m3",
+          "displayName": "MiniMax M3",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 1048576
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.28",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.05",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
         {
           "id": "moonshotai/kimi-k2.6",
           "displayName": "Kimi K2.6",
@@ -459,7 +5624,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T01:04:20.000Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.7",
@@ -479,12 +5644,61 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T01:04:20.000Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T01:04:20.000Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "zai-org/glm-5.2",
+          "displayName": "GLM 5.2",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 524288,
+            "outputTokens": 524288
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.9",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.27",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
@@ -499,13 +5713,456 @@
       "supportedProtocols": [
         "openai-compatible"
       ],
-      "allowsCustomModels": false,
+      "allowsCustomModels": true,
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T01:04:20.000Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
+        {
+          "id": "glm-5.2",
+          "displayName": "GLM 5.2",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048560,
+            "outputTokens": 1048560
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.45",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.3625",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "glm-5.2-fast",
+          "displayName": "GLM 5.2 Fast",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 1048560,
+            "outputTokens": 1048560
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.45",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.3625",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "glm-5.2-flex",
+          "displayName": "GLM 5.2 Flex",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1048560,
+            "outputTokens": 1048560
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.725",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.18125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "glm-5.2-short",
+          "displayName": "GLM 5.2 Short",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 199984,
+            "outputTokens": 199984
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.45",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.3625",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "glm-5.2-short-fast",
+          "displayName": "GLM 5.2 Short Fast",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 199984,
+            "outputTokens": 199984
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "1.45",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.3625",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "glm-5.2-short-fast-flex",
+          "displayName": "GLM 5.2 Short Fast Flex",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 199984,
+            "outputTokens": 199984
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.725",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.18125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "glm-5.2-short-flex",
+          "displayName": "GLM 5.2 Short Flex",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 199984,
+            "outputTokens": 199984
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.725",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.18125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "kimi-k2.5-fast",
+          "displayName": "Kimi K2.5 Fast",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 262128,
+            "outputTokens": 262128
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.52",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2.59",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.13",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "kimi-k2.6-fast",
+          "displayName": "Kimi K2.6 Fast",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 262128,
+            "outputTokens": 262128
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.69",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "3.22",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.1725",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
         {
           "id": "kimi-k2.6-flex",
           "displayName": "Kimi K2.6 Flex",
@@ -528,7 +6185,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T01:04:20.000Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.345",
@@ -548,12 +6205,410 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T01:04:20.000Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T01:04:20.000Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "kimi-k2.7-code-flex",
+          "displayName": "Kimi K2.7 Code Flex",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 262144,
+            "outputTokens": 262144
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.475",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.11875",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "moonshotai/Kimi-K2.5",
+          "displayName": "Kimi K2.5",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 262128,
+            "outputTokens": 262128
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.52",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2.59",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.13",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "moonshotai/Kimi-K2.6",
+          "displayName": "Kimi K2.6",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 262128,
+            "outputTokens": 262128
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.69",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "3.22",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.1725",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "moonshotai/Kimi-K2.7-Code",
+          "displayName": "Kimi K2.7 Code",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 262144,
+            "outputTokens": 262144
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.95",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.2375",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "Qwen/Qwen3.5-397B-A17B-FP8",
+          "displayName": "Qwen3.5 397B A17B FP8",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 262128,
+            "outputTokens": 262128
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.69",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4.14",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.1725",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "Qwen/Qwen3.6-35B-A3B",
+          "displayName": "Qwen3.6 35B A3B",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 131056,
+            "outputTokens": 131056
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.29",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.0725",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "qwen3.5-397b-fast",
+          "displayName": "Qwen3.5 397B Fast",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 262128,
+            "outputTokens": 262128
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.69",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4.14",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.1725",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
+          }
+        },
+        {
+          "id": "qwen3.6-35b-fast",
+          "displayName": "Qwen3.6 35B Fast",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 131056,
+            "outputTokens": 131056
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "rates": {
+              "input": {
+                "amount": "0.29",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "1.15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.0725",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-07-13T22:49:29.519Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
@@ -573,7 +6628,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "catalog",
-        "observedAt": "2026-07-13T01:04:20.000Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": []
     },
@@ -592,7 +6647,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "catalog",
-        "observedAt": "2026-07-13T01:04:20.000Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": []
     }

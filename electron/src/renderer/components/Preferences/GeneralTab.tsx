@@ -100,13 +100,6 @@ export function GeneralTab({
       <section className="config-fieldset">
         <div className="config-fieldset-legend">General</div>
         <div className="config-form-grid">
-          <div role="alert" className="alert alert-info config-form-grid-full">
-            <span>
-              Manage provider connections separately in Settings → Providers.
-              Local workspace features remain available when no provider is connected.
-            </span>
-          </div>
-
           <div className="config-field">
             <label htmlFor="general-theme">Theme</label>
             <select

@@ -47,7 +47,7 @@ const OPENAI: ProviderDefinition = {
   displayName: 'OpenAI',
   supportedAuthMethods: ['api-key', 'environment'],
   supportedProtocols: ['openai-compatible'],
-  allowsCustomModels: false,
+  allowsCustomModels: true,
   lifecycle: 'active',
   models: [{
     id: 'gpt-5/test',
@@ -219,6 +219,79 @@ describe('provider IPC', () => {
       endpoint: 'https://attacker.invalid/v1',
       modelIds: ['gpt-5/test'],
     })).rejects.toThrow('code-owned endpoint');
+  });
+
+  it('accepts a user-defined model for a named provider when the catalog is stale', async () => {
+    const memory = memoryServices();
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const result = await handler(IPC_CHANNELS.PROVIDERS_CREATE)(null, {
+      providerId: 'openai',
+      name: 'OpenAI with a new model',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      modelIds: ['gpt-next'],
+      customModels: [{
+        id: 'gpt-next',
+        displayName: 'GPT Next',
+        protocol: 'openai-compatible',
+        capabilities: {
+          inputModalities: ['text'],
+          outputModalities: ['text'],
+          tools: true,
+          reasoning: true,
+        },
+        limits: { contextTokens: 128000, outputTokens: 16384 },
+      }],
+    });
+
+    expect(result.connection).toMatchObject({
+      providerId: 'openai',
+      modelIds: ['gpt-next'],
+      customModels: [{ id: 'gpt-next', source: 'connection' }],
+    });
+  });
+
+  it('updates an existing named provider connection with a user-defined model', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000022';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Existing OpenAI',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-openai-key' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const result = await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
+      connectionId: id,
+      modelIds: ['gpt-next'],
+      customModels: [{
+        id: 'gpt-next',
+        displayName: 'GPT Next',
+        protocol: 'openai-compatible',
+        capabilities: {
+          inputModalities: ['text'],
+          outputModalities: ['text'],
+          tools: true,
+          reasoning: true,
+        },
+        limits: { contextTokens: 128000, outputTokens: 16384 },
+      }],
+    });
+
+    expect(result.connection).toMatchObject({
+      id,
+      modelIds: ['gpt-next'],
+      customModels: [{ id: 'gpt-next', source: 'connection' }],
+      health: 'ready',
+    });
   });
 
   it('accepts one-shot API-key submission without returning key or handle', async () => {

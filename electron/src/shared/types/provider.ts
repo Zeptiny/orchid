@@ -106,8 +106,8 @@ export const providerModelDefinitionSchema = z.object({
   protocol: providerProtocolSchema,
   lifecycle: providerLifecycleSchema.optional(),
   capabilities: z.object({
-    inputModalities: z.array(z.enum(['text', 'image', 'audio', 'video', 'pdf'])).min(1),
-    outputModalities: z.array(z.enum(['text', 'image', 'audio', 'video', 'pdf'])).min(1),
+    inputModalities: z.array(z.enum(['text', 'image', 'audio', 'video', 'pdf', 'embedding'])).min(1),
+    outputModalities: z.array(z.enum(['text', 'image', 'audio', 'video', 'pdf', 'embedding'])).min(1),
     tools: z.boolean(),
     reasoning: z.boolean(),
   }).strict().optional(),
@@ -119,11 +119,11 @@ export const providerModelDefinitionSchema = z.object({
 
 export type ProviderModelDefinition = z.infer<typeof providerModelDefinitionSchema>;
 
-/** User-declared metadata for a custom compatible model, never inferred. */
+/** User-declared metadata for a model missing from the catalog, never inferred. */
 export const customConnectionModelSchema = providerModelDefinitionSchema.extend({
   capabilities: z.object({
-    inputModalities: z.array(z.enum(['text', 'image', 'audio', 'video', 'pdf'])).min(1),
-    outputModalities: z.array(z.enum(['text', 'image', 'audio', 'video', 'pdf'])).min(1),
+    inputModalities: z.array(z.enum(['text', 'image', 'audio', 'video', 'pdf', 'embedding'])).min(1),
+    outputModalities: z.array(z.enum(['text', 'image', 'audio', 'video', 'pdf', 'embedding'])).min(1),
     tools: z.boolean(),
     reasoning: z.boolean(),
   }).strict(),
@@ -155,7 +155,7 @@ export const providerConnectionSchema = z.object({
   protocol: providerProtocolSchema,
   authMethod: providerAuthMethodSchema,
   credential: credentialReferenceSchema,
-  /** Explicit user models for a generic connection. Never inferred from an alias. */
+  /** Explicit user models for this connection. Never inferred from an alias. */
   modelIds: z.array(z.string().trim().min(1)),
   /** Optional richer metadata for user-defined compatible models. */
   customModels: z.array(customConnectionModelSchema).optional(),

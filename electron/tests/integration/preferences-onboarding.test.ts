@@ -187,10 +187,24 @@ describe('Preferences & Onboarding File Structure', () => {
     ).toBe(true);
   });
 
+  it('tier model assignments use the searchable model picker', () => {
+    const tierModels = fs.readFileSync(path.join(componentsDir, 'Preferences', 'TierModelsTab.tsx'), 'utf8');
+    expect(tierModels).toContain('ModelPicker');
+    expect(tierModels).not.toContain('<select');
+  });
+
   it('RAGTab.tsx exists', () => {
     expect(
       fs.existsSync(path.join(componentsDir, 'Preferences', 'RAGTab.tsx')),
     ).toBe(true);
+  });
+
+  it('RAG settings expose provider-backed embedding models', () => {
+    const ragTab = fs.readFileSync(path.join(componentsDir, 'Preferences', 'RAGTab.tsx'), 'utf8');
+    expect(ragTab).toContain('isEmbeddingModel');
+    expect(ragTab).toContain('embedding_api_model');
+    expect(ragTab).toContain('additionalOptions={localModelOptions}');
+    expect(ragTab).not.toContain('Provider Embedding Model');
   });
 
   it('GeneralTab.tsx exists', () => {

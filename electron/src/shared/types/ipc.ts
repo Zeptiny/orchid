@@ -386,6 +386,8 @@ export interface ProviderModelOption {
   model: ProviderModelView;
   available: boolean;
   unavailableReason: string | null;
+  /** Whether the trusted provider driver can route this selection to RAG embeddings. */
+  embeddingSupported?: boolean;
 }
 
 export interface ProviderMutationResult {

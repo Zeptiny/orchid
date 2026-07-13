@@ -34,17 +34,6 @@ export const ragConfigSchema = z.object({
 });
 
 /**
- * Per-model metadata overrides that can be set in provider config.
- * When present, these override the built-in defaults in model-metadata.ts.
- */
-export const modelMetadataOverridesSchema = z.object({
-  max_input_tokens: z.number().int().positive().nullable().optional(),
-  max_output_tokens: z.number().int().positive().nullable().optional(),
-  supports_vision: z.boolean().optional(),
-  mode: z.enum(['chat', 'embeddings']).optional(),
-});
-
-/**
  * Kept solely so existing config IPC consumers can keep reading the field
  * while connections move to their own store. It must never carry a legacy
  * configured provider, endpoint, or credential.

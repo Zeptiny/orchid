@@ -20,6 +20,46 @@ const PROVIDERS = [
   { sourceId: 'neuralwatt', id: 'neuralwatt', protocol: 'openai-compatible', auth: ['api-key', 'environment'] },
 ];
 
+/** Generic providers are Orchid-owned definitions, not models.dev providers. */
+const GENERIC_PROVIDERS = [
+  {
+    id: 'generic-openai-compatible',
+    displayName: 'Generic OpenAI-compatible',
+    supportedAuthMethods: ['api-key', 'environment', 'none'],
+    supportedProtocols: ['openai-compatible'],
+  },
+  {
+    id: 'generic-anthropic-compatible',
+    displayName: 'Generic Anthropic-compatible',
+    supportedAuthMethods: ['api-key', 'environment', 'none'],
+    supportedProtocols: ['anthropic-messages'],
+  },
+];
+
+const SUPPORTED_MODALITIES = new Set(['text', 'image', 'audio', 'video', 'pdf', 'embedding']);
+
+/**
+ * Keep model roles that Orchid can use today. Media-generation and mixed
+ * output models are intentionally excluded; embedding models remain available
+ * to the RAG surface rather than being presented as chat models.
+ */
+function isUsefulModel(model: any): boolean {
+  const output = model.modalities?.output;
+  if (output === undefined) return true;
+  return Array.isArray(output)
+    && output.length > 0
+    && (output.every((value: unknown) => value === 'text')
+      || output.every((value: unknown) => value === 'embedding'));
+}
+
+function normalizeModalities(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value) || value.length === 0) return fallback;
+  const modalities = value.filter((item: unknown): item is string =>
+    typeof item === 'string' && SUPPORTED_MODALITIES.has(item),
+  );
+  return modalities.length > 0 ? modalities : fallback;
+}
+
 function getOption(name: string) {
   const index = process.argv.indexOf(name);
   return index === -1 ? undefined : process.argv[index + 1];
@@ -51,12 +91,8 @@ function modelToCatalog(model: any, protocol: string, observedAt: string) {
   }
 
   const modalities = model.modalities ?? {};
-  const input = Array.isArray(modalities.input) && modalities.input.length > 0
-    ? modalities.input.filter((value: unknown) => ['text', 'image', 'audio', 'video', 'pdf'].includes(value))
-    : ['text'];
-  const output = Array.isArray(modalities.output) && modalities.output.length > 0
-    ? modalities.output.filter((value: unknown) => ['text', 'image', 'audio', 'video', 'pdf'].includes(value))
-    : ['text'];
+  const input = normalizeModalities(modalities.input, ['text']);
+  const output = normalizeModalities(modalities.output, ['text']);
 
   return {
     id: String(model.id),
@@ -98,24 +134,38 @@ function normalize(snapshot: Record<string, any>, rawBytes: Buffer, capturedAt: 
       capturedAt,
       contentHash: `sha256:${createHash('sha256').update(rawBytes).digest('hex')}`,
     },
-    providers: PROVIDERS.flatMap((definition) => {
-      const provider = snapshot[definition.sourceId];
-      if (!provider || typeof provider.models !== 'object') return [];
-      const models = Object.values(provider.models)
-        .filter((model: any) => model && typeof model.id === 'string')
-        .map((model: any) => modelToCatalog(model, definition.protocol, capturedAt))
-        .sort((a: any, b: any) => a.id.localeCompare(b.id));
-      return [{
-        id: definition.id,
-        displayName: String(provider.name ?? definition.id),
-        supportedAuthMethods: definition.auth,
-        supportedProtocols: [definition.protocol],
-        allowsCustomModels: false,
+    providers: [
+      ...PROVIDERS.flatMap((definition) => {
+        const provider = snapshot[definition.sourceId];
+        if (!provider || typeof provider.models !== 'object') return [];
+        const models = Object.values(provider.models)
+          .filter((model: any) =>
+            model
+            && typeof model.id === 'string'
+            && model.id.trim()
+            && isUsefulModel(model),
+          )
+          .map((model: any) => modelToCatalog(model, definition.protocol, capturedAt))
+          .sort((a: any, b: any) => a.id.localeCompare(b.id));
+        return [{
+          id: definition.id,
+          displayName: String(provider.name ?? definition.id),
+          supportedAuthMethods: definition.auth,
+          supportedProtocols: [definition.protocol],
+          allowsCustomModels: true,
+          lifecycle: 'active',
+          provenance: { source: 'models.dev', observedAt: capturedAt },
+          models,
+        }];
+      }),
+      ...GENERIC_PROVIDERS.map((definition) => ({
+        ...definition,
+        allowsCustomModels: true,
         lifecycle: 'active',
-        provenance: { source: 'models.dev', observedAt: capturedAt },
-        models,
-      }];
-    }),
+        provenance: { source: 'catalog', observedAt: capturedAt },
+        models: [],
+      })),
+    ],
   };
 }
 

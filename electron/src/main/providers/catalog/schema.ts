@@ -42,7 +42,7 @@ export const catalogProvenanceSchema = z.object({
   contentHash: sha256Schema,
 }).strict();
 
-const modalitySchema = z.enum(['text', 'image', 'audio', 'video', 'pdf']);
+const modalitySchema = z.enum(['text', 'image', 'audio', 'video', 'pdf', 'embedding']);
 const lifecycleSchema = z.enum(['active', 'preview', 'deprecated', 'disabled', 'retired']);
 
 export const catalogPriceRateSchema = z.object({

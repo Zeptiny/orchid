@@ -23,7 +23,7 @@ export function createCatalogFixture(version = 1): ProviderCatalog {
       displayName: 'OpenAI',
       supportedAuthMethods: ['api-key'],
       supportedProtocols: ['openai-compatible'],
-      allowsCustomModels: false,
+      allowsCustomModels: true,
       lifecycle: 'active',
       provenance: { source: 'catalog', observedAt: CATALOG_NOW },
       models: [{

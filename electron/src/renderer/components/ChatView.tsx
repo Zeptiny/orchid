@@ -15,6 +15,7 @@ import {
   providerModelOptionLabel,
   selectionMatchesOption,
 } from '../utils/provider-selection';
+import { isTextGenerationModel } from '../utils/models';
 import { useGlobalShortcuts } from '../keyboard';
 import type { Message } from '../../shared/types/message';
 import type { Session } from '../../shared/types/session';
@@ -368,27 +369,31 @@ export function ChatView() {
     session.workspace == null || session.workspace.status === 'valid';
 
   const availableProviderModels = useMemo(
-    () => providerModelOptions.filter((option) => option.available),
+    () => providerModelOptions.filter((option) => option.available && isTextGenerationModel(option.model)),
+    [providerModelOptions],
+  );
+  const chatProviderModels = useMemo(
+    () => providerModelOptions.filter((option) => isTextGenerationModel(option.model)),
     [providerModelOptions],
   );
   const providerModelByKey = useMemo(
-    () => new Map(providerModelOptions.map((option) => [providerModelOptionKey(option), option])),
-    [providerModelOptions],
+    () => new Map(chatProviderModels.map((option) => [providerModelOptionKey(option), option])),
+    [chatProviderModels],
   );
   const providerModelLabels = useMemo(
-    () => Object.fromEntries(providerModelOptions.map((option) => [
+    () => Object.fromEntries(chatProviderModels.map((option) => [
       providerModelOptionKey(option),
       providerModelOptionLabel(option),
     ])),
-    [providerModelOptions],
+    [chatProviderModels],
   );
   const providerModelDetails = useMemo(
-    () => Object.fromEntries(providerModelOptions.map((option) => [providerModelOptionKey(option), option])),
-    [providerModelOptions],
+    () => Object.fromEntries(chatProviderModels.map((option) => [providerModelOptionKey(option), option])),
+    [chatProviderModels],
   );
   const preferredSelection = session.activeSession?.selection ?? currentSelection;
   const selectedProviderModel = preferredSelection
-    ? providerModelOptions.find((option) => selectionMatchesOption(preferredSelection, option)) ?? null
+    ? chatProviderModels.find((option) => selectionMatchesOption(preferredSelection, option)) ?? null
     : null;
   const providerAvailable = providers.hasUsableConnection;
   const modelSelected = selectedProviderModel?.available === true;

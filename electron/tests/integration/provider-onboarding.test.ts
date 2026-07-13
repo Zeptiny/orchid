@@ -60,6 +60,18 @@ describe('provider onboarding and disconnected UX', () => {
     expect(composer).toMatch(/modelSelected,[\s\S]*onOpenProviders,[\s\S]*providerAvailable,[\s\S]*workspaceBound,/);
   });
 
+  it('searches provider presets and catalog models during setup', () => {
+    const wizard = source('components', 'Providers', 'ConnectionWizard.tsx');
+    const providerPicker = source('components', 'SearchableOptionPicker.tsx');
+    const modelPicker = source('components', 'ModelPicker.tsx');
+    expect(wizard).toContain('SearchableOptionPicker');
+    expect(wizard).toContain('<ModelPicker');
+    expect(wizard).toContain('searchPlaceholder="Search providers..."');
+    expect(providerPicker).toContain('searchPlaceholder');
+    expect(modelPicker).toContain('Search models...');
+    expect(modelPicker).toContain('additionalOptions');
+  });
+
   it('renders Lilac supply discount and Neuralwatt quota as informational status', () => {
     const status = source('components', 'Providers', 'ProviderStatus.tsx');
     expect(status).toContain('Subscription discount');

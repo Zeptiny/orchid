@@ -2,7 +2,7 @@
  * Model metadata resolution — capabilities and limits for known LLM models.
  *
  * Provides a `resolveModelMetadata()` function that returns display-ready
- * metadata (max tokens, vision support, mode) for a model ID.
+ * metadata (max tokens and vision support) for a model ID.
  *
  * Model IDs are opaque provider-owned strings. A model ID may contain `/`, so
  * this compatibility lookup never tries to infer a provider alias from it.
@@ -11,7 +11,7 @@
  * 1. Look up the complete model ID in built-in defaults table
  * 2. Cache the result under the complete ID for subsequent lookups
  *
- * Unknown models get safe defaults: null limits, no vision, 'chat' mode.
+ * Unknown models get safe defaults: null limits, no vision.
  * Call `clearModelMetadataCache()` after config saves so overrides refresh.
  */
 import type { ModelMetadata } from '../../shared/types/ipc-boundary';
@@ -33,67 +33,56 @@ const KNOWN_MODELS: Record<string, ModelMetadata> = {
     max_input_tokens: 128_000,
     max_output_tokens: 16_384,
     supports_vision: true,
-    mode: 'chat',
   },
   'gpt-4o-mini': {
     max_input_tokens: 128_000,
     max_output_tokens: 16_384,
     supports_vision: true,
-    mode: 'chat',
   },
   'gpt-4-turbo': {
     max_input_tokens: 128_000,
     max_output_tokens: 4_096,
     supports_vision: true,
-    mode: 'chat',
   },
   'gpt-4': {
     max_input_tokens: 8_192,
     max_output_tokens: 4_096,
     supports_vision: false,
-    mode: 'chat',
   },
   'gpt-3.5-turbo': {
     max_input_tokens: 16_385,
     max_output_tokens: 4_096,
     supports_vision: false,
-    mode: 'chat',
   },
   'o1': {
     max_input_tokens: 200_000,
     max_output_tokens: 100_000,
     supports_vision: true,
-    mode: 'chat',
   },
   'o1-mini': {
     max_input_tokens: 128_000,
     max_output_tokens: 65_536,
     supports_vision: false,
-    mode: 'chat',
   },
   'o1-pro': {
     max_input_tokens: 200_000,
     max_output_tokens: 100_000,
     supports_vision: true,
-    mode: 'chat',
   },
   'o3': {
     max_input_tokens: 200_000,
     max_output_tokens: 100_000,
     supports_vision: true,
-    mode: 'chat',
   },
   'o3-mini': {
     max_input_tokens: 200_000,
     max_output_tokens: 100_000,
     supports_vision: false,
-    mode: 'chat',
   },
   'o4-mini': {
     max_input_tokens: 200_000,
     max_output_tokens: 100_000,
     supports_vision: true,
-    mode: 'chat',
   },
 
   // ── Anthropic Claude family ─────────────────────────────────────────────
@@ -101,43 +90,36 @@ const KNOWN_MODELS: Record<string, ModelMetadata> = {
     max_input_tokens: 200_000,
     max_output_tokens: 32_000,
     supports_vision: true,
-    mode: 'chat',
   },
   'claude-sonnet-4-20250514': {
     max_input_tokens: 200_000,
     max_output_tokens: 16_000,
     supports_vision: true,
-    mode: 'chat',
   },
   'claude-3-5-sonnet': {
     max_input_tokens: 200_000,
     max_output_tokens: 8_192,
     supports_vision: true,
-    mode: 'chat',
   },
   'claude-3-5-haiku': {
     max_input_tokens: 200_000,
     max_output_tokens: 8_192,
     supports_vision: true,
-    mode: 'chat',
   },
   'claude-3-opus': {
     max_input_tokens: 200_000,
     max_output_tokens: 4_096,
     supports_vision: true,
-    mode: 'chat',
   },
   'claude-3-sonnet': {
     max_input_tokens: 200_000,
     max_output_tokens: 4_096,
     supports_vision: true,
-    mode: 'chat',
   },
   'claude-3-haiku': {
     max_input_tokens: 200_000,
     max_output_tokens: 4_096,
     supports_vision: true,
-    mode: 'chat',
   },
 
   // ── Google Gemini family ────────────────────────────────────────────────
@@ -145,31 +127,26 @@ const KNOWN_MODELS: Record<string, ModelMetadata> = {
     max_input_tokens: 1_048_576,
     max_output_tokens: 65_536,
     supports_vision: true,
-    mode: 'chat',
   },
   'gemini-2.5-flash': {
     max_input_tokens: 1_048_576,
     max_output_tokens: 65_536,
     supports_vision: true,
-    mode: 'chat',
   },
   'gemini-2.0-flash': {
     max_input_tokens: 1_048_576,
     max_output_tokens: 8_192,
     supports_vision: true,
-    mode: 'chat',
   },
   'gemini-1.5-pro': {
     max_input_tokens: 2_097_152,
     max_output_tokens: 8_192,
     supports_vision: true,
-    mode: 'chat',
   },
   'gemini-1.5-flash': {
     max_input_tokens: 1_048_576,
     max_output_tokens: 8_192,
     supports_vision: true,
-    mode: 'chat',
   },
 
   // ── Groq models ─────────────────────────────────────────────────────────
@@ -177,19 +154,16 @@ const KNOWN_MODELS: Record<string, ModelMetadata> = {
     max_input_tokens: 128_000,
     max_output_tokens: 32_768,
     supports_vision: false,
-    mode: 'chat',
   },
   'llama-3.1-8b-instant': {
     max_input_tokens: 128_000,
     max_output_tokens: 8_192,
     supports_vision: false,
-    mode: 'chat',
   },
   'mixtral-8x7b-32768': {
     max_input_tokens: 32_768,
     max_output_tokens: 32_768,
     supports_vision: false,
-    mode: 'chat',
   },
 
   // ── xAI Grok ────────────────────────────────────────────────────────────
@@ -197,19 +171,16 @@ const KNOWN_MODELS: Record<string, ModelMetadata> = {
     max_input_tokens: 131_072,
     max_output_tokens: 131_072,
     supports_vision: false,
-    mode: 'chat',
   },
   'grok-2-vision': {
     max_input_tokens: 131_072,
     max_output_tokens: 131_072,
     supports_vision: true,
-    mode: 'chat',
   },
   'grok-3': {
     max_input_tokens: 131_072,
     max_output_tokens: 131_072,
     supports_vision: false,
-    mode: 'chat',
   },
 
   // ── OpenCode / mimo ─────────────────────────────────────────────────────
@@ -217,7 +188,6 @@ const KNOWN_MODELS: Record<string, ModelMetadata> = {
     max_input_tokens: 131_072,
     max_output_tokens: 32_768,
     supports_vision: false,
-    mode: 'chat',
   },
 };
 
@@ -239,7 +209,6 @@ const DEFAULT_METADATA: ModelMetadata = {
   max_input_tokens: null,
   max_output_tokens: null,
   supports_vision: false,
-  mode: 'chat',
 };
 
 /**
@@ -274,7 +243,7 @@ function findBuiltInMetadata(modelId: string): ModelMetadata | null {
  * 2. Built-in defaults for that complete model ID
  * 3. Cache and return
  *
- * Unknown models get safe defaults: null limits, no vision, 'chat' mode.
+ * Unknown models get safe defaults: null limits, no vision.
  *
  * @param modelId - Opaque provider model ID
  * @returns ModelMetadata with all fields populated (nulls for unknown limits)

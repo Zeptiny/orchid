@@ -322,7 +322,7 @@ function requireStaticConnectionSupport(
   }
 
   if (connection.customModels?.length && !definition.allowsCustomModels) {
-    throw new Error(`'${definition.displayName}' does not allow custom models`);
+    throw new Error(`'${definition.displayName}' does not allow user-defined models`);
   }
   for (const model of connection.customModels ?? []) {
     if (model.protocol !== connection.protocol) {
@@ -334,7 +334,7 @@ function requireStaticConnectionSupport(
     const customModel = connection.customModels?.find((model) => model.id === modelId);
     if (!catalogModel && !customModel) {
       throw new Error(definition.allowsCustomModels
-        ? `Custom model '${modelId}' requires explicit capabilities and limits`
+        ? `User-defined model '${modelId}' requires explicit capabilities and limits`
         : `Model '${modelId}' is not available for '${definition.displayName}'`);
     }
     if (catalogModel && catalogModel.protocol !== connection.protocol) {
@@ -488,6 +488,7 @@ async function modelOptions(connectionId?: string): Promise<readonly ProviderMod
         model: modelView(candidate.model, candidate.source),
         available,
         unavailableReason,
+        embeddingSupported: Boolean(current.registry.get(definition.id)?.createEmbeddingTarget),
       });
     }
   }

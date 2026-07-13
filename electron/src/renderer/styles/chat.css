@@ -4732,6 +4732,71 @@ button.inspector-row:hover {
 .model-picker-search input::placeholder {
   color: var(--text-secondary);
 }
+.searchable-picker-menu {
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(360px, 62vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 9px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color) 55%, transparent);
+}
+.searchable-picker-list {
+  list-style: none;
+  min-height: 0;
+  margin: 0;
+  padding: 6px;
+  overflow: auto;
+}
+.searchable-picker-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.searchable-picker-option:hover:not(:disabled),
+.searchable-picker-option:focus-visible,
+.searchable-picker-option.is-selected {
+  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+}
+.searchable-picker-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.searchable-picker-option-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.searchable-picker-option-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.searchable-picker-option-desc {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .model-picker-table-wrap {
   min-height: 0;
   overflow: auto;
@@ -4813,6 +4878,24 @@ button.inspector-row:hover {
 .config-model-picker.model-picker-align-start .model-picker-menu {
   right: auto;
   left: 0;
+}
+.tier-model-picker {
+  width: min(320px, 100%);
+  flex-shrink: 0;
+}
+.provider-wizard-model-picker {
+  width: 100%;
+}
+.provider-wizard-model-picker .model-picker-menu {
+  right: auto;
+  left: 0;
+  z-index: 200;
+  width: min(560px, calc(100vw - 48px));
+  max-width: calc(100vw - 48px);
+  max-height: min(330px, 42vh);
+}
+.provider-wizard-model-picker .model-picker-table {
+  min-width: 0;
 }
 .composer-model-picker {
   width: 180px;

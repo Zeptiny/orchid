@@ -5,6 +5,7 @@ import {
   providerModelOptionLabel,
   selectionMatchesOption,
 } from '../../src/renderer/utils/provider-selection';
+import { isEmbeddingModel, isTextGenerationModel } from '../../src/renderer/utils/models';
 
 function option(connectionId: string, modelId: string): ProviderModelOption {
   return {
@@ -40,5 +41,20 @@ describe('provider selection view model', () => {
   it('labels a model with provider and connection identity', () => {
     const model = option('00000000-0000-4000-8000-000000000002', 'gpt-5');
     expect(providerModelOptionLabel(model)).toBe('OpenAI · Work · Model display');
+  });
+
+  it('separates chat and embedding model roles by output capability', () => {
+    const text = {
+      ...option('connection', 'chat').model,
+      capabilities: { inputModalities: ['text'], outputModalities: ['text'], tools: true, reasoning: true },
+    };
+    const embedding = {
+      ...option('connection', 'embedding').model,
+      capabilities: { inputModalities: ['text'], outputModalities: ['embedding'], tools: false, reasoning: false },
+    };
+    expect(isTextGenerationModel(text)).toBe(true);
+    expect(isEmbeddingModel(text)).toBe(false);
+    expect(isTextGenerationModel(embedding)).toBe(false);
+    expect(isEmbeddingModel(embedding)).toBe(true);
   });
 });

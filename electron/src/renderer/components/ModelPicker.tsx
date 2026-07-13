@@ -5,6 +5,7 @@ import { withCurrentModelOption } from '../utils/models';
 import { Icon } from './Icon';
 
 interface ModelPickerProps {
+  id?: string;
   value: string;
   options: readonly string[];
   onChange: (value: string) => void;
@@ -18,10 +19,20 @@ interface ModelPickerProps {
   optionLabels?: Readonly<Record<string, string>>;
   /** Optional typed metadata for connection-scoped options. */
   optionDetails?: Readonly<Record<string, ProviderModelOption>>;
+  /** Optional non-catalog actions, such as the custom-model entry in setup. */
+  additionalOptions?: readonly ModelPickerAdditionalOption[];
+}
+
+export interface ModelPickerAdditionalOption {
+  readonly value: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly disabled?: boolean;
 }
 
 /** Shared searchable model picker used by chat and configuration. */
 export function ModelPicker({
+  id,
   value,
   options,
   onChange,
@@ -33,6 +44,7 @@ export function ModelPicker({
   emptyMessage = 'No models configured',
   optionLabels,
   optionDetails,
+  additionalOptions = [],
 }: ModelPickerProps) {
   const pickerRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -40,16 +52,28 @@ export function ModelPicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [metadata, setMetadata] = useState<Record<string, ModelMetadata | null>>({});
+  const additionalOptionsByValue = useMemo(
+    () => new Map(additionalOptions.map((option) => [option.value, option])),
+    [additionalOptions],
+  );
 
   const modelOptions = useMemo(
-    () => withCurrentModelOption(options, value),
-    [options, value],
+    () => withCurrentModelOption(
+      [...options, ...additionalOptions.map((option) => option.value)],
+      value,
+    ),
+    [additionalOptions, options, value],
   );
   const filteredModels = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return modelOptions;
-    return modelOptions.filter((model) => model.toLowerCase().includes(normalized));
-  }, [modelOptions, query]);
+    return modelOptions.filter((model) => {
+      const option = additionalOptionsByValue.get(model);
+      return `${optionLabels?.[model] ?? option?.label ?? model} ${model} ${option?.description ?? ''}`
+        .toLowerCase()
+        .includes(normalized);
+    });
+  }, [additionalOptionsByValue, modelOptions, optionLabels, query]);
 
   useEffect(() => {
     if (!open) return;
@@ -91,6 +115,7 @@ export function ModelPicker({
   }, [modelOptions, open, optionLabels, optionDetails]);
 
   const selectModel = (model: string) => {
+    if (additionalOptionsByValue.get(model)?.disabled) return;
     onChange(model);
     setQuery('');
     setOpen(false);
@@ -102,18 +127,21 @@ export function ModelPicker({
       className={`dropdown ${align === 'start' ? 'dropdown-start' : 'dropdown-end'} ${placement === 'top' ? 'dropdown-top' : ''} ${open ? 'dropdown-open' : ''} ${className} model-picker-align-${align}`.trim()}
     >
       <button
+        id={id}
         type="button"
         className="btn btn-ghost model-picker-trigger"
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={menuId}
         aria-label={label}
-        title={(optionLabels?.[value] ?? value) || label}
+        title={(optionLabels?.[value] ?? additionalOptionsByValue.get(value)?.label ?? value) || label}
         disabled={disabled}
         onClick={() => setOpen((previous) => !previous)}
       >
         <Icon name="cpu" size={13} className="shrink-0 opacity-70" />
-        <span className="model-picker-trigger-label">{optionLabels?.[value] ?? displayModelId(value)}</span>
+        <span className="model-picker-trigger-label">
+          {optionLabels?.[value] ?? additionalOptionsByValue.get(value)?.label ?? displayModelId(value)}
+        </span>
         <Icon
           name="chevronDown"
           size={12}
@@ -132,7 +160,9 @@ export function ModelPicker({
             <div>
               <div className="model-picker-title">Models</div>
             </div>
-            <span className="model-picker-current">{(optionLabels?.[value] ?? value) || 'None selected'}</span>
+            <span className="model-picker-current">
+              {(optionLabels?.[value] ?? additionalOptionsByValue.get(value)?.label ?? value) || 'None selected'}
+            </span>
           </div>
 
           <label className="input input-sm model-picker-search">
@@ -167,6 +197,8 @@ export function ModelPicker({
                 {filteredModels.map((model) => {
                   const modelMetadata = metadata[model];
                   const detail = optionDetails?.[model];
+                  const additionalOption = additionalOptionsByValue.get(model);
+                  const displayName = optionLabels?.[model] ?? additionalOption?.label ?? displayModelId(model);
                   const contextLimit = detail
                     ? detail.model.limits?.contextTokens ?? null
                     : modelMetadata?.max_input_tokens ?? null;
@@ -177,7 +209,13 @@ export function ModelPicker({
                     ? detail.model.capabilities?.inputModalities.includes('image') ?? null
                     : modelMetadata?.supports_vision ?? null;
                   const selected = model === value;
-                  const unavailable = detail?.available === false;
+                  const unavailable = detail?.available === false || additionalOption?.disabled === true;
+                  const description = additionalOption?.description
+                    ?? (detail
+                      ? unavailable
+                        ? detail.unavailableReason ?? 'Unavailable'
+                        : detail.providerDisplayName ?? detail.providerId
+                      : null);
                   return (
                     <tr
                       key={model}
@@ -196,15 +234,11 @@ export function ModelPicker({
                     >
                       <td>
                         <div className="model-picker-model-name" title={model}>
-                          {optionLabels?.[model] ?? displayModelId(model)}
+                          {displayName}
                         </div>
-                        {detail && (
+                        {description && (
                           <div className="text-xs text-base-content/60">
-                            {unavailable
-                              ? detail.unavailableReason ?? 'Unavailable'
-                              : detail.model.source === 'connection'
-                                ? 'User-defined model'
-                                : 'Catalog model'}
+                            {description}
                           </div>
                         )}
                       </td>
