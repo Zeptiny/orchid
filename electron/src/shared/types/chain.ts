@@ -14,19 +14,16 @@
  */
 
 import { z } from 'zod';
-import type { Message, Usage } from './message';
 import {
-  messageFromStorageDict,
-  messageToStorageDict,
-  MessageRole,
-  MessageType,
-} from './message';
+  copyModelSelection,
+  modelSelectionSchema,
+  type ModelSelection,
+} from './provider';
+import type { Message, Usage } from './message';
+import { messageFromStorageDict, messageToStorageDict, MessageRole, MessageType } from './message';
 import { sumMessageUsages } from '../usage';
 import type { SubagentRecord } from './subagent';
-import {
-  subagentRecordFromStorageDict,
-  subagentRecordToStorageDict,
-} from './subagent';
+import { subagentRecordFromStorageDict, subagentRecordToStorageDict } from './subagent';
 
 // ── Enums as const objects ──────────────────────────────────────────────────
 
@@ -62,7 +59,10 @@ export interface Chain {
   readonly sessionId: string;
   readonly messages: readonly Message[];
   readonly status: ChainStatus;
-  readonly model: string;
+  /** Executable model identity, scoped to one provider connection. */
+  readonly selection: ModelSelection | null;
+  /** Historical/display snapshot only; never used to resolve a model. */
+  readonly modelLabel: string | null;
   readonly agentName: string;
   readonly agentType: string;
   readonly agentTier: string;
@@ -88,20 +88,22 @@ export const chainStatusSchema = z.enum([
 ]);
 
 // Lazy schemas to handle circular dependency between Chain ↔ SubagentRecord
-export const chainSchema: z.ZodType<Chain> = z.lazy(() =>
-  z.object({
-    id: z.string(),
-    sessionId: z.string(),
-    messages: z.array(z.object({}).passthrough()),
-    status: chainStatusSchema,
-    model: z.string(),
-    agentName: z.string(),
-    agentType: z.string(),
-    agentTier: z.string(),
-    subagentRecord: z.nullable(z.object({}).passthrough()),
-    startTime: z.string().nullable(),
-    endTime: z.string().nullable(),
-  }) as unknown as z.ZodType<Chain>,
+export const chainSchema: z.ZodType<Chain> = z.lazy(
+  () =>
+    z.object({
+      id: z.string(),
+      sessionId: z.string(),
+      messages: z.array(z.object({}).passthrough()),
+      status: chainStatusSchema,
+      selection: modelSelectionSchema.nullable(),
+      modelLabel: z.string().nullable(),
+      agentName: z.string(),
+      agentType: z.string(),
+      agentTier: z.string(),
+      subagentRecord: z.nullable(z.object({}).passthrough()),
+      startTime: z.string().nullable(),
+      endTime: z.string().nullable(),
+    }) as unknown as z.ZodType<Chain>,
 );
 
 // ── Storage dict ────────────────────────────────────────────────────────────
@@ -112,6 +114,9 @@ export interface ChainStorageDict {
   session_id?: string;
   messages?: unknown[];
   status?: string;
+  selection?: ModelSelection | null;
+  modelLabel?: string | null;
+  /** Version 1 only: preserved as a historical label on restore. */
   model?: string;
   agentName?: string;
   agent_name?: string;
@@ -212,7 +217,8 @@ export function chainToStorageDict(chain: Chain): ChainStorageDict {
   const dict: ChainStorageDict = {
     messages: chain.messages.map(messageToStorageDict),
     status: chain.status,
-    model: chain.model,
+    selection: copyModelSelection(chain.selection),
+    modelLabel: chain.modelLabel ?? null,
   };
   if (chain.id) dict.id = chain.id;
   if (chain.sessionId) dict.sessionId = chain.sessionId;
@@ -252,6 +258,21 @@ function parseEndTime(raw: unknown): string | null {
 
 export function chainFromStorageDict(data: unknown): Chain {
   const raw = data as Record<string, unknown>;
+  const hasV2SelectionFields =
+    Object.prototype.hasOwnProperty.call(raw, 'selection') ||
+    Object.prototype.hasOwnProperty.call(raw, 'modelLabel');
+  const parsedSelection = modelSelectionSchema.safeParse(raw.selection);
+  // A legacy `model` string has no connection identity and is therefore only a
+  // display label. Once a chain has v2 fields, never fall back to that alias.
+  const selection: ModelSelection | null = parsedSelection.success ? parsedSelection.data : null;
+  const modelLabel: string | null =
+    typeof raw.modelLabel === 'string'
+      ? raw.modelLabel
+      : hasV2SelectionFields
+        ? null
+        : typeof raw.model === 'string'
+          ? raw.model
+          : null;
 
   // Parse messages and run orphan tool result reconciliation
   const rawMessages = Array.isArray(raw.messages) ? raw.messages : [];
@@ -284,7 +305,8 @@ export function chainFromStorageDict(data: unknown): Chain {
           : '',
     messages,
     status,
-    model: typeof raw.model === 'string' ? raw.model : '',
+    selection,
+    modelLabel,
     agentName:
       typeof raw.agentName === 'string'
         ? raw.agentName

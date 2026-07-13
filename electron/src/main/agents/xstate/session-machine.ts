@@ -171,7 +171,7 @@ export const sessionMachine = setup({
                   task: e.task,
                   agent: context.activeAgent, // Subagent uses parent's agent config
                   systemPrompt: context.systemPrompt,
-                  model: e.model,
+                  selection: e.selection,
                   streamFn: context.subagentStreamFn,
                 },
               });

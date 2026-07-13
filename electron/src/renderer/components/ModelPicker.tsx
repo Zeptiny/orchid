@@ -104,7 +104,7 @@ export function ModelPicker({
         onClick={() => setOpen((previous) => !previous)}
       >
         <Icon name="cpu" size={13} className="shrink-0 opacity-70" />
-        <span className="model-picker-trigger-label">{splitModelId(value).name}</span>
+        <span className="model-picker-trigger-label">{displayModelId(value)}</span>
         <Icon
           name="chevronDown"
           size={12}
@@ -156,7 +156,6 @@ export function ModelPicker({
               </thead>
               <tbody>
                 {filteredModels.map((model) => {
-                  const modelParts = splitModelId(model);
                   const modelMetadata = metadata[model];
                   const selected = model === value;
                   return (
@@ -176,11 +175,8 @@ export function ModelPicker({
                     >
                       <td>
                         <div className="model-picker-model-name" title={model}>
-                          {modelParts.name}
+                          {displayModelId(model)}
                         </div>
-                        {modelParts.provider && (
-                          <div className="model-picker-provider">{modelParts.provider}</div>
-                        )}
                       </td>
                       <td>{modelMetadata ? formatTokenLimit(modelMetadata.max_input_tokens) : '…'}</td>
                       <td>{modelMetadata ? formatTokenLimit(modelMetadata.max_output_tokens) : '…'}</td>
@@ -209,13 +205,9 @@ export function ModelPicker({
   );
 }
 
-function splitModelId(model: string): { provider: string | null; name: string } {
-  if (!model) return { provider: null, name: 'Model' };
-  const slash = model.indexOf('/');
-  if (slash > 0 && slash < model.length - 1) {
-    return { provider: model.slice(0, slash), name: model.slice(slash + 1) };
-  }
-  return { provider: null, name: model };
+/** Model IDs are opaque provider-owned strings and may themselves contain '/'. */
+function displayModelId(model: string): string {
+  return model || 'Model';
 }
 
 function formatTokenLimit(value: number | null): string {

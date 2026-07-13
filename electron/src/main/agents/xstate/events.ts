@@ -9,6 +9,7 @@
 
 import type { StreamEvent } from '../../llm/orchestrator';
 import type { Usage } from '../../../shared/types/message';
+import type { ModelSelection } from '../../../shared/types/provider';
 
 // ── Agent events ────────────────────────────────────────────────────────────
 
@@ -99,7 +100,7 @@ export interface SpawnSubagentEvent {
   name: string;
   task: string;
   agentType: string;
-  model?: string;
+  selection?: ModelSelection | null;
   parentChainIndex?: number;
 }
 

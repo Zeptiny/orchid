@@ -27,6 +27,7 @@ import {
   sessionToStorageDict,
   sessionFromStorageDict,
 } from '../../src/shared/types/session';
+import type { ModelSelection } from '../../src/shared/types/provider';
 import {
   TodoStatus,
   type Todo,
@@ -44,6 +45,11 @@ import type { ToolCall } from '../../src/shared/types/tool';
 function makeToolCall(id: string, name: string, args: string): ToolCall {
   return { id, type: 'function', function: { name, arguments: args } };
 }
+
+const DEFAULT_SELECTION: ModelSelection = {
+  connectionId: '11111111-1111-4111-8111-111111111111',
+  modelId: 'vendor/models/gpt-4o',
+};
 
 function makeMessage(overrides: Partial<Message> & { role: MessageRole }): Message {
   return {
@@ -63,12 +69,15 @@ function makeMessage(overrides: Partial<Message> & { role: MessageRole }): Messa
 
 function makeChain(overrides: Partial<Chain> = {}): Chain {
   const now = new Date().toISOString();
+  const selection = overrides.selection === undefined ? DEFAULT_SELECTION : overrides.selection;
   return {
     id: overrides.id ?? `chain-${Math.random().toString(36).slice(2, 8)}`,
     sessionId: overrides.sessionId ?? 'session-1',
     messages: overrides.messages ?? [],
     status: overrides.status ?? ChainStatus.COMPLETED,
-    model: overrides.model ?? 'gpt-4o',
+    selection,
+    modelLabel:
+      overrides.modelLabel === undefined ? (selection?.modelId ?? null) : overrides.modelLabel,
     agentName: overrides.agentName ?? 'General',
     agentType: overrides.agentType ?? 'internal',
     agentTier: overrides.agentTier ?? 'bloom',
@@ -135,7 +144,8 @@ describe('Domain Models: Session round-trip', () => {
       sessionId: 'session-1',
       messages,
       status: ChainStatus.COMPLETED,
-      model: 'gpt-4o',
+      selection: DEFAULT_SELECTION,
+      modelLabel: DEFAULT_SELECTION.modelId,
       agentName: 'General',
       agentType: 'internal',
       agentTier: 'bloom',
@@ -144,7 +154,8 @@ describe('Domain Models: Session round-trip', () => {
     const session: Session = {
       id: 'session-1',
       name: 'Test Session',
-      model: 'gpt-4o',
+      selection: DEFAULT_SELECTION,
+      modelLabel: DEFAULT_SELECTION.modelId,
       cwd: null,
       chains: [chain],
       activeChainId: 'chain-1',
@@ -155,15 +166,19 @@ describe('Domain Models: Session round-trip', () => {
     };
 
     const dict = sessionToStorageDict(session);
-    expect(dict.version).toBe(1);
+    expect(dict.version).toBe(2);
     expect(dict.id).toBe('session-1');
+    expect(dict.selection).toEqual(DEFAULT_SELECTION);
+    expect(dict.modelLabel).toBe(DEFAULT_SELECTION.modelId);
+    expect(dict).not.toHaveProperty('model');
 
     const restored = sessionFromStorageDict(dict);
 
     // Session-level fields
     expect(restored.id).toBe(session.id);
     expect(restored.name).toBe(session.name);
-    expect(restored.model).toBe(session.model);
+    expect(restored.selection).toEqual(session.selection);
+    expect(restored.modelLabel).toBe(session.modelLabel);
     expect(restored.activeChainId).toBe(session.activeChainId);
     expect(restored.createdAt).toBe(session.createdAt);
     expect(restored.updatedAt).toBe(session.updatedAt);
@@ -174,7 +189,8 @@ describe('Domain Models: Session round-trip', () => {
     expect(restoredChain.id).toBe('chain-1');
     expect(restoredChain.sessionId).toBe('session-1');
     expect(restoredChain.status).toBe(ChainStatus.COMPLETED);
-    expect(restoredChain.model).toBe('gpt-4o');
+    expect(restoredChain.selection).toEqual(DEFAULT_SELECTION);
+    expect(restoredChain.modelLabel).toBe(DEFAULT_SELECTION.modelId);
     expect(restoredChain.agentName).toBe('General');
     expect(restoredChain.agentType).toBe('internal');
     expect(restoredChain.agentTier).toBe('bloom');
@@ -248,7 +264,12 @@ describe('Domain Models: Chain orphan reconciliation', () => {
         tool_call_id: 'tc-nonexistent',
         timestamp: now,
       }),
-      makeMessage({ id: 'msg-3', role: MessageRole.ASSISTANT, content: 'Hi there', timestamp: now }),
+      makeMessage({
+        id: 'msg-3',
+        role: MessageRole.ASSISTANT,
+        content: 'Hi there',
+        timestamp: now,
+      }),
     ];
 
     const chain = makeChain({ messages });
@@ -317,7 +338,12 @@ describe('Domain Models: Chain orphan reconciliation', () => {
         tool_call_id: 'tc-1',
         timestamp: now,
       }),
-      makeMessage({ id: 'msg-3', role: MessageRole.ASSISTANT, content: 'Found it.', timestamp: now }),
+      makeMessage({
+        id: 'msg-3',
+        role: MessageRole.ASSISTANT,
+        content: 'Found it.',
+        timestamp: now,
+      }),
     ];
 
     const chain = makeChain({ messages });
@@ -532,7 +558,8 @@ describe('Domain Models: Per-chain error isolation', () => {
     const session: Session = {
       id: 'session-isolation',
       name: 'Isolation Test',
-      model: 'gpt-4o',
+      selection: DEFAULT_SELECTION,
+      modelLabel: DEFAULT_SELECTION.modelId,
       cwd: null,
       chains: [goodChain],
       activeChainId: null,
@@ -549,7 +576,8 @@ describe('Domain Models: Per-chain error isolation', () => {
     const corruptedChain = {
       messages: null,
       status: 12345,
-      model: { nested: 'bad' },
+      selection: { nested: 'bad' },
+      modelLabel: { nested: 'bad' },
     };
     (dict.chains as unknown[]).push(corruptedChain);
 
@@ -576,7 +604,8 @@ describe('Domain Models: Per-chain error isolation', () => {
     const session: Session = {
       id: 'session-tolerant',
       name: 'Tolerant Test',
-      model: 'gpt-4o',
+      selection: null,
+      modelLabel: null,
       cwd: null,
       chains: [],
       activeChainId: null,
@@ -588,8 +617,8 @@ describe('Domain Models: Per-chain error isolation', () => {
 
     const dict = sessionToStorageDict(session);
     (dict as Record<string, unknown>).chains = [
-      'a string instead of an object',  // will produce a chain with empty defaults
-      42,                                // same
+      'a string instead of an object', // will produce a chain with empty defaults
+      42, // same
     ];
 
     const restored = sessionFromStorageDict(dict);
@@ -718,7 +747,8 @@ describe('Domain Models: multi-chain helpers', () => {
       id: 'c1',
       status: 'running',
       messages: [],
-      model: 'm',
+      selection: DEFAULT_SELECTION,
+      modelLabel: DEFAULT_SELECTION.modelId,
     });
     expect(restored.status).toBe(ChainStatus.ACTIVE);
 

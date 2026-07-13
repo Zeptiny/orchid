@@ -12,6 +12,7 @@ import { useSessionActivity } from '../hooks/useSessionActivity';
 import { useGlobalShortcuts } from '../keyboard';
 import type { Message } from '../../shared/types/message';
 import type { Session } from '../../shared/types/session';
+import type { ModelSelection } from '../../shared/types/provider';
 import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus, CommandContext } from '../../shared/types/ipc-boundary';
 import { ChatStream } from './ChatStream';
 import { InputArea } from './InputArea';
@@ -50,7 +51,7 @@ export function ChatView() {
   const [currentPersonality, setCurrentPersonality] = useState('default');
   const [personalityNames, setPersonalityNames] = useState<string[]>([]);
   const [currentModel, setCurrentModel] = useState('');
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [currentSelection, setCurrentSelection] = useState<ModelSelection | null>(null);
   const [maxContext, setMaxContext] = useState<number | null>(null);
   const [alwaysExpandToolGroups, setAlwaysExpandToolGroups] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -103,15 +104,11 @@ export function ChatView() {
           const config = await window.orchid.config.get();
           if (config.theme) setCurrentTheme(config.theme);
           if (config.personality) setCurrentPersonality(config.personality);
-          if (config.default_model) setCurrentModel(config.default_model);
+          if (config.default_model) {
+            setCurrentSelection(config.default_model);
+            setCurrentModel(config.default_model.modelId);
+          }
           setAlwaysExpandToolGroups(Boolean(config.always_expand_tool_groups));
-          // Same model list as config dropdowns (General / Tier Models)
-          const { collectModelsFromProviders } = await import('../utils/models');
-          setAvailableModels(
-            collectModelsFromProviders(
-              config.providers as Record<string, Record<string, unknown>>,
-            ),
-          );
         }
         if (window.orchid?.config?.listPersonalities) {
           const names = await window.orchid.config.listPersonalities();
@@ -138,31 +135,19 @@ export function ChatView() {
 
   // Keep composer model label in sync when switching sessions
   useEffect(() => {
-    if (session.activeSession?.model) {
-      setCurrentModel(session.activeSession.model);
+    if (session.activeSession?.modelLabel) {
+      setCurrentModel(session.activeSession.modelLabel);
     }
-  }, [session.activeSession?.id, session.activeSession?.model]);
+    setCurrentSelection(session.activeSession?.selection ?? null);
+  }, [session.activeSession?.id, session.activeSession?.selection, session.activeSession?.modelLabel]);
 
-  // Refresh personality list + models when the palette opens
+  // Refresh personality list when the palette opens.
   useEffect(() => {
     if (!paletteOpen) return;
     let cancelled = false;
     if (window.orchid?.config?.listPersonalities) {
       window.orchid.config.listPersonalities().then((names) => {
         if (!cancelled) setPersonalityNames(names);
-      }).catch(() => { /* non-fatal */ });
-    }
-    if (window.orchid?.config?.get) {
-      window.orchid.config.get().then((config) => {
-        if (cancelled) return;
-        void import('../utils/models').then(({ collectModelsFromProviders }) => {
-          if (cancelled) return;
-          setAvailableModels(
-            collectModelsFromProviders(
-              config.providers as Record<string, Record<string, unknown>>,
-            ),
-          );
-        });
       }).catch(() => { /* non-fatal */ });
     }
     return () => { cancelled = true; };
@@ -357,10 +342,10 @@ export function ChatView() {
         void handlePickProjectDir();
         return;
       }
-      const preferredModel =
-        session.activeSession?.model || currentModel || undefined;
+      const preferredSelection =
+        session.activeSession?.selection ?? currentSelection;
       await chat.send(message, {
-        ...(preferredModel ? { model: preferredModel } : {}),
+        ...(preferredSelection ? { model: preferredSelection } : {}),
         ...(session.activeSession?.id
           ? { sessionId: session.activeSession.id }
           : { draftGeneration: session.draftGeneration }),
@@ -369,9 +354,9 @@ export function ChatView() {
     [
       chat,
       session.activeSession?.id,
-      session.activeSession?.model,
+      session.activeSession?.selection,
       session.draftGeneration,
-      currentModel,
+      currentSelection,
       workspaceBound,
       notify,
       handlePickProjectDir,
@@ -548,32 +533,14 @@ export function ChatView() {
       }
     },
     onSetModel: async (model: string) => {
-      setCurrentModel(model);
-      const sessionId = session.activeSession?.id;
-      if (sessionId) {
-        try {
-          await session.changeModel(sessionId, model);
-        } catch (err) {
-          console.error('Failed to change session model:', err);
-          notify(
-            err instanceof Error ? err.message : 'Failed to change model',
-            'error',
-          );
-        }
-      } else {
-        // No session yet — persist as default model for next session
-        try {
-          if (window.orchid?.config?.save) {
-            await window.orchid.config.save({ updates: { default_model: model } });
-          }
-        } catch {
-          // Non-fatal
-        }
-      }
+      void model;
+      notify('Connect a provider in Settings before choosing a model.', 'warning');
     },
-    getAvailableModels: () => availableModels,
+    // U1 deliberately exposes no legacy alias candidates. U8 replaces this
+    // with connection-scoped selections from the provider registry.
+    getAvailableModels: () => [],
     getCurrentModel: () =>
-      session.activeSession?.model || currentModel || '',
+      session.activeSession?.modelLabel || currentModel || '',
     onOpenSettings: () => {
       openSettings();
     },
@@ -595,7 +562,7 @@ export function ChatView() {
     onClose: () => setPaletteOpen(false),
   };
 
-  const model = session.activeSession?.model ?? currentModel ?? '';
+  const model = session.activeSession?.selection?.modelId ?? currentSelection?.modelId ?? '';
 
   useEffect(() => {
     if (!model || !window.orchid?.config?.modelMetadata) {

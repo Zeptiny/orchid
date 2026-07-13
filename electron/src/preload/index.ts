@@ -141,14 +141,14 @@ const orchidAPI: OrchidAPI = {
     get: () =>
       invoke(IPC_CHANNELS.CONFIG_GET),
 
+    diagnostics: () =>
+      invoke(IPC_CHANNELS.CONFIG_DIAGNOSTICS),
+
     save: (updates: ConfigSaveMessage) =>
       invoke(IPC_CHANNELS.CONFIG_SAVE, updates),
 
     modelMetadata: (modelId: string) =>
       invoke(IPC_CHANNELS.CONFIG_MODEL_METADATA, modelId),
-
-    discoverModels: (alias: string, force?: boolean) =>
-      invoke(IPC_CHANNELS.CONFIG_DISCOVER_MODELS, alias, force),
 
     listPersonalities: () =>
       invoke(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES),
@@ -173,8 +173,8 @@ const orchidAPI: OrchidAPI = {
     rename: (id: string, name: string) =>
       invoke(IPC_CHANNELS.SESSION_RENAME, { id, name }),
 
-    changeModel: (id: string, model: string) =>
-      invoke(IPC_CHANNELS.SESSION_CHANGE_MODEL, { id, model }),
+    changeModel: (id, selection, modelLabel) =>
+      invoke(IPC_CHANNELS.SESSION_CHANGE_MODEL, { id, selection, modelLabel }),
 
     getWorkspace: () =>
       invoke<WorkspaceInfo>(IPC_CHANNELS.SESSION_GET_WORKSPACE),

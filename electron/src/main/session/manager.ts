@@ -23,6 +23,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Session } from '../../shared/types/session';
+import type { ModelSelection } from '../../shared/types/provider';
 import type { Message } from '../../shared/types/message';
 import { ChainStatus, type Chain } from '../../shared/types/chain';
 import {
@@ -223,11 +224,16 @@ export class SessionManager {
    * The session is immediately saved to disk and set as active.
    * Matches Python SessionManager.create().
    *
-   * @param model - Model id for the session
+   * @param selection - Connection-scoped model selection for the session
    * @param options - Optional create options. `cwd` is caller-supplied only
    *   (absolute path or null); never silently defaults to process.cwd().
    */
-  create(model: string, options?: CreateSessionOptions, ownerId?: string): Session {
+  create(
+    selection: ModelSelection | null,
+    options?: CreateSessionOptions,
+    ownerId?: string,
+    modelLabel: string | null = selection?.modelId ?? null,
+  ): Session {
     const now = new Date().toISOString();
     // Unbound by default; only set cwd when the caller explicitly provides one.
     // Valid absolute dirs are canonicalized; invalid non-null paths store as
@@ -239,7 +245,8 @@ export class SessionManager {
     const session: Session = {
       id: randomUUID(),
       name: `Session ${now.replace('T', ' ').replace(/\.\d+Z$/, '')}`,
-      model,
+      selection,
+      modelLabel,
       cwd,
       chains: [],
       activeChainId: null,
@@ -312,16 +319,25 @@ export class SessionManager {
   }
 
   /**
-   * Change the model for a session. Updates in-memory and persists to disk.
+   * Change the connection-scoped selection for a session. Updates in-memory and persists to disk.
    *
    * No-op if the session is not the active session.
    * Matches Python SessionManager.change_model().
    */
-  changeModel(id: string, model: string): void {
+  changeModel(
+    id: string,
+    selection: ModelSelection | null,
+    modelLabel: string | null = selection?.modelId ?? null,
+  ): void {
     if (!this.isSelectedByAnyOwner(id)) return;
     const session = this.flushTodos(id);
     if (!session) return;
-    const updated = { ...session, model, updatedAt: new Date().toISOString() };
+    const updated = {
+      ...session,
+      selection,
+      modelLabel,
+      updatedAt: new Date().toISOString(),
+    };
     this.replaceSession(updated);
     storageSaveSession(updated, this._storageOpts);
   }
@@ -418,7 +434,8 @@ export class SessionManager {
    * chain so subagent spawn can attribute `parent_chain_index`.
    */
   startChain(params?: {
-    model?: string;
+    selection?: ModelSelection | null;
+    modelLabel?: string | null;
     agentName?: string;
     agentType?: string;
     agentTier?: string;
@@ -439,12 +456,19 @@ export class SessionManager {
       };
     });
 
+    const hasSelection = params != null && Object.hasOwn(params, 'selection');
+    const hasModelLabel = params != null && Object.hasOwn(params, 'modelLabel');
+    const selection = hasSelection ? params?.selection ?? null : session.selection;
+    const modelLabel = hasModelLabel
+      ? params?.modelLabel ?? null
+      : session.modelLabel;
     const chain: Chain = {
       id: randomUUID(),
       sessionId: session.id,
       messages: params?.messages ? [...params.messages] : [],
       status: ChainStatus.ACTIVE,
-      model: params?.model ?? session.model,
+      selection,
+      modelLabel,
       agentName: params?.agentName ?? 'general',
       agentType: params?.agentType ?? 'subagent',
       agentTier: params?.agentTier ?? 'bloom',
@@ -556,7 +580,8 @@ export class SessionManager {
   persistTurn(params: {
     messages: readonly Message[];
     status?: ChainStatus;
-    model?: string;
+    selection?: ModelSelection | null;
+    modelLabel?: string | null;
     agentName?: string;
     agentType?: string;
     agentTier?: string;
@@ -570,7 +595,8 @@ export class SessionManager {
 
     if (!active) {
       this.startChain({
-        model: params.model,
+        ...(params.selection !== undefined ? { selection: params.selection } : {}),
+        ...(params.modelLabel !== undefined ? { modelLabel: params.modelLabel } : {}),
         agentName: params.agentName,
         agentType: params.agentType,
         agentTier: params.agentTier,
@@ -578,7 +604,13 @@ export class SessionManager {
       }, session.id);
       session = this.ensureSession(session.id);
     } else {
-      if (params.model || params.agentName || params.agentType || params.agentTier) {
+      if (
+        params.selection !== undefined ||
+        params.modelLabel !== undefined ||
+        params.agentName ||
+        params.agentType ||
+        params.agentTier
+      ) {
         const activeId = active.id;
         const now = new Date().toISOString();
         session = this.replaceSession({
@@ -587,7 +619,14 @@ export class SessionManager {
             c.id === activeId
               ? {
                   ...c,
-                  model: params.model ?? c.model,
+                  selection:
+                    params.selection !== undefined
+                      ? params.selection
+                      : c.selection,
+                  modelLabel:
+                    params.modelLabel !== undefined
+                      ? params.modelLabel
+                      : c.modelLabel,
                   agentName: params.agentName ?? c.agentName,
                   agentType: params.agentType ?? c.agentType,
                   agentTier: params.agentTier ?? c.agentTier,
@@ -617,7 +656,8 @@ export class SessionManager {
   syncActiveChain(params: {
     messages: readonly Message[];
     status?: ChainStatus;
-    model?: string;
+    selection?: ModelSelection | null;
+    modelLabel?: string | null;
     agentName?: string;
     agentType?: string;
     agentTier?: string;

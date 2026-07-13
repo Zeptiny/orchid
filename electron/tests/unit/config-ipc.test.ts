@@ -1,8 +1,8 @@
 /**
- * Config IPC handler tests — focusing on the config:save concurrency lock (P1-3).
+ * Config IPC handler tests — config:save serialization and U1 provider boundary.
  *
- * Verifies that concurrent config:save calls are serialized so that
- * read → merge → write cycles don't race and lose provider updates.
+ * General preferences still use serialized read → merge → write cycles, but
+ * provider aliases, credentials, and rename flows no longer belong to config.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
@@ -23,17 +23,12 @@ const mocks = vi.hoisted(() => {
         handlers.delete(channel);
       }),
     },
-    // Track writes so we can assert both updates survived
+    // Track writes so concurrent ordinary preference updates can be asserted.
     writtenConfigs: [] as unknown[],
     // Track getConfig call order for race detection
     getConfigCalls: 0,
-    encryptAndStore: vi.fn(async () => {}),
-    retrieveAndDecrypt: vi.fn(async () => null as string | null),
-    deleteKey: vi.fn(async () => {}),
-    injectKeychainKeys: vi.fn(async (cfg: Record<string, unknown>) => cfg),
-    redactConfig: vi.fn((cfg: Record<string, unknown>) => cfg),
-    redactApiKey: vi.fn((key: string) => key.length <= 8 ? '****' : `${key.slice(0, 3)}...${key.slice(-4)}`),
     clearProjectRuntimeRegistry: vi.fn(),
+    invalidateAllProjectMCPManagers: vi.fn(),
   };
 });
 
@@ -51,7 +46,8 @@ vi.mock('../../src/main/config/loader', () => ({
     mocks.getConfigCalls++;
     return configState;
   }),
-  ConfigManager: {
+  getConfigDiagnostics: vi.fn(() => []),
+    ConfigManager: {
     reset: vi.fn(() => {
       // Simulate cache invalidation: next getConfig() should read from
       // "disk" — the last written config. In production, ConfigManager.reset()
@@ -62,14 +58,15 @@ vi.mock('../../src/main/config/loader', () => ({
         );
       }
     }),
-    load: vi.fn(() => {
+      load: vi.fn(() => {
       if (mocks.writtenConfigs.length > 0) {
         configState = JSON.parse(
           JSON.stringify(mocks.writtenConfigs[mocks.writtenConfigs.length - 1]),
         );
       }
-      return configState;
-    }),
+        return configState;
+      }),
+      diagnostics: vi.fn(() => []),
   },
   atomicWriteJson: vi.fn((_path: string, data: unknown) => {
     mocks.writtenConfigs.push(JSON.parse(JSON.stringify(data)));
@@ -92,23 +89,13 @@ vi.mock('../../src/main/project/runtime', () => ({
   clearProjectRuntimeRegistry: mocks.clearProjectRuntimeRegistry,
 }));
 
-vi.mock('../../src/main/config/keychain', () => ({
-  encryptAndStore: mocks.encryptAndStore,
-  retrieveAndDecrypt: mocks.retrieveAndDecrypt,
-  deleteKey: mocks.deleteKey,
-  injectKeychainKeys: mocks.injectKeychainKeys,
-  providerKeychainKey: (alias: string) => `provider:${alias}:api_key`,
-  redactApiKey: mocks.redactApiKey,
-  redactConfig: mocks.redactConfig,
-}));
-
 vi.mock('../../src/main/llm/model-metadata', () => ({
   resolveModelMetadata: vi.fn(),
   clearModelMetadataCache: vi.fn(),
 }));
 
-vi.mock('../../src/main/llm/providers', () => ({
-  discoverModelsAsync: vi.fn(),
+vi.mock('../../src/main/mcp/project-registry', () => ({
+  invalidateAllProjectMCPManagers: mocks.invalidateAllProjectMCPManagers,
 }));
 
 vi.mock('../../src/main/personality/registry', () => ({
@@ -124,12 +111,8 @@ beforeEach(async () => {
   mocks.handlers.clear();
   mocks.writtenConfigs.length = 0;
   mocks.getConfigCalls = 0;
-  mocks.encryptAndStore.mockClear();
-  mocks.retrieveAndDecrypt.mockReset().mockResolvedValue(null);
-  mocks.deleteKey.mockClear();
-  mocks.injectKeychainKeys.mockReset().mockImplementation(async (cfg) => cfg);
-  mocks.redactConfig.mockReset().mockImplementation((cfg) => cfg);
   mocks.clearProjectRuntimeRegistry.mockClear();
+  mocks.invalidateAllProjectMCPManagers.mockClear();
 
   // Fresh default config state for each test
   configState = defaults() as unknown as Record<string, unknown>;
@@ -157,33 +140,30 @@ function getConfigHandler() {
   return handler;
 }
 
+function getDiagnosticsHandler() {
+  const handler = mocks.handlers.get(IPC_CHANNELS.CONFIG_DIAGNOSTICS);
+  if (!handler) throw new Error('config:diagnostics handler not registered');
+  return handler;
+}
+
 /** Simulate a config:save IPC call with the given updates. */
-function callSave(
-  updates: Record<string, unknown>,
-  providerRenames?: Array<{ from: string; to: string }>,
-) {
+function callSave(updates: Record<string, unknown>) {
   const handler = getSaveHandler();
-  return handler(null, { updates, providerRenames });
+  return handler(null, { updates });
+}
+
+function callRawSave(payload: unknown) {
+  return getSaveHandler()(null, payload);
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('config:save concurrency lock (P1-3)', () => {
-  it('serializes two concurrent saves — second save sees first save result', async () => {
-    // Save 1: add provider "alpha"
-    // Save 2: add provider "beta"
-    // Without the lock, both read the same snapshot and the second write
-    // overwrites the first's provider.  With the lock, "alpha" persists.
-    const save1 = callSave({
-      providers: {
-        alpha: { base_url: 'https://alpha.example.com', models: {} },
-      },
-    });
-    const save2 = callSave({
-      providers: {
-        beta: { base_url: 'https://beta.example.com', models: {} },
-      },
-    });
+  it('serializes concurrent ordinary preference saves without losing either update', async () => {
+    // Without the lock both calls can read the same snapshot, and the final
+    // write would discard one of these otherwise independent preferences.
+    const save1 = callSave({ theme: 'night-orchid' });
+    const save2 = callSave({ always_expand_tool_groups: true });
 
     await Promise.all([save1, save2]);
 
@@ -191,13 +171,10 @@ describe('config:save concurrency lock (P1-3)', () => {
     expect(await save1).toEqual({ status: 'saved' });
     expect(await save2).toEqual({ status: 'saved' });
 
-    // The final written config must contain BOTH providers.
-    // This is the critical assertion — without the lock, only "beta" would survive.
+    // The final written config must contain both ordinary updates.
     const finalWrite = mocks.writtenConfigs[mocks.writtenConfigs.length - 1] as Record<string, unknown>;
-    const providers = finalWrite['providers'] as Record<string, unknown>;
-    expect(providers).toHaveProperty('alpha');
-    expect(providers).toHaveProperty('beta');
-    expect(providers).toHaveProperty('default');
+    expect(finalWrite['theme']).toBe('night-orchid');
+    expect(finalWrite['always_expand_tool_groups']).toBe(true);
   });
 
   it('serializes saves so second save merges on top of first', async () => {
@@ -213,49 +190,14 @@ describe('config:save concurrency lock (P1-3)', () => {
     expect(finalWrite['theme']).toBe('solarized');
   });
 
-  it('second save sees updated providers from first save', async () => {
-    // Save 1: add provider "openai" with api_key
-    // Save 2: update the default provider base_url
-    // Both changes must survive.
-    const save1 = callSave({
-      providers: {
-        openai: {
-          base_url: 'https://api.openai.com/v1',
-          api_key: 'sk-test123456789',
-          models: {},
-        },
-      },
-    });
-    const save2 = callSave({
-      providers: {
-        default: { base_url: 'https://custom-opencode.example.com' },
-      },
+  it('a failed write inside the lock does not block the next save', async () => {
+    const loader = await import('../../src/main/config/loader');
+    vi.mocked(loader.atomicWriteJson).mockImplementationOnce(() => {
+      throw new Error('simulated disk failure');
     });
 
-    await Promise.all([save1, save2]);
-
-    const finalWrite = mocks.writtenConfigs[mocks.writtenConfigs.length - 1] as Record<string, unknown>;
-    const providers = finalWrite['providers'] as Record<string, unknown>;
-
-    // openai from save1 survived
-    expect(providers).toHaveProperty('openai');
-    // default base_url from save2 updated
-    const defaultProv = providers['default'] as Record<string, unknown>;
-    expect(defaultProv['base_url']).toBe('https://custom-opencode.example.com');
-  });
-
-  it('error in one save does not block subsequent saves', async () => {
-    // Save 1: invalid payload (will throw before lock)
-    // Save 2: valid payload
-    const handler = getSaveHandler();
-
-    const badSave = handler(null, { invalid: true }).catch((e: Error) => e);
-    const goodSave = callSave({ theme: 'test-theme' });
-
-    const [badResult, goodResult] = await Promise.all([badSave, goodSave]);
-
-    expect(badResult).toBeInstanceOf(Error);
-    expect(goodResult).toEqual({ status: 'saved' });
+    await expect(callSave({ theme: 'failed-theme' })).rejects.toThrow('simulated disk failure');
+    await expect(callSave({ theme: 'test-theme' })).resolves.toEqual({ status: 'saved' });
 
     const finalWrite = mocks.writtenConfigs[mocks.writtenConfigs.length - 1] as Record<string, unknown>;
     expect(finalWrite['theme']).toBe('test-theme');
@@ -309,125 +251,60 @@ describe('config:save workspace layer reset', () => {
   });
 });
 
-describe('provider API key lifecycle', () => {
-  it('hydrates keychain keys before redacting config:get results', async () => {
-    const hydrated = {
-      ...configState,
+describe('provider configuration boundary (U1)', () => {
+  it('rejects a nonempty legacy providers update before it writes', async () => {
+    await expect(callSave({
       providers: {
-        default: {
-          ...(configState.providers as Record<string, Record<string, unknown>>).default,
-          api_key: 'sk-runtime-secret',
-        },
+        legacy: { base_url: 'https://legacy.example.invalid/v1', models: {} },
       },
-    };
-    const redacted = {
-      ...hydrated,
-      providers: {
-        default: {
-          ...(hydrated.providers as Record<string, Record<string, unknown>>).default,
-          api_key: 'sk-...cret',
-        },
-      },
-    };
-    mocks.injectKeychainKeys.mockResolvedValue(hydrated);
-    mocks.redactConfig.mockReturnValue(redacted);
+    })).rejects.toThrow(/legacy provider aliases are no longer accepted/i);
 
-    const result = await getConfigHandler()(null);
-
-    expect(mocks.injectKeychainKeys).toHaveBeenCalledWith(configState);
-    expect(mocks.redactConfig).toHaveBeenCalledWith(hydrated);
-    expect(result).toEqual(redacted);
+    expect(mocks.writtenConfigs).toHaveLength(0);
+    expect(mocks.getConfigCalls).toBe(0);
   });
 
-  it('moves an existing key when a provider is explicitly renamed', async () => {
-    configState.providers = {
-      legacy: { base_url: 'https://legacy.example.com', models: {} },
-    };
-    mocks.retrieveAndDecrypt.mockResolvedValue('sk-existing-secret');
+  it('rejects the retired providerRenames payload before it writes', async () => {
+    await expect(callRawSave({
+      updates: { theme: 'should-not-write' },
+      providerRenames: [{ from: 'legacy', to: 'work' }],
+    })).rejects.toThrow(/providerRenames/i);
 
-    await callSave(
+    expect(mocks.writtenConfigs).toHaveLength(0);
+    expect(mocks.getConfigCalls).toBe(0);
+  });
+
+  it('returns no providers or API-key-shaped provider state from config:get', async () => {
+    configState.providers = {
+      legacy: {
+        base_url: 'https://legacy.example.invalid/v1',
+        api_key: 'test-only-not-a-secret',
+      },
+    };
+
+    const result = await getConfigHandler()(null) as Record<string, unknown>;
+
+    expect(result['providers']).toEqual({});
+    expect(result).not.toHaveProperty('api_key');
+    expect(JSON.stringify(result)).not.toContain('test-only-not-a-secret');
+  });
+
+  it('exposes only a non-secret legacy reset diagnostic to the renderer', async () => {
+    const loader = await import('../../src/main/config/loader');
+    vi.mocked(loader.getConfigDiagnostics).mockReturnValueOnce([
       {
-        providers: {
-          legacy: null,
-          current: { base_url: 'https://current.example.com', models: {} },
-        },
+        code: 'legacy-provider-config-reset',
+        message: 'Legacy provider configuration was ignored.',
       },
-      [{ from: 'legacy', to: 'current' }],
-    );
+    ]);
 
-    expect(mocks.retrieveAndDecrypt).toHaveBeenCalledWith(
-      'provider:legacy:api_key',
-    );
-    expect(mocks.encryptAndStore).toHaveBeenCalledWith(
-      'provider:current:api_key',
-      'sk-existing-secret',
-    );
-    expect(mocks.deleteKey).toHaveBeenCalledWith('provider:legacy:api_key');
-  });
-
-  it('deletes keychain entries for removed providers', async () => {
-    configState.providers = {
-      removeMe: { base_url: 'https://remove.example.com', models: {} },
-    };
-
-    await callSave({ providers: { removeMe: null } });
-
-    expect(mocks.deleteKey).toHaveBeenCalledWith('provider:removeMe:api_key');
-  });
-
-  it('clears stale keys when adding a provider without a new key', async () => {
-    configState.providers = {};
-
-    await callSave({
-      providers: {
-        reused: { base_url: 'https://reused.example.com', models: {} },
-      },
-    });
-
-    expect(mocks.deleteKey).toHaveBeenCalledWith('provider:reused:api_key');
-  });
-
-  it('clears a stale target key when a renamed provider has no source key', async () => {
-    configState.providers = {
-      legacy: { base_url: 'https://legacy.example.com', models: {} },
-    };
-    mocks.retrieveAndDecrypt.mockResolvedValue(null);
-
-    await callSave(
+    await expect(getDiagnosticsHandler()(null)).resolves.toEqual([
       {
-        providers: {
-          legacy: null,
-          current: { base_url: 'https://current.example.com', models: {} },
-        },
+        code: 'legacy-provider-config-reset',
+        message: 'Legacy provider configuration was ignored.',
       },
-      [{ from: 'legacy', to: 'current' }],
-    );
-
-    expect(mocks.deleteKey).toHaveBeenCalledWith('provider:current:api_key');
-  });
-
-  it('never stores a redacted key returned by config:get', async () => {
-    configState.providers = {
-      existing: { base_url: 'https://existing.example.com', models: {} },
-    };
-    mocks.retrieveAndDecrypt.mockResolvedValue('sk-runtime-secret');
-
-    await callSave({
-      providers: {
-        existing: {
-          base_url: 'https://existing.example.com',
-          api_key: 'sk-...cret',
-          models: {},
-        },
-      },
+    ]);
+    expect(loader.getConfigDiagnostics).toHaveBeenCalledWith({
+      projectDir: '/tmp/orchid-test-home',
     });
-
-    expect(mocks.encryptAndStore).not.toHaveBeenCalledWith(
-      'provider:existing:api_key',
-      'sk-...cret',
-    );
-    const finalWrite = mocks.writtenConfigs.at(-1) as Record<string, unknown>;
-    const providers = finalWrite.providers as Record<string, Record<string, unknown>>;
-    expect(providers.existing.api_key).toBeUndefined();
   });
 });

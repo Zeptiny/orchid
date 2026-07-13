@@ -9,6 +9,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Session } from '../../shared/types/session';
+import type { ModelSelection } from '../../shared/types/provider';
 import type { SessionSummary } from '../../shared/types/ipc-boundary';
 import type { WorkspaceInfo } from '../../shared/types/ipc';
 import { ChainStatus } from '../../shared/types/chain';
@@ -45,8 +46,8 @@ export interface UseSessionReturn {
   deleteSession: (id: string) => Promise<void>;
   /** Rename a session. */
   rename: (id: string, name: string) => Promise<void>;
-  /** Change the model for a session (active only in main). */
-  changeModel: (id: string, model: string) => Promise<void>;
+  /** Change the connection-scoped selection for a session (active only in main). */
+  changeModel: (id: string, selection: ModelSelection | null, modelLabel?: string | null) => Promise<void>;
   /** Resolve current workspace from main. */
   getWorkspace: () => Promise<WorkspaceInfo | null>;
   /** Native folder picker — binds draft/session + sticky default. */
@@ -244,7 +245,7 @@ export function useSession(): UseSessionReturn {
         sessions: [{
           id: session.id,
           name: session.name,
-          model: session.model,
+          modelLabel: session.modelLabel,
           cwd: session.cwd,
           chainCount: session.chains.length,
           updatedAt: Date.now(),
@@ -387,26 +388,42 @@ export function useSession(): UseSessionReturn {
   );
 
   const changeModel = useCallback(
-    async (id: string, model: string) => {
+    async (id: string, selection: ModelSelection | null, modelLabel?: string | null) => {
+      const resolvedModelLabel = modelLabel ?? selection?.modelId ?? null;
       if (!window.orchid?.session?.changeModel) {
         if (activeSession?.id === id) {
-          setActiveSession((prev) => (prev ? { ...prev, model } : null));
+          setActiveSession((prev) => (prev ? {
+            ...prev,
+            selection,
+            modelLabel: resolvedModelLabel,
+          } : null));
         }
         setListState((prev) => {
           if (prev.status !== 'ready' && prev.status !== 'partial') return prev;
           return {
             ...prev,
             sessions: prev.sessions.map((s) =>
-              s.id === id ? { ...s, model } : s,
+              s.id === id ? {
+                ...s,
+                modelLabel: resolvedModelLabel,
+              } : s,
             ),
           };
         });
         return;
       }
 
-      await window.orchid.session.changeModel(id, model);
+      await window.orchid.session.changeModel(
+        id,
+        selection,
+        resolvedModelLabel,
+      );
       if (activeSession?.id === id) {
-        setActiveSession((prev) => (prev ? { ...prev, model } : null));
+        setActiveSession((prev) => (prev ? {
+          ...prev,
+          selection,
+          modelLabel: resolvedModelLabel,
+        } : null));
       }
       await refresh();
     },
@@ -440,14 +457,16 @@ function makeLocalSession(): Session {
   return {
     id: sessionId,
     name: 'Local Session',
-    model: '',
+    selection: null,
+    modelLabel: null,
     cwd: null,
     chains: [{
       id: chainId,
       sessionId,
       messages: [],
       status: ChainStatus.ACTIVE,
-      model: '',
+      selection: null,
+      modelLabel: null,
       agentName: 'general',
       agentType: 'internal',
       agentTier: 'bloom',

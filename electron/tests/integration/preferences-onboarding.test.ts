@@ -76,7 +76,7 @@ afterEach(() => {
 
 // ─── Provider Detection ─────────────────────────────────────────────────────
 
-describe('Provider Detection', () => {
+describe.skip('Legacy renderer provider detection (removed by U1)', () => {
   it('detectProviders returns a result with providers array', async () => {
     const result = await detectProviders();
     expect(result).toHaveProperty('providers');
@@ -118,7 +118,7 @@ describe('Provider Detection', () => {
 
 // ─── API Key Masking ─────────────────────────────────────────────────────────
 
-describe('API Key Masking', () => {
+describe.skip('Legacy renderer API-key handling (removed by U1)', () => {
   it('masks long keys showing last 4 chars', () => {
     const masked = maskApiKey('sk-abc123def456ghij');
     expect(masked).toMatch(/\*+ghij$/);
@@ -140,7 +140,7 @@ describe('API Key Masking', () => {
 
 // ─── Provider Config Builder ─────────────────────────────────────────────────
 
-describe('Provider Config Builder', () => {
+describe.skip('Legacy provider-config builder (removed by U1)', () => {
   it('builds providers config from confirmed providers', () => {
     const providers: DetectedProvider[] = [
       {
@@ -210,6 +210,27 @@ describe('Provider Config Builder', () => {
     expect(Object.keys(config)).toHaveLength(2);
     expect(config).toHaveProperty('openai');
     expect(config).toHaveProperty('anthropic');
+  });
+});
+
+describe('Local-only onboarding (U1)', () => {
+  it('returns no provider or credential-derived renderer data', async () => {
+    await expect(detectProviders()).resolves.toEqual({ providers: [], errors: [] });
+    expect(maskApiKey('not-a-real-key')).toBe('unavailable');
+  });
+
+  it('never constructs a legacy providers config from renderer data', () => {
+    const providers: DetectedProvider[] = [{
+      id: 'legacy',
+      name: 'Legacy',
+      method: 'env-var',
+      baseUrl: 'https://legacy.example.invalid',
+      litellmProvider: 'openai',
+      maskedKey: 'unavailable',
+      models: ['model'],
+      detected: true,
+    }];
+    expect(buildProvidersConfig(providers)).toEqual({});
   });
 });
 
@@ -297,28 +318,16 @@ describe('Onboarding Flow', () => {
 
   it('onboarding skip uses defaults', () => {
     const defaultConfig = defaults();
-    // When user skips, we use the full default config
-    expect(defaultConfig.default_model).toBeTruthy();
+    // Skip enters local-only Orchid with no inferred provider/model.
+    expect(defaultConfig.default_model).toBeNull();
+    expect(defaultConfig.providers).toEqual({});
     expect(defaultConfig.theme).toBeTruthy();
     expect(defaultConfig.personality).toBeTruthy();
   });
 
-  it('onboarding complete saves detected providers', async () => {
+  it('onboarding complete saves only ordinary local preferences', async () => {
     const config = {
-      providers: {
-        ollama: {
-          base_url: 'http://localhost:11434',
-          litellmProvider: 'ollama',
-          models: { 'llama3:latest': {} },
-        },
-      },
-      default_model: 'ollama/llama3:latest',
-      tier_models: {
-        seed: 'ollama/llama3:latest',
-        sprout: 'ollama/llama3:latest',
-        bloom: 'ollama/llama3:latest',
-        crown: 'ollama/llama3:latest',
-      },
+      theme: 'default',
     };
 
     await mockOrchid.config.save({ updates: config });

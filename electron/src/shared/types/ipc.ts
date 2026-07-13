@@ -10,6 +10,7 @@
 import type { Session } from './session';
 import type { Agent } from './agent';
 import type { Usage } from './message';
+import type { ModelSelection } from './provider';
 import type {
   AgentSaveMessage,
   DefinitionDeleteMessage,
@@ -25,8 +26,8 @@ import type {
   SessionSummary,
   SessionActivity,
   Config,
+  ConfigDiagnostic,
   ModelMetadata,
-  DiscoveredModel,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -55,6 +56,7 @@ export type {
   SessionSummary,
   SessionActivity,
   Config,
+  ConfigDiagnostic,
   ModelMetadata,
   DiscoveredModel,
   MCPServerStatus,
@@ -79,7 +81,7 @@ export interface ChatSendMessage {
    * Preferred model when auto-creating a session on first send (draft mode).
    * Ignored when an active session already exists.
    */
-  model?: string;
+  model?: ModelSelection | null;
   /** Renderer draft generation; prevents stale lazy-create events stealing selection. */
   draftGeneration?: number;
 }
@@ -233,15 +235,8 @@ export interface BgCommandSnapshotResult {
 
 // ── Config API ───────────────────────────────────────────────────────────────
 
-export interface ProviderRename {
-  from: string;
-  to: string;
-}
-
 export interface ConfigSaveMessage {
   updates: Partial<Config>;
-  /** Explicit provider alias changes so keychain entries can follow renames safely. */
-  providerRenames?: ProviderRename[];
 }
 
 // ── Session API ──────────────────────────────────────────────────────────────
@@ -298,7 +293,8 @@ export type SessionUpdatedEvent = SessionCreatedEvent;
 
 export interface SessionChangeModelMessage {
   id: string;
-  model: string;
+  selection: ModelSelection | null;
+  modelLabel?: string | null;
 }
 
 /** Source of the resolved workspace path. */
@@ -420,9 +416,9 @@ export interface OrchidAPI {
 
   config: {
     get: () => Promise<Config>;
+    diagnostics: () => Promise<ConfigDiagnostic[]>;
     save: (updates: ConfigSaveMessage) => Promise<{ status: string }>;
     modelMetadata: (modelId: string) => Promise<ModelMetadata>;
-    discoverModels: (alias: string, force?: boolean) => Promise<DiscoveredModel[]>;
     /** List personality names loaded from `~/.orchid/personalities/*.md`. */
     listPersonalities: () => Promise<string[]>;
   };
@@ -438,7 +434,7 @@ export interface OrchidAPI {
     clearActive: () => Promise<{ status: string }>;
     delete: (id: SessionDeleteMessage) => Promise<{ status: string }>;
     rename: (id: string, name: string) => Promise<{ status: string }>;
-    changeModel: (id: string, model: string) => Promise<{ status: string }>;
+    changeModel: (id: string, selection: ModelSelection | null, modelLabel?: string | null) => Promise<{ status: string }>;
     /** Resolve current workspace (draft → session → sticky default → unbound). */
     getWorkspace: () => Promise<WorkspaceInfo>;
     /**
@@ -564,9 +560,9 @@ export const IPC_CHANNELS = {
 
   // Config
   CONFIG_GET: 'config:get',
+  CONFIG_DIAGNOSTICS: 'config:diagnostics',
   CONFIG_SAVE: 'config:save',
   CONFIG_MODEL_METADATA: 'config:model_metadata',
-  CONFIG_DISCOVER_MODELS: 'config:discover_models',
   CONFIG_LIST_PERSONALITIES: 'config:list_personalities',
 
   // Session
@@ -659,9 +655,9 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.CHAT_STOP,
   IPC_CHANNELS.CHAT_SNAPSHOT,
   IPC_CHANNELS.CONFIG_GET,
+  IPC_CHANNELS.CONFIG_DIAGNOSTICS,
   IPC_CHANNELS.CONFIG_SAVE,
   IPC_CHANNELS.CONFIG_MODEL_METADATA,
-  IPC_CHANNELS.CONFIG_DISCOVER_MODELS,
   IPC_CHANNELS.CONFIG_LIST_PERSONALITIES,
   IPC_CHANNELS.SESSION_LIST,
   IPC_CHANNELS.SESSION_LOAD,

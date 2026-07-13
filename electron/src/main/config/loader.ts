@@ -9,8 +9,10 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { ModelSelection } from '../../shared/types/provider';
+import type { ConfigDiagnostic } from '../../shared/types/ipc-boundary';
 import { configSchema, defaults, type Config } from './schema';
-import { mergeLayers, applyEnvOverrides } from './merge';
+import { mergeLayers, applyEnvOverrides, isPlainObject } from './merge';
 import { validateConfig } from './validation';
 
 // ---------------------------------------------------------------------------
@@ -35,6 +37,11 @@ export interface LoadConfigOptions {
   homeConfigPath?: string;
 }
 
+const LEGACY_PROVIDER_CONFIG_RESET_DIAGNOSTIC: ConfigDiagnostic = {
+  code: 'legacy-provider-config-reset',
+  message: 'Legacy provider configuration was ignored. Choose a provider connection and model to enable LLM features.',
+};
+
 // ---------------------------------------------------------------------------
 // File I/O helpers
 // ---------------------------------------------------------------------------
@@ -42,24 +49,80 @@ export interface LoadConfigOptions {
 function loadJson(filePath: string): Record<string, unknown> {
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(raw) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(raw);
+    return isPlainObject(parsed) ? parsed : {};
   } catch {
     return {};
   }
 }
 
 /**
- * Strip `null` values from a dict so they don't shadow dataclass defaults.
- * Matches Python `config.py:154-170`.
+ * Remove development-era provider state before it can reach the executable
+ * config. String alias/model values are not transformed into a connection:
+ * they are discarded, while unrelated preferences remain intact.
  */
-function convertFromDict(data: Record<string, unknown>): Record<string, unknown> {
+function sanitizeConfigLayer(data: Record<string, unknown>): {
+  config: Record<string, unknown>;
+  resetLegacyProviderState: boolean;
+} {
   const result: Record<string, unknown> = {};
+  let resetLegacyProviderState = false;
+
   for (const [k, v] of Object.entries(data)) {
-    if (v !== null) {
-      result[k] = v;
+    if (k === 'providers') {
+      // An empty map is the new IPC compatibility shape, not legacy state.
+      if (v !== null && (!isPlainObject(v) || Object.keys(v).length > 0)) {
+        resetLegacyProviderState = true;
+      }
+      continue;
     }
+
+    if (k === 'default_model' && typeof v === 'string') {
+      resetLegacyProviderState = true;
+      continue;
+    }
+
+    if (k === 'tier_models') {
+      if (typeof v === 'string') {
+        resetLegacyProviderState = true;
+        continue;
+      }
+      if (isPlainObject(v)) {
+        const tiers: Record<string, unknown> = {};
+        for (const [tier, selection] of Object.entries(v)) {
+          if (typeof selection === 'string') {
+            resetLegacyProviderState = true;
+            continue;
+          }
+          tiers[tier] = selection;
+        }
+        result[k] = tiers;
+        continue;
+      }
+    }
+
+    if (k === 'rag' && isPlainObject(v)) {
+      const rag = { ...v };
+      // API embedding aliases relied on the same retired provider alias
+      // resolver as chat. Until U4 introduces connection-scoped embedding
+      // selections, preserve local ONNX behavior instead of issuing a request.
+      if (typeof rag.embedding_api_model === 'string') {
+        delete rag.embedding_api_model;
+        resetLegacyProviderState = true;
+      }
+      result[k] = rag;
+      continue;
+    }
+
+    // Preserve an explicit nullable default selection; retain the prior
+    // behavior for nulls in unrelated config fields.
+    if (v === null && k !== 'default_model') {
+      continue;
+    }
+    result[k] = v;
   }
-  return result;
+
+  return { config: result, resetLegacyProviderState };
 }
 
 /**
@@ -113,7 +176,10 @@ export function atomicWriteJson(filePath: string, data: unknown): void {
  * @param options.projectDir  Directory to search for `.orchid.json`. Defaults to cwd.
  * @param options.homeConfigPath  Override path to home config file (for testing).
  */
-export function loadConfig(options?: LoadConfigOptions | string): Config {
+function loadConfigWithDiagnostics(options?: LoadConfigOptions | string): {
+  config: Config;
+  diagnostics: ConfigDiagnostic[];
+} {
   const opts: LoadConfigOptions = typeof options === 'string'
     ? { projectDir: options }
     : options ?? {};
@@ -125,22 +191,36 @@ export function loadConfig(options?: LoadConfigOptions | string): Config {
   const mergedDict = defaultCfg as unknown as Record<string, unknown>;
 
   // Layer 1: home config
-  const homeRaw = loadJson(homePath);
-  const home = convertFromDict(homeRaw);
+  const home = sanitizeConfigLayer(loadJson(homePath));
 
   // Layer 2: project config
   const projectPath = path.join(projectDir, PROJECT_CONFIG_NAME);
-  const projectRaw = loadJson(projectPath);
-  const project = convertFromDict(projectRaw);
+  const project = sanitizeConfigLayer(loadJson(projectPath));
 
   // Merge all layers
-  const merged = mergeLayers(mergedDict, home, project);
+  const merged = mergeLayers(mergedDict, home.config, project.config);
 
   // Layer 3: env overrides
   applyEnvOverrides(merged);
 
   // Validate with zod (type checking + basic constraints)
-  return configSchema.parse(merged);
+  return {
+    config: configSchema.parse(merged),
+    diagnostics: home.resetLegacyProviderState || project.resetLegacyProviderState
+      ? [{ ...LEGACY_PROVIDER_CONFIG_RESET_DIAGNOSTIC }]
+      : [],
+  };
+}
+
+export function loadConfig(options?: LoadConfigOptions | string): Config {
+  return loadConfigWithDiagnostics(options).config;
+}
+
+/** Read non-secret legacy-reset notices for a specific config layer set. */
+export function getConfigDiagnostics(
+  options?: LoadConfigOptions | string,
+): ConfigDiagnostic[] {
+  return loadConfigWithDiagnostics(options).diagnostics;
 }
 
 /**
@@ -186,10 +266,16 @@ export function ensureHomeConfig(): void {
 export class ConfigManager {
   private static _instance: Config | null = null;
   private static _errors: string[] = [];
+  private static _diagnostics: ConfigDiagnostic[] = [];
 
   /** Return validation errors from the last load. */
   static errors(): string[] {
     return [...ConfigManager._errors];
+  }
+
+  /** Return non-secret load/reset notices from the current config lifecycle. */
+  static diagnostics(): ConfigDiagnostic[] {
+    return ConfigManager._diagnostics.map((diagnostic) => ({ ...diagnostic }));
   }
 
   /** Load config (cached after first call). Use `reset()` to reload. */
@@ -198,16 +284,18 @@ export class ConfigManager {
       return ConfigManager._instance;
     }
 
-    const cfg = loadConfig(options);
-    ConfigManager._errors = validateConfig(cfg);
-    ConfigManager._instance = cfg;
-    return cfg;
+    const loaded = loadConfigWithDiagnostics(options);
+    ConfigManager._errors = validateConfig(loaded.config);
+    ConfigManager._diagnostics = loaded.diagnostics;
+    ConfigManager._instance = loaded.config;
+    return loaded.config;
   }
 
   /** Clear cached config so the next `load()` re-reads from disk. */
   static reset(): void {
     ConfigManager._instance = null;
     ConfigManager._errors = [];
+    ConfigManager._diagnostics = [];
   }
 
   /**
@@ -216,7 +304,18 @@ export class ConfigManager {
    */
   static save(): void {
     if (ConfigManager._instance === null) return;
-    atomicWriteJson(HOME_CONFIG_PATH, ConfigManager._instance);
+    const sanitized = sanitizeConfigLayer(
+      ConfigManager._instance as unknown as Record<string, unknown>,
+    );
+    const config = configSchema.parse({ ...sanitized.config, providers: {} });
+    ConfigManager._instance = config;
+    ConfigManager._errors = validateConfig(config);
+    if (sanitized.resetLegacyProviderState) {
+      ConfigManager._diagnostics = [{ ...LEGACY_PROVIDER_CONFIG_RESET_DIAGNOSTIC }];
+    } else {
+      ConfigManager._diagnostics = [];
+    }
+    atomicWriteJson(HOME_CONFIG_PATH, config);
   }
 }
 
@@ -230,7 +329,7 @@ export function getConfig(): Config {
 }
 
 /** Get the model for a specific tier, falling back to default_model. */
-export function getModelForTier(tier: string): string {
+export function getModelForTier(tier: string): ModelSelection | null {
   const cfg = getConfig();
   return cfg.tier_models[tier] ?? cfg.default_model;
 }

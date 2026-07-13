@@ -18,6 +18,7 @@ import { assign, setup, fromCallback, type ActorRefFrom } from 'xstate';
 import type { StreamEvent } from '../../llm/orchestrator';
 import type { SubagentEvent } from './events';
 import type { Agent } from '../../../shared/types/agent';
+import type { ModelSelection } from '../../../shared/types/provider';
 
 // ── Context ─────────────────────────────────────────────────────────────────
 
@@ -32,8 +33,8 @@ export interface SubagentContext {
   agent: Agent;
   /** System prompt for the subagent. */
   systemPrompt: string;
-  /** Model to use (may differ from parent). */
-  model: string | null;
+  /** Frozen connection-scoped selection (may differ from parent). */
+  selection: ModelSelection | null;
   /** Accumulated response text. */
   response: string;
   /** Error message if failed. */
@@ -55,7 +56,7 @@ export type SubagentStreamFn = (params: {
   agent: Agent;
   systemPrompt: string;
   abortSignal: AbortSignal;
-  model?: string | null;
+  selection?: ModelSelection | null;
 }) => AsyncGenerator<StreamEvent>;
 
 // ── Stream callback input ───────────────────────────────────────────────────
@@ -64,7 +65,7 @@ interface SubagentStreamInput {
   task: string;
   agent: Agent;
   systemPrompt: string;
-  model: string | null;
+  selection: ModelSelection | null;
   abortController: AbortController;
   streamFn: SubagentStreamFn;
 }
@@ -87,7 +88,7 @@ const subagentStreamCallback = fromCallback(
     receive: (callback: (event: SubagentEvent) => void) => void;
     input: SubagentStreamInput;
   }) => {
-    const { task, agent, systemPrompt, model, abortController, streamFn } = input;
+    const { task, agent, systemPrompt, selection, abortController, streamFn } = input;
     let cancelled = false;
 
     // Listen for CANCEL events from parent
@@ -106,7 +107,7 @@ const subagentStreamCallback = fromCallback(
           agent,
           systemPrompt,
           abortSignal: abortController.signal,
-          model,
+          selection,
         });
 
         for await (const event of stream) {
@@ -173,7 +174,7 @@ export const subagentMachine = setup({
       task: string;
       agent: Agent;
       systemPrompt: string;
-      model?: string | null;
+      selection?: ModelSelection | null;
       streamFn: SubagentStreamFn;
     },
   },
@@ -189,7 +190,7 @@ export const subagentMachine = setup({
     task: input.task,
     agent: input.agent,
     systemPrompt: input.systemPrompt,
-    model: input.model ?? null,
+    selection: input.selection ?? null,
     response: '',
     error: null,
     abortController: null,
@@ -213,7 +214,7 @@ export const subagentMachine = setup({
           task: context.task,
           agent: context.agent,
           systemPrompt: context.systemPrompt,
-          model: context.model,
+          selection: context.selection,
           abortController: context.abortController ?? new AbortController(),
           streamFn: context.streamFn,
         }),

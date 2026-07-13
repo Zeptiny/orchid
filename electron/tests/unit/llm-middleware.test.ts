@@ -632,7 +632,7 @@ describe('Throttle middleware', () => {
 // Provider resolution tests
 // ---------------------------------------------------------------------------
 
-describe('Provider resolution', () => {
+describe.skip('Legacy provider resolution (removed by U1)', () => {
   it('resolves work-openai/gpt-4o with custom base_url', () => {
     const config = defaults();
     config.providers = {
@@ -794,6 +794,29 @@ describe('Provider resolution', () => {
 
     const result = resolveModelRef('envtest/gpt-4o', config);
     expect(result.apiKey).toBeUndefined();
+  });
+});
+
+describe('Provider resolution U1 gate', () => {
+  it.each([
+    'no-slash',
+    'legacy/gpt-4o',
+    'custom/vendor/path/model',
+  ])('fails closed for legacy reference %s', (legacyReference) => {
+    const injectedLegacyConfig = {
+      ...defaults(),
+      providers: {
+        legacy: {
+          base_url: 'https://legacy.example.test/v1',
+          api_key: 'must-not-be-used',
+          models: {},
+        },
+      },
+    } as Config;
+
+    expect(() => resolveModelRef(legacyReference, injectedLegacyConfig)).toThrow(
+      /typed model selection/i,
+    );
   });
 });
 

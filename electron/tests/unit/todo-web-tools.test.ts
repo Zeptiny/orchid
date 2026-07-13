@@ -8,6 +8,9 @@
  *   raw mode, large content caching
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { TodoStore } from '../../src/main/tools/todo/store';
 import { buildCreateTool } from '../../src/main/tools/todo/create';
 import { buildUpdateTool } from '../../src/main/tools/todo/update';
@@ -736,6 +739,7 @@ describe('Web Fetch Tools', () => {
 
       // Mock fetch
       const originalFetch = globalThis.fetch;
+      const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-web-fetch-'));
       globalThis.fetch = vi.fn().mockResolvedValue({
         ok: true,
         url: 'https://example.com/large',
@@ -745,7 +749,7 @@ describe('Web Fetch Tools', () => {
       } as unknown as Response);
 
       try {
-        const { handler } = buildWebFetchTool();
+        const { handler } = buildWebFetchTool({ cacheRoot });
         const result = (await handler(
           {
             url: 'https://example.com/large',
@@ -760,6 +764,7 @@ describe('Web Fetch Tools', () => {
         expect(result.content).toContain('test-session');
       } finally {
         globalThis.fetch = originalFetch;
+        fs.rmSync(cacheRoot, { recursive: true, force: true });
       }
     });
 

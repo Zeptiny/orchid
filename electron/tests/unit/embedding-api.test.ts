@@ -86,15 +86,14 @@ describe('Config schema with embedding_api_model', () => {
     expect(cfg.rag.embedding_api_model).toBeNull();
   });
 
-  it('accepts a string value for embedding_api_model', () => {
-    const cfg = configSchema.parse({
+  it('rejects a legacy string embedding alias', () => {
+    expect(() => configSchema.parse({
       ...defaults(),
       rag: {
         ...defaults().rag,
         embedding_api_model: 'openai/text-embedding-3-small',
       },
-    });
-    expect(cfg.rag.embedding_api_model).toBe('openai/text-embedding-3-small');
+    })).toThrow(/null/i);
   });
 
   it('accepts null for embedding_api_model', () => {
@@ -105,7 +104,7 @@ describe('Config schema with embedding_api_model', () => {
     expect(cfg.rag.embedding_api_model).toBeNull();
   });
 
-  it('mode enum accepts chat and embeddings, rejects completion', () => {
+  it('rejects deprecated provider model metadata in general config', () => {
     const cfg = defaults();
     const providers = {
       p: {
@@ -117,9 +116,7 @@ describe('Config schema with embedding_api_model', () => {
         },
       },
     };
-    const parsed = configSchema.parse({ ...cfg, providers });
-    expect((parsed.providers.p.models as Record<string, unknown>)['m1']).toEqual({ mode: 'chat' });
-    expect((parsed.providers.p.models as Record<string, unknown>)['m2']).toEqual({ mode: 'embeddings' });
+    expect(() => configSchema.parse({ ...cfg, providers })).toThrow(/providers is deprecated/i);
   });
 });
 

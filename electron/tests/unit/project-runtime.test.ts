@@ -30,6 +30,23 @@ let homePersonalitiesDir: string;
 let projectA: string;
 let projectB: string;
 
+const HOME_SELECTION = {
+  connectionId: '11111111-1111-4111-8111-111111111111',
+  modelId: 'home/model',
+};
+const PROJECT_A_SELECTION = {
+  connectionId: '22222222-2222-4222-8222-222222222222',
+  modelId: 'project-a/model',
+};
+const PROJECT_B_SELECTION = {
+  connectionId: '33333333-3333-4333-8333-333333333333',
+  modelId: 'project-b/model',
+};
+const PROJECT_A_UPDATED_SELECTION = {
+  connectionId: '44444444-4444-4444-8444-444444444444',
+  modelId: 'project-a/updated',
+};
+
 function writeJson(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf-8');
@@ -112,13 +129,13 @@ beforeEach(() => {
   fs.mkdirSync(projectA, { recursive: true });
   fs.mkdirSync(projectB, { recursive: true });
 
-  writeJson(homeConfigPath, { default_model: 'home/model' });
+  writeJson(homeConfigPath, { default_model: HOME_SELECTION });
   writeAgent(homeAgentsDir, 'shared-agent', 'Home agent');
   writeSkill(homeSkillsDir, 'shared-skill', 'Home skill');
   writePersonality(homePersonalitiesDir, 'voice', 'Home voice');
 
   writeJson(path.join(projectA, '.orchid.json'), {
-    default_model: 'project-a/model',
+    default_model: PROJECT_A_SELECTION,
   });
   writeAgent(
     path.join(projectA, '.orchid', 'agents'),
@@ -142,7 +159,7 @@ beforeEach(() => {
   );
 
   writeJson(path.join(projectB, '.orchid.json'), {
-    default_model: 'project-b/model',
+    default_model: PROJECT_B_SELECTION,
   });
   writeAgent(
     path.join(projectB, '.orchid', 'agents'),
@@ -188,14 +205,14 @@ describe('ProjectRuntimeRegistry', () => {
     const runtimeA = registry.get(projectA);
     const runtimeB = registry.get(projectB);
 
-    expect(runtimeA.config.default_model).toBe('project-a/model');
+    expect(runtimeA.config.default_model).toEqual(PROJECT_A_SELECTION);
     expect(runtimeA.agents.get('shared-agent')?.description).toBe('Project A agent');
     expect(runtimeA.agents.has('a-only-agent')).toBe(true);
     expect(runtimeA.agents.has('b-only-agent')).toBe(false);
     expect(runtimeA.skills.get('shared-skill')?.description).toBe('Project A skill');
     expect(runtimeA.personalities.get('voice')).toBe('Project A voice');
 
-    expect(runtimeB.config.default_model).toBe('project-b/model');
+    expect(runtimeB.config.default_model).toEqual(PROJECT_B_SELECTION);
     expect(runtimeB.agents.get('shared-agent')?.description).toBe('Project B agent');
     expect(runtimeB.agents.has('a-only-agent')).toBe(false);
     expect(runtimeB.agents.has('b-only-agent')).toBe(true);
@@ -227,14 +244,14 @@ describe('ProjectRuntimeRegistry', () => {
     expect(registry.size).toBe(1);
 
     writeJson(path.join(projectA, '.orchid.json'), {
-      default_model: 'project-a/updated',
+      default_model: PROJECT_A_UPDATED_SELECTION,
     });
-    expect(registry.get(projectA).config.default_model).toBe('project-a/model');
+    expect(registry.get(projectA).config.default_model).toEqual(PROJECT_A_SELECTION);
 
     expect(registry.invalidate(alias)).toBe(true);
     const reloaded = registry.get(projectA);
     expect(reloaded).not.toBe(fromAlias);
-    expect(reloaded.config.default_model).toBe('project-a/updated');
+    expect(reloaded.config.default_model).toEqual(PROJECT_A_UPDATED_SELECTION);
 
     registry.clear();
     expect(registry.size).toBe(0);

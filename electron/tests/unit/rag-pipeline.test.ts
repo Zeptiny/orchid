@@ -806,6 +806,16 @@ describe('Batch Vector State', () => {
 // ---------------------------------------------------------------------------
 
 describe('Model Download', () => {
+  beforeEach(async () => {
+    const { _setEmbeddingModelsHomeForTests } = await import('../../src/main/rag/embedder');
+    _setEmbeddingModelsHomeForTests(tmpDir);
+  });
+
+  afterEach(async () => {
+    const { _setEmbeddingModelsHomeForTests } = await import('../../src/main/rag/embedder');
+    _setEmbeddingModelsHomeForTests(null);
+  });
+
   it('should skip download if model.onnx already exists', async () => {
     const { downloadModel } = await import('../../src/main/rag/embedder');
 

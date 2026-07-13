@@ -71,6 +71,8 @@ export interface WebFetchOptions {
   sessionId?: string;
   /** Optional callback for summarize mode (uses LLM agent). */
   summarize?: SummarizeCallback;
+  /** Override the application data root for isolated callers/tests. */
+  cacheRoot?: string;
 }
 
 /**
@@ -270,8 +272,13 @@ function slugFromUrl(url: string): string {
  * @param content - The content to cache
  * @returns The path to the cache file
  */
-function writeCacheFile(sessionId: string, url: string, content: string): string {
-  const cacheDir = path.join(HOME_CONFIG_DIR, 'cache', 'web-fetch', sessionId);
+function writeCacheFile(
+  cacheRoot: string,
+  sessionId: string,
+  url: string,
+  content: string,
+): string {
+  const cacheDir = path.join(cacheRoot, 'cache', 'web-fetch', sessionId);
   fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
 
   const filename = slugFromUrl(url);
@@ -417,6 +424,7 @@ export function buildWebFetchTool(
         contentType,
         content,
         ctx?.sessionId ?? options?.sessionId,
+        options?.cacheRoot,
       );
     }
 
@@ -475,6 +483,7 @@ function buildRawResult(
   contentType: string,
   content: string,
   sessionId?: string,
+  cacheRoot: string = HOME_CONFIG_DIR,
 ): WebFetchResult {
   const attrs =
     `url="${url}"` +
@@ -501,7 +510,7 @@ function buildRawResult(
   }
 
   try {
-    const filePath = writeCacheFile(sessionId, url, content);
+    const filePath = writeCacheFile(cacheRoot, sessionId, url, content);
     return {
       display: `Fetched ${content.length} characters to ${filePath}`,
       content:

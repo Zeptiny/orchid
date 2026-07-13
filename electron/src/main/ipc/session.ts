@@ -7,6 +7,7 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
+import { modelSelectionSchema } from '../../shared/types/provider';
 import type { Message } from '../../shared/types/message';
 import type { Session } from '../../shared/types/session';
 import { SessionManager } from '../session/manager';
@@ -44,7 +45,8 @@ const sessionRenameSchema = z.object({
 
 const sessionChangeModelSchema = z.object({
   id: z.string().uuid(),
-  model: z.string().min(1),
+  selection: modelSelectionSchema.nullable(),
+  modelLabel: z.string().nullable().optional(),
 });
 
 const sessionChangeCwdSchema = z.object({
@@ -279,12 +281,20 @@ export function registerSessionIPC(): void {
     }
 
     const manager = getSessionManager();
-    manager.changeModel(parsed.data.id, parsed.data.model);
+    manager.changeModel(
+      parsed.data.id,
+      parsed.data.selection,
+      parsed.data.modelLabel ?? parsed.data.selection?.modelId ?? null,
+    );
     const active = manager.getSession(parsed.data.id);
     if (!active || active.id !== parsed.data.id) {
       return { status: 'not_active' };
     }
-    return { status: 'changed', model: active.model };
+    return {
+      status: 'changed',
+      selection: active.selection,
+      modelLabel: active.modelLabel,
+    };
   });
 
   // session:get_workspace — resolve current workspace for this window

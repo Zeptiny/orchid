@@ -68,7 +68,7 @@ export function partitionSessionsByWorkspace(
   return { inProject, other };
 }
 
-/** Filter sessions by name / model / cwd path (search is global). */
+/** Filter sessions by name / display-only model label / cwd path (search is global). */
 export function filterSessionsByQuery(
   sessions: readonly SessionSummary[],
   query: string,
@@ -78,7 +78,7 @@ export function filterSessionsByQuery(
   return sessions.filter((session) => {
     return (
       session.name.toLowerCase().includes(q) ||
-      (session.model ?? '').toLowerCase().includes(q) ||
+      (session.modelLabel ?? '').toLowerCase().includes(q) ||
       (session.cwd ?? '').toLowerCase().includes(q)
     );
   });

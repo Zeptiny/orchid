@@ -47,8 +47,8 @@ const mocks = vi.hoisted(() => {
       return {
         projectDir: cwd,
         config: {
-          default_model: 'test/model',
-          tier_models: { bloom: 'test/model' },
+          default_model: null,
+          tier_models: { bloom: null },
           command_timeout: 30,
           llm_stream_retries: 0,
         },
@@ -65,8 +65,8 @@ const mocks = vi.hoisted(() => {
     }) => {
       runtimeByCwd.set(cwd, {
         config: runtime.config ?? {
-          default_model: 'test/model',
-          tier_models: { bloom: 'test/model' },
+          default_model: null,
+          tier_models: { bloom: null },
           command_timeout: 30,
           llm_stream_retries: 0,
         },
@@ -287,8 +287,8 @@ vi.mock('electron', () => ({
 vi.mock('../../src/main/config/loader', () => ({
   HOME_PERSONALITIES_DIR: '/tmp/orchid-test-personalities',
   getConfig: vi.fn(() => ({
-    default_model: 'test/model',
-    tier_models: { bloom: 'test/model' },
+    default_model: null,
+    tier_models: { bloom: null },
     command_timeout: 30,
     llm_stream_retries: 0,
   })),
@@ -296,8 +296,8 @@ vi.mock('../../src/main/config/loader', () => ({
 
 vi.mock('../../src/main/config/runtime', () => ({
   getRuntimeConfig: vi.fn(async () => ({
-    default_model: 'test/model',
-    tier_models: { bloom: 'test/model' },
+    default_model: null,
+    tier_models: { bloom: null },
     command_timeout: 30,
     llm_stream_retries: 0,
   })),
@@ -393,6 +393,21 @@ async function waitForDoneCount(send: ReturnType<typeof vi.fn>, count: number) {
   throw new Error(`Timed out waiting for ${count} chat:done events`);
 }
 
+async function waitForChannelCount(
+  send: ReturnType<typeof vi.fn>,
+  channelName: string,
+  count: number,
+) {
+  const deadline = Date.now() + 1000;
+
+  while (Date.now() < deadline) {
+    if (channelEvents(send, channelName).length >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  throw new Error(`Timed out waiting for ${count} ${channelName} event(s)`);
+}
+
 function makeSession(id: string, cwd = mocks.workspace._testProjectDir) {
   return {
     id,
@@ -408,7 +423,7 @@ function makeSession(id: string, cwd = mocks.workspace._testProjectDir) {
   };
 }
 
-describe('chat IPC', () => {
+describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mocks.handlers.clear();
@@ -1286,5 +1301,114 @@ describe('chat IPC', () => {
     expect(failed).toBeDefined();
     const payload = failed![0] as { messages: Array<{ content: string }> };
     expect(payload.messages.some((m) => m.content === 'Will fail')).toBe(true);
+  });
+});
+
+describe('chat IPC provider gates', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    mocks.streamResponses.length = 0;
+    mocks.streamEventSequences.length = 0;
+    mocks.runtimeRegistry._reset();
+    mocks.sessionManager._reset();
+    chatIpc = await import('../../src/main/ipc/chat');
+    chatIpc.registerChatIPC();
+  });
+
+  afterEach(() => {
+    chatIpc.unregisterChatIPC();
+    mocks.handlers.clear();
+    mocks.sessionManager._reset();
+  });
+
+  it('keeps a local workspace usable but fails sending without a typed provider selection', async () => {
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+    expect(chatSend).toBeDefined();
+
+    const result = await chatSend!({ sender: { id: 901, send } }, { message: 'Local only' });
+
+    expect(result).toEqual({
+      status: 'error',
+      error: expect.stringContaining('provider connection and model'),
+      kind: 'provider_required',
+    });
+    expect(mocks.sessionManager.create).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('rejects a legacy alias string before it can create a session or stream', async () => {
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+    expect(chatSend).toBeDefined();
+
+    await expect(
+      chatSend!({ sender: { id: 902, send } }, { message: 'No alias fallback', model: 'legacy/gpt-4o' }),
+    ).rejects.toThrow(/expected object/i);
+
+    expect(mocks.sessionManager.create).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('treats a legacy session label as display-only and requires a new typed selection', async () => {
+    mocks.sessionManager._setActive({
+      id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      name: 'Legacy session',
+      model: 'legacy/provider/model',
+      cwd: mocks.workspace._testProjectDir,
+      chains: [],
+      activeChainId: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      subagentChains: [],
+      todoStore: { tasks: [] },
+    });
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+
+    const result = await chatSend!({ sender: { id: 903, send } }, { message: 'Do not reuse label' });
+
+    expect(result).toMatchObject({ status: 'error', kind: 'provider_required' });
+    expect(mocks.sessionManager.create).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('accepts a typed selection but does not invoke a legacy stream path', async () => {
+    const typedSelection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      name: 'Typed session',
+      model: typedSelection.modelId,
+      selection: typedSelection,
+      modelLabel: typedSelection.modelId,
+      cwd: mocks.workspace._testProjectDir,
+      chains: [],
+      activeChainId: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      subagentChains: [],
+      todoStore: { tasks: [] },
+    } as never);
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+
+    const result = await chatSend!(
+      { sender: { id: 904, send } },
+      { message: 'Use the selected connection' },
+    );
+
+    expect(result).toMatchObject({ status: 'started' });
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_ERROR, 1);
+    expect(channelEvents(send, IPC_CHANNELS.CHAT_ERROR).at(-1)?.[1]).toMatchObject({
+      type: 'error',
+      title: 'Provider driver unavailable',
+      error: expect.stringContaining('not ready for execution'),
+    });
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+    expect(mocks.toolRegistry.get).not.toHaveBeenCalled();
   });
 });

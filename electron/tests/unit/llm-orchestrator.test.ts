@@ -26,7 +26,11 @@ import type { ToolCall } from '../../src/shared/types/tool';
 import type { Agent } from '../../src/shared/types/agent';
 import { AgentType, AgentTier } from '../../src/shared/types/agent';
 import { toApiMessages } from '../../src/main/llm/history';
-import { executeToolCall, maybeOffloadToolOutput } from '../../src/main/llm/tool-dispatch';
+import {
+  _setToolOutputCacheRootForTests,
+  executeToolCall,
+  maybeOffloadToolOutput,
+} from '../../src/main/llm/tool-dispatch';
 import {
   buildToolMap,
   streamChat,
@@ -576,27 +580,29 @@ describe('output offloading', () => {
   it('writes large output to cache file when session ID provided', () => {
     const sessionId = 'test-session-' + Date.now();
     const content = 'x'.repeat(30_000);
+    const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-tool-cache-'));
+    _setToolOutputCacheRootForTests(testHome);
 
-    const result = maybeOffloadToolOutput('execute_command', content, 'tc-1', sessionId);
+    try {
+      const result = maybeOffloadToolOutput('execute_command', content, 'tc-1', sessionId);
 
-    expect(result).toContain('file=');
-    expect(result).toContain('30000');
-    expect(result).toContain('warning');
+      expect(result).toContain('file=');
+      expect(result).toContain('30000');
+      expect(result).toContain('warning');
 
-    // Verify the cache file was created in the real homedir
-    const cacheDir = path.join(os.homedir(), '.orchid', 'cache', 'tool-output', sessionId);
-    expect(fs.existsSync(cacheDir)).toBe(true);
+      const cacheDir = path.join(testHome, '.orchid', 'cache', 'tool-output', sessionId);
+      expect(fs.existsSync(cacheDir)).toBe(true);
 
-    const files = fs.readdirSync(cacheDir);
-    expect(files.length).toBe(1);
-    expect(files[0]).toContain('execute_command');
+      const files = fs.readdirSync(cacheDir);
+      expect(files.length).toBe(1);
+      expect(files[0]).toContain('execute_command');
 
-    // Verify file content
-    const filePath = path.join(cacheDir, files[0]);
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe(content);
-
-    // Cleanup
-    fs.rmSync(cacheDir, { recursive: true, force: true });
+      const filePath = path.join(cacheDir, files[0]);
+      expect(fs.readFileSync(filePath, 'utf-8')).toBe(content);
+    } finally {
+      _setToolOutputCacheRootForTests(null);
+      fs.rmSync(testHome, { recursive: true, force: true });
+    }
   });
 
   it('falls back to truncation when cache write fails', () => {

@@ -135,17 +135,7 @@ function App() {
       {configOpen && <ConfigView onClose={() => setConfigOpen(false)} />}
       <OnboardingScreen
         isOpen={onboardingOpen && onboardingChecked}
-        onComplete={async (config) => {
-          // Save the onboarding config
-          try {
-            if (window.orchid?.config?.save) {
-              await window.orchid.config.save({ updates: config });
-            }
-          } catch {
-            // Non-fatal
-          }
-          setOnboardingOpen(false);
-        }}
+        onComplete={() => setOnboardingOpen(false)}
         onSkip={() => setOnboardingOpen(false)}
       />
     </div>

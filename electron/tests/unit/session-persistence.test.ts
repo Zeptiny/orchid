@@ -38,6 +38,31 @@ import { SessionManager } from '../../src/main/session/manager';
 let tmpDir: string;
 let storageOpts: StorageOptions;
 
+const DEFAULT_SELECTION = {
+  connectionId: '11111111-1111-4111-8111-111111111111',
+  modelId: 'gpt-4o',
+};
+const ANTHROPIC_SELECTION = {
+  connectionId: '22222222-2222-4222-8222-222222222222',
+  modelId: 'anthropic/claude-3.5-sonnet',
+};
+const SESSION_SELECTION = {
+  connectionId: '33333333-3333-4333-8333-333333333333',
+  modelId: 'session-model',
+};
+const OLD_SELECTION = {
+  connectionId: '44444444-4444-4444-8444-444444444444',
+  modelId: 'old-model',
+};
+const PARAM_SELECTION = {
+  connectionId: '55555555-5555-4555-8555-555555555555',
+  modelId: 'param-model',
+};
+const NEW_SELECTION = {
+  connectionId: '66666666-6666-4666-8666-666666666666',
+  modelId: 'new-model',
+};
+
 function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-session-test-'));
 }
@@ -51,12 +76,14 @@ function makeStorageOpts(dir: string): StorageOptions {
 }
 
 /** Create a minimal test session. */
-function makeSession(overrides: Partial<Session> = {}): Session {
+function makeSession(overrides: Partial<Session> & { model?: string } = {}): Session {
   const now = new Date().toISOString();
+  const selection = overrides.selection ?? DEFAULT_SELECTION;
   return {
     id: overrides.id ?? randomUUID(),
     name: overrides.name ?? 'Test Session',
-    model: overrides.model ?? 'gpt-4o',
+    selection,
+    modelLabel: overrides.modelLabel ?? overrides.model ?? selection.modelId,
     cwd: overrides.cwd !== undefined ? overrides.cwd : null,
     chains: overrides.chains ?? [],
     activeChainId: overrides.activeChainId ?? null,
@@ -85,17 +112,16 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
 }
 
 /** Create a minimal chain for pre-seeding sessions. */
-function makeChain(
-  sessionId: string,
-  overrides: Partial<Chain> = {},
-): Chain {
+function makeChain(sessionId: string, overrides: Partial<Chain> & { model?: string } = {}): Chain {
   const now = new Date().toISOString();
+  const selection = overrides.selection ?? DEFAULT_SELECTION;
   return {
     id: overrides.id ?? `chain-${Math.random().toString(36).slice(2, 10)}`,
     sessionId,
     messages: overrides.messages ?? [],
     status: overrides.status ?? ChainStatus.COMPLETED,
-    model: overrides.model ?? 'gpt-4o',
+    selection,
+    modelLabel: overrides.modelLabel ?? overrides.model ?? selection.modelId,
     agentName: overrides.agentName ?? 'General',
     agentType: overrides.agentType ?? 'internal',
     agentTier: overrides.agentTier ?? 'bloom',
@@ -152,6 +178,203 @@ afterEach(() => {
 });
 
 // ===========================================================================
+// V1 → V2 model selection migration
+// ===========================================================================
+
+describe('session selection persistence migration', () => {
+  it('restores v1 model strings as display-only labels and resaves the full session as v2', () => {
+    const sessionId = 'c1111111-1111-4111-8111-111111111111';
+    const now = '2026-07-12T12:00:00.000Z';
+    const sessionsDir = path.join(tmpDir, 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionsDir, `${sessionId}.json`),
+      JSON.stringify({
+        version: 1,
+        id: sessionId,
+        name: 'Historical session',
+        model: 'legacy/session-model',
+        cwd: '/historical/project',
+        chains: [
+          {
+            id: 'legacy-chain',
+            sessionId,
+            messages: [],
+            status: 'completed',
+            model: 'legacy/chain-model',
+            agentName: 'General',
+            agentType: 'internal',
+            agentTier: 'bloom',
+          },
+        ],
+        activeChainId: null,
+        createdAt: now,
+        updatedAt: now,
+        subagent_chains: [
+          {
+            id: 'legacy-subagent',
+            agent_name: 'explorer',
+            agent_type: 'subagent',
+            agent_tier: 'seed',
+            task: 'inspect history',
+            status: 'completed',
+            chain_id: 'legacy-subagent-chain',
+            start_time: now,
+            end_time: now,
+            result: null,
+            error: null,
+            parent_chain_index: 0,
+            chain: {
+              id: 'legacy-subagent-chain',
+              sessionId,
+              messages: [],
+              status: 'completed',
+              model: 'legacy/subagent-model',
+              agentName: 'explorer',
+              agentType: 'subagent',
+              agentTier: 'seed',
+            },
+          },
+        ],
+        todo_store: {
+          tasks: [
+            {
+              id: 'historic-task',
+              title: 'Keep this todo',
+              status: 'OPEN',
+              subagent_id: null,
+              created_at: now,
+              updated_at: now,
+            },
+          ],
+        },
+      }),
+      'utf-8',
+    );
+
+    const loaded = loadSession(sessionId, storageOpts)!;
+    expect(loaded.selection).toBeNull();
+    expect(loaded.modelLabel).toBe('legacy/session-model');
+    expect(loaded.cwd).toBe('/historical/project');
+    expect(loaded.chains[0].selection).toBeNull();
+    expect(loaded.chains[0].modelLabel).toBe('legacy/chain-model');
+    expect(loaded.subagentChains[0].chain.selection).toBeNull();
+    expect(loaded.subagentChains[0].chain.modelLabel).toBe('legacy/subagent-model');
+    expect(loaded.todoStore.tasks[0].title).toBe('Keep this todo');
+
+    saveSession(loaded, storageOpts);
+    const resaved = JSON.parse(
+      fs.readFileSync(path.join(sessionsDir, `${sessionId}.json`), 'utf-8'),
+    ) as Record<string, unknown>;
+    expect(resaved.version).toBe(2);
+    expect(resaved).not.toHaveProperty('model');
+    expect(resaved.selection).toBeNull();
+    expect(resaved.modelLabel).toBe('legacy/session-model');
+    expect(resaved.cwd).toBe('/historical/project');
+    expect(resaved.chains).toHaveLength(1);
+    expect((resaved.chains as Array<Record<string, unknown>>)[0]).toMatchObject({
+      selection: null,
+      modelLabel: 'legacy/chain-model',
+    });
+    expect((resaved.subagent_chains as Array<Record<string, unknown>>)[0].chain).toMatchObject({
+      selection: null,
+      modelLabel: 'legacy/subagent-model',
+    });
+    expect(resaved.todo_store).toMatchObject({
+      tasks: [expect.objectContaining({ id: 'historic-task', title: 'Keep this todo' })],
+    });
+  });
+
+  it('round-trips an exact typed selection whose model ID contains slashes', () => {
+    const sessionId = 'c2222222-2222-4222-8222-222222222222';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    const session = {
+      id: sessionId,
+      name: 'Selected session',
+      selection,
+      modelLabel: 'Vendor Path Model',
+      cwd: '/selected/project',
+      chains: [
+        {
+          id: 'typed-chain',
+          sessionId,
+          messages: [],
+          status: ChainStatus.COMPLETED,
+          selection,
+          modelLabel: 'Vendor Path Model',
+          agentName: 'General',
+          agentType: 'internal',
+          agentTier: 'bloom',
+          subagentRecord: null,
+          startTime: '2026-07-12T12:00:00.000Z',
+          endTime: '2026-07-12T12:00:01.000Z',
+        },
+      ],
+      activeChainId: null,
+      createdAt: '2026-07-12T12:00:00.000Z',
+      updatedAt: '2026-07-12T12:00:01.000Z',
+      subagentChains: [],
+      todoStore: { tasks: [] },
+    } as unknown as Session;
+
+    saveSession(session, storageOpts);
+    const loaded = loadSession(sessionId, storageOpts)!;
+    expect(loaded.selection).toEqual(selection);
+    expect(loaded.modelLabel).toBe('Vendor Path Model');
+    expect(loaded.chains[0].selection).toEqual(selection);
+    expect(loaded.chains[0].modelLabel).toBe('Vendor Path Model');
+
+    const persisted = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, 'sessions', `${sessionId}.json`), 'utf-8'),
+    ) as Record<string, unknown>;
+    expect(persisted.version).toBe(2);
+    expect(persisted).not.toHaveProperty('model');
+    expect(persisted.selection).toEqual(selection);
+    expect((persisted.chains as Array<Record<string, unknown>>)[0].selection).toEqual(selection);
+  });
+
+  it('uses modelLabel from v2 metadata in the fast summary without stringifying selection', () => {
+    const sessionId = 'c3333333-3333-4333-8333-333333333333';
+    const metadata = JSON.stringify({
+      version: 2,
+      id: sessionId,
+      name: 'Fast summary session',
+      selection: {
+        connectionId: '22222222-2222-4222-8222-222222222222',
+        modelId: 'vendor/path/model',
+      },
+      modelLabel: 'Vendor Path Model',
+      cwd: null,
+      chains: [],
+      activeChainId: null,
+      createdAt: '2026-07-12T12:00:00.000Z',
+      updatedAt: '2026-07-12T12:00:01.000Z',
+      subagentChains: [],
+      todoStore: { tasks: [] },
+    });
+    const sessionsDir = path.join(tmpDir, 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    // Invalid trailing JSON proves listSavedSessions used the top-level fast
+    // metadata path rather than parsing the complete document.
+    fs.writeFileSync(
+      path.join(sessionsDir, `${sessionId}.json`),
+      `${metadata.slice(0, -1)},"truncated":`,
+      'utf-8',
+    );
+
+    const summary = listSavedSessions(storageOpts)[0] as unknown as {
+      modelLabel: string | null | undefined;
+    };
+
+    expect(summary.modelLabel).toBe('Vendor Path Model');
+    expect(summary.modelLabel).not.toBe('[object Object]');
+  });
+});
+
+// ===========================================================================
 // Save → load round-trip
 // ===========================================================================
 
@@ -160,7 +383,8 @@ describe('saveSession → loadSession round-trip', () => {
     const session = makeSession({
       id: 'a1111111-1111-4111-8111-111111111111',
       name: 'Round Trip Test',
-      model: 'anthropic/claude-3.5-sonnet',
+      selection: ANTHROPIC_SELECTION,
+      modelLabel: ANTHROPIC_SELECTION.modelId,
     });
 
     saveSession(session, storageOpts);
@@ -169,7 +393,8 @@ describe('saveSession → loadSession round-trip', () => {
     expect(loaded).not.toBeNull();
     expect(loaded!.id).toBe('a1111111-1111-4111-8111-111111111111');
     expect(loaded!.name).toBe('Round Trip Test');
-    expect(loaded!.model).toBe('anthropic/claude-3.5-sonnet');
+    expect(loaded!.selection).toEqual(ANTHROPIC_SELECTION);
+    expect(loaded!.modelLabel).toBe(ANTHROPIC_SELECTION.modelId);
     expect(loaded!.chains).toEqual([]);
     expect(loaded!.activeChainId).toBeNull();
     expect(loaded!.subagentChains).toEqual([]);
@@ -181,7 +406,8 @@ describe('saveSession → loadSession round-trip', () => {
     const session = makeSession({
       id: 'a2222222-2222-4222-8222-222222222222',
       name: 'With Chains',
-      model: 'gpt-4o',
+      selection: DEFAULT_SELECTION,
+      modelLabel: DEFAULT_SELECTION.modelId,
       chains: [
         {
           id: 'chain-1',
@@ -199,8 +425,8 @@ describe('saveSession → loadSession round-trip', () => {
               timestamp: now,
               usage: null,
               hidden: false,
-    is_error: false,
-  },
+              is_error: false,
+            },
             {
               id: 'msg-2',
               role: 'assistant',
@@ -211,13 +437,19 @@ describe('saveSession → loadSession round-trip', () => {
               name: null,
               thinking: null,
               timestamp: now,
-              usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cached_tokens: 0 },
+              usage: {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                total_tokens: 15,
+                cached_tokens: 0,
+              },
               hidden: false,
-    is_error: false,
-  },
+              is_error: false,
+            },
           ],
           status: 'completed',
-          model: 'gpt-4o',
+          selection: DEFAULT_SELECTION,
+          modelLabel: DEFAULT_SELECTION.modelId,
           agentName: 'General',
           agentType: 'internal',
           agentTier: 'bloom',
@@ -250,22 +482,35 @@ describe('saveSession → loadSession round-trip', () => {
   it('load returns null for corrupted JSON', () => {
     const corruptedId = 'b0000000-0000-4000-8000-000000000001';
     fs.mkdirSync(path.join(tmpDir, 'sessions'), { recursive: true });
-    fs.writeFileSync(path.join(tmpDir, 'sessions', `${corruptedId}.json`), 'not valid json{{{', 'utf-8');
+    fs.writeFileSync(
+      path.join(tmpDir, 'sessions', `${corruptedId}.json`),
+      'not valid json{{{',
+      'utf-8',
+    );
     const loaded = loadSession(corruptedId, storageOpts);
     expect(loaded).toBeNull();
   });
 
   it('save overwrites existing session', () => {
-    const session1 = makeSession({ id: 'a3333333-3333-4333-8333-333333333333', name: 'Original Name' });
+    const session1 = makeSession({
+      id: 'a3333333-3333-4333-8333-333333333333',
+      name: 'Original Name',
+    });
     saveSession(session1, storageOpts);
 
-    const session2 = makeSession({ id: 'a3333333-3333-4333-8333-333333333333', name: 'Updated Name', model: 'new-model' });
+    const session2 = makeSession({
+      id: 'a3333333-3333-4333-8333-333333333333',
+      name: 'Updated Name',
+      selection: NEW_SELECTION,
+      modelLabel: NEW_SELECTION.modelId,
+    });
     saveSession(session2, storageOpts);
 
     const loaded = loadSession('a3333333-3333-4333-8333-333333333333', storageOpts);
     expect(loaded).not.toBeNull();
     expect(loaded!.name).toBe('Updated Name');
-    expect(loaded!.model).toBe('new-model');
+    expect(loaded!.selection).toEqual(NEW_SELECTION);
+    expect(loaded!.modelLabel).toBe('new-model');
   });
 
   it('save preserves todoStore data', () => {
@@ -303,7 +548,10 @@ describe('saveSession → loadSession round-trip', () => {
 
 describe('atomic write', () => {
   it('session file uses .tmp during write (no partial on crash)', () => {
-    const session = makeSession({ id: 'a5555555-5555-4555-8555-555555555555', name: 'Atomic Test' });
+    const session = makeSession({
+      id: 'a5555555-5555-4555-8555-555555555555',
+      name: 'Atomic Test',
+    });
     const sessionPath = path.join(tmpDir, 'sessions', 'a5555555-5555-4555-8555-555555555555.json');
     const tmpPath = sessionPath + '.tmp';
 
@@ -364,19 +612,27 @@ describe('listSavedSessions', () => {
   });
 
   it('lists a single session', () => {
-    const session = makeSession({ id: 'a8888888-8888-4888-8888-888888888888', name: 'List Test', model: 'gpt-4o' });
+    const session = makeSession({
+      id: 'a8888888-8888-4888-8888-888888888888',
+      name: 'List Test',
+      selection: DEFAULT_SELECTION,
+      modelLabel: DEFAULT_SELECTION.modelId,
+    });
     saveSession(session, storageOpts);
 
     const sessions = listSavedSessions(storageOpts);
     expect(sessions).toHaveLength(1);
     expect(sessions[0].id).toBe('a8888888-8888-4888-8888-888888888888');
     expect(sessions[0].name).toBe('List Test');
-    expect(sessions[0].model).toBe('gpt-4o');
+    expect(sessions[0].modelLabel).toBe('gpt-4o');
   });
 
   it('lists multiple sessions sorted by mtime (newest first)', () => {
     // Create sessions with slight delays to ensure different mtimes
-    const session1 = makeSession({ id: 'a9999999-9999-4999-8999-999999999999', name: 'Old Session' });
+    const session1 = makeSession({
+      id: 'a9999999-9999-4999-8999-999999999999',
+      name: 'Old Session',
+    });
     saveSession(session1, storageOpts);
 
     // Small delay to ensure different mtime
@@ -385,7 +641,10 @@ describe('listSavedSessions', () => {
       // busy wait
     }
 
-    const session2 = makeSession({ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'New Session' });
+    const session2 = makeSession({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      name: 'New Session',
+    });
     saveSession(session2, storageOpts);
 
     const sessions = listSavedSessions(storageOpts);
@@ -404,7 +663,8 @@ describe('listSavedSessions', () => {
           sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
           messages: [],
           status: 'completed',
-          model: 'gpt-4o',
+          selection: DEFAULT_SELECTION,
+          modelLabel: DEFAULT_SELECTION.modelId,
           agentName: 'General',
           agentType: 'internal',
           agentTier: 'bloom',
@@ -415,7 +675,8 @@ describe('listSavedSessions', () => {
           sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
           messages: [],
           status: 'completed',
-          model: 'gpt-4o',
+          selection: DEFAULT_SELECTION,
+          modelLabel: DEFAULT_SELECTION.modelId,
           agentName: 'General',
           agentType: 'internal',
           agentTier: 'bloom',
@@ -488,7 +749,12 @@ describe('deleteSession', () => {
     saveSession(session, storageOpts);
 
     // Create tool-output cache
-    const toolOutputDir = path.join(tmpDir, 'cache', 'tool-output', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee');
+    const toolOutputDir = path.join(
+      tmpDir,
+      'cache',
+      'tool-output',
+      'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+    );
     fs.mkdirSync(toolOutputDir, { recursive: true });
     fs.writeFileSync(path.join(toolOutputDir, 'output.txt'), 'cached output');
 
@@ -504,7 +770,12 @@ describe('deleteSession', () => {
     saveSession(session, storageOpts);
 
     // Create web-fetch cache
-    const webFetchDir = path.join(tmpDir, 'cache', 'web-fetch', 'ffffffff-ffff-4fff-8fff-ffffffffffff');
+    const webFetchDir = path.join(
+      tmpDir,
+      'cache',
+      'web-fetch',
+      'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    );
     fs.mkdirSync(webFetchDir, { recursive: true });
     fs.writeFileSync(path.join(webFetchDir, 'page.md'), 'cached page');
 
@@ -519,8 +790,18 @@ describe('deleteSession', () => {
     const session = makeSession({ id: 'a1111111-1111-4111-8111-111111111112' });
     saveSession(session, storageOpts);
 
-    const toolOutputDir = path.join(tmpDir, 'cache', 'tool-output', 'a1111111-1111-4111-8111-111111111112');
-    const webFetchDir = path.join(tmpDir, 'cache', 'web-fetch', 'a1111111-1111-4111-8111-111111111112');
+    const toolOutputDir = path.join(
+      tmpDir,
+      'cache',
+      'tool-output',
+      'a1111111-1111-4111-8111-111111111112',
+    );
+    const webFetchDir = path.join(
+      tmpDir,
+      'cache',
+      'web-fetch',
+      'a1111111-1111-4111-8111-111111111112',
+    );
     fs.mkdirSync(toolOutputDir, { recursive: true });
     fs.mkdirSync(webFetchDir, { recursive: true });
     fs.writeFileSync(path.join(toolOutputDir, 'output.txt'), 'data');
@@ -581,15 +862,12 @@ describe('session cwd persistence', () => {
     fs.mkdirSync(projectDir, { recursive: true });
 
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o', { cwd: projectDir });
+    const session = manager.create(DEFAULT_SELECTION, { cwd: projectDir });
 
     expect(session.cwd).toBe(fs.realpathSync(projectDir));
 
     // Disk JSON has cwd near the top (after id/name/model)
-    const raw = fs.readFileSync(
-      path.join(tmpDir, 'sessions', `${session.id}.json`),
-      'utf-8',
-    );
+    const raw = fs.readFileSync(path.join(tmpDir, 'sessions', `${session.id}.json`), 'utf-8');
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     expect(parsed.cwd).toBe(session.cwd);
     // Key order: cwd appears before chains
@@ -605,14 +883,11 @@ describe('session cwd persistence', () => {
 
   it('create without cwd does not write process.cwd()', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     expect(session.cwd).toBeNull();
 
-    const raw = fs.readFileSync(
-      path.join(tmpDir, 'sessions', `${session.id}.json`),
-      'utf-8',
-    );
+    const raw = fs.readFileSync(path.join(tmpDir, 'sessions', `${session.id}.json`), 'utf-8');
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     expect(parsed.cwd).toBeNull();
     expect(parsed.cwd).not.toBe(process.cwd());
@@ -627,7 +902,7 @@ describe('session cwd persistence', () => {
     const canonical = fs.realpathSync(projectDir);
 
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o', { cwd: projectDir });
+    const session = manager.create(DEFAULT_SELECTION, { cwd: projectDir });
 
     const summaries = listSavedSessions(storageOpts);
     expect(summaries).toHaveLength(1);
@@ -673,7 +948,7 @@ describe('session cwd persistence', () => {
     const canonical = fs.realpathSync(projectDir);
 
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
     expect(session.cwd).toBeNull();
 
     const updated = manager.changeCwd(session.id, projectDir);
@@ -694,7 +969,7 @@ describe('session cwd persistence', () => {
     const canonical = fs.realpathSync(projectDir);
 
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o', { cwd: projectDir });
+    const session = manager.create(DEFAULT_SELECTION, { cwd: projectDir });
     expect(session.cwd).toBe(canonical);
 
     const missing = path.join(tmpDir, 'does-not-exist');
@@ -708,7 +983,7 @@ describe('session cwd persistence', () => {
 
   it('changeCwd rejects relative paths', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     expect(() => manager.changeCwd(session.id, 'relative/path')).toThrow(/Cannot change cwd/);
     expect(manager.getActive()!.cwd).toBeNull();
@@ -719,8 +994,8 @@ describe('session cwd persistence', () => {
     fs.mkdirSync(projectDir, { recursive: true });
 
     const manager = new SessionManager({ storage: storageOpts });
-    const session1 = manager.create('gpt-4o');
-    manager.create('gpt-4o'); // session1 no longer active
+    const session1 = manager.create(DEFAULT_SELECTION);
+    manager.create(DEFAULT_SELECTION); // session1 no longer active
 
     expect(() => manager.changeCwd(session1.id, projectDir)).toThrow(/not active/);
   });
@@ -733,10 +1008,11 @@ describe('session cwd persistence', () => {
 describe('SessionManager', () => {
   it('create() produces a session with UUID and default name', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     expect(session.id).toBeTruthy();
-    expect(session.model).toBe('gpt-4o');
+    expect(session.selection).toEqual(DEFAULT_SELECTION);
+    expect(session.modelLabel).toBe('gpt-4o');
     expect(session.name.startsWith('Session ')).toBe(true);
     expect(session.chains).toEqual([]);
     expect(session.activeChainId).toBeNull();
@@ -752,14 +1028,14 @@ describe('SessionManager', () => {
     const manager = new SessionManager({ storage: storageOpts });
     expect(manager.getActive()).toBeNull();
 
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
     expect(manager.getActive()).not.toBeNull();
     expect(manager.getActive()!.id).toBe(session.id);
   });
 
   it('clearActive() drops active without deleting the session file', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
     expect(manager.getActive()!.id).toBe(session.id);
 
     manager.clearActive();
@@ -773,8 +1049,8 @@ describe('SessionManager', () => {
 
   it('switchTo() loads session from disk and sets as active', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session1 = manager.create('gpt-4o');
-    const session2 = manager.create('anthropic/claude-3.5-sonnet');
+    const session1 = manager.create(DEFAULT_SELECTION);
+    const session2 = manager.create(ANTHROPIC_SELECTION);
 
     // Active should be session2
     expect(manager.getActive()!.id).toBe(session2.id);
@@ -795,7 +1071,7 @@ describe('SessionManager', () => {
 
   it('delete() removes session and clears active if it was active', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
     const sessionId = session.id;
 
     expect(manager.getActive()!.id).toBe(sessionId);
@@ -810,8 +1086,8 @@ describe('SessionManager', () => {
 
   it('delete() does not clear active if deleting a different session', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session1 = manager.create('gpt-4o');
-    const session2 = manager.create('anthropic/claude-3.5-sonnet');
+    const session1 = manager.create(DEFAULT_SELECTION);
+    const session2 = manager.create(ANTHROPIC_SELECTION);
 
     // Delete session1 (not active)
     manager.delete(session1.id);
@@ -822,7 +1098,7 @@ describe('SessionManager', () => {
 
   it('rename() updates active session name', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     manager.rename(session.id, 'New Name');
 
@@ -835,8 +1111,8 @@ describe('SessionManager', () => {
 
   it('rename() is no-op for non-active session', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session1 = manager.create('gpt-4o');
-    const session2 = manager.create('anthropic/claude-3.5-sonnet');
+    const session1 = manager.create(DEFAULT_SELECTION);
+    const session2 = manager.create(ANTHROPIC_SELECTION);
 
     // Try to rename session1 (not active)
     manager.rename(session1.id, 'Should Not Change');
@@ -848,20 +1124,22 @@ describe('SessionManager', () => {
 
   it('changeModel() updates active session model', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
-    manager.changeModel(session.id, 'anthropic/claude-3.5-sonnet');
+    manager.changeModel(session.id, ANTHROPIC_SELECTION);
 
-    expect(manager.getActive()!.model).toBe('anthropic/claude-3.5-sonnet');
+    expect(manager.getActive()!.selection).toEqual(ANTHROPIC_SELECTION);
+    expect(manager.getActive()!.modelLabel).toBe('anthropic/claude-3.5-sonnet');
 
     // Verify persisted
     const loaded = loadSession(session.id, storageOpts);
-    expect(loaded!.model).toBe('anthropic/claude-3.5-sonnet');
+    expect(loaded!.selection).toEqual(ANTHROPIC_SELECTION);
+    expect(loaded!.modelLabel).toBe('anthropic/claude-3.5-sonnet');
   });
 
   it('saveActive() persists active session to disk', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     // Modify in-memory via rename (proper immutable update)
     manager.rename(session.id, 'Modified In Memory');
@@ -879,8 +1157,8 @@ describe('SessionManager', () => {
 
   it('load() loads session from disk without setting as active', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
-    const session2 = manager.create('anthropic/claude-3.5-sonnet');
+    const session = manager.create(DEFAULT_SELECTION);
+    const session2 = manager.create(ANTHROPIC_SELECTION);
 
     // Load session1 without switching
     const loaded = manager.load(session.id);
@@ -893,7 +1171,7 @@ describe('SessionManager', () => {
 
   it('listSaved() returns sessions sorted by mtime', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session1 = manager.create('gpt-4o');
+    const session1 = manager.create(DEFAULT_SELECTION);
 
     // Small delay
     const start = Date.now();
@@ -901,7 +1179,7 @@ describe('SessionManager', () => {
       // busy wait
     }
 
-    const session2 = manager.create('anthropic/claude-3.5-sonnet');
+    const session2 = manager.create(ANTHROPIC_SELECTION);
 
     const sessions = manager.listSaved();
     expect(sessions).toHaveLength(2);
@@ -920,7 +1198,7 @@ describe('SessionManager auto-naming', () => {
       generateTitle: async () => 'My Coding Session',
       storage: storageOpts,
     });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     // Default name starts with "Session "
     expect(session.name.startsWith('Session ')).toBe(true);
@@ -940,7 +1218,7 @@ describe('SessionManager auto-naming', () => {
       generateTitle: async () => 'Should Not Apply',
       storage: storageOpts,
     });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     // Manually rename
     manager.rename(session.id, 'Custom Name');
@@ -951,7 +1229,7 @@ describe('SessionManager auto-naming', () => {
 
   it('autoNameActive() skips if no generateTitle callback', async () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     const result = await manager.autoNameActive();
     expect(result!.name.startsWith('Session ')).toBe(true);
@@ -971,7 +1249,7 @@ describe('SessionManager auto-naming', () => {
       generateTitle: async () => null,
       storage: storageOpts,
     });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
     const originalName = session.name;
 
     await manager.autoNameActive();
@@ -984,7 +1262,7 @@ describe('SessionManager auto-naming', () => {
       generateTitle: async () => longTitle,
       storage: storageOpts,
     });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
     const originalName = session.name;
 
     await manager.autoNameActive();
@@ -998,7 +1276,7 @@ describe('SessionManager auto-naming', () => {
       },
       storage: storageOpts,
     });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
     const originalName = session.name;
 
     // Should not throw
@@ -1015,7 +1293,7 @@ describe('SessionManager auto-naming', () => {
       },
       storage: storageOpts,
     });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     await manager.autoNameActive();
 
@@ -1031,8 +1309,8 @@ describe('SessionManager auto-naming', () => {
 describe('SessionManager switching', () => {
   it('switchTo does not cancel running subagents (by design)', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session1 = manager.create('gpt-4o');
-    const session2 = manager.create('anthropic/claude-3.5-sonnet');
+    const session1 = manager.create(DEFAULT_SELECTION);
+    const session2 = manager.create(ANTHROPIC_SELECTION);
 
     // session1 is no longer active after creating session2
     // Switch back to session1
@@ -1047,10 +1325,10 @@ describe('SessionManager switching', () => {
 
   it('multiple switches preserve session data', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session1 = manager.create('gpt-4o');
+    const session1 = manager.create(DEFAULT_SELECTION);
     manager.rename(session1.id, 'Session 1');
 
-    const session2 = manager.create('anthropic/claude-3.5-sonnet');
+    const session2 = manager.create(ANTHROPIC_SELECTION);
     manager.rename(session2.id, 'Session 2');
 
     // Switch back and forth
@@ -1066,7 +1344,7 @@ describe('SessionManager switching', () => {
 
   it('switchTo preserves the live in-memory session over stale disk state', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     // Simulate external modification (e.g., another process)
     const modified: Session = {
@@ -1092,12 +1370,8 @@ describe('SessionManager switching', () => {
 describe('SessionManager concurrent owners', () => {
   it('keeps a distinct selected session for each window owner', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const sessionA = manager.create('gpt-4o', undefined, 'window-a');
-    const sessionB = manager.create(
-      'anthropic/claude-3.5-sonnet',
-      undefined,
-      'window-b',
-    );
+    const sessionA = manager.create(DEFAULT_SELECTION, undefined, 'window-a');
+    const sessionB = manager.create(ANTHROPIC_SELECTION, undefined, 'window-b');
 
     expect(manager.getActive('window-a')?.id).toBe(sessionA.id);
     expect(manager.getActive('window-b')?.id).toBe(sessionB.id);
@@ -1109,8 +1383,8 @@ describe('SessionManager concurrent owners', () => {
 
   it('writes chains to the explicitly addressed session', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const sessionA = manager.create('gpt-4o', undefined, 'window-a');
-    const sessionB = manager.create('gpt-4o', undefined, 'window-b');
+    const sessionA = manager.create(DEFAULT_SELECTION, undefined, 'window-a');
+    const sessionB = manager.create(DEFAULT_SELECTION, undefined, 'window-b');
 
     const userA = makeMessage({ id: 'owner-a-user', content: 'Question A' });
     const answerA = makeMessage({
@@ -1119,46 +1393,42 @@ describe('SessionManager concurrent owners', () => {
       content: 'Answer A',
     });
     manager.startChain({ messages: [userA] }, sessionA.id);
-    manager.persistTurn(
-      { messages: [userA, answerA], status: ChainStatus.COMPLETED },
-      sessionA.id,
-    );
+    manager.persistTurn({ messages: [userA, answerA], status: ChainStatus.COMPLETED }, sessionA.id);
 
     expect(manager.getSession(sessionA.id)?.chains).toHaveLength(1);
-    expect(manager.getSession(sessionA.id)?.chains[0]?.messages).toEqual([
-      userA,
-      answerA,
-    ]);
+    expect(manager.getSession(sessionA.id)?.chains[0]?.messages).toEqual([userA, answerA]);
     expect(manager.getSession(sessionB.id)?.chains).toHaveLength(0);
   });
 
   it('keeps todo stores isolated by session and persists the addressed store', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const sessionA = manager.create('gpt-4o', undefined, 'window-a');
-    const sessionB = manager.create('gpt-4o', undefined, 'window-b');
+    const sessionA = manager.create(DEFAULT_SELECTION, undefined, 'window-a');
+    const sessionB = manager.create(DEFAULT_SELECTION, undefined, 'window-b');
 
     manager.getTodoStore(sessionA.id).create('A only');
     manager.getTodoStore(sessionB.id).create('B only');
     manager.persistTodos(sessionA.id);
     manager.persistTodos(sessionB.id);
 
-    expect(manager.getTodoStore(sessionA.id).list().map((todo) => todo.title)).toEqual([
-      'A only',
-    ]);
-    expect(manager.getTodoStore(sessionB.id).list().map((todo) => todo.title)).toEqual([
-      'B only',
-    ]);
-    expect(loadSession(sessionA.id, storageOpts)?.todoStore.tasks[0]?.title).toBe(
-      'A only',
-    );
-    expect(loadSession(sessionB.id, storageOpts)?.todoStore.tasks[0]?.title).toBe(
-      'B only',
-    );
+    expect(
+      manager
+        .getTodoStore(sessionA.id)
+        .list()
+        .map((todo) => todo.title),
+    ).toEqual(['A only']);
+    expect(
+      manager
+        .getTodoStore(sessionB.id)
+        .list()
+        .map((todo) => todo.title),
+    ).toEqual(['B only']);
+    expect(loadSession(sessionA.id, storageOpts)?.todoStore.tasks[0]?.title).toBe('A only');
+    expect(loadSession(sessionB.id, storageOpts)?.todoStore.tasks[0]?.title).toBe('B only');
   });
 
   it('shares one in-memory runtime when two windows select the same session', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o', undefined, 'window-a');
+    const session = manager.create(DEFAULT_SELECTION, undefined, 'window-a');
 
     manager.switchTo(session.id, 'window-b');
     const fromA = manager.getTodoStore(session.id);
@@ -1171,7 +1441,7 @@ describe('SessionManager concurrent owners', () => {
 
   it('clears every owner selecting a deleted session', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o', undefined, 'window-a');
+    const session = manager.create(DEFAULT_SELECTION, undefined, 'window-a');
     manager.switchTo(session.id, 'window-b');
 
     manager.delete(session.id);
@@ -1189,14 +1459,12 @@ describe('SessionManager multi-chain lifecycle', () => {
   it('returns null from startChain / persistTurn when no active session', () => {
     const manager = new SessionManager({ storage: storageOpts });
     expect(manager.startChain()).toBeNull();
-    expect(
-      manager.persistTurn({ messages: [makeMessage({ content: 'orphan' })] }),
-    ).toBeNull();
+    expect(manager.persistTurn({ messages: [makeMessage({ content: 'orphan' })] })).toBeNull();
   });
 
   it('startChain appends an ACTIVE chain and sets activeChainId', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
     const user = makeMessage({ id: 'u1', role: 'user', content: 'Hello' });
     const chain = manager.startChain({
       messages: [user],
@@ -1216,7 +1484,7 @@ describe('SessionManager multi-chain lifecycle', () => {
 
   it('N user turns → N chains with turn-local messages only', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    manager.create('gpt-4o');
+    manager.create(DEFAULT_SELECTION);
 
     for (let i = 1; i <= 3; i++) {
       manager.startChain({
@@ -1249,7 +1517,7 @@ describe('SessionManager multi-chain lifecycle', () => {
 
   it('updateActiveChainMessages writes turn-local only (not full history)', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    manager.create('gpt-4o');
+    manager.create(DEFAULT_SELECTION);
     manager.startChain({
       messages: [makeMessage({ content: 'turn1 user' })],
     });
@@ -1277,7 +1545,7 @@ describe('SessionManager multi-chain lifecycle', () => {
 
   it('finishActiveChain freezes status and clears activeChainId', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    manager.create('gpt-4o');
+    manager.create(DEFAULT_SELECTION);
     manager.startChain({ messages: [makeMessage({ content: 'x' })] });
     const finished = manager.finishActiveChain(ChainStatus.INTERRUPTED);
     expect(finished!.chains[0].status).toBe(ChainStatus.INTERRUPTED);
@@ -1287,7 +1555,7 @@ describe('SessionManager multi-chain lifecycle', () => {
 
   it('startChain freezes a leftover ACTIVE chain as INTERRUPTED', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    manager.create('gpt-4o');
+    manager.create(DEFAULT_SELECTION);
     const first = manager.startChain({
       messages: [makeMessage({ content: 'stuck' })],
     })!;
@@ -1304,7 +1572,7 @@ describe('SessionManager multi-chain lifecycle', () => {
 
   it('persistTurn without prior startChain creates and freezes one chain', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
     const messages = [
       makeMessage({ id: 'u1', role: 'user', content: 'Hello' }),
       makeMessage({ id: 'a1', role: 'assistant', content: 'Hi' }),
@@ -1315,7 +1583,8 @@ describe('SessionManager multi-chain lifecycle', () => {
     const chain = result!.chains[0];
     expect(chain.messages).toHaveLength(2);
     expect(chain.status).toBe(ChainStatus.COMPLETED);
-    expect(chain.model).toBe('gpt-4o');
+    expect(chain.selection).toEqual(DEFAULT_SELECTION);
+    expect(chain.modelLabel).toBe('gpt-4o');
     expect(chain.agentName).toBe('general');
     // Finished turns clear activeChainId (Python freeze)
     expect(result!.activeChainId).toBeNull();
@@ -1324,19 +1593,13 @@ describe('SessionManager multi-chain lifecycle', () => {
 
   it('syncActiveChain (wrapper) never rewrites prior chains with full history', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    manager.create('gpt-4o');
+    manager.create(DEFAULT_SELECTION);
 
     manager.syncActiveChain({
-      messages: [
-        makeMessage({ content: 'Q1' }),
-        makeMessage({ role: 'assistant', content: 'A1' }),
-      ],
+      messages: [makeMessage({ content: 'Q1' }), makeMessage({ role: 'assistant', content: 'A1' })],
     });
     manager.syncActiveChain({
-      messages: [
-        makeMessage({ content: 'Q2' }),
-        makeMessage({ role: 'assistant', content: 'A2' }),
-      ],
+      messages: [makeMessage({ content: 'Q2' }), makeMessage({ role: 'assistant', content: 'A2' })],
     });
 
     const session = manager.getActive()!;
@@ -1347,9 +1610,10 @@ describe('SessionManager multi-chain lifecycle', () => {
 
   it('updates ACTIVE chain messages and agent metadata via persistTurn', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    manager.create('gpt-4o');
+    manager.create(DEFAULT_SELECTION);
     manager.startChain({
-      model: 'old-model',
+      selection: OLD_SELECTION,
+      modelLabel: OLD_SELECTION.modelId,
       agentName: 'General',
       agentType: 'internal',
       agentTier: 'bloom',
@@ -1368,7 +1632,8 @@ describe('SessionManager multi-chain lifecycle', () => {
     expect(result!.chains).toHaveLength(1);
     expect(result!.chains[0].messages[0].content).toBe('Updated');
     expect(result!.chains[0].status).toBe(ChainStatus.COMPLETED);
-    expect(result!.chains[0].model).toBe('old-model');
+    expect(result!.chains[0].selection).toEqual(OLD_SELECTION);
+    expect(result!.chains[0].modelLabel).toBe('old-model');
     expect(result!.chains[0].agentName).toBe('coder');
     expect(result!.chains[0].agentType).toBe('internal');
     expect(result!.activeChainId).toBeNull();
@@ -1376,7 +1641,7 @@ describe('SessionManager multi-chain lifecycle', () => {
 
   it('applies INTERRUPTED and FAILED terminal statuses', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    manager.create('gpt-4o');
+    manager.create(DEFAULT_SELECTION);
 
     const interrupted = manager.persistTurn({
       messages: [makeMessage({ content: 'stop' })],
@@ -1392,26 +1657,29 @@ describe('SessionManager multi-chain lifecycle', () => {
     expect(failed!.chains[1].status).toBe(ChainStatus.FAILED);
   });
 
-  it('model fallback: params.model → existing.model → session.model', () => {
+  it('selection fallback: params.selection → existing.selection → session.selection', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    manager.create('session-model');
+    manager.create(SESSION_SELECTION);
 
     const created = manager.persistTurn({
       messages: [makeMessage({ content: 'a' })],
     });
-    expect(created!.chains[0].model).toBe('session-model');
+    expect(created!.chains[0].selection).toEqual(SESSION_SELECTION);
+    expect(created!.chains[0].modelLabel).toBe('session-model');
 
-    manager.startChain({ model: 'session-model' });
+    manager.startChain({ selection: SESSION_SELECTION, modelLabel: 'session-model' });
     const withParam = manager.persistTurn({
       messages: [makeMessage({ content: 'b' })],
-      model: 'param-model',
+      selection: PARAM_SELECTION,
+      modelLabel: PARAM_SELECTION.modelId,
     });
-    expect(withParam!.chains[1].model).toBe('param-model');
+    expect(withParam!.chains[1].selection).toEqual(PARAM_SELECTION);
+    expect(withParam!.chains[1].modelLabel).toBe('param-model');
   });
 
   it('persists multi-chain to disk and reloads', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     manager.startChain();
     manager.persistTurn({
@@ -1430,7 +1698,8 @@ describe('SessionManager multi-chain lifecycle', () => {
         }),
       ],
       status: ChainStatus.COMPLETED,
-      model: 'gpt-4o',
+      selection: DEFAULT_SELECTION,
+      modelLabel: DEFAULT_SELECTION.modelId,
       agentName: 'general',
       agentType: 'internal',
       agentTier: 'bloom',
@@ -1457,7 +1726,7 @@ describe('SessionManager multi-chain lifecycle', () => {
 
   it('copies messages array (does not retain caller reference)', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    manager.create('gpt-4o');
+    manager.create(DEFAULT_SELECTION);
     const messages = [makeMessage({ content: 'mutable' })];
 
     const result = manager.persistTurn({ messages });
@@ -1469,7 +1738,7 @@ describe('SessionManager multi-chain lifecycle', () => {
 
   it('updates updatedAt on the session', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
     const before = session.updatedAt;
 
     const start = Date.now();
@@ -1497,7 +1766,7 @@ describe('SessionManager.syncSubagentChains', () => {
 
   it('sets empty subagentChains and persists', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     // Seed a non-empty list first
     const record = makeSubagentRecord(session.id);
@@ -1514,7 +1783,7 @@ describe('SessionManager.syncSubagentChains', () => {
 
   it('sets populated subagentChains and persists', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     const records = [
       makeSubagentRecord(session.id, {
@@ -1557,7 +1826,7 @@ describe('SessionManager.syncSubagentChains', () => {
 
   it('replaces prior subagentChains entirely (not merge)', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
 
     manager.syncSubagentChains([
       makeSubagentRecord(session.id, { id: 'old-1' }),
@@ -1577,10 +1846,8 @@ describe('SessionManager.syncSubagentChains', () => {
 
   it('copies the subagentChains array (does not retain caller reference)', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
-    const records: SubagentRecord[] = [
-      makeSubagentRecord(session.id, { id: 'copy-1' }),
-    ];
+    const session = manager.create(DEFAULT_SELECTION);
+    const records: SubagentRecord[] = [makeSubagentRecord(session.id, { id: 'copy-1' })];
 
     const result = manager.syncSubagentChains(records);
     records.push(makeSubagentRecord(session.id, { id: 'copy-2' }));
@@ -1591,7 +1858,7 @@ describe('SessionManager.syncSubagentChains', () => {
 
   it('updates updatedAt on the session', () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create('gpt-4o');
+    const session = manager.create(DEFAULT_SELECTION);
     const before = session.updatedAt;
 
     const start = Date.now();

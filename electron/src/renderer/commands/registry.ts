@@ -293,7 +293,7 @@ export function buildModelResults(
 
 /** Build session list for `/sessions` sub-picker. */
 export function buildSessionResults(
-  sessions: readonly { id: string; name: string; model?: string }[],
+  sessions: readonly { id: string; name: string; modelLabel?: string | null }[],
 ): PaletteResult[] {
   if (sessions.length === 0) {
     return [
@@ -311,7 +311,7 @@ export function buildSessionResults(
   return sessions.map((s) => ({
     id: `session:${s.id}`,
     label: s.name,
-    description: s.model ? `Model: ${s.model}` : undefined,
+    description: s.modelLabel ? `Model: ${s.modelLabel}` : undefined,
     category: 'sessions' as CommandCategory,
     icon: 'messageSquare',
     commandName: '/sessions',

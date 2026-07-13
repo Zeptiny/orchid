@@ -10,6 +10,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { Session } from '../../src/shared/types/session';
+import type { ModelSelection } from '../../src/shared/types/provider';
 import type { StorageOptions } from '../../src/main/session/storage';
 import {
   ensureSessionsDir,
@@ -25,6 +26,16 @@ import { SessionManager } from '../../src/main/session/manager';
 let tmpDir: string;
 let storageOpts: StorageOptions;
 
+const DEFAULT_SELECTION: ModelSelection = {
+  connectionId: '11111111-1111-4111-8111-111111111111',
+  modelId: 'vendor/models/gpt-4o',
+};
+
+const ALTERNATE_SELECTION: ModelSelection = {
+  connectionId: '22222222-2222-4222-8222-222222222222',
+  modelId: 'anthropic/claude-3-5-sonnet',
+};
+
 function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-session-parity-'));
 }
@@ -39,10 +50,13 @@ function makeStorageOpts(dir: string): StorageOptions {
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   const now = new Date().toISOString();
+  const selection = overrides.selection === undefined ? DEFAULT_SELECTION : overrides.selection;
   return {
     id: overrides.id ?? randomUUID(),
     name: overrides.name ?? 'Test Session',
-    model: overrides.model ?? 'gpt-4o',
+    selection,
+    modelLabel:
+      overrides.modelLabel === undefined ? (selection?.modelId ?? null) : overrides.modelLabel,
     cwd: overrides.cwd !== undefined ? overrides.cwd : null,
     chains: overrides.chains ?? [],
     activeChainId: overrides.activeChainId ?? null,
@@ -68,23 +82,24 @@ describe('Session Parity', () => {
   describe('create', () => {
     it('SessionManager.create() produces a session with UUID', () => {
       const manager = new SessionManager({ storage: storageOpts });
-      const session = manager.create('gpt-4o');
+      const session = manager.create(DEFAULT_SELECTION);
 
       expect(session.id).toBeTruthy();
       expect(session.id.length).toBeGreaterThan(0);
-      expect(session.model).toBe('gpt-4o');
+      expect(session.selection).toEqual(DEFAULT_SELECTION);
+      expect(session.modelLabel).toBe(DEFAULT_SELECTION.modelId);
     });
 
     it('SessionManager.create() sets default name starting with "Session "', () => {
       const manager = new SessionManager({ storage: storageOpts });
-      const session = manager.create('gpt-4o');
+      const session = manager.create(DEFAULT_SELECTION);
 
       expect(session.name.startsWith('Session ')).toBe(true);
     });
 
     it('SessionManager.create() initializes empty chains', () => {
       const manager = new SessionManager({ storage: storageOpts });
-      const session = manager.create('gpt-4o');
+      const session = manager.create(DEFAULT_SELECTION);
 
       expect(session.chains).toEqual([]);
       expect(session.activeChainId).toBeNull();
@@ -94,15 +109,17 @@ describe('Session Parity', () => {
 
     it('SessionManager.create() defaults cwd to null (not process.cwd)', () => {
       const manager = new SessionManager({ storage: storageOpts });
-      const session = manager.create('gpt-4o');
+      const session = manager.create(null);
       expect(session.cwd).toBeNull();
+      expect(session.selection).toBeNull();
+      expect(session.modelLabel).toBeNull();
     });
 
     it('SessionManager.create() accepts optional cwd and persists it', () => {
       const projectDir = path.join(tmpDir, 'parity-project');
       fs.mkdirSync(projectDir, { recursive: true });
       const manager = new SessionManager({ storage: storageOpts });
-      const session = manager.create('gpt-4o', { cwd: projectDir });
+      const session = manager.create(DEFAULT_SELECTION, { cwd: projectDir });
       expect(session.cwd).toBe(fs.realpathSync(projectDir));
 
       const loaded = loadSession(session.id, storageOpts);
@@ -116,7 +133,7 @@ describe('Session Parity', () => {
       const manager = new SessionManager({ storage: storageOpts });
       expect(manager.getActive()).toBeNull();
 
-      const session = manager.create('gpt-4o');
+      const session = manager.create(DEFAULT_SELECTION);
       expect(manager.getActive()).not.toBeNull();
       expect(manager.getActive()!.id).toBe(session.id);
     });
@@ -124,7 +141,10 @@ describe('Session Parity', () => {
 
   describe('load', () => {
     it('save then load produces identical session', () => {
-      const session = makeSession({ id: 'c1111111-1111-4111-8111-111111111111', name: 'Load Test' });
+      const session = makeSession({
+        id: 'c1111111-1111-4111-8111-111111111111',
+        name: 'Load Test',
+      });
       saveSession(session, storageOpts);
 
       const loaded = loadSession('c1111111-1111-4111-8111-111111111111', storageOpts);
@@ -155,6 +175,11 @@ describe('Session Parity', () => {
 
       const filePath = path.join(tmpDir, 'sessions', 'c2222222-2222-4222-8222-222222222222.json');
       expect(fs.existsSync(filePath)).toBe(true);
+      const stored = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
+      expect(stored.version).toBe(2);
+      expect(stored.selection).toEqual(DEFAULT_SELECTION);
+      expect(stored.modelLabel).toBe(DEFAULT_SELECTION.modelId);
+      expect(stored).not.toHaveProperty('model');
     });
 
     it('save uses atomic write (no .tmp file after completion)', () => {
@@ -166,7 +191,10 @@ describe('Session Parity', () => {
     });
 
     it('save overwrites existing session', () => {
-      const session1 = makeSession({ id: 'c4444444-4444-4444-8444-444444444444', name: 'Original' });
+      const session1 = makeSession({
+        id: 'c4444444-4444-4444-8444-444444444444',
+        name: 'Original',
+      });
       saveSession(session1, storageOpts);
 
       const session2 = makeSession({ id: 'c4444444-4444-4444-8444-444444444444', name: 'Updated' });
@@ -197,8 +225,18 @@ describe('Session Parity', () => {
       saveSession(session, storageOpts);
 
       // Create cache dirs
-      const toolOutputDir = path.join(tmpDir, 'cache', 'tool-output', 'c6666666-6666-4666-8666-666666666666');
-      const webFetchDir = path.join(tmpDir, 'cache', 'web-fetch', 'c6666666-6666-4666-8666-666666666666');
+      const toolOutputDir = path.join(
+        tmpDir,
+        'cache',
+        'tool-output',
+        'c6666666-6666-4666-8666-666666666666',
+      );
+      const webFetchDir = path.join(
+        tmpDir,
+        'cache',
+        'web-fetch',
+        'c6666666-6666-4666-8666-666666666666',
+      );
       fs.mkdirSync(toolOutputDir, { recursive: true });
       fs.mkdirSync(webFetchDir, { recursive: true });
 
@@ -221,7 +259,9 @@ describe('Session Parity', () => {
 
       // Small delay for different mtime
       const start = Date.now();
-      while (Date.now() - start < 50) { /* busy wait */ }
+      while (Date.now() - start < 50) {
+        /* busy wait */
+      }
 
       const session2 = makeSession({ id: 'c8888888-8888-4888-8888-888888888888', name: 'New' });
       saveSession(session2, storageOpts);
@@ -236,8 +276,34 @@ describe('Session Parity', () => {
       const session = makeSession({
         id: 'c9999999-9999-4999-8999-999999999999',
         chains: [
-          { id: 'c1', sessionId: 'c9999999-9999-4999-8999-999999999999', messages: [], status: 'completed', model: 'gpt-4o', agentName: 'General', agentType: 'internal', agentTier: 'bloom', subagentRecord: null },
-          { id: 'c2', sessionId: 'c9999999-9999-4999-8999-999999999999', messages: [], status: 'completed', model: 'gpt-4o', agentName: 'General', agentType: 'internal', agentTier: 'bloom', subagentRecord: null },
+          {
+            id: 'c1',
+            sessionId: 'c9999999-9999-4999-8999-999999999999',
+            messages: [],
+            status: 'completed',
+            selection: DEFAULT_SELECTION,
+            modelLabel: DEFAULT_SELECTION.modelId,
+            agentName: 'General',
+            agentType: 'internal',
+            agentTier: 'bloom',
+            subagentRecord: null,
+            startTime: null,
+            endTime: null,
+          },
+          {
+            id: 'c2',
+            sessionId: 'c9999999-9999-4999-8999-999999999999',
+            messages: [],
+            status: 'completed',
+            selection: DEFAULT_SELECTION,
+            modelLabel: DEFAULT_SELECTION.modelId,
+            agentName: 'General',
+            agentType: 'internal',
+            agentTier: 'bloom',
+            subagentRecord: null,
+            startTime: null,
+            endTime: null,
+          },
         ],
       });
       saveSession(session, storageOpts);
@@ -264,7 +330,7 @@ describe('Session Parity', () => {
         generateTitle: async () => 'My Coding Session',
         storage: storageOpts,
       });
-      const session = manager.create('gpt-4o');
+      const session = manager.create(DEFAULT_SELECTION);
 
       const result = await manager.autoNameActive();
       expect(result).not.toBeNull();
@@ -276,7 +342,7 @@ describe('Session Parity', () => {
         generateTitle: async () => 'Should Not Apply',
         storage: storageOpts,
       });
-      const session = manager.create('gpt-4o');
+      const session = manager.create(DEFAULT_SELECTION);
       manager.rename(session.id, 'Custom Name');
 
       const result = await manager.autoNameActive();
@@ -295,10 +361,12 @@ describe('Session Parity', () => {
 
     it('autoNameActive() handles callback errors gracefully', async () => {
       const manager = new SessionManager({
-        generateTitle: async () => { throw new Error('LLM unavailable'); },
+        generateTitle: async () => {
+          throw new Error('LLM unavailable');
+        },
         storage: storageOpts,
       });
-      const session = manager.create('gpt-4o');
+      const session = manager.create(DEFAULT_SELECTION);
       const originalName = session.name;
 
       const result = await manager.autoNameActive();
@@ -309,8 +377,8 @@ describe('Session Parity', () => {
   describe('switch', () => {
     it('switchTo() loads session and sets as active', () => {
       const manager = new SessionManager({ storage: storageOpts });
-      const session1 = manager.create('gpt-4o');
-      const session2 = manager.create('anthropic/claude-3.5-sonnet');
+      const session1 = manager.create(DEFAULT_SELECTION);
+      const session2 = manager.create(ALTERNATE_SELECTION);
 
       const switched = manager.switchTo(session1.id);
       expect(switched).not.toBeNull();
@@ -326,9 +394,9 @@ describe('Session Parity', () => {
 
     it('multiple switches preserve session data', () => {
       const manager = new SessionManager({ storage: storageOpts });
-      const session1 = manager.create('gpt-4o');
+      const session1 = manager.create(DEFAULT_SELECTION);
       manager.rename(session1.id, 'Session 1');
-      const session2 = manager.create('anthropic/claude-3.5-sonnet');
+      const session2 = manager.create(ALTERNATE_SELECTION);
       manager.rename(session2.id, 'Session 2');
 
       manager.switchTo(session1.id);

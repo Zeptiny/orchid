@@ -33,6 +33,23 @@ let homeSkillsDir: string;
 let projectA: string;
 let projectB: string;
 
+const HOME_SELECTION = {
+  connectionId: '11111111-1111-4111-8111-111111111111',
+  modelId: 'home/model',
+};
+const PROJECT_A_SELECTION = {
+  connectionId: '22222222-2222-4222-8222-222222222222',
+  modelId: 'project-a/model',
+};
+const PROJECT_B_SELECTION = {
+  connectionId: '33333333-3333-4333-8333-333333333333',
+  modelId: 'project-b/model',
+};
+const PROJECT_A_FORCED_SELECTION = {
+  connectionId: '44444444-4444-4444-8444-444444444444',
+  modelId: 'project-a/forced',
+};
+
 function writeJson(filePath: string, data: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
@@ -91,7 +108,7 @@ beforeEach(() => {
 
   // Home config + one home agent/skill
   writeJson(homeConfigPath, {
-    default_model: 'home/model',
+    default_model: HOME_SELECTION,
     command_timeout: 30,
   });
   writeAgent(
@@ -110,7 +127,7 @@ beforeEach(() => {
   // Project A: config override + project-only agent/skill. The planted
   // `general` file verifies that reserved internal agents cannot be overlaid.
   writeJson(path.join(projectA, '.orchid.json'), {
-    default_model: 'project-a/model',
+    default_model: PROJECT_A_SELECTION,
     command_timeout: 99,
   });
   writeAgent(
@@ -140,7 +157,7 @@ beforeEach(() => {
 
   // Project B: different overrides
   writeJson(path.join(projectB, '.orchid.json'), {
-    default_model: 'project-b/model',
+    default_model: PROJECT_B_SELECTION,
     command_timeout: 12,
   });
   writeAgent(
@@ -178,18 +195,18 @@ describe('applyWorkspaceProjectLayers — config', () => {
   it('applies project .orchid.json overrides after reset+load', () => {
     const result = applyOpts(projectA);
     expect(result.applied).toBe(true);
-    expect(result.config.default_model).toBe('project-a/model');
+    expect(result.config.default_model).toEqual(PROJECT_A_SELECTION);
     expect(result.config.command_timeout).toBe(99);
-    expect(getConfig().default_model).toBe('project-a/model');
+    expect(getConfig().default_model).toEqual(PROJECT_A_SELECTION);
   });
 
   it('switches project overrides when applying a different projectDir', () => {
     applyOpts(projectA);
-    expect(getConfig().default_model).toBe('project-a/model');
+    expect(getConfig().default_model).toEqual(PROJECT_A_SELECTION);
 
     const resultB = applyOpts(projectB);
     expect(resultB.applied).toBe(true);
-    expect(getConfig().default_model).toBe('project-b/model');
+    expect(getConfig().default_model).toEqual(PROJECT_B_SELECTION);
     expect(getConfig().command_timeout).toBe(12);
   });
 
@@ -200,7 +217,7 @@ describe('applyWorkspaceProjectLayers — config', () => {
     const result = applyOpts(bare);
     expect(result.applied).toBe(true);
     // Home values apply; no project override
-    expect(result.config.default_model).toBe('home/model');
+    expect(result.config.default_model).toEqual(HOME_SELECTION);
     expect(result.config.command_timeout).toBe(30);
   });
 });
@@ -288,7 +305,7 @@ describe('applyWorkspaceProjectLayers — lastApplied tracking', () => {
 
     const second = applyOpts(projectA);
     expect(second.applied).toBe(false);
-    expect(second.config.default_model).toBe('project-a/model');
+    expect(second.config.default_model).toEqual(PROJECT_A_SELECTION);
   });
 
   it('force: true reloads even when path is unchanged', () => {
@@ -296,7 +313,7 @@ describe('applyWorkspaceProjectLayers — lastApplied tracking', () => {
 
     // Mutate project config on disk
     writeJson(path.join(projectA, '.orchid.json'), {
-      default_model: 'project-a/forced',
+      default_model: PROJECT_A_FORCED_SELECTION,
     });
 
     const forced = applyWorkspaceProjectLayers(projectA, {
@@ -306,7 +323,7 @@ describe('applyWorkspaceProjectLayers — lastApplied tracking', () => {
       homeSkillsDir,
     });
     expect(forced.applied).toBe(true);
-    expect(forced.config.default_model).toBe('project-a/forced');
+    expect(forced.config.default_model).toEqual(PROJECT_A_FORCED_SELECTION);
   });
 
   it('resetLastAppliedProjectDir allows re-apply of same path', () => {

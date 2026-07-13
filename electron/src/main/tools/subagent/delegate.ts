@@ -129,7 +129,7 @@ export function buildDelegateTool(
         isError: true,
       };
     }
-    const model = getModelForTier(ctx.projectRuntime.config, resolvedTier);
+    const selection = getModelForTier(ctx.projectRuntime.config, resolvedTier);
 
     // Attribute to the frozen parent turn. Never discover ownership from the
     // process's currently selected session after another session is opened.
@@ -147,7 +147,7 @@ export function buildDelegateTool(
     // Spawn + start background run (when runner is configured).
     // Freeze parent-turn cwd so mid-turn workspace changes do not rebind the subagent.
     const record = manager.spawn(name, task, agent, {
-      model,
+      selection,
       parentChainIndex,
       // Prefer frozen turn context sessionId over live getActive() (mid-turn switch).
       sessionId: ctx.sessionId,

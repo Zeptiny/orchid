@@ -6,14 +6,14 @@
  * string, etc.).  This module handles cross-field and structural validations
  * that are awkward to express in zod:
  *
- * - non-empty `default_model`
- * - tier_models structure (non-empty string keys/values)
- * - provider alias format (`[a-z0-9-]+`, no reserved aliases)
- * - provider entry structure (base_url, api_key, api_key_env, models)
+ * - nullable connection-scoped `default_model` / tier selections
+ * - tier_models structure (non-empty string keys, typed nullable values)
+ * - deprecated provider compatibility map stays empty
  * - mcp_server name format (`[a-z0-9-]+`)
  * - mcp_server entry structure (command, args, env)
  * - rag.chunk_overlap < rag.chunk_size
  */
+import { modelSelectionSchema } from '../../shared/types/provider';
 import type { Config } from './schema';
 
 // ---------------------------------------------------------------------------
@@ -21,8 +21,6 @@ import type { Config } from './schema';
 // ---------------------------------------------------------------------------
 
 const MCP_SERVER_NAME_RE = /^[a-z0-9-]+$/;
-const PROVIDER_ALIAS_RE = /^[a-z0-9-]+$/;
-const RESERVED_PROVIDER_ALIASES = new Set(['fastembed']);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -67,6 +65,17 @@ function checkPositiveFloat(
   }
 }
 
+function checkNullableModelSelection(
+  value: unknown,
+  field: string,
+  errors: string[],
+): void {
+  if (value === null) return;
+  if (!modelSelectionSchema.safeParse(value).success) {
+    errors.push(`'${field}' must be null or a valid connection-scoped model selection`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main validator
 // ---------------------------------------------------------------------------
@@ -80,10 +89,8 @@ function checkPositiveFloat(
 export function validateConfig(cfg: Config): string[] {
   const errors: string[] = [];
 
-  // --- Non-empty strings ---
-  if (!cfg.default_model || typeof cfg.default_model !== 'string') {
-    errors.push(`'default_model' must be a non-empty string, got ${typeof cfg.default_model}`);
-  }
+  // --- Connection-scoped model selections ---
+  checkNullableModelSelection(cfg.default_model, 'default_model', errors);
 
   // --- tier_models ---
   if (typeof cfg.tier_models !== 'object' || cfg.tier_models === null) {
@@ -93,9 +100,7 @@ export function validateConfig(cfg: Config): string[] {
       if (!tier) {
         errors.push(`'tier_models' key must be a non-empty string, got ${JSON.stringify(tier)}`);
       }
-      if (!model || typeof model !== 'string') {
-        errors.push(`'tier_models.${tier}' must be a non-empty string, got ${JSON.stringify(model)}`);
-      }
+      checkNullableModelSelection(model, `tier_models.${tier}`, errors);
     }
   }
 
@@ -142,53 +147,12 @@ export function validateConfig(cfg: Config): string[] {
     }
   }
 
-  // --- providers ---
+  // --- Deprecated providers compatibility map ---
   const providers = cfg.providers as unknown as Record<string, unknown>;
   if (typeof providers !== 'object' || providers === null) {
     errors.push("'providers' must be a dict");
-  } else {
-    for (const [alias, entry] of Object.entries(providers)) {
-      if (!PROVIDER_ALIAS_RE.test(alias)) {
-        errors.push(`'providers.${alias}': alias must match [a-z0-9-]+ (no '/')`);
-      }
-      if (RESERVED_PROVIDER_ALIASES.has(alias)) {
-        errors.push(`'providers.${alias}': alias is reserved (built-in pseudo-provider)`);
-      }
-      if (typeof entry !== 'object' || entry === null) {
-        errors.push(`'providers.${alias}': must be a dict, got ${typeof entry}`);
-        continue;
-      }
-      const entryDict = entry as Record<string, unknown>;
-      const baseUrl = entryDict['base_url'];
-      if (baseUrl !== undefined && (typeof baseUrl !== 'string' || !baseUrl)) {
-        errors.push(`'providers.${alias}.base_url': must be a non-empty string`);
-      }
-      const apiKey = entryDict['api_key'];
-      if (apiKey !== undefined && (typeof apiKey !== 'string' || !apiKey)) {
-        errors.push(`'providers.${alias}.api_key': must be a non-empty string`);
-      }
-      const apiKeyEnv = entryDict['api_key_env'];
-      if (apiKeyEnv !== undefined && (typeof apiKeyEnv !== 'string' || !apiKeyEnv)) {
-        errors.push(`'providers.${alias}.api_key_env': must be a non-empty string`);
-      }
-      if (apiKey && apiKeyEnv) {
-        errors.push(`'providers.${alias}': both 'api_key' and 'api_key_env' set; use only one`);
-      }
-      const litellmProvider = entryDict['litellm_provider'];
-      if (litellmProvider !== undefined && (typeof litellmProvider !== 'string' || !litellmProvider)) {
-        errors.push(`'providers.${alias}.litellm_provider': must be a non-empty string`);
-      }
-      const models = entryDict['models'];
-      if (models !== undefined && (typeof models !== 'object' || models === null)) {
-        errors.push(`'providers.${alias}.models': must be a dict`);
-      } else if (typeof models === 'object' && models !== null) {
-        for (const [modelId, override] of Object.entries(models as Record<string, unknown>)) {
-          if (override !== undefined && (typeof override !== 'object' || override === null)) {
-            errors.push(`'providers.${alias}.models.${modelId}': override must be a dict`);
-          }
-        }
-      }
-    }
+  } else if (Object.keys(providers).length > 0) {
+    errors.push("'providers' is deprecated and must be empty");
   }
 
   // --- mcp_servers ---

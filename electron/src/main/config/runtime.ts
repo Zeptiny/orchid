@@ -1,12 +1,11 @@
 import type { Config } from './schema';
-import { injectKeychainKeys } from './keychain';
 import { getConfig } from './loader';
 
-/** Return the active layered config with provider API keys restored in memory. */
+/**
+ * Return the active layered config without hydrating retired alias-keyed
+ * credentials. U3 replaces this compatibility helper with a
+ * connection-scoped credential vault.
+ */
 export async function getRuntimeConfig(): Promise<Config> {
-  const config = getConfig();
-  const hydrated = await injectKeychainKeys(
-    config as unknown as Record<string, unknown>,
-  );
-  return hydrated as unknown as Config;
+  return getConfig();
 }

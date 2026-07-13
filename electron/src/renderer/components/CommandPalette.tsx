@@ -157,7 +157,7 @@ export function CommandPalette({
             item: {
               id: `session:${session.id}`,
               label: session.name,
-              description: session.model ? `Model: ${session.model}` : undefined,
+              description: session.modelLabel ? `Model: ${session.modelLabel}` : undefined,
               category: 'sessions',
               icon: 'messageSquare',
               action: 'session',

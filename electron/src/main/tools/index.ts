@@ -197,7 +197,7 @@ function buildWebFetchSummarizer(
       '</page_content>';
 
     const record = manager.spawn('web fetch summary', task, summarizerAgent, {
-      model: getModelForTier(context.projectRuntime.config, agent.tier),
+      selection: getModelForTier(context.projectRuntime.config, agent.tier),
       sessionId: context.sessionId,
       cwd: context.cwd,
       projectRuntime: context.projectRuntime,

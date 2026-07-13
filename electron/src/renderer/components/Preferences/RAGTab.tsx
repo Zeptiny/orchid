@@ -2,11 +2,10 @@
  * RAGTab — RAG (Retrieval-Augmented Generation) configuration.
  *
  * Controls: chunking, retrieval, embedding model, and resource caps.
- * The embedding model selector auto-detects local ONNX vs API (provider)
- * based on which list the selected value belongs to.
+ * Provider-backed embeddings stay disabled until U4 introduces a typed
+ * connection-scoped selection; U1 keeps RAG safely local-only.
  */
-import { useCallback, useMemo } from 'react';
-import { collectEmbeddingModelsFromProviders } from '../../utils/models';
+import { useCallback } from 'react';
 import { ModelPicker } from '../ModelPicker';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -19,12 +18,11 @@ export interface RAGConfig {
   embedding_model: string;
   embedding_threads: number;
   embedding_batch_size: number;
-  embedding_api_model: string | null;
+  embedding_api_model: null;
 }
 
 export interface RAGTabProps {
   rag: RAGConfig;
-  providers?: Record<string, Record<string, unknown>>;
   onChange: (rag: RAGConfig) => void;
 }
 
@@ -40,7 +38,7 @@ const LOCAL_EMBEDDING_MODELS = [
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
+export function RAGTab({ rag, onChange }: RAGTabProps) {
   const updateField = useCallback(
     <K extends keyof RAGConfig>(field: K, value: RAGConfig[K]) => {
       onChange({ ...rag, [field]: value });
@@ -58,30 +56,13 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
     [updateField],
   );
 
-  const apiEmbeddingModels = useMemo(
-    () => collectEmbeddingModelsFromProviders(providers),
-    [providers],
-  );
-
-  const apiModelSet = useMemo(() => new Set(apiEmbeddingModels), [apiEmbeddingModels]);
-  const modelOptions = useMemo(
-    () => [...new Set([...LOCAL_EMBEDDING_MODELS, ...apiEmbeddingModels])],
-    [apiEmbeddingModels],
-  );
-
-  // The active value: API model takes precedence, else local ONNX model
-  const activeModel = rag.embedding_api_model ?? rag.embedding_model;
-  const usingApi = rag.embedding_api_model != null && rag.embedding_api_model !== '';
+  const activeModel = rag.embedding_model;
 
   const handleModelChange = useCallback(
     (value: string) => {
-      if (apiModelSet.has(value)) {
-        onChange({ ...rag, embedding_api_model: value });
-      } else {
-        onChange({ ...rag, embedding_api_model: null, embedding_model: value });
-      }
+      onChange({ ...rag, embedding_api_model: null, embedding_model: value });
     },
-    [rag, onChange, apiModelSet],
+    [rag, onChange],
   );
 
   return (
@@ -149,30 +130,25 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
           <label>Model</label>
           <ModelPicker
             value={activeModel}
-            options={modelOptions}
+            options={LOCAL_EMBEDDING_MODELS}
             onChange={handleModelChange}
             label="Select embedding model"
             align="start"
             className="config-model-picker"
-            emptyMessage="Add an embedding model first"
+            emptyMessage="No local embedding models available"
           />
           <span className="config-field-hint">
-            {usingApi
-              ? 'API model — embeddings generated via provider endpoint.'
-              : 'Local model — embeddings generated on-device via ONNX runtime.'}
-            {apiEmbeddingModels.length === 0 &&
-              ' Add a provider model with mode "embeddings" in the Providers tab to use API embeddings.'}
+            Local model — embeddings are generated on-device via ONNX runtime.
+            Provider-backed embeddings will be available after provider connections are configured.
           </span>
         </div>
       </section>
 
       <section className="config-fieldset">
         <div className="config-fieldset-legend">Resource Limits</div>
-        {!usingApi && (
-          <p className="config-help text-sm opacity-70 mb-2">
-            Caps local ONNX embedding CPU and peak memory during indexing and search.
-          </p>
-        )}
+        <p className="config-help text-sm opacity-70 mb-2">
+          Caps local ONNX embedding CPU and peak memory during indexing and search.
+        </p>
         <div className="config-form-grid">
           <div className="config-field">
             <label htmlFor="rag-embedding-threads">Embedding Threads</label>
@@ -185,7 +161,6 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
               min={1}
               max={64}
               title="ONNX Runtime CPU threads (intra-op). Default 2."
-              disabled={usingApi}
             />
           </div>
 
@@ -200,7 +175,6 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
               min={1}
               max={256}
               title="Texts per forward pass. Lower = less peak RAM/CPU."
-              disabled={usingApi}
             />
           </div>
         </div>

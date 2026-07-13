@@ -2,19 +2,8 @@
  * TierModelsTab — map agent tiers to models.
  *
  * 4 tiers: seed, sprout, bloom, crown.
- * Each tier uses the same model dropdown listing as Default Model (General).
+ * Typed connection-scoped tier assignments are introduced with provider IPC in U8.
  */
-import { useMemo } from 'react';
-import { collectModelsFromProviders } from '../../utils/models';
-import { ModelPicker } from '../ModelPicker';
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-export interface TierModelsTabProps {
-  tierModels: Record<string, string>;
-  providers: Record<string, Record<string, unknown>>;
-  onChange: (tierModels: Record<string, string>) => void;
-}
 
 interface TierInfo {
   id: string;
@@ -49,12 +38,7 @@ const TIERS: TierInfo[] = [
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function TierModelsTab({ tierModels, providers, onChange }: TierModelsTabProps) {
-  const availableModels = useMemo(
-    () => collectModelsFromProviders(providers),
-    [providers],
-  );
-
+export function TierModelsTab() {
   return (
     <div className="config-form">
       <section className="config-fieldset">
@@ -62,22 +46,14 @@ export function TierModelsTab({ tierModels, providers, onChange }: TierModelsTab
 
         <div className="config-card-list">
           {TIERS.map((tier) => {
-            const currentModel = tierModels[tier.id] ?? '';
             return (
               <div key={tier.id} className="config-card config-card-row">
                 <div className="min-w-0">
                   <div className="config-card-title">{tier.label}</div>
                   <p className="config-card-desc">{tier.description}</p>
                 </div>
-                <div className="flex shrink-0 items-center">
-                  <ModelPicker
-                    value={currentModel}
-                    options={availableModels}
-                    onChange={(value) => onChange({ ...tierModels, [tier.id]: value })}
-                    label={`${tier.label} model`}
-                    className="config-model-picker"
-                    emptyMessage="Add providers first"
-                  />
+                <div className="badge badge-ghost shrink-0">
+                  Not configured
                 </div>
               </div>
             );
@@ -85,11 +61,12 @@ export function TierModelsTab({ tierModels, providers, onChange }: TierModelsTab
         </div>
       </section>
 
-      {availableModels.length === 0 && (
-        <div className="config-note">
-          No models available. Add providers in the Providers tab first.
-        </div>
-      )}
+      <div role="alert" className="alert alert-info">
+        <span>
+          Tier assignments require a provider connection and will be available
+          with the connection setup flow.
+        </span>
+      </div>
     </div>
   );
 }

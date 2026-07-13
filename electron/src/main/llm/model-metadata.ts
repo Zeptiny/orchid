@@ -2,22 +2,19 @@
  * Model metadata resolution — capabilities and limits for known LLM models.
  *
  * Provides a `resolveModelMetadata()` function that returns display-ready
- * metadata (max tokens, vision support, mode) for a model ref.
+ * metadata (max tokens, vision support, mode) for a model ID.
  *
- * Model refs from the UI are `alias/model` (same as resolveModelRef). Bare
- * model ids are also accepted for built-in / legacy lookups.
+ * Model IDs are opaque provider-owned strings. A model ID may contain `/`, so
+ * this compatibility lookup never tries to infer a provider alias from it.
  *
  * Resolution order:
- * 1. Split `alias/model` on the first slash when present
- * 2. Look up bare model id in built-in defaults table
- * 3. Merge per-model overrides from that provider's config
- * 4. Cache the result under the full ref for subsequent lookups
+ * 1. Look up the complete model ID in built-in defaults table
+ * 2. Cache the result under the complete ID for subsequent lookups
  *
  * Unknown models get safe defaults: null limits, no vision, 'chat' mode.
  * Call `clearModelMetadataCache()` after config saves so overrides refresh.
  */
 import type { ModelMetadata } from '../../shared/types/ipc-boundary';
-import type { Config } from '../config/schema';
 
 // Re-export for consumers
 export type { ModelMetadata } from '../../shared/types/ipc-boundary';
@@ -246,28 +243,6 @@ const DEFAULT_METADATA: ModelMetadata = {
 };
 
 /**
- * Split a model ref into provider alias and bare model id.
- *
- * UI / session model ids are `alias/model` (first slash only), matching
- * `resolveModelRef`. Bare ids (no slash) are returned as-is with a null alias.
- * Model ids that themselves contain slashes (e.g. `cline-pass/mimo-v2.5`)
- * remain intact after the first slash: `cline/cline-pass/mimo-v2.5`.
- */
-export function splitProviderModelRef(ref: string): {
-  alias: string | null;
-  modelId: string;
-} {
-  const slashIndex = ref.indexOf('/');
-  if (slashIndex <= 0 || slashIndex >= ref.length - 1) {
-    return { alias: null, modelId: ref };
-  }
-  return {
-    alias: ref.slice(0, slashIndex),
-    modelId: ref.slice(slashIndex + 1),
-  };
-}
-
-/**
  * Find the best matching built-in metadata for a bare model ID.
  * Tries exact match first, then prefix match (longest prefix wins).
  */
@@ -292,116 +267,33 @@ function findBuiltInMetadata(modelId: string): ModelMetadata | null {
 }
 
 /**
- * Extract per-model overrides from provider config.
- *
- * When `alias` is set (from `alias/model` refs used by pickers), only that
- * provider's models dict is consulted — so two providers with the same bare
- * model id keep independent overrides.
- *
- * Without an alias, scans all providers and returns the first match (legacy
- * bare-id lookups). Prefer alias-qualified refs from the UI.
- *
- * Override fields: `{ max_input_tokens, max_output_tokens, supports_vision, mode }`
- */
-function findConfigOverrides(
-  modelId: string,
-  config: Config,
-  alias: string | null,
-): Partial<ModelMetadata> | null {
-  const providers = config.providers;
-  if (!providers || typeof providers !== 'object') {
-    return null;
-  }
-
-  if (alias != null) {
-    const provider = providers[alias];
-    if (typeof provider !== 'object' || provider === null) {
-      return null;
-    }
-    return readModelOverride(provider as Record<string, unknown>, modelId);
-  }
-
-  // Bare model id: scan providers (order is object key order). Prefer
-  // alias-qualified refs so same-id models under different providers do not
-  // collide.
-  for (const provider of Object.values(providers)) {
-    if (typeof provider !== 'object' || provider === null) continue;
-    const entry = readModelOverride(provider as Record<string, unknown>, modelId);
-    if (entry) return entry;
-  }
-
-  return null;
-}
-
-function readModelOverride(
-  provider: Record<string, unknown>,
-  modelId: string,
-): Partial<ModelMetadata> | null {
-  const models = provider.models;
-  if (typeof models !== 'object' || models === null) return null;
-
-  const entry = (models as Record<string, unknown>)[modelId];
-  if (typeof entry === 'object' && entry !== null) {
-    return entry as Partial<ModelMetadata>;
-  }
-  return null;
-}
-
-/**
- * Resolve model metadata for a given model ref.
+ * Resolve model metadata for a complete opaque model ID.
  *
  * Resolution order:
  * 1. Cache hit → return cached result
- * 2. Split `alias/model` (first slash) when present
- * 3. Built-in defaults for the bare model id
- * 4. Per-model overrides from that provider's config (or any provider if bare)
- * 5. Merge: built-in defaults ← config overrides
- * 6. Cache and return
+ * 2. Built-in defaults for that complete model ID
+ * 3. Cache and return
  *
  * Unknown models get safe defaults: null limits, no vision, 'chat' mode.
  *
- * @param modelRef - Bare model id or `alias/model` (e.g. `default/mimo-v2.5`)
- * @param config - The application config (for provider overrides)
+ * @param modelId - Opaque provider model ID
  * @returns ModelMetadata with all fields populated (nulls for unknown limits)
  */
 export function resolveModelMetadata(
-  modelRef: string,
-  config: Config,
+  modelId: string,
 ): ModelMetadata {
-  // Check cache (keyed by full ref so provider-specific overrides stay distinct)
-  const cached = metadataCache.get(modelRef);
+  // Check cache keyed by the complete opaque model ID.
+  const cached = metadataCache.get(modelId);
   if (cached) return cached;
 
-  const { alias, modelId } = splitProviderModelRef(modelRef);
-
-  // Find built-in defaults from bare model id
+  // Find built-in defaults from the complete model ID.
   const builtIn = findBuiltInMetadata(modelId);
+  const metadata: ModelMetadata = { ...(builtIn ?? DEFAULT_METADATA) };
 
-  // Find config overrides for this provider + model
-  const overrides = findConfigOverrides(modelId, config, alias);
+  // Cache the result under the complete opaque ID.
+  metadataCache.set(modelId, metadata);
 
-  // Merge: built-in defaults (or DEFAULT) ← config overrides
-  const base = builtIn ?? { ...DEFAULT_METADATA };
-  const merged: ModelMetadata = {
-    max_input_tokens:
-      overrides?.max_input_tokens !== undefined
-        ? overrides.max_input_tokens
-        : base.max_input_tokens,
-    max_output_tokens:
-      overrides?.max_output_tokens !== undefined
-        ? overrides.max_output_tokens
-        : base.max_output_tokens,
-    supports_vision:
-      overrides?.supports_vision !== undefined
-        ? overrides.supports_vision
-        : base.supports_vision,
-    mode: overrides?.mode !== undefined ? overrides.mode : base.mode,
-  };
-
-  // Cache the result under the full ref
-  metadataCache.set(modelRef, merged);
-
-  return merged;
+  return metadata;
 }
 
 /**

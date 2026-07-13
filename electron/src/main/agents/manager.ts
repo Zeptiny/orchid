@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import type { Agent } from '../../shared/types/agent';
 import type { Chain } from '../../shared/types/chain';
 import { ChainStatus } from '../../shared/types/chain';
+import type { ModelSelection } from '../../shared/types/provider';
 import type { Message, Usage } from '../../shared/types/message';
 import { MessageType } from '../../shared/types/message';
 import type { StreamEvent } from '../llm/orchestrator';
@@ -58,7 +59,7 @@ const TERMINAL_STATES = new Set<SubagentState>([
 export type SubagentStreamRunner = (params: {
   task: string;
   agent: Agent;
-  model: string | null;
+  selection: ModelSelection | null;
   abortSignal: AbortSignal;
   sessionId?: string;
   /** Frozen parent-turn workspace cwd (do not re-resolve live session). */
@@ -96,8 +97,8 @@ export interface SubagentRecord {
   chain: Chain | null;
   /** Aggregate token usage across the subagent's stream (also on messages). */
   usage: Usage | null;
-  /** Model override (null = use default). */
-  readonly model: string | null;
+  /** Frozen connection-scoped model selection (null = provider-required). */
+  readonly selection: ModelSelection | null;
   /** Parent chain index (for attribution). */
   readonly parentChainIndex: number | null;
   /**
@@ -162,7 +163,7 @@ export class SubagentManager {
     task: string,
     agent: Agent,
     options: {
-      model?: string;
+      selection?: ModelSelection | null;
       parentChainIndex?: number;
       sessionId?: string;
       /** Frozen parent-turn workspace cwd for tools/prompt. */
@@ -174,7 +175,8 @@ export class SubagentManager {
     const id = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const userMessage = makeUserMessage(task);
-    const chain = makeEmptyChain(id, options.model ?? '', agent);
+    const selection = options.selection ?? null;
+    const chain = makeEmptyChain(id, selection, agent);
 
     const record: SubagentRecord = {
       id,
@@ -191,7 +193,7 @@ export class SubagentManager {
         messages: [userMessage],
       },
       usage: null,
-      model: options.model ?? null,
+      selection,
       parentChainIndex: options.parentChainIndex ?? null,
       sessionId: options.sessionId ?? null,
       projectRuntime: options.projectRuntime,
@@ -439,7 +441,7 @@ export class SubagentManager {
       const stream = runner({
         task: record.task,
         agent: record.agent,
-        model: record.model,
+        selection: record.selection,
         abortSignal: abort.signal,
         sessionId: record.sessionId ?? undefined,
         cwd,
@@ -567,7 +569,7 @@ export class SubagentManager {
 
   private _setChainMessages(record: SubagentRecord, messages: Message[]): void {
     if (!record.chain) {
-      record.chain = makeEmptyChain(record.id, record.model ?? '', record.agent);
+      record.chain = makeEmptyChain(record.id, record.selection, record.agent);
     }
     record.chain = {
       ...record.chain,
@@ -578,7 +580,7 @@ export class SubagentManager {
 
   private _finalizeChain(record: SubagentRecord, status: ChainStatus): void {
     if (!record.chain) {
-      record.chain = makeEmptyChain(record.id, record.model ?? '', record.agent);
+      record.chain = makeEmptyChain(record.id, record.selection, record.agent);
     }
     const terminal =
       status === ChainStatus.INTERRUPTED
@@ -625,7 +627,7 @@ export function runtimeToDomain(record: SubagentRecord): DomainSubagentRecord {
 
   const chain =
     record.chain ??
-    makeEmptyChain(record.id, record.model ?? '', record.agent);
+    makeEmptyChain(record.id, record.selection, record.agent);
 
   return {
     id: record.id,
@@ -646,13 +648,18 @@ export function runtimeToDomain(record: SubagentRecord): DomainSubagentRecord {
 
 // ── Chain factory ───────────────────────────────────────────────────────────
 
-function makeEmptyChain(sessionKey: string, model: string, agent: Agent): Chain {
+function makeEmptyChain(
+  sessionKey: string,
+  selection: ModelSelection | null,
+  agent: Agent,
+): Chain {
   return {
     id: randomUUID(),
     sessionId: sessionKey,
     messages: [],
     status: ChainStatus.ACTIVE,
-    model,
+    selection,
+    modelLabel: selection?.modelId ?? null,
     agentName: agent.name,
     agentType: agent.type,
     agentTier: agent.tier,

@@ -5,30 +5,16 @@
  * Tests leave the runner unset so spawn/markCompleted stay manual.
  */
 import type { Agent } from '../../shared/types/agent';
+import type { ModelSelection } from '../../shared/types/provider';
 import type { StreamEvent } from '../llm/orchestrator';
 import { getConfig } from '../config/loader';
-import { resolveModelRef } from '../llm/providers';
-import { createProviderModel } from '../llm/providers-factory';
 import { getSessionManager } from '../ipc/session';
-import {
-  acquireProjectMCPManager,
-  releaseProjectMCPManager,
-} from '../mcp/project-registry';
-import { getBuiltinToolRegistryForRuntime } from '../tools';
 import {
   getProjectRuntimeRegistry,
   hydrateProjectRuntime,
   type ProjectRuntime,
 } from '../project/runtime';
 import type { SubagentStreamRunner } from './manager';
-import { appendProjectPersonality } from '../project/personality';
-
-/** Tools that must never run inside a subagent (no nested delegation). */
-const SUBAGENT_FORBIDDEN_TOOLS = new Set([
-  'delegate_to_subagent',
-  'wait_for_subagent',
-  'interrupt_subagents',
-]);
 
 /**
  * Fallback cwd when spawn did not pass a frozen parent-turn path.
@@ -55,13 +41,13 @@ function resolveParentSessionCwdFallback(sessionId?: string): string | null {
 
 /**
  * Create the production stream runner for subagents.
- * Resolves model, strips nested-subagent tools, and yields StreamEvents.
+ * Validates a frozen selection before U4 wires it into a trusted driver.
  */
 export function createSubagentStreamRunner(): SubagentStreamRunner {
   return async function* subagentStream(params: {
     task: string;
     agent: Agent;
-    model: string | null;
+    selection: ModelSelection | null;
     abortSignal: AbortSignal;
     sessionId?: string;
     /** Frozen parent-turn workspace cwd. */
@@ -99,86 +85,26 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       params.projectRuntime ?? getProjectRuntimeRegistry().get(parentCwd);
     const runtime = await hydrateProjectRuntime(baseRuntime);
     const config = runtime.config;
-    const mcpManager = acquireProjectMCPManager(baseRuntime);
-    const registry = getBuiltinToolRegistryForRuntime(baseRuntime, {
-      agents: new Map(runtime.agents),
-      skills: new Map(runtime.skills),
-      mcpManager,
-    });
-    const { streamChat } = await import('../llm/orchestrator');
-
-    // Resolve model: explicit override → tier model → project default.
-    const modelId =
-      params.model ||
-      config.tier_models[params.agent.tier] ||
-      config.default_model;
-    const modelRef = resolveModelRef(modelId, config);
-    const modelInstance = await createProviderModel(modelRef);
-
-    // Strip nested-subagent tools even when agent allows '*'.
-    const allowedPatterns =
-      params.agent.allowed_tools.length > 0 ? [...params.agent.allowed_tools] : ['*'];
-    const allowedNames = registry
-      .filter(allowedPatterns)
-      .map((tool) => tool.definition.name)
-      .filter((name) => !SUBAGENT_FORBIDDEN_TOOLS.has(name));
-
-    const agentForRun: Agent = {
-      ...params.agent,
-      allowed_tools: allowedNames,
-    };
-
-    // Live dynamic context scoped to this subagent (not main/peers).
-    const agentScopeId = params.agentScopeId;
-    const { buildSystemPromptContext } = await import('../llm/build-prompt-context');
-    const context = await buildSystemPromptContext({
-      cwd: parentCwd,
-      config,
-      sessionId,
-      agentScopeId,
-    });
-
-    // Isolated history: only the subagent's task (no parent context).
-    // streamChat builds API messages from this; the manager owns the persisted chain.
-    const messages: import('../../shared/types/message').Message[] = [
-      {
-        id: crypto.randomUUID(),
-        role: 'user',
-        content: params.task,
-        type: 'text',
-        tool_calls: null,
-        tool_call_id: null,
-        name: null,
-        thinking: null,
-        timestamp: new Date().toISOString(),
-        usage: null,
-        hidden: false,
-        is_error: false,
-      },
-    ];
-
-    const stream = streamChat({
-      messages,
-      agent: agentForRun,
-      systemPrompt: appendProjectPersonality(
-        params.agent.system_prompt || 'You are a helpful assistant.',
-        runtime,
-      ),
-      context,
-      config,
-      registry,
-      mcpManager,
-      sessionId,
-      projectRuntime: runtime,
-      agentScopeId,
-      abortSignal: params.abortSignal,
-      modelInstance,
-    });
-
-    try {
-      yield* stream;
-    } finally {
-      releaseProjectMCPManager(baseRuntime);
+    // Resolve selection: explicit override → tier selection → nullable default.
+    const selection =
+      params.selection ??
+      (config.tier_models[params.agent.tier] ?? config.default_model);
+    if (selection == null) {
+      yield {
+        type: 'error',
+        title: 'Provider connection required',
+        detail: 'Connect a provider and select a model before delegating a subagent.',
+      };
+      return;
     }
+
+    // U4 installs the trusted registry that turns this frozen selection into a
+    // native adapter. U1 must not revive the legacy alias/model parser here.
+    yield {
+      type: 'error',
+      title: 'Provider driver unavailable',
+      detail: 'Provider connections are not ready for execution yet.',
+    };
+    return;
   };
 }

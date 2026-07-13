@@ -10,7 +10,6 @@ import type { Agent } from '../../shared/types/agent';
 import type { Skill } from '../../shared/types/skill';
 import { readAgents } from '../agents/registry';
 import { loadConfig } from '../config/loader';
-import { injectKeychainKeys } from '../config/keychain';
 import type { Config } from '../config/schema';
 import { readPersonalities } from '../personality/registry';
 import { readSkills } from '../skills/registry';
@@ -132,17 +131,12 @@ export function clearProjectRuntimeRegistry(): void {
 }
 
 /**
- * Restore secret provider credentials into a one-turn copy of a project
- * runtime. Disk-backed project snapshots deliberately omit keychain values;
- * using one of those snapshots directly would send an empty API key to the
- * provider. The cached runtime itself remains secret-free and reusable.
+ * Return the immutable project runtime unchanged. Legacy alias-keyed secrets
+ * are deliberately never rehydrated; U3 replaces this compatibility helper
+ * with connection-scoped credential access.
  */
 export async function hydrateProjectRuntime(
   runtime: ProjectRuntime,
 ): Promise<ProjectRuntime> {
-  const config = await injectKeychainKeys(runtime.config);
-  return Object.freeze({
-    ...runtime,
-    config,
-  });
+  return runtime;
 }
