@@ -32,6 +32,7 @@ import { getConfig } from './config/loader';
 import { ProviderCatalogStore } from './providers/catalog/store';
 import { ProviderCatalogUpdater, createHttpCatalogTransport } from './providers/catalog/updater';
 import type { CatalogKeyring } from './providers/catalog/trust';
+import { CredentialVault } from './providers/credentials/vault';
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
@@ -39,6 +40,7 @@ let mainWindow: BrowserWindow | null = null;
 /** Periodic reclaim of USER-owned bg command stdin after idle timeout. */
 let bgIdleOwnershipTimer: ReturnType<typeof setInterval> | null = null;
 let providerCatalogStore: ProviderCatalogStore | null = null;
+let providerCredentialVault: CredentialVault | null = null;
 
 /**
  * Release engineering replaces this empty development keyring with public
@@ -83,6 +85,20 @@ export function getProviderCatalogStore(): ProviderCatalogStore {
     throw new Error('Provider catalog has not been initialized');
   }
   return providerCatalogStore;
+}
+
+function initializeProviderCredentialVault(): CredentialVault {
+  const vault = new CredentialVault();
+  providerCredentialVault = vault;
+  return vault;
+}
+
+/** Main-process credential access for trusted drivers only. */
+export function getProviderCredentialVault(): CredentialVault {
+  if (!providerCredentialVault) {
+    throw new Error('Provider credential vault has not been initialized');
+  }
+  return providerCredentialVault;
 }
 
 // ── Window creation ──────────────────────────────────────────────────────────
@@ -140,6 +156,9 @@ app.whenReady().then(async () => {
 
     // 1b. Load the bundled provider catalog before any provider-dependent IPC.
     initializeProviderCatalog();
+    // Credential persistence remains unavailable until used when the OS secure
+    // backend is unavailable; it must never abort local-only Orchid startup.
+    initializeProviderCredentialVault();
 
     // 2. Seed defaults into home dirs (before any load)
     seedAgentsDir(HOME_AGENTS_DIR);
@@ -253,6 +272,7 @@ app.on('before-quit', async (event) => {
     // 4. Reset config manager
     ConfigManager.reset();
     providerCatalogStore = null;
+    providerCredentialVault = null;
 
     // 4. Now actually quit
     app.exit(0);

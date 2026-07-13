@@ -44,17 +44,48 @@ function formatTimestamp(date: Date): string {
 export function formatLogLine(level: Level, args: unknown[]): string {
   const timestamp = formatTimestamp(new Date());
   const message = args
-    .map((a) => (typeof a === 'string' ? a : safeInspect(a)))
+    .map((a) => (typeof a === 'string' ? redactLogString(a) : safeInspect(a)))
     .join(' ');
   return `${timestamp} ${level} ${message}\n`;
 }
 
-/** Safe JSON.stringify with fallback for circular refs. */
+const SENSITIVE_LOG_KEY = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|secret|password|cookie|credential)/i;
+
+/** Redact both standalone secret strings and common header/query representations. */
+export function redactLogString(value: string): string {
+  return value
+    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')
+    .replace(/\b(sk-[A-Za-z0-9_-]{8,})\b/g, '[REDACTED]')
+    .replace(/\b(?:access|refresh)[_-]token[-_A-Za-z0-9.]{8,}\b/gi, '[REDACTED]')
+    .replace(
+      /([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|token)=)[^&#\s]+/gi,
+      '$1[REDACTED]',
+    )
+    .replace(
+      /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[=:]\s*)(?:Bearer\s+)?[^\s,;"'}]+/gi,
+      '$1[REDACTED]',
+    );
+}
+
+function redactLogValue(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (typeof value === 'string') return redactLogString(value);
+  if (value === null || typeof value !== 'object') return value;
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((entry) => redactLogValue(entry, seen));
+  const result: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    result[key] = SENSITIVE_LOG_KEY.test(key) ? '[REDACTED]' : redactLogValue(nested, seen);
+  }
+  return result;
+}
+
+/** Safe JSON.stringify with secret redaction and a circular-reference fallback. */
 function safeInspect(obj: unknown): string {
   try {
-    return JSON.stringify(obj);
+    return JSON.stringify(redactLogValue(obj));
   } catch {
-    return String(obj);
+    return redactLogString(String(obj));
   }
 }
 

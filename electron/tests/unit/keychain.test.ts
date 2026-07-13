@@ -19,6 +19,7 @@ import * as path from 'node:path';
 
 const mockSafeStorage = {
   isEncryptionAvailable: vi.fn(() => true),
+  getSelectedStorageBackend: vi.fn(() => 'gnome_libsecret'),
   encryptString: vi.fn((plaintext: string) => {
     // Simple XOR "encryption" for testing (not real crypto)
     const key = 0x42;
@@ -55,6 +56,7 @@ beforeEach(async () => {
   // Re-apply base implementations — vi.clearAllMocks() clears call history
   // but not mockImplementation overrides from previous tests (vi.fn, not spyOn).
   mockSafeStorage.isEncryptionAvailable.mockReturnValue(true);
+  mockSafeStorage.getSelectedStorageBackend.mockReturnValue('gnome_libsecret');
   mockSafeStorage.encryptString.mockImplementation((plaintext: string) => {
     const key = 0x42;
     const buf = Buffer.from(plaintext, 'utf-8');
@@ -89,7 +91,6 @@ let keychainPath: string;
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-keychain-test-'));
   keychainPath = path.join(tmpDir, '.orchid', 'keychain.json');
-  keychain._resetWarningFlag();
 });
 
 afterEach(() => {
@@ -184,43 +185,27 @@ describe('encryptAndStore / retrieveAndDecrypt', () => {
 });
 
 // ===========================================================================
-// Fallback (plaintext) when encryption unavailable
+// Secure-storage failure (no plaintext fallback)
 // ===========================================================================
 
-describe('plaintext fallback', () => {
-  it('stores value as plaintext when encryption unavailable', async () => {
+describe('secure-storage failure', () => {
+  it('rejects persistence when encryption is unavailable instead of writing plaintext', async () => {
     mockSafeStorage.isEncryptionAvailable.mockReturnValue(false);
 
-    const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    await keychain.encryptAndStore('fallback-key', 'plaintext-value', { keychainPath });
-    const result = await keychain.retrieveAndDecrypt('fallback-key', { keychainPath });
-
-    expect(result).toBe('plaintext-value');
+    await expect(keychain.encryptAndStore('fallback-key', 'plaintext-value', { keychainPath }))
+      .rejects.toThrow(/plaintext credential persistence is disabled/i);
     expect(mockSafeStorage.encryptString).not.toHaveBeenCalled();
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('safeStorage encryption is unavailable'),
-    );
-
-    consoleSpy.mockRestore();
+    expect(fs.existsSync(keychainPath)).toBe(false);
   });
 
-  it('emits warning only once per module instance', async () => {
-    mockSafeStorage.isEncryptionAvailable.mockReturnValue(false);
-
-    const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    await keychain.encryptAndStore('key1', 'val1', { keychainPath });
-    await keychain.encryptAndStore('key2', 'val2', { keychainPath });
-
-    // Warning emitted only once (flag is set after first call)
-    expect(consoleSpy).toHaveBeenCalledTimes(1);
-
-    consoleSpy.mockRestore();
+  it('rejects Linux basic_text storage as insecure', async () => {
+    mockSafeStorage.isEncryptionAvailable.mockReturnValue(true);
+    mockSafeStorage.getSelectedStorageBackend.mockReturnValue('basic_text');
+    await expect(keychain.encryptAndStore('key1', 'val1', { keychainPath })).rejects.toThrow();
+    expect(fs.existsSync(keychainPath)).toBe(false);
   });
 
-  it('reads plaintext file correctly', async () => {
-    // Manually write a plaintext keychain file
+  it('ignores a legacy plaintext keychain file', async () => {
     fs.mkdirSync(path.dirname(keychainPath), { recursive: true });
     fs.writeFileSync(
       keychainPath,
@@ -229,7 +214,7 @@ describe('plaintext fallback', () => {
     );
 
     const result = await keychain.retrieveAndDecrypt('key', { keychainPath });
-    expect(result).toBe('plain-value');
+    expect(result).toBeNull();
   });
 
   it('handles decryption failure gracefully', async () => {
@@ -722,13 +707,9 @@ describe('keychain file persistence', () => {
     expect(content.encrypted).toBe(true);
   });
 
-  it('stores encrypted=false when fallback to plaintext', async () => {
+  it('does not create a plaintext fallback file', async () => {
     mockSafeStorage.isEncryptionAvailable.mockReturnValue(false);
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    await keychain.encryptAndStore('test', 'value', { keychainPath });
-
-    const content = JSON.parse(fs.readFileSync(keychainPath, 'utf-8'));
-    expect(content.encrypted).toBe(false);
+    await expect(keychain.encryptAndStore('test', 'value', { keychainPath })).rejects.toThrow();
+    expect(fs.existsSync(keychainPath)).toBe(false);
   });
 });

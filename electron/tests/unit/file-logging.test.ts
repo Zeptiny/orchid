@@ -85,7 +85,23 @@ describe('formatLogLine', () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
     const line = formatLogLine('WARN', [circular]);
-    expect(line).toContain('WARN [object Object]');
+    expect(line).toContain('WARN {"self":"[Circular]"}');
+  });
+
+  it('redacts credential values from strings, URLs, and structured metadata', () => {
+    const line = formatLogLine('ERROR', [
+      'Authorization: Bearer access-token-123456789012345',
+      {
+        refreshToken: 'refresh-token-123456789012345',
+        nested: { apiKey: 'sk-secret-api-key-123456' },
+        url: 'https://example.test/callback?api_key=sk-secret-api-key-123456',
+      },
+    ]);
+
+    expect(line).not.toContain('access-token-123456789012345');
+    expect(line).not.toContain('refresh-token-123456789012345');
+    expect(line).not.toContain('sk-secret-api-key-123456');
+    expect(line).toContain('[REDACTED]');
   });
 });
 

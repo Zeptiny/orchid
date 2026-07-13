@@ -1,9 +1,12 @@
 /**
  * OS Keychain Integration — U25.
  *
- * Encrypts API keys using Electron's `safeStorage` and stores them as base64
- * in `~/.orchid/keychain.json`. Falls back to plaintext with a console warning
- * when encryption is unavailable (e.g. Linux without libsecret).
+ * Legacy compatibility wrapper for Electron's `safeStorage`.
+ *
+ * It stores only encrypted data and fails closed when secure storage is
+ * unavailable. New connection-scoped credentials live in
+ * `providers/credentials/vault.ts`; this module remains only so retired config
+ * surfaces cannot fall back to plaintext while old callers are removed.
  *
  * **Threat model:** This module protects API keys at rest. Session files and
  * tool-output cache store sensitive data (conversation history, file contents,
@@ -22,15 +25,6 @@
  * }
  * ```
  *
- * Fallback (plaintext) format:
- * ```json
- * {
- *   "encrypted": false,
- *   "entries": {
- *     "provider:openai:api_key": "sk-abc123..."
- *   }
- * }
- * ```
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -64,9 +58,9 @@ function resolvePaths(options?: KeychainOptions) {
 // ---------------------------------------------------------------------------
 
 interface KeychainFile {
-  /** Whether entries are encrypted (true) or stored as plaintext fallback (false). */
-  encrypted: boolean;
-  /** Map of key -> base64 ciphertext (encrypted) or plaintext (fallback). */
+  /** Always true. Plaintext files are ignored rather than migrated. */
+  encrypted: true;
+  /** Map of key -> base64 ciphertext. */
   entries: Record<string, string>;
 }
 
@@ -152,8 +146,13 @@ function readKeychainFile(filePath: string): KeychainFile {
     if (typeof parsed !== 'object' || parsed === null) {
       return { encrypted: true, entries: {} };
     }
+    if (parsed.encrypted !== true) {
+      // Never revive a legacy plaintext fallback. Users can submit a new
+      // secret once secure storage is available, or use an env reference.
+      return { encrypted: true, entries: {} };
+    }
     return {
-      encrypted: parsed.encrypted ?? true,
+      encrypted: true,
       entries: (typeof parsed.entries === 'object' && parsed.entries !== null)
         ? parsed.entries
         : {},
@@ -210,31 +209,12 @@ function writeKeychainFile(filePath: string, dirPath: string, data: KeychainFile
  */
 export function isAvailable(): boolean {
   try {
-    return safeStorage.isEncryptionAvailable();
+    if (!safeStorage.isEncryptionAvailable()) return false;
+    const backend = safeStorage.getSelectedStorageBackend?.();
+    return backend !== 'basic_text';
   } catch {
     return false;
   }
-}
-
-/** Whether we've already emitted the plaintext-fallback warning. */
-let plaintextWarningEmitted = false;
-
-function emitPlaintextWarning(): void {
-  if (!plaintextWarningEmitted) {
-    console.warn(
-      '[keychain] safeStorage encryption is unavailable (Linux without libsecret?). ' +
-        'API keys will be stored as plaintext in ~/.orchid/keychain.json. ' +
-        'Install libsecret or gnome-keyring for OS-level encryption.',
-    );
-    plaintextWarningEmitted = true;
-  }
-}
-
-/**
- * Reset the plaintext-warning flag. Used in tests to verify warning emission.
- */
-export function _resetWarningFlag(): void {
-  plaintextWarningEmitted = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,8 +224,9 @@ export function _resetWarningFlag(): void {
 /**
  * Encrypt a value and store it under the given key.
  *
- * Uses `safeStorage.encryptString()` when available; falls back to plaintext
- * storage with a console warning.
+ * Uses `safeStorage.encryptString()` when available. Plaintext persistence is
+ * forbidden; callers must use an environment reference when secure storage is
+ * unavailable.
  *
  * @param key  Storage key (e.g. `"provider:openai:api_key"`).
  * @param value  The plaintext value to encrypt and store.
@@ -261,15 +242,11 @@ export async function encryptAndStore(
   await withKeychainWriteLock(filePath, async () => {
     const file = readKeychainFile(filePath);
 
-    if (isAvailable()) {
-      const encrypted = safeStorage.encryptString(value);
-      file.entries[key] = encrypted.toString('base64');
-      file.encrypted = true;
-    } else {
-      emitPlaintextWarning();
-      file.entries[key] = value;
-      file.encrypted = false;
+    if (!isAvailable()) {
+      throw new Error('Secure storage is unavailable; plaintext credential persistence is disabled.');
     }
+    const encrypted = safeStorage.encryptString(value);
+    file.entries[key] = encrypted.toString('base64');
 
     // Optional test barrier (yields so concurrent RMW without a lock races)
     // Only active outside production to prevent test infrastructure from
@@ -317,8 +294,9 @@ export async function retrieveAndDecrypt(
     }
   }
 
-  // Plaintext fallback — file.encrypted === false, so stored is the raw value.
-  return stored;
+  // `readKeychainFile()` ignores legacy plaintext documents, so all reachable
+  // entries are encrypted. Keep this fail-closed guard for malformed files.
+  return null;
 }
 
 /**
