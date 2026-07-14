@@ -120,14 +120,4 @@ export class ConnectionStore {
     });
   }
 
-  async remove(id: string): Promise<boolean> {
-    return withWriteLock(this.filePath, async () => {
-      const document = readDocument(this.filePath);
-      const connections = document.connections.filter((connection) => connection.id !== id);
-      if (connections.length === document.connections.length) return false;
-      await this.beforePersist?.();
-      atomicWriteJson(this.filePath, { version: 1, connections });
-      return true;
-    });
-  }
 }

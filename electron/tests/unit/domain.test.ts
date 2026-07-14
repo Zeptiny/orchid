@@ -32,7 +32,6 @@ import {
   TodoStatus,
   type Todo,
   VALID_TRANSITIONS,
-  validateTodoTransition,
   todoToStorageDict,
   todoFromStorageDict,
   todoStoreToStorageDict,
@@ -457,27 +456,6 @@ describe('Domain Models: SubagentRecord restore migration', () => {
 // ── Test 4: Todo state machine ──────────────────────────────────────────────
 
 describe('Domain Models: Todo state transitions', () => {
-  it('OPEN → IN_PROGRESS → DONE is valid', () => {
-    expect(validateTodoTransition(TodoStatus.OPEN, TodoStatus.IN_PROGRESS)).toBeNull();
-    expect(validateTodoTransition(TodoStatus.IN_PROGRESS, TodoStatus.DONE)).toBeNull();
-  });
-
-  it('DONE → IN_PROGRESS is invalid', () => {
-    const error = validateTodoTransition(TodoStatus.DONE, TodoStatus.IN_PROGRESS);
-    expect(error).not.toBeNull();
-    expect(error).toContain('Cannot transition');
-  });
-
-  it('OPEN → DONE is invalid (must go through IN_PROGRESS)', () => {
-    const error = validateTodoTransition(TodoStatus.OPEN, TodoStatus.DONE);
-    expect(error).not.toBeNull();
-  });
-
-  it('IN_PROGRESS → OPEN is invalid', () => {
-    const error = validateTodoTransition(TodoStatus.IN_PROGRESS, TodoStatus.OPEN);
-    expect(error).not.toBeNull();
-  });
-
   it('DONE has no valid transitions', () => {
     expect(VALID_TRANSITIONS[TodoStatus.DONE].size).toBe(0);
   });

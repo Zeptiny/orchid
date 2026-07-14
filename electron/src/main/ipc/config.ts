@@ -27,9 +27,6 @@ import {
   listPersonalityNames,
   loadPersonalities,
 } from '../personality/registry';
-import {
-  getLastAppliedProjectDir,
-} from '../project/layers';
 import { clearProjectRuntimeRegistry } from '../project/runtime';
 import { invalidateAllProjectMCPManagers } from '../mcp/project-registry';
 
@@ -124,8 +121,7 @@ export function registerConfigIPC(): void {
   // explain why a legacy provider/default was reset instead of silently
   // presenting a disconnected workspace.
   ipcMain.handle(IPC_CHANNELS.CONFIG_DIAGNOSTICS, async () => {
-    const projectDir = getLastAppliedProjectDir() ?? HOME_CONFIG_DIR;
-    return getConfigDiagnostics({ projectDir });
+    return getConfigDiagnostics({ projectDir: HOME_CONFIG_DIR });
   });
 
   // config:model_metadata — resolve metadata for a given model ID
@@ -136,12 +132,11 @@ export function registerConfigIPC(): void {
     return resolveModelMetadata(modelId);
   });
 
-  // config:list_personalities — names from home (+ project overlay when layers applied)
+  // config:list_personalities — home personalities only (~/.orchid/personalities).
+  // Project personalities are applied at chat time via ProjectRuntime, not this list.
   ipcMain.handle(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES, async () => {
     // Reload so newly-added files appear without restarting the app.
-    // Prefer last applied project dir (set by workspace bind / session load).
-    const projectDir = getLastAppliedProjectDir() ?? undefined;
-    loadPersonalities(projectDir ? { projectDir } : undefined);
+    loadPersonalities();
     return listPersonalityNames();
   });
 

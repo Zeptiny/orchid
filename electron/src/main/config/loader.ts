@@ -259,7 +259,6 @@ export function ensureHomeConfig(): void {
  * Usage:
  * ```ts
  * const cfg = ConfigManager.load();
- * ConfigManager.save();
  * ConfigManager.reset();
  * ```
  */
@@ -298,25 +297,6 @@ export class ConfigManager {
     ConfigManager._diagnostics = [];
   }
 
-  /**
-   * Persist current config to `~/.orchid/config.json` (atomic write).
-   * No-op if no config has been loaded.
-   */
-  static save(): void {
-    if (ConfigManager._instance === null) return;
-    const sanitized = sanitizeConfigLayer(
-      ConfigManager._instance as unknown as Record<string, unknown>,
-    );
-    const config = configSchema.parse({ ...sanitized.config, providers: {} });
-    ConfigManager._instance = config;
-    ConfigManager._errors = validateConfig(config);
-    if (sanitized.resetLegacyProviderState) {
-      ConfigManager._diagnostics = [{ ...LEGACY_PROVIDER_CONFIG_RESET_DIAGNOSTIC }];
-    } else {
-      ConfigManager._diagnostics = [];
-    }
-    atomicWriteJson(HOME_CONFIG_PATH, config);
-  }
 }
 
 // ---------------------------------------------------------------------------

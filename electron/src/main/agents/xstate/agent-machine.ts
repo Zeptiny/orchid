@@ -2,27 +2,24 @@
  * Agent machine — the core state machine for LLM-driven agent orchestration.
  *
  * State flow:
- *   idle → streaming → toolExecuting → streaming → idle → interrupted
+ *   idle → streaming → idle → interrupted
  *
  * Transitions:
  * - idle → streaming: on USER_INPUT
- * - streaming → toolExecuting: on TOOL_CALL (invoke tool via fromPromise)
  * - streaming → idle: on STREAM_END (no tool calls)
- * - toolExecuting → streaming: on TOOL_RESULT (feed result back)
- * - toolExecuting → error: on TOOL_ERROR
  * - streaming → interrupted: on CANCEL (cancels in-flight invoke)
  * - interrupted → idle: on timeout or user confirmation
  * - error → idle: on USER_INPUT (retry)
  *
  * The streaming state uses `fromCallback` for the LLM stream (push-based
- * chunks to parent). Tool execution uses `fromPromise`.
+ * chunks to parent). Tool calls are handled inside the provider stream.
  *
  * Integrates with `streamChat` from U9 (electron/src/main/llm/orchestrator.ts).
  *
  * Ported from Python `src/orchid/agents/manager.py` and `src/orchid/app.py`.
  */
 
-import { assign, setup, fromCallback, fromPromise, type ActorRefFrom } from 'xstate';
+import { assign, setup, fromCallback, type ActorRefFrom } from 'xstate';
 import type { StreamEvent } from '../../llm/orchestrator';
 import type { AgentEvent } from './events';
 import type { Agent } from '../../../shared/types/agent';
@@ -37,12 +34,6 @@ export interface AgentContext {
   thinking: string;
   /** User input that triggered the current stream. */
   currentInput: string;
-  /** Current tool call being executed. */
-  currentToolCall: {
-    toolCallId: string;
-    toolName: string;
-    args: string;
-  } | null;
   /** Current tool call being streamed (generating state). */
   streamingToolCall: {
     toolCallId: string;
@@ -84,11 +75,6 @@ export interface AgentContext {
    * This is the `streamChat` function from U9, or a mock for testing.
    */
   streamFn: StreamFn;
-  /**
-   * Tool execution function.
-   * In production, this dispatches to the tool registry.
-   */
-  executeFn: ExecuteFn;
 }
 
 // ── Function types ──────────────────────────────────────────────────────────
@@ -100,12 +86,6 @@ export type StreamFn = (params: {
   systemPrompt: string;
   abortSignal: AbortSignal;
 }) => AsyncGenerator<StreamEvent>;
-
-/** Function signature for tool execution. */
-export type ExecuteFn = (
-  toolName: string,
-  args: string,
-) => Promise<{ content: string; isError: boolean }>;
 
 // ── Stream callback input ───────────────────────────────────────────────────
 
@@ -120,16 +100,6 @@ export interface StreamCallbackInput {
   abortController: AbortController;
   /** Stream function. */
   streamFn: StreamFn;
-}
-
-// ── Tool execution input ────────────────────────────────────────────────────
-
-export interface ToolExecInput {
-  toolCallId: string;
-  toolName: string;
-  args: string;
-  /** Tool execution function. */
-  executeFn: ExecuteFn;
 }
 
 // ── Stream callback (fromCallback) ──────────────────────────────────────────
@@ -250,38 +220,6 @@ const streamCallback = fromCallback(
   },
 );
 
-// ── Tool execution actor (fromPromise) ──────────────────────────────────────
-
-/**
- * fromPromise actor that executes a single tool call.
- *
- * Resolves with a TOOL_RESULT event, or rejects with a TOOL_ERROR event.
- */
-const toolExecActor = fromPromise(
-  async ({ input }: { input: ToolExecInput }): Promise<AgentEvent> => {
-    try {
-      const result = await input.executeFn(input.toolName, input.args);
-      return {
-        type: 'TOOL_RESULT',
-        toolCallId: input.toolCallId,
-        content: result.content,
-        isError: result.isError,
-      };
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      // Return a TOOL_RESULT with isError instead of throwing,
-      // so the machine can handle it gracefully.
-      return {
-        type: 'TOOL_RESULT',
-        toolCallId: input.toolCallId,
-        content: `Tool execution failed: ${errorMessage}`,
-        isError: true,
-      };
-    }
-  },
-);
-
 // ── Machine definition ──────────────────────────────────────────────────────
 
 export const agentMachine = setup({
@@ -292,14 +230,12 @@ export const agentMachine = setup({
       agent: Agent;
       systemPrompt: string;
       streamFn: StreamFn;
-      executeFn: ExecuteFn;
       /** Auto-reset timeout for interrupted state (ms). Default: 5000. */
       interruptResetMs?: number;
     },
   },
   actors: {
     streamActor: streamCallback,
-    toolExecActor: toolExecActor,
   },
   delays: {
     INTERRUPT_RESET: ({ context }) => context.interruptResetMs,
@@ -311,7 +247,6 @@ export const agentMachine = setup({
     response: '',
     thinking: '',
     currentInput: '',
-    currentToolCall: null,
     streamingToolCall: null,
     toolCallNames: {},
     toolLifecycleUpdate: null,
@@ -324,7 +259,6 @@ export const agentMachine = setup({
     systemPrompt: input.systemPrompt,
     abortController: null,
     streamFn: input.streamFn,
-    executeFn: input.executeFn,
     interruptResetMs: input.interruptResetMs ?? 5000,
   }),
   states: {
@@ -339,7 +273,6 @@ export const agentMachine = setup({
             error: null,
             errorTitle: null,
             wasInterrupted: false,
-            currentToolCall: null,
             streamingToolCall: () => null,
             toolCallNames: () => ({}),
             toolLifecycleUpdate: () => null,
@@ -481,51 +414,6 @@ export const agentMachine = setup({
       },
     },
 
-    toolExecuting: {
-      invoke: {
-        src: 'toolExecActor',
-        input: ({ context }) => {
-          if (!context.currentToolCall) {
-            throw new Error('No tool call in context');
-          }
-          return {
-            ...context.currentToolCall,
-            executeFn: context.executeFn,
-          };
-        },
-        onDone: {
-          target: 'streaming',
-          actions: assign({
-            currentToolCall: () => null,
-          }),
-        },
-        onError: {
-          target: 'error',
-          actions: assign({
-            error: ({ event }) => {
-              const err = event.error;
-              return err instanceof Error ? err.message : String(err);
-            },
-            currentToolCall: () => null,
-          }),
-        },
-      },
-      on: {
-        CANCEL: {
-          target: 'interrupted',
-          actions: assign({
-            wasInterrupted: true,
-            abortController: ({ context }) => {
-              context.abortController?.abort();
-              return null;
-            },
-            currentToolCall: () => null,
-            streamingToolCall: () => null,
-          }),
-        },
-      },
-    },
-
     interrupted: {
       // Stay interrupted until chat IPC finalizes the turn and disposes
       // the actor. Preserve `response` so partial content can be saved.
@@ -536,7 +424,6 @@ export const agentMachine = setup({
             wasInterrupted: false,
             error: null,
             errorTitle: null,
-            currentToolCall: null,
             streamingToolCall: () => null,
             abortController: () => null,
           }),
@@ -549,7 +436,6 @@ export const agentMachine = setup({
             wasInterrupted: false,
             error: null,
             errorTitle: null,
-            currentToolCall: null,
             streamingToolCall: () => null,
             abortController: () => null,
           }),
@@ -563,7 +449,6 @@ export const agentMachine = setup({
             error: null,
             errorTitle: null,
             wasInterrupted: false,
-            currentToolCall: null,
             streamingToolCall: () => null,
             toolCallNames: () => ({}),
             toolLifecycleUpdate: () => null,
@@ -585,7 +470,6 @@ export const agentMachine = setup({
             error: null,
             errorTitle: null,
             wasInterrupted: false,
-            currentToolCall: null,
             streamingToolCall: () => null,
             toolCallNames: () => ({}),
             toolLifecycleUpdate: () => null,

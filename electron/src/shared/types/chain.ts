@@ -13,7 +13,6 @@
  *   TOOL_RESULT with no preceding assistant tool_calls → dropped
  */
 
-import { z } from 'zod';
 import {
   copyModelSelection,
   modelSelectionSchema,
@@ -77,34 +76,6 @@ export interface Chain {
    */
   readonly endTime: string | null;
 }
-
-// ── Zod schemas ─────────────────────────────────────────────────────────────
-
-export const chainStatusSchema = z.enum([
-  ChainStatus.ACTIVE,
-  ChainStatus.COMPLETED,
-  ChainStatus.INTERRUPTED,
-  ChainStatus.FAILED,
-]);
-
-// Lazy schemas to handle circular dependency between Chain ↔ SubagentRecord
-export const chainSchema: z.ZodType<Chain> = z.lazy(
-  () =>
-    z.object({
-      id: z.string(),
-      sessionId: z.string(),
-      messages: z.array(z.object({}).passthrough()),
-      status: chainStatusSchema,
-      selection: modelSelectionSchema.nullable(),
-      modelLabel: z.string().nullable(),
-      agentName: z.string(),
-      agentType: z.string(),
-      agentTier: z.string(),
-      subagentRecord: z.nullable(z.object({}).passthrough()),
-      startTime: z.string().nullable(),
-      endTime: z.string().nullable(),
-    }) as unknown as z.ZodType<Chain>,
-);
 
 // ── Storage dict ────────────────────────────────────────────────────────────
 

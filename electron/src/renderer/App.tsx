@@ -5,29 +5,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { ChatView } from './components/ChatView';
 import { ConfigView } from './components/ConfigView';
 import { OnboardingScreen } from './components/Onboarding/OnboardingScreen';
-import { applyTheme, THEMES, type ThemeName, THEME_NAMES } from './themes';
+import { applyTheme, type ThemeName, THEME_NAMES } from './themes';
 import './styles/chat.css';
 
 type SettingsTab = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag' | 'skills' | 'agents' | 'personalities';
-
-// ─── Theme Context ───────────────────────────────────────────────────────────
-
-interface ThemeContextValue {
-  theme: ThemeName;
-  setTheme: (name: ThemeName) => void;
-  themes: typeof THEMES;
-}
-
-// Simple theme context (no React.createContext needed for this shell)
-let themeContext: ThemeContextValue = {
-  theme: 'default',
-  setTheme: () => {},
-  themes: THEMES,
-};
-
-export function useTheme(): ThemeContextValue {
-  return themeContext;
-}
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -42,11 +23,6 @@ function App() {
   useEffect(() => {
     applyTheme(theme);
 
-    // Update the context
-    themeContext = {
-      ...themeContext,
-      theme,
-    };
   }, [theme]);
 
   // Load saved theme from config on mount + check onboarding
@@ -123,14 +99,6 @@ function App() {
     };
     window.addEventListener('orchid:set-theme', handleSetTheme);
     return () => window.removeEventListener('orchid:set-theme', handleSetTheme);
-  }, [setTheme]);
-
-  // Update context with the setter
-  useEffect(() => {
-    themeContext = {
-      ...themeContext,
-      setTheme,
-    };
   }, [setTheme]);
 
   return (

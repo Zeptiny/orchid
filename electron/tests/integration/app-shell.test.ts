@@ -59,11 +59,6 @@ describe('IPC Channel Names', () => {
     expect(IPC_CHANNELS.TOOL_EXECUTE).toBe('tool:execute');
   });
 
-  it('agent channels are defined', () => {
-    expect(IPC_CHANNELS.AGENT_LIST).toBe('agent:list');
-    expect(IPC_CHANNELS.AGENT_SPAWN).toBe('agent:spawn');
-  });
-
   it('mcp channels are defined', () => {
     expect(IPC_CHANNELS.MCP_STATUS).toBe('mcp:status');
   });
@@ -97,8 +92,6 @@ describe('IPC Security', () => {
       IPC_CHANNELS.SESSION_DELETE,
       IPC_CHANNELS.SESSION_RENAME,
       IPC_CHANNELS.TOOL_EXECUTE,
-      IPC_CHANNELS.AGENT_LIST,
-      IPC_CHANNELS.AGENT_SPAWN,
       IPC_CHANNELS.MCP_STATUS,
       IPC_CHANNELS.RAG_STATUS,
       IPC_CHANNELS.RAG_INDEX,
@@ -198,18 +191,6 @@ describe('Zod Validation at Main-Process Boundary', () => {
     expect(schema.safeParse({ name: '', args: {} }).success).toBe(false);
   });
 
-  it('agent:spawn payload validates correctly', () => {
-    const schema = z.object({
-      name: z.string().min(1),
-      task: z.string().min(1),
-      tier: z.string().optional(),
-    });
-
-    expect(schema.safeParse({ name: 'general', task: 'do something' }).success).toBe(true);
-    expect(schema.safeParse({ name: 'general', task: 'do', tier: 'crown' }).success).toBe(true);
-    expect(schema.safeParse({ name: '', task: 'do' }).success).toBe(false);
-    expect(schema.safeParse({ name: 'general', task: '' }).success).toBe(false);
-  });
 });
 
 // ─── API Surface Type (compile-time checks) ─────────────────────────────────
@@ -265,7 +246,7 @@ describe('OrchidAPI Type Surface', () => {
     type AgentAPI = OrchidAPI['agent'];
     type AgentMethods = keyof AgentAPI;
 
-    const agentMethods: AgentMethods[] = ['list', 'spawn'];
+    const agentMethods: AgentMethods[] = ['save', 'delete'];
     expect(agentMethods).toHaveLength(2);
   });
 
@@ -444,11 +425,10 @@ describe('IPC Handler Module Structure', () => {
     const content = fs.readFileSync(indexPath, 'utf-8');
     expect(content).toContain('export function registerAllIPC');
     expect(content).toContain('export function unregisterAllIPC');
-    expect(content).toContain('export { setMCPManagerRef }');
   });
 
   it('each IPC handler file has register and unregister exports', () => {
-    const handlerFiles = ['chat', 'config', 'session', 'tool', 'agent', 'mcp', 'rag', 'ast'];
+    const handlerFiles = ['chat', 'config', 'session', 'tool', 'mcp', 'rag', 'ast'];
     const ipcDir = path.resolve(__dirname, '../../src/main/ipc');
 
     // Map file names to expected export name casing
@@ -457,7 +437,6 @@ describe('IPC Handler Module Structure', () => {
       config: 'Config',
       session: 'Session',
       tool: 'Tool',
-      agent: 'Agent',
       mcp: 'MCP',
       rag: 'RAG',
       ast: 'AST',
@@ -473,7 +452,7 @@ describe('IPC Handler Module Structure', () => {
   });
 
   it('each IPC handler validates payloads with zod', () => {
-    const handlerFiles = ['chat', 'config', 'session', 'tool', 'agent', 'rag', 'ast'];
+    const handlerFiles = ['chat', 'config', 'session', 'tool', 'rag', 'ast'];
     const ipcDir = path.resolve(__dirname, '../../src/main/ipc');
 
     for (const name of handlerFiles) {

@@ -997,12 +997,6 @@ export function registerChatIPC(): void {
             registry: turnRegistry,
             mcpManager,
           }),
-          // streamChat executes tool calls inside the shared AI SDK loop; this
-          // callback remains required by the state machine for its legacy API.
-          executeFn: async () => ({
-            content: 'Tool execution is handled by the provider stream.',
-            isError: true,
-          }),
         },
       });
       interruptActor = createActor(interruptMachine);
@@ -1217,13 +1211,10 @@ export function registerChatIPC(): void {
       }
 
       const context = snapshot.context as AgentContext;
-      const activityPhase = snapshot.value === 'toolExecuting' ? 'tool' : 'agent';
-      const activityDetail =
-        activityPhase === 'tool'
-          ? `Running ${context.currentToolCall?.toolName ?? 'tool'}`
-          : context.streamingToolCall?.toolName
-            ? `Preparing ${context.streamingToolCall.toolName}`
-            : 'Generating response';
+      const activityPhase = 'agent' as const;
+      const activityDetail = context.streamingToolCall?.toolName
+        ? `Preparing ${context.streamingToolCall.toolName}`
+        : 'Generating response';
       const activityKey = `${String(snapshot.value)}:${activityPhase}:${activityDetail}`;
       if (activityKey !== lastActivityKey) {
         lastActivityKey = activityKey;

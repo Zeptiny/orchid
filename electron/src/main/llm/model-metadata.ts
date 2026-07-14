@@ -271,10 +271,3 @@ export function resolveModelMetadata(
 export function clearModelMetadataCache(): void {
   metadataCache.clear();
 }
-
-/**
- * Get all known model IDs. Useful for UI model pickers.
- */
-export function getKnownModelIds(): string[] {
-  return Object.keys(KNOWN_MODELS);
-}

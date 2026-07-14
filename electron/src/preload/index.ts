@@ -50,7 +50,6 @@ import type {
   SessionMarkSeenMessage,
   WorkspaceInfo,
   ToolExecuteMessage,
-  AgentSpawnMessage,
   AgentSaveMessage,
   DefinitionDeleteMessage,
   DefinitionRevealMessage,
@@ -61,10 +60,7 @@ import type {
   ASTIndexMessage,
   ASTIndexProgress,
   BgCommandSnapshotRequest,
-  UpdaterProgress,
-  UpdaterErrorEvent,
 } from '../shared/types/ipc';
-import type { UpdaterState } from '../shared/types/ipc';
 
 // ── Security helpers ─────────────────────────────────────────────────────────
 
@@ -266,12 +262,6 @@ const orchidAPI: OrchidAPI = {
   },
 
   agent: {
-    list: () =>
-      invoke(IPC_CHANNELS.AGENT_LIST),
-
-    spawn: (message: AgentSpawnMessage) =>
-      invoke(IPC_CHANNELS.AGENT_SPAWN, message),
-
     save: (message: AgentSaveMessage) =>
       invoke(IPC_CHANNELS.AGENT_SAVE, message),
 
@@ -344,28 +334,6 @@ const orchidAPI: OrchidAPI = {
       invoke(IPC_CHANNELS.BG_CMD_SNAPSHOT, request),
   },
 
-  updater: {
-    check: () =>
-      invoke(IPC_CHANNELS.UPDATER_CHECK),
-
-    install: () =>
-      invoke(IPC_CHANNELS.UPDATER_INSTALL),
-
-    status: () =>
-      invoke(IPC_CHANNELS.UPDATER_STATUS),
-
-    download: () =>
-      invoke(IPC_CHANNELS.UPDATER_DOWNLOAD),
-
-    onStatus: (callback: (state: UpdaterState) => void) =>
-      on(IPC_CHANNELS.UPDATER_STATUS_UPDATE, (...args) => callback(args[0] as UpdaterState)),
-
-    onProgress: (callback: (progress: UpdaterProgress) => void) =>
-      on(IPC_CHANNELS.UPDATER_PROGRESS, (...args) => callback(args[0] as UpdaterProgress)),
-
-    onError: (callback: (event: UpdaterErrorEvent) => void) =>
-      on(IPC_CHANNELS.UPDATER_ERROR, (...args) => callback(args[0] as UpdaterErrorEvent)),
-  },
 };
 
 // ── Expose to renderer ───────────────────────────────────────────────────────

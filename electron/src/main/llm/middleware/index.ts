@@ -25,10 +25,9 @@ import {
 // Re-export individual middleware
 export { createRetryMiddleware, type RetryMiddlewareOptions } from './retry';
 export { createThrottleMiddleware, type ThrottleMiddlewareOptions } from './throttle';
-export { classifyError, isTransientError, type ClassifiedError } from './error-classification';
+export { isTransientError } from './error-classification';
 export {
   createProviderQuirksMiddleware,
-  shouldOffloadToolOutput,
   TOOL_OUTPUT_INLINE_THRESHOLD,
   TOOLS_WITHOUT_OUTPUT_OFFLOAD,
 } from './provider-quirks';
@@ -40,15 +39,6 @@ export {
 // Re-export error classes for use by other modules
 export {
   ProviderResolutionError,
-  APIError,
-  AuthenticationError,
-  RateLimitError,
-  TimeoutError,
-  APIConnectionError,
-  BadRequestError,
-  InternalServerError,
-  ServiceUnavailableError,
-  BadGatewayError,
 } from './error-classification';
 
 // ---------------------------------------------------------------------------

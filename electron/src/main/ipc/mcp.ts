@@ -5,27 +5,10 @@
  */
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import type { MCPManager } from '../mcp/manager';
 import { getProjectMCPManager } from '../mcp/project-registry';
 import { getProjectRuntimeRegistry } from '../project/runtime';
 import { isWorkspaceBound } from '../project/workspace';
 import { resolveWindowWorkspace } from './session';
-
-// ── MCP manager reference (injected at startup) ─────────────────────────────
-
-let mcpManagerRef: MCPManager | null = null;
-
-/**
- * Set the MCP manager reference for IPC handlers.
- * Called during app startup after MCP initialization.
- */
-export function setMCPManagerRef(manager: MCPManager | null): void {
-  mcpManagerRef = manager;
-}
-
-export function getMCPManagerRef(): MCPManager | null {
-  return mcpManagerRef;
-}
 
 // ── IPC registration ─────────────────────────────────────────────────────────
 

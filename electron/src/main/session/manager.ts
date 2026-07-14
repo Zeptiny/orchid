@@ -9,7 +9,6 @@
  * - delete(id): Delete session file and caches
  * - rename(id, name): Update name, save
  * - changeModel(id, model): Update model, save
- * - saveActive(): Persist active session to disk
  * - load(id): Load session from disk
  * - listSaved(): List all saved sessions (mtime order, newest first)
  * - getActive(): Get current active session
@@ -25,7 +24,6 @@ import { randomUUID } from 'node:crypto';
 import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Message } from '../../shared/types/message';
-import type { KnownCostTotals } from '../../shared/types/accounting';
 import { ChainStatus, type Chain } from '../../shared/types/chain';
 import {
   canonicalizeProjectDirectory,
@@ -40,7 +38,6 @@ import {
   type StorageOptions,
   type SessionSummary,
 } from './storage';
-import { getProviderAccountingStore } from '../providers/accounting/store';
 
 // ---------------------------------------------------------------------------
 // Create options
@@ -155,34 +152,11 @@ export class SessionManager {
   }
 
   /**
-   * Derived monetary totals come only from immutable provider attempt rows;
-   * sessions intentionally retain no mutable cost aggregate.
-   */
-  getProviderCostTotals(id: string): readonly KnownCostTotals[] {
-    if (!this.ensureSession(id)) return [];
-    try {
-      return getProviderAccountingStore().getSessionTotals(id);
-    } catch {
-      // Local-only/session history stays readable if the ledger is unavailable.
-      return [];
-    }
-  }
-
-  /** Derived chain totals are queried from the same immutable ledger. */
-  getChainProviderCostTotals(chainId: string): readonly KnownCostTotals[] {
-    try {
-      return getProviderAccountingStore().getChainTotals(chainId);
-    } catch {
-      return [];
-    }
-  }
-
-  /**
    * Live TodoStore for the active session.
    *
    * Always returns a store (empty when no session is active) so tool handlers
    * can resolve without null checks. Mutations must call persistActiveTodos()
-   * (or saveActive()) so the snapshot lands on the session file.
+   * so the snapshot lands on the session file.
    */
   getActiveTodoStore(ownerId?: string): TodoStore {
     const sessionId = this.selectedSessionId(ownerId);
@@ -397,19 +371,6 @@ export class SessionManager {
     this.replaceSession(updated);
     storageSaveSession(updated, this._storageOpts);
     return updated;
-  }
-
-  /**
-   * Save the active session to disk.
-   *
-   * No-op if no active session.
-   * Matches Python SessionManager.save_active().
-   */
-  saveActive(ownerId?: string): void {
-    const sessionId = this.selectedSessionId(ownerId);
-    if (!sessionId) return;
-    const session = this.flushTodos(sessionId);
-    if (session) storageSaveSession(session, this._storageOpts);
   }
 
   /**
@@ -669,25 +630,6 @@ export class SessionManager {
       return session;
     }
     return this.finishActiveChain(status, targetId ?? undefined);
-  }
-
-  /**
-   * @deprecated Prefer startChain / updateActiveChainMessages / finishActiveChain
-   * or persistTurn. Kept as a thin multi-chain-aware wrapper for older callers.
-   *
-   * Writes **turn-local** messages onto the active chain (or creates one).
-   * Never replaces prior chains with a cumulative full-history blob.
-   */
-  syncActiveChain(params: {
-    messages: readonly Message[];
-    status?: ChainStatus;
-    selection?: ModelSelection | null;
-    modelLabel?: string | null;
-    agentName?: string;
-    agentType?: string;
-    agentTier?: string;
-  }, sessionId?: string): Session | null {
-    return this.persistTurn(params, sessionId);
   }
 
   /**

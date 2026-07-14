@@ -15,7 +15,6 @@
  *   as historical labels, never as executable selections.
  */
 
-import { z } from 'zod';
 import {
   copyModelSelection,
   modelSelectionSchema,
@@ -49,21 +48,6 @@ export interface Session {
   readonly subagentChains: readonly SubagentRecord[];
   readonly todoStore: TodoStoreData;
 }
-
-// ── Zod schemas ─────────────────────────────────────────────────────────────
-
-export const sessionSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  selection: modelSelectionSchema.nullable(),
-  modelLabel: z.string().nullable(),
-  /** Absolute working/project directory; null when unbound. */
-  cwd: z.string().nullable(),
-  chains: z.array(z.object({}).passthrough()),
-  activeChainId: z.string().nullable().default(null),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
 
 // ── Storage dict ────────────────────────────────────────────────────────────
 

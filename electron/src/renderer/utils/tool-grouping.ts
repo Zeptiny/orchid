@@ -85,11 +85,6 @@ export function isActiveToolStatus(status: string): boolean {
   );
 }
 
-/** Tool finished (success or failure) — eligible for grouping. */
-export function isSettledToolStatus(status: string): boolean {
-  return status === 'completed' || status === 'failed';
-}
-
 /**
  * Build human summary for tool invocations in a group.
  * Counts are invocation counts (not unique patterns/paths).
@@ -163,50 +158,6 @@ export function summarizeToolGroup(
     hasActive,
     hasFailed: failedCount > 0,
   };
-}
-
-/**
- * Fold consecutive groupable tools into groups (size ≥ 2).
- * Non-groupable tools and non-tool items break a run.
- *
- * @deprecated Prefer foldActivityRuns for thought+tool groups.
- */
-export function foldConsecutiveGroupableTools<T>(
-  items: readonly T[],
-  options: {
-    asTool: (item: T) => ToolGroupMember | null;
-    makeTool: (member: ToolGroupMember, source: T) => T;
-    makeGroup: (members: ToolGroupMember[], sources: T[]) => T;
-  },
-): T[] {
-  const { asTool, makeTool, makeGroup } = options;
-  const out: T[] = [];
-  let memberBuf: ToolGroupMember[] = [];
-  let sourceBuf: T[] = [];
-
-  const flush = () => {
-    if (memberBuf.length === 0) return;
-    if (memberBuf.length >= 2) {
-      out.push(makeGroup(memberBuf, sourceBuf));
-    } else {
-      out.push(makeTool(memberBuf[0], sourceBuf[0]));
-    }
-    memberBuf = [];
-    sourceBuf = [];
-  };
-
-  for (const item of items) {
-    const tool = asTool(item);
-    if (tool && isGroupableTool(tool.toolName)) {
-      memberBuf.push(tool);
-      sourceBuf.push(item);
-      continue;
-    }
-    flush();
-    out.push(item);
-  }
-  flush();
-  return out;
 }
 
 /**

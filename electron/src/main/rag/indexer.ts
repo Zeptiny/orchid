@@ -3,7 +3,6 @@
  *
  * Full project indexes run in a dedicated `worker_threads` worker so ONNX +
  * SQLite work does not block the Electron main process. Single-file
- * `updateFile` stays on the caller thread (post-write path).
  *
  * Ported from Python `src/orchid/rag/indexer.py`.
  */
@@ -503,68 +502,6 @@ async function runIndexInWorker(
       });
     });
   });
-}
-
-// ---------------------------------------------------------------------------
-// Single-file re-index (post-write callback)
-// ---------------------------------------------------------------------------
-
-/**
- * Re-index a single file in the RAG store.
- * Used by post-write callbacks from edit/write tools.
- */
-export async function updateFile(
-  filePath: string,
-  projectPath?: string,
-): Promise<void> {
-  if (!projectPath) {
-    throw new Error('projectPath is required; pass the active workspace cwd');
-  }
-  const root = projectPath;
-  const absPath = path.isAbsolute(filePath) ? filePath : path.join(root, filePath);
-
-  let rel: string;
-  try {
-    rel = path.relative(root, absPath);
-  } catch {
-    return;
-  }
-
-  const store = new RAGStore(root);
-  store.initDb();
-
-  if (!shouldInclude(absPath)) {
-    store.deleteByFile(rel);
-    return;
-  }
-
-  const result = await readAndHash(absPath);
-  if (!result) {
-    store.deleteByFile(rel);
-    return;
-  }
-
-  const cfg = getConfig();
-  const chunks = chunkFile(rel, result.content, cfg.rag.chunk_size, cfg.rag.chunk_overlap);
-  if (chunks.length === 0) {
-    store.deleteByFile(rel);
-    return;
-  }
-
-  try {
-    const embedder = await createEmbedderFromConfig();
-    const texts = chunks.map((c) => c.content);
-    const embeddingsFloat = await embedder.embed(texts);
-    const embeddings = embeddingsFloat.map((e) => Array.from(e));
-
-    // Batch path: load vector state, upsert, flush
-    const state = store.loadVectorState();
-    store.upsertFileBatch(state, rel, chunks, embeddings);
-    store.flushVectorState(state);
-    if (result.hash) store.updateFileHash(rel, result.hash);
-  } catch {
-    // Graceful failure — file won't be indexed but no crash
-  }
 }
 
 // ---------------------------------------------------------------------------

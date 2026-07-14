@@ -73,18 +73,6 @@ vi.mock('../../src/main/config/loader', () => ({
   }),
 }));
 
-vi.mock('../../src/main/project/layers', () => ({
-  applyWorkspaceProjectLayers: vi.fn(() => ({
-    applied: true,
-    projectDir: '/mock',
-    config: {},
-    agents: null,
-    skills: null,
-  })),
-  resetLastAppliedProjectDir: vi.fn(),
-  getLastAppliedProjectDir: vi.fn(() => null),
-}));
-
 vi.mock('../../src/main/project/runtime', () => ({
   clearProjectRuntimeRegistry: mocks.clearProjectRuntimeRegistry,
 }));
@@ -223,28 +211,14 @@ describe('config:save workspace layer reset', () => {
     expect(mocks.clearProjectRuntimeRegistry).toHaveBeenCalledTimes(1);
   });
 
-  it('does not re-apply one project globally when sticky is set', async () => {
-    const layers = await import('../../src/main/project/layers');
-    vi.mocked(layers.applyWorkspaceProjectLayers).mockClear();
-
-    configState.default_project_dir = '/tmp/orchid-sticky-project';
-
-    await callSave({ theme: 'layer-test' });
-
-    expect(layers.applyWorkspaceProjectLayers).not.toHaveBeenCalled();
-  });
-
   it('reloads the compatibility cache from home configuration only', async () => {
-    const layers = await import('../../src/main/project/layers');
     const loader = await import('../../src/main/config/loader');
-    vi.mocked(layers.applyWorkspaceProjectLayers).mockClear();
     vi.mocked(loader.ConfigManager.load).mockClear();
 
     configState.default_project_dir = null;
 
     await callSave({ theme: 'home-only' });
 
-    expect(layers.applyWorkspaceProjectLayers).not.toHaveBeenCalled();
     expect(loader.ConfigManager.load).toHaveBeenCalledWith({
       projectDir: '/tmp/orchid-test-home',
     });

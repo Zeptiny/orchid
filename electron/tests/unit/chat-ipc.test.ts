@@ -226,9 +226,6 @@ const mocks = vi.hoisted(() => {
       }
       return activeSession;
     }),
-    syncActiveChain: vi.fn((params: { messages: unknown[]; status?: string }) => {
-      return sessionManager.persistTurn(params);
-    }),
     autoNameActive: vi.fn(async () => activeSession),
     autoName: vi.fn(async () => activeSession),
     /** Test helper: reset between cases */
@@ -245,7 +242,6 @@ const mocks = vi.hoisted(() => {
       sessionManager.clearActive.mockClear();
       sessionManager.startChain.mockClear();
       sessionManager.persistTurn.mockClear();
-      sessionManager.syncActiveChain.mockClear();
       sessionManager.autoNameActive.mockClear();
       sessionManager.autoName.mockClear();
     },
@@ -313,7 +309,6 @@ const mocks = vi.hoisted(() => {
       }
       yield { type: 'finish', finishReason: 'stop' };
     }),
-    listAgents: vi.fn(() => [generalAgent]),
     subagentManager: {
       cancelRunning: vi.fn(() => []),
     },
@@ -348,20 +343,6 @@ vi.mock('../../src/main/config/loader', () => ({
   })),
 }));
 
-vi.mock('../../src/main/config/runtime', () => ({
-  getRuntimeConfig: vi.fn(async () => ({
-    default_model: null,
-    tier_models: { bloom: null },
-    command_timeout: 30,
-    llm_stream_retries: 0,
-  })),
-}));
-
-vi.mock('../../src/main/agents/registry', () => ({
-  listAgents: mocks.listAgents,
-  getAgent: vi.fn(),
-}));
-
 vi.mock('../../src/main/tools', () => ({
   toolRegistry: mocks.toolRegistry,
   createBuiltinToolRegistry: vi.fn(() => mocks.toolRegistry),
@@ -394,18 +375,6 @@ vi.mock('../../src/main/ipc/session', () => ({
   getSessionManager: () => mocks.sessionManager,
   resolveWindowWorkspace: (windowId: string) =>
     mocks.workspace.resolveWorkspace(windowId),
-}));
-
-vi.mock('../../src/main/project/layers', () => ({
-  applyWorkspaceProjectLayers: vi.fn(() => ({
-    applied: true,
-    projectDir: '/tmp/orchid-chat-ipc-project',
-    config: {},
-    agents: null,
-    skills: null,
-  })),
-  getLastAppliedProjectDir: vi.fn(() => null),
-  resetLastAppliedProjectDir: vi.fn(),
 }));
 
 vi.mock('../../src/main/project/runtime', () => ({

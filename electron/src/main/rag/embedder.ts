@@ -646,25 +646,6 @@ async function downloadFile(
 }
 
 /**
- * Check whether model files exist locally.
- *
- * @returns true if the required ONNX model file is present
- */
-export async function isModelAvailable(modelName: string = DEFAULT_ONNX_MODEL): Promise<boolean> {
-  const fs = await import('node:fs');
-  const path = await import('node:path');
-
-  const { storageId, hubId } = resolveEmbeddingModelIds(modelName);
-  const candidates = [
-    path.join(await embeddingModelsHome(), '.orchid', 'models', storageId, 'model.onnx'),
-  ];
-  if (storageId !== hubId) {
-    candidates.push(path.join(await embeddingModelsHome(), '.orchid', 'models', hubId, 'model.onnx'));
-  }
-  return candidates.some((p) => fs.existsSync(p));
-}
-
-/**
  * Get the local directory where model files are stored.
  */
 export async function getModelDir(modelName: string = DEFAULT_ONNX_MODEL): Promise<string> {
@@ -984,13 +965,6 @@ async function getTokenizer(
     tokenizerCache.set(modelName, null);
     return null;
   }
-}
-
-/**
- * Clear the tokenizer cache. Useful for testing.
- */
-export function clearTokenizerCache(): void {
-  tokenizerCache.clear();
 }
 
 // ---------------------------------------------------------------------------

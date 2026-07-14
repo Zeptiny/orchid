@@ -7,7 +7,7 @@
  * - Deep merge for mcp_servers and providers (per-alias merge)
  * - Env override casting (string, int, float, list)
  * - Validation rules
- * - Persistence: save() + load() round-trips
+ * - Persistence: config load round-trips
  * - Atomic write (no partial on crash)
  * - ensureHomeConfig() directory seeding
  */
@@ -842,10 +842,6 @@ describe('ConfigManager', () => {
     expect(ConfigManager.errors()).toEqual([]);
   });
 
-  it('save() is a no-op when no config loaded', () => {
-    // Should not throw
-    ConfigManager.save();
-  });
 });
 
 // ===========================================================================

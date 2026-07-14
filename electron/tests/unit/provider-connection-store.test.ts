@@ -51,7 +51,7 @@ describe('ConnectionStore', () => {
     expect(fs.statSync(providersPath).mode & 0o777).toBe(0o600);
   });
 
-  it('does not mutate a sibling connection or credential reference when one is disabled or removed', async () => {
+  it('does not mutate a sibling connection or credential reference when one is disabled', async () => {
     const store = createStore();
     const work = await store.create(input('Work', 'credential-work-v1'));
     const personal = await store.create(input('Personal', 'credential-personal-v1'));
@@ -59,7 +59,6 @@ describe('ConnectionStore', () => {
     await store.update(work.id, { health: 'disabled' });
     expect(await store.get(personal.id)).toEqual(personal);
 
-    expect(await store.remove(work.id)).toBe(true);
     expect(await store.get(personal.id)).toEqual(personal);
   });
 

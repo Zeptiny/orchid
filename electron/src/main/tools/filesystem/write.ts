@@ -4,7 +4,6 @@
  * Params: file_path (required), content (required).
  * - Auto-creates parent directories.
  * - Atomic write (temp + fsync + replace).
- * - Triggers post-write callbacks (RAG, AST re-indexing).
  *
  * Ported from Python `src/orchid/tools/file_manipulation.py` lines 311-347.
  *
@@ -19,7 +18,6 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { resolveToolPath } from '../types';
-import { triggerPostWriteCallbacks } from './callbacks';
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 
@@ -107,19 +105,12 @@ export const writeHandler: ToolHandler = async (input: unknown, ctx) => {
     // Preserve original file permissions (default to 0o644 for new files)
     fs.chmodSync(file_path, originalMode ?? 0o644);
 
-    // Post-write callbacks
-    const cbFailures = await triggerPostWriteCallbacks(file_path);
-
     const lines = content.split('\n');
     const formatted = lines
       .map((line, i) => `${i + 1} | ${line}`)
       .join('\n');
 
     let display = `Wrote ${lines.length} lines to ${file_path}`;
-    if (cbFailures.length > 0) {
-      display += ` [warnings: ${cbFailures.length} callback(s) failed]`;
-    }
-
     return {
       display,
       content:

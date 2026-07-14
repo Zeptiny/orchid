@@ -11,8 +11,6 @@
  * IN_PROGRESS, DONE) is the most commonly used.
  */
 
-import { z } from 'zod';
-
 // ── Enums as const objects ──────────────────────────────────────────────────
 
 export const TodoStatus = {
@@ -51,23 +49,6 @@ export interface TodoStoreData {
   readonly tasks: readonly Todo[];
 }
 
-// ── Zod schemas ─────────────────────────────────────────────────────────────
-
-export const todoStatusSchema = z.enum([
-  TodoStatus.OPEN,
-  TodoStatus.IN_PROGRESS,
-  TodoStatus.DONE,
-]);
-
-export const todoSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  status: todoStatusSchema,
-  subagent_id: z.string().nullable().default(null),
-  created_at: z.string(),
-  updated_at: z.string(),
-});
-
 // ── Storage dict ────────────────────────────────────────────────────────────
 
 export interface TodoStorageDict {
@@ -81,26 +62,6 @@ export interface TodoStorageDict {
 
 export interface TodoStoreStorageDict {
   tasks?: TodoStorageDict[];
-}
-
-// ── TodoStore operations ────────────────────────────────────────────────────
-
-/**
- * Validate a status transition. Returns null if valid, error message if invalid.
- */
-export function validateTodoTransition(
-  from: TodoStatus,
-  to: TodoStatus,
-): string | null {
-  const allowed = VALID_TRANSITIONS[from];
-  if (!allowed) {
-    return `Unknown status '${from}'`;
-  }
-  if (!allowed.has(to)) {
-    const targets = [...allowed].sort().join(', ') || 'none';
-    return `Cannot transition from '${from}' to '${to}'. Allowed: ${targets}`;
-  }
-  return null;
 }
 
 // ── Serialization ───────────────────────────────────────────────────────────

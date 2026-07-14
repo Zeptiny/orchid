@@ -6,7 +6,6 @@
  * - If multiple matches and replace_all is false → error.
  * - Atomic write (temp + fsync + replace).
  * - Returns unified diff of changes.
- * - Triggers post-write callbacks (RAG, AST re-indexing).
  *
  * Ported from Python `src/orchid/tools/file_manipulation.py` lines 84-204.
  *
@@ -21,7 +20,6 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { resolveToolPath } from '../types';
-import { triggerPostWriteCallbacks } from './callbacks';
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 
@@ -270,17 +268,10 @@ export const editHandler: ToolHandler = async (input: unknown, ctx) => {
     const diffText = unifiedDiff(content, newContent, file_path);
     const { added, removed } = countDiffChanges(diffText);
 
-    // Post-write callbacks
-    const cbFailures = await triggerPostWriteCallbacks(file_path);
-
     let display = `Edited ${file_path}`;
     if (added > 0 || removed > 0) {
       display += ` (+${added} -${removed})`;
     }
-    if (cbFailures.length > 0) {
-      display += ` [warnings: ${cbFailures.length} callback(s) failed]`;
-    }
-
     return { display, content: diffText };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

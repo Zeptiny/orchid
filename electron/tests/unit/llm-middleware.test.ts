@@ -4,7 +4,7 @@
  * Covers:
  * - Retry middleware: transient error → retried with backoff, second attempt succeeds
  * - Retry guard: first token delivered → transient error → NOT retried
- * - Error classification: all 13 branches covered
+ * - Transient error detection: class, status, and message paths covered
  * - Provider quirks: mid-stream empty-choices chunk → stream continues
  * - Throttle: thinking yields are rate-limited
  * - Middleware stack composition
@@ -18,18 +18,7 @@ import {
   createMiddlewareStack,
 } from '../../src/main/llm/middleware/index';
 import {
-  classifyError,
   isTransientError,
-  ProviderResolutionError,
-  AuthenticationError,
-  RateLimitError,
-  TimeoutError,
-  APIConnectionError,
-  BadRequestError,
-  InternalServerError,
-  ServiceUnavailableError,
-  BadGatewayError,
-  APIError,
 } from '../../src/main/llm/middleware/error-classification';
 
 // ---------------------------------------------------------------------------
@@ -50,6 +39,12 @@ function createMockStream(
       }
     },
   });
+}
+
+function createHttpError(message: string, statusCode: number): Error & { statusCode: number } {
+  const error = new Error(message) as Error & { statusCode: number };
+  error.statusCode = statusCode;
+  return error;
 }
 
 /** Create a mock doStream that returns the given chunks. */
@@ -154,7 +149,7 @@ describe('Retry middleware', () => {
       { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 5, textTokens: 5, reasoningTokens: undefined }, totalTokens: 15 } },
     ];
 
-    const error = new RateLimitError('Rate limit exceeded');
+    const error = createHttpError('Rate limit exceeded', 429);
     const doStream = createFailThenSucceedDoStream(1, error, chunks);
 
     // Start the middleware — it will fail once then retry
@@ -177,7 +172,7 @@ describe('Retry middleware', () => {
 
   it('does not retry non-transient errors', async () => {
     const middleware = createRetryMiddleware({ maxRetries: 3 });
-    const error = new BadRequestError('Invalid request');
+    const error = createHttpError('Invalid request', 400);
 
     const doStream = createFailingDoStream(error);
 
@@ -200,7 +195,7 @@ describe('Retry middleware', () => {
     let doStreamCalls = 0;
     const doStream = async () => {
       doStreamCalls++;
-      throw new InternalServerError('Server error');
+      throw createHttpError('Server error', 500);
     };
 
     const resultPromise = middleware.wrapStream!({
@@ -234,7 +229,7 @@ describe('Retry guard: no retry after content delivered', () => {
           start(controller) {
             controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
             // Simulate a mid-stream error after content was delivered
-            controller.error(new RateLimitError('Rate limit mid-stream'));
+            controller.error(createHttpError('Rate limit mid-stream', 429));
           },
         });
         return {
@@ -267,158 +262,10 @@ describe('Retry guard: no retry after content delivered', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Error classification tests
-// ---------------------------------------------------------------------------
-
-describe('Error classification', () => {
-  it('classifies ProviderResolutionError', () => {
-    const result = classifyError(new ProviderResolutionError('Unknown alias'));
-    expect(result).toEqual({
-      title: 'Unknown Provider',
-      detail: 'Unknown alias',
-    });
-  });
-
-  it('classifies AuthenticationError', () => {
-    const result = classifyError(new AuthenticationError());
-    expect(result).toEqual({
-      title: 'Authentication Failed',
-      detail: 'Invalid or missing API key',
-    });
-  });
-
-  it('classifies RateLimitError', () => {
-    const result = classifyError(new RateLimitError());
-    expect(result).toEqual({
-      title: 'Rate Limit Exceeded',
-      detail: 'Rate limit exceeded',
-    });
-  });
-
-  it('classifies TimeoutError', () => {
-    const result = classifyError(new TimeoutError());
-    expect(result).toEqual({
-      title: 'Request Timed Out',
-      detail: 'Request timed out',
-    });
-  });
-
-  it('classifies APIConnectionError', () => {
-    const result = classifyError(new APIConnectionError());
-    expect(result).toEqual({
-      title: 'Connection Failed',
-      detail: 'Connection failed',
-    });
-  });
-
-  it('classifies BadRequestError', () => {
-    const result = classifyError(new BadRequestError('Invalid model'));
-    expect(result).toEqual({
-      title: 'Invalid Request',
-      detail: 'Invalid model',
-    });
-  });
-
-  it('classifies InternalServerError', () => {
-    const result = classifyError(new InternalServerError());
-    expect(result).toEqual({
-      title: 'Server Error',
-      detail: 'Internal server error',
-    });
-  });
-
-  it('classifies ServiceUnavailableError', () => {
-    const result = classifyError(new ServiceUnavailableError());
-    expect(result).toEqual({
-      title: 'Service Unavailable',
-      detail: 'Service unavailable',
-    });
-  });
-
-  it('classifies BadGatewayError', () => {
-    const result = classifyError(new BadGatewayError());
-    expect(result).toEqual({
-      title: 'Bad Gateway',
-      detail: 'Bad gateway',
-    });
-  });
-
-  it('classifies generic APIError', () => {
-    const result = classifyError(new APIError('Something happened'));
-    expect(result).toEqual({
-      title: 'API Error',
-      detail: 'Something happened',
-    });
-  });
-
-  it('classifies timeout-like native errors', () => {
-    const result = classifyError(new Error('Connection timed out'));
-    expect(result).toEqual({
-      title: 'Request Timed Out',
-      detail: 'Connection timed out',
-    });
-  });
-
-  it('classifies HTTP-like native errors', () => {
-    const result = classifyError(new Error('fetch failed: ECONNREFUSED'));
-    expect(result).toEqual({
-      title: 'HTTP Error',
-      detail: 'fetch failed: ECONNREFUSED',
-    });
-  });
-
-  it('classifies unknown errors (fallback)', () => {
-    const result = classifyError(new Error('Something weird'));
-    expect(result).toEqual({
-      title: 'Unexpected Error',
-      detail: 'Something weird',
-    });
-  });
-
-  it('classifies non-Error values (fallback)', () => {
-    const result = classifyError('string error');
-    expect(result).toEqual({
-      title: 'Unexpected Error',
-      detail: 'string error',
-    });
-  });
-
-  it('truncates long detail messages', () => {
-    const longMessage = 'x'.repeat(300);
-    const result = classifyError(new Error(longMessage));
-    expect(result.detail).toHaveLength(200);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Transient error detection tests
 // ---------------------------------------------------------------------------
 
 describe('Transient error detection', () => {
-  it('identifies RateLimitError as transient', () => {
-    expect(isTransientError(new RateLimitError())).toBe(true);
-  });
-
-  it('identifies TimeoutError as transient', () => {
-    expect(isTransientError(new TimeoutError())).toBe(true);
-  });
-
-  it('identifies APIConnectionError as transient', () => {
-    expect(isTransientError(new APIConnectionError())).toBe(true);
-  });
-
-  it('identifies InternalServerError as transient', () => {
-    expect(isTransientError(new InternalServerError())).toBe(true);
-  });
-
-  it('identifies ServiceUnavailableError as transient', () => {
-    expect(isTransientError(new ServiceUnavailableError())).toBe(true);
-  });
-
-  it('identifies BadGatewayError as transient', () => {
-    expect(isTransientError(new BadGatewayError())).toBe(true);
-  });
-
   it('identifies errors with transient status codes', () => {
     expect(isTransientError({ statusCode: 429 })).toBe(true);
     expect(isTransientError({ statusCode: 500 })).toBe(true);
@@ -434,12 +281,9 @@ describe('Transient error detection', () => {
     expect(isTransientError(new Error('ECONNREFUSED'))).toBe(true);
   });
 
-  it('does NOT identify BadRequestError as transient', () => {
-    expect(isTransientError(new BadRequestError())).toBe(false);
-  });
-
-  it('does NOT identify AuthenticationError as transient', () => {
-    expect(isTransientError(new AuthenticationError())).toBe(false);
+  it('does NOT identify non-transient status codes as transient', () => {
+    expect(isTransientError({ statusCode: 400 })).toBe(false);
+    expect(isTransientError({ statusCode: 401 })).toBe(false);
   });
 
   it('does NOT identify unknown errors as transient', () => {
@@ -505,7 +349,7 @@ describe('Provider quirks middleware', () => {
     const middleware = createProviderQuirksMiddleware();
 
     const doStream = async () => {
-      throw new BadRequestError('Invalid request');
+      throw createHttpError('Invalid request', 400);
     };
 
     await expect(

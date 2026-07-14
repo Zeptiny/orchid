@@ -9,7 +9,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { HOME_PERSONALITIES_DIR, getConfig } from '../config/loader';
+import { HOME_PERSONALITIES_DIR } from '../config/loader';
 
 // ---------------------------------------------------------------------------
 // Module-level state
@@ -17,9 +17,6 @@ import { HOME_PERSONALITIES_DIR, getConfig } from '../config/loader';
 
 /** name → markdown body */
 let personalityRegistry: Map<string, string> = new Map();
-
-/** Last projectDir used with loadPersonalities (for lazy-reload overlay). */
-let lastPersonalityProjectDir: string | undefined;
 
 // ---------------------------------------------------------------------------
 // Private helpers
@@ -147,32 +144,8 @@ export function loadPersonalities(
     seedPersonalitiesDir(homeDir);
   }
 
-  // Remember project overlay for lazy-reload in appendPersonality.
-  // Explicit `projectDir: undefined` with only homeDir (tests) keeps prior tracking.
-  if (options && 'projectDir' in options) {
-    lastPersonalityProjectDir = options.projectDir;
-  } else if (!options) {
-    lastPersonalityProjectDir = undefined;
-  }
-
-  const projectDir = options?.projectDir ?? lastPersonalityProjectDir;
-  personalityRegistry = readPersonalities({ homeDir, projectDir });
+  personalityRegistry = readPersonalities({ homeDir, projectDir: options?.projectDir });
   return personalityRegistry;
-}
-
-/**
- * Replace the in-memory personality registry (used after disk CRUD merges).
- */
-export function replacePersonalityRegistry(map: Map<string, string>): void {
-  personalityRegistry = new Map(map);
-}
-
-/**
- * Get the markdown body for a personality by name.
- * Returns `undefined` if not found.
- */
-export function getPersonality(name: string): string | undefined {
-  return personalityRegistry.get(name);
 }
 
 /**
@@ -180,46 +153,4 @@ export function getPersonality(name: string): string | undefined {
  */
 export function listPersonalityNames(): string[] {
   return Array.from(personalityRegistry.keys()).sort();
-}
-
-/**
- * List all currently loaded personalities as `{ name, content }` pairs.
- */
-export function listPersonalities(): Array<{ name: string; content: string }> {
-  return listPersonalityNames().map((name) => ({
-    name,
-    content: personalityRegistry.get(name) ?? '',
-  }));
-}
-
-/**
- * Append the selected personality to the end of an agent system prompt.
- * Matches Python `append_personality`.
- *
- * If the configured personality is unknown, returns the prompt unchanged.
- * Lazy-reloads from disk once if the name is missing (covers files added after startup).
- */
-export function appendPersonality(agentSystemPrompt: string, personalityName?: string): string {
-  const name = personalityName ?? getConfig().personality;
-  let personalityText = personalityRegistry.get(name);
-  if (!personalityText) {
-    // Reload preserving last project overlay (do not wipe project personalities).
-    loadPersonalities(
-      lastPersonalityProjectDir
-        ? { projectDir: lastPersonalityProjectDir }
-        : {},
-    );
-    personalityText = personalityRegistry.get(name);
-  }
-  if (!personalityText) {
-    return agentSystemPrompt;
-  }
-  return `${agentSystemPrompt}\n\n## Personality\n\n${personalityText}\n`;
-}
-
-/**
- * Reset the personality registry (clear all loaded personalities).
- */
-export function resetPersonalityRegistry(): void {
-  personalityRegistry = new Map();
 }

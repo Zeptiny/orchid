@@ -84,37 +84,6 @@ export function filterSessionsByQuery(
   });
 }
 
-export interface DateGroup {
-  label: string;
-  sessions: SessionSummary[];
-}
-
-/** Date buckets: Today / Yesterday / This week / Earlier. */
-export function groupSessionsByDate(
-  sessions: readonly SessionSummary[],
-  now: Date = new Date(),
-): DateGroup[] {
-  const today = startOfDay(now).getTime();
-  const yesterday = today - 24 * 60 * 60 * 1000;
-  const weekAgo = today - 7 * 24 * 60 * 60 * 1000;
-  const groups = new Map<string, SessionSummary[]>();
-
-  for (const session of sessions) {
-    const updated = startOfDay(new Date(session.updatedAt)).getTime();
-    let label = 'Earlier';
-    if (updated >= today) label = 'Today';
-    else if (updated >= yesterday) label = 'Yesterday';
-    else if (updated >= weekAgo) label = 'This week';
-    const bucket = groups.get(label) ?? [];
-    bucket.push(session);
-    groups.set(label, bucket);
-  }
-
-  return (['Today', 'Yesterday', 'This week', 'Earlier'] as const)
-    .map((label) => ({ label, sessions: groups.get(label) ?? [] }))
-    .filter((group) => group.sessions.length > 0);
-}
-
 export interface ProjectGroup {
   /** Normalized key; empty string means unknown/null cwd. */
   key: string;
@@ -293,8 +262,4 @@ function basenamelike(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
   const parts = normalized.split('/').filter(Boolean);
   return parts[parts.length - 1] ?? path;
-}
-
-function startOfDay(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }

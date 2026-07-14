@@ -8,7 +8,6 @@
  */
 
 import type { Session } from './session';
-import type { Agent } from './agent';
 import type { Usage } from './message';
 import type {
   CustomConnectionModel,
@@ -42,7 +41,6 @@ import type {
   ASTIndexResult,
   ASTIndexProgress,
   IndexRunState,
-  UpdaterState,
 } from './ipc-boundary';
 
 export type {
@@ -64,7 +62,6 @@ export type {
   Config,
   ConfigDiagnostic,
   ModelMetadata,
-  DiscoveredModel,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -73,7 +70,6 @@ export type {
   ASTIndexResult,
   ASTIndexProgress,
   IndexRunState,
-  UpdaterState,
 } from './ipc-boundary';
 
 // ── Chat API ─────────────────────────────────────────────────────────────────
@@ -509,19 +505,6 @@ export interface ToolExecuteResult {
   isError: boolean;
 }
 
-// ── Agent API ────────────────────────────────────────────────────────────────
-
-export interface AgentSpawnMessage {
-  name: string;
-  task: string;
-  tier?: string;
-}
-
-export interface AgentSpawnResult {
-  id: string;
-  agent: Agent;
-}
-
 // ── RAG API ──────────────────────────────────────────────────────────────────
 
 export interface RAGIndexMessage {
@@ -534,19 +517,6 @@ export interface RAGIndexMessage {
 export interface ASTIndexMessage {
   /** Force re-index everything. */
   force?: boolean;
-}
-
-// ── Updater API ──────────────────────────────────────────────────────────────
-
-export interface UpdaterProgress {
-  percent: number;
-  bytesPerSecond: number;
-  transferred: number;
-  total: number;
-}
-
-export interface UpdaterErrorEvent {
-  error: string;
 }
 
 // ── Orchid API (the full contextBridge surface) ──────────────────────────────
@@ -654,8 +624,6 @@ export interface OrchidAPI {
   };
 
   agent: {
-    list: () => Promise<Agent[]>;
-    spawn: (message: AgentSpawnMessage) => Promise<AgentSpawnResult>;
     /** Create or update an AGENT.md under global or project scope. */
     save: (message: AgentSaveMessage) => Promise<ManagedAgent>;
     /** Delete an agent definition from the given scope. */
@@ -708,15 +676,6 @@ export interface OrchidAPI {
     snapshot: (request: BgCommandSnapshotRequest) => Promise<BgCommandSnapshotResult>;
   };
 
-  updater: {
-    check: () => Promise<UpdaterState>;
-    install: () => Promise<{ status: string }>;
-    status: () => Promise<UpdaterState>;
-    download: () => Promise<UpdaterState>;
-    onStatus: (callback: (state: UpdaterState) => void) => () => void;
-    onProgress: (callback: (progress: UpdaterProgress) => void) => () => void;
-    onError: (callback: (event: UpdaterErrorEvent) => void) => () => void;
-  };
 }
 
 // ── IPC Channel names ────────────────────────────────────────────────────────
@@ -792,9 +751,7 @@ export const IPC_CHANNELS = {
   // Tool
   TOOL_EXECUTE: 'tool:execute',
 
-  // Agent
-  AGENT_LIST: 'agent:list',
-  AGENT_SPAWN: 'agent:spawn',
+  // Agent definitions
   AGENT_SAVE: 'agent:save',
   AGENT_DELETE: 'agent:delete',
 
@@ -828,10 +785,6 @@ export const IPC_CHANNELS = {
   BG_CMD_SNAPSHOT: 'bgcmd:snapshot',
 
   // Updater
-  UPDATER_CHECK: 'updater:check',
-  UPDATER_INSTALL: 'updater:install',
-  UPDATER_STATUS: 'updater:status',
-  UPDATER_DOWNLOAD: 'updater:download',
   UPDATER_STATUS_UPDATE: 'updater:status_update',
   UPDATER_PROGRESS: 'updater:progress',
   UPDATER_ERROR: 'updater:error',
@@ -875,8 +828,6 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.SESSION_ACTIVITY_LIST,
   IPC_CHANNELS.SESSION_ACTIVITY_MARK_SEEN,
   IPC_CHANNELS.TOOL_EXECUTE,
-  IPC_CHANNELS.AGENT_LIST,
-  IPC_CHANNELS.AGENT_SPAWN,
   IPC_CHANNELS.AGENT_SAVE,
   IPC_CHANNELS.AGENT_DELETE,
   IPC_CHANNELS.DEFINITIONS_LIST,
@@ -894,10 +845,6 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.AST_INDEX,
   IPC_CHANNELS.AST_INDEX_STATE,
   IPC_CHANNELS.BG_CMD_SNAPSHOT,
-  IPC_CHANNELS.UPDATER_CHECK,
-  IPC_CHANNELS.UPDATER_INSTALL,
-  IPC_CHANNELS.UPDATER_STATUS,
-  IPC_CHANNELS.UPDATER_DOWNLOAD,
 ];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────

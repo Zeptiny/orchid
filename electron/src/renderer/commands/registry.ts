@@ -207,20 +207,6 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
   },
 ];
 
-// ── Command lookup ───────────────────────────────────────────────────────────
-
-export function getCommand(name: string): (Command & { execute: (ctx: CommandContext) => Promise<void> }) | undefined {
-  return COMMANDS.find((c) => c.name === name);
-}
-
-export function getCommandNames(): string[] {
-  return COMMANDS.map((c) => c.name);
-}
-
-export function isCommand(name: string): boolean {
-  return COMMANDS.some((c) => c.name === name);
-}
-
 // ── Sub-picker data builders ─────────────────────────────────────────────────
 
 export function buildThemeResults(currentTheme: string): PaletteResult[] {

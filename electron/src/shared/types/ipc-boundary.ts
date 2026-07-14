@@ -66,19 +66,6 @@ export interface ModelMetadata {
   supports_vision: boolean;
 }
 
-/**
- * A model discovered from a provider's `GET /models` endpoint.
- * Used by the renderer model picker to show available models.
- */
-export interface DiscoveredModel {
-  /** The model ID (e.g., 'gpt-4o', 'claude-3-5-sonnet-20241022'). */
-  readonly id: string;
-  /** Optional human-readable name. */
-  readonly name?: string;
-  /** Optional model owner/organization. */
-  readonly owned_by?: string;
-}
-
 export interface RAGConfig {
   chunk_size: number;
   chunk_overlap: number;

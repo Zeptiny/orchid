@@ -12,7 +12,6 @@ import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { ensureIndexed } from '../../ast/indexer';
 import { ASTStore, type SymbolRow } from '../../ast/store';
-import { triggerPostWriteCallbacks } from '../filesystem/callbacks';
 import { xmlAttr, generateDiff, countDiffChanges, atomicWrite, cdataText } from './utils';
 
 // ---------------------------------------------------------------------------
@@ -205,11 +204,6 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
       const { added, removed } = countDiffChanges(diffText);
       totalAdded += added;
       totalRemoved += removed;
-
-      const cbFailures = await triggerPostWriteCallbacks(change.relPath);
-      if (cbFailures.length > 0) {
-        failedFiles.push(change.relPath);
-      }
 
       editResults.push(
         `<edit_result path="${xmlAttr(change.relPath)}" success="true" ` +

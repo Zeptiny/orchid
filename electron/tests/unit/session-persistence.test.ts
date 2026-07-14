@@ -1137,24 +1137,6 @@ describe('SessionManager', () => {
     expect(loaded!.modelLabel).toBe('anthropic/claude-3.5-sonnet');
   });
 
-  it('saveActive() persists active session to disk', () => {
-    const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create(DEFAULT_SELECTION);
-
-    // Modify in-memory via rename (proper immutable update)
-    manager.rename(session.id, 'Modified In Memory');
-
-    // Verify it's on disk
-    const loaded = loadSession(session.id, storageOpts);
-    expect(loaded!.name).toBe('Modified In Memory');
-  });
-
-  it('saveActive() is no-op when no active session', () => {
-    const manager = new SessionManager({ storage: storageOpts });
-    // Should not throw
-    manager.saveActive();
-  });
-
   it('load() loads session from disk without setting as active', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create(DEFAULT_SELECTION);
@@ -1589,23 +1571,6 @@ describe('SessionManager multi-chain lifecycle', () => {
     // Finished turns clear activeChainId (Python freeze)
     expect(result!.activeChainId).toBeNull();
     expect(chain.sessionId).toBe(session.id);
-  });
-
-  it('syncActiveChain (wrapper) never rewrites prior chains with full history', () => {
-    const manager = new SessionManager({ storage: storageOpts });
-    manager.create(DEFAULT_SELECTION);
-
-    manager.syncActiveChain({
-      messages: [makeMessage({ content: 'Q1' }), makeMessage({ role: 'assistant', content: 'A1' })],
-    });
-    manager.syncActiveChain({
-      messages: [makeMessage({ content: 'Q2' }), makeMessage({ role: 'assistant', content: 'A2' })],
-    });
-
-    const session = manager.getActive()!;
-    expect(session.chains).toHaveLength(2);
-    expect(session.chains[0].messages.map((m) => m.content)).toEqual(['Q1', 'A1']);
-    expect(session.chains[1].messages.map((m) => m.content)).toEqual(['Q2', 'A2']);
   });
 
   it('updates ACTIVE chain messages and agent metadata via persistTurn', () => {

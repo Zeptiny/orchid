@@ -1,5 +1,5 @@
 /**
- * Personality loading tests — seed, load, list, append.
+ * Personality loading tests — seed, load, and list names/content.
  *
  * Protects personality loading behavior preserved by the desktop migration.
  */
@@ -9,12 +9,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   loadPersonalities,
-  getPersonality,
   listPersonalityNames,
-  listPersonalities,
   seedPersonalitiesDir,
-  appendPersonality,
-  resetPersonalityRegistry,
 } from '../../src/main/personality/registry';
 
 // ---------------------------------------------------------------------------
@@ -34,11 +30,9 @@ function writePersonality(baseDir: string, name: string, content: string): void 
 
 beforeEach(() => {
   tmpDir = makeTmpDir();
-  resetPersonalityRegistry();
 });
 
 afterEach(() => {
-  resetPersonalityRegistry();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -94,7 +88,7 @@ describe('loadPersonalities', () => {
 // List / get
 // ---------------------------------------------------------------------------
 
-describe('listPersonalityNames / getPersonality', () => {
+describe('listPersonalityNames', () => {
   it('lists names sorted alphabetically', () => {
     writePersonality(tmpDir, 'zen', 'z');
     writePersonality(tmpDir, 'default', 'd');
@@ -104,24 +98,6 @@ describe('listPersonalityNames / getPersonality', () => {
     expect(listPersonalityNames()).toEqual(['default', 'meow', 'zen']);
   });
 
-  it('getPersonality returns content by name', () => {
-    writePersonality(tmpDir, 'pirate', 'Arr!');
-    loadPersonalities({ homeDir: tmpDir });
-
-    expect(getPersonality('pirate')).toBe('Arr!');
-    expect(getPersonality('missing')).toBeUndefined();
-  });
-
-  it('listPersonalities returns name/content pairs', () => {
-    writePersonality(tmpDir, 'a', 'A text');
-    writePersonality(tmpDir, 'b', 'B text');
-    loadPersonalities({ homeDir: tmpDir });
-
-    expect(listPersonalities()).toEqual([
-      { name: 'a', content: 'A text' },
-      { name: 'b', content: 'B text' },
-    ]);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -166,28 +142,6 @@ describe('seedPersonalitiesDir', () => {
 
     const files = fs.readdirSync(homeDir).filter((f) => f.endsWith('.md'));
     expect(files).toHaveLength(6);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// appendPersonality
-// ---------------------------------------------------------------------------
-
-describe('appendPersonality', () => {
-  it('appends personality section when name is known', () => {
-    writePersonality(tmpDir, 'meow', 'You are a cat.');
-    loadPersonalities({ homeDir: tmpDir });
-
-    const result = appendPersonality('You are an agent.', 'meow');
-    expect(result).toContain('You are an agent.');
-    expect(result).toContain('## Personality');
-    expect(result).toContain('You are a cat.');
-  });
-
-  it('returns prompt unchanged when personality is unknown', () => {
-    loadPersonalities({ homeDir: tmpDir });
-    const prompt = 'You are an agent.';
-    expect(appendPersonality(prompt, 'missing')).toBe(prompt);
   });
 });
 

@@ -326,6 +326,3 @@ export function getProviderRuntime(): ProviderRuntime {
 export function resetProviderRuntime(): void {
   providerRuntime = null;
 }
-
-/** @internal Test-only singleton cleanup alias. */
-export const _resetProviderRuntimeForTests = resetProviderRuntime;

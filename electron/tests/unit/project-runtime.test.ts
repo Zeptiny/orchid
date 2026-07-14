@@ -15,11 +15,7 @@ import {
   loadSkills,
   resetSkillRegistry,
 } from '../../src/main/skills/registry';
-import {
-  getPersonality,
-  loadPersonalities,
-  resetPersonalityRegistry,
-} from '../../src/main/personality/registry';
+import { listPersonalityNames, loadPersonalities } from '../../src/main/personality/registry';
 import { ProjectRuntimeRegistry } from '../../src/main/project/runtime';
 
 let tmpRoot: string;
@@ -184,14 +180,12 @@ beforeEach(() => {
 
   resetAgentRegistry();
   resetSkillRegistry();
-  resetPersonalityRegistry();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   resetAgentRegistry();
   resetSkillRegistry();
-  resetPersonalityRegistry();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -224,7 +218,7 @@ describe('ProjectRuntimeRegistry', () => {
     expect(runtimeA.personalities.get('voice')).toBe('Project A voice');
     expect(getAgent('shared-agent')?.description).toBe('Home agent');
     expect(getSkill('shared-skill')?.description).toBe('Home skill');
-    expect(getPersonality('voice')).toBe('Home voice');
+    expect(listPersonalityNames()).toEqual(['voice']);
   });
 
   it('keys the cache by canonical path and supports invalidation and clearing', () => {

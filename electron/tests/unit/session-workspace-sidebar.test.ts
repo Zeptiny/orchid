@@ -8,7 +8,6 @@ import {
   pathsEqual,
   partitionSessionsByWorkspace,
   filterSessionsByQuery,
-  groupSessionsByDate,
   groupSessionsByProject,
   buildPrimarySessions,
   countProjectActivity,
@@ -97,25 +96,6 @@ describe('filterSessionsByQuery', () => {
     expect(filterSessionsByQuery(sessions, 'beta').map((s) => s.id)).toEqual(['2']);
     expect(filterSessionsByQuery(sessions, '/proj/alpha').map((s) => s.id)).toEqual([
       '1',
-    ]);
-  });
-});
-
-describe('groupSessionsByDate', () => {
-  it('buckets by recency', () => {
-    const now = new Date('2026-07-10T15:00:00');
-    const sessions = [
-      summary({ id: 't', name: 'T', updatedAt: new Date('2026-07-10T10:00:00').getTime() }),
-      summary({ id: 'y', name: 'Y', updatedAt: new Date('2026-07-09T10:00:00').getTime() }),
-      summary({ id: 'w', name: 'W', updatedAt: new Date('2026-07-06T10:00:00').getTime() }),
-      summary({ id: 'e', name: 'E', updatedAt: new Date('2026-01-01T10:00:00').getTime() }),
-    ];
-    const groups = groupSessionsByDate(sessions, now);
-    expect(groups.map((g) => g.label)).toEqual([
-      'Today',
-      'Yesterday',
-      'This week',
-      'Earlier',
     ]);
   });
 });

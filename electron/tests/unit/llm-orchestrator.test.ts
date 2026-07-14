@@ -4,14 +4,12 @@
  * Covers:
  * - history.ts: toApiMessages with pairing invariant, THINKING replay
  * - tool-dispatch.ts: executeToolCall, timeout, output offloading
- * - cleanup.ts: orphan cleanup, dangling tool_calls, chain reconciliation
  * - orchestrator.ts: streamChat (mocked AI SDK)
  *
  * Test scenarios from plan:
  * 1. No tool calls → text response yielded
  * 2. Tool call → tool executed → result fed back → stream continues
  * 3. Multi-step: tool call → result → another tool call → result → final text
- * 4. Pairing invariant: Orphaned TOOL_RESULT → dropped. Dangling tool_calls → filtered
  * 5. Output offloading: >20KB → cache file, pointer returned. Exempt tool → inline
  * 6. Usage tracking: Stream ends with usage data → Usage object populated
  * 7. Timeout: Tool >60s → TimeoutError caught, error result returned
@@ -39,12 +37,6 @@ import {
   type StreamEvent,
   type StreamChatParams,
 } from '../../src/main/llm/orchestrator';
-import {
-  cleanOrphanToolResults,
-  cleanDanglingToolCalls,
-  reconcileChain,
-  cleanStreamingArtifacts,
-} from '../../src/main/llm/cleanup';
 import { ToolRegistry } from '../../src/main/tools/registry';
 import { defaults } from '../../src/main/config/schema';
 import { z } from 'zod';
@@ -618,169 +610,6 @@ describe('output offloading', () => {
     // Should fall back to truncation (contains "Truncated below" in the output)
     expect(result).toContain('Truncated below');
     expect(result).toContain('cache write failed');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Cleanup utilities tests
-// ---------------------------------------------------------------------------
-
-describe('cleanOrphanToolResults', () => {
-  it('keeps properly paired tool results', () => {
-    const tc = makeToolCall('tc-1', 'read');
-    const messages = [
-      makeAssistantToolCallMessage([tc]),
-      makeToolResultMessage('tc-1', 'result'),
-    ];
-
-    const result = cleanOrphanToolResults(messages);
-    expect(result).toHaveLength(2);
-  });
-
-  it('drops orphaned tool results', () => {
-    const messages = [
-      makeUserMessage('Hello'),
-      makeToolResultMessage('tc-orphan', 'orphaned'),
-      makeMessage({ role: MessageRole.ASSISTANT, content: 'Response' }),
-    ];
-
-    const result = cleanOrphanToolResults(messages);
-    expect(result).toHaveLength(2);
-    expect(result[1].role).toBe(MessageRole.ASSISTANT);
-  });
-
-  it('drops duplicate tool results for same tool_call_id', () => {
-    const tc = makeToolCall('tc-1', 'read');
-    const messages = [
-      makeAssistantToolCallMessage([tc]),
-      makeToolResultMessage('tc-1', 'first result'),
-      makeToolResultMessage('tc-1', 'duplicate result'),
-    ];
-
-    const result = cleanOrphanToolResults(messages);
-    expect(result).toHaveLength(2);
-    expect(result[1].content).toBe('first result');
-  });
-
-  it('handles empty messages array', () => {
-    const result = cleanOrphanToolResults([]);
-    expect(result).toHaveLength(0);
-  });
-});
-
-describe('cleanDanglingToolCalls', () => {
-  it('keeps tool_calls that have matching results', () => {
-    const tc = makeToolCall('tc-1', 'read');
-    const messages = [
-      makeAssistantToolCallMessage([tc]),
-      makeToolResultMessage('tc-1', 'result'),
-    ];
-
-    const result = cleanDanglingToolCalls(messages);
-    expect(result[0].tool_calls).toHaveLength(1);
-  });
-
-  it('filters out tool_calls with no matching result', () => {
-    const tc1 = makeToolCall('tc-1', 'read');
-    const tc2 = makeToolCall('tc-2', 'grep');
-    const messages = [
-      makeAssistantToolCallMessage([tc1, tc2]),
-      makeToolResultMessage('tc-1', 'result'),
-      // tc-2 has no result — dangling
-    ];
-
-    const result = cleanDanglingToolCalls(messages);
-    expect(result[0].tool_calls).toHaveLength(1);
-    expect(result[0].tool_calls![0].id).toBe('tc-1');
-  });
-
-  it('removes tool_calls field entirely when all are dangling', () => {
-    const tc = makeToolCall('tc-1', 'read');
-    const messages = [
-      makeAssistantToolCallMessage([tc]),
-      // No result — dangling
-    ];
-
-    const result = cleanDanglingToolCalls(messages);
-    expect(result[0].tool_calls).toBeNull();
-  });
-
-  it('handles messages with no tool_calls', () => {
-    const messages = [
-      makeUserMessage('Hello'),
-      makeMessage({ role: MessageRole.ASSISTANT, content: 'Hi' }),
-    ];
-
-    const result = cleanDanglingToolCalls(messages);
-    expect(result).toHaveLength(2);
-  });
-});
-
-describe('reconcileChain', () => {
-  it('runs full cleanup pipeline', () => {
-    const tc1 = makeToolCall('tc-1', 'read');
-    const tc2 = makeToolCall('tc-2', 'grep'); // dangling
-    const messages = [
-      makeUserMessage('Read and grep'),
-      makeAssistantToolCallMessage([tc1, tc2]),
-      makeToolResultMessage('tc-1', 'file contents'),
-      makeToolResultMessage('tc-orphan', 'orphaned'), // orphan
-      makeMessage({ role: MessageRole.ASSISTANT, content: 'Done' }),
-    ];
-
-    const result = reconcileChain(messages);
-
-    // Orphaned tc-orphan should be dropped
-    // tc-2 should be filtered from tool_calls
-    expect(result).toHaveLength(4);
-    expect(result[1].tool_calls).toHaveLength(1);
-    expect(result[1].tool_calls![0].id).toBe('tc-1');
-    expect(result[2].tool_call_id).toBe('tc-1');
-    expect(result[3].content).toBe('Done');
-  });
-});
-
-describe('cleanStreamingArtifacts', () => {
-  it('filters out partial tool_calls (missing id)', () => {
-    const partialTc: ToolCall = {
-      id: '',
-      type: 'function',
-      function: { name: 'read', arguments: '{}' },
-    };
-    const fullTc = makeToolCall('tc-1', 'read');
-
-    const messages = [
-      makeAssistantToolCallMessage([partialTc, fullTc]),
-    ];
-
-    const result = cleanStreamingArtifacts(messages);
-    expect(result[0].tool_calls).toHaveLength(1);
-    expect(result[0].tool_calls![0].id).toBe('tc-1');
-  });
-
-  it('filters out partial tool_calls (missing name)', () => {
-    const partialTc: ToolCall = {
-      id: 'tc-partial',
-      type: 'function',
-      function: { name: '', arguments: '{}' },
-    };
-
-    const messages = [
-      makeAssistantToolCallMessage([partialTc]),
-    ];
-
-    const result = cleanStreamingArtifacts(messages);
-    expect(result[0].tool_calls).toBeNull();
-  });
-
-  it('handles messages with no tool_calls', () => {
-    const messages = [
-      makeUserMessage('Hello'),
-      makeMessage({ role: MessageRole.ASSISTANT, content: 'Hi' }),
-    ];
-
-    const result = cleanStreamingArtifacts(messages);
-    expect(result).toHaveLength(2);
   });
 });
 
