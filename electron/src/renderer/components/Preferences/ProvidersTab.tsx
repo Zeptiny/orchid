@@ -29,7 +29,7 @@ export function ProvidersTab() {
 
   if (providers.isLoading && !providers.overview) {
     return (
-      <div role="status" className="flex items-center gap-2 text-base-content/70">
+      <div role="status" className="flex items-center gap-2 py-6 text-base-content/70">
         <span className="loading loading-spinner loading-sm" aria-hidden="true" />
         Loading provider connections…
       </div>
@@ -50,7 +50,7 @@ export function ProvidersTab() {
 
   const { overview } = providers;
   return (
-    <div className="space-y-8">
+    <div className="config-form">
       {!overview.secureStorage.available && (
         <div role="alert" className="alert alert-warning">
           <Icon name="alert" size={16} />

@@ -161,21 +161,26 @@ export function ProviderStatus({
 
   if (providerIds.length === 0) {
     return (
-      <div role="status" className="alert alert-info">
-        <Icon name="activity" size={16} />
-        <span>No provider status observations are available yet.</span>
-      </div>
+      <section aria-labelledby="provider-status-title" className="config-fieldset">
+        <div className="config-fieldset-legend">
+          <span id="provider-status-title">Provider status</span>
+        </div>
+        <div role="status" className="alert alert-info">
+          <Icon name="activity" size={16} />
+          <span>No provider status observations are available yet.</span>
+        </div>
+      </section>
     );
   }
 
   return (
-    <section aria-labelledby="provider-status-title" className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 id="provider-status-title" className="text-lg font-semibold">
+    <section aria-labelledby="provider-status-title" className="config-fieldset">
+      <div className="config-fieldset-legend">
+        <div className="min-w-0">
+          <h2 id="provider-status-title" className="text-sm font-semibold">
             Provider status
           </h2>
-          <p className="text-sm text-base-content/70">
+          <p className="mt-1 text-xs font-normal text-base-content/70">
             Informational only — status and pricing observations never enable, disable, delay, or
             reroute a request.
           </p>
@@ -188,7 +193,7 @@ export function ProviderStatus({
         </div>
       )}
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid gap-3 xl:grid-cols-2">
         {providerIds.map((providerId) => {
           const status = statuses.find((candidate) => candidate.providerId === providerId);
           const definition = definitions.find((candidate) => candidate.id === providerId);
@@ -198,14 +203,14 @@ export function ProviderStatus({
           );
           const refreshing = refreshingProviderId === providerId;
           return (
-            <article key={providerId} className="card card-border bg-base-100 shadow-sm">
-              <div className="card-body gap-4 p-5">
+            <article key={providerId} className="config-card">
+              <div className="flex flex-col gap-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h3 className="card-title text-base">
+                    <h3 className="config-card-title">
                       {definition?.displayName ?? providerId}
                     </h3>
-                    <p className="text-sm text-base-content/70">
+                    <p className="config-card-desc">
                       Last observed: {formatTimestamp(status?.observedAt)}
                     </p>
                   </div>
@@ -213,7 +218,7 @@ export function ProviderStatus({
                 </div>
 
                 {status?.providerUpdatedAt && (
-                  <p className="text-sm text-base-content/70">
+                  <p className="config-card-desc">
                     Provider updated: {formatTimestamp(status.providerUpdatedAt)}
                   </p>
                 )}
@@ -232,7 +237,7 @@ export function ProviderStatus({
                   </p>
                 )}
 
-                <div className="card-actions justify-end">
+                <div className="flex justify-end">
                   <button
                     type="button"
                     className="btn btn-sm"

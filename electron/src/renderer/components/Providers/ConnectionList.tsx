@@ -104,28 +104,33 @@ export function ConnectionList({
 
   if (connections.length === 0) {
     return (
-      <div role="status" className="alert alert-info sm:alert-horizontal">
-        <Icon name="cpu" size={16} />
-        <span>
-          No provider connections yet. Local workspace, history, and settings stay available.
-        </span>
-        {onAddConnection && (
-          <button type="button" className="btn btn-sm" onClick={onAddConnection}>
-            Add a connection
-          </button>
-        )}
-      </div>
+      <section aria-labelledby="provider-connections-title" className="config-fieldset">
+        <div className="config-fieldset-legend">
+          <span id="provider-connections-title">Connections</span>
+        </div>
+        <div role="status" className="alert alert-info sm:alert-horizontal">
+          <Icon name="cpu" size={16} />
+          <span>
+            No provider connections yet. Local workspace, history, and settings stay available.
+          </span>
+          {onAddConnection && (
+            <button type="button" className="btn btn-sm" onClick={onAddConnection}>
+              Add a connection
+            </button>
+          )}
+        </div>
+      </section>
     );
   }
 
   return (
-    <section aria-labelledby="provider-connections-title" className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 id="provider-connections-title" className="text-lg font-semibold">
+    <section aria-labelledby="provider-connections-title" className="config-fieldset">
+      <div className="config-fieldset-legend">
+        <div className="min-w-0">
+          <h2 id="provider-connections-title" className="text-sm font-semibold">
             Connections
           </h2>
-          <p className="text-sm text-base-content/70">
+          <p className="mt-1 text-xs font-normal text-base-content/70">
             Each connection is a separate provider account or endpoint.
           </p>
         </div>
@@ -150,7 +155,7 @@ export function ConnectionList({
         </div>
       )}
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid gap-3 xl:grid-cols-2">
         {connections.map((connection) => {
           const isBusy = busy?.connectionId === connection.id;
           const modelNames = [
@@ -164,12 +169,12 @@ export function ConnectionList({
           const canValidate =
             connection.health === 'draft' || connection.health === 'needs_attention';
           return (
-            <article key={connection.id} className="card card-border bg-base-100 shadow-sm">
-              <div className="card-body gap-4 p-5">
+            <article key={connection.id} className="config-card">
+              <div className="flex flex-col gap-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h3 className="card-title text-base">{connection.name}</h3>
-                    <p className="text-sm text-base-content/70">
+                    <h3 className="config-card-title">{connection.name}</h3>
+                    <p className="config-card-desc">
                       {connection.providerDisplayName ?? connection.providerId}
                     </p>
                   </div>
@@ -261,7 +266,7 @@ export function ConnectionList({
                   </div>
                 )}
 
-                <div className="card-actions justify-end gap-2">
+                <div className="flex justify-end gap-2">
                   {canValidate && (
                     <button
                       type="button"
