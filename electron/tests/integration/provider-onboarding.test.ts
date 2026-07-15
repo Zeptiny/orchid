@@ -175,4 +175,12 @@ describe('provider onboarding and disconnected UX', () => {
     expect(modelEditor).not.toContain('connection-model-editor-type');
     expect(modelEditor).not.toContain('Model type');
   });
+
+  it('prevents focus scrolling from moving the provider modal shell', () => {
+    const css = source('styles', 'chat.css');
+
+    expect(css).toMatch(
+      /\.provider-connection-wizard \.modal-box \{[^}]*overflow: clip;/s,
+    );
+  });
 });

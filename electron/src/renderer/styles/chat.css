@@ -1427,12 +1427,10 @@
 .provider-connection-wizard .modal-box {
   width: min(860px, 100%);
   max-width: min(860px, 100%);
-  height: fit-content;
-  min-height: 0;
   max-height: min(900px, 92vh);
   margin: 0;
   padding: 0;
-  overflow: hidden;
+  overflow: clip;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border-default);
@@ -1443,11 +1441,6 @@
   scale: 1;
   opacity: 1;
   translate: 0 0;
-}
-
-.provider-connection-wizard .modal-box > form {
-  flex: 0 1 auto;
-  min-height: 0;
 }
 
 .provider-connection-wizard .select,
