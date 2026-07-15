@@ -215,7 +215,7 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown, ctx) => 
       const diffText = generateDiff(content, newContent, file_path);
       const { added, removed } = countDiffChanges(diffText);
 
-      let msg = `Replaced '${symbol_name}' in ${file_path} (+${added} -${removed})`;
+      const msg = `Replaced '${symbol_name}' in ${file_path} (+${added} -${removed})`;
 
       return {
         display: msg,

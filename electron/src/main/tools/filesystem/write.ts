@@ -110,7 +110,7 @@ export const writeHandler: ToolHandler = async (input: unknown, ctx) => {
       .map((line, i) => `${i + 1} | ${line}`)
       .join('\n');
 
-    let display = `Wrote ${lines.length} lines to ${file_path}`;
+    const display = `Wrote ${lines.length} lines to ${file_path}`;
     return {
       display,
       content:
