@@ -132,7 +132,7 @@ export async function bindProjectDirectory(
       // A conversation remains bound to the project it started in. Picking a
       // different folder opens a draft there without moving or cancelling it.
       manager.clearActive(windowId);
-      workingSetClearFocus();
+      workingSetClearFocus(windowId);
       setDraftCwd(windowId, canonical);
     }
   } else {
@@ -184,7 +184,10 @@ export function registerSessionIPC(): void {
     const session = manager.switchTo(id, windowId);
 
     if (session) {
-      workingSetOpenOrFocus(session.id);
+      workingSetOpenOrFocus(session.id, windowId);
+    } else {
+      // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
+      workingSetRemove(id, windowId);
     }
 
     // Session owns workspace now — clear draft so it doesn't shadow session.cwd.
@@ -232,7 +235,7 @@ export function registerSessionIPC(): void {
     // Draft was promoted into the session.
     clearDraftCwd(windowId);
     clearChatHistory(session.id);
-    workingSetOpenOrFocus(session.id);
+    workingSetOpenOrFocus(session.id, windowId);
     event.sender.send(IPC_CHANNELS.SESSION_CREATED, { session });
     emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
     return session;
@@ -246,7 +249,7 @@ export function registerSessionIPC(): void {
     const selected = manager.getActive(windowId);
     if (selected?.cwd) setDraftCwd(windowId, selected.cwd);
     manager.clearActive(windowId);
-    workingSetClearFocus();
+    workingSetClearFocus(windowId);
     const workspace = resolveWindowWorkspace(windowId);
     emitWorkspaceChanged(event.sender, workspace);
     return { status: 'cleared' };
@@ -268,7 +271,7 @@ export function registerSessionIPC(): void {
     const deleted = manager.delete(parsed.data.id);
     if (deleted) {
       removeSessionActivity(parsed.data.id);
-      workingSetRemove(parsed.data.id);
+      workingSetRemove(parsed.data.id, String(event.sender.id));
     }
     if (deleted && wasActive) {
       const windowId = String(event.sender.id);

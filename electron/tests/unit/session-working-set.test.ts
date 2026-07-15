@@ -198,4 +198,42 @@ describe('WorkingSetStore', () => {
     // Remaining open: [c]
     expect(store.getSnapshot().focusedSessionId).toBe('c');
   });
+
+  it('keeps independent focus per owner while sharing open membership', () => {
+    store.openOrFocus('a', 'win-1');
+    store.openOrFocus('b', 'win-1');
+    store.openOrFocus('c', 'win-2');
+
+    expect(store.getSnapshot('win-1').openSessionIds).toEqual(['a', 'b', 'c']);
+    expect(store.getSnapshot('win-2').openSessionIds).toEqual(['a', 'b', 'c']);
+    expect(store.getSnapshot('win-1').focusedSessionId).toBe('b');
+    expect(store.getSnapshot('win-2').focusedSessionId).toBe('c');
+
+    store.setFocus('a', 'win-1');
+    expect(store.getSnapshot('win-1').focusedSessionId).toBe('a');
+    expect(store.getSnapshot('win-2').focusedSessionId).toBe('c');
+  });
+
+  it('loadFromDisk ignores corrupt workingSet shapes', () => {
+    const statePath = tmpStatePath();
+    fs.writeFileSync(statePath, JSON.stringify({ workingSet: null }), 'utf-8');
+    const reader = new WorkingSetStore({ statePath });
+    reader.loadFromDisk();
+    expect(reader.getSnapshot().openSessionIds).toEqual([]);
+
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        workingSet: {
+          openSessionIds: ['ok', 12, null],
+          focusedSessionId: 99,
+          mruSessionIds: ['ok'],
+        },
+      }),
+      'utf-8',
+    );
+    reader.loadFromDisk();
+    expect(reader.getSnapshot().openSessionIds).toEqual(['ok']);
+    expect(reader.getSnapshot().focusedSessionId).toBe('ok');
+  });
 });

@@ -346,11 +346,20 @@ export function ChatView() {
 
   const isLiveSession = useCallback(
     (id: string) => {
+      // Prefer activity store; also treat focused streaming chat as live so
+      // confirm still fires if the activity broadcast has not arrived yet.
       const a = activity.activities.find((row) => row.sessionId === id);
-      if (!a) return false;
-      return a.state === 'working' || a.state === 'waiting' || a.state === 'needs_attention';
+      if (a && (a.state === 'working' || a.state === 'waiting' || a.state === 'needs_attention')) {
+        return true;
+      }
+      if (a?.canCancel) return true;
+      // Focused session currently streaming — cover activity broadcast lag.
+      if (session.activeSession?.id === id && chat.status === 'streaming') {
+        return true;
+      }
+      return false;
     },
-    [activity.activities],
+    [activity.activities, session.activeSession?.id, chat.status],
   );
 
   const focusAfterWorkingSet = useCallback(

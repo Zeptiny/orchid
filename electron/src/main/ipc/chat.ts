@@ -641,7 +641,7 @@ export function ensureActiveSession(
   );
   // Draft was promoted into the new session.
   clearDraftCwd(windowId);
-  workingSetOpenOrFocus(session.id);
+  workingSetOpenOrFocus(session.id, windowId);
   if (canSend(webContents)) {
     webContents.send(IPC_CHANNELS.SESSION_CREATED, { session, draftGeneration });
   }
