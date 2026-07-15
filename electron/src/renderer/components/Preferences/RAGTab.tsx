@@ -12,8 +12,8 @@ import type { ModelSelection } from '../../../shared/types/provider';
 import { useProviders } from '../../hooks/useProviders';
 import { isEmbeddingModel } from '../../utils/models';
 import {
+  providerModelOptionDisplayName,
   providerModelOptionKey,
-  providerModelOptionLabel,
   selectionKey,
 } from '../../utils/provider-selection';
 
@@ -98,7 +98,7 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
   const providerModelLabels = useMemo(
     () => Object.fromEntries(providerEmbeddingOptions.map((option) => [
       providerModelOptionKey(option),
-      providerModelOptionLabel(option),
+      providerModelOptionDisplayName(option),
     ])),
     [providerEmbeddingOptions],
   );

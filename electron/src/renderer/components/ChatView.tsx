@@ -11,6 +11,7 @@ import { useTodos } from '../hooks/useTodos';
 import { useSessionActivity } from '../hooks/useSessionActivity';
 import { useProviders } from '../hooks/useProviders';
 import {
+  providerModelOptionDisplayName,
   providerModelOptionKey,
   providerModelOptionLabel,
   selectionMatchesOption,
@@ -383,7 +384,7 @@ export function ChatView() {
   const providerModelLabels = useMemo(
     () => Object.fromEntries(chatProviderModels.map((option) => [
       providerModelOptionKey(option),
-      providerModelOptionLabel(option),
+      providerModelOptionDisplayName(option),
     ])),
     [chatProviderModels],
   );

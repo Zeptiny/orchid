@@ -14,8 +14,16 @@ export function selectionKey(selection: ModelSelection | null | undefined): stri
   return selection ? `${selection.connectionId}\u001f${selection.modelId}` : '';
 }
 
+export function providerModelOptionDisplayName(option: ProviderModelOption): string {
+  return option.model.displayName;
+}
+
+export function providerModelOptionContextLabel(option: ProviderModelOption): string {
+  return `${option.providerDisplayName ?? option.providerId} · ${option.connectionName}`;
+}
+
 export function providerModelOptionLabel(option: ProviderModelOption): string {
-  return `${option.providerDisplayName ?? option.providerId} · ${option.connectionName} · ${option.model.displayName}`;
+  return `${providerModelOptionContextLabel(option)} · ${providerModelOptionDisplayName(option)}`;
 }
 
 export function selectionMatchesOption(

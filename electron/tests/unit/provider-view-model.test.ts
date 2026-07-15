@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { ProviderModelOption } from '../../src/shared/types/ipc';
 import {
+  providerModelOptionContextLabel,
+  providerModelOptionDisplayName,
   providerModelOptionKey,
   providerModelOptionLabel,
   providerStatusConnectionId,
@@ -46,6 +48,8 @@ describe('provider selection view model', () => {
 
   it('labels a model with provider and connection identity', () => {
     const model = option('00000000-0000-4000-8000-000000000002', 'gpt-5');
+    expect(providerModelOptionDisplayName(model)).toBe('Model display');
+    expect(providerModelOptionContextLabel(model)).toBe('OpenAI · Work');
     expect(providerModelOptionLabel(model)).toBe('OpenAI · Work · Model display');
   });
 

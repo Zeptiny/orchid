@@ -5,8 +5,8 @@ import type { ModelSelection } from '../../../shared/types/provider';
 import { useProviders } from '../../hooks/useProviders';
 import { ModelPicker } from '../ModelPicker';
 import {
+  providerModelOptionDisplayName,
   providerModelOptionKey,
-  providerModelOptionLabel,
   selectionKey,
 } from '../../utils/provider-selection';
 import { isTextGenerationModel } from '../../utils/models';
@@ -60,7 +60,7 @@ export function TierModelsTab({ tierModels, onChange }: TierModelsTabProps) {
   const optionLabels = useMemo(
     () => Object.fromEntries(options.map((option) => [
       providerModelOptionKey(option),
-      providerModelOptionLabel(option),
+      providerModelOptionDisplayName(option),
     ])),
     [options],
   );

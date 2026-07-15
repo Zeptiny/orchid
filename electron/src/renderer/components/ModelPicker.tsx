@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ModelMetadata } from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption } from '../../shared/types/ipc';
 import { withCurrentModelOption } from '../utils/models';
+import { providerModelOptionContextLabel } from '../utils/provider-selection';
 import { Icon } from './Icon';
 
 interface ModelPickerProps {
@@ -69,11 +70,13 @@ export function ModelPicker({
     if (!normalized) return modelOptions;
     return modelOptions.filter((model) => {
       const option = additionalOptionsByValue.get(model);
-      return `${optionLabels?.[model] ?? option?.label ?? model} ${model} ${option?.description ?? ''}`
+      const detail = optionDetails?.[model];
+      const providerContext = detail ? providerModelOptionContextLabel(detail) : '';
+      return `${optionLabels?.[model] ?? option?.label ?? model} ${model} ${option?.description ?? ''} ${providerContext}`
         .toLowerCase()
         .includes(normalized);
     });
-  }, [additionalOptionsByValue, modelOptions, optionLabels, query]);
+  }, [additionalOptionsByValue, modelOptions, optionDetails, optionLabels, query]);
 
   useEffect(() => {
     if (!open) return;
@@ -121,6 +124,14 @@ export function ModelPicker({
     setOpen(false);
   };
 
+  const selectedAdditionalOption = additionalOptionsByValue.get(value);
+  const selectedDetail = optionDetails?.[value];
+  const selectedDisplayName = optionLabels?.[value]
+    ?? selectedAdditionalOption?.label
+    ?? selectedDetail?.model.displayName
+    ?? (value ? displayModelId(value) : '');
+  const selectedSubLabel = selectedDetail ? providerModelOptionContextLabel(selectedDetail) : null;
+
   return (
     <div
       ref={pickerRef}
@@ -129,18 +140,21 @@ export function ModelPicker({
       <button
         id={id}
         type="button"
-        className="btn btn-ghost model-picker-trigger"
+        className={`btn btn-ghost model-picker-trigger${selectedSubLabel ? ' model-picker-trigger-with-sub-label' : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={menuId}
         aria-label={label}
-        title={(optionLabels?.[value] ?? additionalOptionsByValue.get(value)?.label ?? value) || label}
+        title={selectedSubLabel ? `${selectedDisplayName} · ${selectedSubLabel}` : selectedDisplayName || label}
         disabled={disabled}
         onClick={() => setOpen((previous) => !previous)}
       >
         <Icon name="cpu" size={13} className="shrink-0 opacity-70" />
-        <span className="model-picker-trigger-label">
-          {optionLabels?.[value] ?? additionalOptionsByValue.get(value)?.label ?? displayModelId(value)}
+        <span className="model-picker-trigger-copy">
+          <span className="model-picker-trigger-label">{selectedDisplayName || displayModelId(value)}</span>
+          {selectedSubLabel && (
+            <span className="model-picker-trigger-sub-label">{selectedSubLabel}</span>
+          )}
         </span>
         <Icon
           name="chevronDown"
@@ -161,7 +175,10 @@ export function ModelPicker({
               <div className="model-picker-title">Models</div>
             </div>
             <span className="model-picker-current">
-              {(optionLabels?.[value] ?? additionalOptionsByValue.get(value)?.label ?? value) || 'None selected'}
+              <span className="model-picker-current-name">{selectedDisplayName || 'None selected'}</span>
+              {selectedSubLabel && (
+                <span className="model-picker-current-sub-label">{selectedSubLabel}</span>
+              )}
             </span>
           </div>
 
@@ -198,7 +215,10 @@ export function ModelPicker({
                   const modelMetadata = metadata[model];
                   const detail = optionDetails?.[model];
                   const additionalOption = additionalOptionsByValue.get(model);
-                  const displayName = optionLabels?.[model] ?? additionalOption?.label ?? displayModelId(model);
+                  const displayName = optionLabels?.[model]
+                    ?? additionalOption?.label
+                    ?? detail?.model.displayName
+                    ?? displayModelId(model);
                   const contextLimit = detail
                     ? detail.model.limits?.contextTokens ?? null
                     : modelMetadata?.max_input_tokens ?? null;
@@ -214,7 +234,7 @@ export function ModelPicker({
                     ?? (detail
                       ? unavailable
                         ? detail.unavailableReason ?? 'Unavailable'
-                        : detail.providerDisplayName ?? detail.providerId
+                        : providerModelOptionContextLabel(detail)
                       : null);
                   return (
                     <tr
