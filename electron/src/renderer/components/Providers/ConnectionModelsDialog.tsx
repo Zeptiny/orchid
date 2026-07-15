@@ -276,7 +276,12 @@ export function ConnectionModelsEditor({
   return (
     <>
             <fieldset className="fieldset">
-              <legend className="fieldset-legend">Catalog models</legend>
+              <legend className="fieldset-legend flex w-full items-center justify-between gap-3">
+                <span>Catalog models</span>
+                <span className="badge badge-sm badge-ghost whitespace-nowrap">
+                  {selectedModelIds.length} selected
+                </span>
+              </legend>
               <p className="label">
                 Selected models become available to chat, tier assignment, or RAG according to
                 their declared capabilities.
@@ -287,50 +292,64 @@ export function ConnectionModelsEditor({
                   <span>No catalog models match this connection protocol.</span>
                 </div>
               ) : (
-                <ul className="list max-h-72 overflow-y-auto rounded-box border border-base-300 bg-base-100">
+                <ul className="list max-h-96 overflow-y-auto rounded-box border border-base-300 bg-base-100">
                   {catalogModels.map((model) => {
                     const override = customModels.find((candidate) => candidate.id === model.id);
                     const effective = override ?? editableCustomModel(model, protocol);
+                    const selected = selectedModelIds.includes(model.id);
                     return (
-                      <li key={model.id} className="list-row items-center">
-                        <input
-                          type="checkbox"
-                          className="checkbox checkbox-sm"
-                          checked={selectedModelIds.includes(model.id)}
-                          onChange={() => toggleModel(model.id)}
-                          aria-label={`Use ${effective.displayName}`}
-                          disabled={disabled || editingCustomModelId !== null}
-                        />
-                        <div className="min-w-0 list-col-grow">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-medium break-words">{effective.displayName}</span>
-                            {override && <span className="badge badge-sm">Customized</span>}
+                      <li
+                        key={model.id}
+                        className={[
+                          'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2',
+                          'rounded-md border-b border-base-300 p-3 !pl-6 transition-colors last:border-b-0',
+                          selected ? 'bg-primary/10' : 'hover:bg-base-200/80',
+                        ].join(' ')}
+                      >
+                        <label className="min-w-0 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="sr-only"
+                            checked={selected}
+                            onChange={() => toggleModel(model.id)}
+                            aria-label={`Use ${effective.displayName}`}
+                            disabled={disabled || editingCustomModelId !== null}
+                          />
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-medium break-words">{effective.displayName}</span>
+                              {override && <span className="badge badge-sm">Customized</span>}
+                            </div>
+                            <div className="mt-1 break-all font-mono text-xs text-base-content/60">{model.id}</div>
+                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                              <span className="badge badge-sm badge-ghost">
+                                {modelCapabilityLabel('Input', effective.capabilities.inputModalities)}
+                              </span>
+                              <span className="badge badge-sm badge-ghost">
+                                {modelCapabilityLabel('Output', effective.capabilities.outputModalities)}
+                              </span>
+                              {effective.capabilities.tools && <span className="badge badge-sm badge-ghost">Tools</span>}
+                              {effective.capabilities.reasoning && <span className="badge badge-sm badge-ghost">Reasoning</span>}
+                            </div>
                           </div>
-                          <div className="text-xs text-base-content/60 break-all">{model.id}</div>
-                        </div>
-                        <div className="flex flex-wrap items-center justify-end gap-1">
-                          <span className="badge badge-sm">
-                            {modelCapabilityLabel('Input', effective.capabilities.inputModalities)}
-                          </span>
-                          <span className="badge badge-sm">
-                            {modelCapabilityLabel('Output', effective.capabilities.outputModalities)}
-                          </span>
-                          {effective.capabilities.tools && <span className="badge badge-sm">Tools</span>}
-                          {effective.capabilities.reasoning && <span className="badge badge-sm">Reasoning</span>}
+                        </label>
+                        <div className="flex shrink-0 flex-wrap items-start justify-end gap-1">
                           <button
                             type="button"
-                            className="btn btn-ghost btn-sm"
+                            className="btn btn-ghost btn-sm btn-square"
                             onClick={() => startEditingCatalogModel(model)}
+                            aria-label={`Edit ${effective.displayName}`}
+                            title={`Edit ${effective.displayName}`}
                             disabled={disabled || editingCustomModelId !== null}
                           >
                             <Icon name="edit" size={14} />
-                            Edit
                           </button>
                           {override && (
                             <button
                               type="button"
                               className="btn btn-ghost btn-sm"
                               onClick={() => resetCatalogModel(model.id)}
+                              title="Reset catalog metadata"
                               disabled={disabled || editingCustomModelId !== null}
                             >
                               Reset
@@ -373,45 +392,58 @@ export function ConnectionModelsEditor({
               ) : (
                 <ul className="list rounded-box border border-base-300 bg-base-100">
                   {userDefinedModels.map((model) => (
-                    <li key={model.id} className="list-row items-center">
-                      <input
-                        type="checkbox"
-                        className="checkbox checkbox-sm"
-                        checked={selectedModelIds.includes(model.id)}
-                        onChange={() => toggleModel(model.id)}
-                        aria-label={`Use ${model.displayName}`}
-                        disabled={disabled || editingCustomModelId !== null}
-                      />
-                      <div className="min-w-0 list-col-grow">
-                        <div className="font-medium break-words">{model.displayName}</div>
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-base-content/60">
-                          <span className="break-all">{model.id}</span>
-                          <span className="badge badge-sm">
-                            {modelCapabilityLabel('Input', model.capabilities.inputModalities)}
-                          </span>
-                          <span className="badge badge-sm">
-                            {modelCapabilityLabel('Output', model.capabilities.outputModalities)}
-                          </span>
+                    <li
+                      key={model.id}
+                      className={[
+                        'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2',
+                        'rounded-md border-b border-base-300 p-3 !pl-6 transition-colors last:border-b-0',
+                        selectedModelIds.includes(model.id) ? 'bg-primary/10' : 'hover:bg-base-200/80',
+                      ].join(' ')}
+                    >
+                      <label className="min-w-0 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="sr-only"
+                          checked={selectedModelIds.includes(model.id)}
+                          onChange={() => toggleModel(model.id)}
+                          aria-label={`Use ${model.displayName}`}
+                          disabled={disabled || editingCustomModelId !== null}
+                        />
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium break-words">{model.displayName}</div>
+                          <div className="mt-1 break-all font-mono text-xs text-base-content/60">{model.id}</div>
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            <span className="badge badge-sm badge-ghost">
+                              {modelCapabilityLabel('Input', model.capabilities.inputModalities)}
+                            </span>
+                            <span className="badge badge-sm badge-ghost">
+                              {modelCapabilityLabel('Output', model.capabilities.outputModalities)}
+                            </span>
+                            {model.capabilities.tools && <span className="badge badge-sm badge-ghost">Tools</span>}
+                            {model.capabilities.reasoning && <span className="badge badge-sm badge-ghost">Reasoning</span>}
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex gap-1">
+                      </label>
+                      <div className="flex shrink-0 gap-1">
                         <button
                           type="button"
-                          className="btn btn-ghost btn-sm"
+                          className="btn btn-ghost btn-sm btn-square"
                           onClick={() => startEditingCustomModel(model)}
+                          aria-label={`Edit ${model.displayName}`}
+                          title={`Edit ${model.displayName}`}
                           disabled={disabled || editingCustomModelId !== null}
                         >
                           <Icon name="edit" size={14} />
-                          Edit
                         </button>
                         <button
                           type="button"
-                          className="btn btn-ghost btn-sm text-error"
+                          className="btn btn-ghost btn-sm btn-square text-error"
                           onClick={() => removeCustomModel(model.id)}
+                          aria-label={`Remove ${model.displayName}`}
+                          title={`Remove ${model.displayName}`}
                           disabled={disabled || editingCustomModelId !== null}
                         >
                           <Icon name="trash" size={14} />
-                          Remove
                         </button>
                       </div>
                     </li>
@@ -497,11 +529,16 @@ export function ConnectionModelsEditor({
                               return (
                                 <label
                                   key={modality}
-                                  className="label cursor-pointer justify-start gap-2"
+                                  className={[
+                                    'flex min-h-10 cursor-pointer items-center rounded-md border px-3 py-2 text-sm transition-colors',
+                                    checked
+                                      ? 'border-primary/20 bg-primary/10'
+                                      : 'border-base-300 hover:bg-base-200/80',
+                                  ].join(' ')}
                                 >
                                   <input
                                     type="checkbox"
-                                    className="checkbox checkbox-sm"
+                                    className="sr-only"
                                     checked={checked}
                                     onChange={() => toggleModality(direction, modality)}
                                     disabled={disabled || (checked && selected.length === 1)}
@@ -519,21 +556,35 @@ export function ConnectionModelsEditor({
                     Choose every modality this connection model accepts and returns. At least one
                     capability is required in each direction.
                   </p>
-                  <div className="mt-3 flex flex-wrap gap-4">
-                    <label className="label cursor-pointer gap-2">
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <label
+                      className={[
+                        'flex min-h-10 cursor-pointer items-center rounded-md border px-3 py-2 text-sm transition-colors',
+                        customForm.tools
+                          ? 'border-primary/20 bg-primary/10'
+                          : 'border-base-300 hover:bg-base-200/80',
+                      ].join(' ')}
+                    >
                       <input
                         type="checkbox"
-                        className="checkbox checkbox-sm"
+                        className="sr-only"
                         checked={customForm.tools}
                         onChange={(event) => setCustomForm({ ...customForm, tools: event.target.checked })}
                         disabled={disabled}
                       />
                       <span>Supports tools</span>
                     </label>
-                    <label className="label cursor-pointer gap-2">
+                    <label
+                      className={[
+                        'flex min-h-10 cursor-pointer items-center rounded-md border px-3 py-2 text-sm transition-colors',
+                        customForm.reasoning
+                          ? 'border-primary/20 bg-primary/10'
+                          : 'border-base-300 hover:bg-base-200/80',
+                      ].join(' ')}
+                    >
                       <input
                         type="checkbox"
-                        className="checkbox checkbox-sm"
+                        className="sr-only"
                         checked={customForm.reasoning}
                         onChange={(event) => setCustomForm({ ...customForm, reasoning: event.target.checked })}
                         disabled={disabled}

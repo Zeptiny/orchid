@@ -284,7 +284,7 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
           />
         </div>
         <div className="config-field config-form-grid-full">
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
             <div className="config-field">
               <label>Allowed tools</label>
               <MultiSelectList
