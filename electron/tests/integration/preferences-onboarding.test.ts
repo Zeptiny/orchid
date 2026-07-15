@@ -189,7 +189,9 @@ describe('Preferences & Onboarding File Structure', () => {
 
   it('tier model assignments use the searchable model picker', () => {
     const tierModels = fs.readFileSync(path.join(componentsDir, 'Preferences', 'TierModelsTab.tsx'), 'utf8');
-    expect(tierModels).toContain('ModelPicker');
+    const assignments = fs.readFileSync(path.join(componentsDir, 'Preferences', 'ModelAssignments.tsx'), 'utf8');
+    expect(tierModels).toContain('ModelAssignments');
+    expect(assignments).toContain('ModelPicker');
     expect(tierModels).not.toContain('<select');
   });
 

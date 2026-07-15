@@ -92,6 +92,30 @@ describe('provider onboarding and disconnected UX', () => {
     );
   });
 
+  it('offers provider-scoped select-all and deselect-all model actions everywhere the editor is used', () => {
+    const modelEditor = source('components', 'Providers', 'ConnectionModelsDialog.tsx');
+    const onboarding = source('components', 'Onboarding', 'OnboardingScreen.tsx');
+    const providersTab = source('components', 'Preferences', 'ProvidersTab.tsx');
+
+    expect(modelEditor).toContain('Select all models');
+    expect(modelEditor).toContain('Deselect all models');
+    expect(modelEditor).toContain('catalogModelIds');
+    expect(modelEditor).toContain('customModelIds');
+    expect(onboarding).toContain('<ConnectionWizard');
+    expect(providersTab).toContain('<ConnectionWizard');
+  });
+
+  it('keeps onboarding open for multiple providers before assigning the default and tier models', () => {
+    const onboarding = source('components', 'Onboarding', 'OnboardingScreen.tsx');
+
+    expect(onboarding).toContain("'providers'");
+    expect(onboarding).toContain("'models'");
+    expect(onboarding).toContain('Add another provider');
+    expect(onboarding).toContain('default_model');
+    expect(onboarding).toContain('tier_models');
+    expect(onboarding).toContain('window.orchid.config.save');
+  });
+
   it('renders Lilac supply discount and Neuralwatt quota as informational status', () => {
     const status = source('components', 'Providers', 'ProviderStatus.tsx');
     const providersTab = source('components', 'Preferences', 'ProvidersTab.tsx');

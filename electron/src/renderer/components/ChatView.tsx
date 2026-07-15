@@ -178,6 +178,9 @@ export function ChatView() {
       if (detail && typeof detail.always_expand_tool_groups === 'boolean') {
         setAlwaysExpandToolGroups(detail.always_expand_tool_groups);
       }
+      if (detail && 'default_model' in detail) {
+        setCurrentSelection(detail.default_model as ModelSelection | null);
+      }
     };
     window.addEventListener('orchid:config-updated', onConfigUpdated);
     return () => window.removeEventListener('orchid:config-updated', onConfigUpdated);

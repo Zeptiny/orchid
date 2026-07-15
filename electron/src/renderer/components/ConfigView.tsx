@@ -477,7 +477,9 @@ function renderTab(
     case 'tier-models':
       return (
         <TierModelsTab
+          defaultModel={config.default_model}
           tierModels={config.tier_models}
+          onDefaultModelChange={(default_model) => updateDraft({ default_model })}
           onChange={(tier_models) => updateDraft({ tier_models })}
         />
       );

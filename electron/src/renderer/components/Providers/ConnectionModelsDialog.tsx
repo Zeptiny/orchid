@@ -148,6 +148,12 @@ export function ConnectionModelsEditor({
     () => new Set(customModels.map((model) => model.id)),
     [customModels],
   );
+  const selectableModelIds = useMemo(
+    () => Array.from(new Set([...catalogModelIds, ...customModelIds])),
+    [catalogModelIds, customModelIds],
+  );
+  const allModelsSelected = selectableModelIds.length > 0
+    && selectableModelIds.every((modelId) => selectedModelIds.includes(modelId));
   const userDefinedModels = customModels.filter((model) => !catalogModelIds.has(model.id));
   const orphanModelIds = selectedModelIds.filter(
     (modelId) => !catalogModelIds.has(modelId) && !customModelIds.has(modelId),
@@ -161,6 +167,10 @@ export function ConnectionModelsEditor({
     onSelectedModelIdsChange(selectedModelIds.includes(modelId)
       ? selectedModelIds.filter((candidate) => candidate !== modelId)
       : [...selectedModelIds, modelId]);
+  };
+
+  const toggleAllModels = () => {
+    onSelectedModelIdsChange(allModelsSelected ? [] : selectableModelIds);
   };
 
   const startAddingCustomModel = () => {
@@ -276,10 +286,21 @@ export function ConnectionModelsEditor({
   return (
     <>
             <fieldset className="fieldset">
-              <legend className="fieldset-legend flex w-full items-center justify-between gap-3">
+              <legend className="fieldset-legend flex w-full flex-wrap items-center justify-between gap-3">
                 <span>Catalog models</span>
-                <span className="badge badge-sm badge-ghost whitespace-nowrap">
-                  {selectedModelIds.length} selected
+                <span className="flex flex-wrap items-center justify-end gap-2">
+                  <span className="badge badge-sm badge-ghost whitespace-nowrap">
+                    {selectedModelIds.length} selected
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={toggleAllModels}
+                    disabled={disabled || editingCustomModelId !== null || selectableModelIds.length === 0}
+                    aria-pressed={allModelsSelected}
+                  >
+                    {allModelsSelected ? 'Deselect all models' : 'Select all models'}
+                  </button>
                 </span>
               </legend>
               <p className="label">
