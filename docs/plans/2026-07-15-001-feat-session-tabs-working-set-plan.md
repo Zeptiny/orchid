@@ -1,7 +1,7 @@
 ---
 title: "feat: Session tabs as pinned working set"
 type: feat
-status: active
+status: completed
 date: 2026-07-15
 origin: docs/brainstorms/2026-07-15-session-tabs-requirements.md
 ---
