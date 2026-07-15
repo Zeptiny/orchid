@@ -58,7 +58,7 @@ vi.mock('node:os', async (importOriginal) => {
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
 
-import { Embedder, clearTokenizerCache } from '../../src/main/rag/embedder';
+let Embedder: typeof import('../../src/main/rag/embedder').Embedder;
 
 // ---------------------------------------------------------------------------
 // Fixture: minimal WordPiece tokenizer.json (BERT-style, used by BGE-small)
@@ -144,8 +144,9 @@ function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'embedder-tokenizer-test-'));
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules();
+  ({ Embedder } = await import('../../src/main/rag/embedder'));
   tmpDir = makeTmpDir();
   homeModelsDir = path.join(tmpDir, '.orchid', 'models', 'BAAI/bge-small-en-v1.5');
   fs.mkdirSync(homeModelsDir, { recursive: true });
@@ -153,8 +154,6 @@ beforeEach(() => {
   // Point homedir to our temp dir
   setMockedHomedir(() => tmpDir);
 
-  // Clear tokenizer cache between tests
-  clearTokenizerCache();
 });
 
 afterEach(() => {
@@ -300,9 +299,6 @@ describe('BPE Tokenizer', () => {
     });
 
     const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    // Clear cache to force re-import
-    clearTokenizerCache();
 
     const embedder = new Embedder();
     const result = await embedder.embed(['test input']);

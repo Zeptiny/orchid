@@ -560,22 +560,6 @@ describe('Indexer', () => {
     } finally { process.cwd = origCwd; }
   });
 
-  it('should update single file via updateFile', async () => {
-    const projectDir = path.join(tmpDir, 'project');
-    fs.mkdirSync(projectDir, { recursive: true });
-    fs.writeFileSync(path.join(projectDir, 'test.py'), SAMPLE_PYTHON);
-    const origCwd = process.cwd;
-    process.cwd = () => projectDir;
-    try {
-      const { indexProject, updateFile, resetSession } = await import('../../src/main/ast/indexer');
-      resetSession();
-      await indexProject({ projectPath: projectDir, inline: true });
-      fs.writeFileSync(path.join(projectDir, 'test.py'), SAMPLE_PYTHON + '\ndef new_func():\n    pass\n');
-      await updateFile('test.py', projectDir);
-      const { ASTStore } = await import('../../src/main/ast/store');
-      expect(new ASTStore(projectDir).getSymbolsByName('new_func').length).toBeGreaterThan(0);
-    } finally { process.cwd = origCwd; }
-  });
 });
 
 // ── Tool: get_file_skeleton ───────────────────────────────────────────────
@@ -731,19 +715,6 @@ describe('replace_symbol', () => {
     expect(result.content).toContain('diff format="unified"');
   });
 
-  it('should trigger post-write callbacks', async () => {
-    const filePath = path.join(tmpDir, 'test.py');
-    fs.writeFileSync(filePath, SAMPLE_PYTHON);
-    const { registerPostWriteCallback, clearPostWriteCallbacks } = await import('../../src/main/tools/filesystem/callbacks');
-    const cb = vi.fn().mockResolvedValue(undefined);
-    registerPostWriteCallback(cb);
-    try {
-      const { replaceSymbolHandler } = await import('../../src/main/tools/ast/replace-symbol');
-      await replaceSymbolHandler({ file_path: filePath, symbol_name: 'greet', new_source: 'def greet(name):\n    return "hi"' }, { cwd: tmpDir });
-      expect(cb).toHaveBeenCalledWith(filePath);
-    } finally { clearPostWriteCallbacks(); }
-  });
-
   it('should return error for ambiguous symbol', async () => {
     const content = 'class A:\n    def process(self):\n        pass\n\nclass B:\n    def process(self):\n        pass\n';
     const filePath = path.join(tmpDir, 'test.py');
@@ -816,32 +787,5 @@ describe('rename_symbol', () => {
     const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
     const result = await renameSymbolHandler({ old_name: 'x', new_name: '' }, { cwd: tmpDir }) as any;
     expect(result.content).toContain('ast_error');
-  });
-});
-
-// ── Post-write callbacks ──────────────────────────────────────────────────
-
-describe('Post-write callbacks', () => {
-  it('should register and trigger callbacks', async () => {
-    const { registerPostWriteCallback, clearPostWriteCallbacks, triggerPostWriteCallbacks } =
-      await import('../../src/main/tools/filesystem/callbacks');
-    const cb = vi.fn().mockResolvedValue(undefined);
-    registerPostWriteCallback(cb);
-    try {
-      await triggerPostWriteCallbacks('/test.py');
-      expect(cb).toHaveBeenCalledWith('/test.py');
-    } finally { clearPostWriteCallbacks(); }
-  });
-
-  it('should collect failures from callbacks', async () => {
-    const { registerPostWriteCallback, clearPostWriteCallbacks, triggerPostWriteCallbacks } =
-      await import('../../src/main/tools/filesystem/callbacks');
-    const cb = vi.fn().mockRejectedValue(new Error('fail'));
-    registerPostWriteCallback(cb);
-    try {
-      const failures = await triggerPostWriteCallbacks('/test.py');
-      expect(failures).toHaveLength(1);
-      expect(failures[0]).toContain('fail');
-    } finally { clearPostWriteCallbacks(); }
   });
 });

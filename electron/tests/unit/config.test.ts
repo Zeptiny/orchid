@@ -7,7 +7,7 @@
  * - Deep merge for mcp_servers and providers (per-alias merge)
  * - Env override casting (string, int, float, list)
  * - Validation rules
- * - Persistence: save() + load() round-trips
+ * - Persistence: config load round-trips
  * - Atomic write (no partial on crash)
  * - ensureHomeConfig() directory seeding
  */
@@ -26,6 +26,8 @@ import {
   applyEnvOverrides,
   validateConfig,
   loadConfig,
+  getConfigDiagnostics,
+  getTierModelSelection,
   ConfigManager,
   isUnsafeKey,
 } from '../../src/main/config';
@@ -39,6 +41,16 @@ let origEnv: Record<string, string | undefined>;
 
 /** Path to a non-existent home config file (simulates no home config). */
 const NO_HOME_CONFIG = path.join(os.tmpdir(), 'nonexistent-orchid-home-config.json');
+
+const WORK_MODEL_SELECTION = {
+  connectionId: '123e4567-e89b-12d3-a456-426614174000',
+  modelId: 'anthropic/claude-3-5-sonnet',
+};
+
+const PERSONAL_MODEL_SELECTION = {
+  connectionId: '123e4567-e89b-12d3-a456-426614174001',
+  modelId: 'openai/gpt-4o/mini',
+};
 
 function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-config-test-'));
@@ -90,11 +102,38 @@ function clearOrchidEnv(): void {
 // ===========================================================================
 
 describe('schema & defaults', () => {
+  it('starts without an executable provider selection or configured provider', () => {
+    const cfg = defaults();
+
+    expect(cfg.default_model).toBeNull();
+    expect(cfg.tier_models).toEqual({
+      seed: null,
+      sprout: null,
+      bloom: null,
+      crown: null,
+    });
+    expect(cfg.providers).toEqual({});
+  });
+
+  it('selects a typed tier connection from the supplied config snapshot', () => {
+    const config = {
+      ...defaults(),
+      default_model: PERSONAL_MODEL_SELECTION,
+      tier_models: {
+        ...defaults().tier_models,
+        bloom: WORK_MODEL_SELECTION,
+      },
+    };
+
+    expect(getTierModelSelection(config, 'bloom')).toEqual(WORK_MODEL_SELECTION);
+    expect(getTierModelSelection(config, 'seed')).toEqual(PERSONAL_MODEL_SELECTION);
+  });
+
   it('defaults() returns all fields populated', () => {
     const cfg = defaults();
 
     // Top-level scalar fields
-    expect(cfg.default_model).toBe('default/mimo-v2.5');
+    expect(cfg.default_model).toBeNull();
     expect(cfg.command_timeout).toBe(30);
     expect(cfg.read_line_limit).toBe(1000);
     expect(cfg.grep_max_results).toBe(100);
@@ -115,10 +154,10 @@ describe('schema & defaults', () => {
 
     // tier_models
     expect(cfg.tier_models).toEqual({
-      seed: 'default/mimo-v2.5',
-      sprout: 'default/mimo-v2.5',
-      bloom: 'default/mimo-v2.5',
-      crown: 'default/mimo-v2.5',
+      seed: null,
+      sprout: null,
+      bloom: null,
+      crown: null,
     });
 
     // ignored_dirs (21 defaults — matches Python config.py lines 51-73)
@@ -140,9 +179,8 @@ describe('schema & defaults', () => {
     expect(cfg.mcp_servers).toHaveProperty('context7');
     expect(cfg.mcp_servers['context7']!['command']).toBe('npx');
 
-    // providers
-    expect(cfg.providers).toHaveProperty('default');
-    expect(cfg.providers['default']!['base_url']).toBe('https://opencode.ai/zen/go/v1');
+    // Deprecated IPC compatibility map stays empty.
+    expect(cfg.providers).toEqual({});
   });
 
   it('configSchema.parse({}) returns same as defaults()', () => {
@@ -150,9 +188,9 @@ describe('schema & defaults', () => {
     expect(parsed).toEqual(defaults());
   });
 
-  it('configSchema.parse with partial input fills in defaults', () => {
-    const parsed = configSchema.parse({ default_model: 'custom/model' });
-    expect(parsed.default_model).toBe('custom/model');
+  it('configSchema.parse accepts a typed selection with a model ID containing slashes', () => {
+    const parsed = configSchema.parse({ default_model: WORK_MODEL_SELECTION });
+    expect(parsed.default_model).toEqual(WORK_MODEL_SELECTION);
     expect(parsed.command_timeout).toBe(30); // default
     expect(parsed.rag.chunk_size).toBe(2000); // default
   });
@@ -164,9 +202,9 @@ describe('schema & defaults', () => {
     expect(parsed.rag.chunk_overlap).toBe(200); // default
   });
 
-  it('parsePartial returns only provided fields (for merging)', () => {
-    const partial = parsePartial({ default_model: 'custom/model', rag: { top_k: 10 } });
-    expect(partial).toHaveProperty('default_model', 'custom/model');
+  it('parsePartial returns typed selection fields without splitting model IDs', () => {
+    const partial = parsePartial({ default_model: WORK_MODEL_SELECTION, rag: { top_k: 10 } });
+    expect(partial).toHaveProperty('default_model', WORK_MODEL_SELECTION);
   });
 
   it('accepts default_project_dir null and an absolute string', () => {
@@ -272,7 +310,7 @@ describe('mergeConfigUpdates (config:save)', () => {
     expect(validated.rag.embedding_model).toBe('custom/embed');
   });
 
-  it('P1-18: partial providers update preserves other provider aliases', () => {
+  it('ignores legacy provider updates instead of retaining configured aliases', () => {
     const current = defaults() as unknown as Record<string, unknown>;
     current['providers'] = {
       default: {
@@ -292,7 +330,6 @@ describe('mergeConfigUpdates (config:save)', () => {
       },
     };
 
-    // Partial update for only openai — must not drop anthropic / default
     const merged = mergeConfigUpdates(current, {
       providers: {
         openai: { api_key: 'sk-new-key' },
@@ -300,34 +337,25 @@ describe('mergeConfigUpdates (config:save)', () => {
     });
 
     const providers = merged['providers'] as Record<string, Record<string, unknown>>;
-    expect(providers).toHaveProperty('default');
-    expect(providers).toHaveProperty('anthropic');
-    expect(providers).toHaveProperty('openai');
-    expect(providers['openai']!['api_key']).toBe('sk-new-key');
-    // Existing openai fields preserved via per-alias merge
-    expect(providers['openai']!['base_url']).toBe('https://api.openai.com/v1');
-    expect(providers['openai']!['models']).toEqual({ 'gpt-4o': {} });
-    expect(providers['anthropic']!['base_url']).toBe('https://api.anthropic.com');
+    expect(providers).toEqual({});
 
     const validated = configSchema.parse(merged);
-    expect(Object.keys(validated.providers).sort()).toEqual(
-      ['anthropic', 'default', 'openai'].sort(),
-    );
+    expect(validated.providers).toEqual({});
   });
 
   it('partial tier_models update preserves other tiers', () => {
     const current = defaults() as unknown as Record<string, unknown>;
     const merged = mergeConfigUpdates(current, {
-      tier_models: { bloom: 'custom/bloom-model' },
+      tier_models: { bloom: WORK_MODEL_SELECTION },
     });
-    const tiers = merged['tier_models'] as Record<string, string>;
-    expect(tiers['bloom']).toBe('custom/bloom-model');
-    expect(tiers['seed']).toBe('default/mimo-v2.5');
-    expect(tiers['sprout']).toBe('default/mimo-v2.5');
-    expect(tiers['crown']).toBe('default/mimo-v2.5');
+    const tiers = merged['tier_models'] as Record<string, unknown>;
+    expect(tiers['bloom']).toEqual(WORK_MODEL_SELECTION);
+    expect(tiers['seed']).toBeNull();
+    expect(tiers['sprout']).toBeNull();
+    expect(tiers['crown']).toBeNull();
   });
 
-  it('null tombstone removes a provider alias', () => {
+  it('keeps the provider compatibility map empty when a legacy tombstone arrives', () => {
     const current = defaults() as unknown as Record<string, unknown>;
     current['providers'] = {
       default: { base_url: 'https://example.com', models: {} },
@@ -339,18 +367,17 @@ describe('mergeConfigUpdates (config:save)', () => {
     });
 
     const providers = merged['providers'] as Record<string, unknown>;
-    expect(providers).toHaveProperty('default');
-    expect(providers).not.toHaveProperty('openai');
+    expect(providers).toEqual({});
   });
 
   it('scalar top-level updates still replace', () => {
     const current = defaults() as unknown as Record<string, unknown>;
     const merged = mergeConfigUpdates(current, {
       theme: 'dark',
-      default_model: 'custom/model',
+      default_model: WORK_MODEL_SELECTION,
     });
     expect(merged['theme']).toBe('dark');
-    expect(merged['default_model']).toBe('custom/model');
+    expect(merged['default_model']).toEqual(WORK_MODEL_SELECTION);
     // Unrelated nested objects untouched
     expect(merged['rag']).toEqual((current as { rag: unknown }).rag);
   });
@@ -467,7 +494,7 @@ describe('mergeLayers (3-layer)', () => {
     expect(servers['custom']).toEqual({ command: 'my-cmd' });
   });
 
-  it('deep merges providers with models sub-dict', () => {
+  it('does not merge legacy provider maps into config layers', () => {
     const d = {
       providers: {
         default: { base_url: 'url', models: { 'mimo-v2.5': {} } },
@@ -481,9 +508,7 @@ describe('mergeLayers (3-layer)', () => {
 
     const result = mergeLayers(d, {}, project) as Record<string, unknown>;
     const provs = result['providers'] as Record<string, unknown>;
-    const def = provs['default'] as Record<string, unknown>;
-    expect(def['base_url']).toBe('url');
-    expect(def['models']).toEqual({ 'mimo-v2.5': {}, 'gpt-4o': {} });
+    expect(provs).toEqual({});
   });
 
   it('ignores keys not present in defaults', () => {
@@ -501,11 +526,11 @@ describe('mergeLayers (3-layer)', () => {
 describe('applyEnvOverrides', () => {
   beforeEach(clearOrchidEnv);
 
-  it('overrides string field', () => {
+  it('does not allow ORCHID_DEFAULT_MODEL to recreate a legacy alias', () => {
     process.env['ORCHID_DEFAULT_MODEL'] = 'test/model';
     const cfg = { default_model: 'default' } as Record<string, unknown>;
     applyEnvOverrides(cfg);
-    expect(cfg['default_model']).toBe('test/model');
+    expect(cfg['default_model']).toBe('default');
   });
 
   it('casts int env to number', () => {
@@ -599,25 +624,25 @@ describe('validateConfig', () => {
     expect(errors.some((e) => e.includes('llm_stream_retries'))).toBe(true);
   });
 
-  it('invalid provider alias (contains /) is an error', () => {
+  it('legacy provider maps are rejected as deprecated', () => {
     const cfg = {
       ...defaults(),
       providers: { 'bad/alias': { base_url: 'url' } },
     };
     const errors = validateConfig(cfg);
-    expect(errors.some((e) => e.includes('bad/alias') && e.includes('[a-z0-9-]+'))).toBe(true);
+    expect(errors.some((e) => e.includes('providers') && e.includes('deprecated'))).toBe(true);
   });
 
-  it('reserved provider alias "fastembed" is an error', () => {
+  it('rejects every non-empty legacy provider map', () => {
     const cfg = {
       ...defaults(),
       providers: { fastembed: { base_url: 'url' } },
     };
     const errors = validateConfig(cfg);
-    expect(errors.some((e) => e.includes('fastembed') && e.includes('reserved'))).toBe(true);
+    expect(errors.some((e) => e.includes('providers') && e.includes('deprecated'))).toBe(true);
   });
 
-  it('both api_key and api_key_env set is an error', () => {
+  it('does not validate legacy credential fields as current config', () => {
     const cfg = {
       ...defaults(),
       providers: {
@@ -625,7 +650,7 @@ describe('validateConfig', () => {
       },
     };
     const errors = validateConfig(cfg);
-    expect(errors.some((e) => e.includes('both') && e.includes('api_key'))).toBe(true);
+    expect(errors.some((e) => e.includes('providers') && e.includes('deprecated'))).toBe(true);
   });
 
   it('invalid mcp_server name (contains uppercase) is an error', () => {
@@ -676,19 +701,19 @@ describe('loadConfig', () => {
 
   it('loads defaults when no config files exist', () => {
     const cfg = loadNoHome();
-    expect(cfg.default_model).toBe('default/mimo-v2.5');
+    expect(cfg.default_model).toBeNull();
     expect(cfg.command_timeout).toBe(30);
     expect(cfg.rag.chunk_size).toBe(2000);
   });
 
-  it('merges project config over defaults', () => {
+  it('preserves unrelated project config while ignoring a legacy model alias', () => {
     writeJson(path.join(tmpDir, '.orchid.json'), {
       default_model: 'project/model',
       ignored_dirs: ['.git', 'custom-dir'],
     });
 
     const cfg = loadNoHome();
-    expect(cfg.default_model).toBe('project/model');
+    expect(cfg.default_model).toBeNull();
     // ignored_dirs is replaced (arrays are replaced, not merged)
     expect(cfg.ignored_dirs).toEqual(['.git', 'custom-dir']);
     // Other defaults still present
@@ -706,7 +731,7 @@ describe('loadConfig', () => {
     expect(cfg.rag.embedding_model).toBe('fastembed/BAAI/bge-small-en-v1.5'); // default
   });
 
-  it('env overrides take highest priority', () => {
+  it('keeps a legacy model environment override disabled while applying other overrides', () => {
     writeJson(path.join(tmpDir, '.orchid.json'), {
       default_model: 'project/model',
       command_timeout: 60,
@@ -715,7 +740,7 @@ describe('loadConfig', () => {
     process.env['ORCHID_COMMAND_TIMEOUT'] = '90';
 
     const cfg = loadNoHome();
-    expect(cfg.default_model).toBe('env/model');
+    expect(cfg.default_model).toBeNull();
     expect(cfg.command_timeout).toBe(90);
   });
 
@@ -733,8 +758,7 @@ describe('loadConfig', () => {
     });
 
     const cfg = loadNoHome();
-    // null default_model is stripped, so default is used
-    expect(cfg.default_model).toBe('default/mimo-v2.5');
+    expect(cfg.default_model).toBeNull();
     expect(cfg.theme).toBe('custom');
   });
 
@@ -756,8 +780,8 @@ describe('loadConfig', () => {
       homeConfigPath: homeConfig,
     });
 
-    // Project overrides home for default_model
-    expect(cfg.default_model).toBe('project/model');
+    // Legacy aliases from both layers are ignored.
+    expect(cfg.default_model).toBeNull();
     // Home's ignored_dirs is used (project doesn't override it)
     expect(cfg.ignored_dirs).toEqual(['.git', 'home-dir']);
     // Default timeout preserved
@@ -818,10 +842,6 @@ describe('ConfigManager', () => {
     expect(ConfigManager.errors()).toEqual([]);
   });
 
-  it('save() is a no-op when no config loaded', () => {
-    // Should not throw
-    ConfigManager.save();
-  });
 });
 
 // ===========================================================================
@@ -834,7 +854,7 @@ describe('persistence', () => {
   it('save + load round-trips config values', () => {
     const modified = {
       ...defaults(),
-      default_model: 'modified/model',
+      default_model: WORK_MODEL_SELECTION,
       command_timeout: 99,
       rag: { ...defaults().rag, chunk_size: 5000 },
     };
@@ -847,7 +867,7 @@ describe('persistence', () => {
       projectDir: tmpDir,
       homeConfigPath: NO_HOME_CONFIG,
     });
-    expect(cfg.default_model).toBe('modified/model');
+    expect(cfg.default_model).toEqual(WORK_MODEL_SELECTION);
     expect(cfg.command_timeout).toBe(99);
     expect(cfg.rag.chunk_size).toBe(5000);
     // Other fields still default
@@ -890,11 +910,11 @@ describe('edge cases', () => {
 
   it('tier_models partial override merges correctly', () => {
     writeJson(path.join(tmpDir, '.orchid.json'), {
-      tier_models: { seed: 'custom/seed-model' },
+      tier_models: { seed: WORK_MODEL_SELECTION },
     });
     const cfg = loadNoHome();
-    expect(cfg.tier_models['seed']).toBe('custom/seed-model');
-    expect(cfg.tier_models['crown']).toBe('default/mimo-v2.5'); // default preserved
+    expect(cfg.tier_models['seed']).toEqual(WORK_MODEL_SELECTION);
+    expect(cfg.tier_models['crown']).toBeNull();
   });
 
   it('mcp_servers partial override merges per-server', () => {
@@ -911,7 +931,7 @@ describe('edge cases', () => {
     expect(cfg.mcp_servers['custom']!['command']).toBe('my-server');
   });
 
-  it('providers partial override merges per-provider', () => {
+  it('ignores legacy provider records in project config', () => {
     writeJson(path.join(tmpDir, '.orchid.json'), {
       providers: {
         openai: {
@@ -922,11 +942,47 @@ describe('edge cases', () => {
       },
     });
     const cfg = loadNoHome();
-    // Default provider preserved
-    expect(cfg.providers).toHaveProperty('default');
-    // OpenAI provider added
-    expect(cfg.providers).toHaveProperty('openai');
-    expect(cfg.providers['openai']!['base_url']).toBe('https://api.openai.com/v1');
+    expect(cfg.providers).toEqual({});
+  });
+
+  it('resets legacy provider and embedding aliases while preserving unrelated preferences', () => {
+    const homeConfigPath = path.join(tmpDir, 'config.json');
+    writeJson(homeConfigPath, {
+      theme: 'night',
+      default_model: 'legacy/gpt-4o',
+      tier_models: { bloom: 'legacy/gpt-4o' },
+      rag: { top_k: 9, embedding_api_model: 'legacy/text-embedding' },
+      providers: {
+        legacy: { api_key: 'must-not-be-loaded', models: { 'gpt-4o': {} } },
+      },
+    });
+
+    const cfg = ConfigManager.load({ projectDir: tmpDir, homeConfigPath });
+
+    expect(cfg.theme).toBe('night');
+    expect(cfg.default_model).toBeNull();
+    expect(cfg.tier_models.bloom).toBeNull();
+    expect(cfg.rag.top_k).toBe(9);
+    expect(cfg.rag.embedding_api_model).toBeNull();
+    expect(cfg.providers).toEqual({});
+    expect(ConfigManager.diagnostics()).toEqual([
+      expect.objectContaining({ code: 'legacy-provider-config-reset' }),
+    ]);
+  });
+
+  it('reports a legacy provider reset from the selected project layer', () => {
+    writeJson(path.join(tmpDir, '.orchid.json'), {
+      providers: {
+        legacy: { api_key: 'must-not-be-loaded' },
+      },
+    });
+
+    expect(getConfigDiagnostics({
+      projectDir: tmpDir,
+      homeConfigPath: NO_HOME_CONFIG,
+    })).toEqual([
+      expect.objectContaining({ code: 'legacy-provider-config-reset' }),
+    ]);
   });
 
   it('env override for RAG fields works end-to-end', () => {
@@ -946,7 +1002,7 @@ describe('edge cases', () => {
     process.env['ORCHID_BG_CMD_IDLE_TIMEOUT'] = '1800';
 
     const cfg = loadNoHome();
-    expect(cfg.default_model).toBe('env/model');
+    expect(cfg.default_model).toBeNull();
     expect(cfg.command_timeout).toBe(120);
     expect(cfg.theme).toBe('dark');
     expect(cfg.llm_stream_retries).toBe(5);
@@ -1016,7 +1072,7 @@ describe('prototype pollution protection', () => {
 // ===========================================================================
 
 describe('null tombstone protection for top-level object keys', () => {
-  it('providers: null at top level is ignored (not deleted)', () => {
+  it('providers: null retains an empty compatibility map', () => {
     const current = defaults() as unknown as Record<string, unknown>;
     current['providers'] = {
       default: { base_url: 'url', models: {} },
@@ -1024,11 +1080,9 @@ describe('null tombstone protection for top-level object keys', () => {
     };
 
     const merged = mergeConfigUpdates(current, { providers: null });
-    // providers should be preserved, not wiped
     expect(merged).toHaveProperty('providers');
     const providers = merged['providers'] as Record<string, unknown>;
-    expect(providers).toHaveProperty('default');
-    expect(providers).toHaveProperty('openai');
+    expect(providers).toEqual({});
   });
 
   it('mcp_servers: null at top level is ignored', () => {
@@ -1065,7 +1119,7 @@ describe('null tombstone protection for top-level object keys', () => {
     expect(merged).toHaveProperty('tier_models');
   });
 
-  it('alias-level null tombstone still works for providers', () => {
+  it('alias-level provider tombstones do not restore legacy provider state', () => {
     const current = defaults() as unknown as Record<string, unknown>;
     current['providers'] = {
       default: { base_url: 'url', models: {} },
@@ -1077,8 +1131,7 @@ describe('null tombstone protection for top-level object keys', () => {
     });
 
     const providers = merged['providers'] as Record<string, unknown>;
-    expect(providers).toHaveProperty('default');
-    expect(providers).not.toHaveProperty('openai');
+    expect(providers).toEqual({});
   });
 
   it('alias-level null tombstone still works for mcp_servers', () => {

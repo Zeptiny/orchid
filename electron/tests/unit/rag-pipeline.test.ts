@@ -806,6 +806,16 @@ describe('Batch Vector State', () => {
 // ---------------------------------------------------------------------------
 
 describe('Model Download', () => {
+  beforeEach(async () => {
+    const { _setEmbeddingModelsHomeForTests } = await import('../../src/main/rag/embedder');
+    _setEmbeddingModelsHomeForTests(tmpDir);
+  });
+
+  afterEach(async () => {
+    const { _setEmbeddingModelsHomeForTests } = await import('../../src/main/rag/embedder');
+    _setEmbeddingModelsHomeForTests(null);
+  });
+
   it('should skip download if model.onnx already exists', async () => {
     const { downloadModel } = await import('../../src/main/rag/embedder');
 
@@ -818,11 +828,10 @@ describe('Model Download', () => {
     expect(typeof downloadModel).toBe('function');
   });
 
-  it('should export downloadModel, isModelAvailable, and getModelDir', async () => {
+  it('should export downloadModel and getModelDir', async () => {
     const embedderModule = await import('../../src/main/rag/embedder');
 
     expect(typeof embedderModule.downloadModel).toBe('function');
-    expect(typeof embedderModule.isModelAvailable).toBe('function');
     expect(typeof embedderModule.getModelDir).toBe('function');
   });
 

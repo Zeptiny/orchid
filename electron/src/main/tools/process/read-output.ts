@@ -7,6 +7,7 @@
  * Ported from Python `src/orchid/tools/background_io.py`.
  */
 import { z } from 'zod';
+import { normalizeAgentScopeId } from '../../../shared/types/agent-scope';
 import { getBackgroundStore } from './background-store';
 import type { ToolDefinition, ToolHandler } from '../types';
 
@@ -41,7 +42,7 @@ export async function executeReadOutput(
 ): Promise<{ display: string; content: string; isError?: boolean }> {
   const store = getBackgroundStore();
   const scopeSessionId = sessionId ?? null;
-  const scopeAgent = agentScopeId ?? 'main';
+  const scopeAgent = normalizeAgentScopeId(agentScopeId);
   // Visibility is session + agent scoped (peer agents cannot read each other).
   const entry = store.getVisible(id, scopeSessionId, scopeAgent);
   if (!entry) {

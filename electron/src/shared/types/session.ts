@@ -10,26 +10,38 @@
  *   interface — those are runtime-only. The session stores
  *   subagentChains (SubagentRecord[]) and todoStore (TodoStoreData)
  *   for persistence.
- * - Version 1 JSON format (TS app's own, no backward-compat with Python).
+ * - Version 2 JSON stores a connection-scoped model selection plus a
+ *   display-only model label. Version 1 string model aliases remain readable
+ *   as historical labels, never as executable selections.
  */
 
-import { z } from 'zod';
+import {
+  copyModelSelection,
+  modelSelectionSchema,
+  type ModelSelection,
+} from './provider';
 import type { Chain } from './chain';
 import { chainFromStorageDict, chainToStorageDict } from './chain';
+import type { Message } from './message';
 import type { SubagentRecord } from './subagent';
-import {
-  subagentRecordFromStorageDict,
-  subagentRecordToStorageDict,
-} from './subagent';
+import { subagentRecordFromStorageDict, subagentRecordToStorageDict } from './subagent';
 import type { TodoStoreData } from './todo';
 import { todoStoreFromStorageDict, todoStoreToStorageDict } from './todo';
 
 // ── Session ─────────────────────────────────────────────────────────────────
 
+/** Flatten all chain messages for UI + continue-chat history (chronological). */
+export function flattenSessionMessages(session: Session): Message[] {
+  return session.chains.flatMap((chain) => [...chain.messages]);
+}
+
 export interface Session {
   readonly id: string;
   readonly name: string;
-  readonly model: string;
+  /** Executable model identity, scoped to one provider connection. */
+  readonly selection: ModelSelection | null;
+  /** Historical/display snapshot only; never used to resolve a model. */
+  readonly modelLabel: string | null;
   /**
    * Absolute working/project directory for this session.
    * `null` = unbound (legacy sessions without cwd, or intentionally unbound).
@@ -43,26 +55,15 @@ export interface Session {
   readonly todoStore: TodoStoreData;
 }
 
-// ── Zod schemas ─────────────────────────────────────────────────────────────
-
-export const sessionSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  model: z.string(),
-  /** Absolute working/project directory; null when unbound. */
-  cwd: z.string().nullable(),
-  chains: z.array(z.object({}).passthrough()),
-  activeChainId: z.string().nullable().default(null),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-
 // ── Storage dict ────────────────────────────────────────────────────────────
 
 export interface SessionStorageDict {
   version: number;
   id: string;
   name: string;
+  selection?: ModelSelection | null;
+  modelLabel?: string | null;
+  /** Version 1 only: preserved as a historical label on restore. */
   model?: string;
   /** Absolute working directory; missing/null on legacy sessions. */
   cwd?: string | null;
@@ -84,13 +85,14 @@ export interface SessionStorageDict {
 // ── Serialization ───────────────────────────────────────────────────────────
 
 export function sessionToStorageDict(session: Session): SessionStorageDict {
-  // Serialize cwd near the top (after id/name/model) so partial list reads
+  // Serialize selection/label/cwd near the top so partial list reads
   // can extract it without a full JSON parse.
   return {
-    version: 1,
+    version: 2,
     id: session.id,
     name: session.name,
-    model: session.model,
+    selection: copyModelSelection(session.selection),
+    modelLabel: session.modelLabel ?? null,
     cwd: session.cwd,
     chains: session.chains.map(chainToStorageDict),
     activeChainId: session.activeChainId,
@@ -103,6 +105,19 @@ export function sessionToStorageDict(session: Session): SessionStorageDict {
 
 export function sessionFromStorageDict(data: unknown): Session {
   const raw = data as Record<string, unknown>;
+  const isLegacyV1 = typeof raw.version !== 'number' || raw.version < 2;
+  const parsedSelection = modelSelectionSchema.safeParse(raw.selection);
+  // A v1 `model` string is a historical display snapshot only. Do not turn it
+  // back into an executable selection: it lacks the required connection ID.
+  const selection: ModelSelection | null =
+    !isLegacyV1 && parsedSelection.success ? parsedSelection.data : null;
+  const modelLabel: string | null = isLegacyV1
+    ? typeof raw.model === 'string'
+      ? raw.model
+      : null
+    : typeof raw.modelLabel === 'string'
+      ? raw.modelLabel
+      : null;
 
   // Parse chains with per-chain error isolation (matching Python)
   const rawChains = Array.isArray(raw.chains) ? raw.chains : [];
@@ -138,7 +153,8 @@ export function sessionFromStorageDict(data: unknown): Session {
   return {
     id: typeof raw.id === 'string' ? raw.id : '',
     name: typeof raw.name === 'string' ? raw.name : 'Unnamed',
-    model: typeof raw.model === 'string' ? raw.model : '',
+    selection,
+    modelLabel,
     // Legacy sessions without cwd → null (R9); never invent process.cwd().
     cwd: typeof raw.cwd === 'string' ? raw.cwd : null,
     chains,

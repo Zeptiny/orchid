@@ -60,13 +60,6 @@ export interface ToolResultEvent {
   isError: boolean;
 }
 
-/** Tool execution failed with an error. */
-export interface ToolErrorEvent {
-  type: 'TOOL_ERROR';
-  toolCallId: string;
-  error: string;
-}
-
 /** LLM stream completed without requesting further tool calls. */
 export interface StreamEndEvent {
   type: 'STREAM_END';
@@ -89,32 +82,6 @@ export interface ErrorEvent {
 export interface UsageEvent {
   type: 'USAGE';
   usage: Usage;
-}
-
-// ── Subagent events ─────────────────────────────────────────────────────────
-
-/** Parent requests spawning a new subagent. */
-export interface SpawnSubagentEvent {
-  type: 'SPAWN_SUBAGENT';
-  name: string;
-  task: string;
-  agentType: string;
-  model?: string;
-  parentChainIndex?: number;
-}
-
-/** Subagent completed successfully, reported to parent. */
-export interface SubagentCompleteEvent {
-  type: 'SUBAGENT_COMPLETE';
-  subagentId: string;
-  result: string;
-}
-
-/** Subagent failed, reported to parent. */
-export interface SubagentFailedEvent {
-  type: 'SUBAGENT_FAILED';
-  subagentId: string;
-  error: string;
 }
 
 // ── Interrupt events ────────────────────────────────────────────────────────
@@ -140,31 +107,10 @@ export type AgentEvent =
   | ToolCallStartEvent
   | ToolCallDeltaEvent
   | ToolResultEvent
-  | ToolErrorEvent
   | StreamEndEvent
   | CancelEvent
   | ErrorEvent
   | UsageEvent;
-
-/** All events the session machine can receive. */
-export type SessionEvent =
-  | UserInputEvent
-  | SpawnSubagentEvent
-  | SubagentCompleteEvent
-  | SubagentFailedEvent
-  | CancelEvent
-  | InterruptEvent
-  | InterruptTimeoutEvent;
-
-/** All events the subagent machine can receive. */
-export type SubagentEvent =
-  | ChunkEvent
-  | ToolCallEvent
-  | ToolResultEvent
-  | ToolErrorEvent
-  | StreamEndEvent
-  | CancelEvent
-  | ErrorEvent;
 
 /** All events the interrupt machine can receive. */
 export type InterruptMachineEvent =

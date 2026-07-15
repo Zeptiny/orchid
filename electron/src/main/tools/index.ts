@@ -1,18 +1,13 @@
 /**
  * Tool registry — exports and singleton access.
  *
- * Usage:
- *   import { toolRegistry } from './tools';
- *   toolRegistry.register(myToolDefinition, myHandler);
- *
- * Each tool module exports a ToolDefinition and async handler.
- * The registry is a singleton (one instance in the main process).
+ * Each tool module exports a ToolDefinition and async handler. Agent turns use
+ * `getBuiltinToolRegistryForRuntime()` so project agents, skills, and MCP tools
+ * are frozen per runtime; the singleton supports compatibility IPC surfaces.
  */
 import { ToolRegistry } from './registry';
 import {
-  type ToolDefinition,
   type ToolExecutionContext,
-  type ToolHandler,
 } from './types';
 import type { Agent } from '../../shared/types/agent';
 import type { Skill } from '../../shared/types/skill';
@@ -48,10 +43,10 @@ import { buildDelegateTool } from './subagent/delegate';
 import { buildWaitTool } from './subagent/wait';
 import { buildInterruptTool } from './subagent/interrupt';
 import { SubagentManager } from '../agents/manager';
-import { getModelForTier } from '../llm/providers';
+import { getTierModelSelection } from '../config/loader';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 
-/** Singleton registry instance for the main process */
+/** Compatibility registry for non-turn IPC and isolated callers. */
 export const toolRegistry = new ToolRegistry();
 
 interface BuiltinToolContext {
@@ -150,14 +145,6 @@ function notifyTodosChanged(ctx: ToolExecutionContext): void {
   }
 }
 
-function registerBuiltTool(
-  registry: ToolRegistry,
-  definition: ToolDefinition,
-  handler: ToolHandler,
-): void {
-  registry.register(definition, handler);
-}
-
 /**
  * Build the internal web-fetch summarizer from the bundled web-fetch agent.
  *
@@ -197,7 +184,7 @@ function buildWebFetchSummarizer(
       '</page_content>';
 
     const record = manager.spawn('web fetch summary', task, summarizerAgent, {
-      model: getModelForTier(context.projectRuntime.config, agent.tier),
+      selection: getTierModelSelection(context.projectRuntime.config, agent.tier),
       sessionId: context.sessionId,
       cwd: context.cwd,
       projectRuntime: context.projectRuntime,
@@ -225,31 +212,31 @@ function registerBuiltinToolsInto(
   registry: ToolRegistry,
   context: BuiltinToolContext,
 ): void {
-  registerBuiltTool(registry, readDefinition, readHandler);
-  registerBuiltTool(registry, editDefinition, editHandler);
-  registerBuiltTool(registry, writeDefinition, writeHandler);
-  registerBuiltTool(registry, readDirectoryDefinition, readDirectoryHandler);
-  registerBuiltTool(registry, globDefinition, globHandler);
-  registerBuiltTool(registry, grepToolDefinition, grepHandler);
-  registerBuiltTool(registry, ragSearchDefinition, ragSearchHandler);
-  registerBuiltTool(registry, ragIndexDefinition, ragIndexHandler);
-  registerBuiltTool(registry, executeCommandToolDefinition, executeCommandHandler);
-  registerBuiltTool(registry, readOutputToolDefinition, readOutputHandler);
-  registerBuiltTool(registry, sendInputToolDefinition, sendInputHandler);
-  registerBuiltTool(registry, terminateCommandToolDefinition, terminateCommandHandler);
+  registry.register(readDefinition, readHandler);
+  registry.register(editDefinition, editHandler);
+  registry.register(writeDefinition, writeHandler);
+  registry.register(readDirectoryDefinition, readDirectoryHandler);
+  registry.register(globDefinition, globHandler);
+  registry.register(grepToolDefinition, grepHandler);
+  registry.register(ragSearchDefinition, ragSearchHandler);
+  registry.register(ragIndexDefinition, ragIndexHandler);
+  registry.register(executeCommandToolDefinition, executeCommandHandler);
+  registry.register(readOutputToolDefinition, readOutputHandler);
+  registry.register(sendInputToolDefinition, sendInputHandler);
+  registry.register(terminateCommandToolDefinition, terminateCommandHandler);
   registerAstTools(registry);
 
   // Session-scoped store via getter (Python ContextVar parity). notifyChanged
   // snapshots into the session file and pushes SESSION_TODOS_CHANGED to the UI.
   const todoStore = createSessionTodoStoreResolver(context.todoStore);
   const todoCreate = buildCreateTool(todoStore, notifyTodosChanged);
-  registerBuiltTool(registry, todoCreate.definition, todoCreate.handler);
+  registry.register(todoCreate.definition, todoCreate.handler);
   const todoUpdate = buildUpdateTool(todoStore, notifyTodosChanged);
-  registerBuiltTool(registry, todoUpdate.definition, todoUpdate.handler);
+  registry.register(todoUpdate.definition, todoUpdate.handler);
   const todoList = buildListTool(todoStore);
-  registerBuiltTool(registry, todoList.definition, todoList.handler);
+  registry.register(todoList.definition, todoList.handler);
   const todoDelete = buildDeleteTool(todoStore, notifyTodosChanged);
-  registerBuiltTool(registry, todoDelete.definition, todoDelete.handler);
+  registry.register(todoDelete.definition, todoDelete.handler);
 
   const webFetch = buildWebFetchTool({
     summarize: buildWebFetchSummarizer(
@@ -257,25 +244,25 @@ function registerBuiltinToolsInto(
       context.subagentManager,
     ),
   });
-  registerBuiltTool(registry, webFetch.definition, webFetch.handler);
+  registry.register(webFetch.definition, webFetch.handler);
 
   const delegate = buildDelegateTool(
     context.agents,
     context.subagentManager,
   );
-  registerBuiltTool(registry, delegate.definition, delegate.handler);
+  registry.register(delegate.definition, delegate.handler);
   const wait = buildWaitTool(context.subagentManager);
-  registerBuiltTool(registry, wait.definition, wait.handler);
+  registry.register(wait.definition, wait.handler);
   const interrupt = buildInterruptTool(context.subagentManager);
-  registerBuiltTool(registry, interrupt.definition, interrupt.handler);
+  registry.register(interrupt.definition, interrupt.handler);
 
   const skill = buildSkillTool(context.skills);
-  registerBuiltTool(registry, skill.definition, skill.handler);
+  registry.register(skill.definition, skill.handler);
 
   const mcpResource = buildMcpResourceTool(
     context.mcpManager ?? fallbackMcpManager,
   );
-  registerBuiltTool(registry, mcpResource.definition, mcpResource.handler);
+  registry.register(mcpResource.definition, mcpResource.handler);
 }
 
 /** Build a dedicated, immutable-definition registry for one project runtime. */

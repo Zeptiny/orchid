@@ -2,7 +2,7 @@
  * replace_symbol tool — replace an entire symbol definition.
  *
  * Handles the full range (including decorators/comments), ambiguity guard,
- * reverse-byte replacements, atomic write, and post-write callbacks.
+ * reverse-byte replacements and atomic write.
  *
  * Ported from Python `src/orchid/tools/ast.py` execute_replace_symbol.
  */
@@ -11,7 +11,6 @@ import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { resolveToolPath } from '../types';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from '../../ast/parser';
-import { triggerPostWriteCallbacks } from '../filesystem/callbacks';
 import {
   generateDiff,
   countDiffChanges,
@@ -216,13 +215,7 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown, ctx) => 
       const diffText = generateDiff(content, newContent, file_path);
       const { added, removed } = countDiffChanges(diffText);
 
-      // Post-write callbacks
-      const cbFailures = await triggerPostWriteCallbacks(file_path);
-
-      let msg = `Replaced '${symbol_name}' in ${file_path} (+${added} -${removed})`;
-      if (cbFailures.length > 0) {
-        msg += ` [warnings: ${cbFailures.length} callback(s) failed]`;
-      }
+      const msg = `Replaced '${symbol_name}' in ${file_path} (+${added} -${removed})`;
 
       return {
         display: msg,
@@ -233,7 +226,6 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown, ctx) => 
           added,
           removed,
           diffText,
-          message: cbFailures.length > 0 ? cbFailures.join('; ') : undefined,
         }),
       };
     } finally {

@@ -3,11 +3,10 @@
  *
  * Covers:
  * - read: lines 10-20 of 100-line file, empty file, binary detection, offset > line count
- * - edit: single match, multiple match guard, replace_all, diff produced, post-write callbacks
- * - write: new file with parent dirs, existing file overwrite, post-write callbacks
+ * - edit: single match, multiple match guard, replace_all, diff produced
+ * - write: new file with parent dirs, existing file overwrite
  * - read_directory: tree structure, depth limiting, hidden file filtering
  * - glob: all TS files sorted by mtime, hidden file filtering
- * - Post-write callbacks: edit triggers RAG and AST re-indexing
  *
  * Test scenarios from plan U13.
  */
@@ -22,11 +21,6 @@ import { readDirectoryHandler } from '../../src/main/tools/filesystem/read-direc
 import { globHandler } from '../../src/main/tools/filesystem/glob';
 import type { Config } from '../../src/main/config/schema';
 import type { ProjectRuntime } from '../../src/main/project/runtime';
-import {
-  registerPostWriteCallback,
-  clearPostWriteCallbacks,
-  callbackCount,
-} from '../../src/main/tools/filesystem/callbacks';
 import type { ToolExecutionContext } from '../../src/main/tools/types';
 
 // ── Test fixtures ──────────────────────────────────────────────────────────
@@ -75,12 +69,10 @@ function generateLines(count: number): string {
 
 beforeEach(() => {
   tmpDir = createTmpDir();
-  clearPostWriteCallbacks();
 });
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
-  clearPostWriteCallbacks();
 });
 
 // ── read tool ──────────────────────────────────────────────────────────────
@@ -258,24 +250,6 @@ describe('edit tool', () => {
     expect(result.content).toContain('+modified line 2');
   });
 
-  it('should trigger post-write callbacks after edit', async () => {
-    const filePath = writeFile('callback.txt', 'hello world');
-    const calledWith: string[] = [];
-
-    registerPostWriteCallback(async (fp: string) => {
-      calledWith.push(fp);
-    });
-
-    await editHandler({
-      file_path: filePath,
-      old_string: 'hello',
-      new_string: 'goodbye',
-    }, toolCtx());
-
-    expect(calledWith).toHaveLength(1);
-    expect(calledWith[0]).toBe(filePath);
-  });
-
   it('should preserve file permissions after edit', async () => {
     const filePath = writeFile('perm.txt', 'hello world');
     // Set specific permissions (read-write for owner only)
@@ -339,23 +313,6 @@ describe('write tool', () => {
 
     expect(result.display).toContain('Wrote');
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('new content');
-  });
-
-  it('should trigger post-write callbacks after write', async () => {
-    const filePath = path.join(tmpDir, 'cb-write.txt');
-    const calledWith: string[] = [];
-
-    registerPostWriteCallback(async (fp: string) => {
-      calledWith.push(fp);
-    });
-
-    await writeHandler({
-      file_path: filePath,
-      content: 'test',
-    }, toolCtx());
-
-    expect(calledWith).toHaveLength(1);
-    expect(calledWith[0]).toBe(filePath);
   });
 
   it('should return file content with line numbers in result', async () => {
@@ -547,106 +504,6 @@ describe('glob tool', () => {
 
     expect(result.content).toContain('visible.ts');
     expect(result.content).toContain('.hidden.ts');
-  });
-});
-
-// ── Post-write callbacks ───────────────────────────────────────────────────
-
-describe('post-write callbacks', () => {
-  it('should register and invoke callbacks for edit', async () => {
-    const filePath = writeFile('cb.txt', 'hello');
-    const calls: string[] = [];
-
-    registerPostWriteCallback(async (fp) => {
-      calls.push(`rag:${fp}`);
-    });
-    registerPostWriteCallback(async (fp) => {
-      calls.push(`ast:${fp}`);
-    });
-
-    expect(callbackCount()).toBe(2);
-
-    await editHandler({
-      file_path: filePath,
-      old_string: 'hello',
-      new_string: 'world',
-    }, toolCtx());
-
-    expect(calls).toHaveLength(2);
-    expect(calls).toContain(`rag:${filePath}`);
-    expect(calls).toContain(`ast:${filePath}`);
-  });
-
-  it('should register and invoke callbacks for write', async () => {
-    const filePath = path.join(tmpDir, 'cb-write.txt');
-    const calls: string[] = [];
-
-    registerPostWriteCallback(async (fp) => {
-      calls.push(`rag:${fp}`);
-    });
-    registerPostWriteCallback(async (fp) => {
-      calls.push(`ast:${fp}`);
-    });
-
-    await writeHandler({
-      file_path: filePath,
-      content: 'test content',
-    }, toolCtx());
-
-    expect(calls).toHaveLength(2);
-    expect(calls).toContain(`rag:${filePath}`);
-    expect(calls).toContain(`ast:${filePath}`);
-  });
-
-  it('should report callback failures in display', async () => {
-    const filePath = writeFile('fail.txt', 'hello');
-
-    registerPostWriteCallback(async () => {
-      throw new Error('RAG indexing failed');
-    });
-
-    const result = await editHandler({
-      file_path: filePath,
-      old_string: 'hello',
-      new_string: 'world',
-    }, toolCtx());
-
-    expect(result.display).toContain('warnings');
-    expect(result.display).toContain('1 callback(s) failed');
-  });
-
-  it('should continue editing even if callback fails', async () => {
-    const filePath = writeFile('fail.txt', 'hello');
-
-    registerPostWriteCallback(async () => {
-      throw new Error('RAG indexing failed');
-    });
-
-    const result = await editHandler({
-      file_path: filePath,
-      old_string: 'hello',
-      new_string: 'world',
-    }, toolCtx());
-
-    // Edit should still succeed
-    expect(result.display).toContain('Edited');
-    expect(readFile('fail.txt')).toBe('world');
-  });
-
-  it('should not duplicate the same callback function', () => {
-    const cb = async () => {};
-    registerPostWriteCallback(cb);
-    registerPostWriteCallback(cb);
-    expect(callbackCount()).toBe(1);
-  });
-
-  it('should clear callbacks', () => {
-    registerPostWriteCallback(async () => {});
-    registerPostWriteCallback(async () => {});
-    expect(callbackCount()).toBe(2);
-
-    clearPostWriteCallbacks();
-    expect(callbackCount()).toBe(0);
   });
 });
 

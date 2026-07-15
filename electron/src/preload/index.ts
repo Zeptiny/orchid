@@ -31,6 +31,12 @@ import type {
   ChatToolCallDeltaEvent,
   ChatToolCallUpdateEvent,
   ConfigSaveMessage,
+  ProviderConnectionCreateMessage,
+  ProviderConnectionUpdateMessage,
+  ProviderSubmitApiKeyMessage,
+  ProviderConnectionIdMessage,
+  ProviderDisconnectMessage,
+  ProviderStatusRefreshMessage,
   SessionLoadMessage,
   SessionDeleteMessage,
   SessionRenamedEvent,
@@ -44,7 +50,6 @@ import type {
   SessionMarkSeenMessage,
   WorkspaceInfo,
   ToolExecuteMessage,
-  AgentSpawnMessage,
   AgentSaveMessage,
   DefinitionDeleteMessage,
   DefinitionRevealMessage,
@@ -55,10 +60,7 @@ import type {
   ASTIndexMessage,
   ASTIndexProgress,
   BgCommandSnapshotRequest,
-  UpdaterProgress,
-  UpdaterErrorEvent,
 } from '../shared/types/ipc';
-import type { UpdaterState } from '../shared/types/ipc';
 
 // ── Security helpers ─────────────────────────────────────────────────────────
 
@@ -141,17 +143,49 @@ const orchidAPI: OrchidAPI = {
     get: () =>
       invoke(IPC_CHANNELS.CONFIG_GET),
 
+    diagnostics: () =>
+      invoke(IPC_CHANNELS.CONFIG_DIAGNOSTICS),
+
     save: (updates: ConfigSaveMessage) =>
       invoke(IPC_CHANNELS.CONFIG_SAVE, updates),
 
     modelMetadata: (modelId: string) =>
       invoke(IPC_CHANNELS.CONFIG_MODEL_METADATA, modelId),
 
-    discoverModels: (alias: string, force?: boolean) =>
-      invoke(IPC_CHANNELS.CONFIG_DISCOVER_MODELS, alias, force),
-
     listPersonalities: () =>
       invoke(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES),
+  },
+
+  providers: {
+    list: () =>
+      invoke(IPC_CHANNELS.PROVIDERS_LIST),
+
+    create: (message: ProviderConnectionCreateMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_CREATE, message),
+
+    update: (message: ProviderConnectionUpdateMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_UPDATE, message),
+
+    submitApiKey: (message: ProviderSubmitApiKeyMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY, message),
+
+    validate: (message: ProviderConnectionIdMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_VALIDATE, message),
+
+    disable: (message: ProviderConnectionIdMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_DISABLE, message),
+
+    enable: (message: ProviderConnectionIdMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_ENABLE, message),
+
+    disconnect: (message: ProviderDisconnectMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_DISCONNECT, message),
+
+    modelList: (message?: ProviderConnectionIdMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_MODEL_LIST, message),
+
+    refreshStatus: (message: ProviderStatusRefreshMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH, message),
   },
 
   session: {
@@ -173,8 +207,8 @@ const orchidAPI: OrchidAPI = {
     rename: (id: string, name: string) =>
       invoke(IPC_CHANNELS.SESSION_RENAME, { id, name }),
 
-    changeModel: (id: string, model: string) =>
-      invoke(IPC_CHANNELS.SESSION_CHANGE_MODEL, { id, model }),
+    changeModel: (id, selection, modelLabel) =>
+      invoke(IPC_CHANNELS.SESSION_CHANGE_MODEL, { id, selection, modelLabel }),
 
     getWorkspace: () =>
       invoke<WorkspaceInfo>(IPC_CHANNELS.SESSION_GET_WORKSPACE),
@@ -228,12 +262,6 @@ const orchidAPI: OrchidAPI = {
   },
 
   agent: {
-    list: () =>
-      invoke(IPC_CHANNELS.AGENT_LIST),
-
-    spawn: (message: AgentSpawnMessage) =>
-      invoke(IPC_CHANNELS.AGENT_SPAWN, message),
-
     save: (message: AgentSaveMessage) =>
       invoke(IPC_CHANNELS.AGENT_SAVE, message),
 
@@ -306,28 +334,6 @@ const orchidAPI: OrchidAPI = {
       invoke(IPC_CHANNELS.BG_CMD_SNAPSHOT, request),
   },
 
-  updater: {
-    check: () =>
-      invoke(IPC_CHANNELS.UPDATER_CHECK),
-
-    install: () =>
-      invoke(IPC_CHANNELS.UPDATER_INSTALL),
-
-    status: () =>
-      invoke(IPC_CHANNELS.UPDATER_STATUS),
-
-    download: () =>
-      invoke(IPC_CHANNELS.UPDATER_DOWNLOAD),
-
-    onStatus: (callback: (state: UpdaterState) => void) =>
-      on(IPC_CHANNELS.UPDATER_STATUS_UPDATE, (...args) => callback(args[0] as UpdaterState)),
-
-    onProgress: (callback: (progress: UpdaterProgress) => void) =>
-      on(IPC_CHANNELS.UPDATER_PROGRESS, (...args) => callback(args[0] as UpdaterProgress)),
-
-    onError: (callback: (event: UpdaterErrorEvent) => void) =>
-      on(IPC_CHANNELS.UPDATER_ERROR, (...args) => callback(args[0] as UpdaterErrorEvent)),
-  },
 };
 
 // ── Expose to renderer ───────────────────────────────────────────────────────

@@ -5,33 +5,17 @@ import { useState, useEffect, useCallback } from 'react';
 import { ChatView } from './components/ChatView';
 import { ConfigView } from './components/ConfigView';
 import { OnboardingScreen } from './components/Onboarding/OnboardingScreen';
-import { applyTheme, THEMES, type ThemeName, THEME_NAMES } from './themes';
+import { applyTheme, type ThemeName, THEME_NAMES } from './themes';
 import './styles/chat.css';
 
-// ─── Theme Context ───────────────────────────────────────────────────────────
-
-interface ThemeContextValue {
-  theme: ThemeName;
-  setTheme: (name: ThemeName) => void;
-  themes: typeof THEMES;
-}
-
-// Simple theme context (no React.createContext needed for this shell)
-let themeContext: ThemeContextValue = {
-  theme: 'default',
-  setTheme: () => {},
-  themes: THEMES,
-};
-
-export function useTheme(): ThemeContextValue {
-  return themeContext;
-}
+type SettingsTab = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag' | 'skills' | 'agents' | 'personalities';
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
 function App() {
   const [theme, setThemeState] = useState<ThemeName>('default');
   const [configOpen, setConfigOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
 
@@ -39,11 +23,6 @@ function App() {
   useEffect(() => {
     applyTheme(theme);
 
-    // Update the context
-    themeContext = {
-      ...themeContext,
-      theme,
-    };
   }, [theme]);
 
   // Load saved theme from config on mount + check onboarding
@@ -64,12 +43,15 @@ function App() {
 
     async function checkOnboarding() {
       try {
-        if (window.orchid?.session?.list) {
+        if (window.orchid?.providers?.list) {
+          const overview = await window.orchid.providers.list();
+          // U8: provider onboarding is driven by connection readiness, never
+          // by whether the user already has local sessions or history.
+          setOnboardingOpen(!overview.connections.some((connection) => connection.health === 'ready'));
+        } else if (window.orchid?.session?.list) {
+          // Compatibility fallback only for an older preload during dev.
           const sessions = await window.orchid.session.list();
-          // Show onboarding if no sessions exist (first launch)
-          if (sessions.length === 0) {
-            setOnboardingOpen(true);
-          }
+          setOnboardingOpen(sessions.length === 0);
         }
       } catch {
         // Non-fatal — skip onboarding check
@@ -81,9 +63,11 @@ function App() {
     checkOnboarding();
   }, []);
 
-  // Listen for `orchid:open-settings` event (from /settings command)
+  // Listen for `orchid:open-settings` event (from /settings and provider gates).
   useEffect(() => {
-    const handleOpenSettings = () => {
+    const handleOpenSettings = (event: Event) => {
+      const tab = (event as CustomEvent<{ tab?: SettingsTab }>).detail?.tab;
+      if (tab) setSettingsTab(tab);
       setConfigOpen(true);
     };
     window.addEventListener('orchid:open-settings', handleOpenSettings);
@@ -117,14 +101,6 @@ function App() {
     return () => window.removeEventListener('orchid:set-theme', handleSetTheme);
   }, [setTheme]);
 
-  // Update context with the setter
-  useEffect(() => {
-    themeContext = {
-      ...themeContext,
-      setTheme,
-    };
-  }, [setTheme]);
-
   return (
     <div className="app-root" data-theme={theme}>
       {/* Keep ChatView mounted under Config so selection/draft state is not
@@ -132,20 +108,15 @@ function App() {
       <div className={configOpen ? 'hidden' : 'contents'} aria-hidden={configOpen}>
         <ChatView />
       </div>
-      {configOpen && <ConfigView onClose={() => setConfigOpen(false)} />}
+      {configOpen && (
+        <ConfigView
+          initialTab={settingsTab}
+          onClose={() => setConfigOpen(false)}
+        />
+      )}
       <OnboardingScreen
         isOpen={onboardingOpen && onboardingChecked}
-        onComplete={async (config) => {
-          // Save the onboarding config
-          try {
-            if (window.orchid?.config?.save) {
-              await window.orchid.config.save({ updates: config });
-            }
-          } catch {
-            // Non-fatal
-          }
-          setOnboardingOpen(false);
-        }}
+        onComplete={() => setOnboardingOpen(false)}
         onSkip={() => setOnboardingOpen(false)}
       />
     </div>

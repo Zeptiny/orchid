@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DefinitionsListResult } from '../../shared/types/definitions';
 import type { Config } from '../../shared/types/ipc-boundary';
+import type { ConfigDiagnostic } from '../../shared/types/ipc';
 import { AgentsTab } from './Preferences/AgentsTab';
 import { GeneralTab } from './Preferences/GeneralTab';
 import { MCPServersTab } from './Preferences/MCPServersTab';
@@ -15,11 +16,6 @@ import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
 import { withMapDeletionTombstones } from '../utils/config-tombstones';
-import {
-  activeProviderRenames,
-  mergeProviderRename,
-  type ProviderRename,
-} from '../utils/provider-renames';
 
 type TabId =
   | 'general'
@@ -49,19 +45,20 @@ const TABS: TabDef[] = [
 
 interface ConfigViewProps {
   onClose: () => void;
+  initialTab?: TabId;
 }
 
-export function ConfigView({ onClose }: ConfigViewProps) {
+export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps) {
   const session = useSession();
   const rootRef = useRef<HTMLDivElement>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabId>('general');
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<ConfigDiagnostic[]>([]);
   const [originalConfig, setOriginalConfig] = useState<Config | null>(null);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
-  const [providerRenames, setProviderRenames] = useState<ProviderRename[]>([]);
   const [personalities, setPersonalities] = useState<string[]>([]);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [showRestartDialog, setShowRestartDialog] = useState(false);
@@ -76,6 +73,10 @@ export function ConfigView({ onClose }: ConfigViewProps) {
     enabled: true,
     containerRef: rootRef,
   });
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
   const isDirty = Object.keys(draft).length > 0;
   const hasMCPChanges = 'mcp_servers' in draft;
@@ -114,14 +115,20 @@ export function ConfigView({ onClose }: ConfigViewProps) {
     setLoading(true);
     setError(null);
     setDraft({});
-    setProviderRenames([]);
+    setDiagnostics([]);
 
     async function loadConfig() {
       try {
         if (!window.orchid?.config?.get) throw new Error('Configuration API is not available.');
-        const config = await window.orchid.config.get();
+        const [config, diagnostics] = await Promise.all([
+          window.orchid.config.get(),
+          window.orchid.config.diagnostics
+            ? window.orchid.config.diagnostics()
+            : Promise.resolve([]),
+        ]);
         if (!cancelled) {
           setOriginalConfig(config);
+          setDiagnostics(diagnostics);
           setLoading(false);
         }
       } catch {
@@ -159,10 +166,6 @@ export function ConfigView({ onClose }: ConfigViewProps) {
     setDraft((prev) => ({ ...prev, ...updates }));
   }, []);
 
-  const recordProviderRename = useCallback((from: string, to: string) => {
-    setProviderRenames((previous) => mergeProviderRename(previous, from, to));
-  }, []);
-
   const handleSave = useCallback(async () => {
     if (!isDirty) return;
     setSaving(true);
@@ -174,10 +177,8 @@ export function ConfigView({ onClose }: ConfigViewProps) {
       // Convert omitted provider/MCP aliases into null tombstones so deletes
       // still apply under PATCH-style merge.
       const updates = withMapDeletionTombstones(draft, originalConfig);
-      const activeRenames = activeProviderRenames(providerRenames, updates.providers);
       await window.orchid.config.save({
         updates: updates as Partial<Config>,
-        ...(activeRenames.length > 0 ? { providerRenames: activeRenames } : {}),
       });
       if (typeof updates.theme === 'string') {
         window.dispatchEvent(new CustomEvent('orchid:set-theme', {
@@ -185,21 +186,26 @@ export function ConfigView({ onClose }: ConfigViewProps) {
         }));
       }
       if (window.orchid?.config?.get) {
-        const fresh = await window.orchid.config.get();
+        const [fresh, diagnostics] = await Promise.all([
+          window.orchid.config.get(),
+          window.orchid.config.diagnostics
+            ? window.orchid.config.diagnostics()
+            : Promise.resolve([]),
+        ]);
         setOriginalConfig(fresh);
+        setDiagnostics(diagnostics);
         window.dispatchEvent(
           new CustomEvent('orchid:config-updated', { detail: fresh }),
         );
       }
       setDraft({});
-      setProviderRenames([]);
       if (hasMCPChanges) setShowRestartDialog(true);
     } catch {
       setError('Failed to save configuration. Please try again.');
     } finally {
       setSaving(false);
     }
-  }, [draft, hasMCPChanges, isDirty, originalConfig, providerRenames]);
+  }, [draft, hasMCPChanges, isDirty, originalConfig]);
 
   const requestClose = useCallback(() => {
     if (isDirty) {
@@ -321,6 +327,13 @@ export function ConfigView({ onClose }: ConfigViewProps) {
           </div>
         )}
 
+        {diagnostics.map((diagnostic) => (
+          <div key={diagnostic.code} role="alert" className="alert alert-warning rounded-none py-2.5 text-sm">
+            <Icon name="alert" size={14} />
+            <span>{diagnostic.message}</span>
+          </div>
+        ))}
+
         <div className="config-tabs">
           {TABS.map((tab) => (
             <button
@@ -345,7 +358,6 @@ export function ConfigView({ onClose }: ConfigViewProps) {
               activeTab,
               currentConfig,
               updateDraft,
-              recordProviderRename,
               personalities,
               definitions,
               defsLoading,
@@ -383,7 +395,7 @@ export function ConfigView({ onClose }: ConfigViewProps) {
               <button className="btn btn-primary" onClick={async () => { await handleSave(); onClose(); }}>
                 Save
               </button>
-              <button className="btn btn-error" onClick={() => { setDraft({}); setProviderRenames([]); onClose(); }}>
+              <button className="btn btn-error" onClick={() => { setDraft({}); onClose(); }}>
                 Discard
               </button>
               <button className="btn btn-ghost" onClick={() => setShowUnsavedDialog(false)}>
@@ -427,7 +439,6 @@ function renderTab(
   activeTab: TabId,
   config: Config,
   updateDraft: (updates: Record<string, unknown>) => void,
-  recordProviderRename: (from: string, to: string) => void,
   personalities: readonly string[] = [],
   definitions: DefinitionsListResult | null = null,
   defsLoading = false,
@@ -440,7 +451,6 @@ function renderTab(
           astMaxFileSize={config.ast_max_file_size}
           backgroundCommandIdleTimeout={config.background_command_idle_timeout}
           commandTimeout={config.command_timeout}
-          defaultModel={config.default_model}
           directoryTreeDepth={config.directory_tree_depth}
           grepMaxResults={config.grep_max_results}
           ignoredDirs={config.ignored_dirs}
@@ -449,7 +459,6 @@ function renderTab(
           maxToolSteps={config.max_tool_steps}
           personality={config.personality}
           personalities={personalities}
-          providers={config.providers as Record<string, Record<string, unknown>>}
           readLineLimit={config.read_line_limit}
           theme={config.theme}
           alwaysExpandToolGroups={config.always_expand_tool_groups}
@@ -457,13 +466,7 @@ function renderTab(
         />
       );
     case 'providers':
-      return (
-        <ProvidersTab
-          providers={config.providers}
-          onChange={(providers) => updateDraft({ providers })}
-          onRename={recordProviderRename}
-        />
-      );
+      return <ProvidersTab />;
     case 'mcp':
       return (
         <MCPServersTab
@@ -474,8 +477,9 @@ function renderTab(
     case 'tier-models':
       return (
         <TierModelsTab
+          defaultModel={config.default_model}
           tierModels={config.tier_models}
-          providers={config.providers}
+          onDefaultModelChange={(default_model) => updateDraft({ default_model })}
           onChange={(tier_models) => updateDraft({ tier_models })}
         />
       );
@@ -483,7 +487,6 @@ function renderTab(
       return (
         <RAGTab
           rag={config.rag}
-          providers={config.providers}
           onChange={(rag) => updateDraft({ rag })}
         />
       );

@@ -12,12 +12,10 @@ import { createActor, type ActorRefFrom } from 'xstate';
 import { z } from 'zod';
 import { agentMachine, type AgentContext } from '../agents/xstate/agent-machine';
 import { interruptMachine } from '../agents/xstate/interrupt-machine';
-import type { StreamEvent } from '../llm/orchestrator';
+import { streamChat, type StreamEvent } from '../llm/orchestrator';
 import type { Agent } from '../../shared/types/agent';
-import type { Config } from '../config/schema';
+import { modelSelectionSchema, type ModelSelection } from '../../shared/types/provider';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import { resolveModelRef } from '../llm/providers';
-import { createProviderModel } from '../llm/providers-factory';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import type { Message, Usage } from '../../shared/types/message';
 import { ChainStatus } from '../../shared/types/chain';
@@ -27,15 +25,8 @@ import {
   getSessionManager,
   resolveWindowWorkspace,
 } from './session';
-import { importESM } from '../utils/esm-import';
 import { getBackgroundStore } from '../tools/process/background-store';
-import type { MCPManager } from '../mcp/manager';
-import {
-  acquireProjectMCPManager,
-  releaseProjectMCPManager,
-} from '../mcp/project-registry';
 import { getBuiltinToolRegistryForRuntime, getSubagentManager } from '../tools';
-import type { ToolRegistry } from '../tools/registry';
 import type {
   ChatErrorKind,
   ChatSendResult,
@@ -68,6 +59,15 @@ import {
   publishSessionActivity,
 } from './session-activity';
 import { appendProjectPersonality } from '../project/personality';
+import { buildSystemPromptContext } from '../llm/build-prompt-context';
+import {
+  acquireProjectMCPManager,
+  releaseProjectMCPManager,
+} from '../mcp/project-registry';
+import { getProviderRuntime } from '../providers';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
+import { getProviderAccountingStore } from '../providers/accounting/store';
+import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -75,7 +75,7 @@ const chatSendSchema = z.object({
   message: z.string().min(1, 'Message must be non-empty'),
   sessionId: z.string().uuid().optional(),
   /** Preferred model when lazy-creating a session from draft mode. */
-  model: z.string().optional(),
+  model: modelSelectionSchema.nullable().optional(),
   draftGeneration: z.number().int().nonnegative().optional(),
 });
 
@@ -129,8 +129,8 @@ type ActiveAgent = {
   /** Length of context.thinking already snapshotted into turnMessages. */
   thinkingCommittedLength: number;
   agent: Agent;
-  /** Model id frozen for this turn's chain footer / storage. */
-  model: string;
+  /** Connection-scoped selection frozen for this turn's chain/storage. */
+  selection: ModelSelection;
   agentCancelled: boolean;
   finalized: boolean;
   /** Monotonic generation for this window; stale agents must not emit IPC. */
@@ -144,8 +144,8 @@ type ActiveAgent = {
   unsubscribe: () => void;
   interruptUnsubscribe: () => void;
   interruptResetTimer: ReturnType<typeof setTimeout> | null;
-  /** Runtime whose MCP manager lease is held until this actor is disposed. */
-  mcpRuntime: ProjectRuntime;
+  /** Releases turn-scoped resources exactly once when the actor is disposed. */
+  releaseResources: () => void;
 };
 
 const activeAgents = new Map<string, ActiveAgent>();
@@ -178,7 +178,7 @@ function disposeActiveAgent(sessionId: string, active: ActiveAgent): void {
   active.abortController.abort();
   active.actor.stop();
   active.interruptActor.stop();
-  releaseProjectMCPManager(active.mcpRuntime);
+  active.releaseResources();
 }
 
 /**
@@ -426,7 +426,7 @@ export function forceAbortSession(sessionId: string): void {
             turnMessagesFromAgent(existing),
             ChainStatus.INTERRUPTED,
             existing.agent,
-            existing.model,
+            existing.selection,
             wc ?? undefined,
           );
         } catch (err) {
@@ -494,7 +494,7 @@ export function forceStopSession(sessionId: string): boolean {
       turnMessagesFromAgent(existing),
       ChainStatus.INTERRUPTED,
       existing.agent,
-      existing.model,
+      existing.selection,
       ownerWebContents ?? undefined,
     );
   }
@@ -524,6 +524,23 @@ export function forceStopSession(sessionId: string): boolean {
   return true;
 }
 
+/** Active session IDs whose frozen turn uses the given provider connection. */
+export function activeSessionsForProviderConnection(connectionId: string): readonly string[] {
+  return [...activeAgents.values()]
+    .filter((active) => !active.finalized && active.selection.connectionId === connectionId)
+    .map((active) => active.sessionId);
+}
+
+/**
+ * Destructive disconnect helper. Stops only turns already attributed to this
+ * connection; other connections and frozen completed turns remain untouched.
+ */
+export function stopActiveProviderConnectionTurns(connectionId: string): readonly string[] {
+  const sessionIds = activeSessionsForProviderConnection(connectionId);
+  for (const sessionId of sessionIds) forceStopSession(sessionId);
+  return sessionIds;
+}
+
 function canSend(webContents: WebContents): boolean {
   return typeof webContents.isDestroyed !== 'function' || !webContents.isDestroyed();
 }
@@ -538,9 +555,9 @@ function canSend(webContents: WebContents): boolean {
  *
  * @returns ok + session cwd, or a structured failure for the send gate
  */
-function ensureActiveSession(
+export function ensureActiveSession(
   webContents: WebContents,
-  preferredModel?: string,
+  preferredModel?: ModelSelection | null,
   requestedSessionId?: string,
   draftGeneration?: number,
 ): {
@@ -587,20 +604,40 @@ function ensureActiveSession(
   // whatever project another window selects while this turn is running.
   const runtime = getProjectRuntimeRegistry().get(boundCwd);
 
+  const selection = preferredModel ?? active?.selection ?? runtime.config.default_model;
+  if (selection == null) {
+    return {
+      ok: false,
+      result: {
+        status: 'error',
+        error: 'A provider connection and model are required before sending a message.',
+        kind: 'provider_required',
+      },
+    };
+  }
+
   if (active) {
     // Legacy sessions may have null/empty cwd while the window workspace is
     // bound via sticky/draft. Persist that cwd onto the session before tools run.
     if (!active.cwd || active.cwd.trim() === '') {
       manager.changeCwd(active.id, boundCwd);
     }
+    if (preferredModel && (
+      active.selection?.connectionId !== preferredModel.connectionId
+      || active.selection.modelId !== preferredModel.modelId
+    )) {
+      manager.changeModel(active.id, preferredModel, preferredModel.modelId);
+      active = manager.getSession(active.id) ?? { ...active, selection: preferredModel };
+    }
     return { ok: true, cwd: boundCwd, session: active, runtime };
   }
 
-  const model =
-    (preferredModel && preferredModel.trim()) ||
-    runtime.config.default_model ||
-    '';
-  const session = manager.create(model, { cwd: boundCwd }, windowId);
+  const session = manager.create(
+    selection,
+    { cwd: boundCwd },
+    windowId,
+    selection.modelId,
+  );
   // Draft was promoted into the new session.
   clearDraftCwd(windowId);
   if (canSend(webContents)) {
@@ -656,7 +693,7 @@ function persistTurnConversation(
   turnMessages: Message[],
   status: ChainStatus,
   agent: Agent,
-  model?: string,
+  selection?: ModelSelection | null,
   webContents?: WebContents,
 ): void {
   setChatHistory(sessionId, fullHistory);
@@ -665,7 +702,8 @@ function persistTurnConversation(
     const updated = sessionManager.persistTurn({
       messages: turnMessages,
       status,
-      model,
+      selection,
+      modelLabel: selection?.modelId ?? null,
       agentName: agent.name,
       agentType: agent.type,
       agentTier: agent.tier,
@@ -704,107 +742,51 @@ function emitSessionUpdated(webContents: WebContents, sessionId: string): void {
 // ── Stream function (wraps the orchestrator) ─────────────────────────────────
 
 /**
- * Creates a StreamFn compatible with the agent machine.
- * In production, this wraps the streamChat orchestrator from U9.
- *
- * @param turnCtx - Frozen session cwd + sessionId for this agent turn
- * @param turnModel - Session model frozen at turn start (not re-read via getActive)
+ * Bind a turn's already-resolved adapter to the orchestrator. The typed
+ * selection, project runtime, message history, and model instance are all
+ * frozen before the actor starts, so a later settings change cannot redirect
+ * credentials, tools, or a retry to another connection.
  */
-function createStreamFn(
-  config: Config,
-  messages: Message[],
-  turnCtx: ToolExecutionContext,
-  registry: ToolRegistry,
-  mcpManager: MCPManager,
-  turnModel?: string | null,
-) {
-  // Freeze for the whole multi-step agent loop — mid-turn session switch must
-  // not rebind model or session id for later streamChat steps.
-  const frozenSessionId = turnCtx.sessionId;
-  const frozenModel = turnModel ?? null;
-
-  return async function* (params: {
+function createProviderStreamFn(input: {
+  readonly messages: Message[];
+  readonly runtime: ProjectRuntime;
+  readonly sessionId: string;
+  readonly modelInstance: LanguageModelV4;
+  readonly accounting: ProviderAttemptAccountingContext;
+  readonly registry: ReturnType<typeof getBuiltinToolRegistryForRuntime>;
+  readonly mcpManager: ReturnType<typeof acquireProjectMCPManager>;
+}) {
+  return async function* ({
+    agent,
+    systemPrompt,
+    abortSignal,
+  }: {
     message: string;
     agent: Agent;
     systemPrompt: string;
     abortSignal: AbortSignal;
   }): AsyncGenerator<StreamEvent> {
-    // Dynamic import to avoid circular dependency issues
-    const { streamChat } = await import('../llm/orchestrator');
-
-    // Resolve the model for this agent:
-    // frozen session model (from /model) → tier model → global default.
-    const modelRef = resolveModelRef(
-      frozenModel ||
-        config.tier_models[params.agent.tier] ||
-        config.default_model,
-      config,
-    );
-    const modelInstance = await createProviderModel(modelRef);
-
-    // Live dynamic context: tree, todos, subagents, background commands
-    // (Python rebuilds this every stream — do not pass empty stubs).
-    const { buildSystemPromptContext } = await import('../llm/build-prompt-context');
-    const frozenAgentScopeId = turnCtx.agentScopeId ?? 'main';
     const context = await buildSystemPromptContext({
-      cwd: turnCtx.cwd,
-      config,
-      sessionId: frozenSessionId,
-      agentScopeId: frozenAgentScopeId,
+      cwd: input.runtime.projectDir,
+      config: input.runtime.config,
+      sessionId: input.sessionId,
+      agentScopeId: 'main',
     });
-
-    // Use the orchestrator to stream with full message history
-    const stream = streamChat({
-      messages,
-      agent: params.agent,
-      systemPrompt: params.systemPrompt,
+    yield* streamChat({
+      messages: input.messages,
+      agent,
+      systemPrompt,
       context,
-      config,
-      registry,
-      mcpManager,
-      sessionId: frozenSessionId,
-      projectRuntime: turnCtx.projectRuntime,
-      agentScopeId: frozenAgentScopeId,
-      abortSignal: params.abortSignal,
-      modelInstance,
+      config: input.runtime.config,
+      registry: input.registry,
+      mcpManager: input.mcpManager,
+      sessionId: input.sessionId,
+      projectRuntime: input.runtime,
+      agentScopeId: 'main',
+      abortSignal,
+      modelInstance: input.modelInstance,
+      accounting: input.accounting,
     });
-
-    yield* stream;
-  };
-}
-
-// ── Tool execution function ──────────────────────────────────────────────────
-
-/**
- * Creates an ExecuteFn compatible with the agent machine.
- * Dispatches to the tool registry with the frozen turn context.
- */
-function createExecuteFn(
-  turnCtx: ToolExecutionContext,
-  registry: ToolRegistry,
-) {
-  return async (toolName: string, args: string) => {
-    const { normalizeToolHandlerResult } = await import('../tools/result');
-    const tool = registry.get(toolName);
-    if (!tool) {
-      return { content: `Tool '${toolName}' not found`, isError: true };
-    }
-
-    try {
-      const parsedArgs = JSON.parse(args);
-
-      // Validate args against the tool's Zod schema before execution
-      const validation = registry.validate(toolName, parsedArgs);
-      if (!validation.ok) {
-        return { content: validation.error, isError: true };
-      }
-
-      const result = await tool.handler(validation.data, turnCtx);
-      return normalizeToolHandlerResult(result);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      return { content: `Tool execution failed: ${errorMessage}`, isError: true };
-    }
   };
 }
 
@@ -816,59 +798,9 @@ function createExecuteFn(
  *
  * Non-fatal on failure — returns null so the session keeps its default name.
  */
-function createGenerateTitleCallback(
-  config: Config,
-  messages: Message[],
-): GenerateTitleCallback {
-  return async (_session) => {
-    try {
-      // Extract first user and assistant text messages
-      const userMsg = messages.find((m) => m.role === MessageRole.USER);
-      const assistantMsg = messages.find((m) => m.role === MessageRole.ASSISTANT);
-
-      if (!userMsg || !assistantMsg) {
-        return null;
-      }
-
-      // Resolve the seed-tier model for title generation
-      const modelRef = resolveModelRef(
-        config.tier_models['seed'] || config.default_model,
-        config,
-      );
-      const modelInstance = await createProviderModel(modelRef);
-
-      // Use AI SDK generateText for a simple one-shot title
-      const { generateText } = await importESM<typeof import('ai')>('ai');
-
-      // AI SDK 7: system text must use `instructions` (not role:'system' in messages)
-      const result = await generateText({
-        model: modelInstance,
-        instructions:
-          'Generate a short, descriptive title (3-6 words) for this conversation. ' +
-          'Only output the title, nothing else. No quotes, no punctuation at the end.',
-        messages: [
-          {
-            role: 'user',
-            content:
-              `User: ${userMsg.content.slice(0, 500)}\n\n` +
-              `Assistant: ${assistantMsg.content.slice(0, 500)}`,
-          },
-        ],
-      });
-
-      // Extract the first line, trim, and sanitize
-      const title = result.text.trim().split('\n')[0]?.trim();
-      if (!title || title.length === 0) {
-        return null;
-      }
-
-      return title;
-    } catch (err) {
-      // Non-fatal — log and keep default name
-      console.debug('Auto-naming callback failed:', err);
-      return null;
-    }
-  };
+function createGenerateTitleCallback(): GenerateTitleCallback {
+  // Auto-naming resumes once U4 can resolve a frozen selection to a driver.
+  return async () => null;
 }
 
 // ── IPC registration ─────────────────────────────────────────────────────────
@@ -942,16 +874,34 @@ export function registerChatIPC(): void {
       unread: false,
       canCancel: true,
     });
-    const config = runtime.config;
+    const turnSelection = sessionGate.session.selection;
+    if (turnSelection == null) {
+      sessionsStarting.delete(sessionId);
+      completeSessionActivity(sessionId, false);
+      return {
+        status: 'error',
+        error: 'A provider connection and model are required before sending a message.',
+        kind: 'provider_required',
+      };
+    }
+    let modelInstance: LanguageModelV4;
+    let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
+    let accountingStore: ReturnType<typeof getProviderAccountingStore>;
+    try {
+      accountingStore = getProviderAccountingStore();
+      const execution = await getProviderRuntime().resolveExecution(turnSelection);
+      modelInstance = execution.modelInstance;
+      providerSnapshot = execution.snapshot;
+    } catch (error) {
+      sessionsStarting.delete(sessionId);
+      completeSessionActivity(sessionId, false);
+      return {
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error),
+        kind: 'provider_unavailable',
+      };
+    }
     const agents = [...runtime.agents.values()];
-    const mcpManager = acquireProjectMCPManager(sessionGate.runtime);
-    const turnRegistry = getBuiltinToolRegistryForRuntime(sessionGate.runtime, {
-      agents: new Map(runtime.agents),
-      skills: new Map(runtime.skills),
-      subagentManager: getSubagentManager(),
-      mcpManager,
-    });
-
     // Prefer live window history; fall back to flattened session chains.
     // If a prior agent is still streaming, forceAbort persists its partial
     // turn as INTERRUPTED (turn-local) before we open a new chain — never
@@ -984,21 +934,23 @@ export function registerChatIPC(): void {
       sessionId,
       projectRuntime: runtime,
       agentScopeId: 'main',
+      selection: turnSelection,
     };
-    const turnModel = activeSession?.model ?? config.default_model ?? null;
-    const turnModelId = turnModel ?? config.default_model ?? '';
 
     // Multi-chain: open a new ACTIVE chain for this user turn (Python `_start_chain`).
     // Subagent parent_chain_index attributes to this chain while it is active.
     let turnId: string = crypto.randomUUID();
+    let chainId: string | null = null;
     try {
       const chain = sessionManager.startChain({
-        model: turnModelId,
+        selection: turnSelection,
+        modelLabel: activeSession.modelLabel ?? turnSelection.modelId,
         agentName: agent.name,
         agentType: agent.type,
         agentTier: agent.tier,
         messages: [userMessage],
       }, sessionId);
+      chainId = chain?.id ?? null;
       turnId = chain?.id ?? turnId;
       emitSessionUpdated(webContents, sessionId);
     } catch (err) {
@@ -1010,24 +962,54 @@ export function registerChatIPC(): void {
     // mutable global registry used by the settings surface.
     const abortController = new AbortController();
     const baseSystemPrompt = agent.system_prompt || 'You are a helpful assistant.';
-    const actor = createActor(agentMachine, {
-      input: {
-        agent,
-        systemPrompt: appendProjectPersonality(baseSystemPrompt, runtime),
-        streamFn: createStreamFn(
-          config,
-          messages,
-          turnCtx,
-          turnRegistry,
-          mcpManager,
-          turnModel,
-        ),
-        executeFn: createExecuteFn(turnCtx, turnRegistry),
-      },
-    });
-
-    // Create the interrupt machine actor for two-phase Esc confirmation
-    const interruptActor = createActor(interruptMachine);
+    const accounting: ProviderAttemptAccountingContext = {
+      store: accountingStore,
+      sessionId,
+      chainId,
+      turnId,
+      snapshot: providerSnapshot,
+    };
+    const mcpManager = acquireProjectMCPManager(runtime);
+    let resourcesReleased = false;
+    const releaseResources = () => {
+      if (resourcesReleased) return;
+      resourcesReleased = true;
+      releaseProjectMCPManager(runtime);
+    };
+    let actor: ReturnType<typeof createActor<typeof agentMachine>>;
+    let interruptActor: ReturnType<typeof createActor<typeof interruptMachine>>;
+    try {
+      const turnRegistry = getBuiltinToolRegistryForRuntime(runtime, {
+        agents: new Map(runtime.agents),
+        skills: new Map(runtime.skills),
+        mcpManager,
+      });
+      actor = createActor(agentMachine, {
+        input: {
+          agent,
+          systemPrompt: appendProjectPersonality(baseSystemPrompt, runtime),
+          streamFn: createProviderStreamFn({
+            messages,
+            runtime,
+            sessionId,
+            modelInstance,
+            accounting,
+            registry: turnRegistry,
+            mcpManager,
+          }),
+        },
+      });
+      interruptActor = createActor(interruptMachine);
+    } catch (error) {
+      releaseResources();
+      sessionsStarting.delete(sessionId);
+      completeSessionActivity(sessionId, false);
+      return {
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error),
+        kind: 'runtime_hydration_failed',
+      };
+    }
 
     // Track response for incremental updates
     let lastSentLength = 0;
@@ -1059,7 +1041,7 @@ export function registerChatIPC(): void {
       responseCommittedLength: 0,
       thinkingCommittedLength: 0,
       agent,
-      model: turnModelId,
+      selection: turnSelection,
       agentCancelled: false,
       finalized: false,
       generation,
@@ -1069,7 +1051,7 @@ export function registerChatIPC(): void {
       unsubscribe: () => subscription?.unsubscribe(),
       interruptUnsubscribe: () => interruptSubscription?.unsubscribe(),
       interruptResetTimer: null,
-      mcpRuntime: sessionGate.runtime,
+      releaseResources,
     };
     activeAgents.set(sessionId, activeAgent);
     sessionsStarting.delete(sessionId);
@@ -1138,7 +1120,7 @@ export function registerChatIPC(): void {
         turnMessagesFromAgent(activeAgent),
         opts.interrupted ? ChainStatus.INTERRUPTED : ChainStatus.COMPLETED,
         agent,
-        activeAgent.model || config.default_model,
+        activeAgent.selection,
         webContents,
       );
       activeAgent.messages = fullHistory;
@@ -1159,7 +1141,7 @@ export function registerChatIPC(): void {
       if (!opts.interrupted) {
         // Auto-name after first successful exchange (non-blocking)
         const sessionManager = getSessionManager();
-        const generateTitle = createGenerateTitleCallback(config, fullHistory);
+        const generateTitle = createGenerateTitleCallback();
         sessionManager
           .autoName(sessionId, generateTitle)
           .then((updated) => {
@@ -1229,13 +1211,10 @@ export function registerChatIPC(): void {
       }
 
       const context = snapshot.context as AgentContext;
-      const activityPhase = snapshot.value === 'toolExecuting' ? 'tool' : 'agent';
-      const activityDetail =
-        activityPhase === 'tool'
-          ? `Running ${context.currentToolCall?.toolName ?? 'tool'}`
-          : context.streamingToolCall?.toolName
-            ? `Preparing ${context.streamingToolCall.toolName}`
-            : 'Generating response';
+      const activityPhase = 'agent' as const;
+      const activityDetail = context.streamingToolCall?.toolName
+        ? `Preparing ${context.streamingToolCall.toolName}`
+        : 'Generating response';
       const activityKey = `${String(snapshot.value)}:${activityPhase}:${activityDetail}`;
       if (activityKey !== lastActivityKey) {
         lastActivityKey = activityKey;
@@ -1462,7 +1441,7 @@ export function registerChatIPC(): void {
           turnMessagesFromAgent(activeAgent),
           ChainStatus.FAILED,
           agent,
-          activeAgent.model || config.default_model,
+          activeAgent.selection,
           webContents,
         );
         queueMicrotask(() => {
@@ -1471,20 +1450,30 @@ export function registerChatIPC(): void {
       }
     });
 
-    // Start the actor and send user input
-    actor.start();
-    interruptActor.start();
+    try {
+      // Start the actor and send user input
+      actor.start();
+      interruptActor.start();
 
-    // Immediate state so the renderer gets cwd/model chrome before first chunk
-    sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_STATE, {
-      state: 'streaming',
-      response: '',
-      error: null,
-      interruptState: 'idle',
-      cwd: turnCtx.cwd,
-    });
+      // Immediate state so the renderer gets cwd/model chrome before first chunk
+      sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_STATE, {
+        state: 'streaming',
+        response: '',
+        error: null,
+        interruptState: 'idle',
+        cwd: turnCtx.cwd,
+      });
 
-    actor.send({ type: 'USER_INPUT', message });
+      actor.send({ type: 'USER_INPUT', message });
+    } catch (error) {
+      disposeActiveAgent(sessionId, activeAgent);
+      completeSessionActivity(sessionId, false);
+      return {
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error),
+        kind: 'runtime_hydration_failed',
+      };
+    }
 
     return { status: 'started', sessionId, turnId };
   });
@@ -1597,7 +1586,7 @@ export function registerChatIPC(): void {
           turnMessagesFromAgent(existing),
           ChainStatus.INTERRUPTED,
           existing.agent,
-          existing.model,
+          existing.selection,
           streamWebContents,
         );
         completeSessionActivity(

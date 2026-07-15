@@ -2,19 +2,13 @@
  * Preferences & Onboarding Integration Tests — U24.
  *
  * Tests:
- * - Preferences: 5 tabs render, edit provider → save, MCP change → restart prompt, unsaved → dialog
- * - Onboarding: Providers detected → confirmation, None → guide, Confirm → config + seeds
+ * - Preferences: tab/file structure, ordinary preference saves, MCP restart prompt
+ * - Onboarding: local-only defaults and ordinary preference persistence
  *
  * These tests validate the component logic without requiring a running
  * Electron app (mocked window.orchid API).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import {
-  detectProviders,
-  maskApiKey,
-  buildProvidersConfig,
-  type DetectedProvider,
-} from '../../src/renderer/components/Onboarding/ProviderDetector';
 import { defaults } from '../../src/main/config/schema';
 
 // ─── Mock Setup ──────────────────────────────────────────────────────────────
@@ -31,13 +25,6 @@ const mockOrchid = {
   config: {
     get: vi.fn().mockResolvedValue(defaults()),
     save: vi.fn().mockResolvedValue({ status: 'ok' }),
-  },
-  session: {
-    list: vi.fn().mockResolvedValue([]),
-    load: vi.fn().mockResolvedValue(null),
-    create: vi.fn().mockResolvedValue({ id: 'new-session', name: 'New Session' }),
-    delete: vi.fn().mockResolvedValue({ status: 'ok' }),
-    rename: vi.fn().mockResolvedValue({ status: 'ok' }),
   },
   tool: {
     execute: vi.fn().mockResolvedValue({ content: '', isError: false }),
@@ -72,145 +59,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
-});
-
-// ─── Provider Detection ─────────────────────────────────────────────────────
-
-describe('Provider Detection', () => {
-  it('detectProviders returns a result with providers array', async () => {
-    const result = await detectProviders();
-    expect(result).toHaveProperty('providers');
-    expect(result).toHaveProperty('errors');
-    expect(Array.isArray(result.providers)).toBe(true);
-    expect(Array.isArray(result.errors)).toBe(true);
-  });
-
-  it('detectProviders always includes Ollama entry', async () => {
-    const result = await detectProviders();
-    const ollama = result.providers.find((p) => p.id === 'ollama');
-    expect(ollama).toBeDefined();
-    expect(ollama?.name).toBe('Ollama (Local)');
-    expect(ollama?.baseUrl).toBe('http://localhost:11434');
-  });
-
-  it('detectProviders includes known provider entries', async () => {
-    const result = await detectProviders();
-    const ids = result.providers.map((p) => p.id);
-    expect(ids).toContain('openai');
-    expect(ids).toContain('anthropic');
-    expect(ids).toContain('google');
-    expect(ids).toContain('groq');
-    expect(ids).toContain('mistral');
-  });
-
-  it('Ollama detection sets method to ollama-endpoint', async () => {
-    const result = await detectProviders();
-    const ollama = result.providers.find((p) => p.id === 'ollama');
-    expect(ollama?.method).toBe('ollama-endpoint');
-  });
-
-  it('env var providers set method to env-var', async () => {
-    const result = await detectProviders();
-    const openai = result.providers.find((p) => p.id === 'openai');
-    expect(openai?.method).toBe('env-var');
-  });
-});
-
-// ─── API Key Masking ─────────────────────────────────────────────────────────
-
-describe('API Key Masking', () => {
-  it('masks long keys showing last 4 chars', () => {
-    const masked = maskApiKey('sk-abc123def456ghij');
-    expect(masked).toMatch(/\*+ghij$/);
-    expect(masked).not.toContain('abc');
-    expect(masked).not.toContain('123');
-  });
-
-  it('masks short keys with ****', () => {
-    expect(maskApiKey('abc')).toBe('****');
-    expect(maskApiKey('ab')).toBe('****');
-    expect(maskApiKey('')).toBe('****');
-  });
-
-  it('preserves last 4 characters', () => {
-    const masked = maskApiKey('12345678');
-    expect(masked.endsWith('5678')).toBe(true);
-  });
-});
-
-// ─── Provider Config Builder ─────────────────────────────────────────────────
-
-describe('Provider Config Builder', () => {
-  it('builds providers config from confirmed providers', () => {
-    const providers: DetectedProvider[] = [
-      {
-        id: 'openai',
-        name: 'OpenAI',
-        method: 'env-var',
-        baseUrl: 'https://api.openai.com/v1',
-        litellmProvider: 'openai',
-        maskedKey: '****5678',
-        envVar: 'OPENAI_API_KEY',
-        models: ['gpt-4o', 'gpt-4o-mini'],
-        detected: true,
-      },
-    ];
-
-    const config = buildProvidersConfig(providers);
-    expect(config).toHaveProperty('openai');
-    expect(config.openai.base_url).toBe('https://api.openai.com/v1');
-    expect(config.openai.litellm_provider).toBe('openai');
-    expect(config.openai.models).toHaveProperty('gpt-4o');
-    expect(config.openai.models).toHaveProperty('gpt-4o-mini');
-  });
-
-  it('skips undetected providers', () => {
-    const providers: DetectedProvider[] = [
-      {
-        id: 'ollama',
-        name: 'Ollama',
-        method: 'ollama-endpoint',
-        baseUrl: 'http://localhost:11434',
-        litellmProvider: 'ollama',
-        maskedKey: null,
-        models: [],
-        detected: false,
-      },
-    ];
-
-    const config = buildProvidersConfig(providers);
-    expect(config).not.toHaveProperty('ollama');
-  });
-
-  it('handles multiple providers', () => {
-    const providers: DetectedProvider[] = [
-      {
-        id: 'openai',
-        name: 'OpenAI',
-        method: 'env-var',
-        baseUrl: 'https://api.openai.com/v1',
-        litellmProvider: 'openai',
-        maskedKey: '****5678',
-        models: ['gpt-4o'],
-        detected: true,
-      },
-      {
-        id: 'anthropic',
-        name: 'Anthropic',
-        method: 'env-var',
-        baseUrl: 'https://api.anthropic.com/v1',
-        litellmProvider: 'anthropic',
-        maskedKey: '****abcd',
-        models: ['claude-sonnet-4-20250514'],
-        detected: true,
-      },
-    ];
-
-    const config = buildProvidersConfig(providers);
-    expect(Object.keys(config)).toHaveLength(2);
-    expect(config).toHaveProperty('openai');
-    expect(config).toHaveProperty('anthropic');
-  });
 });
 
 // ─── Config Schema Defaults ──────────────────────────────────────────────────
@@ -272,53 +120,32 @@ describe('Preferences Window Behavior', () => {
   });
 
   it('non-MCP save should not trigger restart', () => {
-    const updates = { theme: 'bluey', default_model: 'openai/gpt-4o' };
+    const updates = {
+      theme: 'bluey',
+      default_model: {
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        modelId: 'gpt-4o',
+      },
+    };
     expect('mcp_servers' in updates).toBe(false);
   });
 });
 
 // ─── Onboarding Flow ─────────────────────────────────────────────────────────
 
-describe('Onboarding Flow', () => {
-  it('session.list determines if onboarding shows', async () => {
-    const sessions = await mockOrchid.session.list();
-    expect(sessions).toEqual([]);
-    // Empty sessions → show onboarding
-    expect(sessions.length === 0).toBe(true);
-  });
-
-  it('sessions exist → skip onboarding', async () => {
-    mockOrchid.session.list.mockResolvedValueOnce([
-      { id: 's1', name: 'Session 1', model: 'test', cwd: null, chainCount: 1, updatedAt: Date.now() },
-    ]);
-    const sessions = await mockOrchid.session.list();
-    expect(sessions.length > 0).toBe(true);
-  });
-
+describe('Local-only onboarding defaults', () => {
   it('onboarding skip uses defaults', () => {
     const defaultConfig = defaults();
-    // When user skips, we use the full default config
-    expect(defaultConfig.default_model).toBeTruthy();
+    // Skip enters local-only Orchid with no inferred provider/model.
+    expect(defaultConfig.default_model).toBeNull();
+    expect(defaultConfig.providers).toEqual({});
     expect(defaultConfig.theme).toBeTruthy();
     expect(defaultConfig.personality).toBeTruthy();
   });
 
-  it('onboarding complete saves detected providers', async () => {
+  it('onboarding complete saves only ordinary local preferences', async () => {
     const config = {
-      providers: {
-        ollama: {
-          base_url: 'http://localhost:11434',
-          litellmProvider: 'ollama',
-          models: { 'llama3:latest': {} },
-        },
-      },
-      default_model: 'ollama/llama3:latest',
-      tier_models: {
-        seed: 'ollama/llama3:latest',
-        sprout: 'ollama/llama3:latest',
-        bloom: 'ollama/llama3:latest',
-        crown: 'ollama/llama3:latest',
-      },
+      theme: 'default',
     };
 
     await mockOrchid.config.save({ updates: config });
@@ -360,10 +187,26 @@ describe('Preferences & Onboarding File Structure', () => {
     ).toBe(true);
   });
 
+  it('tier model assignments use the searchable model picker', () => {
+    const tierModels = fs.readFileSync(path.join(componentsDir, 'Preferences', 'TierModelsTab.tsx'), 'utf8');
+    const assignments = fs.readFileSync(path.join(componentsDir, 'Preferences', 'ModelAssignments.tsx'), 'utf8');
+    expect(tierModels).toContain('ModelAssignments');
+    expect(assignments).toContain('ModelPicker');
+    expect(tierModels).not.toContain('<select');
+  });
+
   it('RAGTab.tsx exists', () => {
     expect(
       fs.existsSync(path.join(componentsDir, 'Preferences', 'RAGTab.tsx')),
     ).toBe(true);
+  });
+
+  it('RAG settings expose provider-backed embedding models', () => {
+    const ragTab = fs.readFileSync(path.join(componentsDir, 'Preferences', 'RAGTab.tsx'), 'utf8');
+    expect(ragTab).toContain('isEmbeddingModel');
+    expect(ragTab).toContain('embedding_api_model');
+    expect(ragTab).toContain('additionalOptions={localModelOptions}');
+    expect(ragTab).not.toContain('Provider Embedding Model');
   });
 
   it('GeneralTab.tsx exists', () => {
@@ -379,12 +222,6 @@ describe('Preferences & Onboarding File Structure', () => {
   it('OnboardingScreen.tsx exists', () => {
     expect(
       fs.existsSync(path.join(componentsDir, 'Onboarding', 'OnboardingScreen.tsx')),
-    ).toBe(true);
-  });
-
-  it('ProviderDetector.tsx exists', () => {
-    expect(
-      fs.existsSync(path.join(componentsDir, 'Onboarding', 'ProviderDetector.tsx')),
     ).toBe(true);
   });
 

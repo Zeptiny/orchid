@@ -4,15 +4,16 @@
  * Merge order: defaults → home (~/.orchid/config.json) → project (.orchid.json)
  * Then: ORCHID_ env overrides (cast to correct types).
  *
- * Deep-merge applies to ALL nested dicts (rag, mcp_servers, providers,
+ * Deep-merge applies to nested preference dictionaries (rag, mcp_servers,
  * tier_models) so partial nested configs merge correctly instead of replacing.
+ * Provider connections are intentionally not part of layered config.
  * Scalars and arrays: project overrides home overrides defaults.
  */
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
+export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
@@ -61,7 +62,7 @@ export function deepMerge(
 }
 
 /**
- * Deep-merge two provider/server dicts (mcp_servers, providers).
+ * Deep-merge two named-entry dictionaries (currently MCP servers).
  *
  * For each alias present in either side:
  * - only in home → keep home entry
@@ -109,51 +110,81 @@ export function deepMergeProviderDict(
 // ---------------------------------------------------------------------------
 
 /** Keys that use recursive per-alias merge instead of wholesale replacement. */
-const DEEP_MERGE_KEYS = new Set(['mcp_servers', 'providers']);
+const DEEP_MERGE_KEYS = new Set(['mcp_servers']);
+
+/** Legacy provider config is not a source of executable connection state. */
+const IGNORED_LEGACY_CONFIG_KEYS = new Set(['providers']);
 
 /**
  * Top-level keys whose values are required objects (maps or nested configs).
- * Null tombstones are blocked for these keys — allowing `providers: null` to
- * delete the entire providers map would wipe all custom providers when zod
- * defaults restore only the built-in default.
+ * Null tombstones are blocked for these keys so a partial update cannot remove
+ * an entire required preference map.
  */
 const TOP_LEVEL_OBJECT_KEYS = new Set([
-  'providers',
   'mcp_servers',
   'rag',
   'tier_models',
 ]);
 
 /**
+ * Merge tier selections by tier while keeping each selection atomic. A
+ * selection's connectionId and modelId must never be composed from different
+ * config layers, and `null` is a meaningful "use default / no selection"
+ * value rather than a deletion tombstone.
+ */
+function mergeTierSelections(
+  current: Record<string, unknown>,
+  updates: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...current };
+  for (const tier of Object.keys(updates)) {
+    if (isUnsafeKey(tier)) continue;
+    const value = updates[tier];
+    if (value !== undefined) {
+      result[tier] = value;
+    }
+  }
+  return result;
+}
+
+/**
  * Merge partial `updates` into a full config for `config:save`.
  *
  * Same nested semantics as {@link mergeLayers}:
- * - `providers` / `mcp_servers`: per-alias merge via {@link deepMergeProviderDict}
- *   (partial provider patches preserve other aliases and entry fields)
- * - other nested plain objects (`rag`, `tier_models`, …): {@link deepMerge}
+ * - `mcp_servers`: per-alias merge via {@link deepMergeProviderDict}
+ * - `tier_models`: per-tier merge with atomic typed selections
+ * - other nested plain objects (`rag`, …): {@link deepMerge}
  * - scalars / arrays: source replaces target
  * - `null` values act as tombstones (delete the key) so clients can remove
  *   provider/MCP aliases under PATCH-style deep merge
  *
  * This avoids the shallow `{ ...current, ...updates }` bug where a partial
- * `providers` or `rag` object replaced the entire nested map and zod defaults
+ * `rag` object replaced the entire nested map and zod defaults
  * wiped sibling fields.
  */
 export function mergeConfigUpdates(
   current: Record<string, unknown>,
   updates: Record<string, unknown>,
 ): Record<string, unknown> {
-  const result: Record<string, unknown> = { ...current };
+  const result: Record<string, unknown> = { ...current, providers: {} };
 
   for (const key of Object.keys(updates)) {
     if (isUnsafeKey(key)) continue;
+    if (IGNORED_LEGACY_CONFIG_KEYS.has(key)) continue;
     const srcVal = updates[key];
     if (srcVal === undefined) continue;
 
+    // A nullable typed selection is not a PATCH tombstone. It must replace
+    // the selection atomically so fields cannot mix across connections.
+    if (key === 'default_model') {
+      result[key] = srcVal;
+      continue;
+    }
+
     // Tombstone: explicit null removes a top-level key.
-    // Block deletion for required object keys (providers, mcp_servers, rag,
-    // tier_models) to prevent wiping the entire map — alias-level nulls
-    // inside those maps are handled separately below.
+    // Block deletion for required object keys (mcp_servers, rag, tier_models)
+    // to prevent wiping the entire map — alias-level nulls inside MCP maps are
+    // handled separately below.
     if (srcVal === null) {
       if (TOP_LEVEL_OBJECT_KEYS.has(key)) continue;
       delete result[key];
@@ -163,7 +194,7 @@ export function mergeConfigUpdates(
     const tgtVal = result[key];
 
     if (DEEP_MERGE_KEYS.has(key) && isPlainObject(tgtVal) && isPlainObject(srcVal)) {
-      // Per-alias merge, then apply null tombstones for deleted aliases
+      // Per-alias merge, then apply null tombstones for deleted aliases.
       const merged = deepMergeProviderDict(
         tgtVal as Record<string, unknown>,
         // Strip nulls before provider merge (non-dict values would replace)
@@ -175,6 +206,8 @@ export function mergeConfigUpdates(
         }
       }
       result[key] = merged;
+    } else if (key === 'tier_models' && isPlainObject(tgtVal) && isPlainObject(srcVal)) {
+      result[key] = mergeTierSelections(tgtVal, srcVal);
     } else if (isPlainObject(tgtVal) && isPlainObject(srcVal)) {
       result[key] = deepMerge(
         tgtVal as Record<string, unknown>,
@@ -207,9 +240,8 @@ function stripNullEntries(
  * a project config specifying only `rag.top_k` doesn't wipe out the other
  * rag fields from home/defaults.
  *
- * For `mcp_servers` and `providers` the merge uses the specialised
- * `deepMergeProviderDict` which handles per-alias entry merging including
- * a nested `models` sub-dict.
+ * `mcp_servers` uses the specialised `deepMergeProviderDict`; typed model
+ * selections stay atomic while `tier_models` still merges by tier.
  */
 export function mergeLayers(
   defaults: Record<string, unknown>,
@@ -217,54 +249,47 @@ export function mergeLayers(
   project: Record<string, unknown>,
 ): Record<string, unknown> {
   const merged = { ...defaults };
+  if ('providers' in merged) {
+    merged['providers'] = {};
+  }
 
-  // Apply home overrides
-  for (const key of Object.keys(home)) {
+  applyLayerOverrides(merged, home);
+  applyLayerOverrides(merged, project);
+
+  return merged;
+}
+
+function applyLayerOverrides(
+  merged: Record<string, unknown>,
+  layer: Record<string, unknown>,
+): void {
+  for (const key of Object.keys(layer)) {
     if (isUnsafeKey(key)) continue;
+    if (IGNORED_LEGACY_CONFIG_KEYS.has(key)) continue;
     if (!(key in merged)) continue;
-    const homeVal = home[key];
+    const layerVal = layer[key];
     const mergedVal = merged[key];
 
-    if (DEEP_MERGE_KEYS.has(key) && isPlainObject(homeVal) && isPlainObject(mergedVal)) {
+    if (key === 'default_model') {
+      merged[key] = layerVal;
+    } else if (DEEP_MERGE_KEYS.has(key) && isPlainObject(layerVal) && isPlainObject(mergedVal)) {
       merged[key] = deepMergeProviderDict(
         mergedVal as Record<string, unknown>,
-        homeVal as Record<string, unknown>,
+        layerVal as Record<string, unknown>,
       );
-    } else if (isPlainObject(homeVal) && isPlainObject(mergedVal)) {
+    } else if (key === 'tier_models' && isPlainObject(layerVal) && isPlainObject(mergedVal)) {
+      merged[key] = mergeTierSelections(mergedVal as Record<string, unknown>, layerVal);
+    } else if (isPlainObject(layerVal) && isPlainObject(mergedVal)) {
       // Deep-merge nested dicts (rag, tier_models, etc.) so partial nested
       // configs merge correctly instead of replacing wholesale.
       merged[key] = deepMerge(
         mergedVal as Record<string, unknown>,
-        homeVal as Record<string, unknown>,
+        layerVal as Record<string, unknown>,
       );
     } else {
-      merged[key] = homeVal;
+      merged[key] = layerVal;
     }
   }
-
-  // Apply project overrides (same logic)
-  for (const key of Object.keys(project)) {
-    if (isUnsafeKey(key)) continue;
-    if (!(key in merged)) continue;
-    const projVal = project[key];
-    const mergedVal = merged[key];
-
-    if (DEEP_MERGE_KEYS.has(key) && isPlainObject(projVal) && isPlainObject(mergedVal)) {
-      merged[key] = deepMergeProviderDict(
-        mergedVal as Record<string, unknown>,
-        projVal as Record<string, unknown>,
-      );
-    } else if (isPlainObject(projVal) && isPlainObject(mergedVal)) {
-      merged[key] = deepMerge(
-        mergedVal as Record<string, unknown>,
-        projVal as Record<string, unknown>,
-      );
-    } else {
-      merged[key] = projVal;
-    }
-  }
-
-  return merged;
 }
 
 // ---------------------------------------------------------------------------
@@ -279,7 +304,9 @@ interface EnvMapping {
 
 /** Top-level env mappings — matches Python `config.py:119-134`. */
 const ENV_MAP: EnvMapping[] = [
-  { envKey: 'ORCHID_DEFAULT_MODEL', configPath: ['default_model'], type: 'string' },
+  // ORCHID_DEFAULT_MODEL was an alias/model string. It deliberately has no
+  // replacement: environment variables cannot construct a connection-scoped
+  // executable selection.
   { envKey: 'ORCHID_IGNORED_DIRS', configPath: ['ignored_dirs'], type: 'list' },
   { envKey: 'ORCHID_COMMAND_TIMEOUT', configPath: ['command_timeout'], type: 'int' },
   { envKey: 'ORCHID_READ_LINE_LIMIT', configPath: ['read_line_limit'], type: 'int' },

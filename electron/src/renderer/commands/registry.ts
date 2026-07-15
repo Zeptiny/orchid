@@ -207,20 +207,6 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
   },
 ];
 
-// ── Command lookup ───────────────────────────────────────────────────────────
-
-export function getCommand(name: string): (Command & { execute: (ctx: CommandContext) => Promise<void> }) | undefined {
-  return COMMANDS.find((c) => c.name === name);
-}
-
-export function getCommandNames(): string[] {
-  return COMMANDS.map((c) => c.name);
-}
-
-export function isCommand(name: string): boolean {
-  return COMMANDS.some((c) => c.name === name);
-}
-
 // ── Sub-picker data builders ─────────────────────────────────────────────────
 
 export function buildThemeResults(currentTheme: string): PaletteResult[] {
@@ -293,7 +279,7 @@ export function buildModelResults(
 
 /** Build session list for `/sessions` sub-picker. */
 export function buildSessionResults(
-  sessions: readonly { id: string; name: string; model?: string }[],
+  sessions: readonly { id: string; name: string; modelLabel?: string | null }[],
 ): PaletteResult[] {
   if (sessions.length === 0) {
     return [
@@ -311,7 +297,7 @@ export function buildSessionResults(
   return sessions.map((s) => ({
     id: `session:${s.id}`,
     label: s.name,
-    description: s.model ? `Model: ${s.model}` : undefined,
+    description: s.modelLabel ? `Model: ${s.modelLabel}` : undefined,
     category: 'sessions' as CommandCategory,
     icon: 'messageSquare',
     commandName: '/sessions',

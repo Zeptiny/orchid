@@ -14,6 +14,7 @@ import { getConfig } from '../../config/loader';
 import type { Config } from '../../config/schema';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { getToolConfig, resolveToolPath } from '../types';
+import { isBinaryFile } from '../ast/utils';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -21,7 +22,6 @@ import { getToolConfig, resolveToolPath } from '../types';
 
 const PER_FILE_TIMEOUT_MS = 10_000; // 10 seconds
 const SEMAPHORE_LIMIT = 32;
-const BINARY_CHECK_SIZE = 8192; // first 8KB to detect binary
 
 // ---------------------------------------------------------------------------
 // Semaphore
@@ -91,25 +91,6 @@ function globToRegex(pattern: string): RegExp {
   return new RegExp('^' + regex + '$', 'i');
 }
 
-async function isBinary(filePath: string): Promise<boolean> {
-  try {
-    const fd = await fs.promises.open(filePath, 'r');
-    try {
-      const buf = Buffer.alloc(BINARY_CHECK_SIZE);
-      const { bytesRead } = await fd.read(buf, 0, BINARY_CHECK_SIZE, 0);
-      // Check for null bytes
-      for (let i = 0; i < bytesRead; i++) {
-        if (buf[i] === 0) return true;
-      }
-      return false;
-    } finally {
-      await fd.close();
-    }
-  } catch {
-    return true; // treat unreadable as binary (skip)
-  }
-}
-
 function shouldSkipDir(dirname: string, ignored: Set<string>): boolean {
   if (ignored.has(dirname)) return true;
   return dirname.startsWith('.');
@@ -172,7 +153,7 @@ function searchFileSync(
 
     for (let i = 0; i < lines.length; i++) {
       if (regex.test(lines[i])) {
-        matches.push(`${relativePath}:${i + 1}: ${lines[i].rstrip()}`);
+        matches.push(`${relativePath}:${i + 1}: ${lines[i].replace(/\s+$/, '')}`);
         if (matches.length >= maxResults) break;
       }
     }
@@ -181,17 +162,6 @@ function searchFileSync(
     return null;
   }
 }
-
-// String.prototype extension for rstrip equivalent
-declare global {
-  interface String {
-    rstrip(): string;
-  }
-}
-
-String.prototype.rstrip = function (this: string): string {
-  return this.replace(/\s+$/, '');
-};
 
 // ---------------------------------------------------------------------------
 // Zod schema
@@ -280,7 +250,7 @@ export async function executeGrep(
       if (cancelled) return;
 
       // Binary detection
-      if (await isBinary(filePath)) return;
+      if (await isBinaryFile(filePath, { unreadableAsBinary: true })) return;
 
       // Per-file timeout
       const matches = await Promise.race([

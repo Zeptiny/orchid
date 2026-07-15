@@ -1,9 +1,12 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ModelMetadata } from '../../shared/types/ipc-boundary';
+import type { ProviderModelOption } from '../../shared/types/ipc';
 import { withCurrentModelOption } from '../utils/models';
+import { providerModelOptionContextLabel } from '../utils/provider-selection';
 import { Icon } from './Icon';
 
 interface ModelPickerProps {
+  id?: string;
   value: string;
   options: readonly string[];
   onChange: (value: string) => void;
@@ -13,10 +16,26 @@ interface ModelPickerProps {
   className?: string;
   disabled?: boolean;
   emptyMessage?: string;
+  /** Whether the selected trigger should show provider/connection context. */
+  showSelectedContext?: boolean;
+  /** Optional renderer-owned labels for opaque selection keys. */
+  optionLabels?: Readonly<Record<string, string>>;
+  /** Optional typed metadata for connection-scoped options. */
+  optionDetails?: Readonly<Record<string, ProviderModelOption>>;
+  /** Optional non-catalog actions, such as the custom-model entry in setup. */
+  additionalOptions?: readonly ModelPickerAdditionalOption[];
+}
+
+export interface ModelPickerAdditionalOption {
+  readonly value: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly disabled?: boolean;
 }
 
 /** Shared searchable model picker used by chat and configuration. */
 export function ModelPicker({
+  id,
   value,
   options,
   onChange,
@@ -26,6 +45,10 @@ export function ModelPicker({
   className = '',
   disabled = false,
   emptyMessage = 'No models configured',
+  showSelectedContext = true,
+  optionLabels,
+  optionDetails,
+  additionalOptions = [],
 }: ModelPickerProps) {
   const pickerRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -33,16 +56,30 @@ export function ModelPicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [metadata, setMetadata] = useState<Record<string, ModelMetadata | null>>({});
+  const additionalOptionsByValue = useMemo(
+    () => new Map(additionalOptions.map((option) => [option.value, option])),
+    [additionalOptions],
+  );
 
   const modelOptions = useMemo(
-    () => withCurrentModelOption(options, value),
-    [options, value],
+    () => withCurrentModelOption(
+      [...options, ...additionalOptions.map((option) => option.value)],
+      value,
+    ),
+    [additionalOptions, options, value],
   );
   const filteredModels = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return modelOptions;
-    return modelOptions.filter((model) => model.toLowerCase().includes(normalized));
-  }, [modelOptions, query]);
+    return modelOptions.filter((model) => {
+      const option = additionalOptionsByValue.get(model);
+      const detail = optionDetails?.[model];
+      const providerContext = detail ? providerModelOptionContextLabel(detail) : '';
+      return `${optionLabels?.[model] ?? option?.label ?? model} ${model} ${option?.description ?? ''} ${providerContext}`
+        .toLowerCase()
+        .includes(normalized);
+    });
+  }, [additionalOptionsByValue, modelOptions, optionDetails, optionLabels, query]);
 
   useEffect(() => {
     if (!open) return;
@@ -59,7 +96,9 @@ export function ModelPicker({
   }, [open]);
 
   useEffect(() => {
-    if (!open || !window.orchid?.config?.modelMetadata) return;
+    // Connection-scoped provider options carry their own catalog metadata.
+    // Legacy/local string options retain the old compatibility lookup.
+    if (!open || optionLabels || optionDetails || !window.orchid?.config?.modelMetadata) return;
     let cancelled = false;
     // Always refresh when opened so overrides saved in Preferences appear
     // without requiring an app restart (main-process cache is cleared on save).
@@ -79,13 +118,23 @@ export function ModelPicker({
     return () => {
       cancelled = true;
     };
-  }, [modelOptions, open]);
+  }, [modelOptions, open, optionLabels, optionDetails]);
 
   const selectModel = (model: string) => {
+    if (additionalOptionsByValue.get(model)?.disabled) return;
     onChange(model);
     setQuery('');
     setOpen(false);
   };
+
+  const selectedAdditionalOption = additionalOptionsByValue.get(value);
+  const selectedDetail = optionDetails?.[value];
+  const selectedDisplayName = optionLabels?.[value]
+    ?? selectedAdditionalOption?.label
+    ?? selectedDetail?.model.displayName
+    ?? (value ? displayModelId(value) : '');
+  const selectedSubLabel = selectedDetail ? providerModelOptionContextLabel(selectedDetail) : null;
+  const selectedTriggerSubLabel = showSelectedContext ? selectedSubLabel : null;
 
   return (
     <div
@@ -93,18 +142,24 @@ export function ModelPicker({
       className={`dropdown ${align === 'start' ? 'dropdown-start' : 'dropdown-end'} ${placement === 'top' ? 'dropdown-top' : ''} ${open ? 'dropdown-open' : ''} ${className} model-picker-align-${align}`.trim()}
     >
       <button
+        id={id}
         type="button"
-        className="btn btn-ghost model-picker-trigger"
+        className={`btn btn-ghost model-picker-trigger${selectedTriggerSubLabel ? ' model-picker-trigger-with-sub-label' : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={menuId}
         aria-label={label}
-        title={value || label}
+        title={selectedTriggerSubLabel ? `${selectedDisplayName} · ${selectedTriggerSubLabel}` : selectedDisplayName || label}
         disabled={disabled}
         onClick={() => setOpen((previous) => !previous)}
       >
         <Icon name="cpu" size={13} className="shrink-0 opacity-70" />
-        <span className="model-picker-trigger-label">{splitModelId(value).name}</span>
+        <span className="model-picker-trigger-copy">
+          <span className="model-picker-trigger-label">{selectedDisplayName || displayModelId(value)}</span>
+          {selectedTriggerSubLabel && (
+            <span className="model-picker-trigger-sub-label">{selectedTriggerSubLabel}</span>
+          )}
+        </span>
         <Icon
           name="chevronDown"
           size={12}
@@ -123,7 +178,12 @@ export function ModelPicker({
             <div>
               <div className="model-picker-title">Models</div>
             </div>
-            <span className="model-picker-current">{value || 'None selected'}</span>
+            <span className="model-picker-current">
+              <span className="model-picker-current-name">{selectedDisplayName || 'None selected'}</span>
+              {selectedSubLabel && (
+                <span className="model-picker-current-sub-label">{selectedSubLabel}</span>
+              )}
+            </span>
           </div>
 
           <label className="input input-sm model-picker-search">
@@ -156,16 +216,38 @@ export function ModelPicker({
               </thead>
               <tbody>
                 {filteredModels.map((model) => {
-                  const modelParts = splitModelId(model);
                   const modelMetadata = metadata[model];
+                  const detail = optionDetails?.[model];
+                  const additionalOption = additionalOptionsByValue.get(model);
+                  const displayName = optionLabels?.[model]
+                    ?? additionalOption?.label
+                    ?? detail?.model.displayName
+                    ?? displayModelId(model);
+                  const contextLimit = detail
+                    ? detail.model.limits?.contextTokens ?? null
+                    : modelMetadata?.max_input_tokens ?? null;
+                  const outputLimit = detail
+                    ? detail.model.limits?.outputTokens ?? null
+                    : modelMetadata?.max_output_tokens ?? null;
+                  const supportsVision = detail
+                    ? detail.model.capabilities?.inputModalities.includes('image') ?? null
+                    : modelMetadata?.supports_vision ?? null;
                   const selected = model === value;
+                  const unavailable = detail?.available === false || additionalOption?.disabled === true;
+                  const description = additionalOption?.description
+                    ?? (detail
+                      ? unavailable
+                        ? detail.unavailableReason ?? 'Unavailable'
+                        : providerModelOptionContextLabel(detail)
+                      : null);
                   return (
                     <tr
                       key={model}
                       role="option"
                       tabIndex={0}
                       aria-selected={selected}
-                      className={selected ? 'model-picker-row is-selected' : 'model-picker-row'}
+                      className={`${selected ? 'model-picker-row is-selected' : 'model-picker-row'}${unavailable ? ' opacity-60' : ''}`}
+                      aria-disabled={unavailable || undefined}
                       onClick={() => selectModel(model)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
@@ -176,18 +258,20 @@ export function ModelPicker({
                     >
                       <td>
                         <div className="model-picker-model-name" title={model}>
-                          {modelParts.name}
+                          {displayName}
                         </div>
-                        {modelParts.provider && (
-                          <div className="model-picker-provider">{modelParts.provider}</div>
+                        {description && (
+                          <div className="text-xs text-base-content/60">
+                            {description}
+                          </div>
                         )}
                       </td>
-                      <td>{modelMetadata ? formatTokenLimit(modelMetadata.max_input_tokens) : '…'}</td>
-                      <td>{modelMetadata ? formatTokenLimit(modelMetadata.max_output_tokens) : '…'}</td>
+                      <td>{contextLimit === null ? (detail ? '—' : '…') : formatTokenLimit(contextLimit)}</td>
+                      <td>{outputLimit === null ? (detail ? '—' : '…') : formatTokenLimit(outputLimit)}</td>
                       <td>
-                        {modelMetadata ? (
-                          <span className={modelMetadata.supports_vision ? 'text-success' : 'opacity-50'}>
-                            {modelMetadata.supports_vision ? 'Yes' : 'No'}
+                        {supportsVision !== null ? (
+                          <span className={supportsVision ? 'text-success' : 'opacity-50'}>
+                            {supportsVision ? 'Yes' : 'No'}
                           </span>
                         ) : (
                           '…'
@@ -209,13 +293,9 @@ export function ModelPicker({
   );
 }
 
-function splitModelId(model: string): { provider: string | null; name: string } {
-  if (!model) return { provider: null, name: 'Model' };
-  const slash = model.indexOf('/');
-  if (slash > 0 && slash < model.length - 1) {
-    return { provider: model.slice(0, slash), name: model.slice(slash + 1) };
-  }
-  return { provider: null, name: model };
+/** Model IDs are opaque provider-owned strings and may themselves contain '/'. */
+function displayModelId(model: string): string {
+  return model || 'Model';
 }
 
 function formatTokenLimit(value: number | null): string {

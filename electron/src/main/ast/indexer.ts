@@ -3,7 +3,6 @@
  *
  * Full project indexes run in a dedicated `worker_threads` worker so
  * tree-sitter WASM + SQLite work does not block the Electron main process.
- * Single-file `updateFile` stays on the caller thread (post-write path).
  *
  * Ported from Python `src/orchid/ast/indexer.py`.
  */
@@ -128,43 +127,6 @@ export async function ensureIndexed(projectPath?: string): Promise<void> {
     return;
   }
   await indexProject({ projectPath });
-}
-
-/**
- * Re-index a single file (used by post-write callbacks).
- */
-export async function updateFile(
-  filePath: string,
-  projectPath?: string,
-): Promise<void> {
-  if (!projectPath) {
-    throw new Error('projectPath is required; pass the active workspace cwd');
-  }
-
-  let absPath = filePath;
-  if (!path.isAbsolute(absPath)) {
-    absPath = path.join(projectPath, filePath);
-  }
-
-  let rel: string;
-  try {
-    rel = path.relative(projectPath, absPath);
-  } catch {
-    return;
-  }
-
-  const store = new ASTStore(projectPath);
-  store.initDb();
-
-  const readResult = await readAndHash(absPath);
-  if (!readResult) {
-    store.deleteByFile(rel);
-    return;
-  }
-
-  const { content, hash } = readResult;
-  const symbols = await extractSymbols(rel, content);
-  store.upsertFile(rel, hash, symbols);
 }
 
 export interface IndexProjectOptions {

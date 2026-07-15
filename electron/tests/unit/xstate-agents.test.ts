@@ -3,7 +3,7 @@
  *
  * Covers:
  * - Agent machine: idle → streaming → idle (text response)
- * - Agent machine: streaming → toolExecuting → streaming → idle (tool loop)
+ * - Agent machine: streaming tool events → idle (provider-managed tool loop)
  * - Subagent machine: pending → running → completed (result to parent)
  * - Interrupt flow: first Esc → confirmAgent, second Esc → idle
  * - Interrupt timeout: auto-reset to idle
@@ -16,8 +16,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createActor } from 'xstate';
 import { agentMachine } from '../../src/main/agents/xstate/agent-machine';
-import { subagentMachine } from '../../src/main/agents/xstate/subagent-machine';
-import { sessionMachine } from '../../src/main/agents/xstate/session-machine';
 import { interruptMachine } from '../../src/main/agents/xstate/interrupt-machine';
 import { SubagentManager, SubagentState } from '../../src/main/agents/manager';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
@@ -95,19 +93,6 @@ function mockCancellableStreamFn() {
     if (!params.abortSignal.aborted) {
       yield { type: 'finish', finishReason: 'stop' };
     }
-  };
-}
-
-/**
- * Create a mock tool execution function.
- */
-function mockExecuteFn(
-  results: Map<string, { content: string; isError: boolean }> = new Map(),
-) {
-  return async (toolName: string, _args: string) => {
-    const result = results.get(toolName);
-    if (result) return result;
-    return { content: `Result for ${toolName}`, isError: false };
   };
 }
 
@@ -192,7 +177,6 @@ describe('Agent Machine', () => {
         agent: mockAgent,
         systemPrompt: 'You are helpful.',
         streamFn,
-        executeFn: mockExecuteFn(),
         interruptResetMs: 100, // Short timeout for tests
       },
     });
@@ -208,11 +192,10 @@ describe('Agent Machine', () => {
     expect(actor.getSnapshot().context.error).toBeNull();
   });
 
-  it('streaming → tool_call → toolExecuting → tool result → streaming → idle', async () => {
+  it('streaming tool events → idle', async () => {
     // Simulate a stream that yields content, then tool_call, then more content, then finish.
-    // The agent machine translates tool_call events into a transition to toolExecuting,
-    // but in practice AI SDK handles tool loops internally, so the stream would emit
-    // tool_result as well. For this test, we simulate the full flow.
+    // AI SDK handles tool loops internally; the machine only tracks the events
+    // emitted by the provider stream for UI lifecycle updates.
     const streamFn = async function* (_params: {
       message: string;
       agent: Agent;
@@ -244,7 +227,6 @@ describe('Agent Machine', () => {
         agent: mockAgent,
         systemPrompt: 'You are helpful.',
         streamFn,
-        executeFn: mockExecuteFn(),
         interruptResetMs: 100,
       },
     });
@@ -282,7 +264,6 @@ describe('Agent Machine', () => {
         agent: mockAgent,
         systemPrompt: 'You are helpful.',
         streamFn,
-        executeFn: mockExecuteFn(),
         interruptResetMs: 100,
       },
     });
@@ -309,7 +290,6 @@ describe('Agent Machine', () => {
         agent: mockAgent,
         systemPrompt: 'You are helpful.',
         streamFn,
-        executeFn: mockExecuteFn(),
         interruptResetMs: 100,
       },
     });
@@ -351,7 +331,6 @@ describe('Agent Machine', () => {
         agent: mockAgent,
         systemPrompt: 'You are helpful.',
         streamFn,
-        executeFn: mockExecuteFn(),
         interruptResetMs: 100,
       },
     });
@@ -435,121 +414,6 @@ describe('Interrupt Machine', () => {
     // Timeout → idle
     actor.send({ type: 'INTERRUPT_TIMEOUT' });
     expect(actor.getSnapshot().value).toBe('idle');
-
-    actor.stop();
-  });
-});
-
-// ── Subagent Machine Tests ──────────────────────────────────────────────────
-
-describe('Subagent Machine', () => {
-  it('pending → running → completed → result reported to parent', async () => {
-    const streamFn = mockStreamFn([
-      { type: 'content', text: 'Subagent result' },
-      { type: 'finish', finishReason: 'stop' },
-    ]);
-
-    const parentEvents: unknown[] = [];
-    const actor = createActor(subagentMachine, {
-      input: {
-        id: 'sub-1',
-        label: 'Test Subagent',
-        task: 'Do something',
-        agent: mockAgent,
-        systemPrompt: 'You are a subagent.',
-        streamFn,
-      },
-    });
-
-    actor.start();
-
-    await waitForState(actor, 'completed');
-    expect(actor.getSnapshot().context.response).toBe('Subagent result');
-
-    actor.stop();
-  });
-
-  it('pending → running → failed → error reported to parent', async () => {
-    const streamFn = mockStreamFn([
-      { type: 'error', title: 'Error', detail: 'Something went wrong' },
-    ]);
-
-    const actor = createActor(subagentMachine, {
-      input: {
-        id: 'sub-2',
-        label: 'Failing Subagent',
-        task: 'Fail gracefully',
-        agent: mockAgent,
-        systemPrompt: 'You are a subagent.',
-        streamFn,
-      },
-    });
-
-    actor.start();
-
-    await waitForState(actor, 'failed');
-    expect(actor.getSnapshot().context.error).toBe('Something went wrong');
-
-    actor.stop();
-  });
-
-  it('running → CANCEL → interrupted', async () => {
-    const streamFn = mockCancellableStreamFn();
-
-    const actor = createActor(subagentMachine, {
-      input: {
-        id: 'sub-3',
-        label: 'Cancellable Subagent',
-        task: 'Long running task',
-        agent: mockAgent,
-        systemPrompt: 'You are a subagent.',
-        streamFn,
-      },
-    });
-
-    actor.start();
-
-    // Wait for some content to be emitted
-    await waitForContext(actor, (ctx: { response: string }) => ctx.response.length > 0);
-
-    actor.send({ type: 'CANCEL' });
-    await waitForState(actor, 'interrupted');
-
-    actor.stop();
-  }, 10000);
-
-  it('subagent isolation: tool calls handled internally by stream', async () => {
-    // In practice, AI SDK handles tool loops inside streamText.
-    // The subagent machine only sees high-level events (CHUNK, STREAM_END).
-    // Tool calls within the subagent don't affect parent state.
-    const streamFn = async function* (_params: {
-      message: string;
-      agent: Agent;
-      systemPrompt: string;
-      abortSignal: AbortSignal;
-      model?: string | null;
-    }): AsyncGenerator<StreamEvent> {
-      // Simulate: content → AI SDK handles tool internally → more content
-      yield { type: 'content', text: 'Checking files...' };
-      yield { type: 'content', text: ' Found 5 files.' };
-      yield { type: 'finish', finishReason: 'stop' };
-    };
-
-    const actor = createActor(subagentMachine, {
-      input: {
-        id: 'sub-4',
-        label: 'Isolated Subagent',
-        task: 'Count files',
-        agent: mockAgent,
-        systemPrompt: 'You are a subagent.',
-        streamFn,
-      },
-    });
-
-    actor.start();
-
-    await waitForState(actor, 'completed');
-    expect(actor.getSnapshot().context.response).toBe('Checking files... Found 5 files.');
 
     actor.stop();
   });
@@ -682,207 +546,5 @@ describe('SubagentManager', () => {
     expect(results.size).toBe(2);
     expect(results.get(a.id)?.result).toBe('result a');
     expect(results.get(b.id)?.result).toBe('result b');
-  });
-});
-
-// ── Session Machine Tests ───────────────────────────────────────────────────
-
-describe('Session Machine', () => {
-  it('idle → USER_INPUT → active (spawns agent)', () => {
-    const streamFn = mockStreamFn([
-      { type: 'content', text: 'Response' },
-      { type: 'finish', finishReason: 'stop' },
-    ]);
-
-    const actor = createActor(sessionMachine, {
-      input: {
-        sessionId: 'session-1',
-        activeAgent: mockAgent,
-        systemPrompt: 'You are helpful.',
-        streamFn,
-        subagentStreamFn: streamFn,
-        executeFn: mockExecuteFn(),
-        interruptResetMs: 100,
-      },
-    });
-
-    actor.start();
-    expect(actor.getSnapshot().value).toBe('idle');
-
-    actor.send({ type: 'USER_INPUT', message: 'Hello' });
-    expect(actor.getSnapshot().value).toBe('active');
-
-    actor.stop();
-  });
-
-  it('SPAWN_SUBAGENT adds subagent to context', () => {
-    const streamFn = mockStreamFn([]);
-
-    const actor = createActor(sessionMachine, {
-      input: {
-        sessionId: 'session-1',
-        activeAgent: mockAgent,
-        systemPrompt: 'You are helpful.',
-        streamFn,
-        subagentStreamFn: streamFn,
-        executeFn: mockExecuteFn(),
-        interruptResetMs: 100,
-      },
-    });
-
-    actor.start();
-    actor.send({ type: 'USER_INPUT', message: 'Hello' });
-
-    actor.send({
-      type: 'SPAWN_SUBAGENT',
-      name: 'researcher',
-      task: 'Find info',
-      agentType: 'subagent',
-    });
-
-    const subagents = actor.getSnapshot().context.subagents;
-    expect(subagents.size).toBe(1);
-
-    const [, entry] = Array.from(subagents.entries())[0];
-    expect(entry.label).toBe('researcher');
-    expect(entry.task).toBe('Find info');
-    expect(entry.state).toBe('pending');
-
-    actor.stop();
-  });
-
-  it('SUBAGENT_COMPLETE updates subagent state', () => {
-    const streamFn = mockStreamFn([]);
-
-    const actor = createActor(sessionMachine, {
-      input: {
-        sessionId: 'session-1',
-        activeAgent: mockAgent,
-        systemPrompt: 'You are helpful.',
-        streamFn,
-        subagentStreamFn: streamFn,
-        executeFn: mockExecuteFn(),
-        interruptResetMs: 100,
-      },
-    });
-
-    actor.start();
-    actor.send({ type: 'USER_INPUT', message: 'Hello' });
-
-    actor.send({
-      type: 'SPAWN_SUBAGENT',
-      name: 'researcher',
-      task: 'Find info',
-      agentType: 'subagent',
-    });
-
-    const [subId] = Array.from(actor.getSnapshot().context.subagents.keys());
-
-    actor.send({
-      type: 'SUBAGENT_COMPLETE',
-      subagentId: subId,
-      result: 'Found it!',
-    });
-
-    const entry = actor.getSnapshot().context.subagents.get(subId);
-    expect(entry?.state).toBe('completed');
-    expect(entry?.result).toBe('Found it!');
-    expect(entry?.endTime).toBeTypeOf('number');
-
-    actor.stop();
-  });
-
-  it('SUBAGENT_FAILED updates subagent state', () => {
-    const streamFn = mockStreamFn([]);
-
-    const actor = createActor(sessionMachine, {
-      input: {
-        sessionId: 'session-1',
-        activeAgent: mockAgent,
-        systemPrompt: 'You are helpful.',
-        streamFn,
-        subagentStreamFn: streamFn,
-        executeFn: mockExecuteFn(),
-        interruptResetMs: 100,
-      },
-    });
-
-    actor.start();
-    actor.send({ type: 'USER_INPUT', message: 'Hello' });
-
-    actor.send({
-      type: 'SPAWN_SUBAGENT',
-      name: 'researcher',
-      task: 'Find info',
-      agentType: 'subagent',
-    });
-
-    const [subId] = Array.from(actor.getSnapshot().context.subagents.keys());
-
-    actor.send({
-      type: 'SUBAGENT_FAILED',
-      subagentId: subId,
-      error: 'Network error',
-    });
-
-    const entry = actor.getSnapshot().context.subagents.get(subId);
-    expect(entry?.state).toBe('failed');
-    expect(entry?.error).toBe('Network error');
-
-    actor.stop();
-  });
-
-  it('multiple subagents tracked independently', () => {
-    const streamFn = mockStreamFn([]);
-
-    const actor = createActor(sessionMachine, {
-      input: {
-        sessionId: 'session-1',
-        activeAgent: mockAgent,
-        systemPrompt: 'You are helpful.',
-        streamFn,
-        subagentStreamFn: streamFn,
-        executeFn: mockExecuteFn(),
-        interruptResetMs: 100,
-      },
-    });
-
-    actor.start();
-    actor.send({ type: 'USER_INPUT', message: 'Hello' });
-
-    // Spawn two subagents
-    actor.send({
-      type: 'SPAWN_SUBAGENT',
-      name: 'first',
-      task: 'task 1',
-      agentType: 'subagent',
-    });
-    actor.send({
-      type: 'SPAWN_SUBAGENT',
-      name: 'second',
-      task: 'task 2',
-      agentType: 'subagent',
-    });
-
-    const subIds = Array.from(actor.getSnapshot().context.subagents.keys());
-    expect(subIds).toHaveLength(2);
-
-    // Complete first, fail second
-    actor.send({
-      type: 'SUBAGENT_COMPLETE',
-      subagentId: subIds[0],
-      result: 'done',
-    });
-    actor.send({
-      type: 'SUBAGENT_FAILED',
-      subagentId: subIds[1],
-      error: 'failed',
-    });
-
-    const entries = Array.from(actor.getSnapshot().context.subagents.values());
-    expect(entries[0].state).toBe('completed');
-    expect(entries[1].state).toBe('failed');
-
-    actor.stop();
   });
 });

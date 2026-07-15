@@ -38,8 +38,6 @@ src/
 │   │       └── interrupt-machine.ts  # Two-phase Esc cancellation
 │   ├── llm/                 # LLM integration
 │   │   ├── orchestrator.ts  # streamChat() — async generator yielding StreamEvents
-│   │   ├── providers.ts     # resolveModelRef() — alias/model → AI SDK provider
-│   │   ├── providers-factory.ts  # createProviderModel() — instantiate AI SDK models
 │   │   ├── system-prompt.ts # buildSystemPrompt() — dynamic context injection
 │   │   ├── history.ts       # toApiMessages() — Message[] → AI SDK CoreMessage[]
 │   │   ├── tool-dispatch.ts # executeToolCall() — timeout + output offloading
@@ -51,6 +49,15 @@ src/
 │   │       ├── throttle.ts  # Yield rate-limiting
 │   │       ├── provider-quirks.ts  # Provider-specific edge case handling
 │   │       └── error-classification.ts  # Error types and classification
+│   ├── providers/           # Typed provider connections, drivers, and accounting
+│   │   ├── index.ts         # ProviderRuntime — resolve typed selection + freeze request snapshot
+│   │   ├── resolver.ts      # Resolve {connectionId, modelId} against connections/catalog
+│   │   ├── connection-store.ts # Non-secret connection metadata
+│   │   ├── drivers/         # Code-owned origins, auth, protocols, adapters, status parsing
+│   │   ├── credentials/     # Encrypted vault for API-key secrets
+│   │   ├── catalog/         # Signed bundled/cached catalog and updater
+│   │   ├── status/          # Provider status cache/service
+│   │   └── accounting/      # Append-only attempt ledger and cost calculation
 │   ├── tools/               # Tool registry and built-in tools
 │   │   ├── index.ts         # registerBuiltinTools() — singleton registry setup
 │   │   ├── registry.ts      # ToolRegistry class — register/filter/validate/toJsonSchema
@@ -228,9 +235,9 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 
 ### Tool System
 - Tools are Zod-validated definitions + async handlers
-- `ToolRegistry` singleton: register, filter by glob patterns, validate args, generate JSON Schema
+- Each main-agent and subagent turn builds a registry from its frozen project runtime; the process singleton remains only for non-turn compatibility surfaces
 - Built-in tools: filesystem, search, process, AST, RAG, todo, web, skill, MCP, subagent
-- MCP tools are merged from `MCPManager` at stream time
+- MCP tools are merged from the leased project-owned `MCPManager` at stream time; leases keep superseded managers alive until their turns finish
 - Tool output offloading: large outputs stored in session files, summary sent to LLM
 - **`ToolExecutionContext`**: frozen `{ cwd, sessionId? }` captured at turn start; every tool handler receives it (never re-reads live session/process.cwd mid-turn)
 - **`tool:execute` IPC**: allowlisted read-only tools only; args validated via `toolRegistry.validate` before the handler
@@ -242,10 +249,11 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 - Intentional rebind (pick/set/change_cwd) aborts in-flight chat and reloads project config layers
 
 ### LLM Provider Resolution
-- Config format: `alias/model` (e.g., `default/mimo-v2.5`, `openai/gpt-4o`)
-- Provider inference from explicit field, `litellm_provider`, or URL pattern matching
-- Supports: OpenAI, Anthropic, Google/Gemini, Groq, xAI, and any OpenAI-compatible endpoint
-- API key resolution: literal `api_key` → env var via `api_key_env` → AI SDK default
+- Model identity is always a typed `{ connectionId, modelId }`; slash-delimited model IDs remain opaque and are never parsed as provider aliases
+- Connections store non-secret provider/auth/protocol metadata in `~/.orchid/connections.json`; secrets stay behind opaque handles in the encrypted credential vault
+- `ProviderRuntime.resolveExecution()` resolves one catalog snapshot, validates the credential binding, constructs the code-owned driver adapter, and freezes accounting/provenance for the request
+- Remote catalogs may describe models and pricing but cannot supply executable modules, origins, auth rules, headers, or credential routing
+- Generic OpenAI- and Anthropic-compatible connections are explicit custom-endpoint drivers; specialized drivers own their origins in code
 
 ### Middleware Stack
 Applied via `wrapLanguageModel()`:
@@ -272,13 +280,13 @@ Applied via `wrapLanguageModel()`:
 
 ## Configuration
 
-### Config Schema (23 fields)
+### Config Schema
 Defined in `src/main/config/schema.ts` — single source of truth:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `default_model` | `default/mimo-v2.5` | Default `alias/model` |
-| `tier_models` | `{seed, sprout, bloom, crown}: mimo-v2.5` | Model per agent tier |
+| `default_model` | `null` | Default typed `{connectionId, modelId}` selection |
+| `tier_models` | `{seed, sprout, bloom, crown}: null` | Optional typed selection per agent tier; delegated turns inherit their parent selection |
 | `ignored_dirs` | `.git, node_modules, dist, ...` | Directories to skip |
 | `command_timeout` | 30s | Tool execution timeout |
 | `read_line_limit` | 1000 | Max lines for file read |
@@ -295,7 +303,7 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 | `mcp_startup_timeout` | 60s | MCP server startup timeout |
 | `mcp_per_server_timeout` | 10s | Per-MCP-server timeout |
 | `mcp_servers` | `{context7: ...}` | MCP server configs |
-| `providers` | `{default: opencode.ai}` | Provider aliases |
+| `providers` | `{}` | Deprecated compatibility field; must remain empty because connections live in their own store |
 | `llm_stream_idle_timeout` | 300s | Stream idle timeout |
 | `llm_stream_retries` | 3 | LLM retry count |
 | `background_command_idle_timeout` | 900s | Background cmd timeout |
@@ -364,14 +372,15 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 | Modify themes | `src/renderer/themes/`, CSS files + `index.ts` |
 | Agent definitions | `src/main/agents/defaults/` (YAML/JSON), `src/main/agents/registry.ts` |
 | MCP integration | `src/main/mcp/manager.ts`, `src/main/mcp/transport.ts` |
-| LLM provider changes | `src/main/llm/providers.ts`, `src/main/llm/providers-factory.ts` |
+| Provider resolution / drivers | `src/main/providers/index.ts`, `src/main/providers/resolver.ts`, `src/main/providers/drivers/` |
+| Provider IPC / shared contracts | `src/main/ipc/providers.ts`, `src/shared/types/provider.ts`, `src/shared/types/ipc.ts` |
 | Middleware | `src/main/llm/middleware/` |
 
 ## Security Considerations
 
 - Never expose Node.js APIs to renderer
 - All IPC channels are allowlisted — new channels must be added to both `ALLOWED_INVOKE_CHANNELS` and `ALLOWED_EVENT_CHANNELS`
-- API keys stored via OS keychain when possible, env vars as fallback
+- API keys never cross into the renderer except as a one-shot write-only submission; encrypted vault handles or explicitly named environment variables bind credentials to connection, driver, auth method, and origin
 - `contextIsolation: true` and `sandbox: true` enforced in BrowserWindow
 - Tool execution runs in main process with timeout guards
 - RAG/AST indexes use SQLite (no network access for local embeddings)

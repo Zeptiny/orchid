@@ -162,7 +162,8 @@ export function atomicWrite(filePath: string, content: string): void {
   }
 
   const dir = path.dirname(filePath);
-  const tmpPath = path.join(dir, `.ast_edit_${Date.now()}_${process.pid}.tmp`);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmpPath = path.join(dir, `.atomic_${Date.now()}_${process.pid}.tmp`);
 
   try {
     const fd = fs.openSync(tmpPath, 'w');
@@ -192,6 +193,56 @@ export function atomicWrite(filePath: string, content: string): void {
       // ignore cleanup error
     }
     throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Binary detection
+// ---------------------------------------------------------------------------
+
+const BINARY_CHECK_BYTES = 8192;
+
+/** True if the first 8KB of the file contains a NUL byte. */
+export function isBinaryFileSync(filePath: string): boolean {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const buf = Buffer.alloc(BINARY_CHECK_BYTES);
+      const bytesRead = fs.readSync(fd, buf, 0, BINARY_CHECK_BYTES, 0);
+      for (let i = 0; i < bytesRead; i++) {
+        if (buf[i] === 0) return true;
+      }
+      return false;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Async binary check. When `unreadableAsBinary` is true (grep), unreadable
+ * files are treated as binary so they are skipped.
+ */
+export async function isBinaryFile(
+  filePath: string,
+  opts: { unreadableAsBinary?: boolean } = {},
+): Promise<boolean> {
+  try {
+    const fd = await fs.promises.open(filePath, 'r');
+    try {
+      const buf = Buffer.alloc(BINARY_CHECK_BYTES);
+      const { bytesRead } = await fd.read(buf, 0, BINARY_CHECK_BYTES, 0);
+      for (let i = 0; i < bytesRead; i++) {
+        if (buf[i] === 0) return true;
+      }
+      return false;
+    } finally {
+      await fd.close();
+    }
+  } catch {
+    return opts.unreadableAsBinary === true;
   }
 }
 

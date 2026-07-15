@@ -12,6 +12,8 @@
  * - Graceful failure if native module unavailable
  */
 
+import type { ModelSelection } from '../../shared/types/provider';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -38,6 +40,20 @@ export type DownloadProgressCallback = (info: {
 const DEFAULT_BATCH_SIZE = 16;
 const DEFAULT_THREADS = 2;
 const MAX_RETRIES = 3;
+
+/** Test-only override so embedding tests never write a real home directory. */
+let embeddingModelsHomeOverride: string | null = null;
+
+/** @internal Test-only embedding-model home override. */
+export function _setEmbeddingModelsHomeForTests(home: string | null): void {
+  embeddingModelsHomeOverride = home;
+}
+
+async function embeddingModelsHome(): Promise<string> {
+  if (embeddingModelsHomeOverride) return embeddingModelsHomeOverride;
+  const os = await import('node:os');
+  return os.homedir();
+}
 
 /** Errors that will not recover by retrying (bad feeds, missing model, etc.). */
 function isPermanentEmbeddingError(err: Error): boolean {
@@ -164,8 +180,8 @@ function isPermanentApiError(err: Error): boolean {
 /**
  * Embedder that calls a provider's `/embeddings` API endpoint.
  *
- * Uses `resolveModelRef` + `resolveApiKey` from the LLM provider system to
- * authenticate. Returns Float32Array[] matching the local Embedder interface.
+ * This class is retained for the typed provider driver integration in U4.
+ * Returns Float32Array[] matching the local Embedder interface.
  */
 export class ApiEmbedder implements IEmbedder {
   private baseUrl: string;
@@ -280,21 +296,22 @@ export class ApiEmbedder implements IEmbedder {
 /**
  * Create an embedder based on config.
  *
- * If `rag.embedding_api_model` is set (e.g. `"openai/text-embedding-3-small"`),
- * returns an {@link ApiEmbedder} that calls the provider's /embeddings endpoint.
- * Otherwise returns a local ONNX {@link Embedder}.
+ * A null API selection preserves local ONNX behavior. When a typed selection
+ * is configured, the main-process provider runtime owns its connection,
+ * credential, and code-owned endpoint resolution; legacy alias strings never
+ * reach this function as executable providers.
  */
 export async function createEmbedderFromConfig(): Promise<IEmbedder> {
   let cfgThreads = DEFAULT_THREADS;
   let cfgBatch = DEFAULT_BATCH_SIZE;
   let cfgModel: string | undefined;
-  let cfgApiModel: string | null = null;
+  let cfgApiSelection: ModelSelection | null = null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { getConfig } = require('../config/loader') as typeof import('../config/loader');
     const rag = getConfig().rag;
     cfgModel = rag.embedding_model;
-    cfgApiModel = rag.embedding_api_model ?? null;
+    cfgApiSelection = rag.embedding_api_model;
     if (typeof rag.embedding_threads === 'number' && rag.embedding_threads > 0) {
       cfgThreads = rag.embedding_threads;
     }
@@ -305,21 +322,18 @@ export async function createEmbedderFromConfig(): Promise<IEmbedder> {
     // config unavailable — use hard defaults
   }
 
-  if (cfgApiModel) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { getRuntimeConfig } = require('../config/runtime') as typeof import('../config/runtime');
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { resolveModelRef } = require('../llm/providers') as typeof import('../llm/providers');
-      const config = await getRuntimeConfig();
-      const ref = resolveModelRef(cfgApiModel, config);
-      return new ApiEmbedder(ref.baseUrl ?? '', ref.apiKey, ref.modelId, cfgBatch);
-    } catch {
-      // API model alias not found or resolve failed — fall back to local ONNX
-      console.warn(
-        `Failed to resolve API embedding model '${cfgApiModel}', falling back to local ONNX`,
-      );
-    }
+  if (cfgApiSelection) {
+    // Lazy main-process lookup avoids initializing providers when local ONNX
+    // is selected and keeps the credential-bearing target out of renderer code.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getProviderRuntime } = require('../providers') as typeof import('../providers');
+    const target = await getProviderRuntime().resolveApiEmbeddingTarget(cfgApiSelection);
+    return new ApiEmbedder(
+      target.baseURL,
+      target.apiKey,
+      cfgApiSelection.modelId,
+      cfgBatch,
+    );
   }
 
   return new Embedder({
@@ -507,10 +521,9 @@ export async function downloadModel(
 ): Promise<void> {
   const fs = await import('node:fs');
   const path = await import('node:path');
-  const os = await import('node:os');
 
-  const { storageId, hubId } = resolveEmbeddingModelIds(modelName);
-  const modelDir = path.join(os.homedir(), '.orchid', 'models', storageId);
+  const { hubId } = resolveEmbeddingModelIds(modelName);
+  const modelDir = await getModelDir(modelName);
   const files = modelFilesForHub(hubId);
 
   // Ensure parent directories exist
@@ -633,33 +646,12 @@ async function downloadFile(
 }
 
 /**
- * Check whether model files exist locally.
- *
- * @returns true if the required ONNX model file is present
- */
-export async function isModelAvailable(modelName: string = DEFAULT_ONNX_MODEL): Promise<boolean> {
-  const fs = await import('node:fs');
-  const path = await import('node:path');
-  const os = await import('node:os');
-
-  const { storageId, hubId } = resolveEmbeddingModelIds(modelName);
-  const candidates = [
-    path.join(os.homedir(), '.orchid', 'models', storageId, 'model.onnx'),
-  ];
-  if (storageId !== hubId) {
-    candidates.push(path.join(os.homedir(), '.orchid', 'models', hubId, 'model.onnx'));
-  }
-  return candidates.some((p) => fs.existsSync(p));
-}
-
-/**
  * Get the local directory where model files are stored.
  */
 export async function getModelDir(modelName: string = DEFAULT_ONNX_MODEL): Promise<string> {
   const path = await import('node:path');
-  const os = await import('node:os');
   const { storageId } = resolveEmbeddingModelIds(modelName);
-  return path.join(os.homedir(), '.orchid', 'models', storageId);
+  return path.join(await embeddingModelsHome(), '.orchid', 'models', storageId);
 }
 
 // ---------------------------------------------------------------------------
@@ -861,15 +853,14 @@ async function getOrCreateSession(
 async function resolveModelPath(modelName: string): Promise<string> {
   const fs = await import('node:fs');
   const path = await import('node:path');
-  const os = await import('node:os');
 
   const { storageId, hubId } = resolveEmbeddingModelIds(modelName);
   const candidates = [
-    path.join(os.homedir(), '.orchid', 'models', storageId, 'model.onnx'),
+    path.join(await embeddingModelsHome(), '.orchid', 'models', storageId, 'model.onnx'),
   ];
   // Prefer storageId path; also accept bare hub layout for older installs.
   if (storageId !== hubId) {
-    candidates.push(path.join(os.homedir(), '.orchid', 'models', hubId, 'model.onnx'));
+    candidates.push(path.join(await embeddingModelsHome(), '.orchid', 'models', hubId, 'model.onnx'));
   }
 
   for (const candidate of candidates) {
@@ -917,14 +908,13 @@ async function getTokenizer(
   try {
     const fs = await import('node:fs');
     const path = await import('node:path');
-    const os = await import('node:os');
 
     const { storageId, hubId } = resolveEmbeddingModelIds(modelName);
     const modelDirs = [
-      path.join(os.homedir(), '.orchid', 'models', storageId),
+      path.join(await embeddingModelsHome(), '.orchid', 'models', storageId),
     ];
     if (storageId !== hubId) {
-      modelDirs.push(path.join(os.homedir(), '.orchid', 'models', hubId));
+      modelDirs.push(path.join(await embeddingModelsHome(), '.orchid', 'models', hubId));
     }
 
     let modelDir: string | null = null;
@@ -975,13 +965,6 @@ async function getTokenizer(
     tokenizerCache.set(modelName, null);
     return null;
   }
-}
-
-/**
- * Clear the tokenizer cache. Useful for testing.
- */
-export function clearTokenizerCache(): void {
-  tokenizerCache.clear();
 }
 
 // ---------------------------------------------------------------------------

@@ -1,9 +1,6 @@
 /**
  * Config system — public API.
  *
- * Note: keychain.ts is intentionally NOT re-exported here because it imports
- * `electron` (safeStorage) which is unavailable in non-Electron test contexts.
- * Import directly from `./keychain` when needed.
  */
 export {
   configSchema,
@@ -28,10 +25,11 @@ export { validateConfig } from './validation';
 
 export {
   loadConfig,
+  getConfigDiagnostics,
   ensureHomeConfig,
   ConfigManager,
   getConfig,
-  getModelForTier,
+  getTierModelSelection,
   atomicWriteJson,
   HOME_CONFIG_DIR,
   HOME_CONFIG_PATH,
@@ -41,3 +39,5 @@ export {
   PROJECT_CONFIG_NAME,
   type LoadConfigOptions,
 } from './loader';
+
+export type { ConfigDiagnostic } from '../../shared/types/ipc-boundary';

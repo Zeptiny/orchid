@@ -11,7 +11,6 @@ import {
   unregisterSessionActivityIPC,
 } from './session-activity';
 import { registerToolIPC, unregisterToolIPC } from './tool';
-import { registerAgentIPC, unregisterAgentIPC } from './agent';
 import {
   registerDefinitionsIPC,
   unregisterDefinitionsIPC,
@@ -19,12 +18,10 @@ import {
 import {
   registerMCPIPC,
   unregisterMCPIPC,
-  setMCPManagerRef,
-  getMCPManagerRef,
 } from './mcp';
 import { registerRAGIPC, unregisterRAGIPC } from './rag';
 import { registerASTIPC, unregisterASTIPC } from './ast';
-import { registerUpdaterIPC, unregisterUpdaterIPC } from './updater';
+import { registerProviderIPC, unregisterProviderIPC } from './providers';
 
 /**
  * Register all IPC handlers.
@@ -33,15 +30,14 @@ import { registerUpdaterIPC, unregisterUpdaterIPC } from './updater';
 export function registerAllIPC(): void {
   registerChatIPC();
   registerConfigIPC();
+  registerProviderIPC();
   registerSessionIPC();
   registerSessionActivityIPC();
   registerToolIPC();
-  registerAgentIPC();
   registerDefinitionsIPC();
   registerMCPIPC();
   registerRAGIPC();
   registerASTIPC();
-  registerUpdaterIPC();
 }
 
 /**
@@ -51,16 +47,12 @@ export function registerAllIPC(): void {
 export function unregisterAllIPC(): void {
   unregisterChatIPC();
   unregisterConfigIPC();
+  unregisterProviderIPC();
   unregisterSessionIPC();
   unregisterSessionActivityIPC();
   unregisterToolIPC();
-  unregisterAgentIPC();
   unregisterDefinitionsIPC();
   unregisterMCPIPC();
   unregisterRAGIPC();
   unregisterASTIPC();
-  unregisterUpdaterIPC();
 }
-
-export { setMCPManagerRef };
-export { getMCPManagerRef };

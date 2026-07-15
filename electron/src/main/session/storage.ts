@@ -82,7 +82,7 @@ export function ensureSessionsDir(opts?: StorageOptions): string {
 /**
  * Extract a simple string value for a JSON key from partial text.
  *
- * Works for flat top-level keys like "id", "name", "model" where the
+ * Works for flat top-level keys like "id", "name", "modelLabel" where the
  * value is a quoted string. Returns undefined if the key is not found
  * or value is null.
  *
@@ -104,6 +104,17 @@ function extractJsonString(text: string, key: string): string | undefined {
   return undefined;
 }
 
+/** Extract a finite JSON number for a flat top-level key. */
+function extractJsonNumber(text: string, key: string): number | undefined {
+  const pattern = new RegExp(
+    `${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:\\s*(-?\\d+(?:\\.\\d+)?)\\b`,
+  );
+  const match = pattern.exec(text);
+  if (match?.[1] === undefined) return undefined;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : undefined;
+}
+
 /**
  * Extract a nullable string field (e.g. "cwd") from partial JSON text.
  *
@@ -111,18 +122,13 @@ function extractJsonString(text: string, key: string): string | undefined {
  * - explicit `null` → null
  * - key not found / unparseable → undefined (caller may full-parse)
  */
-function extractJsonNullableString(
-  text: string,
-  key: string,
-): string | null | undefined {
+function extractJsonNullableString(text: string, key: string): string | null | undefined {
   const stringVal = extractJsonString(text, key);
   if (stringVal !== undefined) {
     return stringVal;
   }
   // Match `"key": null` (with optional whitespace)
-  const nullPattern = new RegExp(
-    `${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:\\s*null\\b`,
-  );
+  const nullPattern = new RegExp(`${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:\\s*null\\b`);
   if (nullPattern.test(text)) {
     return null;
   }
@@ -137,6 +143,23 @@ function cwdFromParsed(data: Record<string, unknown>): string | null {
   return typeof data.cwd === 'string' ? data.cwd : null;
 }
 
+/** True for version-1 (or predating versioned) session documents. */
+function isLegacySessionVersion(version: unknown): boolean {
+  return typeof version !== 'number' || version < 2;
+}
+
+/**
+ * Return a display-only label without ever treating a string alias as a
+ * connection-scoped executable selection. Version 1 `model` is historical
+ * display data; version 2 reads only its explicit `modelLabel` field.
+ */
+function modelLabelFromParsed(data: Record<string, unknown>): string | null {
+  if (isLegacySessionVersion(data.version)) {
+    return typeof data.model === 'string' ? data.model : null;
+  }
+  return typeof data.modelLabel === 'string' ? data.modelLabel : null;
+}
+
 /**
  * Try to extract the length of the "chains" array from partial JSON text.
  * Returns the count if the complete array is found, undefined otherwise.
@@ -147,6 +170,7 @@ function extractChainCount(text: string): number | undefined {
   const match = chainsPattern.exec(text);
   if (!match?.[1]) return undefined;
   const arrayContent = match[1]!;
+  if (arrayContent.trim() === '[]') return 0;
   // Count top-level objects in the array by matching { ... } pairs.
   // Use a non-greedy match of balanced braces (works for flat objects).
   const objectPattern = /\{[^{}]*\}/g;
@@ -214,7 +238,7 @@ export function loadSession(sessionId: string, opts?: StorageOptions): Session |
  * Return metadata for all saved sessions sorted by most recent mtime.
  *
  * Uses a partial read strategy for top-level string metadata (first 2048
- * bytes, regex extract id/name/model/cwd). Falls back to full parse if the
+ * bytes, regex extract id/name/modelLabel/cwd). Falls back to full parse if the
  * partial read doesn't contain enough data.
  *
  * Matches Python `storage.py:list_saved_sessions`.
@@ -267,14 +291,21 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
       // Quick extraction via regex (avoids full JSON parse)
       const sessionId = extractJsonString(head, '"id"');
       const name = extractJsonString(head, '"name"');
-      const model = extractJsonString(head, '"model"');
+      const version = extractJsonNumber(head, '"version"');
+      const modelLabel = extractJsonNullableString(head, '"modelLabel"');
+      const legacyModel = extractJsonString(head, '"model"');
       const cwdFromHead = extractJsonNullableString(head, '"cwd"');
 
       if (sessionId) {
         // Try to get chainCount from partial read first (avoids double-read)
         let chainCount = extractChainCount(head);
         let parsedName = name ?? 'Unnamed';
-        let parsedModel = model;
+        let parsedModelLabel: string | null =
+          modelLabel === undefined
+            ? isLegacySessionVersion(version)
+              ? (legacyModel ?? null)
+              : null
+            : modelLabel;
         // Missing cwd in head → treat as null for legacy; refine on full parse
         let parsedCwd: string | null = cwdFromHead === undefined ? null : cwdFromHead;
 
@@ -284,12 +315,12 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
           const data = JSON.parse(raw) as Record<string, unknown>;
           const chains = Array.isArray(data.chains) ? data.chains : [];
           chainCount = chains.length;
-          // Also refine name/model/cwd from full parse if partial didn't get them
+          // Also refine name/modelLabel/cwd from full parse if partial didn't get them
           if (!parsedName || parsedName === 'Unnamed') {
             parsedName = typeof data.name === 'string' ? data.name : 'Unnamed';
           }
-          if (parsedModel === undefined) {
-            parsedModel = typeof data.model === 'string' ? data.model : undefined;
+          if (modelLabel === undefined && legacyModel === undefined) {
+            parsedModelLabel = modelLabelFromParsed(data);
           }
           if (cwdFromHead === undefined) {
             parsedCwd = cwdFromParsed(data);
@@ -299,7 +330,7 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
         sessions.push({
           id: sessionId,
           name: parsedName,
-          model: parsedModel,
+          modelLabel: parsedModelLabel,
           cwd: parsedCwd,
           chainCount,
           updatedAt: mtime,
@@ -312,7 +343,7 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
         sessions.push({
           id: typeof data.id === 'string' ? data.id : '',
           name: typeof data.name === 'string' ? data.name : 'Unnamed',
-          model: typeof data.model === 'string' ? data.model : undefined,
+          modelLabel: modelLabelFromParsed(data),
           cwd: cwdFromParsed(data),
           chainCount: chains.length,
           updatedAt: mtime,

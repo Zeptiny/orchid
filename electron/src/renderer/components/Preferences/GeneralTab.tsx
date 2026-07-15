@@ -2,26 +2,21 @@
  * GeneralTab — general application settings.
  *
  * Organized into fieldsets matching the Iteration 012 mock:
- * General (model, theme, personality, ignored dirs), Tool Limits, Streaming.
+ * General (theme, personality, ignored dirs), Tool Limits, Streaming.
  *
  * Dropdowns use the shared daisyUI `select config-control` pattern (same as
  * Tier Models / RAG embedding model).
  */
-import { useCallback, useMemo } from 'react';
+import { useCallback } from 'react';
 import { THEMES, THEME_NAMES, type ThemeName } from '../../themes';
-import { collectModelsFromProviders } from '../../utils/models';
-import { ModelPicker } from '../ModelPicker';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface GeneralTabProps {
-  defaultModel: string;
   theme: string;
   personality: string;
   /** Personality names loaded from `~/.orchid/personalities/*.md`. */
   personalities?: readonly string[];
-  /** Providers config — used to populate the default model dropdown. */
-  providers?: Record<string, Record<string, unknown>>;
   ignoredDirs: string[];
   commandTimeout: number;
   readLineLimit: number;
@@ -44,11 +39,9 @@ export interface GeneralTabProps {
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function GeneralTab({
-  defaultModel,
   theme,
   personality,
   personalities = [],
-  providers = {},
   ignoredDirs,
   commandTimeout,
   readLineLimit,
@@ -67,8 +60,6 @@ export function GeneralTab({
     personality && !personalities.includes(personality)
       ? [personality, ...personalities]
       : [...personalities];
-
-  const modelOptions = useMemo(() => collectModelsFromProviders(providers), [providers]);
 
   const handleNumberChange = useCallback(
     (field: string, value: string) => {
@@ -109,24 +100,6 @@ export function GeneralTab({
       <section className="config-fieldset">
         <div className="config-fieldset-legend">General</div>
         <div className="config-form-grid">
-          <div className="config-field">
-            <label>Default Model</label>
-            <ModelPicker
-              value={defaultModel}
-              options={modelOptions}
-              onChange={(value) => onChange({ default_model: value })}
-              label="Select default model"
-              align="start"
-              className="config-model-picker"
-              emptyMessage="Add providers first"
-            />
-            {modelOptions.length === 0 && (
-              <span className="config-field-hint">
-                No models listed. Add providers (and their models) in the Providers tab.
-              </span>
-            )}
-          </div>
-
           <div className="config-field">
             <label htmlFor="general-theme">Theme</label>
             <select

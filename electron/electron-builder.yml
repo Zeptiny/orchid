@@ -15,6 +15,8 @@ directories:
 extraResources:
   - from: build/icon.png
     to: icon.png
+  - from: assets/providers/catalog.json
+    to: providers/catalog.json
 
 asar: true
 asarUnpack:

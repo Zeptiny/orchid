@@ -4,8 +4,6 @@
  * Ported from src/orchid/domain/agent.py.
  */
 
-import { z } from 'zod';
-
 // ── Enums as const objects ──────────────────────────────────────────────────
 
 export const AgentType = {
@@ -49,87 +47,4 @@ export interface Agent {
   readonly system_prompt: string;
   readonly allowed_tools: readonly string[];
   readonly allowed_skills: readonly string[];
-}
-
-// ── Zod schemas ─────────────────────────────────────────────────────────────
-
-export const agentTypeSchema = z.enum([AgentType.INTERNAL, AgentType.SUBAGENT]);
-
-export const agentTierSchema = z.enum([
-  AgentTier.SEED,
-  AgentTier.BLOOM,
-  AgentTier.CROWN,
-  AgentTier.SPROUT,
-]);
-
-export const agentSchema = z.object({
-  name: z.string(),
-  type: agentTypeSchema,
-  tier: agentTierSchema.default(AgentTier.BLOOM),
-  description: z.string(),
-  system_prompt: z.string().default(''),
-  allowed_tools: z.array(z.string()).default([]),
-  allowed_skills: z.array(z.string()).default([]),
-});
-
-// ── Storage dict ────────────────────────────────────────────────────────────
-
-export interface AgentStorageDict {
-  name: string;
-  type: string;
-  tier?: string;
-  description: string;
-  system_prompt?: string;
-  allowed_tools?: string[];
-  allowed_skills?: string[];
-  [key: string]: unknown;
-}
-
-// ── Serialization ───────────────────────────────────────────────────────────
-
-export function agentToStorageDict(agent: Agent): AgentStorageDict {
-  return {
-    name: agent.name,
-    type: agent.type,
-    tier: agent.tier,
-    description: agent.description,
-    system_prompt: agent.system_prompt,
-    allowed_tools: [...agent.allowed_tools],
-    allowed_skills: [...agent.allowed_skills],
-  };
-}
-
-export function agentFromStorageDict(data: unknown): Agent {
-  const raw = data as Record<string, unknown>;
-
-  // Parse type with fallback
-  let type: AgentType = AgentType.SUBAGENT;
-  const rawType = typeof raw.type === 'string' ? raw.type.toLowerCase() : '';
-  if (rawType === 'internal' || rawType === 'subagent') {
-    type = rawType;
-  }
-
-  // Parse tier with fallback
-  let tier: AgentTier = AgentTier.BLOOM;
-  const rawTier = typeof raw.tier === 'string' ? raw.tier.toLowerCase() : '';
-  if (
-    rawTier === 'seed' || rawTier === 'bloom' ||
-    rawTier === 'crown' || rawTier === 'sprout'
-  ) {
-    tier = rawTier;
-  }
-
-  return {
-    name: typeof raw.name === 'string' ? raw.name : '',
-    type,
-    tier,
-    description: typeof raw.description === 'string' ? raw.description : '',
-    system_prompt: typeof raw.system_prompt === 'string' ? raw.system_prompt : '',
-    allowed_tools: Array.isArray(raw.allowed_tools)
-      ? (raw.allowed_tools as unknown[]).filter((t): t is string => typeof t === 'string')
-      : [],
-    allowed_skills: Array.isArray(raw.allowed_skills)
-      ? (raw.allowed_skills as unknown[]).filter((s): s is string => typeof s === 'string')
-      : [],
-  };
 }

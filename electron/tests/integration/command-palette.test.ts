@@ -8,18 +8,18 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SessionSummary } from '../../src/main/session/storage';
-import type { CommandContext } from '../../src/main/commands/registry';
+import type { CommandContext } from '../../src/shared/types/ipc-boundary';
 import {
   COMMANDS,
   getRecentCommands,
   trackRecentCommand,
   buildThemeResults,
   buildPersonalityResults,
-  getCommand,
-  getCommandNames,
-  isCommand,
   fuzzyMatch,
-} from '../../src/main/commands/registry';
+} from '../../src/renderer/commands/registry';
+
+const findCommand = (name: string) =>
+  COMMANDS.find((command) => command.name === name);
 
 // ─── Mock Setup ──────────────────────────────────────────────────────────────
 
@@ -107,7 +107,7 @@ describe('Command Registry', () => {
   });
 
   it('all command names are defined', () => {
-    const names = getCommandNames();
+    const names = COMMANDS.map((command) => command.name);
     expect(names).toContain('/new');
     expect(names).toContain('/sessions');
     expect(names).toContain('/rename');
@@ -123,32 +123,6 @@ describe('Command Registry', () => {
     expect(names).not.toContain('/rag status');
     expect(names).not.toContain('/index-rag');
     expect(names).not.toContain('/index-ast');
-  });
-
-  it('getCommand returns command by name', () => {
-    const cmd = getCommand('/new');
-    expect(cmd).toBeDefined();
-    expect(cmd?.name).toBe('/new');
-    expect(cmd?.description).toBe('Create a new session');
-    expect(cmd?.category).toBe('commands');
-  });
-
-  it('getCommand returns undefined for unknown command', () => {
-    const cmd = getCommand('/unknown');
-    expect(cmd).toBeUndefined();
-  });
-
-  it('isCommand returns true for known commands', () => {
-    expect(isCommand('/new')).toBe(true);
-    expect(isCommand('/model')).toBe(true);
-    expect(isCommand('/rag index')).toBe(true);
-    expect(isCommand('/ast index')).toBe(true);
-  });
-
-  it('isCommand returns false for unknown commands', () => {
-    expect(isCommand('/unknown')).toBe(false);
-    expect(isCommand('hello')).toBe(false);
-    expect(isCommand('/rag status')).toBe(false);
   });
 
   it('all commands have required fields', () => {
@@ -395,7 +369,7 @@ describe('Command Execution', () => {
   });
 
   it('/new creates a new session and closes palette', async () => {
-    const cmd = getCommand('/new');
+    const cmd = findCommand('/new');
     expect(cmd).toBeDefined();
     await cmd!.execute(mockContext);
     expect(mockContext.onCreateSession).toHaveBeenCalled();
@@ -403,7 +377,7 @@ describe('Command Execution', () => {
   });
 
   it('/delete deletes the active session after confirm', async () => {
-    const cmd = getCommand('/delete');
+    const cmd = findCommand('/delete');
     expect(cmd).toBeDefined();
     await cmd!.execute(mockContext);
     expect(mockContext.onDeleteSession).toHaveBeenCalledWith('session-1');
@@ -414,21 +388,21 @@ describe('Command Execution', () => {
     (window as unknown as { confirm: typeof confirm }).confirm = vi
       .fn()
       .mockReturnValue(false);
-    const cmd = getCommand('/delete');
+    const cmd = findCommand('/delete');
     await cmd!.execute(mockContext);
     expect(mockContext.onDeleteSession).not.toHaveBeenCalled();
   });
 
   it('/delete notifies when no active session', async () => {
     mockContext.getActiveSessionId = vi.fn().mockReturnValue(null);
-    const cmd = getCommand('/delete');
+    const cmd = findCommand('/delete');
     await cmd!.execute(mockContext);
     expect(mockContext.onNotify).toHaveBeenCalledWith('No active session to delete.', 'warning');
     expect(mockContext.onClose).toHaveBeenCalled();
   });
 
   it('/rename renames the active session', async () => {
-    const cmd = getCommand('/rename');
+    const cmd = findCommand('/rename');
     expect(cmd).toBeDefined();
     await cmd!.execute(mockContext);
     expect(mockContext.onRenameSession).toHaveBeenCalledWith('session-1', 'Renamed Session');
@@ -442,13 +416,13 @@ describe('Command Execution', () => {
     (window as unknown as { prompt: typeof prompt }).prompt = vi
       .fn()
       .mockReturnValue(null);
-    const cmd = getCommand('/rename');
+    const cmd = findCommand('/rename');
     await cmd!.execute(mockContext);
     expect(mockContext.onRenameSession).not.toHaveBeenCalled();
   });
 
   it('/settings opens settings and closes palette', async () => {
-    const cmd = getCommand('/settings');
+    const cmd = findCommand('/settings');
     expect(cmd).toBeDefined();
     await cmd!.execute(mockContext);
     expect(mockContext.onOpenSettings).toHaveBeenCalled();
@@ -456,7 +430,7 @@ describe('Command Execution', () => {
   });
 
   it('/cd opens the project folder picker', async () => {
-    const cmd = getCommand('/cd');
+    const cmd = findCommand('/cd');
     expect(cmd).toBeDefined();
     await cmd!.execute(mockContext);
     expect(mockContext.onPickProjectDir).toHaveBeenCalled();
@@ -468,7 +442,7 @@ describe('Command Execution', () => {
   });
 
   it('/rag index triggers RAG indexing', async () => {
-    const cmd = getCommand('/rag index');
+    const cmd = findCommand('/rag index');
     expect(cmd).toBeDefined();
     await cmd!.execute(mockContext);
     expect(mockContext.onIndexRAG).toHaveBeenCalled();
@@ -477,7 +451,7 @@ describe('Command Execution', () => {
   });
 
   it('/ast index triggers AST indexing', async () => {
-    const cmd = getCommand('/ast index');
+    const cmd = findCommand('/ast index');
     expect(cmd).toBeDefined();
     await cmd!.execute(mockContext);
     expect(mockContext.onIndexAST).toHaveBeenCalled();
@@ -486,7 +460,7 @@ describe('Command Execution', () => {
   });
 
   it('/rag clear clears the RAG index', async () => {
-    const cmd = getCommand('/rag clear');
+    const cmd = findCommand('/rag clear');
     await cmd!.execute(mockContext);
     expect(mockContext.onClearRAG).toHaveBeenCalled();
     expect(mockContext.onNotify).toHaveBeenCalledWith('RAG index cleared.', 'info');
@@ -570,7 +544,7 @@ describe('Command Palette File Structure', () => {
   const path = require('node:path');
 
   const componentsDir = path.resolve(__dirname, '../../src/renderer/components');
-  const commandsDir = path.resolve(__dirname, '../../src/main/commands');
+  const commandsDir = path.resolve(__dirname, '../../src/renderer/commands');
 
   it('CommandPalette component exists', () => {
     expect(fs.existsSync(path.join(componentsDir, 'CommandPalette.tsx'))).toBe(true);

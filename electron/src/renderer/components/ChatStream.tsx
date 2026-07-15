@@ -569,7 +569,7 @@ function buildMultiChainHistoryStreamItems(opts: {
         key: `footer-chain-${chain.id || chainIndex}`,
         usage: turnUsage,
         subUsage,
-        model: chain.model || null,
+        model: chain.modelLabel,
         elapsedSeconds: elapsed,
         interrupted:
           chain.status === ChainStatus.INTERRUPTED ||

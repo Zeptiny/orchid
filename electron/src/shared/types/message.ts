@@ -12,7 +12,7 @@
 
 import { z } from 'zod';
 import type { ToolCall } from './tool';
-import { toolCallSchema, toolCallToStorageDict, toolCallFromStorageDict } from './tool';
+import { toolCallToStorageDict, toolCallFromStorageDict } from './tool';
 
 // ── Enums as const objects ──────────────────────────────────────────────────
 
@@ -69,14 +69,6 @@ export const contextSnapshotSchema = z.object({
   assistant_tokens: z.number().nonnegative(),
 });
 
-export const usageSchema = z.object({
-  prompt_tokens: z.number().default(0),
-  completion_tokens: z.number().default(0),
-  total_tokens: z.number().default(0),
-  cached_tokens: z.number().default(0),
-  context: contextSnapshotSchema.optional(),
-});
-
 // ── Message ─────────────────────────────────────────────────────────────────
 
 export interface Message {
@@ -98,38 +90,6 @@ export interface Message {
    */
   readonly is_error: boolean;
 }
-
-// ── Zod schemas ─────────────────────────────────────────────────────────────
-
-export const messageRoleSchema = z.enum([
-  MessageRole.USER,
-  MessageRole.ASSISTANT,
-  MessageRole.SYSTEM,
-  MessageRole.TOOL,
-]);
-
-export const messageTypeSchema = z.enum([
-  MessageType.TEXT,
-  MessageType.THINKING,
-  MessageType.TOOL_CALL,
-  MessageType.TOOL_RESULT,
-  MessageType.ERROR,
-]);
-
-export const messageSchema = z.object({
-  id: z.string(),
-  role: messageRoleSchema,
-  content: z.string(),
-  type: messageTypeSchema.default(MessageType.TEXT),
-  tool_calls: z.array(toolCallSchema).nullable().default(null),
-  tool_call_id: z.string().nullable().default(null),
-  name: z.string().nullable().default(null),
-  thinking: z.string().nullable().default(null),
-  timestamp: z.string(),
-  usage: usageSchema.nullable().default(null),
-  hidden: z.boolean().default(false),
-  is_error: z.boolean().default(false),
-});
 
 // ── Storage dict ────────────────────────────────────────────────────────────
 

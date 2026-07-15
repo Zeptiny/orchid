@@ -5,25 +5,28 @@
  * Tests leave the runner unset so spawn/markCompleted stay manual.
  */
 import type { Agent } from '../../shared/types/agent';
-import type { StreamEvent } from '../llm/orchestrator';
+import type { ModelSelection } from '../../shared/types/provider';
+import { streamChat, type StreamEvent } from '../llm/orchestrator';
 import { getConfig } from '../config/loader';
-import { resolveModelRef } from '../llm/providers';
-import { createProviderModel } from '../llm/providers-factory';
 import { getSessionManager } from '../ipc/session';
-import {
-  acquireProjectMCPManager,
-  releaseProjectMCPManager,
-} from '../mcp/project-registry';
-import { getBuiltinToolRegistryForRuntime } from '../tools';
 import {
   getProjectRuntimeRegistry,
   hydrateProjectRuntime,
   type ProjectRuntime,
 } from '../project/runtime';
 import type { SubagentStreamRunner } from './manager';
-import { appendProjectPersonality } from '../project/personality';
+import { makeUserMessage } from '../llm/message-factories';
+import { buildSystemPromptContext } from '../llm/build-prompt-context';
+import {
+  acquireProjectMCPManager,
+  releaseProjectMCPManager,
+} from '../mcp/project-registry';
+import { getBuiltinToolRegistryForRuntime } from '../tools';
+import { getProviderRuntime } from '../providers';
+import { getProviderAccountingStore } from '../providers/accounting/store';
+import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
 
-/** Tools that must never run inside a subagent (no nested delegation). */
+/** Delegated workers cannot recursively fan out or control sibling workers. */
 const SUBAGENT_FORBIDDEN_TOOLS = new Set([
   'delegate_to_subagent',
   'wait_for_subagent',
@@ -55,19 +58,23 @@ function resolveParentSessionCwdFallback(sessionId?: string): string | null {
 
 /**
  * Create the production stream runner for subagents.
- * Resolves model, strips nested-subagent tools, and yields StreamEvents.
+ * A child uses the exact frozen selection inherited from its parent turn;
+ * it never parses an alias or consults mutable provider configuration.
  */
 export function createSubagentStreamRunner(): SubagentStreamRunner {
   return async function* subagentStream(params: {
     task: string;
     agent: Agent;
-    model: string | null;
+    selection: ModelSelection | null;
     abortSignal: AbortSignal;
     sessionId?: string;
     /** Frozen parent-turn workspace cwd. */
     cwd?: string;
     /** This subagent's scope id (record.id) for todos / bg / prompt isolation. */
     agentScopeId: string;
+    /** Durable child-chain and turn ids for provider-attempt attribution. */
+    chainId?: string;
+    turnId?: string;
     /** Immutable project config/definitions captured by the parent turn. */
     projectRuntime?: ProjectRuntime;
   }): AsyncGenerator<StreamEvent> {
@@ -99,86 +106,81 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       params.projectRuntime ?? getProjectRuntimeRegistry().get(parentCwd);
     const runtime = await hydrateProjectRuntime(baseRuntime);
     const config = runtime.config;
-    const mcpManager = acquireProjectMCPManager(baseRuntime);
-    const registry = getBuiltinToolRegistryForRuntime(baseRuntime, {
-      agents: new Map(runtime.agents),
-      skills: new Map(runtime.skills),
-      mcpManager,
-    });
-    const { streamChat } = await import('../llm/orchestrator');
+    // Resolve selection: explicit override → tier selection → nullable default.
+    const selection =
+      params.selection ??
+      (config.tier_models[params.agent.tier] ?? config.default_model);
+    if (selection == null) {
+      yield {
+        type: 'error',
+        title: 'Provider connection required',
+        detail: 'Connect a provider and select a model before delegating a subagent.',
+      };
+      return;
+    }
 
-    // Resolve model: explicit override → tier model → project default.
-    const modelId =
-      params.model ||
-      config.tier_models[params.agent.tier] ||
-      config.default_model;
-    const modelRef = resolveModelRef(modelId, config);
-    const modelInstance = await createProviderModel(modelRef);
+    let modelInstance;
+    let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
+    let accountingStore: ReturnType<typeof getProviderAccountingStore>;
+    try {
+      accountingStore = getProviderAccountingStore();
+      const execution = await getProviderRuntime().resolveExecution(selection);
+      modelInstance = execution.modelInstance;
+      providerSnapshot = execution.snapshot;
+    } catch (error) {
+      yield {
+        type: 'error',
+        title: 'Provider unavailable',
+        detail: error instanceof Error ? error.message : String(error),
+      };
+      return;
+    }
 
-    // Strip nested-subagent tools even when agent allows '*'.
-    const allowedPatterns =
-      params.agent.allowed_tools.length > 0 ? [...params.agent.allowed_tools] : ['*'];
-    const allowedNames = registry
-      .filter(allowedPatterns)
-      .map((tool) => tool.definition.name)
-      .filter((name) => !SUBAGENT_FORBIDDEN_TOOLS.has(name));
-
-    const agentForRun: Agent = {
-      ...params.agent,
-      allowed_tools: allowedNames,
-    };
-
-    // Live dynamic context scoped to this subagent (not main/peers).
-    const agentScopeId = params.agentScopeId;
-    const { buildSystemPromptContext } = await import('../llm/build-prompt-context');
     const context = await buildSystemPromptContext({
       cwd: parentCwd,
       config,
       sessionId,
-      agentScopeId,
+      agentScopeId: params.agentScopeId,
     });
-
-    // Isolated history: only the subagent's task (no parent context).
-    // streamChat builds API messages from this; the manager owns the persisted chain.
-    const messages: import('../../shared/types/message').Message[] = [
-      {
-        id: crypto.randomUUID(),
-        role: 'user',
-        content: params.task,
-        type: 'text',
-        tool_calls: null,
-        tool_call_id: null,
-        name: null,
-        thinking: null,
-        timestamp: new Date().toISOString(),
-        usage: null,
-        hidden: false,
-        is_error: false,
-      },
-    ];
-
-    const stream = streamChat({
-      messages,
-      agent: agentForRun,
-      systemPrompt: appendProjectPersonality(
-        params.agent.system_prompt || 'You are a helpful assistant.',
-        runtime,
-      ),
-      context,
-      config,
-      registry,
-      mcpManager,
+    const accounting: ProviderAttemptAccountingContext = {
+      store: accountingStore,
       sessionId,
-      projectRuntime: runtime,
-      agentScopeId,
-      abortSignal: params.abortSignal,
-      modelInstance,
-    });
-
+      chainId: params.chainId ?? null,
+      turnId: params.turnId ?? params.agentScopeId,
+      snapshot: providerSnapshot,
+    };
+    const mcpManager = acquireProjectMCPManager(runtime);
     try {
-      yield* stream;
+      const registry = getBuiltinToolRegistryForRuntime(runtime, {
+        agents: new Map(runtime.agents),
+        skills: new Map(runtime.skills),
+        mcpManager,
+      });
+      const allowedPatterns = params.agent.allowed_tools.length > 0
+        ? [...params.agent.allowed_tools]
+        : ['*'];
+      const allowedTools = registry
+        .filter(allowedPatterns)
+        .map((tool) => tool.definition.name)
+        .filter((name) => !SUBAGENT_FORBIDDEN_TOOLS.has(name));
+      const agentForRun: Agent = { ...params.agent, allowed_tools: allowedTools };
+      yield* streamChat({
+        messages: [makeUserMessage(params.task)],
+        agent: agentForRun,
+        systemPrompt: params.agent.system_prompt || 'You are a helpful assistant.',
+        context,
+        config,
+        registry,
+        mcpManager,
+        sessionId,
+        projectRuntime: runtime,
+        agentScopeId: params.agentScopeId,
+        abortSignal: params.abortSignal,
+        modelInstance,
+        accounting,
+      });
     } finally {
-      releaseProjectMCPManager(baseRuntime);
+      releaseProjectMCPManager(runtime);
     }
   };
 }

@@ -4,7 +4,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   foldActivityRuns,
-  foldConsecutiveGroupableTools,
   isGroupableTool,
   summarizeToolGroup,
   toolFamily,
@@ -114,83 +113,6 @@ describe('summarizeToolGroup', () => {
     expect(summarizeToolGroup([member('1', 'get_function')]).title).toBe(
       'Inspected 1 symbol',
     );
-  });
-});
-
-describe('foldConsecutiveGroupableTools', () => {
-  type Item =
-    | { kind: 'msg'; text: string }
-    | { kind: 'tool'; id: string; toolName: string }
-    | { kind: 'group'; ids: string[] };
-
-  function fold(items: Item[]): Item[] {
-    return foldConsecutiveGroupableTools(items, {
-      asTool: (item) =>
-        item.kind === 'tool'
-          ? { id: item.id, toolName: item.toolName, status: 'completed' }
-          : null,
-      makeTool: (_m, source) => source,
-      makeGroup: (members) => ({
-        kind: 'group',
-        ids: members.map((m) => m.id),
-      }),
-    });
-  }
-
-  it('groups consecutive groupable tools (n >= 2)', () => {
-    const result = fold([
-      { kind: 'msg', text: 'hi' },
-      { kind: 'tool', id: 'a', toolName: 'grep' },
-      { kind: 'tool', id: 'b', toolName: 'read' },
-      { kind: 'tool', id: 'c', toolName: 'read' },
-      { kind: 'msg', text: 'done' },
-    ]);
-    expect(result).toEqual([
-      { kind: 'msg', text: 'hi' },
-      { kind: 'group', ids: ['a', 'b', 'c'] },
-      { kind: 'msg', text: 'done' },
-    ]);
-  });
-
-  it('does not group a single groupable tool', () => {
-    const result = fold([
-      { kind: 'tool', id: 'a', toolName: 'read' },
-      { kind: 'msg', text: 'x' },
-    ]);
-    expect(result).toEqual([
-      { kind: 'tool', id: 'a', toolName: 'read' },
-      { kind: 'msg', text: 'x' },
-    ]);
-  });
-
-  it('breaks groups on mutations (solo)', () => {
-    const result = fold([
-      { kind: 'tool', id: 'a', toolName: 'grep' },
-      { kind: 'tool', id: 'b', toolName: 'read' },
-      { kind: 'tool', id: 'c', toolName: 'edit' },
-      { kind: 'tool', id: 'd', toolName: 'read' },
-      { kind: 'tool', id: 'e', toolName: 'read' },
-    ]);
-    expect(result).toEqual([
-      { kind: 'group', ids: ['a', 'b'] },
-      { kind: 'tool', id: 'c', toolName: 'edit' },
-      { kind: 'group', ids: ['d', 'e'] },
-    ]);
-  });
-
-  it('breaks groups on assistant text between tools', () => {
-    const result = fold([
-      { kind: 'tool', id: 'a', toolName: 'grep' },
-      { kind: 'tool', id: 'b', toolName: 'grep' },
-      { kind: 'msg', text: 'mid' },
-      { kind: 'tool', id: 'c', toolName: 'read' },
-      { kind: 'tool', id: 'd', toolName: 'read' },
-    ]);
-    expect(result).toEqual([
-      { kind: 'group', ids: ['a', 'b'] },
-      { kind: 'msg', text: 'mid' },
-      { kind: 'group', ids: ['c', 'd'] },
-    ]);
   });
 });
 

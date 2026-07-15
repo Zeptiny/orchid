@@ -11,6 +11,7 @@
  */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
+import type { ModelSelection } from '../../shared/types/provider';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import type {
   ChatChunkEvent,
@@ -97,7 +98,7 @@ export interface ChatState {
 
 export interface ChatSendOptions {
   /** Preferred model when main lazy-creates a session from draft mode. */
-  model?: string;
+  model?: ModelSelection;
   /** Explicit session owner; omitted only while composing an unsaved draft. */
   sessionId?: string;
   /** Current draft navigation generation, echoed with lazy SESSION_CREATED. */

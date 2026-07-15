@@ -2,12 +2,20 @@
  * RAGTab — RAG (Retrieval-Augmented Generation) configuration.
  *
  * Controls: chunking, retrieval, embedding model, and resource caps.
- * The embedding model selector auto-detects local ONNX vs API (provider)
- * based on which list the selected value belongs to.
+ * Provider-backed embeddings use the same typed connection-scoped selection as
+ * chat, while local ONNX remains the default path.
  */
-import { useCallback, useMemo } from 'react';
-import { collectEmbeddingModelsFromProviders } from '../../utils/models';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ModelPicker } from '../ModelPicker';
+import type { ProviderModelOption } from '../../../shared/types/ipc';
+import type { ModelSelection } from '../../../shared/types/provider';
+import { useProviders } from '../../hooks/useProviders';
+import { isEmbeddingModel } from '../../utils/models';
+import {
+  providerModelOptionDisplayName,
+  providerModelOptionKey,
+  selectionKey,
+} from '../../utils/provider-selection';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -19,12 +27,11 @@ export interface RAGConfig {
   embedding_model: string;
   embedding_threads: number;
   embedding_batch_size: number;
-  embedding_api_model: string | null;
+  embedding_api_model: ModelSelection | null;
 }
 
 export interface RAGTabProps {
   rag: RAGConfig;
-  providers?: Record<string, Record<string, unknown>>;
   onChange: (rag: RAGConfig) => void;
 }
 
@@ -40,7 +47,34 @@ const LOCAL_EMBEDDING_MODELS = [
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
+export function RAGTab({ rag, onChange }: RAGTabProps) {
+  const providers = useProviders();
+  const [providerEmbeddingOptions, setProviderEmbeddingOptions] = useState<readonly ProviderModelOption[]>([]);
+
+  useEffect(() => {
+    if (!providers.overview) {
+      setProviderEmbeddingOptions([]);
+      return;
+    }
+    let cancelled = false;
+    void providers.modelList().then((options) => {
+      if (!cancelled) {
+        setProviderEmbeddingOptions(options.filter((option) => (
+          option.available && option.embeddingSupported === true && isEmbeddingModel(option.model)
+        )));
+      }
+    }).catch(() => {
+      if (!cancelled) setProviderEmbeddingOptions([]);
+    });
+    return () => { cancelled = true; };
+  }, [providers.modelList, providers.overview]);
+
+  useEffect(() => {
+    const refreshProviders = () => { void providers.refresh(); };
+    window.addEventListener('orchid:providers-updated', refreshProviders);
+    return () => window.removeEventListener('orchid:providers-updated', refreshProviders);
+  }, [providers.refresh]);
+
   const updateField = useCallback(
     <K extends keyof RAGConfig>(field: K, value: RAGConfig[K]) => {
       onChange({ ...rag, [field]: value });
@@ -58,31 +92,45 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
     [updateField],
   );
 
-  const apiEmbeddingModels = useMemo(
-    () => collectEmbeddingModelsFromProviders(providers),
-    [providers],
+  const activeModel = rag.embedding_api_model
+    ? selectionKey(rag.embedding_api_model)
+    : rag.embedding_model;
+  const providerModelLabels = useMemo(
+    () => Object.fromEntries(providerEmbeddingOptions.map((option) => [
+      providerModelOptionKey(option),
+      providerModelOptionDisplayName(option),
+    ])),
+    [providerEmbeddingOptions],
+  );
+  const providerModelDetails = useMemo(
+    () => Object.fromEntries(providerEmbeddingOptions.map((option) => [providerModelOptionKey(option), option])),
+    [providerEmbeddingOptions],
+  );
+  const localModelOptions = useMemo(
+    () => LOCAL_EMBEDDING_MODELS.map((model) => ({
+      value: model,
+      label: model,
+      description: 'Local ONNX model',
+    })),
+    [],
   );
 
-  const apiModelSet = useMemo(() => new Set(apiEmbeddingModels), [apiEmbeddingModels]);
-  const modelOptions = useMemo(
-    () => [...new Set([...LOCAL_EMBEDDING_MODELS, ...apiEmbeddingModels])],
-    [apiEmbeddingModels],
-  );
-
-  // The active value: API model takes precedence, else local ONNX model
-  const activeModel = rag.embedding_api_model ?? rag.embedding_model;
-  const usingApi = rag.embedding_api_model != null && rag.embedding_api_model !== '';
-
-  const handleModelChange = useCallback(
-    (value: string) => {
-      if (apiModelSet.has(value)) {
-        onChange({ ...rag, embedding_api_model: value });
-      } else {
-        onChange({ ...rag, embedding_api_model: null, embedding_model: value });
-      }
-    },
-    [rag, onChange, apiModelSet],
-  );
+  const handleModelChange = useCallback((value: string) => {
+    const option = providerEmbeddingOptions.find((candidate) => providerModelOptionKey(candidate) === value);
+    if (option) {
+      onChange({
+        ...rag,
+        embedding_api_model: {
+          connectionId: option.selection.connectionId,
+          modelId: option.selection.modelId,
+        },
+      });
+      return;
+    }
+    if (localModelOptions.some((candidate) => candidate.value === value)) {
+      onChange({ ...rag, embedding_api_model: null, embedding_model: value });
+    }
+  }, [localModelOptions, onChange, providerEmbeddingOptions, rag]);
 
   return (
     <div className="config-form">
@@ -148,31 +196,29 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
         <div className="config-field">
           <label>Model</label>
           <ModelPicker
+            id="rag-embedding-model"
             value={activeModel}
-            options={modelOptions}
+            options={providerEmbeddingOptions.map(providerModelOptionKey)}
+            optionLabels={providerModelLabels}
+            optionDetails={providerModelDetails}
+            additionalOptions={localModelOptions}
             onChange={handleModelChange}
             label="Select embedding model"
             align="start"
             className="config-model-picker"
-            emptyMessage="Add an embedding model first"
+            emptyMessage="No embedding models available"
           />
           <span className="config-field-hint">
-            {usingApi
-              ? 'API model — embeddings generated via provider endpoint.'
-              : 'Local model — embeddings generated on-device via ONNX runtime.'}
-            {apiEmbeddingModels.length === 0 &&
-              ' Add a provider model with mode "embeddings" in the Providers tab to use API embeddings.'}
+            Choose a local ONNX model or a provider embedding model. Provider models use the selected connection's embedding endpoint.
           </span>
         </div>
       </section>
 
       <section className="config-fieldset">
         <div className="config-fieldset-legend">Resource Limits</div>
-        {!usingApi && (
-          <p className="config-help text-sm opacity-70 mb-2">
-            Caps local ONNX embedding CPU and peak memory during indexing and search.
-          </p>
-        )}
+        <p className="config-help text-sm opacity-70 mb-2">
+          Caps local ONNX embedding CPU and peak memory during indexing and search.
+        </p>
         <div className="config-form-grid">
           <div className="config-field">
             <label htmlFor="rag-embedding-threads">Embedding Threads</label>
@@ -185,7 +231,6 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
               min={1}
               max={64}
               title="ONNX Runtime CPU threads (intra-op). Default 2."
-              disabled={usingApi}
             />
           </div>
 
@@ -200,7 +245,6 @@ export function RAGTab({ rag, providers = {}, onChange }: RAGTabProps) {
               min={1}
               max={256}
               title="Texts per forward pass. Lower = less peak RAM/CPU."
-              disabled={usingApi}
             />
           </div>
         </div>

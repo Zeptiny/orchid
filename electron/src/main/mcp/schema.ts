@@ -13,8 +13,6 @@
  * - "failed":      server startup failed (timeout, crash, bad config)
  * - "unavailable": overall startup budget exhausted before this server started
  */
-import { z } from 'zod';
-
 export type { MCPServerStatus, MCPServerStatusValue } from '../../shared/types/ipc-boundary';
 
 // ---------------------------------------------------------------------------
@@ -28,30 +26,28 @@ export function isValidServerName(name: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// MCPServerConfig schema
+// MCPServerConfig type
 // ---------------------------------------------------------------------------
 
 /**
- * Zod schema for an MCP server configuration entry.
+ * Configuration consumed by the MCP transports.
  *
- * Discriminated by presence of "url" (SSE) vs "command" (stdio).
- * Accepts both shapes from the config file's `mcp_servers` record.
+ * Runtime config validation is owned by the config loader; this module only
+ * needs the structural type at its transport/manager boundaries.
  */
-export const mcpServerConfigSchema = z
-  .object({
-    /** Executable to spawn (stdio transport). */
-    command: z.string().optional(),
-    /** Command-line arguments (stdio transport). */
-    args: z.array(z.string()).optional(),
-    /** Extra environment variables (stdio transport). */
-    env: z.record(z.string(), z.string()).optional(),
-    /** Working directory (stdio transport). */
-    cwd: z.string().optional(),
-    /** SSE endpoint URL (SSE transport). Mutually exclusive with command. */
-    url: z.string().url().optional(),
-    /** Custom HTTP headers for SSE transport. */
-    headers: z.record(z.string(), z.string()).optional(),
-  })
-  .passthrough();
-
-export type MCPServerConfig = z.infer<typeof mcpServerConfigSchema>;
+export interface MCPServerConfig {
+  /** Executable to spawn (stdio transport). */
+  command?: string;
+  /** Command-line arguments (stdio transport). */
+  args?: string[];
+  /** Extra environment variables (stdio transport). */
+  env?: Record<string, string>;
+  /** Working directory (stdio transport). */
+  cwd?: string;
+  /** SSE endpoint URL (SSE transport). */
+  url?: string;
+  /** Custom HTTP headers for SSE transport. */
+  headers?: Record<string, string>;
+  /** Preserve unknown config keys accepted by the config document. */
+  [key: string]: unknown;
+}

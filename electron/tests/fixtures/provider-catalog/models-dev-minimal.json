@@ -1,0 +1,67 @@
+{
+  "openai": {
+    "id": "openai",
+    "name": "OpenAI",
+    "models": {
+      "model/z": {
+        "id": "model/z",
+        "name": "Model Z",
+        "tool_call": true,
+        "reasoning": true,
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["text"]
+        },
+        "limit": {
+          "context": 131072,
+          "output": 8192
+        },
+        "cost": {
+          "input": 1.25,
+          "output": 5,
+          "cache_read": 0.25
+        }
+      },
+      "embedding-only": {
+        "id": "embedding-only",
+        "name": "Embedding Only",
+        "modalities": {
+          "input": ["text"],
+          "output": ["embedding"]
+        }
+      },
+      "image-generator": {
+        "id": "image-generator",
+        "name": "Image Generator",
+        "modalities": {
+          "input": ["text"],
+          "output": ["image"]
+        }
+      },
+      "video-generator": {
+        "id": "video-generator",
+        "name": "Video Generator",
+        "modalities": {
+          "input": ["text"],
+          "output": ["video"]
+        }
+      },
+      "multimodal-generator": {
+        "id": "multimodal-generator",
+        "name": "Multimodal Generator",
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["text", "image"]
+        }
+      },
+      "z-text": {
+        "id": "z-text",
+        "name": "Text Model",
+        "modalities": {
+          "input": ["text"],
+          "output": ["text"]
+        }
+      }
+    }
+  }
+}

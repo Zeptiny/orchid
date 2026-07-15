@@ -48,14 +48,6 @@ function emitStatus(): void {
   sendToRenderer(IPC_CHANNELS.UPDATER_STATUS_UPDATE, { ...state });
 }
 
-function isAppSigned(): boolean {
-  // macOS Gatekeeper validates code signature. Unsigned builds will fail
-  // Gatekeeper assessment. We detect this via the app's build metadata.
-  // electron-builder sets app.isPackaged = true for packaged builds.
-  // For signed builds, we rely on the explicit flag set during initialization.
-  return isSigned;
-}
-
 // ── Updater configuration ────────────────────────────────────────────────────
 
 function configureUpdater(): void {
@@ -97,7 +89,7 @@ function attachEventHandlers(): void {
     emitStatus();
 
     // Auto-download only for signed releases
-    if (isAppSigned()) {
+    if (isSigned) {
       autoUpdater.downloadUpdate().catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         state.status = 'error';

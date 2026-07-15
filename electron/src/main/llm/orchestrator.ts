@@ -29,6 +29,7 @@
  * fallback path (when fullStream is unavailable). Drain of pending is deduped
  * by toolCallId so the same call/result is never yielded twice.
  */
+import { createHash } from 'node:crypto';
 import type { AssistantContent, ModelMessage, Tool } from 'ai';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { Message, Usage } from '../../shared/types/message';
@@ -50,10 +51,32 @@ import {
 import { parseToolExecuteOutput } from '../tools/result';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
+import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
 import { buildContextSnapshot } from './context-snapshot';
 import { importESM } from '../utils/esm-import';
 import { buildSkillTool } from '../tools/skill/skill';
 import { getSkillsRegistry } from '../tools';
+
+const PROVIDER_TOOL_NAME_MAX_LENGTH = 64;
+const PROVIDER_TOOL_NAME_HASH_LENGTH = 16;
+
+/**
+ * Convert an internal MCP tool identity into the conservative function-name
+ * grammar shared by OpenAI-compatible and other providers. The hash preserves
+ * uniqueness when different names sanitize to the same prefix.
+ */
+function toProviderMcpToolName(internalName: string): string {
+  const safePrefix = internalName
+    .replace(/[^A-Za-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'mcp_tool';
+  const hash = createHash('sha256')
+    .update(internalName)
+    .digest('hex')
+    .slice(0, PROVIDER_TOOL_NAME_HASH_LENGTH);
+  const prefixLength = PROVIDER_TOOL_NAME_MAX_LENGTH - hash.length - 1;
+
+  return `${safePrefix.slice(0, prefixLength)}_${hash}`;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -101,6 +124,8 @@ export interface StreamChatParams {
   abortSignal?: AbortSignal;
   /** The AI SDK model instance to use for streaming. */
   modelInstance: LanguageModelV4;
+  /** Frozen durable-attempt context for every provider invocation. */
+  accounting?: ProviderAttemptAccountingContext;
 }
 
 interface LatestContextUsage {
@@ -181,6 +206,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     agentScopeId,
     abortSignal,
     modelInstance,
+    accounting,
   } = params;
 
   // Dynamic import — `ai` is ESM-only but Electron main compiles to CJS
@@ -283,6 +309,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   // ── Compose middleware ──
   const middleware = createMiddlewareStack({
     retry: { maxRetries: config.llm_stream_retries },
+    ...(accounting ? { accounting } : {}),
   });
 
   // Wrap model with middleware
@@ -363,6 +390,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       tools: Object.keys(tools).length > 0 ? tools : undefined,
       stopWhen: isStepCount(maxSteps),
       abortSignal: combinedAbort,
+      // Retry ownership belongs to Orchid's accounting-aware middleware.
+      maxRetries: 0,
       onStepFinish: async ({ usage, request, toolCalls, toolResults }) => {
         if (usage) {
           const cachedTokens = usage.inputTokenDetails?.cacheReadTokens ?? 0;
@@ -763,14 +792,22 @@ export function buildToolMap(
 
       if (!isAllowed) continue;
 
-      toolMap[definition.name] = {
+      const internalName = definition.name;
+      const providerName = toProviderMcpToolName(internalName);
+      if (providerName in toolMap) {
+        throw new Error(
+          `Provider tool name collision for MCP tool "${internalName}": "${providerName}"`,
+        );
+      }
+
+      toolMap[providerName] = {
         description: definition.description,
         inputSchema: definition.inputSchema,
         execute: async (args: unknown) => {
           try {
             const result = await runWithToolTimeout(
-              () => mcpManager.callTool(definition.name, args),
-              definition.name,
+              () => mcpManager.callTool(internalName, args),
+              internalName,
               { timeoutSeconds: dispatchOptions.timeoutSeconds },
             );
             // MCP legacy: plain "Error:" string indicates failure

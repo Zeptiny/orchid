@@ -4,8 +4,6 @@ const mocks = vi.hoisted(() => ({
   loadAgents: vi.fn(),
   loadSkills: vi.fn(),
   loadPersonalities: vi.fn(),
-  applyWorkspaceProjectLayers: vi.fn(),
-  resetLastAppliedProjectDir: vi.fn(),
   invalidate: vi.fn(),
   clear: vi.fn(),
 }));
@@ -28,11 +26,6 @@ vi.mock('../../src/main/personality/registry', () => ({
   loadPersonalities: mocks.loadPersonalities,
 }));
 
-vi.mock('../../src/main/project/layers', () => ({
-  applyWorkspaceProjectLayers: mocks.applyWorkspaceProjectLayers,
-  resetLastAppliedProjectDir: mocks.resetLastAppliedProjectDir,
-}));
-
 vi.mock('../../src/main/project/runtime', () => ({
   getProjectRuntimeRegistry: () => ({
     invalidate: mocks.invalidate,
@@ -52,7 +45,6 @@ describe('reloadDefinitionRegistries', () => {
 
     expect(mocks.invalidate).toHaveBeenCalledWith('/projects/orchid');
     expect(mocks.clear).not.toHaveBeenCalled();
-    expect(mocks.applyWorkspaceProjectLayers).not.toHaveBeenCalled();
     expect(mocks.loadPersonalities).not.toHaveBeenCalled();
   });
 

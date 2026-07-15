@@ -8,8 +8,14 @@
  */
 
 import type { Session } from './session';
-import type { Agent } from './agent';
 import type { Usage } from './message';
+import type {
+  CustomConnectionModel,
+  ModelSelection,
+  ProviderAuthMethod,
+  ProviderLifecycle,
+  ProviderProtocol,
+} from './provider';
 import type {
   AgentSaveMessage,
   DefinitionDeleteMessage,
@@ -25,8 +31,8 @@ import type {
   SessionSummary,
   SessionActivity,
   Config,
+  ConfigDiagnostic,
   ModelMetadata,
-  DiscoveredModel,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -35,7 +41,6 @@ import type {
   ASTIndexResult,
   ASTIndexProgress,
   IndexRunState,
-  UpdaterState,
 } from './ipc-boundary';
 
 export type {
@@ -55,8 +60,8 @@ export type {
   SessionSummary,
   SessionActivity,
   Config,
+  ConfigDiagnostic,
   ModelMetadata,
-  DiscoveredModel,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -65,7 +70,6 @@ export type {
   ASTIndexResult,
   ASTIndexProgress,
   IndexRunState,
-  UpdaterState,
 } from './ipc-boundary';
 
 // ── Chat API ─────────────────────────────────────────────────────────────────
@@ -79,7 +83,7 @@ export interface ChatSendMessage {
    * Preferred model when auto-creating a session on first send (draft mode).
    * Ignored when an active session already exists.
    */
-  model?: string;
+  model?: ModelSelection | null;
   /** Renderer draft generation; prevents stale lazy-create events stealing selection. */
   draftGeneration?: number;
 }
@@ -233,15 +237,160 @@ export interface BgCommandSnapshotResult {
 
 // ── Config API ───────────────────────────────────────────────────────────────
 
-export interface ProviderRename {
-  from: string;
-  to: string;
-}
-
 export interface ConfigSaveMessage {
   updates: Partial<Config>;
-  /** Explicit provider alias changes so keychain entries can follow renames safely. */
-  providerRenames?: ProviderRename[];
+}
+
+// ── Provider API ─────────────────────────────────────────────────────────────
+
+/**
+ * Renderer-safe provider model metadata. Driver origins, pricing internals,
+ * and catalog signatures stay in the main process.
+ */
+export interface ProviderModelView {
+  id: string;
+  displayName: string;
+  protocol: ProviderProtocol;
+  lifecycle: ProviderLifecycle | null;
+  source: 'catalog' | 'connection';
+  capabilities: {
+    inputModalities: readonly string[];
+    outputModalities: readonly string[];
+    tools: boolean;
+    reasoning: boolean;
+  } | null;
+  limits: {
+    contextTokens: number | null;
+    outputTokens: number | null;
+  } | null;
+}
+
+/** A catalog preset rendered by onboarding and settings. */
+export interface ProviderDefinitionView {
+  id: string;
+  displayName: string;
+  supportedAuthMethods: readonly ProviderAuthMethod[];
+  supportedProtocols: readonly ProviderProtocol[];
+  allowsCustomModels: boolean;
+  lifecycle: ProviderLifecycle | null;
+  available: boolean;
+  unavailableReason: string | null;
+  models: readonly ProviderModelView[];
+}
+
+/**
+ * A redacted connection view. `credentialHandle`, encrypted payloads, API
+  * keys are intentionally not part of this type.
+ */
+export interface ProviderConnectionView {
+  id: string;
+  providerId: string;
+  providerDisplayName: string | null;
+  name: string;
+  protocol: ProviderProtocol;
+  authMethod: ProviderAuthMethod;
+  credentialKind: 'stored' | 'environment' | 'none';
+  environmentVariable: string | null;
+  modelIds: readonly string[];
+  customModels: readonly ProviderModelView[];
+  health: 'draft' | 'ready' | 'needs_attention' | 'disabled' | 'disconnected';
+  /** Active frozen turns attributed to this connection; never credential data. */
+  activeTurnCount: number;
+  endpoint: string | null;
+  allowInsecureHttp: boolean;
+}
+
+/** Status data is timestamped and redacted before it crosses IPC. */
+export interface ProviderStatusView {
+  providerId: string;
+  observedAt: string;
+  providerUpdatedAt: string | null;
+  availability: 'available' | 'unavailable' | 'unknown';
+  stale: boolean;
+  data: Readonly<Record<string, unknown>>;
+  error: {
+    kind: 'network' | 'unauthorized' | 'rate-limited' | 'schema' | 'unknown';
+    message: string;
+    statusCode?: number;
+    retryAfterAt?: string;
+  } | null;
+}
+
+export interface ProviderOverview {
+  definitions: readonly ProviderDefinitionView[];
+  connections: readonly ProviderConnectionView[];
+  statuses: readonly ProviderStatusView[];
+  secureStorage: {
+    available: boolean;
+    backend: string | null;
+    reason: 'unavailable' | 'basic_text' | 'error' | null;
+  };
+}
+
+/** Intent-only creation payload; credential handles can never be renderer input. */
+export interface ProviderConnectionCreateMessage {
+  providerId: string;
+  name: string;
+  protocol: ProviderProtocol;
+  authMethod: ProviderAuthMethod;
+  modelIds: readonly string[];
+  customModels?: readonly CustomConnectionModel[];
+  endpoint?: string | null;
+  allowInsecureHttp?: boolean;
+  /** Used only with `authMethod: 'environment'`; the value is never resolved here. */
+  environmentVariable?: string;
+}
+
+/** Safe connection fields that may be edited after creation. */
+export interface ProviderConnectionUpdateMessage {
+  connectionId: string;
+  name?: string;
+  /** Change the connection's authentication strategy; credentials remain write-only. */
+  authMethod?: ProviderAuthMethod;
+  modelIds?: readonly string[];
+  customModels?: readonly CustomConnectionModel[];
+  endpoint?: string | null;
+  allowInsecureHttp?: boolean;
+  /** Select or replace an environment reference without exposing its value. */
+  environmentVariable?: string;
+}
+
+/** One-shot, write-only API key submission. No result includes the key or handle. */
+export interface ProviderSubmitApiKeyMessage {
+  connectionId: string;
+  apiKey: string;
+}
+
+export interface ProviderConnectionIdMessage {
+  connectionId: string;
+}
+
+export interface ProviderDisconnectMessage extends ProviderConnectionIdMessage {
+  /** Explicit UI confirmation is required before stored credentials are removed. */
+  confirm: true;
+}
+
+export interface ProviderStatusRefreshMessage {
+  providerId: string;
+  /** Required for connection-scoped authenticated status sources. */
+  connectionId?: string;
+}
+
+export interface ProviderModelOption {
+  selection: ModelSelection;
+  connectionName: string;
+  providerId: string;
+  providerDisplayName: string | null;
+  model: ProviderModelView;
+  available: boolean;
+  unavailableReason: string | null;
+  /** Whether the trusted provider driver can route this selection to RAG embeddings. */
+  embeddingSupported?: boolean;
+}
+
+export interface ProviderMutationResult {
+  connection: ProviderConnectionView;
+  message: string | null;
 }
 
 // ── Session API ──────────────────────────────────────────────────────────────
@@ -298,7 +447,8 @@ export type SessionUpdatedEvent = SessionCreatedEvent;
 
 export interface SessionChangeModelMessage {
   id: string;
-  model: string;
+  selection: ModelSelection | null;
+  modelLabel?: string | null;
 }
 
 /** Source of the resolved workspace path. */
@@ -357,19 +507,6 @@ export interface ToolExecuteResult {
   isError: boolean;
 }
 
-// ── Agent API ────────────────────────────────────────────────────────────────
-
-export interface AgentSpawnMessage {
-  name: string;
-  task: string;
-  tier?: string;
-}
-
-export interface AgentSpawnResult {
-  id: string;
-  agent: Agent;
-}
-
 // ── RAG API ──────────────────────────────────────────────────────────────────
 
 export interface RAGIndexMessage {
@@ -382,19 +519,6 @@ export interface RAGIndexMessage {
 export interface ASTIndexMessage {
   /** Force re-index everything. */
   force?: boolean;
-}
-
-// ── Updater API ──────────────────────────────────────────────────────────────
-
-export interface UpdaterProgress {
-  percent: number;
-  bytesPerSecond: number;
-  transferred: number;
-  total: number;
-}
-
-export interface UpdaterErrorEvent {
-  error: string;
 }
 
 // ── Orchid API (the full contextBridge surface) ──────────────────────────────
@@ -420,11 +544,34 @@ export interface OrchidAPI {
 
   config: {
     get: () => Promise<Config>;
+    diagnostics: () => Promise<ConfigDiagnostic[]>;
     save: (updates: ConfigSaveMessage) => Promise<{ status: string }>;
     modelMetadata: (modelId: string) => Promise<ModelMetadata>;
-    discoverModels: (alias: string, force?: boolean) => Promise<DiscoveredModel[]>;
     /** List personality names loaded from `~/.orchid/personalities/*.md`. */
     listPersonalities: () => Promise<string[]>;
+  };
+
+  providers: {
+    /** Bundled/catalog provider presets, redacted connections, and status. */
+    list: () => Promise<ProviderOverview>;
+    /** Create a draft connection using only driver-supported metadata. */
+    create: (message: ProviderConnectionCreateMessage) => Promise<ProviderMutationResult>;
+    /** Edit safe connection metadata; credentials require their dedicated flow. */
+    update: (message: ProviderConnectionUpdateMessage) => Promise<ProviderMutationResult>;
+    /** One-shot write-only credential submission. */
+    submitApiKey: (message: ProviderSubmitApiKeyMessage) => Promise<ProviderMutationResult>;
+    /** Validate connection eligibility without returning secret material. */
+    validate: (message: ProviderConnectionIdMessage) => Promise<ProviderMutationResult>;
+    /** Mark a connection unavailable for new turns without deleting it. */
+    disable: (message: ProviderConnectionIdMessage) => Promise<ProviderMutationResult>;
+    /** Re-enable a disabled connection, then revalidate its existing auth. */
+    enable: (message: ProviderConnectionIdMessage) => Promise<ProviderMutationResult>;
+    /** Remove stored credentials after explicit confirmation; preserves connection history. */
+    disconnect: (message: ProviderDisconnectMessage) => Promise<ProviderMutationResult>;
+    /** Connection-scoped typed model options, including unavailable reasons. */
+    modelList: (message?: ProviderConnectionIdMessage) => Promise<readonly ProviderModelOption[]>;
+    /** Refresh informational status only; it never changes connection health. */
+    refreshStatus: (message: ProviderStatusRefreshMessage) => Promise<ProviderStatusView | null>;
   };
 
   session: {
@@ -438,7 +585,7 @@ export interface OrchidAPI {
     clearActive: () => Promise<{ status: string }>;
     delete: (id: SessionDeleteMessage) => Promise<{ status: string }>;
     rename: (id: string, name: string) => Promise<{ status: string }>;
-    changeModel: (id: string, model: string) => Promise<{ status: string }>;
+    changeModel: (id: string, selection: ModelSelection | null, modelLabel?: string | null) => Promise<{ status: string }>;
     /** Resolve current workspace (draft → session → sticky default → unbound). */
     getWorkspace: () => Promise<WorkspaceInfo>;
     /**
@@ -479,8 +626,6 @@ export interface OrchidAPI {
   };
 
   agent: {
-    list: () => Promise<Agent[]>;
-    spawn: (message: AgentSpawnMessage) => Promise<AgentSpawnResult>;
     /** Create or update an AGENT.md under global or project scope. */
     save: (message: AgentSaveMessage) => Promise<ManagedAgent>;
     /** Delete an agent definition from the given scope. */
@@ -533,15 +678,6 @@ export interface OrchidAPI {
     snapshot: (request: BgCommandSnapshotRequest) => Promise<BgCommandSnapshotResult>;
   };
 
-  updater: {
-    check: () => Promise<UpdaterState>;
-    install: () => Promise<{ status: string }>;
-    status: () => Promise<UpdaterState>;
-    download: () => Promise<UpdaterState>;
-    onStatus: (callback: (state: UpdaterState) => void) => () => void;
-    onProgress: (callback: (progress: UpdaterProgress) => void) => () => void;
-    onError: (callback: (event: UpdaterErrorEvent) => void) => () => void;
-  };
 }
 
 // ── IPC Channel names ────────────────────────────────────────────────────────
@@ -564,10 +700,23 @@ export const IPC_CHANNELS = {
 
   // Config
   CONFIG_GET: 'config:get',
+  CONFIG_DIAGNOSTICS: 'config:diagnostics',
   CONFIG_SAVE: 'config:save',
   CONFIG_MODEL_METADATA: 'config:model_metadata',
-  CONFIG_DISCOVER_MODELS: 'config:discover_models',
   CONFIG_LIST_PERSONALITIES: 'config:list_personalities',
+
+  // Providers — every response is redacted and every mutation is validated
+  // in the main process. There is deliberately no generic credential-read API.
+  PROVIDERS_LIST: 'providers:list',
+  PROVIDERS_CREATE: 'providers:create',
+  PROVIDERS_UPDATE: 'providers:update',
+  PROVIDERS_SUBMIT_API_KEY: 'providers:submit_api_key',
+  PROVIDERS_VALIDATE: 'providers:validate',
+  PROVIDERS_DISABLE: 'providers:disable',
+  PROVIDERS_ENABLE: 'providers:enable',
+  PROVIDERS_DISCONNECT: 'providers:disconnect',
+  PROVIDERS_MODEL_LIST: 'providers:model_list',
+  PROVIDERS_STATUS_REFRESH: 'providers:status_refresh',
 
   // Session
   SESSION_LIST: 'session:list',
@@ -604,9 +753,7 @@ export const IPC_CHANNELS = {
   // Tool
   TOOL_EXECUTE: 'tool:execute',
 
-  // Agent
-  AGENT_LIST: 'agent:list',
-  AGENT_SPAWN: 'agent:spawn',
+  // Agent definitions
   AGENT_SAVE: 'agent:save',
   AGENT_DELETE: 'agent:delete',
 
@@ -640,10 +787,6 @@ export const IPC_CHANNELS = {
   BG_CMD_SNAPSHOT: 'bgcmd:snapshot',
 
   // Updater
-  UPDATER_CHECK: 'updater:check',
-  UPDATER_INSTALL: 'updater:install',
-  UPDATER_STATUS: 'updater:status',
-  UPDATER_DOWNLOAD: 'updater:download',
   UPDATER_STATUS_UPDATE: 'updater:status_update',
   UPDATER_PROGRESS: 'updater:progress',
   UPDATER_ERROR: 'updater:error',
@@ -659,10 +802,20 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.CHAT_STOP,
   IPC_CHANNELS.CHAT_SNAPSHOT,
   IPC_CHANNELS.CONFIG_GET,
+  IPC_CHANNELS.CONFIG_DIAGNOSTICS,
   IPC_CHANNELS.CONFIG_SAVE,
   IPC_CHANNELS.CONFIG_MODEL_METADATA,
-  IPC_CHANNELS.CONFIG_DISCOVER_MODELS,
   IPC_CHANNELS.CONFIG_LIST_PERSONALITIES,
+  IPC_CHANNELS.PROVIDERS_LIST,
+  IPC_CHANNELS.PROVIDERS_CREATE,
+  IPC_CHANNELS.PROVIDERS_UPDATE,
+  IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY,
+  IPC_CHANNELS.PROVIDERS_VALIDATE,
+  IPC_CHANNELS.PROVIDERS_DISABLE,
+  IPC_CHANNELS.PROVIDERS_ENABLE,
+  IPC_CHANNELS.PROVIDERS_DISCONNECT,
+  IPC_CHANNELS.PROVIDERS_MODEL_LIST,
+  IPC_CHANNELS.PROVIDERS_STATUS_REFRESH,
   IPC_CHANNELS.SESSION_LIST,
   IPC_CHANNELS.SESSION_LOAD,
   IPC_CHANNELS.SESSION_CREATE,
@@ -677,8 +830,6 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.SESSION_ACTIVITY_LIST,
   IPC_CHANNELS.SESSION_ACTIVITY_MARK_SEEN,
   IPC_CHANNELS.TOOL_EXECUTE,
-  IPC_CHANNELS.AGENT_LIST,
-  IPC_CHANNELS.AGENT_SPAWN,
   IPC_CHANNELS.AGENT_SAVE,
   IPC_CHANNELS.AGENT_DELETE,
   IPC_CHANNELS.DEFINITIONS_LIST,
@@ -696,10 +847,6 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.AST_INDEX,
   IPC_CHANNELS.AST_INDEX_STATE,
   IPC_CHANNELS.BG_CMD_SNAPSHOT,
-  IPC_CHANNELS.UPDATER_CHECK,
-  IPC_CHANNELS.UPDATER_INSTALL,
-  IPC_CHANNELS.UPDATER_STATUS,
-  IPC_CHANNELS.UPDATER_DOWNLOAD,
 ];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────

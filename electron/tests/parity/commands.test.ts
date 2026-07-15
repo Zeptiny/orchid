@@ -5,12 +5,7 @@
  * Tests STRUCTURE (all commands registered, correct metadata), not behavior.
  */
 import { describe, it, expect } from 'vitest';
-import {
-  COMMANDS,
-  getCommand,
-  getCommandNames,
-  isCommand,
-} from '../../src/main/commands/registry';
+import { COMMANDS } from '../../src/renderer/commands/registry';
 
 // ── Expected commands (12 total) ───────────────────────────────────────────
 
@@ -37,13 +32,13 @@ describe('Command Parity', () => {
   });
 
   it('all expected command names are present', () => {
-    const names = getCommandNames().sort();
+    const names = COMMANDS.map((command) => command.name).sort();
     const expectedNames = EXPECTED_COMMANDS.map((c) => c.name).sort();
     expect(names).toEqual(expectedNames);
   });
 
   it('does not include removed or old command names', () => {
-    const names = getCommandNames();
+    const names = COMMANDS.map((command) => command.name);
     expect(names).not.toContain('/rag status');
     expect(names).not.toContain('/index-rag');
     expect(names).not.toContain('/index-ast');
@@ -67,36 +62,10 @@ describe('Command Parity', () => {
 
   it('each expected command has correct category', () => {
     for (const expected of EXPECTED_COMMANDS) {
-      const cmd = getCommand(expected.name);
+      const cmd = COMMANDS.find((command) => command.name === expected.name);
       expect(cmd, `Command '${expected.name}' should exist`).toBeDefined();
       expect(cmd!.category, `Command '${expected.name}' category`).toBe(expected.category);
     }
-  });
-
-  it('getCommand() returns correct command by name', () => {
-    const cmd = getCommand('/new');
-    expect(cmd).toBeDefined();
-    expect(cmd!.name).toBe('/new');
-    expect(cmd!.description).toContain('new session');
-  });
-
-  it('getCommand() returns undefined for unknown command', () => {
-    const cmd = getCommand('/unknown');
-    expect(cmd).toBeUndefined();
-  });
-
-  it('isCommand() returns true for known commands', () => {
-    expect(isCommand('/new')).toBe(true);
-    expect(isCommand('/sessions')).toBe(true);
-    expect(isCommand('/theme')).toBe(true);
-    expect(isCommand('/rag index')).toBe(true);
-    expect(isCommand('/ast index')).toBe(true);
-  });
-
-  it('isCommand() returns false for unknown command', () => {
-    expect(isCommand('/unknown')).toBe(false);
-    expect(isCommand('not-a-command')).toBe(false);
-    expect(isCommand('/rag status')).toBe(false);
   });
 
   it('command names are unique', () => {

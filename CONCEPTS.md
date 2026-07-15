@@ -43,3 +43,10 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 - **Work** — Execution of a plan through task lists, incremental commits, and continuous testing.
 - **Code Review** — Structured review using specialized reviewer personas (correctness, security, performance, etc.).
 - **Compound** — Documenting a recently solved problem to compound team knowledge.
+
+## Provider System
+
+- **Provider Definition** — Trusted Orchid-owned description of a provider's protocols, authentication methods, models, metadata, pricing dimensions, and optional status capabilities. It contains no user credentials.
+- **Provider Connection** — One user-configured account or endpoint attached to a provider definition, with its own credentials, settings, models, and usage attribution. Multiple connections may use the same provider definition.
+- **Pricing Snapshot** — The immutable pricing inputs and provenance frozen when a provider request starts and retained with its accounting record.
+- **Request Cost Record** — Immutable usage and billing evidence for one attributable provider request. Chain and session costs are derived from these records.

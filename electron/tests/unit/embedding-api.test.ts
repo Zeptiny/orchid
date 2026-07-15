@@ -1,82 +1,12 @@
 /**
- * Tests for API embedding model filtering and config changes.
+ * Tests for API embedding configuration and retry behavior.
  *
  * Covers:
- * - collectModelsFromProviders filters out embeddings models
- * - collectEmbeddingModelsFromProviders returns only embeddings models
  * - Config schema accepts embedding_api_model field
  * - ApiEmbedder retry logic (permanent errors don't retry, transient do)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import {
-  collectModelsFromProviders,
-  collectEmbeddingModelsFromProviders,
-} from '../../src/renderer/utils/models';
 import { configSchema, defaults } from '../../src/main/config/schema';
-
-// ── Model filtering tests ──────────────────────────────────────────────────
-
-describe('Model filtering by mode', () => {
-  const providers = {
-    openai: {
-      base_url: 'https://api.openai.com/v1',
-      litellm_provider: 'openai',
-      models: {
-        'gpt-4o': {},
-        'gpt-4o-mini': { supports_vision: true },
-        'text-embedding-3-small': { mode: 'embeddings' },
-        'text-embedding-3-large': { mode: 'embeddings' },
-      },
-    },
-    local: {
-      base_url: 'http://localhost:11434',
-      litellm_provider: 'ollama',
-      models: {
-        'llama-3.3': {},
-      },
-    },
-  };
-
-  it('collectModelsFromProviders excludes embeddings models', () => {
-    const models = collectModelsFromProviders(providers);
-    expect(models).toContain('openai/gpt-4o');
-    expect(models).toContain('openai/gpt-4o-mini');
-    expect(models).toContain('local/llama-3.3');
-    expect(models).not.toContain('openai/text-embedding-3-small');
-    expect(models).not.toContain('openai/text-embedding-3-large');
-  });
-
-  it('collectEmbeddingModelsFromProviders returns only embeddings models', () => {
-    const models = collectEmbeddingModelsFromProviders(providers);
-    expect(models).toContain('openai/text-embedding-3-small');
-    expect(models).toContain('openai/text-embedding-3-large');
-    expect(models).not.toContain('openai/gpt-4o');
-    expect(models).not.toContain('local/llama-3.3');
-  });
-
-  it('collectModelsFromProviders returns empty for null/undefined', () => {
-    expect(collectModelsFromProviders(null)).toEqual([]);
-    expect(collectModelsFromProviders(undefined)).toEqual([]);
-  });
-
-  it('collectEmbeddingModelsFromProviders returns empty for null/undefined', () => {
-    expect(collectEmbeddingModelsFromProviders(null)).toEqual([]);
-    expect(collectEmbeddingModelsFromProviders(undefined)).toEqual([]);
-  });
-
-  it('models without mode field are treated as chat', () => {
-    const prov = {
-      p: {
-        models: {
-          'chat-model': {},
-          'embed-model': { mode: 'embeddings' },
-        },
-      },
-    };
-    expect(collectModelsFromProviders(prov)).toEqual(['p/chat-model']);
-    expect(collectEmbeddingModelsFromProviders(prov)).toEqual(['p/embed-model']);
-  });
-});
 
 // ── Config schema tests ────────────────────────────────────────────────────
 
@@ -86,15 +16,14 @@ describe('Config schema with embedding_api_model', () => {
     expect(cfg.rag.embedding_api_model).toBeNull();
   });
 
-  it('accepts a string value for embedding_api_model', () => {
-    const cfg = configSchema.parse({
+  it('rejects a legacy string embedding alias', () => {
+    expect(() => configSchema.parse({
       ...defaults(),
       rag: {
         ...defaults().rag,
         embedding_api_model: 'openai/text-embedding-3-small',
       },
-    });
-    expect(cfg.rag.embedding_api_model).toBe('openai/text-embedding-3-small');
+    })).toThrow(/object/i);
   });
 
   it('accepts null for embedding_api_model', () => {
@@ -105,21 +34,33 @@ describe('Config schema with embedding_api_model', () => {
     expect(cfg.rag.embedding_api_model).toBeNull();
   });
 
-  it('mode enum accepts chat and embeddings, rejects completion', () => {
+  it('accepts a typed connection-scoped API embedding selection', () => {
+    const cfg = configSchema.parse({
+      ...defaults(),
+      rag: {
+        ...defaults().rag,
+        embedding_api_model: {
+          connectionId: '11111111-1111-4111-8111-111111111111',
+          modelId: 'text-embedding-3-small',
+        },
+      },
+    });
+    expect(cfg.rag.embedding_api_model).toEqual({
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'text-embedding-3-small',
+    });
+  });
+
+  it('rejects deprecated provider model metadata in general config', () => {
     const cfg = defaults();
     const providers = {
       p: {
         base_url: 'https://example.com',
         litellm_provider: 'openai',
-        models: {
-          'm1': { mode: 'chat' },
-          'm2': { mode: 'embeddings' },
-        },
+        legacy_model_metadata: true,
       },
     };
-    const parsed = configSchema.parse({ ...cfg, providers });
-    expect((parsed.providers.p.models as Record<string, unknown>)['m1']).toEqual({ mode: 'chat' });
-    expect((parsed.providers.p.models as Record<string, unknown>)['m2']).toEqual({ mode: 'embeddings' });
+    expect(() => configSchema.parse({ ...cfg, providers })).toThrow(/providers is deprecated/i);
   });
 });
 

@@ -4,7 +4,7 @@
  * Validates that the TS/Electron architecture delivers the properties
  * promised by the migration, by exercising REAL app modules:
  *
- * 1. Parallel subagents — SubagentManager + concurrent subagentMachines
+ * 1. Parallel subagents — SubagentManager + concurrent runners
  * 2. Reactive state updates — agentMachine tool lifecycle context
  * 3. Responsive control during stream — CANCEL / interrupt while streaming
  * 4. Correct auto-scroll — pure helpers used by ChatStream
@@ -13,14 +13,14 @@
  * simulations that only prove the JavaScript runtime works.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { createActor } from 'xstate';
 import {
   SubagentManager,
   SubagentState,
 } from '../../src/main/agents/manager';
 import { agentMachine } from '../../src/main/agents/xstate/agent-machine';
-import { subagentMachine } from '../../src/main/agents/xstate/subagent-machine';
-import { sessionMachine } from '../../src/main/agents/xstate/session-machine';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import type { Agent } from '../../src/shared/types/agent';
 import { AgentType, AgentTier } from '../../src/shared/types/agent';
@@ -189,94 +189,6 @@ describe('Architecture Properties (real modules)', () => {
       expect(maxStartSpread).toBeLessThan(DELAY_MS * 0.5);
     });
 
-    it('concurrent subagentMachines complete in parallel (not serialized)', async () => {
-      const DELAY_MS = 60;
-      const COUNT = 4;
-      const startedAt: number[] = [];
-
-      const streamFn = async function* (params: {
-        message: string;
-        agent: Agent;
-        systemPrompt: string;
-        abortSignal: AbortSignal;
-        model?: string | null;
-      }): AsyncGenerator<StreamEvent> {
-        startedAt.push(Date.now());
-        try {
-          await delay(DELAY_MS, params.abortSignal);
-        } catch {
-          return;
-        }
-        yield { type: 'content', text: `ok:${params.message}` };
-        yield { type: 'finish', finishReason: 'stop' };
-      };
-
-      const wallStart = Date.now();
-      const actors = Array.from({ length: COUNT }, (_, i) =>
-        createActor(subagentMachine, {
-          input: {
-            id: `sub-${i}`,
-            label: `Sub ${i}`,
-            task: `task-${i}`,
-            agent: testAgent,
-            systemPrompt: 'You explore.',
-            streamFn,
-          },
-        }),
-      );
-
-      for (const a of actors) a.start();
-      await Promise.all(actors.map((a) => waitForState(a, 'completed')));
-      const wallDuration = Date.now() - wallStart;
-
-      for (const a of actors) {
-        expect(a.getSnapshot().context.response).toMatch(/^ok:task-/);
-        a.stop();
-      }
-
-      expect(wallDuration).toBeLessThan(DELAY_MS * COUNT * 0.6);
-      expect(startedAt).toHaveLength(COUNT);
-      const maxStartSpread = Math.max(...startedAt) - Math.min(...startedAt);
-      expect(maxStartSpread).toBeLessThan(DELAY_MS * 0.5);
-    });
-
-    it('sessionMachine can register multiple SPAWN_SUBAGENT entries concurrently', () => {
-      const streamFn = async function* (): AsyncGenerator<StreamEvent> {
-        yield { type: 'finish', finishReason: 'stop' };
-      };
-
-      const actor = createActor(sessionMachine, {
-        input: {
-          sessionId: 'arch-parallel',
-          activeAgent: mockAgent,
-          systemPrompt: 'You are helpful.',
-          streamFn,
-          subagentStreamFn: streamFn,
-          executeFn: async () => ({ content: 'ok', isError: false }),
-        },
-      });
-      actor.start();
-
-      // Move to active so SPAWN_SUBAGENT is accepted
-      actor.send({ type: 'USER_INPUT', message: 'go' });
-      for (let i = 0; i < 4; i++) {
-        actor.send({
-          type: 'SPAWN_SUBAGENT',
-          name: `explorer-${i}`,
-          task: `task-${i}`,
-          agentType: 'subagent',
-        });
-      }
-
-      const subagents = actor.getSnapshot().context.subagents;
-      expect(subagents.size).toBe(4);
-      // All registered immediately (not blocked by each other)
-      for (const entry of subagents.values()) {
-        expect(['pending', 'running', 'completed']).toContain(entry.state);
-      }
-
-      actor.stop();
-    });
   });
 
   describe('2. Reactive state updates', () => {
@@ -326,7 +238,6 @@ describe('Architecture Properties (real modules)', () => {
           agent: mockAgent,
           systemPrompt: 'You are helpful.',
           streamFn,
-          executeFn: async () => ({ content: 'ok', isError: false }),
           interruptResetMs: 100,
         },
       });
@@ -440,7 +351,6 @@ describe('Architecture Properties (real modules)', () => {
           agent: mockAgent,
           systemPrompt: 'You are helpful.',
           streamFn,
-          executeFn: async () => ({ content: 'ok', isError: false }),
           interruptResetMs: 50,
         },
       });
@@ -491,7 +401,6 @@ describe('Architecture Properties (real modules)', () => {
           agent: mockAgent,
           systemPrompt: 'You are helpful.',
           streamFn,
-          executeFn: async () => ({ content: 'ok', isError: false }),
           interruptResetMs: 100,
         },
       });
@@ -573,5 +482,113 @@ describe('Architecture Properties (real modules)', () => {
       expect(isUserScrolledUp).toBe(false);
       expect(shouldAutoScroll(isUserScrolledUp)).toBe(true);
     });
+  });
+});
+
+describe('Provider architecture invariants (U9)', () => {
+  const sourceRoot = path.resolve(__dirname, '../../src');
+  const read = (...parts: string[]) => fs.readFileSync(path.join(sourceRoot, ...parts), 'utf8');
+
+  function sourceFiles(directory: string): string[] {
+    return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) return sourceFiles(entryPath);
+      return /\.tsx?$/.test(entry.name) ? [entryPath] : [];
+    });
+  }
+
+  it('has no shipping default provider or alias-derived adapter fallback', () => {
+    const config = read('main', 'config', 'schema.ts');
+    const runtime = read('main', 'providers', 'index.ts');
+    const toolSources = [
+      read('main', 'tools', 'index.ts'),
+      read('main', 'tools', 'subagent', 'delegate.ts'),
+    ].join('\n');
+
+    expect(config).toContain('default_model: modelSelectionSchema.nullable().default(null)');
+    expect(runtime).toContain('resolveModelSelection(selection, connections, definitions)');
+    expect(runtime).not.toContain('default_model');
+    expect(runtime).not.toContain('createOpenAICompatible');
+    expect(runtime).not.toContain('createOpenAI(');
+    expect(toolSources).toContain('getTierModelSelection');
+    expect(toolSources).not.toMatch(/llm\/providers/);
+  });
+
+  it('removes obsolete compatibility modules and their production imports', () => {
+    const obsoletePaths = [
+      ['main', 'llm', 'providers.ts'],
+      ['main', 'llm', 'providers-factory.ts'],
+      ['renderer', 'components', 'Onboarding', 'ProviderDetector.tsx'],
+    ];
+
+    for (const parts of obsoletePaths) {
+      expect(fs.existsSync(path.join(sourceRoot, ...parts))).toBe(false);
+    }
+
+    const legacyImport = /(?:from\s*|import\s*\(|require\()\s*['"][^'"]*(?:\/llm\/providers(?:-factory)?|\/Onboarding\/ProviderDetector)['"]/;
+    const offenders = sourceFiles(sourceRoot).filter((filePath) =>
+      legacyImport.test(fs.readFileSync(filePath, 'utf8')),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('uses the credential vault and removes the legacy keychain fallback', () => {
+    const vault = read('main', 'providers', 'credentials', 'vault.ts');
+    const legacyKeychainPath = path.join(sourceRoot, 'main', 'config', 'keychain.ts');
+
+    expect(fs.existsSync(legacyKeychainPath)).toBe(false);
+    expect(vault).toContain("if (backend === 'basic_text') return { available: false, reason: 'basic_text' }");
+    expect(vault).toContain('this.storage.encryptString(JSON.stringify(secret))');
+    expect(vault).not.toMatch(/encryptedPayload:\s*JSON\.stringify/);
+  });
+
+  it('keeps renderer provider operations intent-only and credential-safe', () => {
+    const ipc = read('shared', 'types', 'ipc.ts');
+    const providerIpc = read('main', 'ipc', 'providers.ts');
+    const preload = read('preload', 'index.ts');
+
+    expect(ipc).toContain('ProviderSubmitApiKeyMessage');
+    const connectionView = ipc.match(
+      /export interface ProviderConnectionView \{([\s\S]*?)\n\}/,
+    )?.[1];
+    expect(connectionView).toBeDefined();
+    expect(connectionView).not.toContain('credentialHandle');
+    expect(connectionView).not.toContain('encrypted');
+    expect(connectionView).not.toContain('apiKey');
+    expect(providerIpc).toContain('Invalid providers:submit_api_key payload');
+    expect(providerIpc).toContain('replaceConnectionApiKey');
+    expect(preload).toContain('submitApiKey');
+    expect(preload).not.toContain('readCredential');
+  });
+
+  it('binds generic credentials to an origin and invalidates them before rebinding', () => {
+    const providerIpc = read('main', 'ipc', 'providers.ts');
+    const vault = read('main', 'providers', 'credentials', 'vault.ts');
+
+    expect(providerIpc).toContain('genericOrigin(existing, current) !== genericOrigin(candidate, current)');
+    expect(providerIpc).toContain('deleteConnectionCredentials(existing.id)');
+    expect(vault).toContain('replaceConnectionApiKey');
+    expect(vault).toContain('normalizeCredentialBinding');
+  });
+
+  it('records every provider call through the durable accounting middleware with no SDK retry layer', () => {
+    const middleware = read('main', 'providers', 'accounting', 'middleware.ts');
+    const orchestrator = read('main', 'llm', 'orchestrator.ts');
+    const store = read('main', 'providers', 'accounting', 'store.ts');
+
+    expect(middleware).toContain('insertPending');
+    expect(middleware).toContain('finalize');
+    expect(orchestrator).toMatch(/maxRetries:\s*0/);
+    expect(store).toContain('interruptPendingForConnection');
+  });
+
+  it('retains Lilac supply-discount fields without using them to gate requests', () => {
+    const lilac = read('main', 'providers', 'drivers', 'lilac.ts');
+    const status = read('main', 'providers', 'status', 'service.ts');
+
+    expect(lilac).toContain('current_subscription_discount_percent');
+    expect(lilac).toContain('current_subscription_credit_multiplier');
+    expect(lilac).toContain('current_subscription_supply_state');
+    expect(status).toContain('never mutates a connection or selects a model');
   });
 });

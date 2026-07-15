@@ -29,12 +29,138 @@ import { registerBuiltinTools } from './tools';
 import { getBackgroundStore } from './tools/process/background-store';
 import { wireSubagentRuntime } from './agents/wire-subagents';
 import { getConfig } from './config/loader';
+import { ProviderCatalogStore } from './providers/catalog/store';
+import { ProviderCatalogUpdater, createHttpCatalogTransport } from './providers/catalog/updater';
+import type { CatalogKeyring } from './providers/catalog/trust';
+import { CredentialVault } from './providers/credentials/vault';
+import { ConnectionStore } from './providers/connection-store';
+import { initializeProviderRuntime, resetProviderRuntime } from './providers';
+import { ProviderStatusScheduler, ProviderStatusService } from './providers/status/service';
+import { createLilacStatusSource } from './providers/drivers/lilac';
+import {
+  initializeProviderAccountingStore,
+  resetProviderAccountingStore,
+} from './providers/accounting/store';
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null;
 /** Periodic reclaim of USER-owned bg command stdin after idle timeout. */
 let bgIdleOwnershipTimer: ReturnType<typeof setInterval> | null = null;
+let providerCatalogStore: ProviderCatalogStore | null = null;
+let providerCredentialVault: CredentialVault | null = null;
+let providerConnectionStore: ConnectionStore | null = null;
+let providerStatusService: ProviderStatusService | null = null;
+let providerStatusScheduler: ProviderStatusScheduler | null = null;
+
+/**
+ * Release engineering replaces this empty development keyring with public
+ * Ed25519 verification keys before enabling the Orchid-controlled catalog
+ * origin. It is intentionally code-owned: renderer input and remote data may
+ * never add a trusted signing key.
+ */
+const RELEASE_CATALOG_KEYRING: CatalogKeyring = Object.freeze({});
+
+function resolveBundledCatalogPath(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'providers', 'catalog.json');
+  }
+  // At runtime __dirname is electron/dist/main, not electron/src/main.
+  return path.join(__dirname, '../../assets/providers/catalog.json');
+}
+
+function initializeProviderCatalog(): ProviderCatalogStore {
+  const store = new ProviderCatalogStore({
+    bundledCatalogPath: resolveBundledCatalogPath(),
+    appVersion: app.getVersion(),
+    keyring: RELEASE_CATALOG_KEYRING,
+  });
+  const snapshot = store.load();
+  providerCatalogStore = store;
+
+  // Refresh is best-effort and entirely independent from provider execution.
+  // Until a release embeds a public key, staying offline is the secure default.
+  if (app.isPackaged && Object.keys(RELEASE_CATALOG_KEYRING).length > 0) {
+    const updater = new ProviderCatalogUpdater(store, createHttpCatalogTransport());
+    void updater.refresh().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`Provider catalog refresh failed; using ${snapshot.source} catalog: ${message}`);
+    });
+  }
+  return store;
+}
+
+/** Main-process access for future provider IPC and driver registry work. */
+export function getProviderCatalogStore(): ProviderCatalogStore {
+  if (!providerCatalogStore) {
+    throw new Error('Provider catalog has not been initialized');
+  }
+  return providerCatalogStore;
+}
+
+function initializeProviderCredentialVault(): CredentialVault {
+  const vault = new CredentialVault();
+  providerCredentialVault = vault;
+  return vault;
+}
+
+function initializeProviderRuntimeServices(
+  catalog: ProviderCatalogStore,
+  vault: CredentialVault,
+  status?: ProviderStatusService,
+): void {
+  const connections = new ConnectionStore();
+  providerConnectionStore = connections;
+  initializeProviderRuntime({
+    catalog,
+    vault,
+    connections,
+    status,
+  });
+}
+
+function initializeProviderStatusServices(): ProviderStatusService {
+  const service = new ProviderStatusService();
+  const scheduler = new ProviderStatusScheduler(service);
+  scheduler.start([createLilacStatusSource()]);
+  providerStatusService = service;
+  providerStatusScheduler = scheduler;
+  return service;
+}
+
+function initializeProviderAccounting(): void {
+  try {
+    initializeProviderAccountingStore();
+  } catch (error) {
+    // Ledger failure must disable provider attempts, not local-only Orchid.
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Provider accounting is unavailable; provider requests are disabled: ${message}`);
+  }
+}
+
+/** Main-process credential access for trusted drivers only. */
+export function getProviderCredentialVault(): CredentialVault {
+  if (!providerCredentialVault) {
+    throw new Error('Provider credential vault has not been initialized');
+  }
+  return providerCredentialVault;
+}
+
+/** Main-process connection metadata storage. Credentials remain in the vault. */
+export function getProviderConnectionStore(): ConnectionStore {
+  if (!providerConnectionStore) {
+    throw new Error('Provider connections have not been initialized');
+  }
+  return providerConnectionStore;
+}
+
+/** Main-process access to informational, redacted provider status only. */
+export function getProviderStatusService(): ProviderStatusService {
+  if (!providerStatusService) {
+    throw new Error('Provider status service has not been initialized');
+  }
+  return providerStatusService;
+}
 
 // ── Window creation ──────────────────────────────────────────────────────────
 
@@ -88,6 +214,15 @@ app.whenReady().then(async () => {
 
     // 1. Ensure home config structure exists
     ensureHomeConfig();
+
+    // 1b. Load the bundled provider catalog before any provider-dependent IPC.
+    const catalog = initializeProviderCatalog();
+    // Credential persistence remains unavailable until used when the OS secure
+    // backend is unavailable; it must never abort local-only Orchid startup.
+    const vault = initializeProviderCredentialVault();
+    const status = initializeProviderStatusServices();
+    initializeProviderRuntimeServices(catalog, vault, status);
+    initializeProviderAccounting();
 
     // 2. Seed defaults into home dirs (before any load)
     seedAgentsDir(HOME_AGENTS_DIR);
@@ -200,6 +335,14 @@ app.on('before-quit', async (event) => {
 
     // 4. Reset config manager
     ConfigManager.reset();
+    providerCatalogStore = null;
+    providerCredentialVault = null;
+    providerConnectionStore = null;
+    providerStatusScheduler?.stop();
+    providerStatusScheduler = null;
+    providerStatusService = null;
+    resetProviderRuntime();
+    resetProviderAccountingStore();
 
     // 4. Now actually quit
     app.exit(0);

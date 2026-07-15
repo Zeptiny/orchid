@@ -20,11 +20,12 @@ import { buildInterruptTool } from '../../src/main/tools/subagent/interrupt';
 import type { SubagentToolResult } from '../../src/main/tools/subagent/delegate';
 import type { ToolExecutionContext } from '../../src/main/tools/types';
 
-// ── Mock getModelForTier ─────────────────────────────────────────────────────
-// Mock the config loader so tests don't need a real config on disk.
-vi.mock('../../src/main/config/loader', () => ({
-  getModelForTier: (tier: string) => `model-for-${tier}`,
-}));
+const tierSelections = {
+  seed: { connectionId: '11111111-1111-4111-8111-111111111111', modelId: 'model-for-seed' },
+  sprout: { connectionId: '22222222-2222-4222-8222-222222222222', modelId: 'model-for-sprout' },
+  bloom: { connectionId: '33333333-3333-4333-8333-333333333333', modelId: 'model-for-bloom' },
+  crown: { connectionId: '44444444-4444-4444-8444-444444444444', modelId: 'model-for-crown' },
+} as const;
 
 // ── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -70,13 +71,8 @@ const toolContext = {
   projectRuntime: {
     projectDir: '/tmp',
     config: {
-      default_model: 'model-default',
-      tier_models: {
-        seed: 'model-for-seed',
-        sprout: 'model-for-sprout',
-        bloom: 'model-for-bloom',
-        crown: 'model-for-crown',
-      },
+      default_model: tierSelections.bloom,
+      tier_models: tierSelections,
     },
     agents: new Map(),
     skills: new Map(),
@@ -130,8 +126,8 @@ describe('delegate_to_subagent', () => {
     }, toolContext);
 
     const records = manager.allRecords();
-    // file-explorer has tier SEED, model should be model-for-seed
-    expect(records[0].model).toBe('model-for-seed');
+    // file-explorer has tier SEED, so its frozen selection is exact.
+    expect(records[0].selection).toEqual(tierSelections.seed);
   });
 
   it('should override tier when tier param is provided', async () => {
@@ -145,7 +141,7 @@ describe('delegate_to_subagent', () => {
     }, toolContext);
 
     const records = manager.allRecords();
-    expect(records[0].model).toBe('model-for-crown');
+    expect(records[0].selection).toEqual(tierSelections.crown);
   });
 
   it('should return error for unknown agent type', async () => {
@@ -222,7 +218,7 @@ describe('delegate_to_subagent', () => {
     expect(definition.name).toBe('delegate_to_subagent');
   });
 
-  it('should pass model to SubagentManager.spawn', async () => {
+  it('should pass the typed selection to SubagentManager.spawn', async () => {
     const { handler } = buildDelegateTool(agents, manager);
 
     await handler({
@@ -232,7 +228,23 @@ describe('delegate_to_subagent', () => {
     }, toolContext);
 
     const records = manager.allRecords();
-    expect(records[0].model).toBe('model-for-crown');
+    expect(records[0].selection).toEqual(tierSelections.crown);
+  });
+
+  it('inherits the parent turn selection instead of rebinding to the worker tier', async () => {
+    const { handler } = buildDelegateTool(agents, manager);
+    const parentSelection = {
+      connectionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      modelId: 'parent/vendor/model',
+    };
+
+    await handler({
+      name: 'same provider',
+      task: 'Use the parent provider identity',
+      type: 'file-explorer',
+    }, { ...toolContext, selection: parentSelection });
+
+    expect(manager.allRecords()[0].selection).toEqual(parentSelection);
   });
 });
 

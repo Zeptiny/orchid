@@ -2,7 +2,17 @@
 ### Bugs
 - Scrolling up is impossible
 
+### Problems
+- LLM can deviate from the architecture
+  - AGENT.MD and docs should fix that
+- LLM can make dead code / not fully implement / not follow the plan
+  - This should not be happening as the reviewers are exactly for that, what is wrong?
+  - Subagents should make it easier to fully follow the plan
+- The skills and agents are not updated for the current capabilities of the harness
+
 ### TODOs geral
+- RAG/AST Post Write Callback
+- Still work to do on 2026-07-15-electron-simplification-review.md
 - Verify if remote embeddings model works correctly
 - Subagents vieweing
 - Do not re-parse markdown every update

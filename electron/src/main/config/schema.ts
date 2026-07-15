@@ -7,8 +7,10 @@
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { Config } from '../../shared/types/ipc-boundary';
+import { modelSelectionSchema } from '../../shared/types/provider';
 
 export type { Config, RAGConfig, ModelMetadata } from '../../shared/types/ipc-boundary';
+export { modelSelectionSchema, type ModelSelection } from '../../shared/types/provider';
 
 // ---------------------------------------------------------------------------
 // Nested schemas
@@ -27,24 +29,20 @@ export const ragConfigSchema = z.object({
   // Defaults keep RAG from saturating all cores / huge tensors.
   embedding_threads: z.number().int().min(1).max(64).default(2),
   embedding_batch_size: z.number().int().min(1).max(256).default(16),
-  /**
-   * API-based embedding model in `provider/model` format.
-   * When set, RAG calls the provider's /embeddings endpoint instead of
-   * running local ONNX inference. null = use local ONNX (embedding_model).
-   */
-  embedding_api_model: z.string().nullable().default(null),
+  /** Optional API embedder, bound to the same connection/model identity as chat. */
+  embedding_api_model: modelSelectionSchema.nullable().default(null),
 });
 
 /**
- * Per-model metadata overrides that can be set in provider config.
- * When present, these override the built-in defaults in model-metadata.ts.
+ * Kept solely so existing config IPC consumers can keep reading the field
+ * while connections move to their own store. It must never carry a legacy
+ * configured provider, endpoint, or credential.
  */
-export const modelMetadataOverridesSchema = z.object({
-  max_input_tokens: z.number().int().positive().nullable().optional(),
-  max_output_tokens: z.number().int().positive().nullable().optional(),
-  supports_vision: z.boolean().optional(),
-  mode: z.enum(['chat', 'embeddings']).optional(),
-});
+const deprecatedProvidersSchema = z
+  .record(z.string(), z.record(z.string(), z.unknown()))
+  .refine((providers) => Object.keys(providers).length === 0, {
+    message: 'providers is deprecated and must be empty',
+  });
 
 // ---------------------------------------------------------------------------
 // Main config schema
@@ -52,14 +50,14 @@ export const modelMetadataOverridesSchema = z.object({
 
 export const configSchema = z
   .object({
-    default_model: z.string().min(1).default('default/mimo-v2.5'),
+    default_model: modelSelectionSchema.nullable().default(null),
     tier_models: z
-      .record(z.string(), z.string())
+      .record(z.string(), modelSelectionSchema.nullable())
       .default({
-        seed: 'default/mimo-v2.5',
-        sprout: 'default/mimo-v2.5',
-        bloom: 'default/mimo-v2.5',
-        crown: 'default/mimo-v2.5',
+        seed: null,
+        sprout: null,
+        bloom: null,
+        crown: null,
       }),
     ignored_dirs: z
       .array(z.string())
@@ -104,15 +102,7 @@ export const configSchema = z
           args: ['-y', '@upstash/context7-mcp'],
         },
       }),
-    providers: z
-      .record(z.string(), z.record(z.string(), z.unknown()))
-      .default({
-        default: {
-          base_url: 'https://opencode.ai/zen/go/v1',
-          litellm_provider: 'openai',
-          models: { 'mimo-v2.5': {} },
-        },
-      }),
+    providers: deprecatedProvidersSchema.default({}),
     llm_stream_idle_timeout: z.number().positive().default(300.0),
     llm_stream_retries: z.number().int().nonnegative().default(3),
     background_command_idle_timeout: z.number().positive().default(900.0),

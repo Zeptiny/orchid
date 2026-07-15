@@ -9,12 +9,15 @@
  * runtime code, no main-process imports.
  */
 
+import type { ModelSelection } from './provider';
+
 // ── Session ─────────────────────────────────────────────────────────────────
 
 export interface SessionSummary {
   readonly id: string;
   readonly name: string;
-  readonly model: string | undefined;
+  /** Display-only historical model label; not an executable provider reference. */
+  readonly modelLabel: string | null;
   /**
    * Absolute working directory for the session.
    * `null` when unbound or for legacy sessions without a stored cwd.
@@ -61,21 +64,6 @@ export interface ModelMetadata {
   max_output_tokens: number | null;
   /** Whether the model supports image/vision inputs. */
   supports_vision: boolean;
-  /** Model operating mode: chat (LLM) or embeddings (vector generation). */
-  mode: 'chat' | 'embeddings';
-}
-
-/**
- * A model discovered from a provider's `GET /models` endpoint.
- * Used by the renderer model picker to show available models.
- */
-export interface DiscoveredModel {
-  /** The model ID (e.g., 'gpt-4o', 'claude-3-5-sonnet-20241022'). */
-  readonly id: string;
-  /** Optional human-readable name. */
-  readonly name?: string;
-  /** Optional model owner/organization. */
-  readonly owned_by?: string;
 }
 
 export interface RAGConfig {
@@ -94,18 +82,24 @@ export interface RAGConfig {
    * Default 16 (was a hard-coded 100).
    */
   embedding_batch_size: number;
-  /**
-   * API-based embedding model reference in `provider/model` format
-   * (e.g. `"openai/text-embedding-3-small"`).
-   * When set, RAG uses this provider endpoint instead of local ONNX.
-   * `null` means use the local ONNX `embedding_model` instead.
-   */
-  embedding_api_model: string | null;
+  /** Optional connection-scoped API embedding model; null keeps ONNX local. */
+  embedding_api_model: ModelSelection | null;
+}
+
+/** Non-secret notice about provider compatibility state discarded on load. */
+export interface ConfigDiagnostic {
+  readonly code: 'legacy-provider-config-reset';
+  readonly message: string;
 }
 
 export interface Config {
-  default_model: string;
-  tier_models: Record<string, string>;
+  /**
+   * The selected connection and model for new work. `null` keeps Orchid in
+   * local-only mode until the user chooses a provider connection.
+   */
+  default_model: ModelSelection | null;
+  /** Per-tier connection-scoped selections. A null tier falls back to the nullable default. */
+  tier_models: Record<string, ModelSelection | null>;
   ignored_dirs: string[];
   command_timeout: number;
   read_line_limit: number;
@@ -118,6 +112,10 @@ export interface Config {
   mcp_startup_timeout: number;
   mcp_per_server_timeout: number;
   mcp_servers: Record<string, Record<string, unknown>>;
+  /**
+   * Deprecated IPC compatibility field. Provider connections live outside
+   * layered config; this map is always empty and must not carry credentials.
+   */
   providers: Record<string, Record<string, unknown>>;
   llm_stream_idle_timeout: number;
   llm_stream_retries: number;
@@ -279,11 +277,11 @@ export interface CommandContext {
   /** Set the personality. */
   onSetPersonality: (name: string) => Promise<void>;
   /**
-   * Set the model for the active session (and local UI chrome).
-   * `model` is a `provider/model` id from the providers config.
+   * U1 compatibility hook for the legacy command palette. It has no model
+   * candidates until U8 replaces it with a connection-scoped selection.
    */
   onSetModel: (model: string) => Promise<void>;
-  /** Models available for /model picker (`provider/model` ids). */
+  /** U1 returns no model candidates; U8 supplies typed selections. */
   getAvailableModels: () => string[];
   /** Current model shown in the UI (session model or default). */
   getCurrentModel: () => string;

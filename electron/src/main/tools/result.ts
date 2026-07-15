@@ -15,24 +15,6 @@ export interface NormalizedToolResult {
   isError: boolean;
 }
 
-/** Structured result shape returned by many built-in tools. */
-export interface StructuredToolResult {
-  content: string;
-  display?: string;
-  isError?: boolean;
-  is_error?: boolean;
-}
-
-/** Build a tool error result with explicit failure flag. */
-export function toolError(display: string, content: string): StructuredToolResult {
-  return { display, content, isError: true };
-}
-
-/** Build a tool success result with a display label. */
-export function toolSuccess(display: string, content: string): StructuredToolResult {
-  return { display, content };
-}
-
 /**
  * Coerce a tool handler return value into a content string + isError flag.
  * Preserves `{ display, content }` as JSON for UI summary parsing.

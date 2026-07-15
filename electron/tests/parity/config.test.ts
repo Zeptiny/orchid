@@ -7,6 +7,11 @@
 import { describe, it, expect } from 'vitest';
 import { configSchema, defaults } from '../../src/main/config/schema';
 
+const DEFAULT_SELECTION = {
+  connectionId: '11111111-1111-4111-8111-111111111111',
+  modelId: 'vendor/models/gpt-4o',
+};
+
 // ── Expected config fields (22 total) ──────────────────────────────────────
 
 interface ConfigFieldExpectation {
@@ -17,38 +22,127 @@ interface ConfigFieldExpectation {
 }
 
 const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
-  { field: 'default_model', type: 'string', defaultValue: 'default/mimo-v2.5', envOverride: 'ORCHID_DEFAULT_MODEL' },
-  { field: 'tier_models', type: 'record', defaultValue: { seed: 'default/mimo-v2.5', sprout: 'default/mimo-v2.5', bloom: 'default/mimo-v2.5', crown: 'default/mimo-v2.5' } },
+  { field: 'default_model', type: 'nullable ModelSelection', defaultValue: null },
+  {
+    field: 'tier_models',
+    type: 'record',
+    defaultValue: { seed: null, sprout: null, bloom: null, crown: null },
+  },
   { field: 'ignored_dirs', type: 'array', defaultValue: undefined }, // complex default, checked separately
-  { field: 'command_timeout', type: 'number', defaultValue: 30, envOverride: 'ORCHID_COMMAND_TIMEOUT' },
-  { field: 'read_line_limit', type: 'number', defaultValue: 1000, envOverride: 'ORCHID_READ_LINE_LIMIT' },
-  { field: 'grep_max_results', type: 'number', defaultValue: 100, envOverride: 'ORCHID_GREP_MAX_RESULTS' },
-  { field: 'directory_tree_depth', type: 'number', defaultValue: 2, envOverride: 'ORCHID_DIRECTORY_TREE_DEPTH' },
+  {
+    field: 'command_timeout',
+    type: 'number',
+    defaultValue: 30,
+    envOverride: 'ORCHID_COMMAND_TIMEOUT',
+  },
+  {
+    field: 'read_line_limit',
+    type: 'number',
+    defaultValue: 1000,
+    envOverride: 'ORCHID_READ_LINE_LIMIT',
+  },
+  {
+    field: 'grep_max_results',
+    type: 'number',
+    defaultValue: 100,
+    envOverride: 'ORCHID_GREP_MAX_RESULTS',
+  },
+  {
+    field: 'directory_tree_depth',
+    type: 'number',
+    defaultValue: 2,
+    envOverride: 'ORCHID_DIRECTORY_TREE_DEPTH',
+  },
   { field: 'theme', type: 'string', defaultValue: 'default', envOverride: 'ORCHID_THEME' },
-  { field: 'personality', type: 'string', defaultValue: 'default', envOverride: 'ORCHID_PERSONALITY' },
+  {
+    field: 'personality',
+    type: 'string',
+    defaultValue: 'default',
+    envOverride: 'ORCHID_PERSONALITY',
+  },
   { field: 'rag', type: 'object', defaultValue: undefined }, // nested, checked separately
-  { field: 'ast_max_file_size', type: 'number', defaultValue: 1_048_576, envOverride: 'ORCHID_AST_MAX_FILE_SIZE' },
-  { field: 'mcp_startup_timeout', type: 'number', defaultValue: 60.0, envOverride: 'ORCHID_MCP_STARTUP_TIMEOUT' },
-  { field: 'mcp_per_server_timeout', type: 'number', defaultValue: 10.0, envOverride: 'ORCHID_MCP_PER_SERVER_TIMEOUT' },
+  {
+    field: 'ast_max_file_size',
+    type: 'number',
+    defaultValue: 1_048_576,
+    envOverride: 'ORCHID_AST_MAX_FILE_SIZE',
+  },
+  {
+    field: 'mcp_startup_timeout',
+    type: 'number',
+    defaultValue: 60.0,
+    envOverride: 'ORCHID_MCP_STARTUP_TIMEOUT',
+  },
+  {
+    field: 'mcp_per_server_timeout',
+    type: 'number',
+    defaultValue: 10.0,
+    envOverride: 'ORCHID_MCP_PER_SERVER_TIMEOUT',
+  },
   { field: 'mcp_servers', type: 'record', defaultValue: undefined }, // complex default
   { field: 'providers', type: 'record', defaultValue: undefined }, // complex default
-  { field: 'llm_stream_idle_timeout', type: 'number', defaultValue: 300.0, envOverride: 'ORCHID_LLM_STREAM_IDLE_TIMEOUT' },
-  { field: 'llm_stream_retries', type: 'number', defaultValue: 3, envOverride: 'ORCHID_LLM_STREAM_RETRIES' },
-  { field: 'background_command_idle_timeout', type: 'number', defaultValue: 900.0, envOverride: 'ORCHID_BG_CMD_IDLE_TIMEOUT' },
+  {
+    field: 'llm_stream_idle_timeout',
+    type: 'number',
+    defaultValue: 300.0,
+    envOverride: 'ORCHID_LLM_STREAM_IDLE_TIMEOUT',
+  },
+  {
+    field: 'llm_stream_retries',
+    type: 'number',
+    defaultValue: 3,
+    envOverride: 'ORCHID_LLM_STREAM_RETRIES',
+  },
+  {
+    field: 'background_command_idle_timeout',
+    type: 'number',
+    defaultValue: 900.0,
+    envOverride: 'ORCHID_BG_CMD_IDLE_TIMEOUT',
+  },
   // Electron-only: AI SDK tool-loop cap (Python is unbounded)
-  { field: 'max_tool_steps', type: 'number', defaultValue: 100, envOverride: 'ORCHID_MAX_TOOL_STEPS' },
+  {
+    field: 'max_tool_steps',
+    type: 'number',
+    defaultValue: 100,
+    envOverride: 'ORCHID_MAX_TOOL_STEPS',
+  },
   // Desktop UI preference outside the migrated core configuration contract.
   { field: 'always_expand_tool_groups', type: 'boolean', defaultValue: false },
 ];
 
 const EXPECTED_RAG_FIELDS = [
   { field: 'chunk_size', type: 'number', defaultValue: 2000, envOverride: 'ORCHID_RAG_CHUNK_SIZE' },
-  { field: 'chunk_overlap', type: 'number', defaultValue: 200, envOverride: 'ORCHID_RAG_CHUNK_OVERLAP' },
+  {
+    field: 'chunk_overlap',
+    type: 'number',
+    defaultValue: 200,
+    envOverride: 'ORCHID_RAG_CHUNK_OVERLAP',
+  },
   { field: 'top_k', type: 'number', defaultValue: 5, envOverride: 'ORCHID_RAG_TOP_K' },
-  { field: 'max_file_size', type: 'number', defaultValue: 512000, envOverride: 'ORCHID_RAG_MAX_FILE_SIZE' },
-  { field: 'embedding_model', type: 'string', defaultValue: 'fastembed/BAAI/bge-small-en-v1.5', envOverride: 'ORCHID_RAG_EMBEDDING_MODEL' },
-  { field: 'embedding_threads', type: 'number', defaultValue: 2, envOverride: 'ORCHID_RAG_EMBEDDING_THREADS' },
-  { field: 'embedding_batch_size', type: 'number', defaultValue: 16, envOverride: 'ORCHID_RAG_EMBEDDING_BATCH_SIZE' },
+  {
+    field: 'max_file_size',
+    type: 'number',
+    defaultValue: 512000,
+    envOverride: 'ORCHID_RAG_MAX_FILE_SIZE',
+  },
+  {
+    field: 'embedding_model',
+    type: 'string',
+    defaultValue: 'fastembed/BAAI/bge-small-en-v1.5',
+    envOverride: 'ORCHID_RAG_EMBEDDING_MODEL',
+  },
+  {
+    field: 'embedding_threads',
+    type: 'number',
+    defaultValue: 2,
+    envOverride: 'ORCHID_RAG_EMBEDDING_THREADS',
+  },
+  {
+    field: 'embedding_batch_size',
+    type: 'number',
+    defaultValue: 16,
+    envOverride: 'ORCHID_RAG_EMBEDDING_BATCH_SIZE',
+  },
 ];
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -107,7 +201,10 @@ describe('Config Parity', () => {
 
       for (const expected of EXPECTED_FIELDS) {
         if (expected.defaultValue !== undefined) {
-          expect(cfg[expected.field as keyof typeof cfg], `Field '${expected.field}' default`).toEqual(expected.defaultValue);
+          expect(
+            cfg[expected.field as keyof typeof cfg],
+            `Field '${expected.field}' default`,
+          ).toEqual(expected.defaultValue);
         }
       }
     });
@@ -116,7 +213,10 @@ describe('Config Parity', () => {
       const cfg = defaults();
 
       for (const expected of EXPECTED_RAG_FIELDS) {
-        expect(cfg.rag[expected.field as keyof typeof cfg.rag], `RAG field '${expected.field}' default`).toBe(expected.defaultValue);
+        expect(
+          cfg.rag[expected.field as keyof typeof cfg.rag],
+          `RAG field '${expected.field}' default`,
+        ).toBe(expected.defaultValue);
       }
     });
 
@@ -134,17 +234,24 @@ describe('Config Parity', () => {
       expect(cfg.mcp_servers['context7']!['command']).toBe('npx');
     });
 
-    it('providers has default provider', () => {
+    it('providers remains an empty deprecated compatibility map', () => {
       const cfg = defaults();
-      expect(cfg.providers).toHaveProperty('default');
-      expect(cfg.providers['default']!['base_url']).toBe('https://opencode.ai/zen/go/v1');
+      expect(cfg.providers).toEqual({});
     });
   });
 
   describe('field types', () => {
+    it('model selections are nullable typed values', () => {
+      const cfg = defaults();
+      expect(cfg.default_model).toBeNull();
+      expect(cfg.tier_models).toEqual({ seed: null, sprout: null, bloom: null, crown: null });
+      const parsed = configSchema.parse({ default_model: DEFAULT_SELECTION });
+      expect(parsed.default_model).toEqual(DEFAULT_SELECTION);
+      expect(() => configSchema.parse({ default_model: 'legacy/model' })).toThrow();
+    });
+
     it('string fields are strings', () => {
       const cfg = defaults();
-      expect(typeof cfg.default_model).toBe('string');
       expect(typeof cfg.theme).toBe('string');
       expect(typeof cfg.personality).toBe('string');
       expect(typeof cfg.rag.embedding_model).toBe('string');
@@ -184,8 +291,8 @@ describe('Config Parity', () => {
     });
 
     it('configSchema.parse with partial input fills in defaults', () => {
-      const parsed = configSchema.parse({ default_model: 'custom/model' });
-      expect(parsed.default_model).toBe('custom/model');
+      const parsed = configSchema.parse({ default_model: DEFAULT_SELECTION });
+      expect(parsed.default_model).toEqual(DEFAULT_SELECTION);
       expect(parsed.command_timeout).toBe(30); // default
       expect(parsed.rag.chunk_size).toBe(2000); // default
     });

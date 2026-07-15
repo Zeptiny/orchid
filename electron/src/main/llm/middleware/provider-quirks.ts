@@ -205,25 +205,3 @@ function createEmptyStreamResult(): LanguageModelV4StreamResult {
     stream,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Tool output offloading helpers (for U9 to use)
-// ---------------------------------------------------------------------------
-
-/**
- * Check if a tool output should be offloaded.
- * Matches Python _maybe_offload_tool_output logic (client.py:251-307).
- *
- * @param toolName - Name of the tool that produced the output
- * @param contentLength - Length of the output content
- * @returns true if the output should be offloaded to a cache file
- */
-export function shouldOffloadToolOutput(
-  toolName: string,
-  contentLength: number,
-): boolean {
-  return (
-    contentLength > TOOL_OUTPUT_INLINE_THRESHOLD &&
-    !TOOLS_WITHOUT_OUTPUT_OFFLOAD.has(toolName)
-  );
-}

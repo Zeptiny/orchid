@@ -335,9 +335,23 @@ export async function runWithToolTimeout<T>(
   );
 }
 
+/** Test-only root override so unit tests never write a real home directory. */
+let toolOutputCacheRootOverride: string | null = null;
+
+/** @internal Test-only cache-root override. */
+export function _setToolOutputCacheRootForTests(root: string | null): void {
+  toolOutputCacheRootOverride = root;
+}
+
 /** Get the tool-output cache directory for a session. */
 function getToolOutputCacheDir(sessionId: string): string {
-  return path.join(os.homedir(), '.orchid', 'cache', 'tool-output', sessionId);
+  return path.join(
+    toolOutputCacheRootOverride ?? os.homedir(),
+    '.orchid',
+    'cache',
+    'tool-output',
+    sessionId,
+  );
 }
 
 /** Generate a slug for the tool output cache file. */

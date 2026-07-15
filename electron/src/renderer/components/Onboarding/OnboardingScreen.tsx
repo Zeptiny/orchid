@@ -1,548 +1,323 @@
 /**
- * OnboardingScreen — first-run onboarding flow.
+ * First-run provider onboarding.
  *
- * 6 steps:
- * 1. Welcome — app name, description, "Get Started"
- * 2. Provider detection — scan for Ollama, check env vars
- * 3. Provider confirmation — pre-filled config with detected providers
- * 4. Model selection — pick default model from detected providers
- * 5. Config seeding — show what will be created
- * 6. Done — "You're ready to go!" with "Start chatting"
- *
- * Features:
- * - Skip onboarding at any step
- * - Skipped steps use defaults
- * - Fullscreen overlay (first launch only)
+ * Provider connections are created through the same wizard used by Settings.
+ * Once one or more connections are ready, onboarding lets the user assign the
+ * default and tier models before returning to chat.
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
-import {
-  detectProviders,
-  buildProvidersConfig,
-  type DetectedProvider,
-  type DetectionResult,
-} from './ProviderDetector';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ProviderModelOption } from '../../../shared/types/ipc';
+import type { ModelSelection } from '../../../shared/types/provider';
+import { useProviders } from '../../hooks/useProviders';
 import { useFocusTrap } from '../../keyboard';
+import { isTextGenerationModel } from '../../utils/models';
+import {
+  ConnectionWizard,
+  type ProviderConnectionCompletion,
+} from '../Providers/ConnectionWizard';
+import {
+  MODEL_ASSIGNMENT_TIERS,
+  ModelAssignments,
+} from '../Preferences/ModelAssignments';
+import { Icon } from '../Icon';
 import orchidIcon from '../../assets/orchid-icon.svg';
 
-// ── Types ────────────────────────────────────────────────────────────────────
+type OnboardingStep = 'providers' | 'models';
 
-type StepId = 'welcome' | 'detect' | 'confirm' | 'models' | 'seeding' | 'done';
-
-interface StepDef {
-  id: StepId;
-  label: string;
-}
-
-const STEPS: StepDef[] = [
-  { id: 'welcome', label: 'Welcome' },
-  { id: 'detect', label: 'Detect' },
-  { id: 'confirm', label: 'Confirm' },
-  { id: 'models', label: 'Models' },
-  { id: 'seeding', label: 'Seed' },
-  { id: 'done', label: 'Done' },
-];
+const EMPTY_TIER_MODELS: Record<string, ModelSelection | null> = Object.fromEntries(
+  MODEL_ASSIGNMENT_TIERS.map((tier) => [tier.id, null]),
+);
 
 interface OnboardingScreenProps {
   isOpen: boolean;
-  onComplete: (config: Record<string, unknown>) => void;
+  onComplete: () => void;
   onSkip: () => void;
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
+function copySelection(selection: ModelSelection): ModelSelection {
+  return { connectionId: selection.connectionId, modelId: selection.modelId };
+}
 
 export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScreenProps) {
-  const [stepIndex, setStepIndex] = useState(0);
-  const [detectionResult, setDetectionResult] = useState<DetectionResult | null>(null);
-  const [detecting, setDetecting] = useState(false);
-  const [confirmedProviders, setConfirmedProviders] = useState<DetectedProvider[]>([]);
-  const [selectedDefaultModel, setSelectedDefaultModel] = useState('');
-  const [seedConfirmed, setSeedConfirmed] = useState(false);
-
+  const providers = useProviders();
+  const [step, setStep] = useState<OnboardingStep>('providers');
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [modelOptions, setModelOptions] = useState<readonly ProviderModelOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [defaultModel, setDefaultModel] = useState<ModelSelection | null>(null);
+  const [tierModels, setTierModels] = useState<Record<string, ModelSelection | null>>(
+    EMPTY_TIER_MODELS,
+  );
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const modelSeededRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const currentStep = STEPS[stepIndex];
-
-  // ── Auto-detect on step 2 ────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (!isOpen || currentStep.id !== 'detect') return;
-
-    let cancelled = false;
-    setDetecting(true);
-
-    detectProviders().then((result) => {
-      if (!cancelled) {
-        setDetectionResult(result);
-        // Auto-populate confirmed providers with detected ones
-        const detected = result.providers.filter((p) => p.detected);
-        setConfirmedProviders(detected);
-        setDetecting(false);
-
-        // Auto-select first model as default
-        if (detected.length > 0 && detected[0].models.length > 0) {
-          setSelectedDefaultModel(`${detected[0].id}/${detected[0].models[0]}`);
-        }
-      }
-    });
-
-    return () => { cancelled = true; };
-  }, [isOpen, currentStep.id]);
-
-  // ── Navigation ───────────────────────────────────────────────────────────
-
-  const goNext = useCallback(() => {
-    setStepIndex((prev) => Math.min(prev + 1, STEPS.length - 1));
-  }, []);
-
-  const goPrev = useCallback(() => {
-    setStepIndex((prev) => Math.max(prev - 1, 0));
-  }, []);
-
-  // ── Toggle provider in confirmed list ────────────────────────────────────
-
-  const toggleProvider = useCallback(
-    (provider: DetectedProvider) => {
-      setConfirmedProviders((prev) => {
-        const exists = prev.find((p) => p.id === provider.id);
-        if (exists) {
-          return prev.filter((p) => p.id !== provider.id);
-        }
-        return [...prev, provider];
-      });
-    },
-    [],
+  const connections = providers.overview?.connections ?? [];
+  const readyConnections = useMemo(
+    () => connections.filter((connection) => connection.health === 'ready'),
+    [connections],
+  );
+  const connectionSignature = useMemo(
+    () => connections
+      .map((connection) => `${connection.id}:${connection.health}:${connection.modelIds.join(',')}`)
+      .sort()
+      .join('|'),
+    [connections],
   );
 
-  // ── Complete onboarding ──────────────────────────────────────────────────
+  useFocusTrap({ enabled: isOpen, containerRef });
 
-  const handleComplete = useCallback(() => {
-    const config: Record<string, unknown> = {};
-
-    // Build providers config from confirmed providers
-    if (confirmedProviders.length > 0) {
-      config.providers = buildProvidersConfig(confirmedProviders);
-    }
-
-    // Set default model if selected
-    if (selectedDefaultModel) {
-      config.default_model = selectedDefaultModel;
-      config.tier_models = {
-        seed: selectedDefaultModel,
-        sprout: selectedDefaultModel,
-        bloom: selectedDefaultModel,
-        crown: selectedDefaultModel,
-      };
-    }
-
-    onComplete(config);
-  }, [confirmedProviders, selectedDefaultModel, onComplete]);
-
-  // ── Skip with defaults ───────────────────────────────────────────────────
-
-  const handleSkip = useCallback(() => {
-    onSkip();
-  }, [onSkip]);
-
-  useFocusTrap({
-    enabled: isOpen,
-    containerRef,
-  });
-
-  // Re-focus first control when the step changes.
   useEffect(() => {
-    if (!isOpen || !containerRef.current) return;
-    const focusable = containerRef.current.querySelectorAll<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-    );
-    focusable[0]?.focus();
-  }, [isOpen, stepIndex]);
+    if (isOpen) return;
+    setStep('providers');
+    setWizardOpen(false);
+    setModelOptions([]);
+    setModelsLoading(false);
+    setModelError(null);
+    setDefaultModel(null);
+    setTierModels(EMPTY_TIER_MODELS);
+    setSaving(false);
+    setSaveError(null);
+    modelSeededRef.current = false;
+  }, [isOpen]);
 
-  // ── Keyboard shortcuts ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isOpen || step !== 'models' || !providers.overview) return;
+    let cancelled = false;
+    setModelsLoading(true);
+    setModelError(null);
+    void providers.modelList().then((options) => {
+      if (cancelled) return;
+      setModelOptions(options.filter(
+        (option) => option.available && isTextGenerationModel(option.model),
+      ));
+    }).catch((error: unknown) => {
+      if (!cancelled) {
+        setModelOptions([]);
+        setModelError(error instanceof Error ? error.message : 'Models could not be loaded.');
+      }
+    }).finally(() => {
+      if (!cancelled) setModelsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [connectionSignature, isOpen, providers.modelList, providers.overview, step]);
+
+  useEffect(() => {
+    if (!isOpen || step !== 'models' || modelSeededRef.current || modelOptions.length === 0) return;
+    const firstSelection = copySelection(modelOptions[0].selection);
+    setDefaultModel(firstSelection);
+    setTierModels(Object.fromEntries(
+      MODEL_ASSIGNMENT_TIERS.map((tier) => [tier.id, copySelection(firstSelection)]),
+    ));
+    modelSeededRef.current = true;
+  }, [isOpen, modelOptions, step]);
 
   useEffect(() => {
     if (!isOpen) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        handleSkip();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onSkip();
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, handleSkip]);
+  }, [isOpen, onSkip]);
 
-  // ── Don't render if not open ─────────────────────────────────────────────
+  const handleProviderComplete = useCallback(async (_result: ProviderConnectionCompletion) => {
+    await providers.refresh();
+    setWizardOpen(false);
+    setSaveError(null);
+  }, [providers.refresh]);
+
+  const finishOnboarding = useCallback(async () => {
+    if (!defaultModel) {
+      setSaveError('Choose a default model before finishing onboarding.');
+      return;
+    }
+    if (!window.orchid?.config?.save) {
+      setSaveError('Configuration saving is unavailable in this build.');
+      return;
+    }
+
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const updates = { default_model: defaultModel, tier_models: tierModels };
+      await window.orchid.config.save({ updates });
+      window.dispatchEvent(new CustomEvent('orchid:config-updated', { detail: updates }));
+      window.dispatchEvent(new CustomEvent<{ selection: ModelSelection }>(
+        'orchid:provider-selection-created',
+        { detail: { selection: defaultModel } },
+      ));
+      onComplete();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Onboarding could not be completed.');
+    } finally {
+      setSaving(false);
+    }
+  }, [defaultModel, onComplete, tierModels]);
 
   if (!isOpen) return null;
 
-  // ── Collect all available models from confirmed providers ────────────────
-
-  const availableModels: string[] = [];
-  for (const provider of confirmedProviders) {
-    for (const model of provider.models) {
-      availableModels.push(`${provider.id}/${model}`);
-    }
-  }
-
-  // ── Seed directories that will be created ────────────────────────────────
-
-  const seedDirs = [
-    '~/.orchid/',
-    '~/.orchid/agents/',
-    '~/.orchid/skills/',
-    '~/.orchid/personalities/',
-    '~/.orchid/config.json',
-  ];
-
-  // ── Render step content ──────────────────────────────────────────────────
-
-  function renderStepContent() {
-    switch (currentStep.id) {
-      case 'welcome':
-        return (
-          <div className="onb-step onb-welcome">
-            <div className="onb-welcome-icon">
-              <img src={orchidIcon} alt="" width={72} height={72} />
-            </div>
-            <h1>Welcome to Orchid</h1>
-            <p className="onb-welcome-subtitle">
-              Your AI-powered coding assistant. Orchid helps you write, debug,
-              and understand code through natural conversation.
-            </p>
-            <div className="onb-welcome-features">
-              <div className="onb-feature">
-                <span className="onb-feature-icon">{'\u{1F4AC}'}</span>
-                <span>Natural language coding</span>
-              </div>
-              <div className="onb-feature">
-                <span className="onb-feature-icon">{'\u{1F527}'}</span>
-                <span>27 built-in tools</span>
-              </div>
-              <div className="onb-feature">
-                <span className="onb-feature-icon">{'\u{1F9E9}'}</span>
-                <span>MCP server integration</span>
-              </div>
-            </div>
-            <div className="onb-step-actions">
-              <button className="btn btn-primary" onClick={goNext}>
-                Get Started
-              </button>
-              <button className="btn btn-ghost" onClick={handleSkip}>
-                Skip Setup
-              </button>
-            </div>
-          </div>
-        );
-
-      case 'detect':
-        return (
-          <div className="onb-step onb-detect">
-            <h2>Detecting Providers</h2>
-            <p className="onb-step-description">
-              Scanning your system for available LLM providers...
-            </p>
-
-            {detecting ? (
-              <div className="state-loading">
-                <div className="spinner" />
-                <span>Scanning...</span>
-              </div>
-            ) : detectionResult ? (
-              <div className="onb-detect-results">
-                {detectionResult.providers.map((p) => (
-                  <div
-                    key={p.id}
-                    className={`onb-detect-item ${p.detected ? 'detected' : 'not-detected'}`}
-                  >
-                    <span className="onb-detect-icon">
-                      {p.detected ? '\u2705' : '\u274C'}
-                    </span>
-                    <span className="onb-detect-name">{p.name}</span>
-                    <span className="onb-detect-method">
-                      {p.method === 'ollama-endpoint'
-                        ? 'localhost:11434'
-                        : p.maskedKey ?? 'not found'}
-                    </span>
-                    {p.detected && (
-                      <span className="onb-detect-models">
-                        {p.models.length} model(s)
-                      </span>
-                    )}
-                  </div>
-                ))}
-
-                {detectionResult.providers.filter((p) => p.detected).length === 0 && (
-                  <div className="onb-detect-none">
-                    <p>No providers detected. You can:</p>
-                    <ul>
-                      <li>Install Ollama: <code>curl -fsSL https://ollama.com/install.sh | sh</code></li>
-                      <li>Set an API key: <code>export OPENAI_API_KEY=sk-...</code></li>
-                      <li>Configure manually in the next step</li>
-                    </ul>
-                  </div>
-                )}
-              </div>
-            ) : null}
-
-            <div className="onb-step-actions">
-              <button className="btn btn-ghost" onClick={goPrev}>
-                Back
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={goNext}
-                disabled={detecting}
-              >
-                Continue
-              </button>
-              <button className="btn btn-ghost" onClick={handleSkip}>
-                Skip Setup
-              </button>
-            </div>
-          </div>
-        );
-
-      case 'confirm':
-        return (
-          <div className="onb-step onb-confirm">
-            <h2>Confirm Providers</h2>
-            <p className="onb-step-description">
-              Select which providers to enable. You can add more later in Preferences.
-            </p>
-
-            {detectionResult && (
-              <div className="onb-confirm-list">
-                {detectionResult.providers
-                  .filter((p) => p.detected)
-                  .map((p) => {
-                    const isConfirmed = confirmedProviders.some(
-                      (cp) => cp.id === p.id,
-                    );
-                    return (
-                      <div
-                        key={p.id}
-                        className={`onb-confirm-item ${isConfirmed ? 'selected' : ''}`}
-                        onClick={() => toggleProvider(p)}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isConfirmed}
-                          onChange={() => toggleProvider(p)}
-                          className="onb-confirm-checkbox"
-                        />
-                        <div className="onb-confirm-info">
-                          <span className="onb-confirm-name">{p.name}</span>
-                          <span className="onb-confirm-detail">
-                            {p.models.length} model(s) available
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-            )}
-
-            {confirmedProviders.length === 0 && (
-              <div className="onb-confirm-empty">
-                No providers selected. You can configure providers later in Preferences.
-              </div>
-            )}
-
-            <div className="onb-step-actions">
-              <button className="btn btn-ghost" onClick={goPrev}>
-                Back
-              </button>
-              <button className="btn btn-primary" onClick={goNext}>
-                Continue
-              </button>
-              <button className="btn btn-ghost" onClick={handleSkip}>
-                Skip Setup
-              </button>
-            </div>
-          </div>
-        );
-
-      case 'models':
-        return (
-          <div className="onb-step onb-models">
-            <h2>Select Default Model</h2>
-            <p className="onb-step-description">
-              Choose the default model for new sessions. You can change this per-session later.
-            </p>
-
-            {availableModels.length > 0 ? (
-              <div className="onb-models-picker">
-                {availableModels.map((model) => (
-                  <div
-                    key={model}
-                    className={`onb-model-item ${selectedDefaultModel === model ? 'selected' : ''}`}
-                    onClick={() => setSelectedDefaultModel(model)}
-                  >
-                    <input
-                      type="radio"
-                      name="default-model"
-                      checked={selectedDefaultModel === model}
-                      onChange={() => setSelectedDefaultModel(model)}
-                      className="onb-model-radio"
-                    />
-                    <span className="onb-model-name">{model}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="onb-models-empty">
-                <p>No models available from detected providers.</p>
-                <p>You can configure providers and models later in Preferences.</p>
-              </div>
-            )}
-
-            <div className="onb-step-actions">
-              <button className="btn btn-ghost" onClick={goPrev}>
-                Back
-              </button>
-              <button className="btn btn-primary" onClick={goNext}>
-                Continue
-              </button>
-              <button className="btn btn-ghost" onClick={handleSkip}>
-                Skip Setup
-              </button>
-            </div>
-          </div>
-        );
-
-      case 'seeding':
-        return (
-          <div className="onb-step onb-seeding">
-            <h2>Configuration Preview</h2>
-            <p className="onb-step-description">
-              The following configuration will be created:
-            </p>
-
-            <div className="onb-seed-preview">
-              <div className="onb-seed-section">
-                <h4>Directories</h4>
-                <ul className="onb-seed-list">
-                  {seedDirs.map((dir) => (
-                    <li key={dir} className="onb-seed-item">
-                      <span className="onb-seed-icon">{'\u{1F4C1}'}</span>
-                      <code>{dir}</code>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              {confirmedProviders.length > 0 && (
-                <div className="onb-seed-section">
-                  <h4>Providers</h4>
-                  <ul className="onb-seed-list">
-                    {confirmedProviders.map((p) => (
-                      <li key={p.id} className="onb-seed-item">
-                        <span className="onb-seed-icon">{'\u{1F4E1}'}</span>
-                        <span>{p.name}</span>
-                        <span className="onb-seed-detail">
-                          {p.models.length} model(s)
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {selectedDefaultModel && (
-                <div className="onb-seed-section">
-                  <h4>Default Model</h4>
-                  <div className="onb-seed-item">
-                    <span className="onb-seed-icon">{'\u{1F916}'}</span>
-                    <code>{selectedDefaultModel}</code>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <label className="onb-seed-confirm">
-              <input
-                type="checkbox"
-                checked={seedConfirmed}
-                onChange={(e) => setSeedConfirmed(e.target.checked)}
-              />
-              <span>I understand and want to create this configuration</span>
-            </label>
-
-            <div className="onb-step-actions">
-              <button className="btn btn-ghost" onClick={goPrev}>
-                Back
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleComplete}
-                disabled={!seedConfirmed}
-              >
-                Create Configuration
-              </button>
-              <button className="btn btn-ghost" onClick={handleSkip}>
-                Skip Setup
-              </button>
-            </div>
-          </div>
-        );
-
-      case 'done':
-        return (
-          <div className="onb-step onb-done">
-            <div className="onb-done-icon">{'\u{1F389}'}</div>
-            <h2>You're Ready to Go!</h2>
-            <p className="onb-done-subtitle">
-              Your configuration has been created. You can always change these
-              settings later via <code>/settings</code>.
-            </p>
-            <div className="onb-step-actions">
-              <button className="btn btn-primary" onClick={handleComplete}>
-                Start Chatting
-              </button>
-            </div>
-          </div>
-        );
-    }
-  }
-
-  // ── Main render ──────────────────────────────────────────────────────────
-
   return (
-    <div className="onb-overlay" ref={containerRef}>
-      <div className="onb-container">
-        {/* Progress bar */}
-        <div className="onb-progress">
-          {STEPS.map((step, i) => (
-            <div
-              key={step.id}
-              className={`onb-progress-step ${
-                i === stepIndex
-                  ? 'active'
-                  : i < stepIndex
-                    ? 'completed'
-                    : ''
-              }`}
-            >
-              <div className="onb-progress-dot" />
-              <span className="onb-progress-label">{step.label}</span>
+    <>
+      <div className="onb-overlay" ref={containerRef}>
+        <div className="onb-container">
+          <ul className="steps steps-horizontal w-full" aria-label="Onboarding progress">
+            <li className="step step-primary">Add providers</li>
+            <li className={`step ${step === 'models' ? 'step-primary' : ''}`}>Choose models</li>
+          </ul>
+
+          {step === 'providers' ? (
+            <div className="onb-step text-left">
+              <div className="flex flex-col items-center gap-4 text-center">
+                <img src={orchidIcon} alt="Orchid" width={72} height={72} />
+                <div className="space-y-2">
+                  <h1 className="text-3xl font-semibold">Connect your providers</h1>
+                  <p className="onb-step-description">
+                    Add one or more provider connections. You can use multiple accounts, endpoints,
+                    or providers together.
+                  </p>
+                </div>
+              </div>
+
+              {providers.error && !providers.overview && (
+                <div role="alert" className="alert alert-warning">
+                  <span>{providers.error}</span>
+                  <button type="button" className="btn btn-sm" onClick={() => void providers.refresh()}>
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {connections.length > 0 ? (
+                <div className="grid gap-3 sm:grid-cols-2" aria-label="Added providers">
+                  {connections.map((connection) => (
+                    <article key={connection.id} className="config-card">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h2 className="config-card-title truncate">{connection.name}</h2>
+                          <p className="config-card-desc truncate">
+                            {connection.providerDisplayName ?? connection.providerId}
+                          </p>
+                        </div>
+                        <span className={connection.health === 'ready'
+                          ? 'badge badge-success badge-soft'
+                          : 'badge badge-warning badge-soft'}>
+                          {connection.health === 'ready' ? 'Ready' : 'Needs attention'}
+                        </span>
+                      </div>
+                      <p className="mt-3 text-xs text-base-content/70">
+                        {connection.modelIds.length} model{connection.modelIds.length === 1 ? '' : 's'} selected
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div role="status" className="alert alert-info">
+                  <Icon name="cpu" size={16} />
+                  <span>Add a provider to unlock model selection and chat.</span>
+                </div>
+              )}
+
+              {saveError && (
+                <div role="alert" className="alert alert-error">
+                  <Icon name="alertCircle" size={16} />
+                  <span>{saveError}</span>
+                </div>
+              )}
+
+              <div className="onb-step-actions">
+                <button className="btn btn-ghost" onClick={onSkip} type="button">
+                  Skip onboarding
+                </button>
+                <button
+                  className="btn"
+                  onClick={() => setWizardOpen(true)}
+                  type="button"
+                  disabled={!providers.overview}
+                >
+                  <Icon name="plus" size={15} />
+                  {connections.length > 0 ? 'Add another provider' : 'Add a provider'}
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => {
+                    setSaveError(null);
+                    setStep('models');
+                  }}
+                  type="button"
+                  disabled={readyConnections.length === 0}
+                >
+                  Next: choose models
+                </button>
+              </div>
             </div>
-          ))}
-        </div>
+          ) : (
+            <div className="onb-step text-left">
+              <div>
+                <h1 className="text-3xl font-semibold">Choose your models</h1>
+                <p className="onb-step-description mt-2">
+                  Pick the model for new chats and the model each agent tier should use.
+                </p>
+              </div>
 
-        {/* Step content */}
-        <div className="onb-content">
-          {renderStepContent()}
-        </div>
+              {modelsLoading ? (
+                <div role="status" className="alert alert-info">
+                  <span className="loading loading-spinner loading-sm" aria-hidden="true" />
+                  <span>Loading models…</span>
+                </div>
+              ) : (
+                <ModelAssignments
+                  options={modelOptions}
+                  defaultModel={defaultModel}
+                  tierModels={tierModels}
+                  onDefaultModelChange={setDefaultModel}
+                  onTierModelsChange={setTierModels}
+                  disabled={saving}
+                />
+              )}
 
-        {/* Skip link */}
-        <div className="onb-skip-footer">
-          <button className="btn btn-ghost btn-sm" onClick={handleSkip}>
-            Skip onboarding and use defaults
-          </button>
+              {(modelError || saveError) && (
+                <div role="alert" className="alert alert-error">
+                  <Icon name="alertCircle" size={16} />
+                  <span>{modelError ?? saveError}</span>
+                </div>
+              )}
+
+              <div className="onb-step-actions">
+                <button className="btn btn-ghost" onClick={() => setStep('providers')} type="button" disabled={saving}>
+                  Back to providers
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => void finishOnboarding()}
+                  type="button"
+                  disabled={saving || modelsLoading || modelOptions.length === 0 || !defaultModel}
+                >
+                  {saving ? 'Finishing…' : 'Finish onboarding'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
-    </div>
+
+      {providers.overview && (
+        <ConnectionWizard
+          isOpen={wizardOpen}
+          definitions={providers.overview.definitions}
+          secureStorage={providers.overview.secureStorage}
+          onClose={() => setWizardOpen(false)}
+          onCreate={providers.createConnection}
+          onSubmitApiKey={providers.submitApiKey}
+          onValidate={providers.validateConnection}
+          onComplete={handleProviderComplete}
+        />
+      )}
+    </>
   );
 }

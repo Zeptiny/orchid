@@ -4,7 +4,7 @@
  * Shows a scrollable list of available options with checkboxes, plus any
  * currently selected values that are not in the catalog (orphan / custom globs).
  */
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 export interface MultiSelectListProps {
   /** Catalog of selectable values. */
@@ -18,6 +18,8 @@ export interface MultiSelectListProps {
   optionLabels?: Readonly<Record<string, string>>;
   /** Max height of the scroll area. */
   maxHeightClass?: string;
+  /** Optional placeholder for the filter shown when there are many options. */
+  searchPlaceholder?: string;
   emptyLabel?: string;
 }
 
@@ -28,8 +30,10 @@ export function MultiSelectList({
   leadingOptions = [],
   optionLabels = {},
   maxHeightClass = 'max-h-72',
+  searchPlaceholder = 'Filter options…',
   emptyLabel = 'No options available',
 }: MultiSelectListProps) {
+  const [query, setQuery] = useState('');
   const selectedSet = useMemo(() => new Set(selected), [selected]);
 
   const ordered = useMemo(() => {
@@ -58,6 +62,14 @@ export function MultiSelectList({
     return out;
   }, [leadingOptions, options, selected]);
 
+  const visibleOptions = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return ordered;
+    return ordered.filter((opt) =>
+      (optionLabels[opt] ?? opt).toLowerCase().includes(normalizedQuery),
+    );
+  }, [optionLabels, ordered, query]);
+
   const toggle = (value: string) => {
     if (selectedSet.has(value)) {
       onChange(selected.filter((v) => v !== value));
@@ -79,64 +91,84 @@ export function MultiSelectList({
   }
 
   return (
-    <div className="flex flex-col gap-2 min-w-0">
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs font-normal"
-          onClick={selectAllCatalog}
-        >
-          Select all
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs font-normal"
-          onClick={clearAll}
-        >
-          Clear
-        </button>
-        <span className="text-xs text-base-content/50 ml-auto">
+    <div className="flex min-w-0 flex-col gap-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs font-normal"
+            onClick={selectAllCatalog}
+          >
+            Select all
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs font-normal"
+            onClick={clearAll}
+          >
+            Clear
+          </button>
+        </div>
+        <span className="badge badge-sm badge-ghost ml-auto whitespace-nowrap">
           {selected.length} selected
         </span>
       </div>
+
+      {ordered.length > 8 && (
+        <input
+          type="search"
+          className="input input-sm h-9 min-h-9 w-full"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={searchPlaceholder}
+          aria-label={searchPlaceholder}
+        />
+      )}
+
       <div
-        className={`overflow-y-auto rounded-md border border-base-300 bg-base-100 ${maxHeightClass}`}
+        className={`overflow-y-auto rounded-box border border-base-300 bg-base-100 p-1.5 ${maxHeightClass}`}
       >
-        <ul className="flex flex-col p-1.5 gap-0.5 w-full">
-          {ordered.map((opt) => {
-            const checked = selectedSet.has(opt);
-            const isOrphan = !options.includes(opt) && !leadingOptions.includes(opt);
-            const label = optionLabels[opt] ?? opt;
-            return (
-              <li key={opt}>
-                <label
-                  className={[
-                    'flex items-center gap-2.5 cursor-pointer rounded-md py-2 px-2.5',
-                    'hover:bg-base-200/80 transition-colors',
-                    checked ? 'bg-primary/10' : '',
-                  ].join(' ')}
-                >
-                  <input
-                    type="checkbox"
-                    className="checkbox checkbox-sm shrink-0"
-                    checked={checked}
-                    onChange={() => toggle(opt)}
-                  />
-                  <span className="min-w-0 flex-1 flex items-center gap-2">
-                    <span className="font-mono text-sm leading-snug break-all">
-                      {label}
-                    </span>
-                    {isOrphan && (
-                      <span className="badge badge-sm badge-ghost shrink-0">
-                        custom
+        {visibleOptions.length > 0 ? (
+          <ul className="flex w-full flex-col gap-1">
+            {visibleOptions.map((opt) => {
+              const checked = selectedSet.has(opt);
+              const isOrphan = !options.includes(opt) && !leadingOptions.includes(opt);
+              const label = optionLabels[opt] ?? opt;
+              return (
+                <li key={opt}>
+                  <label
+                    className={[
+                      'flex min-h-11 cursor-pointer items-center gap-2.5 rounded-md border border-transparent px-3 py-2.5',
+                      'hover:bg-base-200/80 transition-colors',
+                      checked ? 'border-primary/20 bg-primary/10' : '',
+                    ].join(' ')}
+                  >
+                    <input
+                      type="checkbox"
+                      className="sr-only"
+                      checked={checked}
+                      onChange={() => toggle(opt)}
+                    />
+                    <span className="min-w-0 flex-1 flex items-center gap-2">
+                      <span className="font-mono text-sm leading-snug break-all">
+                        {label}
                       </span>
-                    )}
-                  </span>
-                </label>
-              </li>
-            );
-          })}
-        </ul>
+                      {isOrphan && (
+                        <span className="badge badge-sm badge-ghost shrink-0">
+                          custom
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="px-3 py-4 text-sm text-base-content/50">
+            No options match “{query}”.
+          </p>
+        )}
       </div>
     </div>
   );

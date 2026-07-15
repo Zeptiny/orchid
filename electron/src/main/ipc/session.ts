@@ -7,8 +7,8 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import type { Message } from '../../shared/types/message';
-import type { Session } from '../../shared/types/session';
+import { modelSelectionSchema } from '../../shared/types/provider';
+import { flattenSessionMessages } from '../../shared/types/session';
 import { SessionManager } from '../session/manager';
 import { getConfig } from '../config/loader';
 import { clearChatHistory, seedChatHistory } from './chat-history';
@@ -44,7 +44,8 @@ const sessionRenameSchema = z.object({
 
 const sessionChangeModelSchema = z.object({
   id: z.string().uuid(),
-  model: z.string().min(1),
+  selection: modelSelectionSchema.nullable(),
+  modelLabel: z.string().nullable().optional(),
 });
 
 const sessionChangeCwdSchema = z.object({
@@ -73,10 +74,7 @@ export function getSessionManager(): SessionManager {
   return sessionManager;
 }
 
-/** Flatten all chain messages for UI + continue-chat history (chronological). */
-export function flattenSessionMessages(session: Session): Message[] {
-  return session.chains.flatMap((chain) => [...chain.messages]);
-}
+export { flattenSessionMessages };
 
 /**
  * Resolve workspace for a window using draft + active session + sticky default.
@@ -87,6 +85,21 @@ export function resolveWindowWorkspace(windowId: string): WorkspaceInfo {
     sessionCwd: active?.cwd ?? null,
     stickyDefault: getConfig().default_project_dir,
   });
+}
+
+/**
+ * Bound project path for IPC tools/indexers: draft → session → sticky, only when bound.
+ */
+export function resolveBoundProjectPath(windowId?: string): string | null {
+  try {
+    const info = resolveWindowWorkspace(windowId ?? '');
+    if (isWorkspaceBound(info) && info.cwd != null) {
+      return info.cwd;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
 }
 
 /**
@@ -279,12 +292,20 @@ export function registerSessionIPC(): void {
     }
 
     const manager = getSessionManager();
-    manager.changeModel(parsed.data.id, parsed.data.model);
+    manager.changeModel(
+      parsed.data.id,
+      parsed.data.selection,
+      parsed.data.modelLabel ?? parsed.data.selection?.modelId ?? null,
+    );
     const active = manager.getSession(parsed.data.id);
     if (!active || active.id !== parsed.data.id) {
       return { status: 'not_active' };
     }
-    return { status: 'changed', model: active.model };
+    return {
+      status: 'changed',
+      selection: active.selection,
+      modelLabel: active.modelLabel,
+    };
   });
 
   // session:get_workspace — resolve current workspace for this window

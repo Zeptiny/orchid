@@ -1,60 +1,45 @@
-/**
- * Shared model listing helpers for config dropdowns and /model palette.
- */
+import type { ProviderModelView } from '../../shared/types/ipc';
+import type { CustomConnectionModel } from '../../shared/types/provider';
 
-/**
- * Check if a model entry in a provider's models dict is tagged as embeddings.
- */
-function isEmbeddingsModel(modelData: unknown): boolean {
-  if (!modelData || typeof modelData !== 'object') return false;
-  return (modelData as Record<string, unknown>).mode === 'embeddings';
+/** Shared model selection helpers for searchable pickers. */
+
+/** Unknown/custom models remain eligible for chat until their role is declared. */
+export function isTextGenerationModel(model: ProviderModelView): boolean {
+  const output = model.capabilities?.outputModalities;
+  return output === null || output === undefined || output.length === 0 || output.every((value) => value === 'text');
 }
 
-/**
- * Collect all available chat model IDs from the providers config.
- * Models tagged as `mode: "embeddings"` are excluded — they are for RAG,
- * not for chat/tier model pickers.
- * Returns sorted "provider/model" strings (same shape used by tier models).
- */
-export function collectModelsFromProviders(
-  providers: Record<string, Record<string, unknown>> | null | undefined,
-): string[] {
-  if (!providers) return [];
-  const models: string[] = [];
-  for (const [providerId, providerData] of Object.entries(providers)) {
-    const providerModels = providerData?.models;
-    if (providerModels && typeof providerModels === 'object' && !Array.isArray(providerModels)) {
-      for (const [modelId, modelData] of Object.entries(providerModels as Record<string, unknown>)) {
-        if (modelId && !isEmbeddingsModel(modelData)) {
-          models.push(`${providerId}/${modelId}`);
-        }
-      }
-    }
-  }
-  return models.sort((a, b) => a.localeCompare(b));
+/** Embedding-only models are selectable by RAG, but must not appear in chat. */
+export function isEmbeddingModel(model: ProviderModelView): boolean {
+  const output = model.capabilities?.outputModalities;
+  return output !== null && output !== undefined && output.length > 0
+    && output.every((value) => value === 'embedding');
 }
 
-/**
- * Collect all available embedding model IDs from the providers config.
- * Only models tagged as `mode: "embeddings"` are included.
- * Returns sorted "provider/model" strings.
- */
-export function collectEmbeddingModelsFromProviders(
-  providers: Record<string, Record<string, unknown>> | null | undefined,
-): string[] {
-  if (!providers) return [];
-  const models: string[] = [];
-  for (const [providerId, providerData] of Object.entries(providers)) {
-    const providerModels = providerData?.models;
-    if (providerModels && typeof providerModels === 'object' && !Array.isArray(providerModels)) {
-      for (const [modelId, modelData] of Object.entries(providerModels as Record<string, unknown>)) {
-        if (modelId && isEmbeddingsModel(modelData)) {
-          models.push(`${providerId}/${modelId}`);
-        }
-      }
-    }
-  }
-  return models.sort((a, b) => a.localeCompare(b));
+export const CONNECTION_MODEL_MODALITIES = [
+  'text',
+  'image',
+  'audio',
+  'video',
+  'pdf',
+  'embedding',
+] as const;
+
+export type ConnectionModelModality = (typeof CONNECTION_MODEL_MODALITIES)[number];
+
+/** Build the exact input/output metadata selected for one connection model. */
+export function connectionModelCapabilities(
+  inputModalities: readonly ConnectionModelModality[] = ['text'],
+  outputModalities: readonly ConnectionModelModality[] = ['text'],
+  tools = true,
+  reasoning = true,
+): CustomConnectionModel['capabilities'] {
+  return {
+    inputModalities: [...inputModalities],
+    outputModalities: [...outputModalities],
+    tools,
+    reasoning,
+  };
 }
 
 /**
