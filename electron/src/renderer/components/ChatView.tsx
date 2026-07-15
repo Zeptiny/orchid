@@ -311,25 +311,32 @@ export function ChatView() {
   useEffect(() => {
     if (didBootstrapTabs.current) return;
     if (!tabs.ready) return;
-    if (session.listState.status !== 'ready' && session.listState.status !== 'partial') {
+    if (
+      session.listState.status !== 'ready' &&
+      session.listState.status !== 'partial' &&
+      session.listState.status !== 'empty'
+    ) {
+      return;
+    }
+    // User already navigated before restore finished — do not clobber.
+    if (sessionSwitchGen.current > 0 || session.activeSession) {
+      didBootstrapTabs.current = true;
       return;
     }
 
     didBootstrapTabs.current = true;
-    const focusId = tabs.snapshot.focusedSessionId;
     const openIds = tabs.snapshot.openSessionIds;
-    if (focusId && openIds.includes(focusId)) {
+    const focusId =
+      tabs.snapshot.focusedSessionId && openIds.includes(tabs.snapshot.focusedSessionId)
+        ? tabs.snapshot.focusedSessionId
+        : tabs.snapshot.mruSessionIds.find((id) => openIds.includes(id)) ?? openIds[0] ?? null;
+    if (focusId) {
       void handleSessionSelect(focusId);
       setDraftTabVisible(false);
       return;
     }
-    if (openIds[0]) {
-      void handleSessionSelect(openIds[0]);
-      setDraftTabVisible(false);
-      return;
-    }
     void enterDraftMode();
-  }, [tabs.ready, tabs.snapshot, session.listState, handleSessionSelect, enterDraftMode]);
+  }, [tabs.ready, tabs.snapshot, session.listState, session.activeSession, handleSessionSelect, enterDraftMode]);
 
   useEffect(() => {
     if (session.activeSession?.id) {
@@ -361,8 +368,9 @@ export function ChatView() {
 
   const performCloseTab = useCallback(
     async (id: string) => {
+      const wasFocused = session.activeSession?.id === id;
       const snapshot = await tabs.closeTab(id);
-      if (session.activeSession?.id === id) {
+      if (wasFocused) {
         await focusAfterWorkingSet(snapshot);
       }
     },
@@ -456,6 +464,8 @@ export function ChatView() {
         ++sessionSwitchGen.current;
         chat.setMessages([]);
         applySessionMessages(null);
+        setDraftTabVisible(true);
+        setComposerDraftKey((k) => k + 1);
         notify(`New chat in project: ${info.cwd}`, 'info');
       } else {
         notify(`Project folder: ${info.cwd}`, 'info');

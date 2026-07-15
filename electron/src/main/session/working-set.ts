@@ -92,9 +92,12 @@ export class WorkingSetStore {
       const parsed: unknown = JSON.parse(raw);
       if (isPersistedShape(parsed)) {
         const ws = parsed.workingSet;
-        this.openSessionIds = Array.isArray(ws.openSessionIds) ? [...ws.openSessionIds] : [];
-        this.focusedSessionId = typeof ws.focusedSessionId === 'string' ? ws.focusedSessionId : null;
-        this.mruSessionIds = Array.isArray(ws.mruSessionIds) ? [...ws.mruSessionIds] : [];
+        this.openSessionIds = asStringIdList(ws.openSessionIds);
+        this.mruSessionIds = asStringIdList(ws.mruSessionIds);
+        this.focusedSessionId =
+          typeof ws.focusedSessionId === 'string' && this.openSessionIds.includes(ws.focusedSessionId)
+            ? ws.focusedSessionId
+            : this.pickMruAmong(this.openSessionIds);
       }
     } catch {
       // missing or corrupt file — keep current state
@@ -119,8 +122,16 @@ export class WorkingSetStore {
   }
 }
 
+function asStringIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
 function isPersistedShape(value: unknown): value is PersistedShape {
-  return typeof value === 'object' && value !== null && 'workingSet' in value;
+  if (typeof value !== 'object' || value === null) return false;
+  if (!('workingSet' in value)) return false;
+  const ws = (value as { workingSet: unknown }).workingSet;
+  return typeof ws === 'object' && ws !== null;
 }
 
 export const sessionWorkingSet = new WorkingSetStore();

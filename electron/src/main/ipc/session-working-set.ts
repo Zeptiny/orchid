@@ -25,8 +25,9 @@ function mutateAndPersist(
   const snapshot = run();
   try {
     sessionWorkingSet.saveToDisk();
-  } catch {
+  } catch (err) {
     // Non-fatal — in-memory state remains authoritative for this process.
+    console.error('[working-set] failed to persist ui-state.json', err);
   }
   broadcast(snapshot);
   return snapshot;
@@ -48,7 +49,8 @@ export function bootstrapWorkingSet(): WorkingSetSnapshot {
 export function registerSessionWorkingSetIPC(): void {
   try {
     sessionWorkingSet.loadFromDisk();
-    sessionWorkingSet.filterExisting(existingSessionIds());
+    // Persist filtered set so deleted sessions do not reappear after restart.
+    mutateAndPersist(() => sessionWorkingSet.filterExisting(existingSessionIds()));
   } catch {
     // empty store
   }
@@ -65,6 +67,9 @@ export function registerSessionWorkingSetIPC(): void {
         throw new Error(
           `Invalid session:working_set_open_or_focus payload: ${parsed.error.message}`,
         );
+      }
+      if (!existingSessionIds().has(parsed.data.id)) {
+        return sessionWorkingSet.getSnapshot();
       }
       return mutateAndPersist(() => sessionWorkingSet.openOrFocus(parsed.data.id));
     },

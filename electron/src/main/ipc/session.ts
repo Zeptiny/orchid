@@ -132,6 +132,7 @@ export async function bindProjectDirectory(
       // A conversation remains bound to the project it started in. Picking a
       // different folder opens a draft there without moving or cancelling it.
       manager.clearActive(windowId);
+      workingSetClearFocus();
       setDraftCwd(windowId, canonical);
     }
   } else {
