@@ -7,6 +7,7 @@
  * Ported from Python `src/orchid/tools/background_io.py`.
  */
 import { z } from 'zod';
+import { normalizeAgentScopeId } from '../../../shared/types/agent-scope';
 import { getBackgroundStore } from './background-store';
 import type { ToolDefinition, ToolHandler } from '../types';
 
@@ -32,7 +33,7 @@ export async function executeSendInput(
   agentScopeId?: string | null,
 ): Promise<{ display: string; content: string; isError?: boolean }> {
   const store = getBackgroundStore();
-  const entry = store.getVisible(id, sessionId ?? null, agentScopeId ?? 'main');
+  const entry = store.getVisible(id, sessionId ?? null, normalizeAgentScopeId(agentScopeId));
   if (!entry) {
     return {
       display: `Background command ${id} not found`,

@@ -8,7 +8,7 @@ import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import type { TodoToolResult, NotifyTodoChanged, TodoStoreSource } from './create';
 import { resolveTodoStore } from './create';
-import { TodoStatus } from '../../../shared/types/todo';
+import { TodoStatus, parseTodoStatus } from '../../../shared/types/todo';
 import {
   isMainAgentScope,
   normalizeAgentScopeId,
@@ -79,18 +79,17 @@ export function buildUpdateTool(
       };
     }
 
-    // Parse and validate status
     let parsedStatus: TodoStatus | undefined;
     if (status !== undefined) {
-      const upper = status.toUpperCase();
-      if (!Object.values(TodoStatus).includes(upper as TodoStatus)) {
+      const parsed = parseTodoStatus(status);
+      if (parsed === null) {
         return {
           display: 'Invalid status',
           content: `Error: Invalid status '${status}'. Valid statuses: ${Object.values(TodoStatus).join(', ')}`,
           isError: true,
         };
       }
-      parsedStatus = upper as TodoStatus;
+      parsedStatus = parsed;
     }
 
     // Ownership reassignment: main only; subagents cannot reassign.

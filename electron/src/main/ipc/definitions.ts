@@ -23,8 +23,7 @@ import {
 import { assertPathUnderOrchidRoots } from '../defs/paths';
 import { reloadDefinitionRegistries } from '../defs/reload';
 import { toolRegistry } from '../tools';
-import { resolveWindowWorkspace } from './session';
-import { isWorkspaceBound } from '../project/workspace';
+import { resolveBoundProjectPath } from './session';
 
 // ── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -76,12 +75,7 @@ const revealSchema = z.object({
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function projectDirFromEvent(event: Electron.IpcMainInvokeEvent): string | null {
-  const windowId = String(event.sender.id);
-  const workspace = resolveWindowWorkspace(windowId);
-  if (isWorkspaceBound(workspace) && workspace.cwd) {
-    return workspace.cwd;
-  }
-  return null;
+  return resolveBoundProjectPath(String(event.sender.id));
 }
 
 // ── Registration ─────────────────────────────────────────────────────────────

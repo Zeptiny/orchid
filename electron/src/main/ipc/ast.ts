@@ -14,8 +14,7 @@ import {
   getIndexState,
 } from '../ast/indexer';
 import { ASTStore } from '../ast/store';
-import { resolveWindowWorkspace } from './session';
-import { isWorkspaceBound } from '../project/workspace';
+import { resolveBoundProjectPath } from './session';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -23,27 +22,10 @@ const astIndexSchema = z.object({
   force: z.boolean().optional().default(false),
 });
 
-/**
- * Resolve project path for AST IPC from active workspace
- * (draft → session → sticky via resolveWindowWorkspace).
- * Only returns a path when isWorkspaceBound — no raw session.cwd fallback.
- */
-function resolveAstProjectPath(windowId?: string): string | null {
-  try {
-    const info = resolveWindowWorkspace(windowId ?? '');
-    if (isWorkspaceBound(info) && info.cwd != null) {
-      return info.cwd;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
 function broadcastProgress(projectPath: string, progress: ASTIndexProgress): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
-    if (resolveAstProjectPath(String(win.webContents.id)) !== projectPath) continue;
+    if (resolveBoundProjectPath(String(win.webContents.id)) !== projectPath) continue;
     win.webContents.send(IPC_CHANNELS.AST_PROGRESS, progress);
   }
 }
@@ -53,7 +35,7 @@ function broadcastProgress(projectPath: string, progress: ASTIndexProgress): voi
 export function registerASTIPC(): void {
   // ast:status — return AST store status
   ipcMain.handle(IPC_CHANNELS.AST_STATUS, async (event) => {
-    const projectPath = resolveAstProjectPath(String(event.sender.id));
+    const projectPath = resolveBoundProjectPath(String(event.sender.id));
     if (!projectPath) {
       return {
         totalFiles: 0,
@@ -68,7 +50,7 @@ export function registerASTIPC(): void {
 
   // ast:index_state — in-flight run snapshot for remounting UIs
   ipcMain.handle(IPC_CHANNELS.AST_INDEX_STATE, async (event) => {
-    const projectPath = resolveAstProjectPath(String(event.sender.id));
+    const projectPath = resolveBoundProjectPath(String(event.sender.id));
     return getIndexState(projectPath ?? undefined);
   });
 
@@ -81,7 +63,7 @@ export function registerASTIPC(): void {
 
     const { force } = parsed.data;
 
-    const projectPath = resolveAstProjectPath(String(event.sender.id));
+    const projectPath = resolveBoundProjectPath(String(event.sender.id));
     if (!projectPath) {
       return {
         filesScanned: 0,

@@ -5,9 +5,9 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { getToolConfig } from '../types';
 import { Embedder } from '../../rag/embedder';
 import { RAGStore } from '../../rag/store';
-import { getConfig } from '../../config/loader';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -58,7 +58,7 @@ export const ragSearchHandler: ToolHandler = async (
     top_k?: number;
     file_pattern?: string;
   };
-  const cfg = ctx.projectRuntime?.config ?? getConfig();
+  const cfg = getToolConfig(ctx);
   const projectPath = ctx.cwd;
 
   const store = new RAGStore(projectPath);

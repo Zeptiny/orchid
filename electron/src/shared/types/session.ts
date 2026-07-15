@@ -22,12 +22,18 @@ import {
 } from './provider';
 import type { Chain } from './chain';
 import { chainFromStorageDict, chainToStorageDict } from './chain';
+import type { Message } from './message';
 import type { SubagentRecord } from './subagent';
 import { subagentRecordFromStorageDict, subagentRecordToStorageDict } from './subagent';
 import type { TodoStoreData } from './todo';
 import { todoStoreFromStorageDict, todoStoreToStorageDict } from './todo';
 
 // ── Session ─────────────────────────────────────────────────────────────────
+
+/** Flatten all chain messages for UI + continue-chat history (chronological). */
+export function flattenSessionMessages(session: Session): Message[] {
+  return session.chains.flatMap((chain) => [...chain.messages]);
+}
 
 export interface Session {
   readonly id: string;

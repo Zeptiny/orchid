@@ -253,63 +253,43 @@ export function mergeLayers(
     merged['providers'] = {};
   }
 
-  // Apply home overrides
-  for (const key of Object.keys(home)) {
+  applyLayerOverrides(merged, home);
+  applyLayerOverrides(merged, project);
+
+  return merged;
+}
+
+function applyLayerOverrides(
+  merged: Record<string, unknown>,
+  layer: Record<string, unknown>,
+): void {
+  for (const key of Object.keys(layer)) {
     if (isUnsafeKey(key)) continue;
     if (IGNORED_LEGACY_CONFIG_KEYS.has(key)) continue;
     if (!(key in merged)) continue;
-    const homeVal = home[key];
+    const layerVal = layer[key];
     const mergedVal = merged[key];
 
     if (key === 'default_model') {
-      merged[key] = homeVal;
-    } else if (DEEP_MERGE_KEYS.has(key) && isPlainObject(homeVal) && isPlainObject(mergedVal)) {
+      merged[key] = layerVal;
+    } else if (DEEP_MERGE_KEYS.has(key) && isPlainObject(layerVal) && isPlainObject(mergedVal)) {
       merged[key] = deepMergeProviderDict(
         mergedVal as Record<string, unknown>,
-        homeVal as Record<string, unknown>,
+        layerVal as Record<string, unknown>,
       );
-    } else if (key === 'tier_models' && isPlainObject(homeVal) && isPlainObject(mergedVal)) {
-      merged[key] = mergeTierSelections(mergedVal as Record<string, unknown>, homeVal);
-    } else if (isPlainObject(homeVal) && isPlainObject(mergedVal)) {
+    } else if (key === 'tier_models' && isPlainObject(layerVal) && isPlainObject(mergedVal)) {
+      merged[key] = mergeTierSelections(mergedVal as Record<string, unknown>, layerVal);
+    } else if (isPlainObject(layerVal) && isPlainObject(mergedVal)) {
       // Deep-merge nested dicts (rag, tier_models, etc.) so partial nested
       // configs merge correctly instead of replacing wholesale.
       merged[key] = deepMerge(
         mergedVal as Record<string, unknown>,
-        homeVal as Record<string, unknown>,
+        layerVal as Record<string, unknown>,
       );
     } else {
-      merged[key] = homeVal;
+      merged[key] = layerVal;
     }
   }
-
-  // Apply project overrides (same logic)
-  for (const key of Object.keys(project)) {
-    if (isUnsafeKey(key)) continue;
-    if (IGNORED_LEGACY_CONFIG_KEYS.has(key)) continue;
-    if (!(key in merged)) continue;
-    const projVal = project[key];
-    const mergedVal = merged[key];
-
-    if (key === 'default_model') {
-      merged[key] = projVal;
-    } else if (DEEP_MERGE_KEYS.has(key) && isPlainObject(projVal) && isPlainObject(mergedVal)) {
-      merged[key] = deepMergeProviderDict(
-        mergedVal as Record<string, unknown>,
-        projVal as Record<string, unknown>,
-      );
-    } else if (key === 'tier_models' && isPlainObject(projVal) && isPlainObject(mergedVal)) {
-      merged[key] = mergeTierSelections(mergedVal as Record<string, unknown>, projVal);
-    } else if (isPlainObject(projVal) && isPlainObject(mergedVal)) {
-      merged[key] = deepMerge(
-        mergedVal as Record<string, unknown>,
-        projVal as Record<string, unknown>,
-      );
-    } else {
-      merged[key] = projVal;
-    }
-  }
-
-  return merged;
 }
 
 // ---------------------------------------------------------------------------

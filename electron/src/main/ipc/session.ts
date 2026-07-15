@@ -8,8 +8,7 @@ import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { modelSelectionSchema } from '../../shared/types/provider';
-import type { Message } from '../../shared/types/message';
-import type { Session } from '../../shared/types/session';
+import { flattenSessionMessages } from '../../shared/types/session';
 import { SessionManager } from '../session/manager';
 import { getConfig } from '../config/loader';
 import { clearChatHistory, seedChatHistory } from './chat-history';
@@ -75,10 +74,7 @@ export function getSessionManager(): SessionManager {
   return sessionManager;
 }
 
-/** Flatten all chain messages for UI + continue-chat history (chronological). */
-export function flattenSessionMessages(session: Session): Message[] {
-  return session.chains.flatMap((chain) => [...chain.messages]);
-}
+export { flattenSessionMessages };
 
 /**
  * Resolve workspace for a window using draft + active session + sticky default.
@@ -89,6 +85,21 @@ export function resolveWindowWorkspace(windowId: string): WorkspaceInfo {
     sessionCwd: active?.cwd ?? null,
     stickyDefault: getConfig().default_project_dir,
   });
+}
+
+/**
+ * Bound project path for IPC tools/indexers: draft → session → sticky, only when bound.
+ */
+export function resolveBoundProjectPath(windowId?: string): string | null {
+  try {
+    const info = resolveWindowWorkspace(windowId ?? '');
+    if (isWorkspaceBound(info) && info.cwd != null) {
+      return info.cwd;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
 }
 
 /**

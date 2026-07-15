@@ -15,8 +15,7 @@ import {
   isIndexing,
   getIndexState,
 } from '../rag/indexer';
-import { resolveWindowWorkspace } from './session';
-import { isWorkspaceBound } from '../project/workspace';
+import { resolveBoundProjectPath } from './session';
 import { getProjectRuntimeRegistry } from '../project/runtime';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
@@ -25,27 +24,10 @@ const ragIndexSchema = z.object({
   force: z.boolean().optional().default(false),
 });
 
-/**
- * Resolve project path for RAG IPC from active workspace
- * (draft → session → sticky via resolveWindowWorkspace).
- * Only returns a path when isWorkspaceBound — no raw session.cwd fallback.
- */
-function resolveRagProjectPath(windowId?: string): string | null {
-  try {
-    const info = resolveWindowWorkspace(windowId ?? '');
-    if (isWorkspaceBound(info) && info.cwd != null) {
-      return info.cwd;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
 function broadcastProgress(projectPath: string, progress: RAGIndexProgress): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
-    if (resolveRagProjectPath(String(win.webContents.id)) !== projectPath) continue;
+    if (resolveBoundProjectPath(String(win.webContents.id)) !== projectPath) continue;
     win.webContents.send(IPC_CHANNELS.RAG_PROGRESS, progress);
   }
 }
@@ -55,7 +37,7 @@ function broadcastProgress(projectPath: string, progress: RAGIndexProgress): voi
 export function registerRAGIPC(): void {
   // rag:status — return RAG store status
   ipcMain.handle(IPC_CHANNELS.RAG_STATUS, async (event) => {
-    const projectPath = resolveRagProjectPath(String(event.sender.id));
+    const projectPath = resolveBoundProjectPath(String(event.sender.id));
     if (!projectPath) {
       return {
         totalChunks: 0,
@@ -69,7 +51,7 @@ export function registerRAGIPC(): void {
 
   // rag:index_state — in-flight run snapshot for remounting UIs
   ipcMain.handle(IPC_CHANNELS.RAG_INDEX_STATE, async (event) => {
-    const projectPath = resolveRagProjectPath(String(event.sender.id));
+    const projectPath = resolveBoundProjectPath(String(event.sender.id));
     return getIndexState(projectPath ?? undefined);
   });
 
@@ -82,7 +64,7 @@ export function registerRAGIPC(): void {
 
     const { force } = parsed.data;
 
-    const projectPath = resolveRagProjectPath(String(event.sender.id));
+    const projectPath = resolveBoundProjectPath(String(event.sender.id));
     if (!projectPath) {
       return {
         filesScanned: 0,
@@ -121,7 +103,7 @@ export function registerRAGIPC(): void {
 
   // rag:clear — clear the RAG index
   ipcMain.handle(IPC_CHANNELS.RAG_CLEAR, async (event) => {
-    const projectPath = resolveRagProjectPath(String(event.sender.id));
+    const projectPath = resolveBoundProjectPath(String(event.sender.id));
     if (projectPath) {
       clearIndex(projectPath);
     }

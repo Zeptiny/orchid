@@ -18,6 +18,7 @@ import * as fs from 'node:fs';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { getToolConfig, resolveToolPath } from '../types';
+import { isBinaryFileSync } from '../ast/utils';
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 
@@ -41,28 +42,6 @@ export const readDefinition: ToolDefinition = {
   category: 'filesystem',
 };
 
-// ── Binary detection ───────────────────────────────────────────────────────
-
-const BINARY_CHECK_BYTES = 8192;
-
-function isBinaryFile(filePath: string): boolean {
-  try {
-    const fd = fs.openSync(filePath, 'r');
-    try {
-      const buf = Buffer.alloc(BINARY_CHECK_BYTES);
-      const bytesRead = fs.readSync(fd, buf, 0, BINARY_CHECK_BYTES, 0);
-      for (let i = 0; i < bytesRead; i++) {
-        if (buf[i] === 0) return true;
-      }
-      return false;
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return false;
-  }
-}
-
 // ── Handler ────────────────────────────────────────────────────────────────
 
 export const readHandler: ToolHandler = async (input: unknown, ctx) => {
@@ -72,7 +51,7 @@ export const readHandler: ToolHandler = async (input: unknown, ctx) => {
 
   try {
     // Binary check
-    if (isBinaryFile(file_path)) {
+    if (isBinaryFileSync(file_path)) {
       return {
         display: `Read error ${file_path}`,
         content: `Error reading file ${file_path}: file appears to be binary.`,

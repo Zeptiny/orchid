@@ -9,7 +9,7 @@ import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import type { TodoToolResult, TodoStoreSource } from './create';
 import { resolveTodoStore } from './create';
-import { TodoStatus } from '../../../shared/types/todo';
+import { TodoStatus, parseTodoStatus } from '../../../shared/types/todo';
 import {
   filterTodosForScope,
   MAIN_AGENT_SCOPE_ID,
@@ -51,18 +51,17 @@ export function buildListTool(
       status?: string;
     };
 
-    // Parse and validate status
     let parsedStatus: TodoStatus | undefined;
     if (status !== undefined) {
-      const upper = status.toUpperCase();
-      if (!Object.values(TodoStatus).includes(upper as TodoStatus)) {
+      const parsed = parseTodoStatus(status);
+      if (parsed === null) {
         return {
           display: 'Invalid status',
           content: `Error: Invalid status '${status}'. Valid statuses: ${Object.values(TodoStatus).join(', ')}`,
           isError: true,
         };
       }
-      parsedStatus = upper as TodoStatus;
+      parsedStatus = parsed;
     }
 
     const scope = normalizeAgentScopeId(ctx.agentScopeId);

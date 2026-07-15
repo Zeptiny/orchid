@@ -12,6 +12,7 @@
  */
 import * as fs from 'node:fs';
 import { getConfig, atomicWriteJson, HOME_CONFIG_PATH } from '../config/loader';
+import { isPlainObject } from '../config/merge';
 import { withConfigSaveLock } from '../ipc/config';
 import type { WorkspaceInfo, WorkspaceSource } from '../../shared/types/ipc';
 import { inspectProjectDirectory } from './path';
@@ -93,11 +94,11 @@ export async function updateStickyDefaultProjectDir(
       if (fs.existsSync(HOME_CONFIG_PATH)) {
         const raw = fs.readFileSync(HOME_CONFIG_PATH, 'utf-8');
         const parsed: unknown = JSON.parse(raw);
-        if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        if (!isPlainObject(parsed)) {
           // Corrupt / non-object home config — do not write {}.
           return;
         }
-        home = parsed as Record<string, unknown>;
+        home = parsed;
       } else {
         home = {};
       }

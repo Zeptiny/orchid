@@ -7,19 +7,18 @@ import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { getProjectMCPManager } from '../mcp/project-registry';
 import { getProjectRuntimeRegistry } from '../project/runtime';
-import { isWorkspaceBound } from '../project/workspace';
-import { resolveWindowWorkspace } from './session';
+import { resolveBoundProjectPath } from './session';
 
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerMCPIPC(): void {
   // mcp:status — resolve the sender's project instead of a process-global manager.
   ipcMain.handle(IPC_CHANNELS.MCP_STATUS, async (event) => {
-    const workspace = resolveWindowWorkspace(String(event.sender.id));
-    if (!isWorkspaceBound(workspace) || !workspace.cwd) {
+    const cwd = resolveBoundProjectPath(String(event.sender.id));
+    if (cwd == null) {
       return [];
     }
-    const runtime = getProjectRuntimeRegistry().get(workspace.cwd);
+    const runtime = getProjectRuntimeRegistry().get(cwd);
     return getProjectMCPManager(runtime).getStatus();
   });
 }

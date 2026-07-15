@@ -15,8 +15,7 @@ import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { toolRegistry } from '../tools';
 import type { ToolExecutionContext } from '../tools/types';
-import { getSessionManager, resolveWindowWorkspace } from './session';
-import { isWorkspaceBound } from '../project/workspace';
+import { getSessionManager, resolveBoundProjectPath } from './session';
 import { getProjectRuntimeRegistry } from '../project/runtime';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
@@ -45,21 +44,18 @@ const RENDERER_ALLOWED_TOOLS = new Set([
 
 /**
  * Resolve tool context for renderer-initiated tool:execute (outside an agent turn).
- * Uses active workspace (draft → session → sticky) via resolveWindowWorkspace.
- * Rejects unless isWorkspaceBound (no raw session.cwd fallback).
+ * Uses active workspace (draft → session → sticky). Rejects when unbound.
  */
 function resolveToolExecuteContext(windowId: string): ToolExecutionContext | null {
   try {
-    const info = resolveWindowWorkspace(windowId);
-    if (!isWorkspaceBound(info) || info.cwd == null) {
-      return null;
-    }
+    const cwd = resolveBoundProjectPath(windowId);
+    if (cwd == null) return null;
     const active = getSessionManager().getActive(windowId);
     return {
-      cwd: info.cwd,
+      cwd,
       sessionId: active?.id,
       agentScopeId: 'main',
-      projectRuntime: getProjectRuntimeRegistry().get(info.cwd),
+      projectRuntime: getProjectRuntimeRegistry().get(cwd),
     };
   } catch {
     return null;

@@ -18,9 +18,8 @@ import {
 } from '../utils/provider-selection';
 import { isTextGenerationModel } from '../utils/models';
 import { useGlobalShortcuts } from '../keyboard';
-import type { Message } from '../../shared/types/message';
-import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
+import { flattenSessionMessages, type Session } from '../../shared/types/session';
 import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus, CommandContext } from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption } from '../../shared/types/ipc';
 import { ChatStream } from './ChatStream';
@@ -31,11 +30,6 @@ import { LeftSidebar } from './LeftSidebar';
 import { CommandPalette } from './CommandPalette';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { SessionHeader } from './session-header';
-
-/** Flatten every chain's messages for the center pane (chronological). */
-function messagesFromSession(loaded: Session): Message[] {
-  return loaded.chains.flatMap((chain) => [...chain.messages]);
-}
 
 type ToastSeverity = 'info' | 'warning' | 'error';
 interface Toast {
@@ -212,7 +206,7 @@ export function ChatView() {
         chat.setMessages([]);
         return;
       }
-      chat.setMessages(messagesFromSession(loadedSession));
+      chat.setMessages(flattenSessionMessages(loadedSession));
     },
     [chat],
   );

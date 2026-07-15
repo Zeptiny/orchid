@@ -3,6 +3,8 @@
 - Scrolling up is impossible
 
 ### TODOs geral
+- RAG/AST Post Write Callback
+- Still work to do on 2026-07-15-electron-simplification-review.md
 - Verify if remote embeddings model works correctly
 - Subagents vieweing
 - Do not re-parse markdown every update

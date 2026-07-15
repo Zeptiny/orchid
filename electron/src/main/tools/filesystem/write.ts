@@ -18,6 +18,7 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { resolveToolPath } from '../types';
+import { atomicWrite } from '../ast/utils';
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 
@@ -41,44 +42,6 @@ export const writeDefinition: ToolDefinition = {
   category: 'filesystem',
 };
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-/**
- * Write content atomically: tmp file + fsync + rename.
- * Matches Python `src/orchid/tools/ast.py` lines 198-228.
- */
-function atomicWrite(filePath: string, content: string): void {
-  const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
-
-  const tmpPath = path.join(dir, `.write_${Date.now()}_${process.pid}.tmp`);
-  try {
-    const fd = fs.openSync(tmpPath, 'w');
-    try {
-      fs.writeSync(fd, content, undefined, 'utf-8');
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(tmpPath, filePath);
-
-    // fsync parent dir
-    const dirFd = fs.openSync(dir, 'r');
-    try {
-      fs.fsyncSync(dirFd);
-    } finally {
-      fs.closeSync(dirFd);
-    }
-  } catch (err) {
-    try {
-      fs.unlinkSync(tmpPath);
-    } catch {
-      // ignore cleanup error
-    }
-    throw err;
-  }
-}
-
 // ── Handler ────────────────────────────────────────────────────────────────
 
 export const writeHandler: ToolHandler = async (input: unknown, ctx) => {
@@ -86,24 +49,22 @@ export const writeHandler: ToolHandler = async (input: unknown, ctx) => {
   const file_path = resolveToolPath(ctx.cwd, rawPath);
 
   try {
-    // Auto-create parent directories
     const parentDir = path.dirname(file_path);
     fs.mkdirSync(parentDir, { recursive: true });
 
-    // Preserve original file permissions if file exists
     let originalMode: number | undefined;
     try {
-      const stat = fs.statSync(file_path);
-      originalMode = stat.mode;
+      originalMode = fs.statSync(file_path).mode;
     } catch {
-      // File doesn't exist, will use default mode
+      // new file
     }
 
-    // Atomic write
     atomicWrite(file_path, content);
 
-    // Preserve original file permissions (default to 0o644 for new files)
-    fs.chmodSync(file_path, originalMode ?? 0o644);
+    // New files default to 0o644; existing mode already restored by atomicWrite
+    if (originalMode === undefined) {
+      fs.chmodSync(file_path, 0o644);
+    }
 
     const lines = content.split('\n');
     const formatted = lines
