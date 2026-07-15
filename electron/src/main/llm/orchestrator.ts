@@ -29,6 +29,7 @@
  * fallback path (when fullStream is unavailable). Drain of pending is deduped
  * by toolCallId so the same call/result is never yielded twice.
  */
+import { createHash } from 'node:crypto';
 import type { AssistantContent, ModelMessage, Tool } from 'ai';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { Message, Usage } from '../../shared/types/message';
@@ -55,6 +56,27 @@ import { buildContextSnapshot } from './context-snapshot';
 import { importESM } from '../utils/esm-import';
 import { buildSkillTool } from '../tools/skill/skill';
 import { getSkillsRegistry } from '../tools';
+
+const PROVIDER_TOOL_NAME_MAX_LENGTH = 64;
+const PROVIDER_TOOL_NAME_HASH_LENGTH = 16;
+
+/**
+ * Convert an internal MCP tool identity into the conservative function-name
+ * grammar shared by OpenAI-compatible and other providers. The hash preserves
+ * uniqueness when different names sanitize to the same prefix.
+ */
+function toProviderMcpToolName(internalName: string): string {
+  const safePrefix = internalName
+    .replace(/[^A-Za-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'mcp_tool';
+  const hash = createHash('sha256')
+    .update(internalName)
+    .digest('hex')
+    .slice(0, PROVIDER_TOOL_NAME_HASH_LENGTH);
+  const prefixLength = PROVIDER_TOOL_NAME_MAX_LENGTH - hash.length - 1;
+
+  return `${safePrefix.slice(0, prefixLength)}_${hash}`;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -770,14 +792,22 @@ export function buildToolMap(
 
       if (!isAllowed) continue;
 
-      toolMap[definition.name] = {
+      const internalName = definition.name;
+      const providerName = toProviderMcpToolName(internalName);
+      if (providerName in toolMap) {
+        throw new Error(
+          `Provider tool name collision for MCP tool "${internalName}": "${providerName}"`,
+        );
+      }
+
+      toolMap[providerName] = {
         description: definition.description,
         inputSchema: definition.inputSchema,
         execute: async (args: unknown) => {
           try {
             const result = await runWithToolTimeout(
-              () => mcpManager.callTool(definition.name, args),
-              definition.name,
+              () => mcpManager.callTool(internalName, args),
+              internalName,
               { timeoutSeconds: dispatchOptions.timeoutSeconds },
             );
             // MCP legacy: plain "Error:" string indicates failure

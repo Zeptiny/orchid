@@ -38,6 +38,7 @@ import {
   type StreamChatParams,
 } from '../../src/main/llm/orchestrator';
 import { ToolRegistry } from '../../src/main/tools/registry';
+import type { MCPManager } from '../../src/main/mcp/manager';
 import { defaults } from '../../src/main/config/schema';
 import { z } from 'zod';
 
@@ -685,6 +686,43 @@ describe('ToolRegistry integration with dispatch', () => {
         query: { type: 'string' },
       },
     });
+  });
+
+  it('buildToolMap exposes stable provider-safe MCP aliases and routes them internally', async () => {
+    const internalNames = [
+      'mcp::context7::query.docs',
+      'mcp::context7::query docs',
+      `mcp::long-server::${'very-long-tool-name-'.repeat(5)}ç`,
+    ];
+    const callTool = vi.fn(async () => 'ok');
+    const mcpManager = {
+      getTools: () => internalNames.map((name, index) => ({
+        definition: {
+          name,
+          description: `MCP tool ${index}`,
+          inputSchema: z.object({ query: z.string().optional() }),
+          category: 'mcp',
+        },
+        handler: vi.fn(),
+      })),
+      callTool,
+    } as unknown as MCPManager;
+
+    const firstBuild = buildToolMap(['*'], registry, mcpManager, {});
+    const secondBuild = buildToolMap(['*'], registry, mcpManager, {});
+    const aliases = Object.keys(firstBuild);
+
+    expect(aliases).toHaveLength(internalNames.length);
+    expect(aliases).toEqual(Object.keys(secondBuild));
+    expect(new Set(aliases).size).toBe(internalNames.length);
+    for (const alias of aliases) {
+      expect(alias).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+      expect(alias).not.toContain('::');
+    }
+
+    await (firstBuild[aliases[0]] as any).execute({ query: 'routing check' });
+
+    expect(callTool).toHaveBeenCalledWith(internalNames[0], { query: 'routing check' });
   });
 });
 
