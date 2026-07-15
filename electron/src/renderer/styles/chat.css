@@ -4254,20 +4254,6 @@ button.inspector-row:hover {
   width: min(320px, 100%);
   flex-shrink: 0;
 }
-.provider-wizard-model-picker {
-  width: 100%;
-}
-.provider-wizard-model-picker .model-picker-menu {
-  right: auto;
-  left: 0;
-  z-index: 200;
-  width: min(560px, calc(100vw - 48px));
-  max-width: calc(100vw - 48px);
-  max-height: min(330px, 42vh);
-}
-.provider-wizard-model-picker .model-picker-table {
-  min-width: 0;
-}
 .composer-model-picker {
   width: 180px;
 }

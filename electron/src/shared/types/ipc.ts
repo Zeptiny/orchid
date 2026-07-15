@@ -345,11 +345,13 @@ export interface ProviderConnectionCreateMessage {
 export interface ProviderConnectionUpdateMessage {
   connectionId: string;
   name?: string;
+  /** Change the connection's authentication strategy; credentials remain write-only. */
+  authMethod?: ProviderAuthMethod;
   modelIds?: readonly string[];
   customModels?: readonly CustomConnectionModel[];
   endpoint?: string | null;
   allowInsecureHttp?: boolean;
-  /** Reconnect an environment-authenticated connection without exposing its value. */
+  /** Select or replace an environment reference without exposing its value. */
   environmentVariable?: string;
 }
 

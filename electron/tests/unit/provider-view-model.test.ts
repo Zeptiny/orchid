@@ -3,9 +3,15 @@ import type { ProviderModelOption } from '../../src/shared/types/ipc';
 import {
   providerModelOptionKey,
   providerModelOptionLabel,
+  providerStatusConnectionId,
   selectionMatchesOption,
 } from '../../src/renderer/utils/provider-selection';
-import { isEmbeddingModel, isTextGenerationModel } from '../../src/renderer/utils/models';
+import type { ProviderConnectionView } from '../../src/shared/types/ipc';
+import {
+  connectionModelCapabilities,
+  isEmbeddingModel,
+  isTextGenerationModel,
+} from '../../src/renderer/utils/models';
 
 function option(connectionId: string, modelId: string): ProviderModelOption {
   return {
@@ -56,5 +62,69 @@ describe('provider selection view model', () => {
     expect(isEmbeddingModel(text)).toBe(false);
     expect(isTextGenerationModel(embedding)).toBe(false);
     expect(isEmbeddingModel(embedding)).toBe(true);
+  });
+
+  it('defaults editable model capabilities to text I/O with tools and reasoning', () => {
+    expect(connectionModelCapabilities()).toEqual({
+      inputModalities: ['text'],
+      outputModalities: ['text'],
+      tools: true,
+      reasoning: true,
+    });
+    expect(connectionModelCapabilities(
+      ['text', 'image'],
+      ['text'],
+      false,
+      false,
+    )).toEqual({
+      inputModalities: ['text', 'image'],
+      outputModalities: ['text'],
+      tools: false,
+      reasoning: false,
+    });
+    expect(connectionModelCapabilities(
+      ['text'],
+      ['embedding'],
+      true,
+      true,
+    )).toEqual({
+      inputModalities: ['text'],
+      outputModalities: ['embedding'],
+      tools: true,
+      reasoning: true,
+    });
+  });
+
+  it('hosts provider status on one matching connection and prefers a ready connection', () => {
+    const connection = (
+      id: string,
+      providerId: string,
+      health: ProviderConnectionView['health'],
+    ): ProviderConnectionView => ({
+      id,
+      providerId,
+      providerDisplayName: providerId,
+      name: id,
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credentialKind: 'stored',
+      environmentVariable: null,
+      modelIds: [],
+      customModels: [],
+      health,
+      activeTurnCount: 0,
+      endpoint: null,
+      allowInsecureHttp: false,
+    });
+    const connections = [
+      connection('lilac-disabled', 'lilac', 'disabled'),
+      connection('neuralwatt-ready', 'neuralwatt', 'ready'),
+      connection('lilac-ready', 'lilac', 'ready'),
+      connection('lilac-second-ready', 'lilac', 'ready'),
+    ];
+
+    expect(providerStatusConnectionId(connections, 'lilac')).toBe('lilac-ready');
+    expect(providerStatusConnectionId(connections, 'neuralwatt')).toBe('neuralwatt-ready');
+    expect(providerStatusConnectionId(connections, 'openai')).toBeNull();
   });
 });

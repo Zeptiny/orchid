@@ -12,7 +12,6 @@ import type {
   ProviderConnectionUpdateMessage,
   ProviderConnectionView,
   ProviderDefinitionView,
-  ProviderModelOption,
   ProviderModelView,
   ProviderMutationResult,
   ProviderOverview,
@@ -27,10 +26,11 @@ import type {
 import { useFocusTrap } from '../../keyboard';
 import { isTextGenerationModel } from '../../utils/models';
 import { Icon } from '../Icon';
-import { ModelPicker } from '../ModelPicker';
 import { SearchableOptionPicker, type SearchableOption } from '../SearchableOptionPicker';
-
-const CUSTOM_MODEL_VALUE = '__custom_model__';
+import {
+  ConnectionModelsEditor,
+  connectionCustomModelDrafts,
+} from './ConnectionModelsDialog';
 
 export interface ProviderConnectionCompletion {
   readonly connection: ProviderConnectionView;
@@ -43,7 +43,7 @@ export interface ConnectionWizardProps {
   readonly secureStorage: ProviderOverview['secureStorage'];
   readonly onClose: () => void;
   readonly onCreate: (message: ProviderConnectionCreateMessage) => Promise<ProviderMutationResult>;
-  /** Present when repairing an existing connection instead of creating another account. */
+  /** Present when editing an existing connection instead of creating another account. */
   readonly existingConnection?: ProviderConnectionView | null;
   readonly onUpdate?: (message: ProviderConnectionUpdateMessage) => Promise<ProviderMutationResult>;
   readonly onSubmitApiKey: (
@@ -65,24 +65,16 @@ function defaultAuthMethod(definition: ProviderDefinitionView | undefined): Prov
   return definition?.supportedAuthMethods[0] ?? 'api-key';
 }
 
-function firstModelId(
+function defaultModelIds(
   definition: ProviderDefinitionView | undefined,
   protocol: ProviderProtocol,
-): string {
+): readonly string[] {
   const model = definition?.models.find(
     (candidate) => candidate.protocol === protocol
       && modelAvailable(candidate)
       && isTextGenerationModel(candidate),
   );
-  if (model) return model.id;
-  return definition?.allowsCustomModels ? CUSTOM_MODEL_VALUE : '';
-}
-
-function parseOptionalLimit(value: string): number | null | undefined {
-  const trimmed = value.trim();
-  if (trimmed === '') return null;
-  const parsed = Number(trimmed);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+  return model ? [model.id] : [];
 }
 
 function describeError(error: unknown): string {
@@ -90,8 +82,8 @@ function describeError(error: unknown): string {
 }
 
 /**
- * A keyboard-first modal that creates one connection and guides valid
- * authentication. It intentionally does not offer credential-handle editing.
+ * A keyboard-first modal that creates or edits one complete connection.
+ * It intentionally does not offer credential-handle editing.
  */
 export function ConnectionWizard({
   isOpen,
@@ -114,13 +106,9 @@ export function ConnectionWizard({
   const [connectionName, setConnectionName] = useState('');
   const [protocol, setProtocol] = useState<ProviderProtocol>('openai-compatible');
   const [authMethod, setAuthMethod] = useState<ProviderAuthMethod>('api-key');
-  const [selectedModelId, setSelectedModelId] = useState('');
-  const [customModelId, setCustomModelId] = useState('');
-  const [customModelName, setCustomModelName] = useState('');
-  const [customTools, setCustomTools] = useState(false);
-  const [customReasoning, setCustomReasoning] = useState(false);
-  const [customContextLimit, setCustomContextLimit] = useState('');
-  const [customOutputLimit, setCustomOutputLimit] = useState('');
+  const [connectionModelIds, setConnectionModelIds] = useState<readonly string[]>([]);
+  const [connectionCustomModels, setConnectionCustomModels] = useState<readonly CustomConnectionModel[]>([]);
+  const [modelsEditing, setModelsEditing] = useState(false);
   const [endpoint, setEndpoint] = useState('');
   const [allowInsecureHttp, setAllowInsecureHttp] = useState(false);
   const [environmentVariable, setEnvironmentVariable] = useState('');
@@ -138,13 +126,6 @@ export function ConnectionWizard({
     () => definitions.find((definition) => definition.id === providerId) ?? null,
     [definitions, providerId],
   );
-  const catalogModels = useMemo(
-    () =>
-      selectedDefinition?.models.filter(
-        (model) => model.protocol === protocol && modelAvailable(model) && isTextGenerationModel(model),
-      ) ?? [],
-    [protocol, selectedDefinition],
-  );
   const providerPickerOptions = useMemo<readonly SearchableOption[]>(
     () => definitions.map((definition) => ({
       value: definition.id,
@@ -153,34 +134,21 @@ export function ConnectionWizard({
     })),
     [definitions],
   );
-  const modelLabels = useMemo(
-    () => Object.fromEntries(catalogModels.map((model) => [model.id, model.displayName])),
-    [catalogModels],
-  );
-  const modelDetails = useMemo<Readonly<Record<string, ProviderModelOption>>>(
-    () => Object.fromEntries(catalogModels.map((model) => [model.id, {
-      selection: { connectionId: 'catalog', modelId: model.id },
-      connectionName: '',
-      providerId: selectedDefinition?.id ?? '',
-      providerDisplayName: selectedDefinition?.displayName ?? null,
-      model,
-      available: true,
-      unavailableReason: null,
-    }])),
-    [catalogModels, selectedDefinition],
-  );
-  const additionalModelOptions = useMemo(
-    () => selectedDefinition?.allowsCustomModels
-      ? [{ value: CUSTOM_MODEL_VALUE, label: 'Custom model…', description: 'Enter a model ID supplied by this endpoint.' }]
-      : [],
-    [selectedDefinition?.allowsCustomModels],
-  );
   const supportsCustomEndpoint =
     selectedDefinition?.allowsCustomModels === true &&
     (selectedDefinition.id === 'generic-openai-compatible' ||
       selectedDefinition.id === 'generic-anthropic-compatible');
-  const usesCustomModel = selectedModelId === CUSTOM_MODEL_VALUE;
   const apiKeyPersistenceAvailable = secureStorage.available;
+  const endpointChanged = Boolean(
+    existingConnection
+      && supportsCustomEndpoint
+      && endpoint.trim() !== (existingConnection.endpoint ?? ''),
+  );
+  const requiresNewApiKey = authMethod === 'api-key' && (
+    !existingConnection
+      || existingConnection.authMethod !== 'api-key'
+      || endpointChanged
+  );
   const metadataLocked = submitting || (pendingConnection !== null && !existingConnection);
 
   useFocusTrap({
@@ -195,13 +163,9 @@ export function ConnectionWizard({
     setConnectionName(definition?.displayName ?? '');
     setProtocol(nextProtocol);
     setAuthMethod(defaultAuthMethod(definition));
-    setSelectedModelId(firstModelId(definition, nextProtocol));
-    setCustomModelId('');
-    setCustomModelName('');
-    setCustomTools(false);
-    setCustomReasoning(false);
-    setCustomContextLimit('');
-    setCustomOutputLimit('');
+    setConnectionModelIds(defaultModelIds(definition, nextProtocol));
+    setConnectionCustomModels([]);
+    setModelsEditing(false);
     setEndpoint('');
     setAllowInsecureHttp(false);
     setEnvironmentVariable('');
@@ -212,21 +176,13 @@ export function ConnectionWizard({
   }, []);
 
   const resetForExistingConnection = useCallback((connection: ProviderConnectionView) => {
-    const customModel = connection.customModels[0] ?? null;
-    const selected = customModel
-      ? CUSTOM_MODEL_VALUE
-      : connection.modelIds[0] ?? '';
     setProviderId(connection.providerId);
     setConnectionName(connection.name);
     setProtocol(connection.protocol);
     setAuthMethod(connection.authMethod);
-    setSelectedModelId(selected);
-    setCustomModelId(customModel?.id ?? '');
-    setCustomModelName(customModel?.displayName ?? '');
-    setCustomTools(customModel?.capabilities?.tools ?? false);
-    setCustomReasoning(customModel?.capabilities?.reasoning ?? false);
-    setCustomContextLimit(customModel?.limits?.contextTokens?.toString() ?? '');
-    setCustomOutputLimit(customModel?.limits?.outputTokens?.toString() ?? '');
+    setConnectionModelIds([...connection.modelIds]);
+    setConnectionCustomModels(connectionCustomModelDrafts(connection));
+    setModelsEditing(false);
     setEndpoint(connection.endpoint ?? '');
     setAllowInsecureHttp(connection.allowInsecureHttp);
     setEnvironmentVariable(connection.environmentVariable ?? '');
@@ -297,64 +253,35 @@ export function ConnectionWizard({
 
   const selectProtocol = (nextProtocol: ProviderProtocol) => {
     setProtocol(nextProtocol);
-    setSelectedModelId(firstModelId(selectedDefinition ?? undefined, nextProtocol));
+    setConnectionModelIds(defaultModelIds(selectedDefinition ?? undefined, nextProtocol));
+    setConnectionCustomModels([]);
+    setModelsEditing(false);
     setError(null);
   };
 
-  const buildCustomModel = (): { model: CustomConnectionModel } | { error: string } => {
-    const id = customModelId.trim();
-    if (!id) return { error: 'Enter the model ID supplied by this endpoint.' };
-    const contextTokens = parseOptionalLimit(customContextLimit);
-    const outputTokens = parseOptionalLimit(customOutputLimit);
-    if (contextTokens === undefined || outputTokens === undefined) {
-      return { error: 'Custom model limits must be positive whole numbers or left blank.' };
-    }
-    return {
-      model: {
-        id,
-        displayName: customModelName.trim() || id,
-        protocol,
-        capabilities: {
-          inputModalities: ['text'],
-          outputModalities: ['text'],
-          tools: customTools,
-          reasoning: customReasoning,
-        },
-        limits: { contextTokens, outputTokens },
-      },
-    };
-  };
-
-  const buildCreateMessage = ():
+  const buildConnectionMessage = ():
     { message: ProviderConnectionCreateMessage; selectionModelId: string } | { error: string } => {
     if (!selectedDefinition || !selectedDefinition.available) {
       return { error: 'Choose an enabled provider preset.' };
     }
     const name = connectionName.trim();
     if (!name) return { error: 'Enter a name that identifies this account or endpoint.' };
-    if (!selectedModelId) return { error: 'Choose an initial model for this connection.' };
+    if (!existingConnection && connectionModelIds.length === 0) {
+      return { error: 'Select at least one model for this connection.' };
+    }
     if (supportsCustomEndpoint && !endpoint.trim()) {
       return { error: 'Enter the custom endpoint URL for this connection.' };
     }
     if (authMethod === 'environment' && !environmentVariable.trim()) {
       return { error: 'Enter the environment variable that holds this provider credential.' };
     }
-    if (authMethod === 'api-key' && !apiKey.trim()) {
+    if (requiresNewApiKey && !apiKey.trim()) {
       return { error: 'Enter the API key once so Orchid can store it securely.' };
     }
 
-    let modelIds: readonly string[];
-    let customModels: readonly CustomConnectionModel[] | undefined;
-    let selectionModelId = selectedModelId;
-    if (usesCustomModel) {
-      const custom = buildCustomModel();
-      if ('error' in custom) return custom;
-      modelIds = [custom.model.id];
-      customModels = [custom.model];
-      selectionModelId = custom.model.id;
-    } else {
-      modelIds = [selectedModelId];
-    }
+    const modelIds = [...connectionModelIds];
+    const customModels = [...connectionCustomModels];
+    const selectionModelId = existingConnection ? '' : connectionModelIds[0] ?? '';
 
     return {
       selectionModelId,
@@ -364,7 +291,7 @@ export function ConnectionWizard({
         protocol,
         authMethod,
         modelIds,
-        ...(customModels ? { customModels } : {}),
+        customModels,
         ...(supportsCustomEndpoint ? { endpoint: endpoint.trim(), allowInsecureHttp } : {}),
         ...(authMethod === 'environment'
           ? { environmentVariable: environmentVariable.trim() }
@@ -379,6 +306,7 @@ export function ConnectionWizard({
   ): ProviderConnectionUpdateMessage => ({
     connectionId,
     name: message.name,
+    authMethod: message.authMethod,
     modelIds: message.modelIds,
     customModels: message.customModels ?? [],
     ...(message.endpoint === undefined ? {} : { endpoint: message.endpoint }),
@@ -409,10 +337,16 @@ export function ConnectionWizard({
     return true;
   };
 
+  const finishExistingUpdate = async (result: ProviderMutationResult): Promise<void> => {
+    setPendingConnection(result.connection);
+    await onComplete?.({ connection: result.connection, selection: null });
+    close(true);
+  };
+
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (submittingRef.current) return;
-    const built = buildCreateMessage();
+    const built = buildConnectionMessage();
     if ('error' in built) {
       setError(built.error);
       return;
@@ -424,20 +358,26 @@ export function ConnectionWizard({
     setFeedback(null);
     try {
       let connection = pendingConnection;
+      let latestResult: ProviderMutationResult;
       if (existingConnection) {
-        if (!onUpdate) throw new Error('Connection repair is unavailable in this build.');
+        if (!onUpdate) throw new Error('Connection editing is unavailable in this build.');
         const updated = await onUpdate(updateMessageForExisting(existingConnection.id, built.message));
+        latestResult = updated;
         connection = updated.connection;
         setPendingConnection(connection);
         if (updated.message) setFeedback(updated.message);
       } else if (!connection) {
         const created = await onCreate(built.message);
+        latestResult = created;
         connection = created.connection;
         setPendingConnection(connection);
         if (created.message) setFeedback(created.message);
+      } else {
+        latestResult = { connection, message: null };
       }
 
-      if (authMethod === 'api-key') {
+      const apiKeyProvided = authMethod === 'api-key' && apiKey.trim().length > 0;
+      if (apiKeyProvided) {
         let authenticated: ProviderMutationResult;
         try {
           authenticated = await onSubmitApiKey({ connectionId: connection.id, apiKey });
@@ -445,12 +385,23 @@ export function ConnectionWizard({
           // A pasted API key lives only until its one-shot IPC request settles.
           setApiKey('');
         }
-        await finishIfReady(authenticated, built.selectionModelId);
-        return;
+        latestResult = authenticated;
+      } else if (!existingConnection) {
+        latestResult = await onValidate({ connectionId: connection.id });
       }
 
-      const validated = await onValidate({ connectionId: connection.id });
-      await finishIfReady(validated, built.selectionModelId);
+      const authenticationChanged = Boolean(existingConnection) && (
+        authMethod !== existingConnection?.authMethod
+          || apiKeyProvided
+          || endpointChanged
+          || (authMethod === 'environment'
+            && environmentVariable.trim() !== (existingConnection?.environmentVariable ?? ''))
+      );
+      if (existingConnection && !authenticationChanged) {
+        await finishExistingUpdate(latestResult);
+        return;
+      }
+      await finishIfReady(latestResult, built.selectionModelId);
     } catch (submitError) {
       setError(describeError(submitError));
     } finally {
@@ -477,17 +428,18 @@ export function ConnectionWizard({
         <header className="provider-wizard-header">
           <div className="min-w-0">
             <h2 id="provider-connection-wizard-title" className="text-base font-semibold tracking-tight">
-              {existingConnection ? `Reconnect ${existingConnection.name}` : 'Connect a provider'}
+              {existingConnection ? `Edit connection · ${existingConnection.name}` : 'Connect a provider'}
             </h2>
             <p className="mt-1 text-sm text-base-content/70">
-              Connections are independent accounts or endpoints. Orchid never chooses one
-              automatically.
+              {existingConnection
+                ? 'Update connection details, authentication, and models in one place.'
+                : 'Connections are independent accounts or endpoints. Orchid never chooses one automatically.'}
             </p>
           </div>
           <button
             type="button"
             className="btn btn-ghost btn-sm btn-circle"
-            aria-label="Close provider connection setup"
+            aria-label={existingConnection ? 'Close connection editor' : 'Close provider connection setup'}
             onClick={() => close()}
             disabled={submitting}
           >
@@ -506,23 +458,34 @@ export function ConnectionWizard({
           <form className="flex min-h-0 flex-1 flex-col" onSubmit={submit}>
             <div className="provider-wizard-body">
               <fieldset className="fieldset">
-                <legend className="fieldset-legend">Provider and connection</legend>
-                <label className="label" htmlFor="provider-wizard-preset">
-                  Provider preset
-                </label>
-                <SearchableOptionPicker
-                  id="provider-wizard-preset"
-                  value={providerId}
-                  options={providerPickerOptions}
-                  onChange={selectDefinition}
-                  label="Select provider preset"
-                  title="Provider presets"
-                  searchPlaceholder="Search providers..."
-                  emptyMessage="No provider presets available"
-                  disabled={submitting || pendingConnection !== null}
-                />
-                {selectedDefinition?.unavailableReason && (
-                  <p className="label text-warning">{selectedDefinition.unavailableReason}</p>
+                <legend className="fieldset-legend">
+                  {existingConnection ? 'Connection details' : 'Provider and connection'}
+                </legend>
+                {existingConnection ? (
+                  <div className="flex items-center justify-between gap-3 rounded-box bg-base-200 px-3 py-2">
+                    <span className="text-sm text-base-content/70">Provider</span>
+                    <span className="badge">{selectedDefinition?.displayName ?? providerId}</span>
+                  </div>
+                ) : (
+                  <>
+                    <label className="label" htmlFor="provider-wizard-preset">
+                      Provider preset
+                    </label>
+                    <SearchableOptionPicker
+                      id="provider-wizard-preset"
+                      value={providerId}
+                      options={providerPickerOptions}
+                      onChange={selectDefinition}
+                      label="Select provider preset"
+                      title="Provider presets"
+                      searchPlaceholder="Search providers..."
+                      emptyMessage="No provider presets available"
+                      disabled={metadataLocked}
+                    />
+                    {selectedDefinition?.unavailableReason && (
+                      <p className="label text-warning">{selectedDefinition.unavailableReason}</p>
+                    )}
+                  </>
                 )}
 
                 <label className="label mt-3" htmlFor="provider-wizard-name">
@@ -541,7 +504,7 @@ export function ConnectionWizard({
                 <p className="label">This name distinguishes accounts for the same provider.</p>
               </fieldset>
 
-              <div className="grid gap-4 md:grid-cols-2">
+              {!existingConnection && (
                 <fieldset className="fieldset">
                   <legend className="fieldset-legend">Protocol</legend>
                   <label className="label" htmlFor="provider-wizard-protocol">
@@ -552,7 +515,7 @@ export function ConnectionWizard({
                     className="select w-full"
                     value={protocol}
                     onChange={(event) => selectProtocol(event.target.value as ProviderProtocol)}
-                    disabled={submitting || pendingConnection !== null}
+                    disabled={metadataLocked}
                   >
                     {(selectedDefinition?.supportedProtocols ?? []).map((candidate) => (
                       <option key={candidate} value={candidate}>
@@ -560,117 +523,9 @@ export function ConnectionWizard({
                       </option>
                     ))}
                   </select>
-                </fieldset>
-
-                <fieldset className="fieldset">
-                  <legend className="fieldset-legend">Initial model</legend>
-                  <label className="label" htmlFor="provider-wizard-model">
-                    Model
-                  </label>
-                  <ModelPicker
-                    key={`${selectedDefinition?.id ?? 'provider'}:${protocol}`}
-                    id="provider-wizard-model"
-                    value={selectedModelId}
-                    options={catalogModels.map((model) => model.id)}
-                    optionLabels={modelLabels}
-                    optionDetails={modelDetails}
-                    additionalOptions={additionalModelOptions}
-                    onChange={setSelectedModelId}
-                    label="Select initial model"
-                    align="start"
-                    className="provider-wizard-model-picker"
-                    disabled={metadataLocked}
-                    emptyMessage="No catalog models available"
-                  />
-                  <p className="label">The initial selection remains scoped to this connection.</p>
-                </fieldset>
-              </div>
-
-              {usesCustomModel && (
-                <fieldset className="fieldset">
-                  <legend className="fieldset-legend">Custom model metadata</legend>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div>
-                      <label className="label" htmlFor="provider-wizard-custom-model-id">
-                        Model ID
-                      </label>
-                      <input
-                        id="provider-wizard-custom-model-id"
-                        className="input w-full"
-                        value={customModelId}
-                        onChange={(event) => setCustomModelId(event.target.value)}
-                        placeholder="provider/model-id"
-                        disabled={metadataLocked}
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="label" htmlFor="provider-wizard-custom-model-name">
-                        Display name
-                      </label>
-                      <input
-                        id="provider-wizard-custom-model-name"
-                        className="input w-full"
-                        value={customModelName}
-                        onChange={(event) => setCustomModelName(event.target.value)}
-                        placeholder="Optional friendly name"
-                        disabled={metadataLocked}
-                      />
-                    </div>
-                    <div>
-                      <label className="label" htmlFor="provider-wizard-context-limit">
-                        Context limit
-                      </label>
-                      <input
-                        id="provider-wizard-context-limit"
-                        className="input w-full"
-                        inputMode="numeric"
-                        value={customContextLimit}
-                        onChange={(event) => setCustomContextLimit(event.target.value)}
-                        placeholder="Unknown"
-                        disabled={metadataLocked}
-                      />
-                    </div>
-                    <div>
-                      <label className="label" htmlFor="provider-wizard-output-limit">
-                        Output limit
-                      </label>
-                      <input
-                        id="provider-wizard-output-limit"
-                        className="input w-full"
-                        inputMode="numeric"
-                        value={customOutputLimit}
-                        onChange={(event) => setCustomOutputLimit(event.target.value)}
-                        placeholder="Unknown"
-                        disabled={metadataLocked}
-                      />
-                    </div>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-4">
-                    <label className="label cursor-pointer gap-2">
-                      <input
-                        className="checkbox checkbox-sm"
-                        type="checkbox"
-                        checked={customTools}
-                        onChange={(event) => setCustomTools(event.target.checked)}
-                        disabled={metadataLocked}
-                      />
-                      <span>Supports tools</span>
-                    </label>
-                    <label className="label cursor-pointer gap-2">
-                      <input
-                        className="checkbox checkbox-sm"
-                        type="checkbox"
-                        checked={customReasoning}
-                        onChange={(event) => setCustomReasoning(event.target.checked)}
-                        disabled={metadataLocked}
-                      />
-                      <span>Supports reasoning</span>
-                    </label>
-                  </div>
                   <p className="label">
-                    This metadata is explicitly user-provided; Orchid does not infer it from an
-                    endpoint.
+                    Protocol is fixed after creation. Configure every model for this connection
+                    below before saving.
                   </p>
                 </fieldset>
               )}
@@ -723,7 +578,7 @@ export function ConnectionWizard({
                     setEnvironmentVariable('');
                     setError(null);
                   }}
-                  disabled={submitting || pendingConnection !== null}
+                  disabled={metadataLocked}
                 >
                   {(selectedDefinition?.supportedAuthMethods ?? []).map((method) => (
                     <option key={method} value={method}>
@@ -746,12 +601,16 @@ export function ConnectionWizard({
                           className="input w-full"
                           value={apiKey}
                           onChange={(event) => setApiKey(event.target.value)}
-                          placeholder="Paste once; it is never shown again"
+                          placeholder={existingConnection
+                            ? 'Leave blank to keep the current credential'
+                            : 'Paste once; it is never shown again'}
                           disabled={submitting}
-                          required={!pendingConnection}
+                          required={requiresNewApiKey}
                         />
                         <p className="label">
-                          Submitted once to secure storage, then immediately cleared from this form.
+                          {existingConnection
+                            ? 'Enter a new key only to replace the stored credential. It is never shown again.'
+                            : 'Submitted once to secure storage, then immediately cleared from this form.'}
                         </p>
                       </>
                     ) : (
@@ -794,6 +653,20 @@ export function ConnectionWizard({
 
               </fieldset>
 
+              {selectedDefinition && (
+                <ConnectionModelsEditor
+                  key={existingConnection?.id ?? `${selectedDefinition.id}:${protocol}`}
+                  protocol={protocol}
+                  definition={selectedDefinition}
+                  selectedModelIds={connectionModelIds}
+                  customModels={connectionCustomModels}
+                  disabled={metadataLocked}
+                  onSelectedModelIdsChange={setConnectionModelIds}
+                  onCustomModelsChange={setConnectionCustomModels}
+                  onEditingChange={setModelsEditing}
+                />
+              )}
+
               {feedback && (
                 <div role="status" aria-live="polite" className="alert alert-info">
                   <Icon name="alertCircle" size={16} />
@@ -820,12 +693,12 @@ export function ConnectionWizard({
               <button
                 type="submit"
                 className="btn btn-primary"
-                disabled={submitting || (authMethod === 'api-key' && !apiKeyPersistenceAvailable)}
+                disabled={submitting || modelsEditing || (requiresNewApiKey && !apiKeyPersistenceAvailable)}
               >
                 {submitting
-                  ? 'Connecting…'
+                  ? existingConnection ? 'Saving…' : 'Connecting…'
                   : existingConnection
-                    ? 'Reconnect connection'
+                    ? 'Save changes'
                     : pendingConnection
                       ? 'Continue setup'
                       : 'Create connection'}

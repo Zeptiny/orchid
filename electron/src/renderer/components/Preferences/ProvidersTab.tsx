@@ -8,13 +8,12 @@ import {
   type ProviderConnectionCompletion,
 } from '../Providers/ConnectionWizard';
 import { ConnectionList } from '../Providers/ConnectionList';
-import { ProviderStatus } from '../Providers/ProviderStatus';
 import { Icon } from '../Icon';
 
 export function ProvidersTab() {
   const providers = useProviders();
   const [wizardOpen, setWizardOpen] = useState(false);
-  const [connectionToRepair, setConnectionToRepair] = useState<ProviderConnectionView | null>(null);
+  const [connectionToEdit, setConnectionToEdit] = useState<ProviderConnectionView | null>(null);
 
   const completeConnection = async (result: ProviderConnectionCompletion) => {
     if (result.selection) {
@@ -24,7 +23,7 @@ export function ProvidersTab() {
       ));
     }
     await providers.refresh();
-    setConnectionToRepair(null);
+    setConnectionToEdit(null);
   };
 
   if (providers.isLoading && !providers.overview) {
@@ -72,35 +71,31 @@ export function ProvidersTab() {
 
       <ConnectionList
         connections={overview.connections}
+        definitions={overview.definitions}
+        statuses={overview.statuses}
         onAddConnection={() => {
-          setConnectionToRepair(null);
+          setConnectionToEdit(null);
           setWizardOpen(true);
         }}
-        onReconnect={(connection) => {
-          setConnectionToRepair(connection);
+        onEditConnection={(connection) => {
+          setConnectionToEdit(connection);
           setWizardOpen(true);
         }}
         onValidate={providers.validateConnection}
         onDisable={providers.disableConnection}
         onEnable={providers.enableConnection}
         onDisconnect={providers.disconnectConnection}
-      />
-
-      <ProviderStatus
-        definitions={overview.definitions}
-        statuses={overview.statuses}
-        connections={overview.connections}
-        onRefresh={providers.refreshStatus}
+        onRefreshStatus={providers.refreshStatus}
       />
 
       <ConnectionWizard
         isOpen={wizardOpen}
-        existingConnection={connectionToRepair}
+        existingConnection={connectionToEdit}
         definitions={overview.definitions}
         secureStorage={overview.secureStorage}
         onClose={() => {
           setWizardOpen(false);
-          setConnectionToRepair(null);
+          setConnectionToEdit(null);
         }}
         onCreate={providers.createConnection}
         onUpdate={providers.updateConnection}

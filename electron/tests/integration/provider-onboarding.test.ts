@@ -60,23 +60,119 @@ describe('provider onboarding and disconnected UX', () => {
     expect(composer).toMatch(/modelSelected,[\s\S]*onOpenProviders,[\s\S]*providerAvailable,[\s\S]*workspaceBound,/);
   });
 
-  it('searches provider presets and catalog models during setup', () => {
+  it('searches provider presets and uses the shared model editor during setup', () => {
     const wizard = source('components', 'Providers', 'ConnectionWizard.tsx');
     const providerPicker = source('components', 'SearchableOptionPicker.tsx');
-    const modelPicker = source('components', 'ModelPicker.tsx');
     expect(wizard).toContain('SearchableOptionPicker');
-    expect(wizard).toContain('<ModelPicker');
+    expect(wizard).toContain('<ConnectionModelsEditor');
     expect(wizard).toContain('searchPlaceholder="Search providers..."');
     expect(providerPicker).toContain('searchPlaceholder');
-    expect(modelPicker).toContain('Search models...');
-    expect(modelPicker).toContain('additionalOptions');
+    expect(wizard).not.toContain('<ModelPicker');
+    expect(wizard).not.toContain('Initial model');
+  });
+
+  it('configures multiple models and capabilities before creating a connection', () => {
+    const onboarding = source('components', 'Onboarding', 'OnboardingScreen.tsx');
+    const providersTab = source('components', 'Preferences', 'ProvidersTab.tsx');
+    const wizard = source('components', 'Providers', 'ConnectionWizard.tsx');
+
+    expect(onboarding).toContain('<ConnectionWizard');
+    expect(onboarding).toContain('onCreate={providers.createConnection}');
+    expect(providersTab).toContain('<ConnectionWizard');
+    expect(providersTab).toContain('onCreate={providers.createConnection}');
+    expect(wizard).toContain('function defaultModelIds');
+    expect(wizard).toContain('setConnectionModelIds(defaultModelIds(definition, nextProtocol))');
+    expect(wizard).toContain('{selectedDefinition && (');
+    expect(wizard).not.toContain('{existingConnection && selectedDefinition && (');
+    expect(wizard).toContain('selectedModelIds={connectionModelIds}');
+    expect(wizard).toContain('modelIds = [...connectionModelIds]');
+    expect(wizard).toContain('customModels = [...connectionCustomModels]');
+    expect(wizard).toContain(
+      "const selectionModelId = existingConnection ? '' : connectionModelIds[0] ?? '';",
+    );
   });
 
   it('renders Lilac supply discount and Neuralwatt quota as informational status', () => {
     const status = source('components', 'Providers', 'ProviderStatus.tsx');
+    const providersTab = source('components', 'Preferences', 'ProvidersTab.tsx');
+    const connections = source('components', 'Providers', 'ConnectionList.tsx');
     expect(status).toContain('Subscription discount');
     expect(status).toContain('Credit multiplier');
     expect(status).toContain('Accounting method');
     expect(status).toContain('Informational only');
+    expect(providersTab).not.toContain('<ProviderStatus');
+    expect(connections).toContain('<ProviderStatus');
+    expect(connections).toContain('providerStatusConnectionId');
+  });
+
+  it('manages connection settings and models through one edit modal', () => {
+    const providersTab = source('components', 'Preferences', 'ProvidersTab.tsx');
+    const connections = source('components', 'Providers', 'ConnectionList.tsx');
+    const modelEditor = source('components', 'Providers', 'ConnectionModelsDialog.tsx');
+    const wizard = source('components', 'Providers', 'ConnectionWizard.tsx');
+
+    expect(providersTab).not.toContain('<ConnectionModelsDialog');
+    expect(connections).toContain('Edit connection');
+    expect(connections).not.toContain('Manage models');
+    expect(connections).not.toContain('Update authentication');
+    expect(wizard).toContain('<ConnectionModelsEditor');
+    expect(wizard).toContain('modelIds = [...connectionModelIds]');
+    expect(wizard).toContain('customModels = [...connectionCustomModels]');
+    expect(modelEditor).not.toContain('<dialog');
+    expect(modelEditor).toContain('customModels');
+    expect(modelEditor).toContain('Add custom model');
+    expect(modelEditor).toContain('Edit');
+    expect(modelEditor).toContain('Remove');
+  });
+
+  it('omits fixed protocol controls from edit mode and removes the separate initial-model picker', () => {
+    const wizard = source('components', 'Providers', 'ConnectionWizard.tsx');
+
+    expect(wizard).toContain('{!existingConnection && (');
+    expect(wizard).toContain('Connection protocol');
+    expect(wizard).not.toContain('Initial model');
+    expect(wizard).toContain('Edit connection');
+    expect(wizard).toContain('Save changes');
+  });
+
+  it('allows every connection to update its authentication through the safe credential wizard', () => {
+    const providersTab = source('components', 'Preferences', 'ProvidersTab.tsx');
+    const connections = source('components', 'Providers', 'ConnectionList.tsx');
+    const wizard = source('components', 'Providers', 'ConnectionWizard.tsx');
+
+    expect(providersTab).toContain('onEditConnection');
+    expect(connections).toContain('Edit connection');
+    expect(wizard).toContain('authMethod: message.authMethod');
+    expect(wizard).toContain('Edit connection');
+    expect(wizard).toContain('disabled={metadataLocked}');
+    expect(wizard).toContain('onSubmitApiKey');
+  });
+
+  it('keeps authentication and protocol details out of connection cards', () => {
+    const connections = source('components', 'Providers', 'ConnectionList.tsx');
+    const wizard = source('components', 'Providers', 'ConnectionWizard.tsx');
+
+    expect(connections).not.toContain('>Authentication</dt>');
+    expect(connections).not.toContain('credentialLabel(connection)');
+    expect(connections).not.toContain('>Protocol</dt>');
+    expect(connections).not.toContain('protocolLabel(connection.protocol)');
+    expect(wizard).toContain('<legend className="fieldset-legend">Authentication</legend>');
+  });
+
+  it('matches the provider wizard shell and edits explicit input/output capabilities', () => {
+    const modelEditor = source('components', 'Providers', 'ConnectionModelsDialog.tsx');
+    const wizard = source('components', 'Providers', 'ConnectionWizard.tsx');
+
+    expect(wizard).toContain('provider-connection-wizard');
+    expect(wizard).toContain('provider-wizard-header');
+    expect(wizard).toContain('provider-wizard-body');
+    expect(wizard).toContain('provider-wizard-actions');
+    expect(modelEditor).toContain('startEditingCatalogModel');
+    expect(modelEditor).toContain('Customized');
+    expect(modelEditor).toContain('Input capabilities');
+    expect(modelEditor).toContain('Output capabilities');
+    expect(modelEditor).toContain('toggleModality');
+    expect(modelEditor).not.toContain('connection-model-editor-type');
+    expect(modelEditor).not.toContain('Model type');
   });
 });

@@ -90,12 +90,30 @@ const createConnectionSchema = z.object({
 const updateConnectionSchema = z.object({
   connectionId: idSchema,
   name: z.string().trim().min(1).max(120).optional(),
+  authMethod: providerAuthMethodSchema.optional(),
   modelIds: modelIdsSchema.optional(),
   customModels: z.array(customConnectionModelSchema).max(500).optional(),
   endpoint: providerEndpointSchema.nullable().optional(),
   allowInsecureHttp: z.boolean().optional(),
   environmentVariable: environmentVariableSchema.optional(),
-}).strict().refine((value) => Object.keys(value).some((key) => key !== 'connectionId'), {
+}).strict().superRefine((value, ctx) => {
+  if (value.authMethod === 'environment' && !value.environmentVariable) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['environmentVariable'],
+      message: 'Environment authentication requires an environment variable name',
+    });
+  }
+  if (value.authMethod !== undefined
+    && value.authMethod !== 'environment'
+    && value.environmentVariable !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['environmentVariable'],
+      message: 'An environment variable is valid only for environment authentication',
+    });
+  }
+}).refine((value) => Object.keys(value).some((key) => key !== 'connectionId'), {
   message: 'Provide at least one connection field to update',
 });
 
@@ -321,10 +339,13 @@ function requireStaticConnectionSupport(
     throw new Error(`'${definition.displayName}' uses a code-owned endpoint and cannot be redirected`);
   }
 
-  if (connection.customModels?.length && !definition.allowsCustomModels) {
-    throw new Error(`'${definition.displayName}' does not allow user-defined models`);
-  }
   for (const model of connection.customModels ?? []) {
+    const overridesCatalogModel = definition.models.some(
+      (catalogModel) => catalogModel.id === model.id,
+    );
+    if (!definition.allowsCustomModels && !overridesCatalogModel) {
+      throw new Error(`'${definition.displayName}' does not allow user-defined models`);
+    }
     if (model.protocol !== connection.protocol) {
       throw new Error(`Custom model '${model.id}' does not match connection protocol '${connection.protocol}'`);
     }
@@ -433,24 +454,25 @@ function candidateModels(
   definition: ProviderDefinition,
 ): Array<{ readonly model: ProviderModelDefinition; readonly source: 'catalog' | 'connection' }> {
   const candidates: Array<{ model: ProviderModelDefinition; source: 'catalog' | 'connection' }> = [];
-  for (const model of definition.models) {
-    if (model.protocol === connection.protocol) candidates.push({ model, source: 'catalog' });
-  }
-  const knownIds = new Set(candidates.map((candidate) => candidate.model.id));
-  for (const model of connection.customModels ?? []) {
-    if (!knownIds.has(model.id) && model.protocol === connection.protocol) {
-      candidates.push({ model, source: 'connection' });
-      knownIds.add(model.id);
-    }
-  }
   for (const id of connection.modelIds) {
-    if (!knownIds.has(id)) {
-      candidates.push({
-        source: 'connection',
-        model: { id, displayName: id, protocol: connection.protocol },
-      });
-      knownIds.add(id);
+    const customModel = connection.customModels?.find(
+      (model) => model.id === id && model.protocol === connection.protocol,
+    );
+    if (customModel) {
+      candidates.push({ model: customModel, source: 'connection' });
+      continue;
     }
+    const catalogModel = definition.models.find(
+      (model) => model.id === id && model.protocol === connection.protocol,
+    );
+    if (catalogModel) {
+      candidates.push({ model: catalogModel, source: 'catalog' });
+      continue;
+    }
+    candidates.push({
+      source: 'connection',
+      model: { id, displayName: id, protocol: connection.protocol },
+    });
   }
   return candidates;
 }
@@ -556,8 +578,11 @@ export function registerProviderIPC(): void {
     if (!parsed.success) throw new Error('Invalid providers:update payload');
     const current = services();
     const existing = await requireConnection(parsed.data.connectionId);
+    const nextAuthMethod = parsed.data.authMethod ?? existing.authMethod;
+    const authMethodChanged = nextAuthMethod !== existing.authMethod;
     const patch = {
       ...(parsed.data.name === undefined ? {} : { name: parsed.data.name }),
+      ...(parsed.data.authMethod === undefined ? {} : { authMethod: parsed.data.authMethod }),
       ...(parsed.data.modelIds === undefined ? {} : { modelIds: parsed.data.modelIds }),
       ...(parsed.data.customModels === undefined ? {} : { customModels: parsed.data.customModels }),
       ...(parsed.data.endpoint === undefined ? {} : { endpoint: parsed.data.endpoint }),
@@ -566,12 +591,17 @@ export function registerProviderIPC(): void {
         : { allowInsecureHttp: parsed.data.allowInsecureHttp }),
     };
     if (parsed.data.environmentVariable !== undefined) {
-      if (existing.authMethod !== 'environment') {
+      if (nextAuthMethod !== 'environment') {
         throw new Error('Only environment-authenticated connections can change an environment reference');
       }
       Object.assign(patch, {
         credential: createEnvironmentCredentialReference(parsed.data.environmentVariable),
         health: 'draft' as const,
+      });
+    } else if (authMethodChanged) {
+      Object.assign(patch, {
+        credential: { kind: 'none' as const },
+        health: nextAuthMethod === 'none' ? 'ready' as const : 'draft' as const,
       });
     }
     const candidate = { ...existing, ...patch } as ProviderConnection;
@@ -582,12 +612,14 @@ export function registerProviderIPC(): void {
     // environment reference in the same intent before the endpoint is usable.
     const endpointChanged = parsed.data.endpoint !== undefined
       && genericOrigin(existing, current) !== genericOrigin(candidate, current);
-    if (endpointChanged && existing.credential.kind === 'stored') {
+    if (existing.credential.kind === 'stored' && (authMethodChanged || endpointChanged)) {
       await current.vault.deleteConnectionCredentials(existing.id);
+    }
+    if (endpointChanged && nextAuthMethod === 'api-key') {
       Object.assign(patch, { credential: { kind: 'none' as const }, health: 'draft' });
     } else if (
       endpointChanged
-      && existing.credential.kind === 'environment'
+      && nextAuthMethod === 'environment'
       && parsed.data.environmentVariable === undefined
     ) {
       Object.assign(patch, { credential: { kind: 'none' as const }, health: 'draft' });

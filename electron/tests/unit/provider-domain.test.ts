@@ -31,7 +31,7 @@ function connection(overrides: Partial<ProviderConnection> = {}): ProviderConnec
     protocol: 'openai-compatible',
     authMethod: 'api-key',
     credential: { kind: 'stored', handle: 'credential-work-v1' },
-    modelIds: [],
+    modelIds: ['vendor/path/model'],
     health: 'ready',
     ...overrides,
   };
@@ -109,6 +109,44 @@ describe('provider domain', () => {
       expect(result.connection.id).toBe(CONNECTION_ID);
       expect(result.model.id).toBe('vendor/path/model');
     }
+  });
+
+  it('does not resolve a catalog model removed from the connection model set', () => {
+    expect(resolveModelSelection(
+      { connectionId: CONNECTION_ID, modelId: 'vendor/path/model' },
+      [connection({ modelIds: [] })],
+      [definition()],
+    )).toMatchObject({ kind: 'unavailable', reason: 'missing-model' });
+  });
+
+  it('prefers connection-local metadata over a matching preconfigured catalog model', () => {
+    const result = resolveModelSelection(
+      { connectionId: CONNECTION_ID, modelId: 'vendor/path/model' },
+      [connection({
+        customModels: [{
+          id: 'vendor/path/model',
+          displayName: 'Work-tuned model',
+          protocol: 'openai-compatible',
+          capabilities: {
+            inputModalities: ['text', 'image'],
+            outputModalities: ['text'],
+            tools: false,
+            reasoning: true,
+          },
+          limits: { contextTokens: 64_000, outputTokens: 8_000 },
+        }],
+      })],
+      [definition({ allowsCustomModels: false })],
+    );
+
+    expect(result).toMatchObject({
+      kind: 'resolved',
+      model: {
+        source: 'connection',
+        displayName: 'Work-tuned model',
+        capabilities: { inputModalities: ['text', 'image'] },
+      },
+    });
   });
 
   it('fails closed for unknown, disabled, and definition-mismatched selections', () => {

@@ -39,25 +39,31 @@ export function resolveModelSelection(
     || !provider.supportedProtocols.includes(connection.protocol)) {
     return { kind: 'unavailable', selection, reason: 'unsupported-connection' };
   }
-
-  const catalogModel = provider.models.find((model) => model.id === selection.modelId);
-  if (catalogModel) {
-    if (catalogModel.lifecycle === 'disabled' || catalogModel.lifecycle === 'retired') {
-      return { kind: 'unavailable', selection, reason: 'model-disabled' };
-    }
-    if (catalogModel.protocol !== connection.protocol) {
-      return { kind: 'unavailable', selection, reason: 'provider-mismatch' };
-    }
-    const model: EffectiveModel = { ...catalogModel, source: 'catalog' };
-    return { kind: 'resolved', selection, connection, provider, model };
+  if (!connection.modelIds.includes(selection.modelId)) {
+    return { kind: 'unavailable', selection, reason: 'missing-model' };
   }
 
+  const catalogModel = provider.models.find((model) => model.id === selection.modelId);
+  if (catalogModel?.lifecycle === 'disabled' || catalogModel?.lifecycle === 'retired') {
+    return { kind: 'unavailable', selection, reason: 'model-disabled' };
+  }
   const customModel = connection.customModels?.find((model) => model.id === selection.modelId);
-  if (provider.allowsCustomModels && customModel) {
+  if (customModel && (provider.allowsCustomModels || catalogModel)) {
+    if (customModel.lifecycle === 'disabled' || customModel.lifecycle === 'retired') {
+      return { kind: 'unavailable', selection, reason: 'model-disabled' };
+    }
     if (customModel.protocol !== connection.protocol) {
       return { kind: 'unavailable', selection, reason: 'provider-mismatch' };
     }
     const model: EffectiveModel = { ...customModel, source: 'connection' };
+    return { kind: 'resolved', selection, connection, provider, model };
+  }
+
+  if (catalogModel) {
+    if (catalogModel.protocol !== connection.protocol) {
+      return { kind: 'unavailable', selection, reason: 'provider-mismatch' };
+    }
+    const model: EffectiveModel = { ...catalogModel, source: 'catalog' };
     return { kind: 'resolved', selection, connection, provider, model };
   }
 

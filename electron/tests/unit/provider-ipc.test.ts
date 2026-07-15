@@ -294,6 +294,86 @@ describe('provider IPC', () => {
     });
   });
 
+  it('lists only the catalog models selected on the connection after model edits', async () => {
+    const secondModel = {
+      ...OPENAI.models[0],
+      id: 'gpt-5/other',
+      displayName: 'GPT 5 Other',
+    };
+    const memory = memoryServices([{ ...OPENAI, models: [...OPENAI.models, secondModel] }]);
+    const id = '00000000-0000-4000-8000-000000000023';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Editable OpenAI',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-openai-key' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const initial = await handler(IPC_CHANNELS.PROVIDERS_MODEL_LIST)(null, { connectionId: id });
+    expect(initial.map((option: { model: { id: string } }) => option.model.id)).toEqual([
+      'gpt-5/test',
+    ]);
+
+    await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
+      connectionId: id,
+      modelIds: ['gpt-5/other'],
+    });
+    const updated = await handler(IPC_CHANNELS.PROVIDERS_MODEL_LIST)(null, { connectionId: id });
+    expect(updated.map((option: { model: { id: string } }) => option.model.id)).toEqual([
+      'gpt-5/other',
+    ]);
+  });
+
+  it('accepts a connection-local override for a preconfigured model', async () => {
+    const fixedCatalogProvider = { ...OPENAI, allowsCustomModels: false };
+    const memory = memoryServices([fixedCatalogProvider]);
+    const id = '00000000-0000-4000-8000-000000000024';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Vision override',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-openai-key' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
+      connectionId: id,
+      customModels: [{
+        id: 'gpt-5/test',
+        displayName: 'GPT 5 Vision override',
+        protocol: 'openai-compatible',
+        capabilities: {
+          inputModalities: ['text', 'image'],
+          outputModalities: ['text'],
+          tools: true,
+          reasoning: false,
+        },
+        limits: { contextTokens: 32_000, outputTokens: 4_000 },
+      }],
+    });
+
+    const options = await handler(IPC_CHANNELS.PROVIDERS_MODEL_LIST)(null, { connectionId: id });
+    expect(options).toMatchObject([{
+      model: {
+        id: 'gpt-5/test',
+        source: 'connection',
+        displayName: 'GPT 5 Vision override',
+        capabilities: { inputModalities: ['text', 'image'] },
+      },
+    }]);
+  });
+
   it('accepts one-shot API-key submission without returning key or handle', async () => {
     const memory = memoryServices();
     const id = '00000000-0000-4000-8000-000000000021';
@@ -322,6 +402,112 @@ describe('provider IPC', () => {
     expect(JSON.stringify(result)).not.toContain('sk-test-never-serialize');
     expect(JSON.stringify(result)).not.toContain('00000000-0000-4000-8000-000000000099');
     expect(result).toMatchObject({ connection: { health: 'ready', credentialKind: 'stored' } });
+  });
+
+  it('changes authentication method while keeping credential values redacted', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000025';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Authentication editor',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-openai-key' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const result = await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
+      connectionId: id,
+      authMethod: 'environment',
+      environmentVariable: 'UPDATED_OPENAI_API_KEY',
+    });
+
+    expect(memory.vault.deleteConnectionCredentials).toHaveBeenCalledWith(id);
+    expect(memory.records.get(id)).toMatchObject({
+      authMethod: 'environment',
+      credential: { kind: 'environment', variable: 'UPDATED_OPENAI_API_KEY' },
+    });
+    expect(result).toMatchObject({
+      connection: {
+        authMethod: 'environment',
+        credentialKind: 'environment',
+        environmentVariable: 'UPDATED_OPENAI_API_KEY',
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('fixture-openai-key');
+  });
+
+  it('switches an environment connection to a newly stored API key', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000026';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Authentication transition',
+      protocol: 'openai-compatible',
+      authMethod: 'environment',
+      credential: { kind: 'environment', variable: 'OLD_OPENAI_API_KEY' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const unauthenticated = await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
+      connectionId: id,
+      authMethod: 'api-key',
+    });
+    expect(unauthenticated).toMatchObject({
+      connection: {
+        authMethod: 'api-key',
+        credentialKind: 'none',
+        health: 'needs_attention',
+      },
+    });
+
+    const authenticated = await handler(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY)(null, {
+      connectionId: id,
+      apiKey: 'replacement-api-key',
+    });
+    expect(memory.vault.replaceConnectionApiKey).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: id, authMethod: 'api-key' }),
+      'replacement-api-key',
+    );
+    expect(authenticated).toMatchObject({
+      connection: { authMethod: 'api-key', credentialKind: 'stored', health: 'ready' },
+    });
+    expect(JSON.stringify(authenticated)).not.toContain('replacement-api-key');
+  });
+
+  it('requires an environment reference when changing to environment authentication', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000027';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Invalid authentication transition',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-openai-key' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
+      connectionId: id,
+      authMethod: 'environment',
+    })).rejects.toThrow('Invalid providers:update payload');
+    expect(memory.vault.deleteConnectionCredentials).not.toHaveBeenCalled();
+    expect(memory.records.get(id)).toMatchObject({
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-openai-key' },
+    });
   });
 
   it('invalidates a stored generic credential before a normalized-origin change', async () => {

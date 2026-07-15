@@ -1,5 +1,5 @@
 /** Informational provider status cards. Status never changes send eligibility. */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type {
   ProviderConnectionView,
   ProviderDefinitionView,
@@ -9,9 +9,9 @@ import type {
 import { Icon } from '../Icon';
 
 export interface ProviderStatusProps {
-  readonly statuses: readonly ProviderStatusView[];
-  readonly definitions?: readonly ProviderDefinitionView[];
-  readonly connections?: readonly ProviderConnectionView[];
+  readonly connection: ProviderConnectionView;
+  readonly definition?: ProviderDefinitionView;
+  readonly status?: ProviderStatusView;
   readonly onRefresh?: (
     message: ProviderStatusRefreshMessage,
   ) => Promise<ProviderStatusView | null>;
@@ -98,38 +98,28 @@ function availabilityBadge(status: ProviderStatusView | undefined): string {
  * are intentionally shown as unavailable when their source omits them.
  */
 export function ProviderStatus({
-  statuses,
-  definitions = [],
-  connections = [],
+  connection,
+  definition,
+  status,
   onRefresh,
 }: ProviderStatusProps) {
-  const [refreshingProviderId, setRefreshingProviderId] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const providerIds = useMemo(() => {
-    const known = definitions
-      .filter((definition) => definition.id === 'lilac' || definition.id === 'neuralwatt')
-      .map((definition) => definition.id);
-    return [...new Set([...known, ...statuses.map((status) => status.providerId)])];
-  }, [definitions, statuses]);
+  const { providerId } = connection;
+  const supportsKnownStatus = providerId === 'lilac' || providerId === 'neuralwatt';
 
-  const refresh = async (providerId: string) => {
+  const refresh = async () => {
     if (!onRefresh) return;
-    const connection =
-      providerId === 'neuralwatt'
-        ? (connections.find(
-            (candidate) => candidate.providerId === providerId && candidate.health === 'ready',
-          ) ?? connections.find((candidate) => candidate.providerId === providerId))
-        : undefined;
-    if (providerId === 'neuralwatt' && !connection) {
-      setError('Connect Neuralwatt before refreshing account quota and accounting status.');
+    if (providerId === 'neuralwatt' && connection.health !== 'ready') {
+      setError('Reconnect Neuralwatt before refreshing account quota and accounting status.');
       return;
     }
-    setRefreshingProviderId(providerId);
+    setRefreshing(true);
     setError(null);
     try {
       await onRefresh({
         providerId,
-        ...(connection ? { connectionId: connection.id } : {}),
+        connectionId: connection.id,
       });
     } catch (refreshError) {
       setError(
@@ -138,7 +128,7 @@ export function ProviderStatus({
           : 'Status refresh could not be completed.',
       );
     } finally {
-      setRefreshingProviderId(null);
+      setRefreshing(false);
     }
   };
 
@@ -146,113 +136,76 @@ export function ProviderStatus({
   // status view is open, refresh at the documented 60s UI cadence; the main
   // status service still coalesces calls and enforces its 30s manual minimum.
   useEffect(() => {
-    if (!onRefresh) return;
-    const connection = connections.find(
-      (candidate) => candidate.providerId === 'neuralwatt' && candidate.health === 'ready',
-    );
-    if (!connection) return;
+    if (!onRefresh || providerId !== 'neuralwatt' || connection.health !== 'ready') return;
     const refreshQuota = () => {
-      void onRefresh({ providerId: 'neuralwatt', connectionId: connection.id }).catch(() => undefined);
+      void onRefresh({ providerId, connectionId: connection.id }).catch(() => undefined);
     };
     refreshQuota();
     const timer = window.setInterval(refreshQuota, 60_000);
     return () => window.clearInterval(timer);
-  }, [connections, onRefresh]);
+  }, [connection.health, connection.id, onRefresh, providerId]);
 
-  if (providerIds.length === 0) {
-    return (
-      <section aria-labelledby="provider-status-title" className="config-fieldset">
-        <div className="config-fieldset-legend">
-          <span id="provider-status-title">Provider status</span>
-        </div>
-        <div role="status" className="alert alert-info">
-          <Icon name="activity" size={16} />
-          <span>No provider status observations are available yet.</span>
-        </div>
-      </section>
-    );
-  }
+  if (!supportsKnownStatus && !status) return null;
+
+  const statusTitleId = `provider-status-${connection.id}`;
 
   return (
-    <section aria-labelledby="provider-status-title" className="config-fieldset">
-      <div className="config-fieldset-legend">
+    <section
+      aria-labelledby={statusTitleId}
+      className="rounded-box border border-base-300 bg-base-200/40 p-3"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 id="provider-status-title" className="text-sm font-semibold">
+          <h4 id={statusTitleId} className="text-sm font-semibold">
             Provider status
-          </h2>
-          <p className="mt-1 text-xs font-normal text-base-content/70">
-            Informational only — status and pricing observations never enable, disable, delay, or
-            reroute a request.
+          </h4>
+          <p className="mt-1 text-xs text-base-content/70">
+            Informational only · Last observed: {formatTimestamp(status?.observedAt)}
           </p>
         </div>
+        <span className={availabilityBadge(status)}>{availabilityLabel(status)}</span>
       </div>
+
       {error && (
-        <div role="alert" aria-live="assertive" className="alert alert-warning">
+        <div role="alert" aria-live="assertive" className="alert alert-warning mt-3">
           <Icon name="alert" size={16} />
           <span>{error}</span>
         </div>
       )}
 
-      <div className="grid gap-3 xl:grid-cols-2">
-        {providerIds.map((providerId) => {
-          const status = statuses.find((candidate) => candidate.providerId === providerId);
-          const definition = definitions.find((candidate) => candidate.id === providerId);
-          const requiresConnection = providerId === 'neuralwatt';
-          const hasConnection = connections.some(
-            (connection) => connection.providerId === providerId,
-          );
-          const refreshing = refreshingProviderId === providerId;
-          return (
-            <article key={providerId} className="config-card">
-              <div className="flex flex-col gap-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h3 className="config-card-title">
-                      {definition?.displayName ?? providerId}
-                    </h3>
-                    <p className="config-card-desc">
-                      Last observed: {formatTimestamp(status?.observedAt)}
-                    </p>
-                  </div>
-                  <span className={availabilityBadge(status)}>{availabilityLabel(status)}</span>
-                </div>
+      <div className="mt-3 flex flex-col gap-3">
+        {status?.providerUpdatedAt && (
+          <p className="config-card-desc">
+            Provider updated: {formatTimestamp(status.providerUpdatedAt)}
+          </p>
+        )}
+        {status?.error && (
+          <div role="alert" className="alert alert-warning">
+            <Icon name="alert" size={16} />
+            <span>{status.error.message}</span>
+          </div>
+        )}
 
-                {status?.providerUpdatedAt && (
-                  <p className="config-card-desc">
-                    Provider updated: {formatTimestamp(status.providerUpdatedAt)}
-                  </p>
-                )}
-                {status?.error && (
-                  <div role="alert" className="alert alert-warning">
-                    <Icon name="alert" size={16} />
-                    <span>{status.error.message}</span>
-                  </div>
-                )}
+        {providerId === 'lilac' && <LilacStatusDetails status={status} />}
+        {providerId === 'neuralwatt' && <NeuralwattStatusDetails status={status} />}
+        {!supportsKnownStatus && status && Object.keys(status.data).length === 0 && (
+          <p className="text-sm text-base-content/70">
+            No provider-specific status details were supplied.
+          </p>
+        )}
 
-                {providerId === 'lilac' && <LilacStatusDetails status={status} />}
-                {providerId === 'neuralwatt' && <NeuralwattStatusDetails status={status} />}
-                {providerId !== 'lilac' && providerId !== 'neuralwatt' && !status && (
-                  <p className="text-sm text-base-content/70">
-                    No timestamped observation has been received.
-                  </p>
-                )}
-
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => void refresh(providerId)}
-                    disabled={!onRefresh || refreshing || (requiresConnection && !hasConnection)}
-                    aria-label={`Refresh ${definition?.displayName ?? providerId} status`}
-                  >
-                    <Icon name="refresh" size={14} className={refreshing ? 'animate-spin' : ''} />
-                    {refreshing ? 'Refreshing…' : 'Refresh status'}
-                  </button>
-                </div>
-              </div>
-            </article>
-          );
-        })}
+        <div className="flex justify-end">
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => void refresh()}
+            disabled={!onRefresh || refreshing || (providerId === 'neuralwatt' && connection.health !== 'ready')}
+            aria-label={`Refresh ${definition?.displayName ?? providerId} status for ${connection.name}`}
+          >
+            <Icon name="refresh" size={14} className={refreshing ? 'animate-spin' : ''} />
+            {refreshing ? 'Refreshing…' : 'Refresh status'}
+          </button>
+        </div>
       </div>
     </section>
   );

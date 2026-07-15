@@ -12,7 +12,7 @@ const connection: ProviderConnection = {
   protocol: 'openai-compatible',
   authMethod: 'api-key',
   credential: { kind: 'stored', handle: '55555555-5555-4555-8555-555555555555' },
-  modelIds: [],
+  modelIds: ['gpt-test'],
   health: 'ready',
 };
 
@@ -52,7 +52,7 @@ describe('ProviderDriverRegistry', () => {
         getProviderDefinitions: () => catalogToProviderDefinitions(firstCatalog),
         load,
       },
-      connections: { list: async () => [connection] },
+      connections: { list: async () => [{ ...connection, modelIds: ['gpt-test/1'] }] },
       vault: {
         readSecret: vi.fn(async () => {
           await credentialWait;
@@ -162,6 +162,7 @@ describe('ProviderDriverRegistry', () => {
       ...connection,
       providerId: 'lilac',
       name: 'Lilac subscription',
+      modelIds: ['moonshotai/kimi-k2.6'],
     };
     const lilacProvider: ProviderDefinition = {
       id: 'lilac',

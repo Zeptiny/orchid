@@ -1,5 +1,5 @@
 /** Renderer-safe view-model helpers for typed connection-scoped selections. */
-import type { ProviderModelOption } from '../../shared/types/ipc';
+import type { ProviderConnectionView, ProviderModelOption } from '../../shared/types/ipc';
 import type { ModelSelection } from '../../shared/types/provider';
 
 /**
@@ -24,4 +24,19 @@ export function selectionMatchesOption(
 ): boolean {
   return selection?.connectionId === option.selection.connectionId
     && selection.modelId === option.selection.modelId;
+}
+
+/**
+ * Pick one connection card to host provider-scoped status. A ready connection
+ * wins because authenticated status refreshes can use it immediately; stable
+ * list order breaks ties so the same observation is never repeated elsewhere.
+ */
+export function providerStatusConnectionId(
+  connections: readonly ProviderConnectionView[],
+  providerId: string,
+): string | null {
+  const matching = connections.filter((connection) => connection.providerId === providerId);
+  return matching.find((connection) => connection.health === 'ready')?.id
+    ?? matching[0]?.id
+    ?? null;
 }
