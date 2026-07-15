@@ -25,6 +25,7 @@ import {
   getSessionManager,
   resolveWindowWorkspace,
 } from './session';
+import { workingSetOpenOrFocus } from './session-working-set';
 import { getBackgroundStore } from '../tools/process/background-store';
 import { getBuiltinToolRegistryForRuntime, getSubagentManager } from '../tools';
 import type {
@@ -640,6 +641,7 @@ export function ensureActiveSession(
   );
   // Draft was promoted into the new session.
   clearDraftCwd(windowId);
+  workingSetOpenOrFocus(session.id);
   if (canSend(webContents)) {
     webContents.send(IPC_CHANNELS.SESSION_CREATED, { session, draftGeneration });
   }

@@ -36,11 +36,19 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
     group: 'sessions',
     allowInEditable: true,
   },
+  {
+    id: 'session.tab.close',
+    chord: { key: 'w', mod: true },
+    label: 'Close current tab',
+    footerLabel: 'close tab',
+    group: 'sessions',
+    allowInEditable: true,
+  },
   ...([1, 2, 3, 4, 5, 6, 7, 8, 9] as const).map(
     (n): ShortcutDef => ({
       id: `session.switch.${n}`,
       chord: { key: String(n), mod: true },
-      label: `Switch to session ${n}`,
+      label: `Switch to open tab ${n}`,
       group: 'sessions',
       allowInEditable: true,
     }),

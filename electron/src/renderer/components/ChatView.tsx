@@ -9,6 +9,7 @@ import { useSession } from '../hooks/useSession';
 import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
 import { useSessionActivity } from '../hooks/useSessionActivity';
+import { useSessionTabs } from '../hooks/useSessionTabs';
 import { useProviders } from '../hooks/useProviders';
 import {
   providerModelOptionDisplayName,
@@ -30,6 +31,7 @@ import { LeftSidebar } from './LeftSidebar';
 import { CommandPalette } from './CommandPalette';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { SessionHeader } from './session-header';
+import { SessionTabBar } from './SessionTabBar';
 
 type ToastSeverity = 'info' | 'warning' | 'error';
 interface Toast {
@@ -43,11 +45,15 @@ export function ChatView() {
   const subagents = useSubagents(session.activeSession?.id ?? null);
   const todos = useTodos(session.activeSession?.id ?? null);
   const activity = useSessionActivity();
+  const tabs = useSessionTabs();
   const providers = useProviders();
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [closeConfirmId, setCloseConfirmId] = useState<string | null>(null);
+  const [draftTabVisible, setDraftTabVisible] = useState(false);
+  const [composerDraftKey, setComposerDraftKey] = useState(0);
   const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
   const [ragStatus, setRagStatus] = useState<RAGStoreStatus | null>(null);
   const [astStatus, setAstStatus] = useState<ASTStoreStatus | null>(null);
@@ -64,7 +70,7 @@ export function ChatView() {
 
   // Guards against out-of-order session:load responses overwriting a newer pick.
   const sessionSwitchGen = useRef(0);
-  const didAutoSelect = useRef(false);
+  const didBootstrapTabs = useRef(false);
 
   const connectionStateSignature = useMemo(
     () => providers.overview?.connections
@@ -247,12 +253,23 @@ export function ChatView() {
     [session, chat, applySessionMessages],
   );
 
+  const enterDraftMode = useCallback(async (opts?: { clearComposer?: boolean }) => {
+    const gen = ++sessionSwitchGen.current;
+    chat.setMessages([]);
+    await session.enterDraft();
+    if (gen !== sessionSwitchGen.current) return;
+    applySessionMessages(null);
+    setDraftTabVisible(true);
+    if (opts?.clearComposer) {
+      setComposerDraftKey((k) => k + 1);
+    }
+  }, [session, chat, applySessionMessages]);
+
   // New chat: draft in the currently selected project. Never open a folder
   // picker here — inherit session.cwd → workspace.cwd → sticky default.
   // Without a bound project, stay draft-unbound until the user picks a folder.
   const handleSessionCreate = useCallback(async () => {
     const gen = ++sessionSwitchGen.current;
-    chat.setMessages([]);
     const inheritCwd =
       session.activeSession?.cwd?.trim() ||
       (session.workspace?.status === 'valid' ? session.workspace.cwd : null);
@@ -264,11 +281,8 @@ export function ChatView() {
         return;
       }
     }
-    await session.enterDraft();
-    if (gen !== sessionSwitchGen.current) return;
-    // Ensure empty pane after draft clear (enterDraft does not load messages).
-    applySessionMessages(null);
-  }, [session, chat, applySessionMessages]);
+    await enterDraftMode({ clearComposer: true });
+  }, [session, enterDraftMode, applySessionMessages]);
 
   // Project-row New Chat: make that project the window's draft workspace, then
   // clear selection. The first message creates a new session there while any
@@ -277,15 +291,12 @@ export function ChatView() {
     const gen = ++sessionSwitchGen.current;
     const workspace = await session.setWorkspace(projectDir);
     if (!workspace?.cwd || gen !== sessionSwitchGen.current) return;
-    chat.setMessages([]);
-    await session.enterDraft();
-    if (gen !== sessionSwitchGen.current) return;
-    applySessionMessages(null);
+    await enterDraftMode({ clearComposer: true });
     setToast({
       severity: 'info',
       message: `New chat in project: ${workspace.cwd}`,
     });
-  }, [session, chat, applySessionMessages]);
+  }, [session, enterDraftMode]);
 
   // Project header click: select the project itself (draft bound to it) without
   // loading the first session in that group.
@@ -293,56 +304,96 @@ export function ChatView() {
     const gen = ++sessionSwitchGen.current;
     const workspace = await session.setWorkspace(projectDir);
     if (!workspace?.cwd || gen !== sessionSwitchGen.current) return;
-    chat.setMessages([]);
-    await session.enterDraft();
-    if (gen !== sessionSwitchGen.current) return;
-    applySessionMessages(null);
-  }, [session, chat, applySessionMessages]);
+    await enterDraftMode({ clearComposer: true });
+  }, [session, enterDraftMode]);
 
-  // Auto-select the most recent session on first list load so the UI isn't
-  // stuck with an empty pane while sessions exist in the sidebar.
+  // Restore durable open tabs (or empty draft) instead of auto-picking library[0].
   useEffect(() => {
-    if (didAutoSelect.current) return;
-    if (session.activeSession) {
-      didAutoSelect.current = true;
-      return;
-    }
+    if (didBootstrapTabs.current) return;
+    if (!tabs.ready) return;
     if (session.listState.status !== 'ready' && session.listState.status !== 'partial') {
       return;
     }
-    const first = session.listState.sessions[0];
-    if (!first) {
-      didAutoSelect.current = true;
+
+    didBootstrapTabs.current = true;
+    const focusId = tabs.snapshot.focusedSessionId;
+    const openIds = tabs.snapshot.openSessionIds;
+    if (focusId && openIds.includes(focusId)) {
+      void handleSessionSelect(focusId);
+      setDraftTabVisible(false);
       return;
     }
-    didAutoSelect.current = true;
-    void handleSessionSelect(first.id);
-  }, [session.listState, session.activeSession, handleSessionSelect]);
+    if (openIds[0]) {
+      void handleSessionSelect(openIds[0]);
+      setDraftTabVisible(false);
+      return;
+    }
+    void enterDraftMode();
+  }, [tabs.ready, tabs.snapshot, session.listState, handleSessionSelect, enterDraftMode]);
 
-  // When the active session is deleted, clear the chat pane and open another.
+  useEffect(() => {
+    if (session.activeSession?.id) {
+      setDraftTabVisible(false);
+    }
+  }, [session.activeSession?.id]);
+
+  const isLiveSession = useCallback(
+    (id: string) => {
+      const a = activity.activities.find((row) => row.sessionId === id);
+      if (!a) return false;
+      return a.state === 'working' || a.state === 'waiting' || a.state === 'needs_attention';
+    },
+    [activity.activities],
+  );
+
+  const focusAfterWorkingSet = useCallback(
+    async (snapshot: { focusedSessionId: string | null; openSessionIds: readonly string[] }) => {
+      const nextId = snapshot.focusedSessionId;
+      if (nextId) {
+        setDraftTabVisible(false);
+        await handleSessionSelect(nextId);
+        return;
+      }
+      await enterDraftMode();
+    },
+    [handleSessionSelect, enterDraftMode],
+  );
+
+  const performCloseTab = useCallback(
+    async (id: string) => {
+      const snapshot = await tabs.closeTab(id);
+      if (session.activeSession?.id === id) {
+        await focusAfterWorkingSet(snapshot);
+      }
+    },
+    [tabs, session.activeSession?.id, focusAfterWorkingSet],
+  );
+
+  const requestCloseTab = useCallback(
+    (id: string) => {
+      if (isLiveSession(id)) {
+        setCloseConfirmId(id);
+        return;
+      }
+      void performCloseTab(id);
+    },
+    [isLiveSession, performCloseTab],
+  );
+
+  // When the active session is deleted, follow MRU among remaining open tabs.
   const handleSessionDelete = useCallback(
     async (id: string) => {
       const wasActive = session.activeSession?.id === id;
       await session.deleteSession(id);
+      const snapshot = await tabs.refresh();
       if (!wasActive) return;
 
       const gen = ++sessionSwitchGen.current;
       chat.setMessages([]);
-
-      // Re-fetch the list after delete (closure listState may be stale).
-      try {
-        const remaining = window.orchid?.session?.list
-          ? await window.orchid.session.list()
-          : [];
-        if (gen !== sessionSwitchGen.current) return;
-        if (remaining[0]) {
-          void handleSessionSelect(remaining[0].id);
-        }
-      } catch {
-        // Non-fatal — pane already cleared
-      }
+      if (gen !== sessionSwitchGen.current) return;
+      await focusAfterWorkingSet(snapshot);
     },
-    [session, chat, handleSessionSelect],
+    [session, chat, tabs, focusAfterWorkingSet],
   );
 
   const notify = useCallback((message: string, severity: ToastSeverity = 'info') => {
@@ -488,16 +539,29 @@ export function ChatView() {
     const handlers: Record<string, (event: KeyboardEvent) => void> = {};
     for (let n = 1; n <= 9; n++) {
       handlers[`session.switch.${n}`] = () => {
-        const list =
-          session.listState.status === 'ready' || session.listState.status === 'partial'
-            ? session.listState.sessions
-            : [];
-        const target = list[n - 1];
-        if (target) void handleSessionSelect(target.id);
+        const targetId = tabs.snapshot.openSessionIds[n - 1];
+        if (targetId) {
+          setDraftTabVisible(false);
+          void handleSessionSelect(targetId);
+        }
       };
     }
     return handlers;
-  }, [session.listState, handleSessionSelect]);
+  }, [tabs.snapshot.openSessionIds, handleSessionSelect]);
+
+  const handleCloseFocusedTab = useCallback(() => {
+    if (draftTabVisible && !session.activeSession) {
+      setDraftTabVisible(false);
+      return;
+    }
+    const id = session.activeSession?.id ?? tabs.snapshot.focusedSessionId;
+    if (id) requestCloseTab(id);
+  }, [
+    draftTabVisible,
+    session.activeSession,
+    tabs.snapshot.focusedSessionId,
+    requestCloseTab,
+  ]);
 
   const shortcutHandlers = useMemo(
     () => ({
@@ -506,6 +570,9 @@ export function ChatView() {
       'settings.open': () => openSettings(),
       'session.new': () => {
         void handleSessionCreate();
+      },
+      'session.tab.close': () => {
+        handleCloseFocusedTab();
       },
       'inspector.toggle': () => toggleSidebar(),
       'sessionsRail.toggle': () => toggleLeftSidebar(),
@@ -516,6 +583,7 @@ export function ChatView() {
       toggleHelp,
       openSettings,
       handleSessionCreate,
+      handleCloseFocusedTab,
       toggleSidebar,
       toggleLeftSidebar,
       sessionSwitchHandlers,
@@ -751,10 +819,70 @@ export function ChatView() {
             </button>
           </div>
         )}
+        <SessionTabBar
+          openSessionIds={tabs.snapshot.openSessionIds}
+          focusedSessionId={tabs.snapshot.focusedSessionId}
+          sessions={
+            session.listState.status === 'ready' || session.listState.status === 'partial'
+              ? session.listState.sessions
+              : []
+          }
+          activities={activity.activities}
+          showDraft={draftTabVisible && !session.activeSession}
+          draftLabel="New chat"
+          draftProjectName={
+            session.workspace?.cwd
+              ? session.workspace.cwd.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? null
+              : null
+          }
+          onSelect={(id) => {
+            setDraftTabVisible(false);
+            void handleSessionSelect(id);
+          }}
+          onSelectDraft={() => {
+            void enterDraftMode();
+          }}
+          onClose={requestCloseTab}
+          onCloseDraft={() => {
+            setDraftTabVisible(false);
+            if (tabs.snapshot.focusedSessionId) {
+              void handleSessionSelect(tabs.snapshot.focusedSessionId);
+            }
+          }}
+        />
         <SessionHeader
           session={session.activeSession}
           workspace={session.workspace}
         />
+        {closeConfirmId ? (
+          <div className="session-tab-confirm" role="alertdialog" aria-modal="true">
+            <div className="session-tab-confirm-card">
+              <p className="session-tab-confirm-text">
+                This session is still running. Close the tab and keep the agent working in the background?
+              </p>
+              <div className="session-tab-confirm-actions">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setCloseConfirmId(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => {
+                    const id = closeConfirmId;
+                    setCloseConfirmId(null);
+                    if (id) void performCloseTab(id);
+                  }}
+                >
+                  Close tab
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
         <ChatStream
           messages={chat.messages}
           streamingContent={chat.streamingContent}
@@ -782,6 +910,7 @@ export function ChatView() {
           alwaysExpandToolGroups={alwaysExpandToolGroups}
         />
         <InputArea
+          key={composerDraftKey}
           status={chat.status}
           model={providerPickerValue}
           modelLabels={providerModelLabels}

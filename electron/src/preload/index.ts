@@ -48,6 +48,9 @@ import type {
   SessionTodosChangedEvent,
   SessionActivityChangedEvent,
   SessionMarkSeenMessage,
+  WorkingSetIdMessage,
+  WorkingSetSetFocusMessage,
+  WorkingSetChangedEvent,
   WorkspaceInfo,
   ToolExecuteMessage,
   AgentSaveMessage,
@@ -227,6 +230,26 @@ const orchidAPI: OrchidAPI = {
 
     markSeen: (message: SessionMarkSeenMessage) =>
       invoke(IPC_CHANNELS.SESSION_ACTIVITY_MARK_SEEN, message),
+
+    getWorkingSet: () =>
+      invoke(IPC_CHANNELS.SESSION_WORKING_SET_GET),
+
+    openOrFocusTab: (message: WorkingSetIdMessage) =>
+      invoke(IPC_CHANNELS.SESSION_WORKING_SET_OPEN_OR_FOCUS, message),
+
+    closeTab: (message: WorkingSetIdMessage) =>
+      invoke(IPC_CHANNELS.SESSION_WORKING_SET_CLOSE, message),
+
+    removeTab: (message: WorkingSetIdMessage) =>
+      invoke(IPC_CHANNELS.SESSION_WORKING_SET_REMOVE, message),
+
+    setTabFocus: (message: WorkingSetSetFocusMessage) =>
+      invoke(IPC_CHANNELS.SESSION_WORKING_SET_SET_FOCUS, message),
+
+    onWorkingSetChanged: (callback: (event: WorkingSetChangedEvent) => void) =>
+      on(IPC_CHANNELS.SESSION_WORKING_SET_CHANGED, (...args) =>
+        callback(args[0] as WorkingSetChangedEvent),
+      ),
 
     onRenamed: (callback: (event: SessionRenamedEvent) => void) =>
       on(IPC_CHANNELS.SESSION_RENAMED, (...args) => callback(args[0] as SessionRenamedEvent)),

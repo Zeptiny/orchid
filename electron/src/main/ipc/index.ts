@@ -10,6 +10,10 @@ import {
   registerSessionActivityIPC,
   unregisterSessionActivityIPC,
 } from './session-activity';
+import {
+  registerSessionWorkingSetIPC,
+  unregisterSessionWorkingSetIPC,
+} from './session-working-set';
 import { registerToolIPC, unregisterToolIPC } from './tool';
 import {
   registerDefinitionsIPC,
@@ -33,6 +37,7 @@ export function registerAllIPC(): void {
   registerProviderIPC();
   registerSessionIPC();
   registerSessionActivityIPC();
+  registerSessionWorkingSetIPC();
   registerToolIPC();
   registerDefinitionsIPC();
   registerMCPIPC();
@@ -50,6 +55,7 @@ export function unregisterAllIPC(): void {
   unregisterProviderIPC();
   unregisterSessionIPC();
   unregisterSessionActivityIPC();
+  unregisterSessionWorkingSetIPC();
   unregisterToolIPC();
   unregisterDefinitionsIPC();
   unregisterMCPIPC();

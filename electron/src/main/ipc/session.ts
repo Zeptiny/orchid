@@ -24,6 +24,11 @@ import {
 } from '../project/workspace';
 import { getProjectRuntimeRegistry } from '../project/runtime';
 import { removeSessionActivity } from './session-activity';
+import {
+  workingSetClearFocus,
+  workingSetOpenOrFocus,
+  workingSetRemove,
+} from './session-working-set';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -177,6 +182,10 @@ export function registerSessionIPC(): void {
     // session continues and remains addressed by its own session id.
     const session = manager.switchTo(id, windowId);
 
+    if (session) {
+      workingSetOpenOrFocus(session.id);
+    }
+
     // Session owns workspace now — clear draft so it doesn't shadow session.cwd.
     // Sticky default is intentionally NOT updated on load (R4).
     clearDraftCwd(windowId);
@@ -222,6 +231,7 @@ export function registerSessionIPC(): void {
     // Draft was promoted into the session.
     clearDraftCwd(windowId);
     clearChatHistory(session.id);
+    workingSetOpenOrFocus(session.id);
     event.sender.send(IPC_CHANNELS.SESSION_CREATED, { session });
     emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
     return session;
@@ -235,6 +245,7 @@ export function registerSessionIPC(): void {
     const selected = manager.getActive(windowId);
     if (selected?.cwd) setDraftCwd(windowId, selected.cwd);
     manager.clearActive(windowId);
+    workingSetClearFocus();
     const workspace = resolveWindowWorkspace(windowId);
     emitWorkspaceChanged(event.sender, workspace);
     return { status: 'cleared' };
@@ -256,6 +267,7 @@ export function registerSessionIPC(): void {
     const deleted = manager.delete(parsed.data.id);
     if (deleted) {
       removeSessionActivity(parsed.data.id);
+      workingSetRemove(parsed.data.id);
     }
     if (deleted && wasActive) {
       const windowId = String(event.sender.id);

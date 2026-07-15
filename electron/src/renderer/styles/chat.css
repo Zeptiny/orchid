@@ -3180,6 +3180,104 @@
 }
 
 /* Selected-session identity belongs above the scrollable conversation. */
+.session-tab-bar {
+  display: flex;
+  align-items: stretch;
+  min-height: 36px;
+  border-bottom: 1px solid var(--border-color, oklch(var(--bc) / 0.12));
+  background: oklch(var(--b2) / 0.55);
+  flex-shrink: 0;
+}
+
+.session-tab-bar-scroll {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  width: 100%;
+  padding: 4px 6px;
+  scrollbar-width: thin;
+}
+
+.session-tab {
+  display: flex;
+  align-items: center;
+  max-width: 220px;
+  min-width: 96px;
+  flex: 0 0 auto;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+}
+
+.session-tab-active {
+  background: oklch(var(--b1));
+  border-color: oklch(var(--bc) / 0.12);
+}
+
+.session-tab-select {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0.3rem 0.25rem 0.3rem 0.5rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.8rem;
+}
+
+.session-tab-label {
+  min-width: 0;
+}
+
+.session-tab-close {
+  opacity: 0.55;
+  flex: 0 0 auto;
+  margin-right: 2px;
+}
+
+.session-tab:hover .session-tab-close,
+.session-tab-active .session-tab-close {
+  opacity: 1;
+}
+
+.session-tab-confirm {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: oklch(var(--b1) / 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.session-tab-confirm-card {
+  max-width: 22rem;
+  padding: 1rem 1.1rem;
+  border-radius: 0.75rem;
+  border: 1px solid oklch(var(--bc) / 0.15);
+  background: oklch(var(--b1));
+  box-shadow: 0 12px 40px oklch(0% 0 0 / 0.25);
+}
+
+.session-tab-confirm-text {
+  margin: 0 0 0.85rem;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.session-tab-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 .session-header {
   flex: 0 0 auto;
   min-width: 0;
