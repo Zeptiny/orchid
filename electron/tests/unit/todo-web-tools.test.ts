@@ -4,7 +4,7 @@
  * Covers:
  * - Todo: create → ID, OPEN status, OPEN → IN_PROGRESS → DONE (valid),
  *   DONE → IN_PROGRESS (invalid), list, delete
- * - Web fetch: URL validation (private IPs blocked), summarize mode,
+ * - Web fetch: URL validation (scheme/empty only), summarize mode,
  *   raw mode, large content caching
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -461,100 +461,49 @@ describe('Web Fetch Tools', () => {
       expect(result.content).toContain('http or https');
     });
 
-    it('should reject localhost', async () => {
-      const { handler } = buildWebFetchTool();
-      const result = (await callTool(handler, {
-        url: 'http://localhost:8080',
-        query: 'test',
-      })) as { display: string; content: string };
+    it('allows localhost, private IPs, and embedded credentials (SSRF checks removed)', async () => {
+      const originalFetch = globalThis.fetch;
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => ({
+        ok: true,
+        url,
+        status: 200,
+        headers: new Map([['content-type', 'text/html']]),
+        arrayBuffer: () =>
+          Promise.resolve(
+            new TextEncoder().encode('<title>Local</title><body>ok</body>').buffer,
+          ),
+      }));
+      globalThis.fetch = mockFetch as typeof fetch;
 
-      expect(result.display).toBe('Invalid URL');
-      expect(result.content).toContain('localhost');
-    });
+      try {
+        const { handler } = buildWebFetchTool();
+        const urls = [
+          'http://localhost:8080',
+          'http://127.0.0.1',
+          'http://10.0.0.1',
+          'http://172.16.0.1',
+          'http://192.168.1.1',
+          'http://169.254.169.254',
+          'http://user:pass@example.com',
+        ];
 
-    it('should reject 127.0.0.1', async () => {
-      const { handler } = buildWebFetchTool();
-      const result = (await callTool(handler, {
-        url: 'http://127.0.0.1',
-        query: 'test',
-      })) as { display: string; content: string };
+        for (const url of urls) {
+          mockFetch.mockClear();
+          const result = (await callTool(handler, {
+            url,
+          })) as { display: string; content: string; isError?: boolean };
 
-      expect(result.display).toBe('Invalid URL');
-      expect(result.content).toContain('private or reserved');
-    });
-
-    it('should reject 10.x.x.x (RFC 1918)', async () => {
-      const { handler } = buildWebFetchTool();
-      const result = (await callTool(handler, {
-        url: 'http://10.0.0.1',
-        query: 'test',
-      })) as { display: string; content: string };
-
-      expect(result.display).toBe('Invalid URL');
-      expect(result.content).toContain('private or reserved');
-    });
-
-    it('should reject 172.16-31.x.x (RFC 1918)', async () => {
-      const { handler } = buildWebFetchTool();
-
-      // 172.16.x.x
-      const r1 = (await callTool(handler, {
-        url: 'http://172.16.0.1',
-        query: 'test',
-      })) as { display: string };
-      expect(r1.display).toBe('Invalid URL');
-
-      // 172.31.x.x
-      const r2 = (await callTool(handler, {
-        url: 'http://172.31.255.255',
-        query: 'test',
-      })) as { display: string };
-      expect(r2.display).toBe('Invalid URL');
-
-      // 172.15.x.x (not blocked)
-      // We can't test this easily without mocking fetch, so skip
-    });
-
-    it('should reject 192.168.x.x (RFC 1918)', async () => {
-      const { handler } = buildWebFetchTool();
-      const result = (await callTool(handler, {
-        url: 'http://192.168.1.1',
-        query: 'test',
-      })) as { display: string; content: string };
-
-      expect(result.display).toBe('Invalid URL');
-      expect(result.content).toContain('private or reserved');
-    });
-
-    it('should reject 169.254.x.x (link-local)', async () => {
-      const { handler } = buildWebFetchTool();
-
-      // 169.254.169.254 (cloud metadata endpoint - caught by link-local check)
-      const r1 = (await callTool(handler, {
-        url: 'http://169.254.169.254',
-        query: 'test',
-      })) as { display: string; content: string };
-      expect(r1.display).toBe('Invalid URL');
-      expect(r1.content).toContain('private or reserved');
-
-      // 169.254.1.1 (link-local)
-      const r2 = (await callTool(handler, {
-        url: 'http://169.254.1.1',
-        query: 'test',
-      })) as { display: string; content: string };
-      expect(r2.display).toBe('Invalid URL');
-      expect(r2.content).toContain('private or reserved');
-    });
-
-    it('should reject embedded credentials', async () => {
-      const { handler } = buildWebFetchTool();
-      const result = (await callTool(handler, {
-        url: 'http://user:pass@example.com',
-        query: 'test',
-      })) as { display: string; content: string };
-
-      expect(result.display).toBe('Invalid URL');
-      expect(result.content).toContain('credentials');
+          expect(result.display).not.toBe('Invalid URL');
+          expect(result.isError).not.toBe(true);
+          expect(result.content).toContain('<web_fetch_raw');
+          expect(mockFetch).toHaveBeenCalledWith(
+            url,
+            expect.objectContaining({ redirect: 'follow' }),
+          );
+        }
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
 
     it('should treat an omitted query as raw mode', async () => {
