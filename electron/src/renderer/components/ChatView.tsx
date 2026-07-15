@@ -549,9 +549,23 @@ export function ChatView() {
     return handlers;
   }, [tabs.snapshot.openSessionIds, handleSessionSelect]);
 
+  const leaveDraftToOpenTab = useCallback(async () => {
+    const openIds = tabs.snapshot.openSessionIds;
+    if (openIds.length === 0) {
+      // Empty working set: draft is the only surface — keep it visible.
+      setDraftTabVisible(true);
+      return;
+    }
+    const mru = tabs.snapshot.mruSessionIds.find((id) => openIds.includes(id));
+    const nextId = mru ?? openIds[openIds.length - 1] ?? openIds[0];
+    setDraftTabVisible(false);
+    setComposerDraftKey((k) => k + 1);
+    await handleSessionSelect(nextId);
+  }, [tabs.snapshot, handleSessionSelect]);
+
   const handleCloseFocusedTab = useCallback(() => {
     if (draftTabVisible && !session.activeSession) {
-      setDraftTabVisible(false);
+      void leaveDraftToOpenTab();
       return;
     }
     const id = session.activeSession?.id ?? tabs.snapshot.focusedSessionId;
@@ -561,6 +575,7 @@ export function ChatView() {
     session.activeSession,
     tabs.snapshot.focusedSessionId,
     requestCloseTab,
+    leaveDraftToOpenTab,
   ]);
 
   const shortcutHandlers = useMemo(
@@ -844,10 +859,7 @@ export function ChatView() {
           }}
           onClose={requestCloseTab}
           onCloseDraft={() => {
-            setDraftTabVisible(false);
-            if (tabs.snapshot.focusedSessionId) {
-              void handleSessionSelect(tabs.snapshot.focusedSessionId);
-            }
+            void leaveDraftToOpenTab();
           }}
         />
         <SessionHeader
