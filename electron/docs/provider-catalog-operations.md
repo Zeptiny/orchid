@@ -21,7 +21,7 @@ Run operator commands from `electron/`.
    npm run catalog:seed -- --input /secure/path/models-dev-api.json --output /secure/path/catalog.json --captured-at 2026-07-13T00:00:00.000Z --catalog-version 42
    ```
 
-   The seed tool is a research/import tool, not a runtime dependency. It emits only its supported `models.dev` providers; reapply Orchid-owned generic entries and reviewed lifecycle metadata before publication rather than replacing the bundled catalog blindly.
+   The seed tool is a research/import tool, not a runtime dependency. It emits the supported `models.dev` providers plus Orchid-owned generic provider entries, and keeps text-only chat models plus embedding-only RAG models. Image/video generation and mixed-output models are excluded. Review the generated catalog and lifecycle metadata before publication rather than replacing the bundled catalog blindly.
 
 3. Review provenance, model protocol/capability/limit/pricing changes, app compatibility, expiry, and lifecycle changes. Verify that no executable or credential-routing fields were introduced.
 4. Run the structural check:
