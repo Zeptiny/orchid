@@ -222,13 +222,17 @@ export function ChatView() {
 
   const handleSessionSelect = useCallback(
     async (id: string) => {
-      // Skip no-op re-select of the already active session (still allow
-      // re-click to refresh if desired — always reload for correctness).
+      // Already focused this session (not draft) — skip full reload to avoid flicker.
+      if (session.activeSession?.id === id && !draftTabVisible) {
+        return;
+      }
+
       const gen = ++sessionSwitchGen.current;
 
       // Optimistically clear the pane so stale messages never linger while
       // the next session loads (or if load fails).
       chat.setMessages([]);
+      setDraftTabVisible(false);
 
       const loadedSession = await session.load(id);
       // A newer click/create won the race — drop this result.
@@ -250,7 +254,7 @@ export function ChatView() {
       }
       chat.hydrateSnapshot(snapshot);
     },
-    [session, chat, applySessionMessages],
+    [session, chat, applySessionMessages, draftTabVisible],
   );
 
   const enterDraftMode = useCallback(async (opts?: { clearComposer?: boolean }) => {
@@ -422,6 +426,18 @@ export function ChatView() {
     setToast({ message, severity });
     toastTimer.current = setTimeout(() => setToast(null), 4500);
   }, []);
+
+  const handleSessionRename = useCallback(
+    async (id: string, name: string) => {
+      try {
+        await session.rename(id, name);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        notify(`Rename failed: ${message}`, 'error');
+      }
+    },
+    [session, notify],
+  );
 
   useEffect(() => {
     return () => {
@@ -826,6 +842,7 @@ export function ChatView() {
         }}
         onSessionDelete={handleSessionDelete}
         onSessionSelect={handleSessionSelect}
+        onSessionRename={handleSessionRename}
         activities={activity.activities}
         onStopSession={(sessionId) => {
           void chat.stop(sessionId);
@@ -880,6 +897,7 @@ export function ChatView() {
           onCloseDraft={() => {
             void leaveDraftToOpenTab();
           }}
+          onRename={handleSessionRename}
         />
         <SessionHeader
           session={session.activeSession}

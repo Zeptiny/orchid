@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { SessionActivity, SessionSummary } from '../../shared/types/ipc-boundary';
 import { Icon } from './Icon';
+import { SessionNameEditor } from './SessionNameEditor';
 
 export interface SessionTabBarProps {
   openSessionIds: readonly string[];
@@ -14,6 +15,7 @@ export interface SessionTabBarProps {
   onSelectDraft: () => void;
   onClose: (sessionId: string) => void;
   onCloseDraft: () => void;
+  onRename?: (sessionId: string, name: string) => void | Promise<void>;
 }
 
 const statusClass: Record<SessionActivity['state'], string> = {
@@ -41,6 +43,7 @@ export function SessionTabBar({
   onSelectDraft,
   onClose,
   onCloseDraft,
+  onRename,
 }: SessionTabBarProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const sessionsById = useMemo(
@@ -78,8 +81,6 @@ export function SessionTabBar({
           const active = !showDraft && focusedSessionId === id;
           const project = projectBasename(session?.cwd);
           const title = session?.name ?? id.slice(0, 8);
-          const label =
-            multiProject && project ? `${project} / ${title}` : title;
           const showDot =
             activity &&
             (activity.state !== 'idle' ||
@@ -105,12 +106,32 @@ export function SessionTabBar({
                     onClose(id);
                   }
                 }}
-                title={label}
+                title={
+                  multiProject && project
+                    ? `${project} / ${title}`
+                    : title
+                }
               >
                 {showDot ? (
                   <span className={`status status-xs ${dotClass}`} aria-hidden />
                 ) : null}
-                <span className="session-tab-label truncate">{label}</span>
+                {multiProject && project ? (
+                  <span className="session-tab-project truncate" aria-hidden>
+                    {project}
+                    <span className="session-tab-project-sep"> / </span>
+                  </span>
+                ) : null}
+                {onRename ? (
+                  <SessionNameEditor
+                    name={title}
+                    className="session-tab-label truncate"
+                    title={`${title} (double-click to rename)`}
+                    onBeginEdit={() => onSelect(id)}
+                    onRename={(next) => onRename(id, next)}
+                  />
+                ) : (
+                  <span className="session-tab-label truncate">{title}</span>
+                )}
               </button>
               <button
                 type="button"

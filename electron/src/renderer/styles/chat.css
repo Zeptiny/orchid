@@ -3235,6 +3235,54 @@
   min-width: 0;
 }
 
+.session-tab-project {
+  flex: 0 1 auto;
+  opacity: 0.7;
+  font-size: 0.75rem;
+  max-width: 5.5rem;
+}
+
+.session-tab-project-sep {
+  opacity: 0.55;
+}
+
+.session-name-editor-label {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  cursor: text;
+}
+
+.session-name-editor-input {
+  min-width: 4rem;
+  max-width: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0 0.2rem;
+  border: 1px solid oklch(var(--bc) / 0.25);
+  border-radius: 0.25rem;
+  background: oklch(var(--b1));
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  outline: none;
+}
+
+.session-name-editor-input:focus {
+  border-color: oklch(var(--p));
+  box-shadow: 0 0 0 1px oklch(var(--p) / 0.35);
+}
+
+.session-tab-select .session-name-editor-label,
+.session-tab-select .session-name-editor-input {
+  flex: 1 1 auto;
+}
+
+.session-item-name.session-name-editor-label,
+.session-item-name.session-name-editor-input {
+  display: block;
+}
+
 .session-tab-close {
   opacity: 0.55;
   flex: 0 0 auto;
