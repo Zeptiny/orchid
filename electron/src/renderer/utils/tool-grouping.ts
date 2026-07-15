@@ -6,6 +6,7 @@
  * - read:   read, read_directory
  * - fetch:  web_fetch
  * - ast:    find_symbol_references, get_function, get_file_skeleton
+ * - skill:  skill
  *
  * Mutations (edit, write, replace_symbol, rename_symbol, rag_index, exec, …)
  * never enter a group.
@@ -28,9 +29,11 @@ export const GROUPABLE_TOOLS = new Set([
   'find_symbol_references',
   'get_function',
   'get_file_skeleton',
+  // skill
+  'skill',
 ]);
 
-export type ToolGroupFamily = 'search' | 'read' | 'fetch' | 'ast' | 'other';
+export type ToolGroupFamily = 'search' | 'read' | 'fetch' | 'ast' | 'skill' | 'other';
 
 export interface ToolGroupMember {
   id: string;
@@ -45,6 +48,7 @@ export interface ToolGroupSummary {
   readCount: number;
   fetchCount: number;
   astCount: number;
+  skillCount: number;
   failedCount: number;
   hasActive: boolean;
   /** True when any child tool failed. */
@@ -73,6 +77,9 @@ export function toolFamily(toolName: string): ToolGroupFamily {
   ) {
     return 'ast';
   }
+  if (lower === 'skill') {
+    return 'skill';
+  }
   return 'other';
 }
 
@@ -99,6 +106,7 @@ export function summarizeToolGroup(
   let readCount = 0;
   let fetchCount = 0;
   let astCount = 0;
+  let skillCount = 0;
   let failedCount = 0;
   let hasActive = false;
 
@@ -111,6 +119,7 @@ export function summarizeToolGroup(
     else if (family === 'read') readCount += 1;
     else if (family === 'fetch') fetchCount += 1;
     else if (family === 'ast') astCount += 1;
+    else if (family === 'skill') skillCount += 1;
   }
 
   const parts: string[] = [];
@@ -137,6 +146,12 @@ export function summarizeToolGroup(
     );
   }
 
+  if (skillCount > 0) {
+    parts.push(
+      skillCount === 1 ? 'Loaded 1 skill' : `Loaded ${skillCount} skills`,
+    );
+  }
+
   // Fallback if only "other" somehow landed in a group
   if (parts.length === 0 && blocks.length > 0) {
     parts.push(
@@ -154,6 +169,7 @@ export function summarizeToolGroup(
     readCount,
     fetchCount,
     astCount,
+    skillCount,
     failedCount,
     hasActive,
     hasFailed: failedCount > 0,
