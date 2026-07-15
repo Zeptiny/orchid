@@ -1,25 +1,13 @@
 /**
  * web_fetch tool — fetch a URL and extract information.
  *
- * Ported from Python `src/orchid/tools/web_fetch.py`.
- *
- * Key behaviors (matching Python):
- * - URL validation: block private IPs (RFC 1918), link-local, localhost/loopback,
- *   cloud metadata endpoints, embedded credentials
+ * Key behaviors:
  * - Only allow http/https schemes
  * - Maximum response body size cap
  * - Fetch via fetch() with 30s timeout
- * - Post-redirect URL validation: re-validates the final URL after following
- *   redirects to prevent SSRF via redirect bypass (e.g., public → 127.0.0.1)
  * - Summarize mode: HTML to markdown, sends to web-fetch agent
  * - Raw mode: markdown; >10K chars → cache file
  * - Title extraction via HTML parsing
- *
- * Known limitation (P1-1):
- * - DNS rebinding TOCTOU: Hostname is validated at check time but resolved at
- *   fetch time. A DNS rebinding attack could resolve to a private IP between
- *   validation and fetch. Full mitigation requires pre-resolving via dns.lookup
- *   and validating the resolved IP, which is deferred.
  */
 import TurndownService from 'turndown';
 import { z } from 'zod';
@@ -92,75 +80,7 @@ export interface WebFetchResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Check if an IP address is in a private/reserved range.
- *
- * Blocks:
- * - RFC 1918: 10.x.x.x, 172.16-31.x.x, 192.168.x.x
- * - Link-local: 169.254.x.x
- * - Loopback: 127.x.x.x
- * - Cloud metadata: 169.254.169.254
- * - IPv6 loopback: ::1
- * - IPv6 link-local: fe80::/10
- */
-function isPrivateIP(hostname: string): boolean {
-  // IPv6 loopback
-  if (hostname === '::1' || hostname === '0:0:0:0:0:0:0:1') {
-    return true;
-  }
-
-  // IPv6 link-local (fe80::/10)
-  if (hostname.startsWith('fe80:')) {
-    return true;
-  }
-
-  // IPv4-mapped IPv6
-  const ipv4Mapped = hostname.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-  if (ipv4Mapped) {
-    return isPrivateIPv4(ipv4Mapped[1]);
-  }
-
-  // Plain IPv4
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
-    return isPrivateIPv4(hostname);
-  }
-
-  return false;
-}
-
-/**
- * Check if an IPv4 address is in a private/reserved range.
- */
-function isPrivateIPv4(ip: string): boolean {
-  const parts = ip.split('.').map(Number);
-  if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) {
-    return false;
-  }
-
-  const [a, b] = parts;
-
-  // 10.x.x.x (RFC 1918)
-  if (a === 10) return true;
-
-  // 172.16-31.x.x (RFC 1918)
-  if (a === 172 && b >= 16 && b <= 31) return true;
-
-  // 192.168.x.x (RFC 1918)
-  if (a === 192 && b === 168) return true;
-
-  // 169.254.x.x (link-local)
-  if (a === 169 && b === 254) return true;
-
-  // 127.x.x.x (loopback)
-  if (a === 127) return true;
-
-  // 0.0.0.0
-  if (a === 0 && b === 0 && parts[2] === 0 && parts[3] === 0) return true;
-
-  return false;
-}
-
-/**
- * Validate a URL for safety.
+ * Validate a URL.
  *
  * Returns an error message if invalid, or null if valid.
  */
@@ -179,28 +99,6 @@ function validateUrl(url: string): string | null {
   // Only allow http/https
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return 'url must use http or https.';
-  }
-
-  // Block embedded credentials
-  if (parsed.username || parsed.password) {
-    return 'url must not contain embedded credentials.';
-  }
-
-  const hostname = parsed.hostname.toLowerCase();
-
-  // Block localhost
-  if (hostname === 'localhost') {
-    return 'url must not point to localhost.';
-  }
-
-  // Block private/reserved IPs
-  if (isPrivateIP(hostname)) {
-    return 'url must not point to a private or reserved IP address.';
-  }
-
-  // Block cloud metadata endpoint (extra check for 169.254.169.254)
-  if (hostname === '169.254.169.254') {
-    return 'url must not point to the cloud metadata endpoint.';
   }
 
   return null;
@@ -368,18 +266,6 @@ export function buildWebFetchTool(
         };
       }
       return { display: 'Fetch failed', content: `Error: ${message}`, isError: true };
-    }
-
-    // Validate final URL after redirects to prevent SSRF bypass.
-    // An attacker could set up a redirect from a public URL to a private IP.
-    const finalUrlAfterRedirect = response.url || url;
-    const redirectError = validateUrl(finalUrlAfterRedirect);
-    if (redirectError) {
-      return {
-        display: 'Redirect blocked',
-        content: `Error: Redirect to blocked URL (${redirectError})`,
-        isError: true,
-      };
     }
 
     // Check HTTP status
