@@ -16,6 +16,8 @@ interface ModelPickerProps {
   className?: string;
   disabled?: boolean;
   emptyMessage?: string;
+  /** Whether the selected trigger should show provider/connection context. */
+  showSelectedContext?: boolean;
   /** Optional renderer-owned labels for opaque selection keys. */
   optionLabels?: Readonly<Record<string, string>>;
   /** Optional typed metadata for connection-scoped options. */
@@ -43,6 +45,7 @@ export function ModelPicker({
   className = '',
   disabled = false,
   emptyMessage = 'No models configured',
+  showSelectedContext = true,
   optionLabels,
   optionDetails,
   additionalOptions = [],
@@ -131,6 +134,7 @@ export function ModelPicker({
     ?? selectedDetail?.model.displayName
     ?? (value ? displayModelId(value) : '');
   const selectedSubLabel = selectedDetail ? providerModelOptionContextLabel(selectedDetail) : null;
+  const selectedTriggerSubLabel = showSelectedContext ? selectedSubLabel : null;
 
   return (
     <div
@@ -140,20 +144,20 @@ export function ModelPicker({
       <button
         id={id}
         type="button"
-        className={`btn btn-ghost model-picker-trigger${selectedSubLabel ? ' model-picker-trigger-with-sub-label' : ''}`}
+        className={`btn btn-ghost model-picker-trigger${selectedTriggerSubLabel ? ' model-picker-trigger-with-sub-label' : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={menuId}
         aria-label={label}
-        title={selectedSubLabel ? `${selectedDisplayName} · ${selectedSubLabel}` : selectedDisplayName || label}
+        title={selectedTriggerSubLabel ? `${selectedDisplayName} · ${selectedTriggerSubLabel}` : selectedDisplayName || label}
         disabled={disabled}
         onClick={() => setOpen((previous) => !previous)}
       >
         <Icon name="cpu" size={13} className="shrink-0 opacity-70" />
         <span className="model-picker-trigger-copy">
           <span className="model-picker-trigger-label">{selectedDisplayName || displayModelId(value)}</span>
-          {selectedSubLabel && (
-            <span className="model-picker-trigger-sub-label">{selectedSubLabel}</span>
+          {selectedTriggerSubLabel && (
+            <span className="model-picker-trigger-sub-label">{selectedTriggerSubLabel}</span>
           )}
         </span>
         <Icon

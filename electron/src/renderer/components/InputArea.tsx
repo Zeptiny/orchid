@@ -627,6 +627,7 @@ export function InputArea({
             onChange={(next) => void handleSelectModel(next)}
             placement="top"
             label="Select model"
+            showSelectedContext={false}
             disabled={isStreaming || interruptState === 'confirmAgent'}
             className="composer-model-picker"
           />
