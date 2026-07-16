@@ -71,7 +71,7 @@ jobs:
         run: npm ci
 
       - name: Rebuild native modules
-        run: ./scripts/rebuild-native.sh --force
+        run: npm run rebuild:native
         shell: bash
 
       - name: Build (compile TS + bundle renderer)

@@ -44,6 +44,15 @@ describe('keyboard registry', () => {
     }
   });
 
+  it('registers close-tab and open-tab switch shortcuts', () => {
+    const close = getShortcut('session.tab.close');
+    expect(close?.chord).toEqual({ key: 'w', mod: true });
+    expect(close?.group).toBe('sessions');
+    for (let n = 1; n <= 9; n++) {
+      expect(getShortcut(`session.switch.${n}`)?.label).toMatch(/open tab/i);
+    }
+  });
+
   it('groups help entries without empty groups', () => {
     const groups = groupShortcutsForHelp();
     expect(groups.length).toBeGreaterThan(0);

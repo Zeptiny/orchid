@@ -24,6 +24,7 @@ import {
 } from '../utils/session-workspace';
 import { Icon } from './Icon';
 import { SessionActivitySection } from './session-activity-section';
+import { SessionNameEditor } from './SessionNameEditor';
 
 interface LeftSidebarProps {
   isCollapsed: boolean;
@@ -33,6 +34,7 @@ interface LeftSidebarProps {
   onSessionSelect: (id: string) => void;
   onSessionCreate: () => void;
   onSessionDelete: (id: string) => void;
+  onSessionRename?: (id: string, name: string) => void | Promise<void>;
   onRefreshSessions: () => void;
   onOpenSettings: () => void;
   /** Current workspace (draft → session → sticky → unbound). */
@@ -74,6 +76,7 @@ export function LeftSidebar({
   onSessionSelect,
   onSessionCreate,
   onSessionDelete,
+  onSessionRename,
   onRefreshSessions,
   onOpenSettings,
   workspace = null,
@@ -223,6 +226,7 @@ export function LeftSidebar({
             activeSessionId={activeSessionId}
             selectedProjectPath={selectedProjectPath}
             onDelete={onSessionDelete}
+            onRename={onSessionRename}
             onRefresh={onRefreshSessions}
             onSelect={onSessionSelect}
             onProjectSelect={onProjectSelect}
@@ -348,6 +352,7 @@ interface ProjectSessionListProps {
   onSelect: (id: string) => void;
   onProjectSelect?: (projectDir: string) => void;
   onDelete: (id: string) => void;
+  onRename?: (id: string, name: string) => void | Promise<void>;
   onRefresh: () => void;
   isUnbound: boolean;
   onPickProjectDir?: () => void;
@@ -364,6 +369,7 @@ function ProjectSessionList({
   onSelect,
   onProjectSelect,
   onDelete,
+  onRename,
   onRefresh,
   isUnbound,
   onPickProjectDir,
@@ -600,6 +606,7 @@ function ProjectSessionList({
                     onSelect(id);
                   }}
                   onDelete={onDelete}
+                  onRename={onRename}
                 />
               );
             })}
@@ -642,6 +649,7 @@ function SessionRow({
   showPathHint,
   onSelect,
   onDelete,
+  onRename,
 }: {
   session: SessionSummary;
   activity?: SessionActivity;
@@ -652,6 +660,7 @@ function SessionRow({
   showPathHint: boolean;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
+  onRename?: (id: string, name: string) => void | Promise<void>;
 }) {
   const pathHint = session.cwd
     ? truncatePathDisplay(session.cwd, 24)
@@ -662,17 +671,16 @@ function SessionRow({
       className={`session-row group ${isKeyboardActive ? 'session-row-keyboard' : ''}`}
       data-session-index={sessionIndex}
     >
-      <button
+      <div
         id={optionId}
-        type="button"
         role="option"
         aria-selected={isActive}
         tabIndex={-1}
         className={`session-item ${isActive ? 'session-item-active' : ''} ${
           isKeyboardActive ? 'session-item-keyboard' : ''
         }`}
-        onClick={() => onSelect(session.id)}
         title={session.cwd ?? session.name}
+        onClick={() => onSelect(session.id)}
       >
         {activity && (
           <span
@@ -701,15 +709,26 @@ function SessionRow({
           />
         )}
         <span className="session-item-main min-w-0">
-          <span className="session-item-name truncate" title={session.name}>
-            {session.name}
-          </span>
+          {onRename ? (
+            <SessionNameEditor
+              name={session.name}
+              className="session-item-name truncate"
+              title={`${session.name} (double-click or F2 to rename)`}
+              onSelect={() => onSelect(session.id)}
+              onBeginEdit={() => onSelect(session.id)}
+              onRename={(next) => onRename(session.id, next)}
+            />
+          ) : (
+            <span className="session-item-name truncate" title={session.name}>
+              {session.name}
+            </span>
+          )}
           {showPathHint && (
             <span className="session-item-path mono truncate">{pathHint}</span>
           )}
         </span>
         {isActive && <span className="badge badge-xs badge-ghost">selected</span>}
-      </button>
+      </div>
       <button
         className="btn btn-ghost btn-xs btn-square session-item-delete"
         tabIndex={-1}

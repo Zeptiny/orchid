@@ -432,6 +432,25 @@ export interface SessionMarkSeenMessage {
   id: string;
 }
 
+/** Durable open tab set for the primary window. */
+export interface WorkingSetSnapshot {
+  openSessionIds: string[];
+  focusedSessionId: string | null;
+  mruSessionIds: string[];
+}
+
+export interface WorkingSetIdMessage {
+  id: string;
+}
+
+export interface WorkingSetSetFocusMessage {
+  id: string | null;
+}
+
+export interface WorkingSetChangedEvent {
+  snapshot: WorkingSetSnapshot;
+}
+
 /** Fired when main creates a session (e.g. first message from draft mode). */
 export interface SessionCreatedEvent {
   session: Session;
@@ -607,6 +626,13 @@ export interface OrchidAPI {
     listActivity: () => Promise<SessionActivity[]>;
     /** Mark an off-screen completion as viewed. */
     markSeen: (message: SessionMarkSeenMessage) => Promise<SessionActivity | null>;
+    /** Durable open tab set (primary window). */
+    getWorkingSet: () => Promise<WorkingSetSnapshot>;
+    openOrFocusTab: (message: WorkingSetIdMessage) => Promise<WorkingSetSnapshot>;
+    closeTab: (message: WorkingSetIdMessage) => Promise<WorkingSetSnapshot>;
+    removeTab: (message: WorkingSetIdMessage) => Promise<WorkingSetSnapshot>;
+    setTabFocus: (message: WorkingSetSetFocusMessage) => Promise<WorkingSetSnapshot>;
+    onWorkingSetChanged: (callback: (event: WorkingSetChangedEvent) => void) => () => void;
     onRenamed: (callback: (event: SessionRenamedEvent) => void) => () => void;
     /** Session auto-created on first message from draft mode. */
     onCreated: (callback: (event: SessionCreatedEvent) => void) => () => void;
@@ -749,6 +775,12 @@ export const IPC_CHANNELS = {
   SESSION_ACTIVITY_LIST: 'session:activity_list',
   SESSION_ACTIVITY_MARK_SEEN: 'session:activity_mark_seen',
   SESSION_ACTIVITY_CHANGED: 'session:activity_changed',
+  SESSION_WORKING_SET_GET: 'session:working_set_get',
+  SESSION_WORKING_SET_OPEN_OR_FOCUS: 'session:working_set_open_or_focus',
+  SESSION_WORKING_SET_CLOSE: 'session:working_set_close',
+  SESSION_WORKING_SET_REMOVE: 'session:working_set_remove',
+  SESSION_WORKING_SET_SET_FOCUS: 'session:working_set_set_focus',
+  SESSION_WORKING_SET_CHANGED: 'session:working_set_changed',
 
   // Tool
   TOOL_EXECUTE: 'tool:execute',
@@ -829,6 +861,11 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.SESSION_CHANGE_CWD,
   IPC_CHANNELS.SESSION_ACTIVITY_LIST,
   IPC_CHANNELS.SESSION_ACTIVITY_MARK_SEEN,
+  IPC_CHANNELS.SESSION_WORKING_SET_GET,
+  IPC_CHANNELS.SESSION_WORKING_SET_OPEN_OR_FOCUS,
+  IPC_CHANNELS.SESSION_WORKING_SET_CLOSE,
+  IPC_CHANNELS.SESSION_WORKING_SET_REMOVE,
+  IPC_CHANNELS.SESSION_WORKING_SET_SET_FOCUS,
   IPC_CHANNELS.TOOL_EXECUTE,
   IPC_CHANNELS.AGENT_SAVE,
   IPC_CHANNELS.AGENT_DELETE,
@@ -868,6 +905,7 @@ export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
   IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED,
   IPC_CHANNELS.SESSION_TODOS_CHANGED,
   IPC_CHANNELS.SESSION_ACTIVITY_CHANGED,
+  IPC_CHANNELS.SESSION_WORKING_SET_CHANGED,
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
   IPC_CHANNELS.UPDATER_STATUS_UPDATE,
