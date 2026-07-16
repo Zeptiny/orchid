@@ -45,6 +45,19 @@ describe('provider onboarding and disconnected UX', () => {
     expect(viewModel).toContain('never splits a model ID');
   });
 
+  it('restores config default_model in draft mode instead of clearing selection', () => {
+    const chat = source('components', 'ChatView.tsx');
+    // Draft (no active session) must re-apply the configured default, not null.
+    expect(chat).toContain('setDefaultSelection');
+    expect(chat).toMatch(
+      /if \(session\.activeSession\) \{[\s\S]*setCurrentSelection\(session\.activeSession\.selection \?\? null\);[\s\S]*return;[\s\S]*\}[\s\S]*setCurrentSelection\(defaultSelection\);/,
+    );
+    // Must not unconditionally wipe selection when activeSession is null.
+    expect(chat).not.toMatch(
+      /setCurrentSelection\(session\.activeSession\?\.selection \?\? null\);/,
+    );
+  });
+
   it('clears a pasted API key after its one-shot submission settles', () => {
     const wizard = source('components', 'Providers', 'ConnectionWizard.tsx');
     expect(wizard).toContain('onSubmitApiKey');

@@ -63,6 +63,8 @@ export function ChatView() {
   const [currentPersonality, setCurrentPersonality] = useState('default');
   const [personalityNames, setPersonalityNames] = useState<string[]>([]);
   const [currentSelection, setCurrentSelection] = useState<ModelSelection | null>(null);
+  /** Configured default model for new chats / draft mode. */
+  const [defaultSelection, setDefaultSelection] = useState<ModelSelection | null>(null);
   const [providerModelOptions, setProviderModelOptions] = useState<readonly ProviderModelOption[]>([]);
   const [maxContext, setMaxContext] = useState<number | null>(null);
   const [alwaysExpandToolGroups, setAlwaysExpandToolGroups] = useState(false);
@@ -163,9 +165,7 @@ export function ChatView() {
           const config = await window.orchid.config.get();
           if (config.theme) setCurrentTheme(config.theme);
           if (config.personality) setCurrentPersonality(config.personality);
-          if (config.default_model) {
-            setCurrentSelection(config.default_model);
-          }
+          setDefaultSelection(config.default_model ?? null);
           setAlwaysExpandToolGroups(Boolean(config.always_expand_tool_groups));
         }
         if (window.orchid?.config?.listPersonalities) {
@@ -187,17 +187,27 @@ export function ChatView() {
         setAlwaysExpandToolGroups(detail.always_expand_tool_groups);
       }
       if (detail && 'default_model' in detail) {
-        setCurrentSelection(detail.default_model as ModelSelection | null);
+        setDefaultSelection(detail.default_model as ModelSelection | null);
       }
     };
     window.addEventListener('orchid:config-updated', onConfigUpdated);
     return () => window.removeEventListener('orchid:config-updated', onConfigUpdated);
   }, []);
 
-  // Keep composer model label in sync when switching sessions
+  // Keep composer model in sync with the active session. In draft mode (no
+  // active session), restore the configured default so new chats are ready.
   useEffect(() => {
-    setCurrentSelection(session.activeSession?.selection ?? null);
-  }, [session.activeSession?.id, session.activeSession?.selection, session.activeSession?.modelLabel]);
+    if (session.activeSession) {
+      setCurrentSelection(session.activeSession.selection ?? null);
+      return;
+    }
+    setCurrentSelection(defaultSelection);
+  }, [
+    session.activeSession?.id,
+    session.activeSession?.selection,
+    session.activeSession?.modelLabel,
+    defaultSelection,
+  ]);
 
   // Refresh personality list when the palette opens.
   useEffect(() => {
