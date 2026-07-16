@@ -3659,6 +3659,45 @@
   justify-content: flex-start;
   margin: 1px 7px 4px;
 }
+/* Tree guide lines: nest sessions under project like `tree` */
+.session-project-group > .session-row,
+.session-project-group > .session-project-expand {
+  --tree-gutter: 16px;
+  --tree-line: color-mix(in srgb, var(--text-secondary) 28%, transparent);
+  position: relative;
+  margin-left: 10px;
+  padding-left: var(--tree-gutter);
+}
+.session-project-group > .session-row::before,
+.session-project-group > .session-project-expand::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid var(--tree-line);
+}
+.session-project-group > .session-row::after,
+.session-project-group > .session-project-expand::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  width: calc(var(--tree-gutter) - 4px);
+  height: 0;
+  border-top: 1px solid var(--tree-line);
+}
+/* Last child: stop the vertical line at the elbow (L shape) */
+.session-project-group > .session-row:last-child::before,
+.session-project-group > .session-project-expand:last-child::before {
+  bottom: 50%;
+}
+.session-project-group > .session-project-expand {
+  margin-right: 7px;
+  margin-bottom: 4px;
+  margin-top: 1px;
+}
 .session-row {
   position: relative;
   border: none;
