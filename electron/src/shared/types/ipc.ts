@@ -41,6 +41,8 @@ import type {
   ASTIndexResult,
   ASTIndexProgress,
   IndexRunState,
+  RAGConfig,
+  UpdaterState,
 } from './ipc-boundary';
 
 export type {
@@ -70,6 +72,9 @@ export type {
   ASTIndexResult,
   ASTIndexProgress,
   IndexRunState,
+  RAGConfig,
+  UpdaterState,
+  UpdateStatus,
 } from './ipc-boundary';
 
 // ── Chat API ─────────────────────────────────────────────────────────────────
@@ -233,6 +238,11 @@ export interface BgCommandSnapshotRequest {
   commandId: number;
   /** Optional last N lines to retrieve (default: 50, max: 1000). */
   lastN?: number;
+  /**
+   * Owning session for visibility. When omitted, main resolves the calling
+   * window's active session; cross-session command tails are denied.
+   */
+  sessionId?: string;
 }
 
 export interface BgCommandSnapshotResult {
@@ -244,8 +254,50 @@ export interface BgCommandSnapshotResult {
 
 // ── Config API ───────────────────────────────────────────────────────────────
 
+/**
+ * Nested map under config:save PATCH. `null` values are tombstones that delete
+ * the key under deep-merge (e.g. removed mcp_servers aliases).
+ */
+export type ConfigPatchMap<V> = { readonly [key: string]: V | null };
+
+/**
+ * PATCH-style config update matching main's mergeConfigUpdates semantics:
+ * - Nested plain objects (rag, …) deep-merge field-by-field
+ * - Map entries (mcp_servers, tier_models) accept null tombstones for deletes
+ * - Nullable fields (default_model, default_project_dir) use null as a real value
+ *
+ * Not the same as Partial<Config>: Partial cannot express map tombstones.
+ */
+export type ConfigPatch = {
+  default_model?: ModelSelection | null;
+  tier_models?: ConfigPatchMap<ModelSelection | null>;
+  ignored_dirs?: string[];
+  command_timeout?: number;
+  read_line_limit?: number;
+  grep_max_results?: number;
+  directory_tree_depth?: number;
+  theme?: string;
+  personality?: string;
+  rag?: Partial<RAGConfig> & {
+    embedding_api_model?: ModelSelection | null;
+  };
+  ast_max_file_size?: number;
+  mcp_startup_timeout?: number;
+  mcp_per_server_timeout?: number;
+  mcp_servers?: ConfigPatchMap<Record<string, unknown>>;
+  /** Rejected at the main boundary; kept for draft tombstone helpers only. */
+  providers?: ConfigPatchMap<Record<string, unknown>>;
+  llm_stream_idle_timeout?: number;
+  llm_stream_retries?: number;
+  background_command_idle_timeout?: number;
+  max_tool_steps?: number;
+  default_project_dir?: string | null;
+  always_expand_tool_groups?: boolean;
+  has_completed_onboarding?: boolean;
+};
+
 export interface ConfigSaveMessage {
-  updates: Partial<Config>;
+  updates: ConfigPatch;
 }
 
 // ── Provider API ─────────────────────────────────────────────────────────────
@@ -508,17 +560,43 @@ export interface SessionWorkspaceChangedEvent {
   workspace: WorkspaceInfo;
 }
 
+/** Machine-readable chat:send gate / start failures. */
+export type ChatSendErrorKind =
+  | 'session_not_found'
+  | 'unbound_workspace'
+  | 'provider_required'
+  | 'session_busy'
+  | 'runtime_hydration_failed'
+  | 'provider_unavailable';
+
 /** Result of chat:send (started stream or structured gate failure). */
-export interface ChatSendResult {
-  status: string;
-  /** Session that owns the started turn (present when status is started). */
-  sessionId?: string;
-  /** Turn/chain identity for ordering live events. */
-  turnId?: string;
-  /** Human-readable error when status is not started. */
-  error?: string;
-  /** Machine-readable failure kind (e.g. unbound_workspace). */
-  kind?: string;
+export type ChatSendResult =
+  | {
+      status: 'started';
+      /** Session that owns the started turn. */
+      sessionId: string;
+      /** Turn/chain identity for ordering live events. */
+      turnId: string;
+    }
+  | {
+      status: 'error';
+      kind: ChatSendErrorKind;
+      error: string;
+    };
+
+// ── Updater API ──────────────────────────────────────────────────────────────
+
+/** Detailed download progress emitted on updater:progress. */
+export interface UpdaterProgressEvent {
+  percent: number;
+  bytesPerSecond: number;
+  transferred: number;
+  total: number;
+}
+
+/** Error payload emitted on updater:error. */
+export interface UpdaterErrorEvent {
+  error: string;
 }
 
 // ── Tool API ─────────────────────────────────────────────────────────────────
@@ -711,6 +789,12 @@ export interface OrchidAPI {
     snapshot: (request: BgCommandSnapshotRequest) => Promise<BgCommandSnapshotResult>;
   };
 
+  /** Auto-update lifecycle events from electron-updater (main → renderer). */
+  updater: {
+    onStatus: (callback: (state: UpdaterState) => void) => () => void;
+    onProgress: (callback: (event: UpdaterProgressEvent) => void) => () => void;
+    onError: (callback: (event: UpdaterErrorEvent) => void) => () => void;
+  };
 }
 
 // ── IPC Channel names ────────────────────────────────────────────────────────

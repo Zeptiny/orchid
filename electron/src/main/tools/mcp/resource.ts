@@ -45,7 +45,7 @@ export function buildMcpResourceTool(
     category: 'mcp',
   };
 
-  const handler: ToolHandler = async (input: unknown, _ctx): Promise<McpResourceResult> => {
+  const handler: ToolHandler = async (input: unknown, ctx): Promise<McpResourceResult> => {
     const { uri } = input as { uri: string };
 
     const serverName = manager.getResourceServer(uri);
@@ -53,12 +53,21 @@ export function buildMcpResourceTool(
       return {
         display: 'Resource not found',
         content: `Error: No MCP server found for URI '${uri}'.`,
-      isError: true,
+        isError: true,
       };
     }
 
     try {
-      const content = await manager.readResource(serverName, uri);
+      const content = await manager.readResource(serverName, uri, {
+        signal: ctx?.abortSignal,
+      });
+      if (typeof content === 'string' && content.startsWith('Error:')) {
+        return {
+          display: 'MCP read error',
+          content,
+          isError: true,
+        };
+      }
       return {
         display: `MCP resource '${uri}'`,
         content,
@@ -68,8 +77,8 @@ export function buildMcpResourceTool(
       return {
         display: 'MCP read error',
         content: `Error reading MCP resource: ${message}`,
-      isError: true
-    };
+        isError: true,
+      };
     }
   };
 

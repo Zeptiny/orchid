@@ -11,36 +11,15 @@
  * or executing arbitrary commands.
  */
 import { ipcMain } from 'electron';
-import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { toolRegistry } from '../tools';
 import type { ToolExecutionContext } from '../tools/types';
 import { getSessionManager, resolveBoundProjectPath } from './session';
 import { getProjectRuntimeRegistry } from '../project/runtime';
-
-// ── Zod validation schemas ───────────────────────────────────────────────────
-
-const toolExecuteSchema = z.object({
-  name: z.string().min(1),
-  args: z.unknown(),
-});
-
-// ── Allowlist of tools safe for renderer invocation ──────────────────────────
-
-/**
- * Tools that the renderer may invoke directly via tool:execute.
- * Only read-only, non-destructive tools are permitted.
- * Dangerous tools (write, edit, execute_command, web_fetch, etc.) must be
- * invoked through the agent layer which enforces its own safety checks.
- */
-const RENDERER_ALLOWED_TOOLS = new Set([
-  'read',
-  'read_directory',
-  'glob',
-  'grep',
-  'todo_list',
-  'rag_search',
-]);
+import {
+  RENDERER_ALLOWED_TOOLS,
+  toolExecuteSchema,
+} from './payload-schemas';
 
 /**
  * Resolve tool context for renderer-initiated tool:execute (outside an agent turn).

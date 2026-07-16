@@ -5,9 +5,7 @@
  * Wraps SessionManager from U5 with zod-validated payloads.
  */
 import { BrowserWindow, dialog, ipcMain } from 'electron';
-import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import { modelSelectionSchema } from '../../shared/types/provider';
 import { flattenSessionMessages } from '../../shared/types/session';
 import { SessionManager } from '../session/manager';
 import { getConfig } from '../config/loader';
@@ -29,38 +27,14 @@ import {
   workingSetOpenOrFocus,
   workingSetRemove,
 } from './session-working-set';
-
-// ── Zod validation schemas ───────────────────────────────────────────────────
-
-const sessionLoadSchema = z.object({
-  id: z.string().uuid(),
-  /** When false, peek from disk without activating or seeding chat history. */
-  activate: z.boolean().optional().default(true),
-});
-
-const sessionDeleteSchema = z.object({
-  id: z.string().uuid(),
-});
-
-const sessionRenameSchema = z.object({
-  id: z.string().uuid(),
-  name: z.string().min(1),
-});
-
-const sessionChangeModelSchema = z.object({
-  id: z.string().uuid(),
-  selection: modelSelectionSchema.nullable(),
-  modelLabel: z.string().nullable().optional(),
-});
-
-const sessionChangeCwdSchema = z.object({
-  id: z.string().uuid(),
-  cwd: z.string().min(1),
-});
-
-const sessionSetWorkspaceSchema = z.object({
-  cwd: z.string().min(1),
-});
+import {
+  sessionChangeCwdSchema,
+  sessionChangeModelSchema,
+  sessionDeleteSchema,
+  sessionLoadSchema,
+  sessionRenameSchema,
+  sessionSetWorkspaceSchema,
+} from './payload-schemas';
 
 // ── Singleton session manager ────────────────────────────────────────────────
 

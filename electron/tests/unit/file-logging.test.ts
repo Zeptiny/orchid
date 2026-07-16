@@ -286,6 +286,30 @@ describe('FileLogger', () => {
     expect(logger.isActive).toBe(false);
   });
 
+  it('close() resolves within timeout when stream end hangs', async () => {
+    const logFile = path.join(tmpDir, 'orchid.log');
+    const logger = new FileLogger({ logDir: tmpDir, logFile });
+
+    // Replace stream with one whose end() never invokes its callback
+    const hanging = {
+      end: (_cb?: () => void) => hanging,
+      destroy: () => {
+        /* no-op */
+      },
+      once: () => hanging,
+      on: () => hanging,
+      write: () => true,
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (logger as any).stream = hanging;
+
+    const started = Date.now();
+    await logger.close(50);
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeLessThan(500);
+    expect(logger.isActive).toBe(false);
+  });
+
   it('uninstall() restores original console methods', () => {
     const logFile = path.join(tmpDir, 'orchid.log');
     const logger = new FileLogger({ logDir: tmpDir, logFile });

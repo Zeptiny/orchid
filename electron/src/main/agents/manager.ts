@@ -204,7 +204,7 @@ export class SubagentManager {
 
     const userMessage = makeUserMessage(task);
     const selection = options.selection ?? null;
-    const chain = makeEmptyChain(id, selection, agent);
+    const chain = makeEmptyChain(options.sessionId ?? '', selection, agent);
 
     const record: SubagentRecord = {
       id,
@@ -654,11 +654,13 @@ export class SubagentManager {
       }
 
       if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
-        // cancelOne already finalized; just ensure partial text is kept
-        if (responseText.trim() && !TERMINAL_STATES.has(record.state)) {
-          messages.push(makeAssistantMessage(responseText, accumulatedUsage));
-          this._setChainMessages(record, messages);
-        }
+        this._flushPartialOnInterrupt(
+          record,
+          messages,
+          responseText,
+          resultText,
+          accumulatedUsage,
+        );
         return;
       }
 
@@ -680,6 +682,13 @@ export class SubagentManager {
       this.markCompleted(record.id, record.result ?? '');
     } catch (err) {
       if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
+        this._flushPartialOnInterrupt(
+          record,
+          messages,
+          responseText,
+          resultText,
+          accumulatedUsage,
+        );
         return;
       }
       // Keep partial content
@@ -695,20 +704,58 @@ export class SubagentManager {
     }
   }
 
+  private _flushPartialOnInterrupt(
+    record: SubagentRecord,
+    messages: Message[],
+    responseText: string,
+    resultText: string,
+    accumulatedUsage: Usage | null,
+  ): void {
+    if (responseText.trim()) {
+      messages.push(makeAssistantMessage(responseText, accumulatedUsage));
+    }
+    if (resultText) {
+      record.result = resultText;
+    }
+    if (accumulatedUsage) {
+      record.usage = accumulatedUsage;
+    }
+    if (responseText.trim() || resultText) {
+      this._setChainMessages(record, messages);
+      if (record.state === SubagentState.INTERRUPTED) {
+        this._finalizeChain(record, ChainStatus.INTERRUPTED);
+      }
+      this._notify();
+    }
+  }
+
   private _setChainMessages(record: SubagentRecord, messages: Message[]): void {
     if (!record.chain) {
-      record.chain = makeEmptyChain(record.id, record.selection, record.agent);
+      record.chain = makeEmptyChain(
+        record.sessionId ?? '',
+        record.selection,
+        record.agent,
+      );
     }
+    const prev = record.chain.status;
+    const keepTerminal =
+      prev === ChainStatus.INTERRUPTED ||
+      prev === ChainStatus.FAILED ||
+      prev === ChainStatus.COMPLETED;
     record.chain = {
       ...record.chain,
       messages: [...messages],
-      status: ChainStatus.ACTIVE,
+      status: keepTerminal ? prev : ChainStatus.ACTIVE,
     };
   }
 
   private _finalizeChain(record: SubagentRecord, status: ChainStatus): void {
     if (!record.chain) {
-      record.chain = makeEmptyChain(record.id, record.selection, record.agent);
+      record.chain = makeEmptyChain(
+        record.sessionId ?? '',
+        record.selection,
+        record.agent,
+      );
     }
     const terminal =
       status === ChainStatus.INTERRUPTED
@@ -755,7 +802,7 @@ export function runtimeToDomain(record: SubagentRecord): DomainSubagentRecord {
 
   const chain =
     record.chain ??
-    makeEmptyChain(record.id, record.selection, record.agent);
+    makeEmptyChain(record.sessionId ?? '', record.selection, record.agent);
 
   return {
     id: record.id,

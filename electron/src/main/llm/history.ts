@@ -163,10 +163,12 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
 
     apiMessages.push(d);
 
-    // Update lastAssistantToolCallIds for the next iteration
-    if (msg.tool_calls && msg.tool_calls.length > 0) {
+    // Match-set must reflect only surviving tool_calls (those actually
+    // emitted). Using unfiltered msg.tool_calls would keep dropped ids and
+    // incorrectly pair orphaned TOOL_RESULT messages to them.
+    if (d.tool_calls && d.tool_calls.length > 0) {
       lastAssistantToolCallIds = new Set(
-        msg.tool_calls.map((tc) => tc.id).filter((id): id is string => id != null),
+        d.tool_calls.map((tc) => tc.id).filter((id): id is string => id != null),
       );
     } else {
       lastAssistantToolCallIds = new Set();

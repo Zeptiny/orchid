@@ -11,8 +11,7 @@
  * These tests validate the IPC/type layer without requiring
  * a running Electron app (mocked ipcMain/ipcRenderer).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { z } from 'zod';
+import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -21,6 +20,12 @@ import {
   ALLOWED_EVENT_CHANNELS,
 } from '../../src/shared/types/ipc';
 import type { OrchidAPI } from '../../src/shared/types/ipc';
+import {
+  chatSendSchema,
+  configSaveSchema,
+  sessionLoadSchema,
+  toolExecuteSchema,
+} from '../../src/main/ipc/payload-schemas';
 
 // ─── IPC Channel Structure ───────────────────────────────────────────────────
 
@@ -137,60 +142,61 @@ describe('IPC Security', () => {
   });
 });
 
-// ─── Zod Validation ──────────────────────────────────────────────────────────
+// ─── Zod Validation (production schemas) ─────────────────────────────────────
+
+const SESSION_UUID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 
 describe('Zod Validation at Main-Process Boundary', () => {
-  it('chat:send payload validates correctly', () => {
-    const schema = z.object({
-      message: z.string().min(1),
-      sessionId: z.string().optional(),
-    });
+  it('chat:send uses production schema (uuid sessionId, non-empty message)', () => {
+    expect(chatSendSchema.safeParse({ message: 'hello' }).success).toBe(true);
+    expect(
+      chatSendSchema.safeParse({ message: 'hello', sessionId: SESSION_UUID }).success,
+    ).toBe(true);
 
-    // Valid
-    expect(schema.safeParse({ message: 'hello' }).success).toBe(true);
-    expect(schema.safeParse({ message: 'hello', sessionId: 'abc' }).success).toBe(true);
-
-    // Invalid
-    expect(schema.safeParse({ message: '' }).success).toBe(false);
-    expect(schema.safeParse({ message: 123 }).success).toBe(false);
-    expect(schema.safeParse({}).success).toBe(false);
+    // Non-uuid sessionId rejected (weaker local schemas used to accept 'abc')
+    expect(
+      chatSendSchema.safeParse({ message: 'hello', sessionId: 'abc' }).success,
+    ).toBe(false);
+    expect(chatSendSchema.safeParse({ message: '' }).success).toBe(false);
+    expect(chatSendSchema.safeParse({ message: 123 }).success).toBe(false);
+    expect(chatSendSchema.safeParse({}).success).toBe(false);
   });
 
-  it('config:save payload validates correctly', () => {
-    const schema = z.object({
-      updates: z.object({
-        default_model: z.string().optional(),
-        theme: z.string().optional(),
-      }),
-    });
+  it('config:save uses production schema (known keys, rejects providers)', () => {
+    expect(configSaveSchema.safeParse({ updates: { theme: 'dark' } }).success).toBe(true);
+    expect(configSaveSchema.safeParse({ updates: {} }).success).toBe(true);
 
-    expect(schema.safeParse({ updates: { default_model: 'gpt-4' } }).success).toBe(true);
-    expect(schema.safeParse({ updates: { theme: 'dark' } }).success).toBe(true);
-    expect(schema.safeParse({ updates: {} }).success).toBe(true);
-    expect(schema.safeParse({}).success).toBe(false);
+    // Unknown keys rejected
+    expect(
+      configSaveSchema.safeParse({ updates: { not_a_real_key: true } }).success,
+    ).toBe(false);
+    // Legacy providers rejected at boundary
+    expect(
+      configSaveSchema.safeParse({ updates: { providers: { x: {} } } }).success,
+    ).toBe(false);
+    // Strict: extra top-level keys rejected
+    expect(
+      configSaveSchema.safeParse({
+        updates: { theme: 'dark' },
+        providerRenames: [],
+      }).success,
+    ).toBe(false);
+    expect(configSaveSchema.safeParse({}).success).toBe(false);
   });
 
-  it('session:load payload validates correctly', () => {
-    const schema = z.object({
-      id: z.string().min(1),
-    });
-
-    expect(schema.safeParse({ id: 'session-123' }).success).toBe(true);
-    expect(schema.safeParse({ id: '' }).success).toBe(false);
-    expect(schema.safeParse({}).success).toBe(false);
+  it('session:load uses production schema (uuid id)', () => {
+    expect(sessionLoadSchema.safeParse({ id: SESSION_UUID }).success).toBe(true);
+    expect(sessionLoadSchema.safeParse({ id: 'session-123' }).success).toBe(false);
+    expect(sessionLoadSchema.safeParse({ id: '' }).success).toBe(false);
+    expect(sessionLoadSchema.safeParse({}).success).toBe(false);
   });
 
-  it('tool:execute payload validates correctly', () => {
-    const schema = z.object({
-      name: z.string().min(1),
-      args: z.unknown(),
-    });
-
-    expect(schema.safeParse({ name: 'read', args: { path: '/tmp' } }).success).toBe(true);
-    expect(schema.safeParse({ name: 'read', args: null }).success).toBe(true);
-    expect(schema.safeParse({ name: '', args: {} }).success).toBe(false);
+  it('tool:execute uses production schema', () => {
+    expect(toolExecuteSchema.safeParse({ name: 'read', args: { path: '/tmp' } }).success).toBe(true);
+    expect(toolExecuteSchema.safeParse({ name: 'read', args: null }).success).toBe(true);
+    expect(toolExecuteSchema.safeParse({ name: '', args: {} }).success).toBe(false);
+    expect(toolExecuteSchema.safeParse({ args: {} }).success).toBe(false);
   });
-
 });
 
 // ─── API Surface Type (compile-time checks) ─────────────────────────────────
@@ -451,14 +457,20 @@ describe('IPC Handler Module Structure', () => {
     }
   });
 
-  it('each IPC handler validates payloads with zod', () => {
+  it('each IPC handler validates payloads with production schemas', () => {
     const handlerFiles = ['chat', 'config', 'session', 'tool', 'rag', 'ast'];
     const ipcDir = path.resolve(__dirname, '../../src/main/ipc');
+
+    // Schemas live in payload-schemas.ts (single source of truth for tests + handlers)
+    const schemasPath = path.join(ipcDir, 'payload-schemas.ts');
+    expect(fs.existsSync(schemasPath)).toBe(true);
+    const schemasContent = fs.readFileSync(schemasPath, 'utf-8');
+    expect(schemasContent).toContain("import { z } from 'zod'");
 
     for (const name of handlerFiles) {
       const filePath = path.join(ipcDir, `${name}.ts`);
       const content = fs.readFileSync(filePath, 'utf-8');
-      expect(content).toContain("import { z } from 'zod'");
+      expect(content).toContain("from './payload-schemas'");
       expect(content).toContain('.safeParse(');
     }
   });

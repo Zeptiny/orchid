@@ -63,7 +63,7 @@ vi.mock('../../src/main/utils/esm-import', () => ({
 // The provider IPC test seam below supplies every runtime service. Avoiding
 // Electron startup keeps this deterministic while preserving the public IPC
 // handler contract.
-vi.mock('../../src/main/index', () => ({
+vi.mock('../../src/main/providers/runtime-context', () => ({
   getProviderCatalogStore: vi.fn(),
   getProviderConnectionStore: vi.fn(),
   getProviderCredentialVault: vi.fn(),

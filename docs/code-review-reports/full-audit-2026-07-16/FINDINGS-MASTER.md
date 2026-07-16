@@ -5,7 +5,7 @@
 **Dedup rules:** Same root cause / same primary fix site → one master row. Cross-section corroboration listed in **Sections**. Severity = highest reported. Confidence = max. Autofix = most conservative when mixed.
 
 **Totals after cross-section dedup:** **24 P0 · 111 P1 · 115 P2 · 32 P3 = 282 unique findings**  
-**Remediation (this branch):** **16 P0 fixed** · **all safe_auto fixed** · **P1 researched:** 100 open→ 89 still open · 10 partial · 1 fixed-on-verify · **Open P0 001–008 deferred**
+**Remediation (this branch):** **16 P0 fixed** · **all safe_auto fixed** · **P1 batch (001,005–009,013–016,018–019,021–023,027–029,031,036–037):** **19 fixed** · **2 partial residual (016, 029)** · **Open P0 001–008 deferred**
 
 Section raw tables (before cross-dedup) had ~320+ row citations; cross-section merges collapsed repeated root causes into single master IDs.
 
@@ -257,43 +257,43 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 | ID | Title | Primary file | Sections | Conf | Autofix | Status |
 |----|-------|--------------|----------|------|---------|--------|
-| M-P1-001 | `bgcmd:snapshot` has no session/window ownership check | `main/ipc/chat.ts:1733` | S1 | 100 | gated_auto | open |
+| M-P1-001 | `bgcmd:snapshot` has no session/window ownership check | `main/ipc/chat.ts:1733` | S1 | 100 | gated_auto | fixed |
 | M-P1-002 | `session:change_model` reports success on no-op | `main/ipc/session.ts:304` | S1 | 100 | safe_auto | fixed |
 | M-P1-003 | `session:rename` always emits renamed on no-op | `main/ipc/session.ts:285` | S1 | 100 | safe_auto | fixed |
 | M-P1-004 | `unregisterChatIPC` tears down agents without releasing MCP leases | `main/ipc/chat.ts:1762` | S1, S2 | 100 | safe_auto | fixed |
-| M-P1-005 | macOS signed-build detection uses build-time env vars at runtime | `main/index.ts:277` | S1 | 100 | gated_auto | open |
-| M-P1-006 | macOS `activate` recreates window without rebinding updater `mainWindowRef` | `main/index.ts:306` | S1 | 75 | gated_auto | open |
-| M-P1-007 | `chat:send` with `sessionId` re-selects session mid-flight (selection steal) | `main/ipc/chat.ts:577` | S1 | 75 | gated_auto | open |
-| M-P1-008 | `before-quit` always `preventDefault` without re-entrancy/deadline | `main/index.ts:314` | S1 | 75 | gated_auto | open |
-| M-P1-009 | Graceful shutdown can hang: `FileLogger.close` has no timeout | `main/index.ts` + `logging.ts` | S1 | 75 | gated_auto | open |
+| M-P1-005 | macOS signed-build detection uses build-time env vars at runtime | `main/index.ts:277` | S1 | 100 | gated_auto | fixed |
+| M-P1-006 | macOS `activate` recreates window without rebinding updater `mainWindowRef` | `main/index.ts:306` | S1 | 75 | gated_auto | fixed |
+| M-P1-007 | `chat:send` with `sessionId` re-selects session mid-flight (selection steal) | `main/ipc/chat.ts:577` | S1 | 75 | gated_auto | fixed |
+| M-P1-008 | `before-quit` always `preventDefault` without re-entrancy/deadline | `main/index.ts:314` | S1 | 75 | gated_auto | fixed |
+| M-P1-009 | Graceful shutdown can hang: `FileLogger.close` has no timeout | `main/index.ts` + `logging.ts` | S1 | 75 | gated_auto | fixed |
 | M-P1-010 | MCP SSE `url` from config enables main-process SSRF | `mcp/transport.ts:32` | S1, S4 | 75 | gated_auto | open |
 | M-P1-011 | `session:set_workspace` binds any absolute readable dir without dialog | `main/ipc/session.ts:355` | S1 | 100 | gated_auto | open |
 | M-P1-012 | Composition: `set_workspace` + `tool:execute` rebinds cwd then reads secrets | session + tool IPC | S1 | 100 | manual | open |
-| M-P1-013 | Concurrent draft `chat:send` creates duplicate sessions / dual streams | `main/ipc/chat.ts:563` | S1 | 75 | manual | open |
-| M-P1-014 | Updater events allowlisted/emitted but never on `OrchidAPI`/preload | `preload/index.ts:360` | S1, S6 | 100 | manual | open |
-| M-P1-015 | Preload event listeners trust unchecked `as Event` casts | `preload/index.ts:118` | S1 | 100 | gated_auto | open |
-| M-P1-016 | `invoke()` return type is an unchecked `Promise` cast | `preload/index.ts:84` | S1 | 100 | gated_auto | open |
+| M-P1-013 | Concurrent draft `chat:send` creates duplicate sessions / dual streams | `main/ipc/chat.ts:563` | S1 | 75 | manual | fixed |
+| M-P1-014 | Updater events allowlisted/emitted but never on `OrchidAPI`/preload | `preload/index.ts:360` | S1, S6 | 100 | manual | fixed |
+| M-P1-015 | Preload event listeners trust unchecked `as Event` casts | `preload/index.ts:118` | S1 | 100 | gated_auto | fixed |
+| M-P1-016 | `invoke()` return type is an unchecked `Promise` cast | `preload/index.ts:84` | S1 | 100 | gated_auto | partial |
 | M-P1-017 | Allowlists are `readonly string[]` instead of `IPCChannel` literals | `shared/types/ipc.ts:838` | S1 | 100 | safe_auto | fixed |
-| M-P1-018 | `ChatSendResult` is open `status`/`kind` strings, not a closed union | `shared/types/ipc.ts:512` | S1 | 100 | manual | open |
-| M-P1-019 | `ConfigSaveMessage` is `Partial<Config>` but runtime is tombstone PATCH | `shared/types/ipc.ts:247` | S1, S3 | 92 | manual | open |
+| M-P1-018 | `ChatSendResult` is open `status`/`kind` strings, not a closed union | `shared/types/ipc.ts:512` | S1 | 100 | manual | fixed |
+| M-P1-019 | `ConfigSaveMessage` is `Partial<Config>` but runtime is tombstone PATCH | `shared/types/ipc.ts:247` | S1, S3 | 92 | manual | fixed |
 | M-P1-020 | `chat.ts` is a ~1779-line god module | `main/ipc/chat.ts:1` | S1 | 100 | manual | open |
-| M-P1-021 | `providers` IPC imports `main/index` → circular dependency | `main/ipc/providers.ts:30` | S1, S3 | 100 | gated_auto | open |
-| M-P1-022 | app-shell IPC Zod tests reimplement weaker schemas than production | `tests/integration/app-shell.test.ts:142` | S1 | 100 | gated_auto | open |
-| M-P1-023 | Critical IPC modules lack dedicated handler tests | `electron/tests/unit` | S1 | 100 | manual | partial |
+| M-P1-021 | `providers` IPC imports `main/index` → circular dependency | `main/ipc/providers.ts:30` | S1, S3 | 100 | gated_auto | fixed |
+| M-P1-022 | app-shell IPC Zod tests reimplement weaker schemas than production | `tests/integration/app-shell.test.ts:142` | S1 | 100 | gated_auto | fixed |
+| M-P1-023 | Critical IPC modules lack dedicated handler tests | `electron/tests/unit` | S1 | 100 | manual | fixed |
 | M-P1-024 | No first-class agent-native command surface for full UI capability set | `shared/commands.ts` + tools | S1, S6 | 85 | advisory | open |
 | M-P1-025 | `JSON.parse` on history tool_calls can crash entire stream turn | `llm/orchestrator.ts:249` | S2 | 100 | safe_auto | fixed |
 | M-P1-026 | Subagent final result ignores tool-only work (empty wait payload) | `agents/manager.ts:463` | S2 | 100 | gated_auto | open |
-| M-P1-027 | Interrupted subagent drops in-flight partial assistant text | `agents/manager.ts:533` | S2 | 75 | gated_auto | open |
-| M-P1-028 | `toApiMessages` match-set keeps filtered-out tool_call ids | `llm/history.ts:167` | S2 | 75 | gated_auto | open |
+| M-P1-027 | Interrupted subagent drops in-flight partial assistant text | `agents/manager.ts:533` | S2 | 75 | gated_auto | fixed |
+| M-P1-028 | `toApiMessages` match-set keeps filtered-out tool_call ids | `llm/history.ts:167` | S2 | 75 | gated_auto | fixed |
 | M-P1-029 | Tool timeout does not cancel underlying work | `llm/tool-dispatch.ts:270` | S2, S4 | 100 | gated_auto | partial |
 | M-P1-030 | Retry backoff sleep ignores abort/cancel | `llm/middleware/retry.ts:43` | S2 | 100 | gated_auto | open |
-| M-P1-031 | Retry only covers `doStream()` setup, not mid-stream drops | `llm/middleware/retry.ts:86` | S2 | 75 | manual | open |
+| M-P1-031 | Retry only covers `doStream()` setup, not mid-stream drops | `llm/middleware/retry.ts:86` | S2 | 75 | manual | fixed |
 | M-P1-032 | Conversation history unbounded; full re-send every turn | session + history + orchestrator | S2 | 90 | manual | open |
 | M-P1-033 | Every chain/subagent persist rewrites full pretty-printed session JSON + fsync | `session/storage.ts` | S2 | 85 | manual | open |
 | M-P1-034 | SubagentManager never prunes records (process lifetime) | `agents/manager.ts` | S2 | 93 | gated_auto | open |
 | M-P1-035 | Subagent tool events → debounced full-session rewrites of all chains | wire-subagents + persist | S2 | 80 | gated_auto | open |
-| M-P1-036 | Subagent `Chain.sessionId` is subagent id, not session UUID | `agents/manager.ts:656` | S2 | 90 | gated_auto | open |
-| M-P1-037 | Asymmetric restore: subagents → INTERRUPTED; chains keep ACTIVE | `shared/types/chain.ts` | S2 | 85 | gated_auto | open |
+| M-P1-036 | Subagent `Chain.sessionId` is subagent id, not session UUID | `agents/manager.ts:656` | S2 | 90 | gated_auto | fixed |
+| M-P1-037 | Asymmetric restore: subagents → INTERRUPTED; chains keep ACTIVE | `shared/types/chain.ts` | S2 | 85 | gated_auto | fixed |
 | M-P1-038 | Dual SubagentRecord / status enums + third `SubagentState` prompt DTO | manager + subagent.ts + system-prompt | S2 | 90 | manual | open |
 | M-P1-039 | Explicit `any` tool map disables type checking at LLM tool boundary | `orchestrator.ts:726` | S2 | 92 | gated_auto | open |
 | M-P1-040 | Unsafe double cast Zod→AI SDK in context-snapshot | `context-snapshot.ts:32` | S2 | 88 | gated_auto | open |
@@ -378,7 +378,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-001 — `bgcmd:snapshot` has no session/window ownership check
 
-- **Status:** open
+- **Status:** fixed · bgcmd:snapshot uses snapshotForSession (session ownership; any agentScope)
 - **Primary:** `main/ipc/chat.ts:1733` · **Sections:** S1 · **Conf:** 100 · **Autofix:** gated_auto
 - **Why it matters:** Any renderer that can invoke bgcmd:snapshot can read background command output by numeric commandId alone. Background processes are session-scoped elsewhere, so missing ownership lets one window/session observe another's command tails (and exit codes).
 - **Evidence:** `electron/src/main/ipc/chat.ts` validates only `{ commandId, lastN }` and calls `store.snapshot` with no sessionId/windowId. Store has visibility helpers (`getVisible` / `isVisible` by sessionId + agentScopeId) in background-store, unused here.
@@ -386,7 +386,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-005 — macOS signed-build detection uses build-time env vars at runtime
 
-- **Status:** open
+- **Status:** fixed · runtime codesign -dv detection (not CSC_* env)
 - **Primary:** `main/index.ts:277` · **Sections:** S1 · **Conf:** 100 · **Autofix:** gated_auto
 - **Why it matters:** Auto-update gating on macOS depends on "signed build," but runtime checks build-time env vars that are usually absent in installed apps. Signed production builds can be treated as unsigned (or the reverse if env is leaked), so auto-update policy is wrong.
 - **Evidence:** `electron/src/main/index.ts` — isSigned = app.isPackaged && darwin ? !!(process.env.CODESIGN_CERT || process.env.CSC_NAME) : app.isPackaged, then initUpdater({ signed: isSigned }).
@@ -394,7 +394,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-006 — macOS `activate` recreates window without rebinding updater `mainWindowRef`
 
-- **Status:** open
+- **Status:** fixed · setUpdaterWindow on macOS activate recreate
 - **Primary:** `main/index.ts:306` · **Sections:** S1 · **Conf:** 75 · **Autofix:** gated_auto
 - **Why it matters:** On macOS, closing the last window keeps the app alive. Dock activate recreates a window but never rebinds the updater's cached window, so update status/progress/error events go nowhere after recreate.
 - **Evidence:** activate only createWindow() (index.ts). initUpdater sets mainWindowRef once at startup (updater.ts). No setMainWindow/re-init on recreate; sendToRenderer uses stale/null mainWindowRef.
@@ -402,7 +402,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-007 — `chat:send` with `sessionId` re-selects session mid-flight (selection steal)
 
-- **Status:** open
+- **Status:** fixed · ensureActiveSession resolves by id without switchTo
 - **Primary:** `main/ipc/chat.ts:577` · **Sections:** S1 · **Conf:** 75 · **Autofix:** gated_auto
 - **Why it matters:** Sending with sessionId forces switchTo for that window even if the user is viewing another session. Mid-flight sends from background tabs can steal selection and confuse UI/history binding.
 - **Evidence:** ensureActiveSession in chat.ts: if requestedSessionId and active?.id !== requestedSessionId, manager.switchTo(requestedSessionId, windowId). Used by chat:send.
@@ -410,7 +410,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-008 — `before-quit` always `preventDefault` without re-entrancy/deadline
 
-- **Status:** open
+- **Status:** fixed · isQuitting re-entrancy + 10s hard deadline
 - **Primary:** `main/index.ts:314` · **Sections:** S1 · **Conf:** 75 · **Autofix:** gated_auto
 - **Why it matters:** Every before-quit always preventDefaults and runs async cleanup. A second quit signal can re-enter cleanup while the first is still awaiting (bg drain, logger, MCP), causing double teardown or a stuck app that never reaches app.exit.
 - **Evidence:** index.ts before-quit — no isQuitting / re-entrancy guard; always event.preventDefault() then long await chain ending in app.exit.
@@ -418,7 +418,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-009 — Graceful shutdown can hang: `FileLogger.close` has no timeout
 
-- **Status:** open
+- **Status:** fixed · FileLogger.close races end vs timeout; force-destroy
 - **Primary:** ``main/index.ts` + `logging.ts`` · **Sections:** S1 · **Conf:** 75 · **Autofix:** gated_auto
 - **Why it matters:** Shutdown awaits log stream end with no timeout. A stuck/broken write stream blocks the rest of teardown (IPC unregister, MCP shutdown, app.exit).
 - **Evidence:** FileLogger.close (logging.ts) is new Promise resolved only on s.end callback — no timeout/reject. before-quit await closeFileLogging().
@@ -450,7 +450,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-013 — Concurrent draft `chat:send` creates duplicate sessions / dual streams
 
-- **Status:** open
+- **Status:** fixed · window-level draft single-flight before create
 - **Primary:** `main/ipc/chat.ts:563` · **Sections:** S1 · **Conf:** 75 · **Autofix:** manual
 - **Why it matters:** Concurrent first sends from draft mode each create a new session before any per-session busy lock applies, producing duplicate sessions and dual streams for one user action.
 - **Evidence:** sessionsStarting is keyed by sessionId after ensureActiveSession. Draft path with no active creates via manager.create with no window/draft-level mutex. Two parallel chat:send without sessionId both see no active → two creates.
@@ -458,7 +458,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-014 — Updater events allowlisted/emitted but never on `OrchidAPI`/preload
 
-- **Status:** open
+- **Status:** fixed · orchid.updater onStatus/onProgress/onError on preload + OrchidAPI
 - **Primary:** `preload/index.ts:360` · **Sections:** S1, S6 · **Conf:** 100 · **Autofix:** manual
 - **Why it matters:** Updater push channels are allowlisted and emitted from main, but preload/OrchidAPI never expose listeners, so the UI cannot subscribe to update lifecycle events.
 - **Evidence:** Channels in IPC_CHANNELS + ALLOWED_EVENT_CHANNELS. Main emits via updater.ts. Preload orchidAPI ends at bgCmd with no updater namespace. OrchidAPI interface has no updater methods.
@@ -466,7 +466,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-015 — Preload event listeners trust unchecked `as Event` casts
 
-- **Status:** open
+- **Status:** fixed · shared Zod parse at preload on* boundary; drop invalid
 - **Primary:** `preload/index.ts:118` · **Sections:** S1 · **Conf:** 100 · **Autofix:** gated_auto
 - **Why it matters:** Event payloads are force-cast to typed events with no runtime validation. Malformed main payloads become typed lies in the renderer and can throw or corrupt UI state.
 - **Evidence:** Preload pattern e.g. callback(args[0] as ChatChunkEvent) and same for other on* handlers (preload/index.ts).
@@ -474,7 +474,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-016 — `invoke()` return type is an unchecked `Promise` cast
 
-- **Status:** open
+- **Status:** partial · invoke result parse for high-risk channels only
 - **Primary:** `preload/index.ts:84` · **Sections:** S1 · **Conf:** 100 · **Autofix:** gated_auto
 - **Why it matters:** invoke casts the Electron promise to Promise<T> without validating results. TypeScript safety ends at the cast; runtime shape drift is silent until UI breaks.
 - **Evidence:** preload/index.ts — return ipcRenderer.invoke(channel, ...args) as Promise<T>.
@@ -482,7 +482,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-018 — `ChatSendResult` is open `status`/`kind` strings, not a closed union
 
-- **Status:** open
+- **Status:** fixed · ChatSendResult discriminated union + ChatSendErrorKind
 - **Primary:** `shared/types/ipc.ts:512` · **Sections:** S1 · **Conf:** 100 · **Autofix:** manual
 - **Why it matters:** Open status/kind strings prevent exhaustiveness checking. Callers cannot safely switch on results; typos and new kinds won't be caught at compile time.
 - **Evidence:** ChatSendResult (ipc.ts) uses status: string and kind?: string. Runtime kinds are closed in practice (session_not_found, unbound_workspace, provider_required, session_busy, …, status: 'started').
@@ -490,7 +490,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-019 — `ConfigSaveMessage` is `Partial<Config>` but runtime is tombstone PATCH
 
-- **Status:** open
+- **Status:** fixed · ConfigPatch / null tombstones; save call sites aligned
 - **Primary:** `shared/types/ipc.ts:247` · **Sections:** S1, S3 · **Conf:** 92 · **Autofix:** manual
 - **Why it matters:** Types say Partial<Config> (no null deletes) while main merge treats null as tombstones. Renderers and tests can believe invalid shapes are type-safe, and TypeScript won't model delete semantics.
 - **Evidence:** ConfigSaveMessage.updates: Partial<Config>. Runtime configSaveSchema is z.record(z.string(), z.unknown()); merge docs null tombstones.
@@ -506,7 +506,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-021 — `providers` IPC imports `main/index` → circular dependency
 
-- **Status:** open
+- **Status:** fixed · providers/runtime-context.ts leaf getters; no main/index cycle
 - **Primary:** `main/ipc/providers.ts:30` · **Sections:** S1, S3 · **Conf:** 100 · **Autofix:** gated_auto
 - **Why it matters:** Providers IPC imports the app entry module for store getters, creating a circular dependency with main/index (which registers IPC). Risk of partial initialization / hard-to-debug load order bugs.
 - **Evidence:** providers.ts imports getProviderCatalogStore, getProviderConnectionStore, getProviderCredentialVault, getProviderStatusService from '../index'. Those getters are defined/exported on index.ts.
@@ -514,7 +514,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-022 — app-shell IPC Zod tests reimplement weaker schemas than production
 
-- **Status:** open
+- **Status:** fixed · app-shell imports production IPC schemas
 - **Primary:** `tests/integration/app-shell.test.ts:142` · **Sections:** S1 · **Conf:** 100 · **Autofix:** gated_auto
 - **Why it matters:** Integration tests re-declare weaker Zod schemas, so they can pass while production rejects real payloads (or accept invalid ones prod would reject)—false confidence.
 - **Evidence:** app-shell.test.ts — local z.object({ message, sessionId: z.string().optional() }) vs prod sessionId: z.string().uuid().optional(); config test uses string default_model vs typed selection; not importing production schemas.
@@ -522,7 +522,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-023 — Critical IPC modules lack dedicated handler tests
 
-- **Status:** partial
+- **Status:** fixed · tool/mcp/rag/ast IPC handler unit tests + payload-schemas export
 - **Primary:** `electron/tests/unit` · **Sections:** S1 · **Conf:** 100 · **Autofix:** manual
 - **Why it matters:** Several IPC surfaces have unit coverage, but not all critical handlers. Gaps leave regressions in tool/mcp/rag/ast (and ownership checks) uncaught.
 - **Evidence:** Present: chat-ipc, config-ipc, provider-ipc, session-*-ipc under electron/tests/unit/. IPC modules include tool.ts, mcp.ts, rag.ts, ast.ts — no dedicated tool-ipc / mcp-ipc / rag-ipc / ast-ipc handler tests (only channel presence in app-shell and non-IPC tool/mcp unit tests).
@@ -546,7 +546,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-027 — Interrupted subagent drops in-flight partial assistant text
 
-- **Status:** open
+- **Status:** fixed · flush partial assistant text on interrupt; preserve terminal chain status
 - **Primary:** `agents/manager.ts:533` · **Sections:** S2 · **Conf:** 75 · **Autofix:** gated_auto
 - **Why it matters:** Esc/interrupt loses in-flight assistant deltas; waiters and persisted chains miss partial progress.
 - **Evidence:** cancelOne marks terminal + finalizes before flush. Abort path only keeps partial text if !TERMINAL_STATES.has(record.state) — already terminal, so flush never runs.
@@ -554,7 +554,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-028 — `toApiMessages` match-set keeps filtered-out tool_call ids
 
-- **Status:** open
+- **Status:** fixed · lastAssistantToolCallIds from surviving tool_calls only
 - **Primary:** `llm/history.ts:167` · **Sections:** S2 · **Conf:** 75 · **Autofix:** gated_auto
 - **Why it matters:** Match-set can include filtered-out tool_call ids → orphaned tool results or provider 400s.
 - **Evidence:** llm/history.ts emits only surviving tool_calls, but rebuilds lastAssistantToolCallIds from unfiltered msg.tool_calls.
@@ -562,7 +562,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-029 — Tool timeout does not cancel underlying work
 
-- **Status:** partial
+- **Status:** partial · abortSignal into web_fetch + MCP callTool/readResource
 - **Primary:** `llm/tool-dispatch.ts:270` · **Sections:** S2, S4 · **Conf:** 100 · **Autofix:** gated_auto
 - **Why it matters:** Timed-out tools can keep burning CPU/IO/network if work ignores abort. Process path improved by M-P0-016; most other tools still ignore abortSignal.
 - **Evidence:** tool-dispatch + withTimeout aborts controller; execute-command honors ctx.abortSignal. Most other tools (fs/ast/rag/mcp) never read abortSignal.
@@ -578,7 +578,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-031 — Retry only covers `doStream()` setup, not mid-stream drops
 
-- **Status:** open
+- **Status:** fixed · pre-content mid-stream retry; content = text/reasoning/tool parts
 - **Primary:** `llm/middleware/retry.ts:86` · **Sections:** S2 · **Conf:** 75 · **Autofix:** manual
 - **Why it matters:** Transient mid-stream drops after doStream() returns are not retried; only setup failures are.
 - **Evidence:** retry.ts retries only around await doStream(); stream is returned after pipeThrough — mid-stream errors bypass the while-loop.
@@ -618,7 +618,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-036 — Subagent `Chain.sessionId` is subagent id, not session UUID
 
-- **Status:** open
+- **Status:** fixed · makeEmptyChain uses parent session UUID
 - **Primary:** `agents/manager.ts:656` · **Sections:** S2 · **Conf:** 90 · **Autofix:** gated_auto
 - **Why it matters:** Wrong Chain.sessionId breaks ownership, restore, and any session-scoped queries on nested chains.
 - **Evidence:** manager makeEmptyChain(sessionKey, …) sets sessionId: sessionKey; spawn passes subagent id, not parent session UUID (record.sessionId is separate).
@@ -626,7 +626,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 
 ### M-P1-037 — Asymmetric restore: subagents → INTERRUPTED; chains keep ACTIVE
 
-- **Status:** open
+- **Status:** fixed · chainFromStorageDict maps ACTIVE/running → INTERRUPTED
 - **Primary:** `shared/types/chain.ts` · **Sections:** S2 · **Conf:** 85 · **Autofix:** gated_auto
 - **Why it matters:** Cold load leaves chains ACTIVE while subagents become INTERRUPTED → inconsistent resume UI and write targets.
 - **Evidence:** Subagents: PENDING/RUNNING → INTERRUPTED on restore. Chains: keep active as ACTIVE (no freeze-on-restore).
@@ -1376,7 +1376,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 | Severity | Unique findings | ID range | Fixed (this branch) | Open |
 |----------|-----------------|----------|---------------------|------|
 | **P0** | **24** | M-P0-001 … M-P0-024 | **16** (009–024) | **8** (001–008) |
-| **P1** | **111** | M-P1-001 … M-P1-111 | **12** fixed · **10** partial | **89** open |
+| **P1** | **111** | M-P1-001 … M-P1-111 | **31** fixed · **10** partial | **70** open |
 | **P2** | **115** | M-P2-001 … M-P2-115 | **13** (safe_auto) | **102** |
 | **P3** | **32** | M-P3-001 … M-P3-032 | **8** (safe_auto) | **24** |
 | **Total** | **282** | | **49** fixed · **10** partial | **223** open |
@@ -1418,4 +1418,4 @@ Overlaps mean sum > 282.
 | **This file** | Complete deduplicated master table |
 
 **Generated:** 2026-07-16 · Full re-read of all six section reports before merge.  
-**Remediation update:** 2026-07-16 · M-P0-009…024 fixed · all safe_auto fixed · all remaining open P1s verified with Why/Evidence/Suggested fix write-ups (89 open · 10 partial · 1 fixed-on-verify).
+**Remediation update:** 2026-07-16 · M-P0-009…024 fixed · all safe_auto fixed · P1 batch M-P1-001,005–009,013–016,018–019,021–023,027–029,031,036–037 remediated (19 fixed · 016/029 partial residual · ~70 P1 still open).

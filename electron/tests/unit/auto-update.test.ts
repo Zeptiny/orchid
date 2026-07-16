@@ -51,6 +51,14 @@ vi.mock('electron', () => ({
   BrowserWindow: vi.fn(() => mockBrowserWindow),
 }));
 
+const mockTerminateAll = vi.fn();
+vi.mock('../../src/main/tools/process/background-store', () => ({
+  getBackgroundStore: () => ({
+    terminateAll: mockTerminateAll,
+    clear: vi.fn(),
+  }),
+}));
+
 // ---------------------------------------------------------------------------
 // Import updater after mock setup
 // ---------------------------------------------------------------------------
@@ -67,6 +75,7 @@ beforeEach(async () => {
   mockAutoUpdater.allowDowngrade = false;
   mockAutoUpdater.disableDifferentialDownload = false;
   mockApp.isPackaged = true;
+  mockTerminateAll.mockClear();
 
   // Set up default mock behavior for downloadUpdate
   mockAutoUpdater.downloadUpdate.mockResolvedValue(undefined);
@@ -120,6 +129,31 @@ describe('initUpdater', () => {
     expect(registeredEvents).toContain('download-progress');
     expect(registeredEvents).toContain('update-downloaded');
     expect(registeredEvents).toContain('error');
+  });
+
+  it('setUpdaterWindow rebinds IPC target without re-attaching handlers', () => {
+    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+    const handlerCount = mockAutoUpdater.on.mock.calls.length;
+
+    const nextWindow = {
+      isDestroyed: vi.fn(() => false),
+      webContents: { send: vi.fn() },
+    };
+
+    updater.setUpdaterWindow(nextWindow as unknown as Electron.BrowserWindow);
+    expect(mockAutoUpdater.on.mock.calls.length).toBe(handlerCount);
+
+    const updateAvailableHandler = mockAutoUpdater.on.mock.calls.find(
+      (call: unknown[]) => call[0] === 'update-available',
+    )?.[1] as ((info: unknown) => void) | undefined;
+
+    updateAvailableHandler!({ version: '2.0.0', releaseNotes: null });
+
+    expect(nextWindow.webContents.send).toHaveBeenCalledWith(
+      'updater:status_update',
+      expect.objectContaining({ status: 'available', version: '2.0.0' }),
+    );
+    expect(mockBrowserWindow.webContents.send).not.toHaveBeenCalled();
   });
 });
 
@@ -342,20 +376,12 @@ describe('quitAndInstall', () => {
     expect(mockApp.removeAllListeners).toHaveBeenCalledWith('before-quit');
   });
 
-  it('terminates background process groups before stripping before-quit', async () => {
-    const { getBackgroundStore, setBackgroundStore, BackgroundProcessStore } =
-      await import('../../src/main/tools/process/background-store');
-    const store = new BackgroundProcessStore();
-    setBackgroundStore(store);
-    const terminateAll = vi.spyOn(store, 'terminateAll');
-
+  it('terminates background process groups before stripping before-quit', () => {
+    mockTerminateAll.mockClear();
     updater.quitAndInstall();
 
-    expect(terminateAll).toHaveBeenCalled();
+    expect(mockTerminateAll).toHaveBeenCalled();
     expect(mockApp.removeAllListeners).toHaveBeenCalledWith('before-quit');
-    // restore empty store for other tests
-    setBackgroundStore(new BackgroundProcessStore());
-    void getBackgroundStore;
   });
 });
 

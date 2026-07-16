@@ -158,6 +158,14 @@ export function initUpdater(options: { window: BrowserWindow; signed?: boolean }
 }
 
 /**
+ * Rebind the window used for updater IPC after recreation (e.g. macOS activate).
+ * Does not re-attach autoUpdater listeners.
+ */
+export function setUpdaterWindow(window: BrowserWindow): void {
+  mainWindowRef = window;
+}
+
+/**
  * Manually check for updates.
  * For unsigned builds, this still checks but does not auto-download.
  * User must explicitly call `downloadUpdate()` after seeing the available notification.

@@ -705,30 +705,11 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
             ? { draftGeneration: options.draftGeneration }
             : {}),
         });
-        // Only adopt send resolution when the user is still viewing this turn's
-        // session (or still in draft). Navigation mid-send must not retarget
-        // stream filters to the previous session.
-        const stillViewingSendTarget =
-          !activeSessionIdRef.current ||
-          !result?.sessionId ||
-          activeSessionIdRef.current === result.sessionId ||
-          streamSessionIdRef.current === result.sessionId;
-        if (result?.sessionId && stillViewingSendTarget) {
-          streamSessionIdRef.current = result.sessionId;
-        }
-        if (result?.turnId && stillViewingSendTarget) {
-          // Preserve any already-observed sequence for this same turn. Main
-          // may emit its first state event before the invoke promise resolves.
-          if (streamTurnIdRef.current !== result.turnId) {
-            streamTurnIdRef.current = result.turnId;
-            lastSequenceRef.current = -1;
-          }
-        }
         // Structured gate failures (e.g. unbound workspace) — no stream starts.
-        if (result && result.status === 'error') {
+        if (result.status === 'error') {
           isSendingRef.current = false;
           setError(
-            result.error ??
+            result.error ||
               (result.kind === 'unbound_workspace'
                 ? 'No project folder selected. Choose a folder before sending a message.'
                 : 'Failed to send message'),
@@ -744,6 +725,24 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           });
           setStreamStartTime(null);
           setElapsedSeconds(0);
+          return;
+        }
+
+        // Only adopt send resolution when the user is still viewing this turn's
+        // session (or still in draft). Navigation mid-send must not retarget
+        // stream filters to the previous session.
+        const stillViewingSendTarget =
+          !activeSessionIdRef.current ||
+          activeSessionIdRef.current === result.sessionId ||
+          streamSessionIdRef.current === result.sessionId;
+        if (stillViewingSendTarget) {
+          streamSessionIdRef.current = result.sessionId;
+          // Preserve any already-observed sequence for this same turn. Main
+          // may emit its first state event before the invoke promise resolves.
+          if (streamTurnIdRef.current !== result.turnId) {
+            streamTurnIdRef.current = result.turnId;
+            lastSequenceRef.current = -1;
+          }
         }
       } catch (err) {
         isSendingRef.current = false;

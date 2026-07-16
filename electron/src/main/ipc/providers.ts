@@ -32,7 +32,7 @@ import {
   getProviderConnectionStore,
   getProviderCredentialVault,
   getProviderStatusService,
-} from '../index';
+} from '../providers/runtime-context';
 import type { ConnectionStore } from '../providers/connection-store';
 import {
   CredentialVault,

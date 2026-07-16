@@ -8,8 +8,10 @@
  * - contextIsolation: true (enforced in BrowserWindow)
  * - nodeIntegration: false (enforced in BrowserWindow)
  * - Only allowed channels can be invoked/subscribed
+ * - Event payloads and critical invoke results are Zod-validated at this boundary
  */
 import { contextBridge, ipcRenderer } from 'electron';
+import type { z } from 'zod';
 import {
   ALLOWED_INVOKE_CHANNELS,
   ALLOWED_EVENT_CHANNELS,
@@ -63,7 +65,38 @@ import type {
   ASTIndexMessage,
   ASTIndexProgress,
   BgCommandSnapshotRequest,
+  UpdaterState,
+  UpdaterProgressEvent,
+  UpdaterErrorEvent,
 } from '../shared/types/ipc';
+import {
+  chatChunkEventSchema,
+  chatThinkingEventSchema,
+  chatStateEventSchema,
+  chatDoneEventSchema,
+  chatErrorEventSchema,
+  chatUsageEventSchema,
+  chatToolCallStartEventSchema,
+  chatToolCallDeltaEventSchema,
+  chatToolCallUpdateEventSchema,
+  sessionRenamedEventSchema,
+  sessionCreatedEventSchema,
+  sessionWorkspaceChangedEventSchema,
+  sessionTodosChangedEventSchema,
+  sessionActivityChangedEventSchema,
+  workingSetChangedEventSchema,
+  ragIndexProgressSchema,
+  astIndexProgressSchema,
+  updaterStateSchema,
+  updaterProgressEventSchema,
+  updaterErrorEventSchema,
+  chatSendResultSchema,
+  toolExecuteResultSchema,
+  bgCommandSnapshotResultSchema,
+  configSaveResultSchema,
+  workspaceInfoSchema,
+  chatSessionSnapshotSchema,
+} from '../shared/types/ipc-schemas';
 
 // ── Security helpers ─────────────────────────────────────────────────────────
 
@@ -81,9 +114,33 @@ function assertAllowedEvent(channel: string): void {
 
 // ── Typed invoke wrapper ─────────────────────────────────────────────────────
 
-function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
+/**
+ * High-risk invoke channels validated on resolve. Residual: most other
+ * channels still rely on TypeScript casts only (see M-P1-016 residual).
+ */
+const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
+  [IPC_CHANNELS.CHAT_SEND]: chatSendResultSchema,
+  [IPC_CHANNELS.CHAT_SNAPSHOT]: chatSessionSnapshotSchema,
+  [IPC_CHANNELS.TOOL_EXECUTE]: toolExecuteResultSchema,
+  [IPC_CHANNELS.BG_CMD_SNAPSHOT]: bgCommandSnapshotResultSchema,
+  [IPC_CHANNELS.CONFIG_SAVE]: configSaveResultSchema,
+  [IPC_CHANNELS.SESSION_GET_WORKSPACE]: workspaceInfoSchema,
+  [IPC_CHANNELS.SESSION_PICK_PROJECT_DIR]: workspaceInfoSchema,
+  [IPC_CHANNELS.SESSION_SET_WORKSPACE]: workspaceInfoSchema,
+};
+
+async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   assertAllowedInvoke(channel);
-  return ipcRenderer.invoke(channel, ...args) as Promise<T>;
+  const result: unknown = await ipcRenderer.invoke(channel, ...args);
+  const schema = INVOKE_RESULT_SCHEMAS[channel];
+  if (!schema) {
+    return result as T;
+  }
+  const parsed = schema.safeParse(result);
+  if (!parsed.success) {
+    throw new Error(`Invalid IPC response for '${channel}': ${parsed.error.message}`);
+  }
+  return parsed.data as T;
 }
 
 // ── Typed event listener wrapper ─────────────────────────────────────────────
@@ -96,6 +153,29 @@ function on(channel: string, callback: (...args: unknown[]) => void): () => void
   return () => {
     ipcRenderer.removeListener(channel, handler);
   };
+}
+
+/**
+ * Subscribe to an event channel and drop payloads that fail schema validation.
+ * Prevents unchecked `as Event` casts from delivering malformed main→renderer data.
+ * Schema shape may be a structural subset of T (e.g. session identity only).
+ */
+function onParsed<T>(
+  channel: string,
+  schema: z.ZodTypeAny,
+  callback: (payload: T) => void,
+): () => void {
+  return on(channel, (...args) => {
+    const parsed = schema.safeParse(args[0]);
+    if (!parsed.success) {
+      console.warn(
+        `[orchid preload] dropped invalid event on '${channel}':`,
+        parsed.error.message,
+      );
+      return;
+    }
+    callback(parsed.data as T);
+  });
 }
 
 // ── Build the API surface ────────────────────────────────────────────────────
@@ -115,31 +195,31 @@ const orchidAPI: OrchidAPI = {
       invoke(IPC_CHANNELS.CHAT_SNAPSHOT, message ?? {}),
 
     onChunk: (callback: (event: ChatChunkEvent) => void) =>
-      on(IPC_CHANNELS.CHAT_CHUNK, (...args) => callback(args[0] as ChatChunkEvent)),
+      onParsed(IPC_CHANNELS.CHAT_CHUNK, chatChunkEventSchema, callback),
 
     onThinking: (callback: (event: ChatThinkingEvent) => void) =>
-      on(IPC_CHANNELS.CHAT_THINKING, (...args) => callback(args[0] as ChatThinkingEvent)),
+      onParsed(IPC_CHANNELS.CHAT_THINKING, chatThinkingEventSchema, callback),
 
     onState: (callback: (event: ChatStateEvent) => void) =>
-      on(IPC_CHANNELS.CHAT_STATE, (...args) => callback(args[0] as ChatStateEvent)),
+      onParsed(IPC_CHANNELS.CHAT_STATE, chatStateEventSchema, callback),
 
     onDone: (callback: (event: ChatDoneEvent) => void) =>
-      on(IPC_CHANNELS.CHAT_DONE, (...args) => callback(args[0] as ChatDoneEvent)),
+      onParsed(IPC_CHANNELS.CHAT_DONE, chatDoneEventSchema, callback),
 
     onError: (callback: (event: ChatErrorEvent) => void) =>
-      on(IPC_CHANNELS.CHAT_ERROR, (...args) => callback(args[0] as ChatErrorEvent)),
+      onParsed(IPC_CHANNELS.CHAT_ERROR, chatErrorEventSchema, callback),
 
     onUsage: (callback: (event: ChatUsageEvent) => void) =>
-      on(IPC_CHANNELS.CHAT_USAGE, (...args) => callback(args[0] as ChatUsageEvent)),
+      onParsed(IPC_CHANNELS.CHAT_USAGE, chatUsageEventSchema, callback),
 
     onToolCallStart: (callback: (event: ChatToolCallStartEvent) => void) =>
-      on(IPC_CHANNELS.CHAT_TOOL_CALL_START, (...args) => callback(args[0] as ChatToolCallStartEvent)),
+      onParsed(IPC_CHANNELS.CHAT_TOOL_CALL_START, chatToolCallStartEventSchema, callback),
 
     onToolCallDelta: (callback: (event: ChatToolCallDeltaEvent) => void) =>
-      on(IPC_CHANNELS.CHAT_TOOL_CALL_DELTA, (...args) => callback(args[0] as ChatToolCallDeltaEvent)),
+      onParsed(IPC_CHANNELS.CHAT_TOOL_CALL_DELTA, chatToolCallDeltaEventSchema, callback),
 
     onToolCallUpdate: (callback: (event: ChatToolCallUpdateEvent) => void) =>
-      on(IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, (...args) => callback(args[0] as ChatToolCallUpdateEvent)),
+      onParsed(IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, chatToolCallUpdateEventSchema, callback),
   },
 
   config: {
@@ -247,36 +327,28 @@ const orchidAPI: OrchidAPI = {
       invoke(IPC_CHANNELS.SESSION_WORKING_SET_SET_FOCUS, message),
 
     onWorkingSetChanged: (callback: (event: WorkingSetChangedEvent) => void) =>
-      on(IPC_CHANNELS.SESSION_WORKING_SET_CHANGED, (...args) =>
-        callback(args[0] as WorkingSetChangedEvent),
-      ),
+      onParsed(IPC_CHANNELS.SESSION_WORKING_SET_CHANGED, workingSetChangedEventSchema, callback),
 
     onRenamed: (callback: (event: SessionRenamedEvent) => void) =>
-      on(IPC_CHANNELS.SESSION_RENAMED, (...args) => callback(args[0] as SessionRenamedEvent)),
+      onParsed(IPC_CHANNELS.SESSION_RENAMED, sessionRenamedEventSchema, callback),
 
     onCreated: (callback: (event: SessionCreatedEvent) => void) =>
-      on(IPC_CHANNELS.SESSION_CREATED, (...args) => callback(args[0] as SessionCreatedEvent)),
+      onParsed(IPC_CHANNELS.SESSION_CREATED, sessionCreatedEventSchema, callback),
 
     onUpdated: (callback: (event: SessionUpdatedEvent) => void) =>
-      on(IPC_CHANNELS.SESSION_UPDATED, (...args) => callback(args[0] as SessionUpdatedEvent)),
+      onParsed(IPC_CHANNELS.SESSION_UPDATED, sessionCreatedEventSchema, callback),
 
     onWorkspaceChanged: (callback: (event: SessionWorkspaceChangedEvent) => void) =>
-      on(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, (...args) =>
-        callback(args[0] as SessionWorkspaceChangedEvent),
-      ),
+      onParsed(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, sessionWorkspaceChangedEventSchema, callback),
 
     onSubagentsChanged: (callback: () => void) =>
       on(IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED, () => callback()),
 
     onTodosChanged: (callback: (event: SessionTodosChangedEvent) => void) =>
-      on(IPC_CHANNELS.SESSION_TODOS_CHANGED, (...args) =>
-        callback(args[0] as SessionTodosChangedEvent),
-      ),
+      onParsed(IPC_CHANNELS.SESSION_TODOS_CHANGED, sessionTodosChangedEventSchema, callback),
 
     onActivityChanged: (callback: (event: SessionActivityChangedEvent) => void) =>
-      on(IPC_CHANNELS.SESSION_ACTIVITY_CHANGED, (...args) =>
-        callback(args[0] as SessionActivityChangedEvent),
-      ),
+      onParsed(IPC_CHANNELS.SESSION_ACTIVITY_CHANGED, sessionActivityChangedEventSchema, callback),
   },
 
   tool: {
@@ -335,7 +407,7 @@ const orchidAPI: OrchidAPI = {
       invoke(IPC_CHANNELS.RAG_INDEX_STATE),
 
     onProgress: (callback: (progress: RAGIndexProgress) => void) =>
-      on(IPC_CHANNELS.RAG_PROGRESS, (...args) => callback(args[0] as RAGIndexProgress)),
+      onParsed(IPC_CHANNELS.RAG_PROGRESS, ragIndexProgressSchema, callback),
   },
 
   ast: {
@@ -349,7 +421,7 @@ const orchidAPI: OrchidAPI = {
       invoke(IPC_CHANNELS.AST_INDEX_STATE),
 
     onProgress: (callback: (progress: ASTIndexProgress) => void) =>
-      on(IPC_CHANNELS.AST_PROGRESS, (...args) => callback(args[0] as ASTIndexProgress)),
+      onParsed(IPC_CHANNELS.AST_PROGRESS, astIndexProgressSchema, callback),
   },
 
   bgCmd: {
@@ -357,6 +429,16 @@ const orchidAPI: OrchidAPI = {
       invoke(IPC_CHANNELS.BG_CMD_SNAPSHOT, request),
   },
 
+  updater: {
+    onStatus: (callback: (state: UpdaterState) => void) =>
+      onParsed(IPC_CHANNELS.UPDATER_STATUS_UPDATE, updaterStateSchema, callback),
+
+    onProgress: (callback: (event: UpdaterProgressEvent) => void) =>
+      onParsed(IPC_CHANNELS.UPDATER_PROGRESS, updaterProgressEventSchema, callback),
+
+    onError: (callback: (event: UpdaterErrorEvent) => void) =>
+      onParsed(IPC_CHANNELS.UPDATER_ERROR, updaterErrorEventSchema, callback),
+  },
 };
 
 // ── Expose to renderer ───────────────────────────────────────────────────────

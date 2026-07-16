@@ -218,6 +218,20 @@ export class BackgroundProcessStore {
     return { tail: entry.buffer.getTail(lastN), exitCode: entry.exitCode };
   }
 
+  /**
+   * Session-owned snapshot for UI IPC: any agentScopeId within the session
+   * (main or subagent). Does not require agentScopeId === 'main'.
+   */
+  snapshotForSession(
+    procId: number,
+    lastN: number | undefined,
+    sessionId: string,
+  ): { tail: string; exitCode: number | null } | undefined {
+    const entry = this._entries.get(procId);
+    if (!entry || entry.sessionId !== sessionId) return undefined;
+    return { tail: entry.buffer.getTail(lastN), exitCode: entry.exitCode };
+  }
+
   // -- input ---------------------------------------------------------------
 
   async send(procId: number, text: string): Promise<boolean> {

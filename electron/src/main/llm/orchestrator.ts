@@ -815,11 +815,25 @@ export function buildToolMap(
         description: definition.description,
         inputSchema: definition.inputSchema,
         execute: async (args: unknown) => {
+          // Mirror executeToolCall: abort on outer timeout so MCP SDK cancels
+          // the in-flight request instead of abandoning it after the race.
+          const timeoutAbort = new AbortController();
+          const parentAbort = dispatchOptions.abortSignal;
+          const combinedAbort =
+            parentAbort !== undefined
+              ? AbortSignal.any([parentAbort, timeoutAbort.signal])
+              : timeoutAbort.signal;
           try {
             const result = await runWithToolTimeout(
-              () => mcpManager.callTool(internalName, args),
+              () =>
+                mcpManager.callTool(internalName, args, {
+                  signal: combinedAbort,
+                }),
               internalName,
-              { timeoutSeconds: dispatchOptions.timeoutSeconds },
+              {
+                timeoutSeconds: dispatchOptions.timeoutSeconds,
+                abortController: timeoutAbort,
+              },
             );
             // MCP legacy: plain "Error:" string indicates failure
             if (typeof result === 'string' && result.startsWith('Error:')) {

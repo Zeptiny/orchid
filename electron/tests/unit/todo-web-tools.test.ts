@@ -775,6 +775,47 @@ describe('Web Fetch Tools', () => {
       }
     });
 
+    it('should cancel in-flight fetch when ctx.abortSignal aborts', async () => {
+      const originalFetch = globalThis.fetch;
+      let sawSignal: AbortSignal | undefined;
+      globalThis.fetch = vi.fn().mockImplementation(
+        (_url: string, init?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            sawSignal = init?.signal;
+            const onAbort = () => {
+              const error = new Error('The operation was aborted');
+              error.name = 'AbortError';
+              reject(error);
+            };
+            if (init?.signal?.aborted) {
+              onAbort();
+              return;
+            }
+            init?.signal?.addEventListener('abort', onAbort, { once: true });
+          }),
+      ) as unknown as typeof fetch;
+
+      try {
+        const { handler } = buildWebFetchTool();
+        const ac = new AbortController();
+        const pending = handler(
+          { url: 'https://example.com' },
+          { cwd: process.cwd(), abortSignal: ac.signal },
+        );
+        // Abort after the fetch has attached its listener
+        await Promise.resolve();
+        ac.abort();
+        const result = (await pending) as { display: string; content: string; isError?: boolean };
+
+        expect(sawSignal).toBeDefined();
+        expect(result.display).toBe('Fetch cancelled');
+        expect(result.content).toContain('cancelled');
+        expect(result.isError).toBe(true);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
     it('should handle HTTP errors', async () => {
       const originalFetch = globalThis.fetch;
       globalThis.fetch = vi.fn().mockResolvedValue({

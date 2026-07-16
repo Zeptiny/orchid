@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('electron', () => ({ ipcMain: mocks.ipcMain }));
-vi.mock('../../src/main/index', () => ({
+vi.mock('../../src/main/providers/runtime-context', () => ({
   getProviderCatalogStore: vi.fn(),
   getProviderConnectionStore: vi.fn(),
   getProviderCredentialVault: vi.fn(),

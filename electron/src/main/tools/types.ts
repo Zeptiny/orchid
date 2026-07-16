@@ -70,9 +70,17 @@ export interface ToolExecutionContext {
    */
   agentScopeId?: string;
   /**
-   * Abort signal for outer tool-dispatch timeout.
-   * Foreground process tools must kill the live ChildProcess handle on abort
-   * (never by bare PID after delay — PID reuse risk).
+   * Abort signal for outer tool-dispatch timeout / parent cancel.
+   *
+   * Honored by long-running / network tools that can cancel cooperatively:
+   * - `execute_command` — kills the live ChildProcess handle (never bare PID)
+   * - `web_fetch` — aborts the HTTP request
+   * - MCP `callTool` / `readResource` — cancels the in-flight SDK request
+   * - `wait_for_subagent` — unblocks wait without cancelling children
+   *
+   * Residual: pure sync FS tools (read/write/edit/glob/grep) and AST/RAG
+   * indexers do not cooperatively cancel mid-op; work may finish after the
+   * timed-out tool result is returned.
    */
   abortSignal?: AbortSignal;
 }

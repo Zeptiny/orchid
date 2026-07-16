@@ -316,6 +316,30 @@ describe('toApiMessages', () => {
       expect(result[2].tool_call_id).toBe('tc-1');
       expect(result[3].tool_call_id).toBe('tc-2');
     });
+
+    it('match-set only keeps surviving tool_call ids (partial filter)', () => {
+      // Only tc-1 received a result; tc-2 must be stripped from emitted
+      // tool_calls. Match-set is rebuilt from that surviving set (not the
+      // unfiltered msg.tool_calls) so pairing stays consistent with emit.
+      const tc1 = makeToolCall('tc-1', 'read');
+      const tc2 = makeToolCall('tc-2', 'grep');
+      const messages = [
+        makeUserMessage('Read and grep'),
+        makeAssistantToolCallMessage([tc1, tc2], 'Let me check'),
+        makeToolResultMessage('tc-1', 'file contents'),
+        // tc-2 dangling — interrupted before result
+        makeMessage({ role: MessageRole.ASSISTANT, content: 'Done with partial tools' }),
+      ];
+
+      const result = toApiMessages(messages);
+
+      expect(result).toHaveLength(4);
+      expect(result[1].tool_calls).toHaveLength(1);
+      expect(result[1].tool_calls![0].id).toBe('tc-1');
+      expect(result[1].tool_calls!.some((tc) => tc.id === 'tc-2')).toBe(false);
+      expect(result[2].tool_call_id).toBe('tc-1');
+      expect(result[3].content).toBe('Done with partial tools');
+    });
   });
 
   describe('THINKING replay', () => {
@@ -838,7 +862,11 @@ describe('ToolRegistry integration with dispatch', () => {
 
     await (firstBuild[aliases[0]] as any).execute({ query: 'routing check' });
 
-    expect(callTool).toHaveBeenCalledWith(internalNames[0], { query: 'routing check' });
+    expect(callTool).toHaveBeenCalledWith(
+      internalNames[0],
+      { query: 'routing check' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 });
 

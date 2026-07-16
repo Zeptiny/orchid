@@ -156,6 +156,57 @@ describe('SubagentManager runtime', () => {
     await record._runPromise;
   });
 
+  it('interrupt flushes in-flight partial assistant text into chain/result', async () => {
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'partial answer' };
+      await new Promise<void>((resolve) => {
+        const onAbort = () => {
+          params.abortSignal.removeEventListener('abort', onAbort);
+          resolve();
+        };
+        if (params.abortSignal.aborted) {
+          resolve();
+          return;
+        }
+        params.abortSignal.addEventListener('abort', onAbort);
+      });
+    });
+
+    const record = manager.spawn('t-partial', 'stream then cancel', testAgent, {
+      sessionId: 'session-partial',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(record.state).toBe(SubagentState.RUNNING);
+
+    expect(manager.cancelOne(record.id)).toBe(true);
+    await record._runPromise;
+
+    expect(record.state).toBe(SubagentState.INTERRUPTED);
+    expect(record.result).toBe('partial answer');
+    const texts =
+      record.chain?.messages
+        .filter((m) => m.type === 'text' && m.role === 'assistant')
+        .map((m) => m.content) ?? [];
+    expect(texts.some((t) => t?.includes('partial answer'))).toBe(true);
+    expect(record.chain?.status).toBe('interrupted');
+  });
+
+  it('chain.sessionId is parent session UUID, not subagent id', () => {
+    const parentSessionId = '550e8400-e29b-41d4-a716-446655440000';
+    const record = manager.spawn('explorer', 'inspect', testAgent, {
+      sessionId: parentSessionId,
+    });
+
+    expect(record.sessionId).toBe(parentSessionId);
+    expect(record.chain).not.toBeNull();
+    expect(record.chain!.sessionId).toBe(parentSessionId);
+    expect(record.chain!.sessionId).not.toBe(record.id);
+    expect(record.chain!.id).not.toBe(record.id);
+
+    const domain = runtimeToDomain(record);
+    expect(domain.chain?.sessionId).toBe(parentSessionId);
+  });
+
   it('without runner stays pending until markCompleted', () => {
     const record = manager.spawn('manual', 'task', testAgent);
     expect(record.state).toBe(SubagentState.PENDING);
@@ -195,6 +246,8 @@ describe('SubagentManager runtime', () => {
 
     expect(a.sessionId).toBe('session-a');
     expect(b.sessionId).toBe('session-b');
+    expect(a.chain?.sessionId).toBe('session-a');
+    expect(b.chain?.sessionId).toBe('session-b');
 
     const cancelled = manager.cancelRunning('session-a');
     expect(cancelled).toEqual([a.id]);

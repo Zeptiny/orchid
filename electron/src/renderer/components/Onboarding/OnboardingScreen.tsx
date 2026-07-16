@@ -6,7 +6,7 @@
  * auto-reopen; provider recovery after completion uses Settings.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ProviderModelOption } from '../../../shared/types/ipc';
+import type { ConfigPatch, ProviderModelOption } from '../../../shared/types/ipc';
 import type { ModelSelection } from '../../../shared/types/provider';
 import {
   RECOMMENDED_MCP_SERVERS,
@@ -229,7 +229,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
       }
 
       const mcpServers = selectedRecommendedMcpServers(selectedMcpIds);
-      const updates: Record<string, unknown> = {
+      const updates: ConfigPatch = {
         default_model: defaultModel,
         tier_models: tierModels,
         theme,

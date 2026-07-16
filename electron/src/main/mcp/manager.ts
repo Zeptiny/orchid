@@ -220,9 +220,14 @@ export class MCPManager {
    *
    * @param name - Fully-qualified tool name (e.g. "mcp::context7::read-docs").
    * @param args - Tool arguments (validated by the MCP server's input schema).
+   * @param options - Optional abort signal from tool-dispatch / parent cancel.
    * @returns Tool result content (text concatenated, non-text blocks noted).
    */
-  async callTool(name: string, args: unknown): Promise<unknown> {
+  async callTool(
+    name: string,
+    args: unknown,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown> {
     const { serverName, toolName } = this._parseToolName(name);
     const client = this._clients.get(serverName);
 
@@ -230,17 +235,41 @@ export class MCPManager {
       return `Error: MCP server '${serverName}' is not connected.`;
     }
 
+    if (options?.signal?.aborted) {
+      return `Error: MCP tool '${toolName}' was cancelled.`;
+    }
+
+    const timeoutAbort = new AbortController();
+    const combinedSignal =
+      options?.signal !== undefined
+        ? AbortSignal.any([options.signal, timeoutAbort.signal])
+        : timeoutAbort.signal;
+    const timeoutMessage = `MCP tool '${toolName}' on server '${serverName}' timed out after ${Math.round(this._perServerTimeout / 1000)}s`;
+
     let result: Awaited<ReturnType<typeof client.callTool>>;
     try {
       result = await this._withTimeout(
-        client.callTool({ name: toolName, arguments: args as Record<string, unknown> }),
+        client.callTool(
+          { name: toolName, arguments: args as Record<string, unknown> },
+          undefined,
+          { signal: combinedSignal },
+        ),
         this._perServerTimeout,
-        `MCP tool '${toolName}' on server '${serverName}' timed out after ${Math.round(this._perServerTimeout / 1000)}s`,
+        timeoutMessage,
+        timeoutAbort,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (message.toLowerCase().includes('timed out')) {
-        return `Error: ${message}`;
+      const name_ = err instanceof Error ? err.name : '';
+      if (options?.signal?.aborted && !timeoutAbort.signal.aborted) {
+        return `Error: MCP tool '${toolName}' was cancelled.`;
+      }
+      if (
+        message.toLowerCase().includes('timed out') ||
+        name_ === 'AbortError' ||
+        message.toLowerCase().includes('abort')
+      ) {
+        return `Error: ${timeoutMessage}`;
       }
       return `Error: MCP tool '${toolName}' failed: ${message}`;
     }
@@ -278,26 +307,51 @@ export class MCPManager {
    *
    * @param serverName - Name of the MCP server.
    * @param uri - Resource URI to read.
+   * @param options - Optional abort signal from tool-dispatch / parent cancel.
    * @returns Resource content as string.
    */
-  async readResource(serverName: string, uri: string): Promise<string> {
+  async readResource(
+    serverName: string,
+    uri: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<string> {
     const client = this._clients.get(serverName);
 
     if (client === undefined) {
       return `Error: MCP server '${serverName}' is not connected.`;
     }
 
+    if (options?.signal?.aborted) {
+      return `Error: MCP readResource '${uri}' was cancelled.`;
+    }
+
+    const timeoutAbort = new AbortController();
+    const combinedSignal =
+      options?.signal !== undefined
+        ? AbortSignal.any([options.signal, timeoutAbort.signal])
+        : timeoutAbort.signal;
+    const timeoutMessage = `MCP readResource '${uri}' on server '${serverName}' timed out after ${Math.round(this._perServerTimeout / 1000)}s`;
+
     let result: Awaited<ReturnType<typeof client.readResource>>;
     try {
       result = await this._withTimeout(
-        client.readResource({ uri }),
+        client.readResource({ uri }, { signal: combinedSignal }),
         this._perServerTimeout,
-        `MCP readResource '${uri}' on server '${serverName}' timed out after ${Math.round(this._perServerTimeout / 1000)}s`,
+        timeoutMessage,
+        timeoutAbort,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (message.toLowerCase().includes('timed out')) {
-        return `Error: ${message}`;
+      const name_ = err instanceof Error ? err.name : '';
+      if (options?.signal?.aborted && !timeoutAbort.signal.aborted) {
+        return `Error: MCP readResource '${uri}' was cancelled.`;
+      }
+      if (
+        message.toLowerCase().includes('timed out') ||
+        name_ === 'AbortError' ||
+        message.toLowerCase().includes('abort')
+      ) {
+        return `Error: ${timeoutMessage}`;
       }
       return `Error: MCP readResource '${uri}' failed: ${message}`;
     }
@@ -481,8 +535,10 @@ export class MCPManager {
           category: 'mcp',
         };
 
-        const handler: ToolHandler = async (input: unknown, _ctx) => {
-          const raw = await this.callTool(registryName, input);
+        const handler: ToolHandler = async (input: unknown, ctx) => {
+          const raw = await this.callTool(registryName, input, {
+            signal: ctx?.abortSignal,
+          });
           if (typeof raw === 'string' && raw.startsWith('Error:')) {
             return { content: raw, isError: true };
           }
@@ -601,8 +657,10 @@ export class MCPManager {
     promise: Promise<T>,
     ms: number,
     message: string,
+    abortController?: AbortController,
   ): Promise<T> {
     if (!Number.isFinite(ms) || ms <= 0) {
+      abortController?.abort();
       promise.then(() => undefined, () => undefined);
       return Promise.reject(new Error(message));
     }
@@ -611,6 +669,7 @@ export class MCPManager {
     const timeoutPromise = new Promise<T>((_, reject) => {
       timer = setTimeout(() => {
         timedOut = true;
+        abortController?.abort();
         reject(new Error(message));
       }, ms);
       if (typeof timer === 'object' && timer && 'unref' in timer) {

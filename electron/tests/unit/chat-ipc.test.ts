@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => {
     fromId: vi.fn(() => null),
   };
 
-  let activeSession: {
+  type MockSession = {
     id: string;
     name: string;
     model: string;
@@ -23,7 +23,9 @@ const mocks = vi.hoisted(() => {
     todoStore: { tasks: unknown[] };
     selection?: { connectionId: string; modelId: string } | null;
     modelLabel?: string;
-  } | null = null;
+  };
+  let activeSession: MockSession | null = null;
+  const sessionsById = new Map<string, MockSession>();
 
   let workspaceBound = true;
   const testProjectDir = '/tmp/orchid-chat-ipc-project';
@@ -146,11 +148,12 @@ const mocks = vi.hoisted(() => {
     clearActive: vi.fn(() => {
       activeSession = null;
     }),
-    create: vi.fn((model: string, options?: { cwd?: string | null }) => {
+    create: vi.fn((model: string | { connectionId: string; modelId: string }, options?: { cwd?: string | null }) => {
+      const modelLabel = typeof model === 'string' ? model : model.modelId;
       activeSession = {
         id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
         name: 'Session draft',
-        model,
+        model: modelLabel,
         cwd: options?.cwd ?? null,
         chains: [],
         activeChainId: null,
@@ -158,7 +161,10 @@ const mocks = vi.hoisted(() => {
         updatedAt: new Date().toISOString(),
         subagentChains: [],
         todoStore: { tasks: [] },
+        selection: typeof model === 'string' ? undefined : model,
+        modelLabel,
       };
+      sessionsById.set(activeSession.id, activeSession);
       return activeSession;
     }),
     changeCwd: vi.fn((id: string, cwd: string) => {
@@ -166,6 +172,7 @@ const mocks = vi.hoisted(() => {
         throw new Error(`Cannot change cwd: session ${id} is not active`);
       }
       activeSession = { ...activeSession, cwd };
+      sessionsById.set(id, activeSession);
       return activeSession;
     }),
     changeModel: vi.fn((
@@ -177,18 +184,26 @@ const mocks = vi.hoisted(() => {
         throw new Error(`Cannot change model: session ${id} is not active`);
       }
       activeSession = { ...activeSession, selection, model: modelLabel, modelLabel };
+      sessionsById.set(id, activeSession);
       return activeSession;
     }),
-    getSession: vi.fn((id: string) => activeSession?.id === id ? activeSession : null),
-    switchTo: vi.fn((id: string) => activeSession?.id === id ? activeSession : null),
-    startChain: vi.fn((params?: { messages?: unknown[] }) => {
-      if (!activeSession) return null;
+    getSession: vi.fn((id: string) => sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null)),
+    switchTo: vi.fn((id: string) => {
+      const session = sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null);
+      if (session) activeSession = session;
+      return session;
+    }),
+    startChain: vi.fn((params?: { messages?: unknown[]; }, sessionId?: string) => {
+      const target = sessionId
+        ? sessionsById.get(sessionId) ?? null
+        : activeSession;
+      if (!target) return null;
       const chain = {
-        id: `chain-${activeSession.chains.length + 1}`,
-        sessionId: activeSession.id,
+        id: `chain-${target.chains.length + 1}`,
+        sessionId: target.id,
         messages: params?.messages ?? [],
         status: 'active',
-        model: activeSession.model,
+        model: target.model,
         agentName: 'general',
         agentType: 'subagent',
         agentTier: 'bloom',
@@ -196,22 +211,28 @@ const mocks = vi.hoisted(() => {
         startTime: new Date().toISOString(),
         endTime: null,
       };
-      activeSession = {
-        ...activeSession,
-        chains: [...activeSession.chains, chain],
+      const updated = {
+        ...target,
+        chains: [...target.chains, chain],
         activeChainId: chain.id,
       };
+      sessionsById.set(updated.id, updated);
+      if (activeSession?.id === updated.id) activeSession = updated;
       return chain;
     }),
-    persistTurn: vi.fn((params: { messages: unknown[]; status?: string }) => {
-      if (!activeSession) return null;
+    persistTurn: vi.fn((params: { messages: unknown[]; status?: string }, sessionId?: string) => {
+      const target = sessionId
+        ? sessionsById.get(sessionId) ?? null
+        : activeSession;
+      if (!target) return null;
       const status = params.status ?? 'completed';
-      const activeId = activeSession.activeChainId;
+      const activeId = target.activeChainId;
       const idx = activeId
-        ? activeSession.chains.findIndex((c: { id: string }) => c.id === activeId)
+        ? target.chains.findIndex((c: { id: string }) => c.id === activeId)
         : -1;
+      let updated: MockSession;
       if (idx >= 0) {
-        const chains = activeSession.chains.map((c: { id: string }, i: number) =>
+        const chains = target.chains.map((c: { id: string }, i: number) =>
           i === idx
             ? {
                 ...c,
@@ -221,18 +242,18 @@ const mocks = vi.hoisted(() => {
               }
             : c,
         );
-        activeSession = {
-          ...activeSession,
+        updated = {
+          ...target,
           chains,
           activeChainId: null,
         };
       } else {
         const chain = {
-          id: `chain-${activeSession.chains.length + 1}`,
-          sessionId: activeSession.id,
+          id: `chain-${target.chains.length + 1}`,
+          sessionId: target.id,
           messages: params.messages,
           status,
-          model: activeSession.model,
+          model: target.model,
           agentName: 'general',
           agentType: 'subagent',
           agentTier: 'bloom',
@@ -240,13 +261,15 @@ const mocks = vi.hoisted(() => {
           startTime: new Date().toISOString(),
           endTime: new Date().toISOString(),
         };
-        activeSession = {
-          ...activeSession,
-          chains: [...activeSession.chains, chain],
+        updated = {
+          ...target,
+          chains: [...target.chains, chain],
           activeChainId: null,
         };
       }
-      return activeSession;
+      sessionsById.set(updated.id, updated);
+      if (activeSession?.id === updated.id) activeSession = updated;
+      return updated;
     }),
     autoNameActive: vi.fn(async () => activeSession),
     autoName: vi.fn(async (
@@ -261,6 +284,7 @@ const mocks = vi.hoisted(() => {
     /** Test helper: reset between cases */
     _reset: () => {
       activeSession = null;
+      sessionsById.clear();
       workspaceBound = true;
       workspaceByWindow.clear();
       sessionManager.getActive.mockClear();
@@ -276,8 +300,13 @@ const mocks = vi.hoisted(() => {
       sessionManager.autoName.mockClear();
     },
     /** Test helper: seed an active session without going through create(). */
-    _setActive: (session: typeof activeSession) => {
+    _setActive: (session: MockSession | null) => {
       activeSession = session;
+      if (session) sessionsById.set(session.id, session);
+    },
+    /** Test helper: register a session without selecting it for the window. */
+    _putSession: (session: MockSession) => {
+      sessionsById.set(session.id, session);
     },
   };
 
@@ -309,6 +338,51 @@ const mocks = vi.hoisted(() => {
       workspaceByWindow.set(windowId, cwd);
     },
     _testProjectDir: testProjectDir,
+  };
+
+  const backgroundEntries = new Map<number, {
+    sessionId: string | null;
+    agentScopeId: string;
+    tail: string;
+    exitCode: number | null;
+  }>();
+  const backgroundStore = {
+    entries: backgroundEntries,
+    terminateSession: vi.fn(),
+    snapshot: vi.fn((commandId: number, _lastN?: number) => {
+      const entry = backgroundEntries.get(commandId);
+      if (!entry) return undefined;
+      return { tail: entry.tail, exitCode: entry.exitCode };
+    }),
+    snapshotVisible: vi.fn((
+      commandId: number,
+      _lastN?: number,
+      sessionId?: string | null,
+      agentScopeId?: string,
+    ) => {
+      const entry = backgroundEntries.get(commandId);
+      if (!entry) return undefined;
+      if (entry.sessionId !== (sessionId ?? null)) return undefined;
+      if (entry.agentScopeId !== (agentScopeId ?? 'main')) return undefined;
+      return { tail: entry.tail, exitCode: entry.exitCode };
+    }),
+    snapshotForSession: vi.fn((
+      commandId: number,
+      _lastN: number | undefined,
+      sessionId: string,
+    ) => {
+      const entry = backgroundEntries.get(commandId);
+      if (!entry || entry.sessionId !== sessionId) return undefined;
+      return { tail: entry.tail, exitCode: entry.exitCode };
+    }),
+    list: vi.fn(() => []),
+    _reset: () => {
+      backgroundEntries.clear();
+      backgroundStore.terminateSession.mockClear();
+      backgroundStore.snapshot.mockClear();
+      backgroundStore.snapshotVisible.mockClear();
+      backgroundStore.snapshotForSession.mockClear();
+    },
   };
 
   return {
@@ -358,6 +432,7 @@ const mocks = vi.hoisted(() => {
     buildSystemPromptContext,
     mcpManager,
     accountingStore,
+    backgroundStore,
   };
 });
 
@@ -444,6 +519,12 @@ vi.mock('../../src/main/project/runtime', () => ({
   hydrateProjectRuntime: async <T>(runtime: T) => runtime,
 }));
 
+vi.mock('../../src/main/tools/process/background-store', () => ({
+  getBackgroundStore: () => mocks.backgroundStore,
+  setBackgroundStore: vi.fn(),
+  BackgroundProcessStore: vi.fn(),
+}));
+
 vi.mock('../../src/main/ipc/session-activity', () => ({
   publishSessionActivity: mocks.publishSessionActivity,
   completeSessionActivity: mocks.completeSessionActivity,
@@ -471,6 +552,7 @@ describe('chat session selection gate', () => {
     vi.clearAllMocks();
     mocks.runtimeRegistry._reset();
     mocks.sessionManager._reset();
+    mocks.backgroundStore._reset();
     chatIpc = await import('../../src/main/ipc/chat');
   });
 
@@ -500,6 +582,36 @@ describe('chat session selection gate', () => {
       preferred,
       preferred.modelId,
     );
+  });
+
+  it('resolves requestedSessionId via getSession without switchTo (M-P1-007)', () => {
+    const viewing = {
+      ...makeSession('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+      selection: {
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        modelId: 'viewing/model',
+      },
+    };
+    const background = {
+      ...makeSession('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
+      selection: {
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        modelId: 'background/model',
+      },
+    };
+    mocks.sessionManager._setActive(viewing);
+    mocks.sessionManager._putSession(background);
+
+    const result = chatIpc.ensureActiveSession(
+      { id: 907, send: vi.fn() } as never,
+      null,
+      background.id,
+    );
+
+    expect(result).toMatchObject({ ok: true, session: { id: background.id } });
+    expect(mocks.sessionManager.switchTo).not.toHaveBeenCalled();
+    expect(mocks.sessionManager.getSession).toHaveBeenCalledWith(background.id);
+    expect(mocks.sessionManager.getActive()).toMatchObject({ id: viewing.id });
   });
 });
 
@@ -1890,5 +2002,113 @@ describe('chat IPC teardown and bgcmd bounds', () => {
       { commandId: 999_999, lastN: 1000 },
     );
     expect(result).toEqual({ tail: '', exitCode: null });
+  });
+
+  it('bgcmd:snapshot denies cross-session command tails (M-P1-001)', async () => {
+    const ownerSession = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const otherSession = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    mocks.backgroundStore.entries.set(42, {
+      sessionId: ownerSession,
+      agentScopeId: 'main',
+      tail: 'secret-output\n',
+      exitCode: 0,
+    });
+
+    mocks.sessionManager._setActive({
+      ...makeSession(otherSession),
+      selection: {
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        modelId: 'vendor/path/model',
+      },
+    });
+
+    const snap = mocks.handlers.get(IPC_CHANNELS.BG_CMD_SNAPSHOT)!;
+    const denied = await snap(
+      { sender: { id: 913, send: vi.fn() } },
+      { commandId: 42, lastN: 50 },
+    );
+    expect(denied).toEqual({ tail: '', exitCode: null });
+
+    const allowed = await snap(
+      { sender: { id: 913, send: vi.fn() } },
+      { commandId: 42, lastN: 50, sessionId: ownerSession },
+    );
+    expect(allowed).toEqual({ tail: 'secret-output\n', exitCode: 0 });
+  });
+
+  it('bgcmd:snapshot allows subagent-scoped tails within the same session', async () => {
+    const ownerSession = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    mocks.backgroundStore.entries.set(43, {
+      sessionId: ownerSession,
+      agentScopeId: 'subagent-xyz',
+      tail: 'subagent-output\n',
+      exitCode: null,
+    });
+    mocks.sessionManager._setActive({
+      ...makeSession(ownerSession),
+      selection: {
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        modelId: 'vendor/path/model',
+      },
+    });
+
+    const snap = mocks.handlers.get(IPC_CHANNELS.BG_CMD_SNAPSHOT)!;
+    const result = await snap(
+      { sender: { id: 914, send: vi.fn() } },
+      { commandId: 43, lastN: 50 },
+    );
+    expect(result).toEqual({ tail: 'subagent-output\n', exitCode: null });
+  });
+});
+
+describe('chat:send draft single-flight (M-P1-013)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    mocks.streamResponses.length = 0;
+    mocks.streamEventSequences.length = 0;
+    mocks.runtimeRegistry._reset();
+    mocks.sessionManager._reset();
+    chatIpc = await import('../../src/main/ipc/chat');
+    chatIpc.registerChatIPC();
+  });
+
+  afterEach(() => {
+    chatIpc.unregisterChatIPC();
+    mocks.handlers.clear();
+    mocks.sessionManager._reset();
+  });
+
+  it('concurrent draft sends create only one session', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { type: 'content', text: 'ok' };
+      await new Promise((r) => setTimeout(r, 30));
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const webContents = { id: 920, send };
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+
+    const first = chatSend(
+      { sender: webContents },
+      { message: 'First draft send', model: selection },
+    );
+    const second = chatSend(
+      { sender: webContents },
+      { message: 'Second draft send', model: selection },
+    );
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(mocks.sessionManager.create).toHaveBeenCalledTimes(1);
+    const statuses = [firstResult, secondResult].map(
+      (r) => (r as { status: string }).status,
+    );
+    expect(statuses.filter((s) => s === 'started')).toHaveLength(1);
+    expect(statuses).toContain('error');
   });
 });

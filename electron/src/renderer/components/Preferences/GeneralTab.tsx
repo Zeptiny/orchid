@@ -8,6 +8,7 @@
  * Tier Models / RAG embedding model).
  */
 import { useCallback } from 'react';
+import type { ConfigPatch } from '../../../shared/types/ipc';
 import { THEMES, THEME_NAMES, type ThemeName } from '../../themes';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -35,7 +36,7 @@ export interface GeneralTabProps {
   maxToolSteps: number;
   /** When true, compact tool-activity groups start expanded. */
   alwaysExpandToolGroups: boolean;
-  onChange: (updates: Record<string, unknown>) => void;
+  onChange: (updates: ConfigPatch) => void;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────

@@ -240,25 +240,44 @@ export function buildWebFetchTool(
       return { display: 'Invalid URL', content: `Error: ${urlError}`, isError: true };
     }
 
-    // Fetch the URL
+    // Fetch the URL — combine outer tool-dispatch abort with the 30s HTTP budget
     let response: Response;
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort(), FETCH_TIMEOUT_MS);
+    if (typeof timeoutId === 'object' && timeoutId && 'unref' in timeoutId) {
+      (timeoutId as NodeJS.Timeout).unref();
+    }
+    const parentAbort = ctx?.abortSignal;
+    const fetchSignal =
+      parentAbort !== undefined
+        ? AbortSignal.any([parentAbort, timeoutController.signal])
+        : timeoutController.signal;
 
+    try {
       response = await fetch(url, {
-        signal: controller.signal,
+        signal: fetchSignal,
         headers: {
           'User-Agent': USER_AGENT,
           Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         },
         redirect: 'follow',
       });
-
-      clearTimeout(timeoutId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (message.includes('abort')) {
+      const name = err instanceof Error ? err.name : '';
+      const aborted =
+        name === 'AbortError' ||
+        message.toLowerCase().includes('abort') ||
+        fetchSignal.aborted;
+      if (aborted) {
+        // Prefer outer cancel over the local 30s budget when both could apply.
+        if (parentAbort?.aborted && !timeoutController.signal.aborted) {
+          return {
+            display: 'Fetch cancelled',
+            content: 'Error: Request was cancelled.',
+            isError: true,
+          };
+        }
         return {
           display: 'Fetch timed out',
           content: 'Error: Request timed out after 30 seconds.',
@@ -266,6 +285,16 @@ export function buildWebFetchTool(
         };
       }
       return { display: 'Fetch failed', content: `Error: ${message}`, isError: true };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    if (parentAbort?.aborted) {
+      return {
+        display: 'Fetch cancelled',
+        content: 'Error: Request was cancelled.',
+        isError: true,
+      };
     }
 
     // Check HTTP status
@@ -321,6 +350,14 @@ export function buildWebFetchTool(
         content:
           'Error: Summarize mode requires a summarize callback. ' +
           'Omit query to get the page content directly.',
+        isError: true,
+      };
+    }
+
+    if (parentAbort?.aborted) {
+      return {
+        display: 'Fetch cancelled',
+        content: 'Error: Request was cancelled.',
         isError: true,
       };
     }

@@ -5,7 +5,6 @@
  * late UI subscribers (tab switches / remounts) keep seeing updates.
  */
 import { BrowserWindow, ipcMain } from 'electron';
-import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { ASTIndexProgress } from '../../shared/types/ipc-boundary';
 import {
@@ -15,12 +14,7 @@ import {
 } from '../ast/indexer';
 import { ASTStore } from '../ast/store';
 import { resolveBoundProjectPath } from './session';
-
-// ── Zod validation schemas ───────────────────────────────────────────────────
-
-const astIndexSchema = z.object({
-  force: z.boolean().optional().default(false),
-});
+import { astIndexSchema } from './payload-schemas';
 
 function broadcastProgress(projectPath: string, progress: ASTIndexProgress): void {
   for (const win of BrowserWindow.getAllWindows()) {

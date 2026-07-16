@@ -177,8 +177,11 @@ export class FileLogger {
     console.debug = this.origDebug;
   }
 
-  /** Close the write stream. Call on app shutdown. */
-  close(): Promise<void> {
+  /**
+   * Close the write stream. Call on app shutdown.
+   * Races stream end with a short timeout so a stuck drain cannot hang quit.
+   */
+  close(timeoutMs = 2000): Promise<void> {
     return new Promise((resolve) => {
       if (!this.stream) {
         resolve();
@@ -186,7 +189,31 @@ export class FileLogger {
       }
       const s = this.stream;
       this.stream = null;
-      s.end(() => resolve());
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+
+      const timer = setTimeout(() => {
+        try {
+          s.destroy();
+        } catch {
+          // ignore destroy failures during forced close
+        }
+        finish();
+      }, timeoutMs);
+      if (typeof timer === 'object' && timer && 'unref' in timer) {
+        (timer as NodeJS.Timeout).unref();
+      }
+
+      const onDone = (): void => {
+        clearTimeout(timer);
+        finish();
+      };
+      s.once('error', onDone);
+      s.end(onDone);
     });
   }
 

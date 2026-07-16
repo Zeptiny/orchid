@@ -206,10 +206,14 @@ describe('MCPManager', () => {
         libraryName: 'react',
         query: 'hooks',
       });
-      expect(mockInstances[0].callTool).toHaveBeenCalledWith({
-        name: 'resolve-library-id',
-        arguments: { libraryName: 'react', query: 'hooks' },
-      });
+      expect(mockInstances[0].callTool).toHaveBeenCalledWith(
+        {
+          name: 'resolve-library-id',
+          arguments: { libraryName: 'react', query: 'hooks' },
+        },
+        undefined,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
       expect(result).toBe('library-id-123');
 
       // Shutdown clears all state
@@ -456,7 +460,10 @@ describe('MCPManager', () => {
 
       const content = await manager.readResource('docs-server', 'docs://api/reference');
       expect(content).toBe('# API Reference\n\nThis is the API reference.');
-      expect(mockInstances[0].readResource).toHaveBeenCalledWith({ uri: 'docs://api/reference' });
+      expect(mockInstances[0].readResource).toHaveBeenCalledWith(
+        { uri: 'docs://api/reference' },
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
 
       const listed = manager.listResources();
       expect(listed).toEqual([
@@ -515,6 +522,50 @@ describe('MCPManager', () => {
   // ---------------------------------------------------------------------------
 
   describe('callTool content handling', () => {
+    it('should pass abort signal into the MCP SDK callTool options', async () => {
+      enqueueMock({
+        listToolsResult: toolsResult([{ name: 'slow', description: 'Slow tool' }]),
+        listResourcesResult: [],
+      });
+
+      await manager.startAll({ server: makeStdioConfig() });
+
+      mockInstances[0].callTool.mockResolvedValueOnce(callToolResult('ok'));
+      const ac = new AbortController();
+      await manager.callTool('mcp::server::slow', { q: 1 }, { signal: ac.signal });
+
+      expect(mockInstances[0].callTool).toHaveBeenCalledWith(
+        { name: 'slow', arguments: { q: 1 } },
+        undefined,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+
+      // Outer abort is combined into the SDK signal
+      const sdkSignal = mockInstances[0].callTool.mock.calls[0][2].signal as AbortSignal;
+      expect(sdkSignal.aborted).toBe(false);
+      ac.abort();
+      expect(sdkSignal.aborted).toBe(true);
+
+      await manager.shutdown();
+    });
+
+    it('should return cancelled when already aborted before call', async () => {
+      enqueueMock({
+        listToolsResult: toolsResult([{ name: 'slow', description: 'Slow tool' }]),
+        listResourcesResult: [],
+      });
+
+      await manager.startAll({ server: makeStdioConfig() });
+
+      const ac = new AbortController();
+      ac.abort();
+      const result = await manager.callTool('mcp::server::slow', {}, { signal: ac.signal });
+      expect(result).toBe("Error: MCP tool 'slow' was cancelled.");
+      expect(mockInstances[0].callTool).not.toHaveBeenCalled();
+
+      await manager.shutdown();
+    });
+
     it('should concatenate multiple text blocks', async () => {
       enqueueMock({
         listToolsResult: toolsResult([{ name: 'multi-text', description: 'Multi text' }]),
@@ -694,17 +745,25 @@ describe('MCPManager', () => {
       // Each tool routes to the correct server
       mockInstances[0].callTool.mockResolvedValueOnce(callToolResult('library-123'));
       await manager.callTool('mcp::context7::resolve-library-id', { libraryName: 'react' });
-      expect(mockInstances[0].callTool).toHaveBeenCalledWith({
-        name: 'resolve-library-id',
-        arguments: { libraryName: 'react' },
-      });
+      expect(mockInstances[0].callTool).toHaveBeenCalledWith(
+        {
+          name: 'resolve-library-id',
+          arguments: { libraryName: 'react' },
+        },
+        undefined,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
 
       mockInstances[1].callTool.mockResolvedValueOnce(callToolResult('search results'));
       await manager.callTool('mcp::tavily::search', { query: 'MCP' });
-      expect(mockInstances[1].callTool).toHaveBeenCalledWith({
-        name: 'search',
-        arguments: { query: 'MCP' },
-      });
+      expect(mockInstances[1].callTool).toHaveBeenCalledWith(
+        {
+          name: 'search',
+          arguments: { query: 'MCP' },
+        },
+        undefined,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
 
       await manager.shutdown();
     });
@@ -731,10 +790,14 @@ describe('MCPManager', () => {
       const result = await tools[0].handler({ message: 'hello' });
       expect(result).toBe('echoed: hello');
 
-      expect(mockInstances[0].callTool).toHaveBeenCalledWith({
-        name: 'echo',
-        arguments: { message: 'hello' },
-      });
+      expect(mockInstances[0].callTool).toHaveBeenCalledWith(
+        {
+          name: 'echo',
+          arguments: { message: 'hello' },
+        },
+        undefined,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
 
       await manager.shutdown();
     });

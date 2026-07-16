@@ -6,7 +6,6 @@
  * fails closed for legacy provider aliases and secrets in the config document.
  */
 import { ipcMain } from 'electron';
-import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import {
   getConfig,
@@ -28,44 +27,7 @@ import {
 } from '../personality/registry';
 import { clearProjectRuntimeRegistry } from '../project/runtime';
 import { invalidateAllProjectMCPManagers } from '../mcp/project-registry';
-
-// ── Zod validation schemas ───────────────────────────────────────────────────
-
-/**
- * Known top-level config keys — extracted from configSchema so the IPC
- * boundary rejects typos like `{ providres: ... }` that would silently no-op.
- */
-const KNOWN_CONFIG_KEYS = new Set(Object.keys(configSchema.shape));
-
-/**
- * Accept partial config updates, including `null` tombstones for deleting
- * nested map entries.
- *
- * Top-level keys are validated against known config schema keys so typos
- * are rejected at the boundary rather than silently ignored.
- *
- * Structure is validated after deep-merge via `configSchema.parse`.
- */
-const configSaveSchema = z.object({
-  updates: z.record(z.string(), z.unknown()),
-}).strict().superRefine((data, ctx) => {
-  for (const key of Object.keys(data.updates)) {
-    if (!KNOWN_CONFIG_KEYS.has(key)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `Unknown config key: "${key}". Known keys: ${[...KNOWN_CONFIG_KEYS].sort().join(', ')}`,
-        path: ['updates', key],
-      });
-    }
-    if (key === 'providers') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Legacy provider aliases are no longer accepted in config:save. Use provider connections instead.',
-        path: ['updates', key],
-      });
-    }
-  }
-});
+import { configSaveSchema } from './payload-schemas';
 
 // ── Config save lock ────────────────────────────────────────────────────────
 

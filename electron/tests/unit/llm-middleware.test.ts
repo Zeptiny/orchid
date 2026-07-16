@@ -224,11 +224,16 @@ describe('Retry guard: no retry after content delivered', () => {
     const doStream = async () => {
       doStreamCalls++;
       if (doStreamCalls === 1) {
-        // First call: stream that yields content then throws
+        // Yield content, then error on a later pull so contentDelivered is
+        // set before the failure (sync enqueue+error can surface as error-first).
+        let pulled = 0;
         const stream = new ReadableStream<LanguageModelV4StreamPart>({
-          start(controller) {
-            controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
-            // Simulate a mid-stream error after content was delivered
+          pull(controller) {
+            pulled++;
+            if (pulled === 1) {
+              controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
+              return;
+            }
             controller.error(createHttpError('Rate limit mid-stream', 429));
           },
         });
@@ -251,14 +256,114 @@ describe('Retry guard: no retry after content delivered', () => {
       model: mockModel(),
     });
 
-    // The stream should error when we try to read it
     const reader = result.stream.getReader();
-    const firstRead = reader.read();
-    await expect(firstRead).rejects.toThrow('Rate limit mid-stream');
+    // Content is delivered first
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(first.value).toEqual({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
+    // Then the mid-stream error propagates without retry
+    await expect(reader.read()).rejects.toThrow('Rate limit mid-stream');
 
     // Should NOT have retried (only 1 doStream call)
     expect(doStreamCalls).toBe(1);
   });
+
+  it('does not retry mid-stream after tool-call content was delivered', async () => {
+    vi.useRealTimers();
+    const middleware = createRetryMiddleware({ maxRetries: 3 });
+
+    let doStreamCalls = 0;
+    const doStream = async () => {
+      doStreamCalls++;
+      if (doStreamCalls === 1) {
+        let pulled = 0;
+        const stream = new ReadableStream<LanguageModelV4StreamPart>({
+          pull(controller) {
+            pulled++;
+            if (pulled === 1) {
+              controller.enqueue({
+                type: 'tool-input-start',
+                id: 'call-1',
+                toolName: 'read',
+              } as LanguageModelV4StreamPart);
+              return;
+            }
+            controller.error(createHttpError('Rate limit after tool start', 429));
+          },
+        });
+        return {
+          stream,
+          rawCall: { rawPrompt: '', rawSettings: {} },
+          rawResponse: {},
+          request: { body: '{}' },
+          response: {},
+        };
+      }
+      return createMockDoStream([])();
+    };
+
+    const result = await middleware.wrapStream!({
+      doStream,
+      doGenerate: mockDoGenerate,
+      params: mockParams(),
+      model: mockModel(),
+    });
+
+    const reader = result.stream.getReader();
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(first.value?.type).toBe('tool-input-start');
+    await expect(reader.read()).rejects.toThrow('Rate limit after tool start');
+    expect(doStreamCalls).toBe(1);
+  });
+
+  it('retries mid-stream transient error when no content was delivered yet', async () => {
+    vi.useRealTimers();
+    const middleware = createRetryMiddleware({ maxRetries: 3 });
+
+    let doStreamCalls = 0;
+    const doStream = async () => {
+      doStreamCalls++;
+      if (doStreamCalls === 1) {
+        // Pre-content drop: stream errors before any text-delta
+        const stream = new ReadableStream<LanguageModelV4StreamPart>({
+          start(controller) {
+            controller.error(createHttpError('Connection reset before tokens', 502));
+          },
+        });
+        return {
+          stream,
+          rawCall: { rawPrompt: '', rawSettings: {} },
+          rawResponse: {},
+          request: { body: '{}' },
+          response: {},
+        };
+      }
+      return createMockDoStream([
+        { type: 'text-delta', id: 'txt-0', delta: 'Recovered' },
+        {
+          type: 'finish',
+          finishReason: 'stop',
+          usage: {
+            inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 1, textTokens: 1, reasoningTokens: undefined },
+            totalTokens: 2,
+          },
+        },
+      ])();
+    };
+
+    const result = await middleware.wrapStream!({
+      doStream,
+      doGenerate: mockDoGenerate,
+      params: mockParams(),
+      model: mockModel(),
+    });
+
+    const collected = await collectStream(result.stream);
+    expect(collected[0]).toEqual({ type: 'text-delta', id: 'txt-0', delta: 'Recovered' });
+    expect(doStreamCalls).toBe(2);
+  }, 10000);
 });
 
 // ---------------------------------------------------------------------------

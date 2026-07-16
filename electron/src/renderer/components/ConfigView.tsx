@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DefinitionsListResult } from '../../shared/types/definitions';
 import type { Config } from '../../shared/types/ipc-boundary';
-import type { ConfigDiagnostic } from '../../shared/types/ipc';
+import type { ConfigDiagnostic, ConfigPatch } from '../../shared/types/ipc';
 import { AgentsTab } from './Preferences/AgentsTab';
 import { GeneralTab } from './Preferences/GeneralTab';
 import { MCPServersTab } from './Preferences/MCPServersTab';
@@ -62,7 +62,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
   const [error, setError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<ConfigDiagnostic[]>([]);
   const [originalConfig, setOriginalConfig] = useState<Config | null>(null);
-  const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const [draft, setDraft] = useState<ConfigPatch>({});
   const [personalities, setPersonalities] = useState<string[]>([]);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [showRestartDialog, setShowRestartDialog] = useState(false);
@@ -206,7 +206,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
     return { ...originalConfig, ...draft } as Config;
   }, [originalConfig, draft]);
 
-  const updateDraft = useCallback((updates: Record<string, unknown>) => {
+  const updateDraft = useCallback((updates: ConfigPatch) => {
     setDraft((prev) => ({ ...prev, ...updates }));
   }, []);
 
@@ -222,7 +222,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
       // still apply under PATCH-style merge.
       const updates = withMapDeletionTombstones(draft, originalConfig);
       await window.orchid.config.save({
-        updates: updates as Partial<Config>,
+        updates,
       });
       if (typeof updates.theme === 'string') {
         window.dispatchEvent(new CustomEvent('orchid:set-theme', {
@@ -474,7 +474,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
 function renderTab(
   activeTab: TabId,
   config: Config,
-  updateDraft: (updates: Record<string, unknown>) => void,
+  updateDraft: (updates: ConfigPatch) => void,
   personalities: readonly string[] = [],
   definitions: DefinitionsListResult | null = null,
   _defsLoading = false,

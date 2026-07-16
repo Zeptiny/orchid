@@ -15,7 +15,7 @@ import { interruptMachine } from '../agents/xstate/interrupt-machine';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
 import { createMiddlewareStack } from '../llm/middleware';
 import { AgentType, type Agent } from '../../shared/types/agent';
-import { modelSelectionSchema, type ModelSelection } from '../../shared/types/provider';
+import type { ModelSelection } from '../../shared/types/provider';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import type { Message, Usage } from '../../shared/types/message';
@@ -73,28 +73,12 @@ import { getProviderAccountingStore } from '../providers/accounting/store';
 import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
 import { importESM } from '../utils/esm-import';
 import { getTierModelSelection } from '../config/loader';
-
-// ── Zod validation schemas ───────────────────────────────────────────────────
-
-const chatSendSchema = z.object({
-  message: z.string().min(1, 'Message must be non-empty'),
-  sessionId: z.string().uuid().optional(),
-  /** Preferred model when lazy-creating a session from draft mode. */
-  model: modelSelectionSchema.nullable().optional(),
-  draftGeneration: z.number().int().nonnegative().optional(),
-});
-
-const chatCancelSchema = z.object({
-  sessionId: z.string().uuid().optional(),
-});
-
-const chatSnapshotSchema = z.object({
-  sessionId: z.string().uuid().optional(),
-});
-
-const chatStopSchema = z.object({
-  sessionId: z.string().uuid(),
-});
+import {
+  chatCancelSchema,
+  chatSendSchema,
+  chatSnapshotSchema,
+  chatStopSchema,
+} from './payload-schemas';
 
 /** Upper bound for bgcmd:snapshot lastN (prevents unbounded payload reads). */
 const BG_CMD_SNAPSHOT_MAX_LAST_N = 1000;
@@ -102,6 +86,8 @@ const BG_CMD_SNAPSHOT_MAX_LAST_N = 1000;
 const bgCommandSnapshotSchema = z.object({
   commandId: z.number().int().positive(),
   lastN: z.number().int().positive().max(BG_CMD_SNAPSHOT_MAX_LAST_N).optional(),
+  /** Owning session; when omitted, resolved from the calling window's active session. */
+  sessionId: z.string().uuid().optional(),
 });
 
 // ── Active actor tracking ────────────────────────────────────────────────────
@@ -158,6 +144,19 @@ type ActiveAgent = {
 
 const activeAgents = new Map<string, ActiveAgent>();
 const sessionsStarting = new Set<string>();
+/**
+ * Single-flight draft session create per window. Concurrent first sends from
+ * draft mode share one in-flight ensure promise so only one session is created.
+ */
+const draftEnsureByWindow = new Map<
+  string,
+  Promise<{
+    ok: true;
+    cwd: string;
+    session: import('../../shared/types/session').Session;
+    runtime: ProjectRuntime;
+  } | { ok: false; result: ChatSendResult }>
+>();
 
 /**
  * Per-session generation counter. Incremented on every new chat:send and on
@@ -553,10 +552,22 @@ function canSend(webContents: WebContents): boolean {
   return typeof webContents.isDestroyed !== 'function' || !webContents.isDestroyed();
 }
 
+type EnsureActiveSessionResult =
+  | {
+      ok: true;
+      cwd: string;
+      session: import('../../shared/types/session').Session;
+      runtime: ProjectRuntime;
+    }
+  | { ok: false; result: ChatSendResult };
+
 /**
- * Ensure there is an active session before streaming/persisting.
+ * Ensure there is a session ready before streaming/persisting.
  * Draft mode leaves no active session until the first chat:send — create
  * lazily here and notify the renderer so the sidebar gains a list entry.
+ *
+ * When `requestedSessionId` is set, resolves that session by id without
+ * changing the window's active selection (mid-flight / background sends).
  *
  * Requires a valid workspace (draft → session → sticky default). Never uses
  * process.cwd() as the product default. If unbound, does not create a session.
@@ -568,29 +579,22 @@ export function ensureActiveSession(
   preferredModel?: ModelSelection | null,
   requestedSessionId?: string,
   draftGeneration?: number,
-): {
-  ok: true;
-  cwd: string;
-  session: import('../../shared/types/session').Session;
-  runtime: ProjectRuntime;
-} | { ok: false; result: ChatSendResult } {
+): EnsureActiveSessionResult {
   const windowId = String(webContents.id);
   const manager = getSessionManager();
-  let active = manager.getActive(windowId);
-  if (requestedSessionId) {
-    if (active?.id !== requestedSessionId) {
-      active = manager.switchTo(requestedSessionId, windowId);
-    }
-    if (!active) {
-      return {
-        ok: false,
-        result: {
-          status: 'error',
-          error: 'The requested session no longer exists.',
-          kind: 'session_not_found',
-        },
-      };
-    }
+  // Resolve by id without switchTo — do not steal window selection mid-flight.
+  let active = requestedSessionId
+    ? manager.getSession(requestedSessionId)
+    : manager.getActive(windowId);
+  if (requestedSessionId && !active) {
+    return {
+      ok: false,
+      result: {
+        status: 'error',
+        error: 'The requested session no longer exists.',
+        kind: 'session_not_found',
+      },
+    };
   }
   const workspace = resolveWindowWorkspace(windowId);
 
@@ -624,18 +628,31 @@ export function ensureActiveSession(
     };
   }
 
+  // Draft path: re-check in case a concurrent first-send just created a session.
+  if (!active) {
+    active = manager.getActive(windowId);
+  }
+
   if (active) {
+    const selectedNow = manager.getActive(windowId)?.id === active.id;
     // Legacy sessions may have null/empty cwd while the window workspace is
-    // bound via sticky/draft. Persist that cwd onto the session before tools run.
-    if (!active.cwd || active.cwd.trim() === '') {
+    // bound via sticky/draft. Persist that cwd only when this window has the
+    // session selected (changeCwd requires selection; never switchTo to force it).
+    if (selectedNow && (!active.cwd || active.cwd.trim() === '')) {
       manager.changeCwd(active.id, boundCwd);
+      active = manager.getSession(active.id) ?? { ...active, cwd: boundCwd };
     }
     if (preferredModel && (
       active.selection?.connectionId !== preferredModel.connectionId
-      || active.selection.modelId !== preferredModel.modelId
+      || active.selection?.modelId !== preferredModel.modelId
     )) {
-      manager.changeModel(active.id, preferredModel, preferredModel.modelId);
-      active = manager.getSession(active.id) ?? { ...active, selection: preferredModel };
+      if (selectedNow) {
+        manager.changeModel(active.id, preferredModel, preferredModel.modelId);
+        active = manager.getSession(active.id) ?? { ...active, selection: preferredModel };
+      } else {
+        // Turn-local override only — do not steal selection to persist.
+        active = { ...active, selection: preferredModel };
+      }
     }
     return { ok: true, cwd: boundCwd, session: active, runtime };
   }
@@ -653,6 +670,61 @@ export function ensureActiveSession(
     webContents.send(IPC_CHANNELS.SESSION_CREATED, { session, draftGeneration });
   }
   return { ok: true, cwd: boundCwd, session, runtime };
+}
+
+/**
+ * Window-level single-flight for draft first-send. Concurrent chat:send without
+ * sessionId share one ensure promise so only one session is created.
+ */
+function ensureActiveSessionSingleFlight(
+  webContents: WebContents,
+  preferredModel?: ModelSelection | null,
+  requestedSessionId?: string,
+  draftGeneration?: number,
+): EnsureActiveSessionResult | Promise<EnsureActiveSessionResult> {
+  const windowId = String(webContents.id);
+  const manager = getSessionManager();
+  // Existing session or explicit id: no draft create race.
+  if (requestedSessionId || manager.getActive(windowId)) {
+    return ensureActiveSession(
+      webContents,
+      preferredModel,
+      requestedSessionId,
+      draftGeneration,
+    );
+  }
+
+  const inflight = draftEnsureByWindow.get(windowId);
+  if (inflight) return inflight;
+
+  let resolveFlight!: (value: EnsureActiveSessionResult) => void;
+  let rejectFlight!: (reason: unknown) => void;
+  const flight = new Promise<EnsureActiveSessionResult>((resolve, reject) => {
+    resolveFlight = resolve;
+    rejectFlight = reject;
+  });
+  draftEnsureByWindow.set(windowId, flight);
+
+  try {
+    const result = ensureActiveSession(
+      webContents,
+      preferredModel,
+      requestedSessionId,
+      draftGeneration,
+    );
+    resolveFlight(result);
+  } catch (error) {
+    rejectFlight(error);
+    draftEnsureByWindow.delete(windowId);
+    throw error;
+  } finally {
+    queueMicrotask(() => {
+      if (draftEnsureByWindow.get(windowId) === flight) {
+        draftEnsureByWindow.delete(windowId);
+      }
+    });
+  }
+  return flight;
 }
 
 function classifyErrorKind(title: string | null | undefined, detail: string): ChatErrorKind {
@@ -902,11 +974,15 @@ export function registerChatIPC(): void {
     // Lazy session create + workspace gate (R2/R3): require valid workspace;
     // create with that cwd; if unbound, fail without streaming.
     // Resolves the session and captures its project runtime before actor setup.
-    const sessionGate = ensureActiveSession(
-      webContents,
-      preferredModel,
-      requestedSessionId,
-      parsed.data.draftGeneration,
+    // Draft first-send uses window single-flight so concurrent sends do not
+    // create duplicate sessions.
+    const sessionGate = await Promise.resolve(
+      ensureActiveSessionSingleFlight(
+        webContents,
+        preferredModel,
+        requestedSessionId,
+        parsed.data.draftGeneration,
+      ),
     );
     if (!sessionGate.ok) {
       return sessionGate.result;
@@ -1745,17 +1821,24 @@ export function registerChatIPC(): void {
     return { status: 'no_active_stream' };
   });
 
-  // bgcmd:snapshot — get background command output snapshot
-  ipcMain.handle(IPC_CHANNELS.BG_CMD_SNAPSHOT, async (_event, payload: unknown) => {
+  // bgcmd:snapshot — get background command output snapshot (session-scoped)
+  ipcMain.handle(IPC_CHANNELS.BG_CMD_SNAPSHOT, async (event, payload: unknown) => {
     const parsed = bgCommandSnapshotSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid bgcmd:snapshot payload: ${parsed.error.message}`);
     }
 
-    const { commandId, lastN } = parsed.data;
-    const store = getBackgroundStore();
-    const snap = store.snapshot(commandId, lastN ?? 50);
+    const { commandId, lastN, sessionId: requestedSessionId } = parsed.data;
+    const windowId = String(event.sender.id);
+    const sessionId =
+      requestedSessionId ?? getSessionManager().getActive(windowId)?.id ?? null;
+    if (!sessionId) {
+      return { tail: '', exitCode: null };
+    }
 
+    const store = getBackgroundStore();
+    // Session ownership only — include main and subagent-scoped bgcmds.
+    const snap = store.snapshotForSession(commandId, lastN ?? 50, sessionId);
     if (!snap) {
       return { tail: '', exitCode: null };
     }
@@ -1782,6 +1865,7 @@ export function unregisterChatIPC(): void {
   }
   activeAgents.clear();
   sessionsStarting.clear();
+  draftEnsureByWindow.clear();
   agentGenerations.clear();
   clearAllChatHistory();
 }

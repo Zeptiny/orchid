@@ -720,7 +720,7 @@ describe('Domain Models: Tool storage dict', () => {
 // ── Multi-chain helpers ─────────────────────────────────────────────────────
 
 describe('Domain Models: multi-chain helpers', () => {
-  it('accepts Python running status as ACTIVE and serializes FAILED', () => {
+  it('migrates Python running/active → INTERRUPTED on restore and serializes FAILED', () => {
     const restored = chainFromStorageDict({
       id: 'c1',
       status: 'running',
@@ -728,7 +728,20 @@ describe('Domain Models: multi-chain helpers', () => {
       selection: DEFAULT_SELECTION,
       modelLabel: DEFAULT_SELECTION.modelId,
     });
-    expect(restored.status).toBe(ChainStatus.ACTIVE);
+    // ACTIVE cannot survive restore — process is gone (mirrors subagent migration)
+    expect(restored.status).toBe(ChainStatus.INTERRUPTED);
+    expect(restored.endTime).toBeTruthy();
+
+    const activeRestored = chainFromStorageDict({
+      id: 'c2',
+      status: 'active',
+      messages: [],
+      selection: DEFAULT_SELECTION,
+      modelLabel: DEFAULT_SELECTION.modelId,
+      endTime: '2026-07-10T12:00:00.000Z',
+    });
+    expect(activeRestored.status).toBe(ChainStatus.INTERRUPTED);
+    expect(activeRestored.endTime).toBe('2026-07-10T12:00:00.000Z');
 
     const failed = makeChain({ status: ChainStatus.FAILED });
     const dict = chainToStorageDict(failed);

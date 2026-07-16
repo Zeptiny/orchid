@@ -5,7 +5,6 @@
  * late UI subscribers (tab switches / remounts) keep seeing updates.
  */
 import { BrowserWindow, ipcMain } from 'electron';
-import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { RAGIndexProgress } from '../../shared/types/ipc-boundary';
 import {
@@ -17,12 +16,7 @@ import {
 } from '../rag/indexer';
 import { resolveBoundProjectPath } from './session';
 import { getProjectRuntimeRegistry } from '../project/runtime';
-
-// ── Zod validation schemas ───────────────────────────────────────────────────
-
-const ragIndexSchema = z.object({
-  force: z.boolean().optional().default(false),
-});
+import { ragIndexSchema } from './payload-schemas';
 
 function broadcastProgress(projectPath: string, progress: RAGIndexProgress): void {
   for (const win of BrowserWindow.getAllWindows()) {
