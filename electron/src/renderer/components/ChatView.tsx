@@ -241,9 +241,9 @@ export function ChatView() {
 
       const gen = ++sessionSwitchGen.current;
 
-      // Optimistically clear the pane so stale messages never linger while
-      // the next session loads (or if load fails).
-      chat.setMessages([]);
+      // Rebind stream affinity before the async load so previous-session
+      // events cannot repopulate the pane during navigation.
+      chat.beginSessionSwitch(id);
       setDraftTabVisible(false);
 
       const loadedSession = await session.load(id);
@@ -253,6 +253,7 @@ export function ChatView() {
       }
       if (!loadedSession) {
         console.error('Failed to load session:', id);
+        chat.hydrateSnapshot(null);
         return;
       }
       applySessionMessages(loadedSession);
@@ -271,7 +272,7 @@ export function ChatView() {
 
   const enterDraftMode = useCallback(async (opts?: { clearComposer?: boolean }) => {
     const gen = ++sessionSwitchGen.current;
-    chat.setMessages([]);
+    chat.beginSessionSwitch(null);
     await session.enterDraft();
     if (gen !== sessionSwitchGen.current) return;
     applySessionMessages(null);
@@ -499,7 +500,7 @@ export function ChatView() {
     if (info?.status === 'valid' && info.cwd) {
       if (startsDraft) {
         ++sessionSwitchGen.current;
-        chat.setMessages([]);
+        chat.beginSessionSwitch(null);
         applySessionMessages(null);
         setDraftTabVisible(true);
         setComposerDraftKey((k) => k + 1);

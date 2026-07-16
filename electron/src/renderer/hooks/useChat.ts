@@ -24,6 +24,7 @@ import type {
   ChatToolCallStartEvent,
   ChatToolCallUpdateEvent,
   ChatSnapshot,
+  ChatSessionSnapshot,
 } from '../../shared/types/ipc';
 import {
   type ContextBreakdown,
@@ -120,9 +121,11 @@ export interface UseChatReturn extends ChatState {
    */
   setMessages: (messages: Message[]) => void;
   /** Read live state for a session without changing selection. */
-  getSnapshot: (sessionId: string) => Promise<ChatSnapshot | null>;
+  getSnapshot: (sessionId: string) => Promise<ChatSessionSnapshot | null>;
+  /** Bind event affinity immediately and buffer the target while it hydrates. */
+  beginSessionSwitch: (sessionId: string | null) => void;
   /** Apply a snapshot after the caller has committed a session selection. */
-  hydrateSnapshot: (snapshot: ChatSnapshot | null) => void;
+  hydrateSnapshot: (snapshot: ChatSessionSnapshot | null) => void;
 }
 
 export interface ChatEventAffinity {
@@ -148,6 +151,23 @@ export function acceptChatEvent(
   affinity.streamTurnId = event.turnId;
   affinity.lastSequence = event.sequence;
   return true;
+}
+
+export function bindChatSession(
+  affinity: ChatEventAffinity,
+  sessionId: string | null,
+): void {
+  affinity.selectedSessionId = sessionId;
+  affinity.streamSessionId = sessionId;
+  affinity.streamTurnId = null;
+  affinity.lastSequence = -1;
+}
+
+export function shouldBufferChatEvent(
+  hydratingSessionId: string | null,
+  event: { sessionId: string },
+): boolean {
+  return hydratingSessionId != null && event.sessionId === hydratingSessionId;
 }
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
@@ -205,6 +225,10 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const streamTurnIdRef = useRef<string | null>(null);
   const lastSequenceRef = useRef(-1);
   const priorActiveSessionIdRef = useRef<string | null>(activeSessionId);
+  const hydrationRef = useRef<{
+    sessionId: string;
+    events: Array<() => void>;
+  } | null>(null);
 
   useEffect(() => {
     const switchedSession = priorActiveSessionIdRef.current !== activeSessionId;
@@ -235,6 +259,18 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     streamTurnIdRef.current = affinity.streamTurnId;
     lastSequenceRef.current = affinity.lastSequence;
     return accepted;
+  }, []);
+
+  const deliverEvent = useCallback((
+    event: { sessionId: string },
+    apply: () => void,
+  ) => {
+    const hydration = hydrationRef.current;
+    if (shouldBufferChatEvent(hydration?.sessionId ?? null, event)) {
+      hydration?.events.push(apply);
+      return;
+    }
+    apply();
   }, []);
 
   /**
@@ -293,34 +329,14 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     }
 
     const unsubChunk = window.orchid.chat.onChunk((event: ChatChunkEvent) => {
-      if (!acceptsEvent(event)) return;
-      accumulatedContentRef.current += event.data;
-      setStreamingContent(accumulatedContentRef.current);
-      // Append to last text segment, or open a new one (preserves tool→text→tool order).
-      applyStreamSegments((prev) => {
-        const last = prev[prev.length - 1];
-        if (last?.kind === 'text') {
-          return [
-            ...prev.slice(0, -1),
-            { ...last, content: last.content + event.data },
-          ];
-        }
-        return [
-          ...prev,
-          { kind: 'text', id: crypto.randomUUID(), content: event.data },
-        ];
-      });
-    });
-
-    const unsubThinking =
-      window.orchid.chat.onThinking?.((event: ChatThinkingEvent) => {
+      deliverEvent(event, () => {
         if (!acceptsEvent(event)) return;
-        accumulatedThinkingRef.current += event.data;
-        setStreamingThinking(accumulatedThinkingRef.current);
-        // Chronological thinking segments → Thought widgets in ChatStream
+        accumulatedContentRef.current += event.data;
+        setStreamingContent(accumulatedContentRef.current);
+        // Append to last text segment, or open a new one (preserves tool→text→tool order).
         applyStreamSegments((prev) => {
           const last = prev[prev.length - 1];
-          if (last?.kind === 'thinking') {
+          if (last?.kind === 'text') {
             return [
               ...prev.slice(0, -1),
               { ...last, content: last.content + event.data },
@@ -328,35 +344,62 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           }
           return [
             ...prev,
-            { kind: 'thinking', id: crypto.randomUUID(), content: event.data },
+            { kind: 'text', id: crypto.randomUUID(), content: event.data },
           ];
+        });
+      });
+    });
+
+    const unsubThinking =
+      window.orchid.chat.onThinking?.((event: ChatThinkingEvent) => {
+        deliverEvent(event, () => {
+          if (!acceptsEvent(event)) return;
+          accumulatedThinkingRef.current += event.data;
+          setStreamingThinking(accumulatedThinkingRef.current);
+          // Chronological thinking segments → Thought widgets in ChatStream
+          applyStreamSegments((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.kind === 'thinking') {
+              return [
+                ...prev.slice(0, -1),
+                { ...last, content: last.content + event.data },
+              ];
+            }
+            return [
+              ...prev,
+              { kind: 'thinking', id: crypto.randomUUID(), content: event.data },
+            ];
+          });
         });
       }) ?? (() => {});
 
     const unsubState = window.orchid.chat.onState((event: ChatStateEvent) => {
-      if (!acceptsEvent(event)) return;
-      if (event.state === 'streaming') {
-        setStatus('streaming');
-      } else if (event.state === 'error') {
-        setStatus('error');
-        setError(event.error);
-      } else if (event.state === 'idle') {
-        setStatus('idle');
-        // Stream finished from main — allow another send
-        isSendingRef.current = false;
-      }
-      // Track interrupt confirmation phase from main process (authoritative for
-      // confirmAgent / confirmSubagents; do not let onDone clobber this).
-      if (event.interruptState) {
-        setInterruptState(event.interruptState);
-      }
-      // Track working directory from main process
-      if (event.cwd) {
-        setCwd(event.cwd);
-      }
+      deliverEvent(event, () => {
+        if (!acceptsEvent(event)) return;
+        if (event.state === 'streaming') {
+          setStatus('streaming');
+        } else if (event.state === 'error') {
+          setStatus('error');
+          setError(event.error);
+        } else if (event.state === 'idle') {
+          setStatus('idle');
+          // Stream finished from main — allow another send
+          isSendingRef.current = false;
+        }
+        // Track interrupt confirmation phase from main process (authoritative for
+        // confirmAgent / confirmSubagents; do not let onDone clobber this).
+        if (event.interruptState) {
+          setInterruptState(event.interruptState);
+        }
+        // Track working directory from main process
+        if (event.cwd) {
+          setCwd(event.cwd);
+        }
+      });
     });
 
     const unsubDone = window.orchid.chat.onDone((event: ChatDoneEvent) => {
+      deliverEvent(event, () => {
       if (!acceptsEvent(event)) return;
       if (event.usage) {
         setUsage(event.usage);
@@ -432,9 +475,11 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       }
       isSendingRef.current = false;
       setStatus('idle');
+      });
     });
 
     const unsubError = window.orchid.chat.onError((event: ChatErrorEvent) => {
+      deliverEvent(event, () => {
       if (!acceptsEvent(event)) return;
       // Prefer title + detail for banner classification when available
       const display =
@@ -478,15 +523,19 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       setInterruptState('idle');
       accumulatedContentRef.current = '';
       accumulatedThinkingRef.current = '';
+      });
     });
 
     const unsubUsage = window.orchid.chat.onUsage((event: ChatUsageEvent) => {
-      if (!acceptsEvent(event)) return;
-      setUsage(event.usage);
-      usageRef.current = event.usage;
+      deliverEvent(event, () => {
+        if (!acceptsEvent(event)) return;
+        setUsage(event.usage);
+        usageRef.current = event.usage;
+      });
     });
 
     const unsubToolStart = window.orchid.chat.onToolCallStart?.((event: ChatToolCallStartEvent) => {
+      deliverEvent(event, () => {
       if (!acceptsEvent(event)) return;
       applyToolBlocks((prev) => upsertToolBlock(prev, {
         id: event.toolCallId,
@@ -509,9 +558,11 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           { kind: 'tool', toolCallId: event.toolCallId },
         ];
       });
+      });
     }) ?? (() => {});
 
     const unsubToolDelta = window.orchid.chat.onToolCallDelta?.((event: ChatToolCallDeltaEvent) => {
+      deliverEvent(event, () => {
       if (!acceptsEvent(event)) return;
       applyToolBlocks((prev) => prev.map((block) => {
         if (block.id !== event.toolCallId) return block;
@@ -523,9 +574,11 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
             : 'generating',
         };
       }));
+      });
     }) ?? (() => {});
 
     const unsubToolUpdate = window.orchid.chat.onToolCallUpdate?.((event: ChatToolCallUpdateEvent) => {
+      deliverEvent(event, () => {
       if (!acceptsEvent(event)) return;
       applyToolBlocks((prev) => upsertToolBlock(prev, {
         id: event.toolCallId,
@@ -554,6 +607,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           { kind: 'tool', toolCallId: event.toolCallId },
         ];
       });
+      });
     }) ?? (() => {});
 
     return () => {
@@ -567,7 +621,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       unsubToolDelta();
       unsubToolUpdate();
     };
-  }, [acceptsEvent, applyToolBlocks, applyStreamSegments]);
+  }, [acceptsEvent, applyToolBlocks, applyStreamSegments, deliverEvent]);
 
   const send = useCallback(
     async (message: string, options?: ChatSendOptions) => {
@@ -765,69 +819,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     }
   }, []);
 
-  const getSnapshot = useCallback(async (sessionId: string): Promise<ChatSnapshot | null> => {
-    if (!window.orchid?.chat?.snapshot) return null;
-    try {
-      return await window.orchid.chat.snapshot({ sessionId });
-    } catch {
-      return null;
-    }
-  }, []);
-
-  const hydrateSnapshot = useCallback((snapshot: ChatSnapshot | null) => {
-    if (!snapshot) return;
-    if (snapshot.sessionId !== activeSessionIdRef.current) return;
-
-    // A stream event delivered after the snapshot is newer and already owns
-    // the local view. Never rewind it with a stale IPC response.
-    if (
-      streamTurnIdRef.current === snapshot.turnId &&
-      lastSequenceRef.current > snapshot.sequence
-    ) {
-      return;
-    }
-
-    streamSessionIdRef.current = snapshot.sessionId;
-    streamTurnIdRef.current = snapshot.turnId;
-    lastSequenceRef.current = snapshot.sequence;
-    const liveTools: ToolBlock[] = snapshot.toolCalls.map((tool) => ({
-      id: tool.toolCallId,
-      toolName: tool.toolName,
-      status: tool.status,
-      partialArgs: tool.partialArgs,
-      args: tool.args,
-      result: tool.result,
-      error: tool.error,
-      startedAt: tool.startedAt,
-      finishedAt: tool.finishedAt,
-    }));
-    applyToolBlocks(liveTools);
-    applyStreamSegments(snapshot.streamSegments.map((segment) => ({ ...segment })));
-    accumulatedContentRef.current = snapshot.response;
-    accumulatedThinkingRef.current = snapshot.thinking;
-    setStreamingContent(snapshot.response);
-    setStreamingThinking(snapshot.thinking);
-    setUsage(snapshot.usage);
-    usageRef.current = snapshot.usage;
-    setError(snapshot.error);
-    setInterruptState(snapshot.interruptState);
-    setInterrupted(snapshot.interrupted);
-    setCwd(snapshot.cwd ?? '');
-    const isLive = snapshot.state === 'streaming';
-    isSendingRef.current = isLive;
-    setStatus(snapshot.state);
-    setStreamStartTime(isLive ? snapshot.startedAt ?? Date.now() : null);
-    setElapsedSeconds(
-      isLive && snapshot.startedAt != null
-        ? (Date.now() - snapshot.startedAt) / 1000
-        : 0,
-    );
-  }, [applyToolBlocks, applyStreamSegments]);
-
-  const clearError = useCallback(() => {
-    setError(null);
-  }, []);
-
   /**
    * Replace messages (session load / new session) and drop all live/stale UI
    * state so nothing from the previous session remains (tools, stream, etc.).
@@ -858,6 +849,99 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     lastSequenceRef.current = -1;
   }, [applyToolBlocks, applyStreamSegments]);
 
+  const beginSessionSwitch = useCallback((sessionId: string | null) => {
+    const affinity: ChatEventAffinity = {
+      selectedSessionId: activeSessionIdRef.current,
+      streamSessionId: streamSessionIdRef.current,
+      streamTurnId: streamTurnIdRef.current,
+      lastSequence: lastSequenceRef.current,
+    };
+    bindChatSession(affinity, sessionId);
+    activeSessionIdRef.current = affinity.selectedSessionId;
+    streamSessionIdRef.current = affinity.streamSessionId;
+    streamTurnIdRef.current = affinity.streamTurnId;
+    lastSequenceRef.current = affinity.lastSequence;
+    hydrationRef.current = sessionId ? { sessionId, events: [] } : null;
+    replaceMessages([]);
+  }, [replaceMessages]);
+
+  const getSnapshot = useCallback(async (
+    sessionId: string,
+  ): Promise<ChatSessionSnapshot | null> => {
+    if (!window.orchid?.chat?.snapshot) return null;
+    try {
+      return await window.orchid.chat.snapshot({ sessionId });
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const hydrateSnapshot = useCallback((snapshot: ChatSessionSnapshot | null) => {
+    const hydration = hydrationRef.current;
+    hydrationRef.current = null;
+    if (!snapshot) {
+      // Snapshot IPC failed after navigation. Keep the loaded history and let
+      // target-session events observed during the request advance the view.
+      for (const apply of hydration?.events ?? []) apply();
+      return;
+    }
+    if (snapshot.sessionId !== activeSessionIdRef.current) return;
+
+    replaceMessages(snapshot.messages);
+    const live: ChatSnapshot | null = snapshot.live;
+    if (!live) {
+      // With no live actor, the coherent history is authoritative. Any queued
+      // terminal events were emitted before that history snapshot and are stale.
+      return;
+    }
+
+    streamSessionIdRef.current = live.sessionId;
+    streamTurnIdRef.current = live.turnId;
+    lastSequenceRef.current = live.sequence;
+    const liveTools: ToolBlock[] = live.toolCalls.map((tool) => ({
+      id: tool.toolCallId,
+      toolName: tool.toolName,
+      status: tool.status,
+      partialArgs: tool.partialArgs,
+      args: tool.args,
+      result: tool.result,
+      error: tool.error,
+      startedAt: tool.startedAt,
+      finishedAt: tool.finishedAt,
+    }));
+    applyToolBlocks(liveTools);
+    applyStreamSegments(live.streamSegments.map((segment) => ({ ...segment })));
+    accumulatedContentRef.current = live.response;
+    accumulatedThinkingRef.current = live.thinking;
+    setStreamingContent(live.response);
+    setStreamingThinking(live.thinking);
+    setUsage(live.usage);
+    usageRef.current = live.usage;
+    setError(live.error);
+    setInterruptState(live.interruptState);
+    setInterrupted(live.interrupted);
+    setCwd(live.cwd ?? '');
+    const isLive = live.state === 'streaming';
+    isSendingRef.current = isLive;
+    setStatus(live.state);
+    setStreamStartTime(isLive ? live.startedAt ?? Date.now() : null);
+    setElapsedSeconds(
+      isLive && live.startedAt != null
+        ? (Date.now() - live.startedAt) / 1000
+        : 0,
+    );
+
+    // The snapshot is the base state. Replaying through acceptsEvent drops
+    // queued events already covered by its sequence and applies only newer ones.
+    if (hydration?.sessionId === snapshot.sessionId) {
+      for (const apply of hydration.events) apply();
+    }
+  }, [applyToolBlocks, applyStreamSegments, replaceMessages]);
+
+  const clearError = useCallback(() => {
+    setError(null);
+  }, []);
+
   return {
     messages,
     status,
@@ -878,6 +962,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     cancel,
     stop,
     getSnapshot,
+    beginSessionSwitch,
     hydrateSnapshot,
     clearError,
     setMessages: replaceMessages,

@@ -8,7 +8,7 @@
  */
 
 import type { Session } from './session';
-import type { Usage } from './message';
+import type { Message, Usage } from './message';
 import type {
   CustomConnectionModel,
   ModelSelection,
@@ -140,6 +140,13 @@ export interface ChatSnapshot {
   cwd: string | null;
   startedAt: number | null;
   interrupted: boolean;
+}
+
+/** Coherent persisted history plus the optional in-flight tail for one session. */
+export interface ChatSessionSnapshot {
+  sessionId: string;
+  messages: Message[];
+  live: ChatSnapshot | null;
 }
 
 interface ChatEventIdentity {
@@ -548,8 +555,8 @@ export interface OrchidAPI {
     cancel: (message?: ChatCancelMessage) => Promise<{ status: string }>;
     /** Immediately stop exactly one session without staged Esc confirmation. */
     stop: (message: ChatStopMessage) => Promise<{ status: string }>;
-    /** Read a running session's in-flight state without changing window selection. */
-    snapshot: (message?: ChatSnapshotMessage) => Promise<ChatSnapshot | null>;
+    /** Read coherent persisted history and in-flight state without changing selection. */
+    snapshot: (message?: ChatSnapshotMessage) => Promise<ChatSessionSnapshot | null>;
     onChunk: (callback: (event: ChatChunkEvent) => void) => () => void;
     onThinking: (callback: (event: ChatThinkingEvent) => void) => () => void;
     onState: (callback: (event: ChatStateEvent) => void) => () => void;

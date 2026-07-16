@@ -433,6 +433,8 @@ vi.mock('../../src/main/mcp/project-registry', () => ({
 
 vi.mock('../../src/main/ipc/session', () => ({
   getSessionManager: () => mocks.sessionManager,
+  flattenSessionMessages: (session: { chains: Array<{ messages?: unknown[] }> }) =>
+    session.chains.flatMap((chain) => chain.messages ?? []),
   resolveWindowWorkspace: (windowId: string) =>
     mocks.workspace.resolveWorkspace(windowId),
 }));
@@ -904,7 +906,7 @@ describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
     await sendPromise;
   });
 
-  it('returns a session-addressed live snapshot for a running turn', async () => {
+  it('returns coherent persisted history with an optional live snapshot', async () => {
     let releaseStream: (() => void) | undefined;
     const streamGate = new Promise<void>((resolve) => {
       releaseStream = resolve;
@@ -937,15 +939,18 @@ describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
     );
     expect(snapshot).toMatchObject({
       sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-      state: 'streaming',
-      response: 'Live partial response',
-      thinking: '',
-      toolCalls: [],
-      error: null,
-      interrupted: false,
+      messages: [expect.objectContaining({ content: 'Keep going' })],
+      live: {
+        state: 'streaming',
+        response: 'Live partial response',
+        thinking: '',
+        toolCalls: [],
+        error: null,
+        interrupted: false,
+      },
     });
-    expect(snapshot.turnId).toEqual(expect.any(String));
-    expect(snapshot.sequence).toEqual(expect.any(Number));
+    expect(snapshot.live.turnId).toEqual(expect.any(String));
+    expect(snapshot.live.sequence).toEqual(expect.any(Number));
     expect(
       await chatSnapshot!(
         { sender: webContents },
@@ -955,6 +960,20 @@ describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
 
     releaseStream!();
     await sendPromise;
+    await waitForDoneCount(send, 1);
+
+    const completedSnapshot = await chatSnapshot!(
+      { sender: webContents },
+      { sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+    );
+    expect(completedSnapshot).toMatchObject({
+      sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      messages: [
+        expect.objectContaining({ content: 'Keep going' }),
+        expect.objectContaining({ content: 'Live partial response' }),
+      ],
+      live: null,
+    });
   });
 
   it('maps AI SDK 7 tool stream parts through generating → running → completed', async () => {
@@ -1432,6 +1451,109 @@ describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
     expect(failed).toBeDefined();
     const payload = failed![0] as { messages: Array<{ content: string }> };
     expect(payload.messages.some((m) => m.content === 'Will fail')).toBe(true);
+  });
+});
+
+describe('chat session snapshot hydration', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    mocks.streamResponses.length = 0;
+    mocks.streamEventSequences.length = 0;
+    mocks.runtimeRegistry._reset();
+    mocks.sessionManager._reset();
+    chatIpc = await import('../../src/main/ipc/chat');
+    chatIpc.registerChatIPC();
+  });
+
+  afterEach(() => {
+    chatIpc.unregisterChatIPC();
+    mocks.handlers.clear();
+    mocks.sessionManager._reset();
+  });
+
+  it('keeps persisted history available after the live actor completes', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession('cccccccc-cccc-4ccc-8ccc-cccccccccccc'),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    let releaseStream: (() => void) | undefined;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield {
+        type: 'tool_call_start',
+        toolCallId: 'call-read-1',
+        toolName: 'read',
+      };
+      yield {
+        type: 'tool_call',
+        toolCallId: 'call-read-1',
+        toolName: 'read',
+        args: '{"path":"README.md"}',
+      };
+      yield {
+        type: 'tool_result',
+        toolCallId: 'call-read-1',
+        content: 'Orchid',
+        isError: false,
+      };
+      yield { type: 'content', text: 'Live partial response' };
+      await streamGate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const webContents = { id: 490, send: vi.fn() };
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    const chatSnapshot = mocks.handlers.get(IPC_CHANNELS.CHAT_SNAPSHOT)!;
+    const sendPromise = chatSend({ sender: webContents }, { message: 'Keep going' });
+
+    await waitForChannelCount(webContents.send, IPC_CHANNELS.CHAT_CHUNK, 1);
+    const running = await chatSnapshot(
+      { sender: webContents },
+      { sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+    );
+    expect(running).toMatchObject({
+      sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      messages: [expect.objectContaining({ content: 'Keep going' })],
+      live: expect.objectContaining({
+        response: 'Live partial response',
+        toolCalls: [expect.objectContaining({
+          toolCallId: 'call-read-1',
+          status: 'completed',
+          result: 'Orchid',
+        })],
+        streamSegments: expect.arrayContaining([
+          expect.objectContaining({ kind: 'tool', toolCallId: 'call-read-1' }),
+        ]),
+      }),
+    });
+
+    releaseStream!();
+    await sendPromise;
+    await waitForDoneCount(webContents.send, 1);
+
+    const completed = await chatSnapshot(
+      { sender: webContents },
+      { sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+    );
+    expect(completed).toMatchObject({
+      sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      messages: [
+        expect.objectContaining({ content: 'Keep going' }),
+        expect.objectContaining({ type: 'tool_call', tool_call_id: 'call-read-1' }),
+        expect.objectContaining({ type: 'tool_result', tool_call_id: 'call-read-1' }),
+        expect.objectContaining({ content: 'Live partial response' }),
+      ],
+      live: null,
+    });
   });
 });
 

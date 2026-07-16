@@ -33,6 +33,7 @@ import type {
   ChatErrorKind,
   ChatSendResult,
   ChatSnapshot,
+  ChatSessionSnapshot,
   ChatSnapshotState,
   ChatStreamSegmentSnapshot,
   ChatToolCallSnapshot,
@@ -1561,18 +1562,29 @@ export function registerChatIPC(): void {
 
   // chat:snapshot — atomically hydrate a renderer that returns to a running session.
   // This is deliberately read-only: it never changes the sender window's selection.
-  ipcMain.handle(IPC_CHANNELS.CHAT_SNAPSHOT, async (event, payload: unknown) => {
-    const parsed = chatSnapshotSchema.safeParse(payload ?? {});
-    if (!parsed.success) {
-      throw new Error(`Invalid chat:snapshot payload: ${parsed.error.message}`);
-    }
-    const windowId = String(event.sender.id);
-    const sessionId =
-      parsed.data.sessionId ?? getSessionManager().getActive(windowId)?.id;
-    if (!sessionId) return null;
-    const active = activeAgents.get(sessionId);
-    return active ? snapshotForAgent(active) : null;
-  });
+  ipcMain.handle(
+    IPC_CHANNELS.CHAT_SNAPSHOT,
+    async (event, payload: unknown): Promise<ChatSessionSnapshot | null> => {
+      const parsed = chatSnapshotSchema.safeParse(payload ?? {});
+      if (!parsed.success) {
+        throw new Error(`Invalid chat:snapshot payload: ${parsed.error.message}`);
+      }
+      const windowId = String(event.sender.id);
+      const sessionId =
+        parsed.data.sessionId ?? getSessionManager().getActive(windowId)?.id;
+      if (!sessionId) return null;
+      const session = getSessionManager().getSession(sessionId);
+      if (!session) return null;
+      const active = activeAgents.get(sessionId);
+      return {
+        sessionId,
+        messages: flattenSessionMessages(session),
+        // Finalization and persistence share one synchronous callback, so a
+        // finalized actor is already represented by history when IPC observes it.
+        live: active && !active.finalized ? snapshotForAgent(active) : null,
+      };
+    },
+  );
 
   // chat:stop — immediate targeted cancellation from the global Activity list.
   ipcMain.handle(IPC_CHANNELS.CHAT_STOP, async (_event, payload: unknown) => {
