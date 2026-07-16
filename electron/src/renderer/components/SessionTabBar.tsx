@@ -104,6 +104,9 @@ export function SessionTabBar({
             >
               <div
                 className="session-tab-select"
+                role="button"
+                tabIndex={-1}
+                onClick={() => onSelect(id)}
                 title={
                   multiProject && project
                     ? `${project} / ${title}`
@@ -124,18 +127,11 @@ export function SessionTabBar({
                     name={title}
                     className="session-tab-label truncate"
                     title={`${title} (double-click or F2 to rename)`}
-                    onSelect={() => onSelect(id)}
                     onBeginEdit={() => onSelect(id)}
                     onRename={(next) => onRename(id, next)}
                   />
                 ) : (
-                  <button
-                    type="button"
-                    className="session-tab-label-button truncate"
-                    onClick={() => onSelect(id)}
-                  >
-                    <span className="session-tab-label truncate">{title}</span>
-                  </button>
+                  <span className="session-tab-label truncate">{title}</span>
                 )}
               </div>
               <button

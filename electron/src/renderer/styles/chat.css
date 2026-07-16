@@ -3209,6 +3209,7 @@
   border-radius: 0.5rem;
   border: 1px solid transparent;
   background: transparent;
+  cursor: pointer;
 }
 
 .session-tab-active {
@@ -3228,24 +3229,12 @@
   color: inherit;
   text-align: left;
   font-size: 0.8rem;
+  cursor: pointer;
 }
 
 .session-tab-label {
   min-width: 0;
-}
-
-.session-tab-label-button {
-  display: inline-flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
   cursor: pointer;
-  text-align: left;
 }
 
 .session-tab-project {
@@ -3263,8 +3252,12 @@
   display: inline-block;
   min-width: 0;
   max-width: 100%;
-  cursor: text;
+  cursor: pointer;
   outline: none;
+}
+
+.session-tab-select .session-name-editor-label {
+  cursor: pointer;
 }
 
 .session-name-editor-label:focus-visible {
@@ -3285,6 +3278,7 @@
   font: inherit;
   line-height: inherit;
   outline: none;
+  cursor: text;
 }
 
 .session-name-editor-input:focus {

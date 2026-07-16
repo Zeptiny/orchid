@@ -106,8 +106,11 @@ export function SessionNameEditor({
       className={`session-name-editor-label ${className ?? ''}`}
       title={title ?? `${name} (double-click or F2 to rename)`}
       onClick={(e) => {
-        e.stopPropagation();
-        onSelect?.();
+        // Let parent row/tab handle select; optional onSelect for nested cases.
+        if (onSelect) {
+          e.stopPropagation();
+          onSelect();
+        }
       }}
       onDoubleClick={startEditFromPointer}
       onKeyDown={(e: ReactKeyboardEvent<HTMLSpanElement>) => {
