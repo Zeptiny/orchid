@@ -262,6 +262,35 @@ describe('execute_command foreground', () => {
     expect(result.content).toContain('timed out');
   }, 10_000);
 
+  it('should kill the process group on outer abort (dispatch timeout)', async () => {
+    // Marker file written only if sleep completes — must not appear after abort kill
+    const markerDir = createTmpDir();
+    const marker = path.join(markerDir, 'still-alive');
+    const ac = new AbortController();
+    const runPromise = executeCommand(
+      `sleep 30; touch "${marker}"`,
+      'long sleep',
+      undefined,
+      60,
+      true,
+      false,
+      false,
+      { abortSignal: ac.signal },
+    );
+
+    await new Promise((r) => setTimeout(r, 200));
+    ac.abort();
+
+    const result = await runPromise;
+    expect(result.isError).toBe(true);
+    expect(result.content.toLowerCase()).toContain('timed out');
+
+    // Give any surviving sleep a moment; marker must not exist
+    await new Promise((r) => setTimeout(r, 500));
+    expect(fs.existsSync(marker)).toBe(false);
+    fs.rmSync(markerDir, { recursive: true, force: true });
+  }, 10_000);
+
   it('should use custom working directory', async () => {
     const dir = createTmpDir();
     fs.writeFileSync(path.join(dir, 'test.txt'), 'hello');

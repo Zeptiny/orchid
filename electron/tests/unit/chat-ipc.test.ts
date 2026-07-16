@@ -906,6 +906,43 @@ describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
     await sendPromise;
   });
 
+  it('Esc2 + interrupt TIMEOUT cancels subagents before dispose', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.streamChat.mockImplementationOnce(async function* () {
+        yield { type: 'content', text: 'Partial answer' };
+        await new Promise((resolve) => setTimeout(resolve, 60_000));
+        yield { type: 'finish', finishReason: 'stop' };
+      });
+
+      const send = vi.fn();
+      const webContents = { id: 45, send };
+      const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+      const chatCancel = mocks.handlers.get(IPC_CHANNELS.CHAT_CANCEL);
+      expect(chatSend).toBeDefined();
+      expect(chatCancel).toBeDefined();
+
+      const sendPromise = chatSend!({ sender: webContents }, { message: 'Write something long' });
+      await vi.advanceTimersByTimeAsync(40);
+
+      expect(await chatCancel!({ sender: webContents })).toEqual({ status: 'confirming' });
+      expect(await chatCancel!({ sender: webContents })).toEqual({
+        status: 'confirming_subagents',
+      });
+      expect(mocks.subagentManager.cancelRunning).not.toHaveBeenCalled();
+
+      // Auto-reset after Esc2: INTERRUPT_TIMEOUT → cancelRunning then dispose
+      await vi.advanceTimersByTimeAsync(5000);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mocks.subagentManager.cancelRunning).toHaveBeenCalled();
+      await sendPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('returns coherent persisted history with an optional live snapshot', async () => {
     let releaseStream: (() => void) | undefined;
     const streamGate = new Promise<void>((resolve) => {

@@ -32,11 +32,13 @@ const MAX_OUTPUT_BYTES = 1 * 1024 * 1024; // 1 MiB
 /**
  * Read stdout + stderr from a child process with bounded size and timeout.
  * Returns [stdout_bytes, stderr_bytes, truncated].
+ * Optional abortSignal rejects with Error('aborted') after the caller kills the process.
  */
 async function readBounded(
   proc: ChildProcess,
   timeoutMs: number,
   maxBytes: number,
+  abortSignal?: AbortSignal,
 ): Promise<{ stdout: Buffer; stderr: Buffer; truncated: boolean }> {
   const stdoutChunks: Buffer[] = [];
   const stderrChunks: Buffer[] = [];
@@ -44,9 +46,29 @@ async function readBounded(
   let truncated = false;
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      abortSignal?.removeEventListener('abort', onAbort);
+      fn();
+    };
+
     const timer = setTimeout(() => {
-      reject(new Error('timeout'));
+      finish(() => reject(new Error('timeout')));
     }, timeoutMs);
+
+    const onAbort = () => {
+      finish(() => reject(new Error('aborted')));
+    };
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        onAbort();
+        return;
+      }
+      abortSignal.addEventListener('abort', onAbort, { once: true });
+    }
 
     const onData = (stream: 'stdout' | 'stderr', chunk: Buffer | string) => {
       const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
@@ -75,36 +97,36 @@ async function readBounded(
     }
 
     proc.on('close', () => {
-      clearTimeout(timer);
-      const stdout = Buffer.concat(stdoutChunks);
-      const stderr = Buffer.concat(stderrChunks);
+      finish(() => {
+        const stdout = Buffer.concat(stdoutChunks);
+        const stderr = Buffer.concat(stderrChunks);
 
-      // Ensure total doesn't exceed maxBytes (trim stderr first)
-      const total = stdout.length + stderr.length;
-      if (total > maxBytes) {
-        const overflow = total - maxBytes;
-        if (stderr.length >= overflow) {
-          resolve({
-            stdout,
-            stderr: stderr.subarray(0, stderr.length - overflow),
-            truncated: true,
-          });
+        // Ensure total doesn't exceed maxBytes (trim stderr first)
+        const total = stdout.length + stderr.length;
+        if (total > maxBytes) {
+          const overflow = total - maxBytes;
+          if (stderr.length >= overflow) {
+            resolve({
+              stdout,
+              stderr: stderr.subarray(0, stderr.length - overflow),
+              truncated: true,
+            });
+          } else {
+            const rem = overflow - stderr.length;
+            resolve({
+              stdout: stdout.subarray(0, stdout.length - rem),
+              stderr: Buffer.alloc(0),
+              truncated: true,
+            });
+          }
         } else {
-          const rem = overflow - stderr.length;
-          resolve({
-            stdout: stdout.subarray(0, stdout.length - rem),
-            stderr: Buffer.alloc(0),
-            truncated: true,
-          });
+          resolve({ stdout, stderr, truncated });
         }
-      } else {
-        resolve({ stdout, stderr, truncated });
-      }
+      });
     });
 
     proc.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
+      finish(() => reject(err));
     });
   });
 }
@@ -155,6 +177,7 @@ export async function executeCommand(
     sessionId?: string;
     agentScopeId?: string;
     config?: Pick<Config, 'command_timeout'>;
+    abortSignal?: AbortSignal;
   },
 ): Promise<{ display: string; content: string; isError?: boolean }> {
   if (description === undefined) description = command;
@@ -247,8 +270,53 @@ export async function executeCommand(
       env,
     });
 
+    // Outer tool-dispatch timeout aborts this signal — kill the live handle only
+    // (never bare PID after delay; PID reuse risk).
+    const abortSignal = options?.abortSignal;
+    const onAbort = () => {
+      if (proc.exitCode === null) {
+        killProcessGroup(proc, 'SIGKILL');
+      }
+    };
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        onAbort();
+      } else {
+        abortSignal.addEventListener('abort', onAbort, { once: true });
+      }
+    }
+
     try {
-      const { stdout, stderr, truncated } = await readBounded(proc, timeoutMs, MAX_OUTPUT_BYTES);
+      let bounded: { stdout: Buffer; stderr: Buffer; truncated: boolean };
+      try {
+        bounded = await readBounded(proc, timeoutMs, MAX_OUTPUT_BYTES, abortSignal);
+      } catch (err) {
+        // Inner command_timeout or outer abort — kill live handle if still running
+        if (proc.exitCode === null) {
+          killProcessGroup(proc, 'SIGKILL');
+        }
+        await waitForExit(proc);
+        if (err instanceof Error && err.message === 'timeout') {
+          return {
+            display: `$ ${description} - Timed out after ${timeout} seconds`,
+            content: `Error: ${description} timed out after ${timeout} seconds.`,
+            isError: true,
+          };
+        }
+        if (
+          (err instanceof Error && err.message === 'aborted') ||
+          abortSignal?.aborted
+        ) {
+          return {
+            display: `$ ${description} - Timed out`,
+            content: `Error: ${description} timed out.`,
+            isError: true,
+          };
+        }
+        throw err;
+      }
+
+      const { stdout, stderr, truncated } = bounded;
 
       // If truncated and still running, kill it
       if (truncated && proc.exitCode === null) {
@@ -273,18 +341,8 @@ export async function executeCommand(
         // Non-zero exit is a real command failure (backend-owned status).
         isError: exitCode !== 0,
       };
-    } catch (err) {
-      // Timeout
-      if (err instanceof Error && err.message === 'timeout') {
-        killProcessGroup(proc, 'SIGKILL');
-        await waitForExit(proc);
-        return {
-          display: `$ ${description} - Timed out after ${timeout} seconds`,
-          content: `Error: ${description} timed out after ${timeout} seconds.`,
-      isError: true
-    };
-      }
-      throw err;
+    } finally {
+      abortSignal?.removeEventListener('abort', onAbort);
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -340,6 +398,7 @@ export const executeCommandHandler: ToolHandler = async (input: unknown, ctx) =>
       sessionId: ctx.sessionId,
       agentScopeId: ctx.agentScopeId ?? 'main',
       config: getToolConfig(ctx),
+      abortSignal: ctx.abortSignal,
     },
   );
 };

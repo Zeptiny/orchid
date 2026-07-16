@@ -355,6 +355,32 @@ describe('MCPManager', () => {
       expect(manager.getTools()).toHaveLength(0);
       await manager.shutdown();
     });
+
+    it('should clear all clients/tools and not leave connected ghosts after overall timeout', async () => {
+      // Fast server connects and registers tools, then overall budget expires
+      // while a second server is still connecting — must not leave tools on closed clients.
+      enqueueMock({
+        listToolsResult: toolsResult([{ name: 'early-tool', description: 'Early' }]),
+        listResourcesResult: { resources: [{ uri: 'res://early', name: 'early' }] },
+      });
+      enqueueMock({ connectDelayMs: 5000 });
+
+      await manager.startAll(
+        { early: makeStdioConfig(), late: makeStdioConfig() },
+        { perServerTimeout: 10000, startupTimeout: 150 },
+      );
+
+      const statuses = manager.getStatus();
+      expect(statuses.every((s) => s.status === 'failed' || s.status === 'unavailable')).toBe(true);
+      expect(statuses.every((s) => s.status !== 'connected')).toBe(true);
+      expect(statuses.every((s) => s.toolCount === 0)).toBe(true);
+
+      expect(manager.getTools()).toHaveLength(0);
+      const callResult = await manager.callTool('mcp::early::early-tool', {});
+      expect(String(callResult)).toContain('not connected');
+
+      await manager.shutdown();
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -431,6 +457,16 @@ describe('MCPManager', () => {
       const content = await manager.readResource('docs-server', 'docs://api/reference');
       expect(content).toBe('# API Reference\n\nThis is the API reference.');
       expect(mockInstances[0].readResource).toHaveBeenCalledWith({ uri: 'docs://api/reference' });
+
+      const listed = manager.listResources();
+      expect(listed).toEqual([
+        expect.objectContaining({
+          uri: 'docs://api/reference',
+          server: 'docs-server',
+          name: 'API Reference',
+        }),
+      ]);
+      expect(manager.getResourceServer('docs://api/reference')).toBe('docs-server');
 
       await manager.shutdown();
     });

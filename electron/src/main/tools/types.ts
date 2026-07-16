@@ -69,6 +69,12 @@ export interface ToolExecutionContext {
    * Isolates todos and background commands so peer agents cannot see each other.
    */
   agentScopeId?: string;
+  /**
+   * Abort signal for outer tool-dispatch timeout.
+   * Foreground process tools must kill the live ChildProcess handle on abort
+   * (never by bare PID after delay — PID reuse risk).
+   */
+  abortSignal?: AbortSignal;
 }
 
 /**

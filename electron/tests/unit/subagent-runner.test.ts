@@ -46,12 +46,15 @@ const mocks = vi.hoisted(() => ({
     backgroundCommands: [],
   })),
   toolRegistry: {
-    filter: vi.fn(() => [
-      { definition: { name: 'read_file' } },
-      { definition: { name: 'delegate_to_subagent' } },
-      { definition: { name: 'wait_for_subagent' } },
-      { definition: { name: 'interrupt_subagents' } },
-    ]),
+    filter: vi.fn((patterns: string[]) => {
+      if (patterns.length === 0) return [];
+      return [
+        { definition: { name: 'read_file' } },
+        { definition: { name: 'delegate_to_subagent' } },
+        { definition: { name: 'wait_for_subagent' } },
+        { definition: { name: 'interrupt_subagents' } },
+      ];
+    }),
   },
   mcpManager: {},
   acquireProjectMCPManager: vi.fn(),
@@ -109,7 +112,7 @@ const agent: Agent = {
   tier: 'bloom',
   description: 'Test worker',
   system_prompt: 'Test prompt',
-  allowed_tools: [],
+  allowed_tools: ['*'],
   allowed_skills: [],
 };
 
@@ -250,5 +253,29 @@ describe('createSubagentStreamRunner', () => {
 
     expect(mocks.acquireProjectMCPManager).toHaveBeenCalledTimes(1);
     expect(mocks.releaseProjectMCPManager).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats empty allowed_tools as no tools (does not coerce to *)', async () => {
+    const emptyToolsAgent: Agent = {
+      ...agent,
+      name: 'summarizer',
+      allowed_tools: [],
+    };
+
+    await collect(createSubagentStreamRunner()({
+      task: 'Summarize this',
+      agent: emptyToolsAgent,
+      selection,
+      abortSignal: new AbortController().signal,
+      agentScopeId: 'scope-empty',
+      sessionId: 'session-empty',
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+    }));
+
+    expect(mocks.toolRegistry.filter).toHaveBeenCalledWith([]);
+    expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
+      agent: expect.objectContaining({ allowed_tools: [] }),
+    }));
   });
 });

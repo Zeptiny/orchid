@@ -56,9 +56,10 @@ export function buildInterruptTool(
             'No session context available; cannot interrupt subagents without a session id.',
         };
       }
+      // cancelOne (via cancelRunning) already resolves waiters for cancelled
+      // records. Do not flush process-wide waiters — that would unblock
+      // other sessions' waits (M-P0-013).
       const cancelled = manager.cancelRunning(ctx.sessionId);
-      // Flush any remaining pending state callbacks for clean state transitions
-      manager.flushStateCallbacks();
 
       if (cancelled.length === 0) {
         return {
@@ -85,13 +86,11 @@ export function buildInterruptTool(
       } else if (TERMINAL_STATES.has(record.state)) {
         alreadyDone.push(sid);
       } else {
+        // cancelOne resolves waiters for this record only.
         manager.cancelOne(sid);
         cancelled.push(sid);
       }
     }
-
-    // Flush any remaining pending state callbacks for clean state transitions
-    manager.flushStateCallbacks();
 
     // Build status message
     const parts: string[] = [];

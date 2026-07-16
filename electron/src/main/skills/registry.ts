@@ -183,9 +183,16 @@ function loadSkillsFromDir(skillsDir: string): Map<string, Skill> {
   return skills;
 }
 
+/** Resource subtrees that ship with default skills (scripts, refs, assets). */
+const SKILL_RESOURCE_DIRS = ['scripts', 'references', 'assets'] as const;
+
 /**
  * Copy default skill directories from the source (bundled defaults) to a
- * target directory, only if the target subdirectory doesn't already exist.
+ * target directory.
+ *
+ * - Missing skill (no SKILL.md): recursive copy of the entire default tree.
+ * - Existing SKILL.md: leave user content alone; only fill missing resource
+ *   subtrees (scripts/references/assets) without clobbering SKILL.md.
  */
 function seedDefaults(sourceDir: string, targetDir: string): void {
   if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
@@ -206,8 +213,20 @@ function seedDefaults(sourceDir: string, targetDir: string): void {
     const targetFile = path.join(targetSubdir, SKILL_FILENAME);
 
     if (!fs.existsSync(targetFile)) {
-      fs.mkdirSync(targetSubdir, { recursive: true });
-      fs.copyFileSync(sourceFile, targetFile);
+      fs.cpSync(sourceSubdir, targetSubdir, { recursive: true });
+      continue;
+    }
+
+    for (const resource of SKILL_RESOURCE_DIRS) {
+      const sourceResource = path.join(sourceSubdir, resource);
+      const targetResource = path.join(targetSubdir, resource);
+      if (
+        fs.existsSync(sourceResource) &&
+        fs.statSync(sourceResource).isDirectory() &&
+        !fs.existsSync(targetResource)
+      ) {
+        fs.cpSync(sourceResource, targetResource, { recursive: true });
+      }
     }
   }
 }
@@ -280,8 +299,9 @@ export function listSkills(): Skill[] {
 }
 
 /**
- * Seed default skill files into the given home directory.
- * Copies bundled defaults if the target skill subdirectory doesn't exist.
+ * Seed default skill trees into the given home directory.
+ * Missing skills are copied recursively (SKILL.md + scripts/references/assets).
+ * Existing SKILL.md is preserved; missing resource subtrees are filled in.
  */
 export function seedSkillsDir(homeDir: string): void {
   const defaultsDir = path.join(__dirname, 'defaults');

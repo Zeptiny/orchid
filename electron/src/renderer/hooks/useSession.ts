@@ -1,13 +1,16 @@
 /**
  * useSession — manages session state, switching, creation.
  *
+ * Shared module store so ChatView and ConfigView (both mounted under config)
+ * share one active session / list / workspace instead of diverging.
+ *
  * Provides:
  * - Active session
  * - Session list
  * - load(), create(), delete(), rename() actions
  * - Loading/error states (interaction states)
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { SessionSummary } from '../../shared/types/ipc-boundary';
@@ -70,370 +73,488 @@ const UNBOUND_WORKSPACE: WorkspaceInfo = {
   status: 'unbound',
 };
 
-// ── Hook ─────────────────────────────────────────────────────────────────────
+// ── Shared store (one session state for all useSession() callers) ────────────
 
-export function useSession(): UseSessionReturn {
-  const [activeSession, setActiveSession] = useState<Session | null>(null);
-  const [listState, setListState] = useState<SessionListState>({ status: 'loading' });
-  const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  /** Monotonic generation so out-of-order session:load responses are dropped. */
-  const loadGenerationRef = useRef(0);
-  const draftGenerationRef = useRef(0);
-  const [draftGeneration, setDraftGeneration] = useState(0);
-  const advanceDraftGeneration = useCallback(() => {
-    const next = draftGenerationRef.current + 1;
-    draftGenerationRef.current = next;
-    setDraftGeneration(next);
-    return next;
-  }, []);
+type Listener = () => void;
 
-  const refresh = useCallback(async () => {
-    if (!window.orchid?.session?.list) {
+interface SharedSnapshot {
+  readonly activeSession: Session | null;
+  readonly listState: SessionListState;
+  readonly workspace: WorkspaceInfo | null;
+  readonly isLoading: boolean;
+  readonly draftGeneration: number;
+}
+
+let activeSession: Session | null = null;
+let listState: SessionListState = { status: 'loading' };
+let workspace: WorkspaceInfo | null = null;
+let isLoading = false;
+let draftGeneration = 0;
+/** Monotonic generation so out-of-order session:load responses are dropped. */
+let loadGeneration = 0;
+let bootstrapped = false;
+const listeners = new Set<Listener>();
+const unsubscribers: Array<() => void> = [];
+
+let cachedSnapshot: SharedSnapshot = {
+  activeSession,
+  listState,
+  workspace,
+  isLoading,
+  draftGeneration,
+};
+
+function rebuildSnapshot(): void {
+  cachedSnapshot = {
+    activeSession,
+    listState,
+    workspace,
+    isLoading,
+    draftGeneration,
+  };
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function getSnapshot(): SharedSnapshot {
+  return cachedSnapshot;
+}
+
+function setActiveSession(next: Session | null | ((prev: Session | null) => Session | null)): void {
+  const resolved = typeof next === 'function' ? next(activeSession) : next;
+  if (resolved === activeSession) return;
+  activeSession = resolved;
+  rebuildSnapshot();
+}
+
+function setListState(next: SessionListState | ((prev: SessionListState) => SessionListState)): void {
+  const resolved = typeof next === 'function' ? next(listState) : next;
+  if (resolved === listState) return;
+  listState = resolved;
+  rebuildSnapshot();
+}
+
+function setWorkspaceState(next: WorkspaceInfo | null): void {
+  if (next === workspace) return;
+  workspace = next;
+  rebuildSnapshot();
+}
+
+function setIsLoading(next: boolean): void {
+  if (next === isLoading) return;
+  isLoading = next;
+  rebuildSnapshot();
+}
+
+function advanceDraftGeneration(): number {
+  draftGeneration += 1;
+  rebuildSnapshot();
+  return draftGeneration;
+}
+
+async function refreshShared(): Promise<void> {
+  if (!window.orchid?.session?.list) {
+    setListState({ status: 'empty' });
+    return;
+  }
+
+  try {
+    const sessions = await window.orchid.session.list();
+    if (sessions.length === 0) {
       setListState({ status: 'empty' });
-      return;
+    } else {
+      setListState({ status: 'ready', sessions });
     }
-
-    try {
-      const sessions = await window.orchid.session.list();
-      if (sessions.length === 0) {
-        setListState({ status: 'empty' });
-      } else {
-        setListState({ status: 'ready', sessions });
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    setListState((prev) => {
+      if (prev.status === 'ready' || prev.status === 'partial') {
+        return { status: 'partial', sessions: prev.sessions, error };
       }
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
-      setListState((prev) => {
-        if (prev.status === 'ready' || prev.status === 'partial') {
-          return { status: 'partial', sessions: prev.sessions, error };
-        }
-        return { status: 'error', error };
-      });
-    }
-  }, []);
-
-  const getWorkspace = useCallback(async (): Promise<WorkspaceInfo | null> => {
-    if (!window.orchid?.session?.getWorkspace) {
-      return UNBOUND_WORKSPACE;
-    }
-    try {
-      const info = await window.orchid.session.getWorkspace();
-      setWorkspace(info);
-      return info;
-    } catch (err) {
-      console.error('Failed to get workspace:', err);
-      return null;
-    }
-  }, []);
-
-  // Load session list + workspace on mount
-  useEffect(() => {
-    refresh();
-    void getWorkspace();
-  }, [refresh, getWorkspace]);
-
-  // Listen for push rename events from main process (e.g. auto-naming)
-  useEffect(() => {
-    if (!window.orchid?.session?.onRenamed) {
-      return undefined;
-    }
-
-    const unsubscribe = window.orchid.session.onRenamed((event) => {
-      setActiveSession((prev) => {
-        if (prev && prev.id === event.id) {
-          return { ...prev, name: event.name };
-        }
-        return prev;
-      });
-      // Refresh session list so sidebar shows updated name
-      refresh();
+      return { status: 'error', error };
     });
-    return unsubscribe;
-  }, [refresh]);
+  }
+}
+
+async function getWorkspaceShared(): Promise<WorkspaceInfo | null> {
+  if (!window.orchid?.session?.getWorkspace) {
+    return UNBOUND_WORKSPACE;
+  }
+  try {
+    const info = await window.orchid.session.getWorkspace();
+    setWorkspaceState(info);
+    return info;
+  } catch (err) {
+    console.error('Failed to get workspace:', err);
+    return null;
+  }
+}
+
+function ensureBootstrapped(): void {
+  if (bootstrapped) return;
+  bootstrapped = true;
+
+  void refreshShared();
+  void getWorkspaceShared();
+
+  if (window.orchid?.session?.onRenamed) {
+    unsubscribers.push(
+      window.orchid.session.onRenamed((event) => {
+        setActiveSession((prev) => {
+          if (prev && prev.id === event.id) {
+            return { ...prev, name: event.name };
+          }
+          return prev;
+        });
+        void refreshShared();
+      }),
+    );
+  }
 
   // Lazy create: first chat:send with no active session creates one in main
   // and pushes SESSION_CREATED so the sidebar gains a list entry. Only adopt
   // when this window is still in draft (no active session) so a concurrent
   // promotion cannot steal selection after the user navigated elsewhere.
-  useEffect(() => {
-    if (!window.orchid?.session?.onCreated) {
-      return undefined;
-    }
-
-    const unsubscribe = window.orchid.session.onCreated((event) => {
-      setActiveSession((prev) => {
-        if (prev != null) return prev;
-        if (
-          event.draftGeneration != null &&
-          event.draftGeneration !== draftGenerationRef.current
-        ) {
-          return prev;
-        }
-        return event.session;
-      });
-      void refresh();
-      void getWorkspace();
-    });
-    return unsubscribe;
-  }, [refresh, getWorkspace]);
+  if (window.orchid?.session?.onCreated) {
+    unsubscribers.push(
+      window.orchid.session.onCreated((event) => {
+        setActiveSession((prev) => {
+          if (prev != null) return prev;
+          if (
+            event.draftGeneration != null &&
+            event.draftGeneration !== draftGeneration
+          ) {
+            return prev;
+          }
+          return event.session;
+        });
+        void refreshShared();
+        void getWorkspaceShared();
+      }),
+    );
+  }
 
   // Multi-chain turn lifecycle: start/finish updates chains on the active session.
-  useEffect(() => {
-    if (!window.orchid?.session?.onUpdated) {
-      return undefined;
-    }
-
-    const unsubscribe = window.orchid.session.onUpdated((event) => {
-      setActiveSession((prev) => {
-        // Only update when the same session is still active. Never resurrect
-        // a session after New Chat/draft (prev === null) from a late event.
-        if (prev?.id === event.session.id) {
-          return event.session;
-        }
-        return prev;
-      });
-    });
-    return unsubscribe;
-  }, []);
+  if (window.orchid?.session?.onUpdated) {
+    unsubscribers.push(
+      window.orchid.session.onUpdated((event) => {
+        setActiveSession((prev) => {
+          // Only update when the same session is still active. Never resurrect
+          // a session after New Chat/draft (prev === null) from a late event.
+          if (prev?.id === event.session.id) {
+            return event.session;
+          }
+          return prev;
+        });
+      }),
+    );
+  }
 
   // Workspace changes (pick / change_cwd / load / clear)
-  useEffect(() => {
-    if (!window.orchid?.session?.onWorkspaceChanged) {
-      return undefined;
-    }
+  if (window.orchid?.session?.onWorkspaceChanged) {
+    unsubscribers.push(
+      window.orchid.session.onWorkspaceChanged((event) => {
+        setWorkspaceState(event.workspace);
+      }),
+    );
+  }
+}
 
-    const unsubscribe = window.orchid.session.onWorkspaceChanged((event) => {
-      setWorkspace(event.workspace);
-    });
-    return unsubscribe;
-  }, []);
+async function loadShared(id: string): Promise<Session | null> {
+  if (!window.orchid?.session?.load) {
+    return null;
+  }
 
-  const load = useCallback(async (id: string): Promise<Session | null> => {
-    if (!window.orchid?.session?.load) {
-      return null;
-    }
-
-    const generation = ++loadGenerationRef.current;
-    advanceDraftGeneration();
-    setIsLoading(true);
-    try {
-      const session = await window.orchid.session.load({ id });
-      // Drop stale responses when a newer load (or draft) superseded this one.
-      if (generation !== loadGenerationRef.current) {
-        return session;
-      }
-      setActiveSession(session);
-      // Load does not rewrite sticky default; refresh workspace from session.
-      void getWorkspace();
-      return session;
-    } catch (err) {
-      console.error('Failed to load session:', err);
-      return null;
-    } finally {
-      if (generation === loadGenerationRef.current) {
-        setIsLoading(false);
-      }
-    }
-  }, [getWorkspace, advanceDraftGeneration]);
-
-  const create = useCallback(async () => {
-    if (!window.orchid?.session?.create) {
-      const session = makeLocalSession();
-      setActiveSession(session);
-      setListState({
-        status: 'ready',
-        sessions: [{
-          id: session.id,
-          name: session.name,
-          modelLabel: session.modelLabel,
-          cwd: session.cwd,
-          chainCount: session.chains.length,
-          updatedAt: Date.now(),
-        }],
-      });
+  const generation = ++loadGeneration;
+  advanceDraftGeneration();
+  setIsLoading(true);
+  try {
+    const session = await window.orchid.session.load({ id });
+    // Drop stale responses when a newer load (or draft) superseded this one.
+    if (generation !== loadGeneration) {
       return session;
     }
-
-    setIsLoading(true);
-    try {
-      const session = await window.orchid.session.create();
-      setActiveSession(session);
-      await refresh();
-      return session;
-    } finally {
+    setActiveSession(session);
+    // Load does not rewrite sticky default; refresh workspace from session.
+    void getWorkspaceShared();
+    return session;
+  } catch (err) {
+    console.error('Failed to load session:', err);
+    return null;
+  } finally {
+    if (generation === loadGeneration) {
       setIsLoading(false);
     }
-  }, [refresh]);
+  }
+}
 
-  const enterDraft = useCallback(async () => {
-    loadGenerationRef.current += 1;
+async function createShared(): Promise<Session> {
+  if (!window.orchid?.session?.create) {
+    const session = makeLocalSession();
+    setActiveSession(session);
+    setListState({
+      status: 'ready',
+      sessions: [{
+        id: session.id,
+        name: session.name,
+        modelLabel: session.modelLabel,
+        cwd: session.cwd,
+        chainCount: session.chains.length,
+        updatedAt: Date.now(),
+      }],
+    });
+    return session;
+  }
+
+  setIsLoading(true);
+  try {
+    const session = await window.orchid.session.create();
+    setActiveSession(session);
+    await refreshShared();
+    return session;
+  } finally {
+    setIsLoading(false);
+  }
+}
+
+async function enterDraftShared(): Promise<void> {
+  loadGeneration += 1;
+  advanceDraftGeneration();
+  if (window.orchid?.session?.clearActive) {
+    await window.orchid.session.clearActive();
+  }
+  setActiveSession(null);
+  void getWorkspaceShared();
+}
+
+async function pickProjectDirShared(): Promise<WorkspaceInfo | null> {
+  if (!window.orchid?.session?.pickProjectDir) {
+    return null;
+  }
+  try {
     advanceDraftGeneration();
-    if (window.orchid?.session?.clearActive) {
-      await window.orchid.session.clearActive();
+    const info = await window.orchid.session.pickProjectDir();
+    setWorkspaceState(info);
+    // The main process turns a non-empty session into a draft in the new
+    // project. Do not make the old conversation appear to have moved.
+    const current = activeSession;
+    if (current?.chains.length) {
+      setActiveSession(null);
+    } else if (current && info.cwd) {
+      setActiveSession((prev) => (prev ? { ...prev, cwd: info.cwd } : null));
     }
+    return info;
+  } catch (err) {
+    console.error('Failed to pick project directory:', err);
+    return null;
+  }
+}
+
+async function setWorkspacePathShared(cwd: string): Promise<WorkspaceInfo | null> {
+  if (!window.orchid?.session?.setWorkspace) {
+    return null;
+  }
+  try {
+    advanceDraftGeneration();
+    const info = await window.orchid.session.setWorkspace({ cwd });
+    setWorkspaceState(info);
+    // Binding a new project from a non-empty conversation starts a draft in
+    // main. Keep the old conversation out of the center pane rather than
+    // making it look as though it moved projects.
+    const current = activeSession;
+    if (current?.chains.length) {
+      setActiveSession(null);
+    } else if (current && info.cwd) {
+      setActiveSession((prev) => (prev ? { ...prev, cwd: info.cwd } : null));
+    }
+    return info;
+  } catch (err) {
+    console.error('Failed to set workspace:', err);
+    return null;
+  }
+}
+
+async function changeCwdShared(id: string, cwd: string): Promise<Session | null> {
+  if (!window.orchid?.session?.changeCwd) {
+    return null;
+  }
+  try {
+    const session = await window.orchid.session.changeCwd({ id, cwd });
+    if (activeSession?.id === id) {
+      setActiveSession(session);
+    }
+    void getWorkspaceShared();
+    await refreshShared();
+    return session;
+  } catch (err) {
+    console.error('Failed to change session cwd:', err);
+    return null;
+  }
+}
+
+async function deleteSessionShared(id: string): Promise<void> {
+  if (!window.orchid?.session?.delete) {
+    if (activeSession?.id === id) {
+      setActiveSession(null);
+    }
+    setListState({ status: 'empty' });
+    return;
+  }
+
+  await window.orchid.session.delete({ id });
+  if (activeSession?.id === id) {
     setActiveSession(null);
-    void getWorkspace();
-  }, [getWorkspace, advanceDraftGeneration]);
+  }
+  await refreshShared();
+}
 
-  const pickProjectDir = useCallback(async (): Promise<WorkspaceInfo | null> => {
-    if (!window.orchid?.session?.pickProjectDir) {
-      return null;
+async function renameShared(id: string, name: string): Promise<void> {
+  if (!window.orchid?.session?.rename) {
+    if (activeSession?.id === id) {
+      setActiveSession((prev) => (prev ? { ...prev, name } : null));
     }
-    try {
-      advanceDraftGeneration();
-      const info = await window.orchid.session.pickProjectDir();
-      setWorkspace(info);
-      // The main process turns a non-empty session into a draft in the new
-      // project. Do not make the old conversation appear to have moved.
-      if (activeSession?.chains.length) {
-        setActiveSession(null);
-      } else if (activeSession && info.cwd) {
-        setActiveSession((prev) => (prev ? { ...prev, cwd: info.cwd } : null));
-      }
-      return info;
-    } catch (err) {
-      console.error('Failed to pick project directory:', err);
-      return null;
-    }
-  }, [activeSession, advanceDraftGeneration]);
+    setListState((prev) => {
+      if (prev.status !== 'ready' && prev.status !== 'partial') return prev;
+      return {
+        ...prev,
+        sessions: prev.sessions.map((session) => (
+          session.id === id ? { ...session, name } : session
+        )),
+      };
+    });
+    return;
+  }
 
-  const setWorkspacePath = useCallback(async (cwd: string): Promise<WorkspaceInfo | null> => {
-    if (!window.orchid?.session?.setWorkspace) {
-      return null;
-    }
-    try {
-      advanceDraftGeneration();
-      const info = await window.orchid.session.setWorkspace({ cwd });
-      setWorkspace(info);
-      // Binding a new project from a non-empty conversation starts a draft in
-      // main. Keep the old conversation out of the center pane rather than
-      // making it look as though it moved projects.
-      if (activeSession?.chains.length) {
-        setActiveSession(null);
-      } else if (activeSession && info.cwd) {
-        setActiveSession((prev) => (prev ? { ...prev, cwd: info.cwd } : null));
-      }
-      return info;
-    } catch (err) {
-      console.error('Failed to set workspace:', err);
-      return null;
-    }
-  }, [activeSession, advanceDraftGeneration]);
+  await window.orchid.session.rename(id, name);
+  if (activeSession?.id === id) {
+    setActiveSession((prev) => (prev ? { ...prev, name } : null));
+  }
+  await refreshShared();
+}
 
-  const changeCwd = useCallback(
-    async (id: string, cwd: string): Promise<Session | null> => {
-      if (!window.orchid?.session?.changeCwd) {
-        return null;
-      }
-      try {
-        const session = await window.orchid.session.changeCwd({ id, cwd });
-        if (activeSession?.id === id) {
-          setActiveSession(session);
-        }
-        void getWorkspace();
-        await refresh();
-        return session;
-      } catch (err) {
-        console.error('Failed to change session cwd:', err);
-        return null;
-      }
-    },
-    [activeSession, getWorkspace, refresh],
-  );
-
-  const deleteSession = useCallback(
-    async (id: string) => {
-      if (!window.orchid?.session?.delete) {
-        if (activeSession?.id === id) {
-          setActiveSession(null);
-        }
-        setListState({ status: 'empty' });
-        return;
-      }
-
-      await window.orchid.session.delete({ id });
-      if (activeSession?.id === id) {
-        setActiveSession(null);
-      }
-      await refresh();
-    },
-    [activeSession, refresh],
-  );
-
-  const rename = useCallback(
-    async (id: string, name: string) => {
-      if (!window.orchid?.session?.rename) {
-        if (activeSession?.id === id) {
-          setActiveSession((prev) => (prev ? { ...prev, name } : null));
-        }
-        setListState((prev) => {
-          if (prev.status !== 'ready' && prev.status !== 'partial') return prev;
-          return {
-            ...prev,
-            sessions: prev.sessions.map((session) => (
-              session.id === id ? { ...session, name } : session
-            )),
-          };
-        });
-        return;
-      }
-
-      await window.orchid.session.rename(id, name);
-      if (activeSession?.id === id) {
-        setActiveSession((prev) => (prev ? { ...prev, name } : null));
-      }
-      await refresh();
-    },
-    [activeSession, refresh],
-  );
-
-  const changeModel = useCallback(
-    async (id: string, selection: ModelSelection | null, modelLabel?: string | null) => {
-      const resolvedModelLabel = modelLabel ?? selection?.modelId ?? null;
-      if (!window.orchid?.session?.changeModel) {
-        if (activeSession?.id === id) {
-          setActiveSession((prev) => (prev ? {
-            ...prev,
-            selection,
-            modelLabel: resolvedModelLabel,
-          } : null));
-        }
-        setListState((prev) => {
-          if (prev.status !== 'ready' && prev.status !== 'partial') return prev;
-          return {
-            ...prev,
-            sessions: prev.sessions.map((s) =>
-              s.id === id ? {
-                ...s,
-                modelLabel: resolvedModelLabel,
-              } : s,
-            ),
-          };
-        });
-        return;
-      }
-
-      await window.orchid.session.changeModel(
-        id,
+async function changeModelShared(
+  id: string,
+  selection: ModelSelection | null,
+  modelLabel?: string | null,
+): Promise<void> {
+  const resolvedModelLabel = modelLabel ?? selection?.modelId ?? null;
+  if (!window.orchid?.session?.changeModel) {
+    if (activeSession?.id === id) {
+      setActiveSession((prev) => (prev ? {
+        ...prev,
         selection,
-        resolvedModelLabel,
-      );
-      if (activeSession?.id === id) {
-        setActiveSession((prev) => (prev ? {
-          ...prev,
-          selection,
-          modelLabel: resolvedModelLabel,
-        } : null));
-      }
-      await refresh();
-    },
-    [activeSession, refresh],
+        modelLabel: resolvedModelLabel,
+      } : null));
+    }
+    setListState((prev) => {
+      if (prev.status !== 'ready' && prev.status !== 'partial') return prev;
+      return {
+        ...prev,
+        sessions: prev.sessions.map((s) =>
+          s.id === id ? {
+            ...s,
+            modelLabel: resolvedModelLabel,
+          } : s,
+        ),
+      };
+    });
+    return;
+  }
+
+  await window.orchid.session.changeModel(
+    id,
+    selection,
+    resolvedModelLabel,
   );
+  if (activeSession?.id === id) {
+    setActiveSession((prev) => (prev ? {
+      ...prev,
+      selection,
+      modelLabel: resolvedModelLabel,
+    } : null));
+  }
+  await refreshShared();
+}
+
+/** Test-only access to the shared cache (not for product code). */
+export const __sessionCacheTest = {
+  reset(): void {
+    for (const unsub of unsubscribers.splice(0)) {
+      try {
+        unsub();
+      } catch {
+        // ignore
+      }
+    }
+    activeSession = null;
+    listState = { status: 'loading' };
+    workspace = null;
+    isLoading = false;
+    draftGeneration = 0;
+    loadGeneration = 0;
+    bootstrapped = false;
+    listeners.clear();
+    cachedSnapshot = {
+      activeSession,
+      listState,
+      workspace,
+      isLoading,
+      draftGeneration,
+    };
+  },
+  getSnapshot,
+  getActiveSession: () => activeSession,
+  getListState: () => listState,
+  getWorkspace: () => workspace,
+  getDraftGeneration: () => draftGeneration,
+  getLoadGeneration: () => loadGeneration,
+  refresh: refreshShared,
+  load: loadShared,
+  enterDraft: enterDraftShared,
+  create: createShared,
+  deleteSession: deleteSessionShared,
+  rename: renameShared,
+  changeModel: changeModelShared,
+  pickProjectDir: pickProjectDirShared,
+  setWorkspace: setWorkspacePathShared,
+  changeCwd: changeCwdShared,
+  getWorkspaceFromMain: getWorkspaceShared,
+  ensureBootstrapped,
+  subscribe,
+};
+
+// ── Hook ─────────────────────────────────────────────────────────────────────
+
+export function useSession(): UseSessionReturn {
+  ensureBootstrapped();
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+
+  const load = useCallback((id: string) => loadShared(id), []);
+  const create = useCallback(() => createShared(), []);
+  const enterDraft = useCallback(() => enterDraftShared(), []);
+  const deleteSession = useCallback((id: string) => deleteSessionShared(id), []);
+  const rename = useCallback((id: string, name: string) => renameShared(id, name), []);
+  const changeModel = useCallback(
+    (id: string, selection: ModelSelection | null, modelLabel?: string | null) =>
+      changeModelShared(id, selection, modelLabel),
+    [],
+  );
+  const getWorkspace = useCallback(() => getWorkspaceShared(), []);
+  const pickProjectDir = useCallback(() => pickProjectDirShared(), []);
+  const setWorkspace = useCallback((cwd: string) => setWorkspacePathShared(cwd), []);
+  const changeCwd = useCallback((id: string, cwd: string) => changeCwdShared(id, cwd), []);
+  const refresh = useCallback(() => refreshShared(), []);
 
   return {
-    activeSession,
-    listState,
-    workspace,
+    activeSession: snapshot.activeSession,
+    listState: snapshot.listState,
+    workspace: snapshot.workspace,
     load,
     create,
     enterDraft,
@@ -442,11 +563,11 @@ export function useSession(): UseSessionReturn {
     changeModel,
     getWorkspace,
     pickProjectDir,
-    setWorkspace: setWorkspacePath,
+    setWorkspace,
     changeCwd,
-    draftGeneration,
+    draftGeneration: snapshot.draftGeneration,
     refresh,
-    isLoading,
+    isLoading: snapshot.isLoading,
   };
 }
 

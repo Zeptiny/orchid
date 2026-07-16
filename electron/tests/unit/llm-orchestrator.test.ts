@@ -432,6 +432,55 @@ describe('executeToolCall', () => {
     expect(result.content).toContain("does not exist");
   });
 
+  it('rejects invalid args via Zod validation on the agent path', async () => {
+    const handler = vi.fn(async () => 'should not run');
+    registry.register(
+      {
+        name: 'echo',
+        description: 'Echo input',
+        inputSchema: z.object({ text: z.string() }),
+        category: 'test',
+      },
+      handler,
+    );
+
+    const toolCall = makeToolCall('tc-1', 'echo', '{}');
+    const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
+
+    expect(result.is_error).toBe(true);
+    expect(result.content).toContain('Invalid arguments');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('passes Zod-parsed data to the handler on the agent path', async () => {
+    const handler = vi.fn(async (input) => {
+      const args = input as { text: string; count?: number };
+      return `Echo: ${args.text} x${args.count ?? 1}`;
+    });
+    registry.register(
+      {
+        name: 'echo',
+        description: 'Echo input',
+        inputSchema: z.object({
+          text: z.string(),
+          count: z.number().optional().default(1),
+        }),
+        category: 'test',
+      },
+      handler,
+    );
+
+    const toolCall = makeToolCall('tc-1', 'echo', '{"text":"hi"}');
+    const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
+
+    expect(result.is_error).not.toBe(true);
+    expect(result.content).toBe('Echo: hi x1');
+    expect(handler).toHaveBeenCalledWith(
+      { text: 'hi', count: 1 },
+      expect.objectContaining({ cwd: TEST_TOOL_CWD }),
+    );
+  });
+
   it('handles tool execution error', async () => {
     registry.register(
       {
@@ -497,25 +546,51 @@ describe('executeToolCall', () => {
       expect(result.is_error).toBe(true);
     });
 
-    it('skips timeout for exempt tools', async () => {
+    it('skips timeout when definition.noTimeout is set', async () => {
+      registry.register(
+        {
+          name: 'custom_long',
+          description: 'Long-running exempt tool',
+          inputSchema: z.object({}),
+          category: 'test',
+          noTimeout: true,
+        },
+        async () => 'ok',
+      );
+
+      const toolCall = makeToolCall('tc-1', 'custom_long', '{}');
+      const result = await executeToolCall(toolCall, registry, {
+        cwd: TEST_TOOL_CWD,
+        timeoutSeconds: 0.001,
+      });
+
+      expect(result.content).toBe('ok');
+    });
+
+    it('applies outer timeout to wait_for_subagent (not in TOOLS_WITHOUT_TIMEOUT)', async () => {
       registry.register(
         {
           name: 'wait_for_subagent',
           description: 'Wait tool',
           inputSchema: z.object({}),
           category: 'test',
-          noTimeout: true,
         },
-        async () => 'waited',
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+          return 'never';
+        },
       );
 
       const toolCall = makeToolCall('tc-1', 'wait_for_subagent', '{}');
-      const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD, 
-        timeoutSeconds: 0.001, // Would timeout if not exempt
+      const result = await executeToolCall(toolCall, registry, {
+        cwd: TEST_TOOL_CWD,
+        waitTimeoutSeconds: 0.05,
       });
 
-      expect(result.content).toBe('waited');
-    });
+      expect(result.is_error).toBe(true);
+      expect(result.content).toContain('timed out');
+      expect(result.content).toContain('wait_for_subagent');
+    }, 10000);
 
     it('skips timeout for tools in TOOLS_WITHOUT_TIMEOUT set', async () => {
       registry.register(
@@ -535,6 +610,47 @@ describe('executeToolCall', () => {
 
       expect(result.content).toBe('output');
     });
+
+    it('aborts tool context signal on outer timeout so process tools can kill children', async () => {
+      let sawAbort = false;
+      registry.register(
+        {
+          name: 'slow_abortable',
+          description: 'Slow tool that listens for abort',
+          inputSchema: z.object({}),
+          category: 'test',
+        },
+        async (_input, ctx) => {
+          await new Promise<void>((resolve) => {
+            if (ctx.abortSignal?.aborted) {
+              sawAbort = true;
+              resolve();
+              return;
+            }
+            ctx.abortSignal?.addEventListener(
+              'abort',
+              () => {
+                sawAbort = true;
+                resolve();
+              },
+              { once: true },
+            );
+            setTimeout(resolve, 5000);
+          });
+          return 'done';
+        },
+      );
+
+      const toolCall = makeToolCall('tc-1', 'slow_abortable', '{}');
+      const result = await executeToolCall(toolCall, registry, {
+        cwd: TEST_TOOL_CWD,
+        timeoutSeconds: 0.1,
+      });
+
+      expect(result.content).toContain('timed out');
+      expect(result.is_error).toBe(true);
+      expect(sawAbort).toBe(true);
+    }, 10_000);
   });
 });
 

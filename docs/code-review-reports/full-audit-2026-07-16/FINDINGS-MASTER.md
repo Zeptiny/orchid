@@ -1,10 +1,11 @@
 # Full Audit 2026-07-16 — Master Findings Table
 
 **Source:** S1–S6 section reports (re-read in full)  
-**Mode:** report-only · **Fixes applied:** none  
+**Mode:** audit + remediation tracking · **Branch:** `fix/full-audit-2026-07-16`  
 **Dedup rules:** Same root cause / same primary fix site → one master row. Cross-section corroboration listed in **Sections**. Severity = highest reported. Confidence = max. Autofix = most conservative when mixed.
 
-**Totals after cross-section dedup:** **24 P0 · 111 P1 · 115 P2 · 32 P3 = 282 unique findings**
+**Totals after cross-section dedup:** **24 P0 · 111 P1 · 115 P2 · 32 P3 = 282 unique findings**  
+**Remediation (this branch):** **16 P0 fixed** (M-P0-009…024) · **8 P0 open** (M-P0-001…008) · **P1–P3 open**
 
 Section raw tables (before cross-dedup) had ~320+ row citations; cross-section merges collapsed repeated root causes into single master IDs.
 
@@ -18,6 +19,7 @@ Section raw tables (before cross-dedup) had ~320+ row citations; cross-section m
 | **Sections** | Which audit sections reported it (`S1`…`S6`) |
 | **Primary file** | Best single location for navigation |
 | **Autofix** | `safe_auto` · `gated_auto` · `manual` · `advisory` |
+| **Status** | `open` · `fixed` (landed on this branch) |
 
 Protected paths (`docs/brainstorms|plans|solutions`) were never flagged for deletion.
 
@@ -25,39 +27,41 @@ Protected paths (`docs/brainstorms|plans|solutions`) were never flagged for dele
 
 ## P0 — Critical (24)
 
-Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
+Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).  
+**Status:** `fixed` = remediated on `fix/full-audit-2026-07-16`; `open` = still outstanding.
 
-| ID | Title | Primary file | Sections | Conf | Autofix |
-|----|-------|--------------|----------|------|---------|
-| M-P0-001 | `config:save` → MCP stdio RCE | `main/ipc/config.ts:148` | S1, S3, S4 | 100 | manual |
-| M-P0-002 | Project MCP auto-spawn | project-registry + transport | S4, S1 | 90 | manual |
-| M-P0-003 | No FS path sandbox | `tools/types.ts:89` | S4 | 100 | manual |
-| M-P0-004 | `tool:execute` absolute reads | `main/ipc/tool.ts:36` | S1, S4 | 100 | manual |
-| M-P0-005 | Unrestricted shell RCE | `execute-command.ts:222` | S4 | 100 | manual |
-| M-P0-006 | `web_fetch` SSRF | `tools/web/fetch.ts:87` | S4 | 100 | manual |
-| M-P0-007 | Env-auth secret exfil | `providers/index.ts:160` | S3 | 75 | manual |
-| M-P0-008 | `allowInsecureHttp` dropped | `compatible.ts:63` + index.ts | S3 | 100 | gated_auto |
-| M-P0-009 | submit_api_key ∥ disconnect race | `ipc/providers.ts` | S3 | 85 | manual |
-| M-P0-010 | validateConnection re-enables disabled | `ipc/providers.ts` | S3 | 90 | manual |
-| M-P0-011 | Unbounded `wait_for_subagent` | `agents/manager.ts:264` | S2, S4 | 100 | gated_auto |
-| M-P0-012 | Esc orphans subagents | `ipc/chat.ts` | S1, S2 | 92 | gated_auto |
-| M-P0-013 | Cross-session waiter flush | `tools/subagent/interrupt.ts` | S2 | 90 | manual |
-| M-P0-014 | Quit doesn’t kill bg process groups | `main/index.ts:314` | S4, S1 | 92 | gated_auto |
-| M-P0-015 | MCP startup timeout false-connected | `mcp/manager.ts:153` | S4 | 88 | gated_auto |
-| M-P0-016 | Tool timeout abandons detached shells | `tool-dispatch` + execute | S4 | 90 | gated_auto |
-| M-P0-017 | Agent path skips Zod validate | `llm/tool-dispatch.ts:144` | S2, S4 | 88 | gated_auto |
-| M-P0-018 | Dual `useSession()` Config vs Chat | `ConfigView.tsx:53` | S5 | 92 | manual |
-| M-P0-019 | Incomplete skill/agent seed | `skills/registry.ts:190` | S4, S6 | 100 | gated_auto |
-| M-P0-020 | Empty `allowed_tools` semantics split | `tools/registry.ts:49` | S4, S6 | 100 | gated_auto |
-| M-P0-021 | No `list_mcp_resources` | tools/mcp + manager | S4, S6 | 100 | manual |
-| M-P0-022 | `read_mcp_resource` not on general | `general/AGENT.md` | S6 | 90 | safe_auto |
-| M-P0-023 | No AST index management tool | tools/ast | S4, S6 | 100 | manual |
-| M-P0-024 | Session lifecycle UI-only | commands + session IPC | S6, S1 | 100 | manual |
+| ID | Title | Primary file | Sections | Conf | Autofix | Status |
+|----|-------|--------------|----------|------|---------|--------|
+| M-P0-001 | `config:save` → MCP stdio RCE | `main/ipc/config.ts:148` | S1, S3, S4 | 100 | manual | open |
+| M-P0-002 | Project MCP auto-spawn | project-registry + transport | S4, S1 | 90 | manual | open |
+| M-P0-003 | No FS path sandbox | `tools/types.ts:89` | S4 | 100 | manual | open |
+| M-P0-004 | `tool:execute` absolute reads | `main/ipc/tool.ts:36` | S1, S4 | 100 | manual | open |
+| M-P0-005 | Unrestricted shell RCE | `execute-command.ts:222` | S4 | 100 | manual | open |
+| M-P0-006 | `web_fetch` SSRF | `tools/web/fetch.ts:87` | S4 | 100 | manual | open |
+| M-P0-007 | Env-auth secret exfil | `providers/index.ts:160` | S3 | 75 | manual | open |
+| M-P0-008 | `allowInsecureHttp` dropped | `compatible.ts:63` + index.ts | S3 | 100 | gated_auto | open |
+| M-P0-009 | submit_api_key ∥ disconnect race | `ipc/providers.ts` | S3 | 85 | manual | fixed |
+| M-P0-010 | validateConnection re-enables disabled | `ipc/providers.ts` | S3 | 90 | manual | fixed |
+| M-P0-011 | Unbounded `wait_for_subagent` | `agents/manager.ts:264` | S2, S4 | 100 | gated_auto | fixed |
+| M-P0-012 | Esc orphans subagents | `ipc/chat.ts` | S1, S2 | 92 | gated_auto | fixed |
+| M-P0-013 | Cross-session waiter flush | `tools/subagent/interrupt.ts` | S2 | 90 | manual | fixed |
+| M-P0-014 | Quit doesn’t kill bg process groups | `main/index.ts:314` | S4, S1 | 92 | gated_auto | fixed |
+| M-P0-015 | MCP startup timeout false-connected | `mcp/manager.ts:153` | S4 | 88 | gated_auto | fixed |
+| M-P0-016 | Tool timeout abandons detached shells | `tool-dispatch` + execute | S4 | 90 | gated_auto | fixed |
+| M-P0-017 | Agent path skips Zod validate | `llm/tool-dispatch.ts:144` | S2, S4 | 88 | gated_auto | fixed |
+| M-P0-018 | Dual `useSession()` Config vs Chat | `ConfigView.tsx:53` | S5 | 92 | manual | fixed |
+| M-P0-019 | Incomplete skill/agent seed | `skills/registry.ts:190` | S4, S6 | 100 | gated_auto | fixed |
+| M-P0-020 | Empty `allowed_tools` semantics split | `tools/registry.ts:49` | S4, S6 | 100 | gated_auto | fixed |
+| M-P0-021 | No `list_mcp_resources` | tools/mcp + manager | S4, S6 | 100 | manual | fixed |
+| M-P0-022 | `read_mcp_resource` not on general | `general/AGENT.md` | S6 | 90 | safe_auto | fixed |
+| M-P0-023 | No AST index management tool | tools/ast | S4, S6 | 100 | manual | fixed |
+| M-P0-024 | Session lifecycle UI-only | commands + session IPC | S6, S1 | 100 | manual | fixed |
 
 **Related product orphan (S6 P0 map, tracked as P1):** config/providers agent CRUD gap → **M-P1-053**.
 
 ### M-P0-001 — `config:save` → MCP stdio RCE
 
+- **Status:** open
 - **Primary:** `electron/src/main/ipc/config.ts:148` · **Sections:** S1, S3, S4 · **Conf:** 100 · **Autofix:** manual
 - **Why it matters:** A compromised or buggy renderer can turn a settings write into main-process code execution: config is persisted, project MCP managers are invalidated, and the next chat turn (or MCP status path) spawns the attacker-chosen command with full user privileges.
 - **Evidence:** `configSaveSchema` allows free-form `mcp_servers` nested records; after save, `clearProjectRuntimeRegistry` / `invalidateAllProjectMCPManagers`; `ProjectMCPManagerRegistry` → `startAll` → `StdioClientTransport({ command, args, env, cwd })` with no allowlist, confirmation, or path confinement; same path used by intentional UI (`MCPServersTab`) without a privileged gate.
@@ -65,6 +69,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-002 — Project `.orchid.json` MCP auto-spawn
 
+- **Status:** open
 - **Primary:** `mcp/transport.ts` + project-registry + config merge · **Sections:** S4, S1 · **Conf:** 90 · **Autofix:** manual
 - **Why it matters:** Home + project config deep-merge means a cloned repo’s `.orchid` / project MCP map can introduce a malicious server that runs when the project is bound—stdio spawn as the desktop user without a trust prompt.
 - **Evidence:** Config merge includes `mcp_servers` from project layer; `ProjectMCPManagerRegistry` sets cwd to `projectDir` and starts every configured server; `createTransport` spawns `command`/`args`/`env` with no binary allowlist; validation only checks name regex and non-empty command; manager documents no sandboxing.
@@ -72,6 +77,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-003 — Filesystem tools have no project path sandbox
 
+- **Status:** open
 - **Primary:** `electron/src/main/tools/types.ts:89` · **Sections:** S4 · **Conf:** 100 · **Autofix:** manual
 - **Why it matters:** Any agent turn (or prompt injection) can read/write/enumerate arbitrary absolute paths outside the bound workspace—secrets, SSH keys, other projects, system files. Primary agent-tool boundary is open by design (deferred R20).
 - **Evidence:** `resolveToolPath()` keeps absolute paths absolute and only `path.resolve`/`normalize`—no realpath containment under `ctx.cwd`; read/write/edit/glob/read_directory/grep all use it; security notes in filesystem tools document R20 deferral; contrast: `defs/paths.ts` already has realpath containment unused by tools.
@@ -79,6 +85,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-004 — `tool:execute` absolute path exfiltration
 
+- **Status:** open
 - **Primary:** `electron/src/main/ipc/tool.ts:36` · **Sections:** S1, S4 · **Conf:** 100 · **Autofix:** manual
 - **Why it matters:** Renderer-facing “safe” tools still allow absolute reads. Compromised renderer can exfiltrate SSH keys, vault material, cookies, etc. without the agent loop.
 - **Evidence:** `RENDERER_ALLOWED_TOOLS` includes read/read_directory/glob/grep; handlers use same unrestricted `resolveToolPath`; `read.ts` documents unrestricted absolute paths; attack: `tool:execute({ name: 'read', args: { file_path: '/home/user/.ssh/id_rsa' } })`.
@@ -86,6 +93,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-005 — `execute_command` unrestricted shell RCE
 
+- **Status:** open
 - **Primary:** `electron/src/main/tools/process/execute-command.ts:222` · **Sections:** S4 · **Conf:** 100 · **Autofix:** manual
 - **Why it matters:** Prompt injection or a malicious model response can run arbitrary shell as the logged-in user with full privileges and full `process.env` (API keys, tokens), plus optional cwd escape.
 - **Evidence:** Default `shell=true` → `/bin/sh -c command`; background path same; `env = { ...process.env, ...ENV_SUPPRESSION }` only sets NO_COLOR/TERM/PAGER; `working_directory` via unrestricted `resolveToolPath`; no confirmation, allowlist, or capability split.
@@ -93,6 +101,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-006 — `web_fetch` classic SSRF
 
+- **Status:** open
 - **Primary:** `electron/src/main/tools/web/fetch.ts:87` · **Sections:** S4 · **Conf:** 100 · **Autofix:** manual
 - **Why it matters:** Agent (or prompt injection) can force main process to request localhost, RFC1918, link-local, and cloud metadata (e.g. 169.254.169.254), exfiltrating credentials or probing internal services; `redirect:'follow'` can bounce public → internal.
 - **Evidence:** `validateUrl` only checks non-empty + http/https; no private IP/localhost/metadata checks; `fetch(..., { redirect: 'follow' })` with no post-redirect revalidation; body up to 10 MiB returned to the model.
@@ -100,6 +109,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-007 — Env-auth + generic endpoint secret exfil
 
+- **Status:** open
 - **Primary:** `electron/src/main/providers/index.ts:160` · **Sections:** S3 · **Conf:** 75 · **Autofix:** manual
 - **Why it matters:** Environment auth reads any `process.env` value matching the user-supplied variable name and sends it as the API key to a fully user-controlled generic endpoint—compromised renderer can bind e.g. `OPENAI_API_KEY` / AWS tokens to an attacker URL.
 - **Evidence:** `resolveCredential`: `process.env[connection.credential.variable]` with no allowlist; `environmentVariableSchema` only `/^[A-Z_][A-Z0-9_]*$/`; generic drivers allow custom endpoints; IPC create/update accept env var + endpoint; adapter posts apiKey to user baseURL.
@@ -107,6 +117,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-008 — `allowInsecureHttp` dropped on request path
 
+- **Status:** open
 - **Primary:** `drivers/compatible.ts:63` + `providers/index.ts:176` · **Sections:** S3 · **Conf:** 100 · **Autofix:** gated_auto
 - **Why it matters:** Users who explicitly allow non-loopback HTTP can create/store credentials (IPC honors the flag) but chat/embed resolution re-validates without it—ready connections hard-fail at runtime; LAN/self-hosted HTTP is false-ready.
 - **Evidence:** IPC/registry validate with `allowInsecureNonLoopbackHttp: connection.allowInsecureHttp === true`; `resolveCredential` calls bare `validateGenericEndpoint(endpoint)`; `createCompatibleLanguageModel` re-validates without the flag; tests cover flag in isolation, not E2E resolve/execution.
@@ -114,6 +125,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-009 — Concurrent submit_api_key + disconnect leaves live key
 
+- **Status:** fixed · Per-connection mutex on submit/disconnect/disable/enable/update/validate; CAS vault cleanup after submit
 - **Primary:** `electron/src/main/ipc/providers.ts` · **Sections:** S3 · **Conf:** 85 · **Autofix:** manual
 - **Why it matters:** Independent handlers with no shared connection-level mutex; interleaving can leave a usable vault handle while UI reports disconnected (or reverse)—credentials not durably removed.
 - **Evidence:** `PROVIDERS_DISCONNECT` and `PROVIDERS_SUBMIT_API_KEY` only serialize their own store; constructed sequence: disconnect deletes vault → submit writes new key → disconnect marks disconnected → submit updates handle + may validate ready; vault and connection write locks are independent.
@@ -121,6 +133,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-010 — validateConnection re-enables disabled/disconnected
 
+- **Status:** fixed · Validate re-reads under lock; never overwrites `disabled`/`disconnected`
 - **Primary:** `electron/src/main/ipc/providers.ts` (validate path) · **Sections:** S3 · **Conf:** 90 · **Autofix:** manual
 - **Why it matters:** Concurrent validate/submit with disable/disconnect can overwrite terminal health back to `ready`/`needs_attention`, defeating user intent for new turns.
 - **Evidence:** `validateConnection` short-circuits only on snapshot health then always `connections.update({ health: ready|needs_attention })`; CREATE/UPDATE/SUBMIT/ENABLE end in validate after earlier read; concurrent DISABLE/DISCONNECT then validate’s update under ConnectionStore lock overwrites terminal health.
@@ -128,6 +141,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-011 — `wait_for_subagent` can hang forever
 
+- **Status:** fixed · 300s wait budget; timeout returns `isError` with still-running snapshot; does **not** cancel subagents
 - **Primary:** `agents/manager.ts:264` + tool-dispatch + wait · **Sections:** S2, S4 · **Conf:** 100 · **Autofix:** gated_auto
 - **Why it matters:** Hung or never-completing subagent blocks the parent indefinitely; UI stays “working”; background children keep consuming quota; neither tool timeout nor stream idle recovery can unblock.
 - **Evidence:** `manager.wait()` awaits waiters with no max wait/deadline/AbortSignal; `TOOLS_WITHOUT_TIMEOUT` includes `wait_for_subagent`; orchestrator `pauseIdleForTool()` clears idle timer for whole tool window; wait handler awaits `manager.wait` with no outer timeout.
@@ -135,6 +149,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-012 — Esc-cancel + interrupt timeout orphans subagents
 
+- **Status:** fixed · 3-phase Esc kept; interrupt TIMEOUT after Esc2 calls `cancelRunning(sessionId)` before dispose
 - **Primary:** `main/ipc/chat.ts` + interrupt-machine · **Sections:** S1, S2 · **Conf:** 92 · **Autofix:** gated_auto
 - **Why it matters:** Second Esc finalizes main INTERRUPTED without `cancelRunning`; 5s timeout disposes main only—children keep tools/LLM/persist while UI thinks the turn is over. `forceStop` cancels children; Esc path inconsistent.
 - **Evidence:** Second Esc sets `agentCancelled`, finalizes, advances to confirmSubagents, does not call `cancelRunning`; timeout → idle + `disposeActiveAgent` only; `cancelRunning` only on third Esc / forceAbort / forceStop.
@@ -142,6 +157,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-013 — Cross-session waiter flush
 
+- **Status:** fixed · Removed process-wide `flushStateCallbacks` from interrupt tool
 - **Primary:** `tools/subagent/interrupt.ts` + `agents/manager.ts` · **Sections:** S2 · **Conf:** 90 · **Autofix:** manual
 - **Why it matters:** Session B’s interrupt can unblock Session A’s blocked `wait_for_subagent` while A’s children still run—parent A continues on incomplete/empty results (cross-session timing side channel).
 - **Evidence:** Session A waits on A1; Session B `interrupt_subagents` → `cancelRunning(B)` then `flushStateCallbacks()`; flush iterates **all** process-wide records and resolves every pending waiter, including A1 still non-terminal; wait returns incomplete record.
@@ -149,6 +165,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-014 — App quit never terminates background process groups
 
+- **Status:** fixed · `before-quit` + `quitAndInstall` terminate/clear background store
 - **Primary:** `main/index.ts:314` + background-store · **Sections:** S4, S1 · **Conf:** 92 · **Autofix:** gated_auto
 - **Why it matters:** Detached shells/builds/PTYs survive Electron exit, holding ports/files/CPU and confusing the next session.
 - **Evidence:** `before-quit` cleans MCP, IPC, config, logging but never `getBackgroundStore().terminateAll()`/`clear()`; background spawns use `detached: true` process groups; detached children survive Electron exit.
@@ -156,6 +173,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-015 — MCP startup timeout false-connected
 
+- **Status:** fixed · Overall timeout full teardown; no connected ghosts; clear clients/tools/uri map
 - **Primary:** `mcp/manager.ts:153` · **Sections:** S4 · **Conf:** 88 · **Autofix:** gated_auto
 - **Why it matters:** Partial MCP startup (slow later server) closes healthy earlier servers, then tools hit dead transports while status still reports connected—silent tool failures and possible orphaned stdio children.
 - **Evidence:** On overall timeout, `startAll` awaits `_awaitRunner()` which stops and `client.close()`s every entry in `_clients`; status for already-connected servers remains `connected`; `_clearDisconnectedState` only drops non-connected entries; tools stay registered against closed clients.
@@ -163,6 +181,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-016 — Tool-dispatch timeout abandons detached shells
 
+- **Status:** fixed · Outer timeout AbortSignal; kill live `ChildProcess` process group (no bare-PID delayed kill)
 - **Primary:** `llm/tool-dispatch.ts` + execute-command · **Sections:** S4 · **Conf:** 90 · **Autofix:** gated_auto
 - **Why it matters:** Outer tool timeout rejects the Promise without killing the detached process group—children keep running; agent retries → more orphans; resource exhaustion outside the agent loop.
 - **Evidence:** `execute_command` spawns `detached: true`; `runWithToolTimeout` only Promise.races the handler and does not signal the child; long-running payload + ~60s outer timeout leaves process group alive; SIGTERM only if execute_command’s own timeout wins the race.
@@ -170,6 +189,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-017 — Agent tool path never runs Zod validation
 
+- **Status:** fixed · `registry.validate` before handler; handlers receive parsed data
 - **Primary:** `llm/tool-dispatch.ts:144` · **Sections:** S2, S4 · **Conf:** 88 · **Autofix:** gated_auto
 - **Why it matters:** IPC validates tool args; agent loop does not. Malformed LLM args reach handlers via `input as XInput`—type checker off on the primary execution path; Zod schemas exist but are unused there.
 - **Evidence:** `executeToolCall` JSON-parses args and calls `registered.handler(args, toolCtx)` without `registry.validate()`; IPC `tool:execute` does validate; handlers cast `unknown` input; registry `validate()` unused on agent path.
@@ -177,6 +197,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-018 — Dual `useSession()` Config vs Chat
 
+- **Status:** fixed · Shared module session store (`useSyncExternalStore`); Config and Chat share one state
 - **Primary:** `renderer/ConfigView.tsx:53` + ChatView + useSession · **Sections:** S5 · **Conf:** 92 · **Autofix:** manual
 - **Why it matters:** App keeps ChatView mounted under Config, but ConfigView mounts a second independent `useSession()`. Selecting/creating/deleting/rebinding from Config left rail only mutates Config’s local state—ChatView can show the old conversation or chat against a deleted/stale selection until full reload.
 - **Evidence:** App keeps ChatView mounted while ConfigView open (`hidden`); ConfigView and ChatView each call `useSession()` with no shared store; Config `handleSessionSelect` only `session.load` then `onClose`—never ChatView’s switch/hydrate paths; no `session:active-changed` reconciliation across instances.
@@ -184,6 +205,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-019 — Incomplete skill/agent seedDefaults
 
+- **Status:** fixed · Recursive seed + fill missing scripts/references/assets without clobbering user md
 - **Primary:** `skills/registry.ts:190` (+ agents) · **Sections:** S4, S6 · **Conf:** 100 · **Autofix:** gated_auto
 - **Why it matters:** First-run seed into `~/.orchid/skills/` leaves skill bodies without resource trees; skill tool resolves scripts/references/assets under skill dir—seeded installs get resource-not-found and broken workflows (compound, plan, resolve-pr-feedback, etc.).
 - **Evidence:** `seedDefaults` only `copyFileSync` for SKILL.md/AGENT.md; 13 default skills ship refs/scripts/assets; `executeResourceRead` requires those subdirs under `skill.location`; parity tests load from full source tree, never seeded home.
@@ -191,6 +213,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-020 — Empty `allowed_tools` semantics split
 
+- **Status:** fixed · Canonical empty = none; removed subagent empty→`*` coercion
 - **Primary:** `tools/registry.ts:49` · **Sections:** S4, S6 · **Conf:** 100 · **Autofix:** gated_auto
 - **Why it matters:** Empty allowlist is either “no tools” or “all tools” depending on path—silent tool starvation or accidental over-grant.
 - **Evidence:** `ToolRegistry.filter([])` returns `[]`; `tools/index.ts` comment claims empty means all tools for normal subagents; `subagent-runner` coerces empty → `['*']`; main `buildToolMap` / streamChat uses raw `filter` with no empty→`*`; web-fetch AGENT.md has `allowed_tools: []`.
@@ -198,6 +221,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-021 — No `list_mcp_resources`
 
+- **Status:** fixed · `list_mcp_resources` tool + `MCPManager.listResources()`
 - **Primary:** tools/mcp + manager · **Sections:** S4, S6 · **Conf:** 100 · **Autofix:** manual
 - **Why it matters:** MCP resources are enumerated into `_uriMap` at connect but never exposed as a list tool—agents must already know URIs; incomplete agent-native resource use.
 - **Evidence:** Manager `listResources` only fills `_uriMap`; only tool is `read_mcp_resource(uri)`; no list_mcp_resources / list_mcp_servers tools; no resource URI injection into dynamic prompt.
@@ -205,6 +229,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-022 — `read_mcp_resource` not on general agent
 
+- **Status:** fixed · Added to general `allowed_tools` (re-seed home agent to pick up)
 - **Primary:** `agents/defaults/general/AGENT.md` · **Sections:** S6 · **Conf:** 90 · **Autofix:** safe_auto
 - **Why it matters:** Tool is registered and parity inventory expects it, but main agent allowlist omits it—general cannot read MCP resources even when URIs are known.
 - **Evidence:** Tool registered in `tools/mcp/resource.ts` + `tools/index.ts`; parity expects `read_mcp_resource`; general `allowed_tools` lists `mcp::context7::*` / `mcp::example::*` but not `read_mcp_resource`.
@@ -212,6 +237,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-023 — No AST index management tool
 
+- **Status:** fixed · `ast_index` tool (`status|index|clear`) registered + on general
 - **Primary:** tools/ast · **Sections:** S4, S6 · **Conf:** 100 · **Autofix:** manual
 - **Why it matters:** UI has `/ast index` and RAG has `rag_index` (status|index|clear); agents cannot force rebuild, clear, or inspect AST status mid-turn—stale index after large refactors is a silent failure mode.
 - **Evidence:** AST tools are skeleton/function/refs/rename/replace only; some call `ensureIndexed` as side effect; RAG has `rag_index` action enum; AST IPC has status/index; no tool wrapper.
@@ -219,6 +245,7 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-024 — Session lifecycle + model change UI-only
 
+- **Status:** fixed · session_list/create/load/rename/delete/change_model tools + general allowlist
 - **Primary:** commands + session IPC · **Sections:** S6, S1 · **Conf:** 100 · **Autofix:** manual
 - **Why it matters:** Core multi-session product (`/new`, `/sessions`, `/rename`, `/delete`, `/model`) is UI/IPC-only—agent cannot create, switch, rename, delete sessions or change session model mid-session.
 - **Evidence:** `renderer/commands/registry.ts` defines session/model commands; `session:*` IPC; no session_list/create/load/rename/delete or session_change_model tools; coding tools do not rebind session selection.
@@ -540,13 +567,15 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ## Totals
 
-| Severity | Unique findings | ID range |
-|----------|-----------------|----------|
-| **P0** | **24** | M-P0-001 … M-P0-024 |
-| **P1** | **111** | M-P1-001 … M-P1-111 |
-| **P2** | **115** | M-P2-001 … M-P2-115 |
-| **P3** | **32** | M-P3-001 … M-P3-032 |
-| **Total** | **282** | |
+| Severity | Unique findings | ID range | Fixed (this branch) | Open |
+|----------|-----------------|----------|---------------------|------|
+| **P0** | **24** | M-P0-001 … M-P0-024 | **16** (009–024) | **8** (001–008) |
+| **P1** | **111** | M-P1-001 … M-P1-111 | 0 | 111 |
+| **P2** | **115** | M-P2-001 … M-P2-115 | 0 | 115 |
+| **P3** | **32** | M-P3-001 … M-P3-032 | 0 | 32 |
+| **Total** | **282** | | **16** | **266** |
+
+P1–P3 tables have no **Status** column yet (all open). Add when remediated.
 
 ---
 
@@ -582,4 +611,5 @@ Overlaps mean sum > 282.
 | [SYNTHESIS.md](./SYNTHESIS.md) | Top blockers + fix waves |
 | **This file** | Complete deduplicated master table |
 
-**Generated:** 2026-07-16 · Full re-read of all six section reports before merge.
+**Generated:** 2026-07-16 · Full re-read of all six section reports before merge.  
+**Remediation update:** 2026-07-16 · M-P0-009…024 marked `fixed` on `fix/full-audit-2026-07-16`.

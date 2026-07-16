@@ -46,6 +46,14 @@ interface InternalServerStatus {
   error: string | null;
 }
 
+/** MCP resource metadata discovered at connect time. */
+export interface MCPResourceInfo {
+  uri: string;
+  server: string;
+  name?: string;
+  description?: string;
+}
+
 // ---------------------------------------------------------------------------
 // MCPManager
 // ---------------------------------------------------------------------------
@@ -57,8 +65,8 @@ export class MCPManager {
   // Tools discovered from all servers: namespaced name → { definition, handler }
   private _tools = new Map<string, RegisteredTool>();
 
-  // URI → server name mapping for resource reading
-  private _uriMap = new Map<string, string>();
+  // URI → resource metadata for listing/reading
+  private _uriMap = new Map<string, MCPResourceInfo>();
 
   // Per-server status tracking
   private _serverStatus = new Map<string, InternalServerStatus>();
@@ -151,21 +159,27 @@ export class MCPManager {
         }),
       ]);
     } catch {
-      // Overall budget exhausted — tear down the runner, mark remaining unavailable
+      // Overall budget exhausted — full teardown so no connected ghosts remain
       console.warn(
         `MCP startup timed out after ${this._startupTimeout / 1000}s; continuing with reduced MCP availability`,
       );
       await this._awaitRunner();
 
+      const timeoutErr = `startup timed out after ${Math.round(this._startupTimeout / 1000)}s`;
       for (const [, status] of this._serverStatus) {
-        if (status.status !== 'connected' && status.status !== 'failed') {
-          status.status = 'unavailable';
-          status.error = `startup timed out after ${Math.round(this._startupTimeout / 1000)}s`;
+        if (status.status === 'failed') {
+          continue;
         }
+        // Runner already closed clients — any prior "connected" is a ghost
+        status.status = status.status === 'connected' ? 'failed' : 'unavailable';
+        status.error = timeoutErr;
+        status.toolCount = 0;
       }
 
-      // Clear dead sessions/tools so callTool/readResource report cleanly
-      this._clearDisconnectedState();
+      // Drop all clients/tools/URIs — tools must not stay registered against closed clients
+      this._clients.clear();
+      this._tools.clear();
+      this._uriMap.clear();
       return;
     }
 
@@ -311,7 +325,16 @@ export class MCPManager {
    * @returns The server name, or undefined if no server owns this URI.
    */
   getResourceServer(uri: string): string | undefined {
-    return this._uriMap.get(uri);
+    return this._uriMap.get(uri)?.server;
+  }
+
+  /**
+   * List all MCP resources discovered at connect time.
+   *
+   * @returns Resource entries with uri, server, and optional name/description.
+   */
+  listResources(): MCPResourceInfo[] {
+    return Array.from(this._uriMap.values()).map((info) => ({ ...info }));
   }
 
   /**
@@ -472,7 +495,12 @@ export class MCPManager {
       // Enumerate resources — also bounded by same per-server budget
       const resourcesResult = await this._raceWithSignal(client.listResources(), combined, timeoutMessage);
       for (const resource of resourcesResult.resources) {
-        this._uriMap.set(resource.uri, serverName);
+        this._uriMap.set(resource.uri, {
+          uri: resource.uri,
+          server: serverName,
+          name: resource.name || undefined,
+          description: resource.description || undefined,
+        });
       }
     } catch (err) {
       try {
@@ -537,8 +565,8 @@ export class MCPManager {
     }
 
     // Remove URIs belonging to non-connected servers
-    for (const [uri, serverName] of Array.from(this._uriMap)) {
-      const status = this._serverStatus.get(serverName);
+    for (const [uri, info] of Array.from(this._uriMap)) {
+      const status = this._serverStatus.get(info.server);
       if (!status || status.status !== 'connected') {
         this._uriMap.delete(uri);
       }

@@ -299,6 +299,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     cwd: context.cwd,
     agentScopeId,
     projectRuntime,
+    abortSignal,
   }, {
     skills: projectRuntime
       ? new Map(projectRuntime.skills)

@@ -321,19 +321,31 @@ app.on('before-quit', async (event) => {
       bgIdleOwnershipTimer = null;
     }
 
-    // 1. Close file logging stream
+    // 1. Kill background process groups before tearing down MCP/IPC
+    const bgStore = getBackgroundStore();
+    bgStore.terminateAll();
+    // Drain for SIGTERM→SIGKILL escalation in BackgroundProcessStore (2s)
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, 2100);
+      if (typeof t === 'object' && t && 'unref' in t) {
+        (t as NodeJS.Timeout).unref();
+      }
+    });
+    bgStore.clear();
+
+    // 2. Close file logging stream
     await closeFileLogging();
 
-    // 2. Unregister IPC handlers
+    // 3. Unregister IPC handlers
     unregisterAllIPC();
 
-    // 2. Shut down MCP transports
+    // 4. Shut down MCP transports
     await shutdownProjectMCPManagers();
 
-    // 3. Destroy auto-updater
+    // 5. Destroy auto-updater
     destroyUpdater();
 
-    // 4. Reset config manager
+    // 6. Reset config manager
     ConfigManager.reset();
     providerCatalogStore = null;
     providerCredentialVault = null;
@@ -344,7 +356,7 @@ app.on('before-quit', async (event) => {
     resetProviderRuntime();
     resetProviderAccountingStore();
 
-    // 4. Now actually quit
+    // 7. Now actually quit
     app.exit(0);
   } catch (err) {
     console.error('Error during shutdown:', err);

@@ -375,6 +375,30 @@ describe('wait_for_subagent', () => {
     expect(definition.actionLabel).toBe('Waiting...');
     expect(definition.category).toBe('subagent');
   });
+
+  it('hang → isError timeout; subagent remains RUNNING', async () => {
+    const { handler } = buildWaitTool(manager);
+    const record = manager.spawn('hang', 'long task', codeReviewerAgent);
+    manager.markRunning(record.id);
+
+    // Short-circuit the default 300s budget while exercising real wait timeout.
+    const origWait = manager.wait.bind(manager);
+    const waitSpy = vi.spyOn(manager, 'wait').mockImplementation((ids, _opts) =>
+      origWait(ids, { timeoutMs: 40 }),
+    );
+
+    const result = (await handler({
+      subagent_ids: [record.id],
+    })) as SubagentToolResult;
+
+    expect(result.isError).toBe(true);
+    expect(result.display).toMatch(/timed out/i);
+    expect(result.content).toContain('Only the wait tool stopped waiting');
+    expect(result.content).toContain('were not cancelled or interrupted');
+    expect(result.content).toContain(record.id);
+    expect(record.state).toBe(SubagentState.RUNNING);
+    waitSpy.mockRestore();
+  });
 });
 
 // ── interrupt_subagents ──────────────────────────────────────────────────────

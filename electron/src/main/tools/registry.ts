@@ -40,6 +40,9 @@ export class ToolRegistry {
   /**
    * Filter tools by glob patterns using minimatch.
    *
+   * Empty allowlist (`[]`) means no tools — not all tools. Agents that need
+   * every tool must pass `['*']` explicitly.
+   *
    * Patterns support the same syntax as Python's fnmatch:
    * - `*` → matches all tools
    * - `read*` → matches read, read_directory, read_output, read_mcp_resource

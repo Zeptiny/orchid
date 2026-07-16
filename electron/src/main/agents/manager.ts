@@ -75,6 +75,31 @@ export type SubagentStreamRunner = (params: {
 
 export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
 
+/** Default max time `wait_for_subagent` will block (5 minutes). */
+export const DEFAULT_WAIT_TIMEOUT_MS = 300_000;
+
+/**
+ * Thrown by `SubagentManager.wait` when the wait budget elapses while any
+ * target is still non-terminal. Subagents are not cancelled.
+ */
+export class SubagentWaitTimeoutError extends Error {
+  readonly timeoutMs: number;
+  readonly statusSnapshot: string[];
+
+  constructor(timeoutMs: number, statusSnapshot: string[]) {
+    const seconds = Math.round(timeoutMs / 1000);
+    super(
+      `Wait timed out after ${seconds}s with no completion. ` +
+        `Subagents are still running (${statusSnapshot.join('; ')}). ` +
+        `Only the wait tool stopped waiting; they were not cancelled or interrupted. ` +
+        `Call wait_for_subagent again or interrupt_subagents to stop them.`,
+    );
+    this.name = 'SubagentWaitTimeoutError';
+    this.timeoutMs = timeoutMs;
+    this.statusSnapshot = statusSnapshot;
+  }
+}
+
 // ── SubagentRecord ──────────────────────────────────────────────────────────
 
 export interface SubagentRecord {
@@ -260,9 +285,27 @@ export class SubagentManager {
 
   /**
    * Wait for all specified subagents to reach a terminal state.
+   *
+   * Optional `timeoutMs` races the wait without cancelling subagents.
+   * Optional `signal` unblocks the wait when the parent turn is aborted
+   * (children keep running unless separately cancelled).
+   *
+   * @throws {SubagentWaitTimeoutError} when `timeoutMs` elapses with any
+   *   non-terminal target still running
+   * @throws {DOMException} (`AbortError`) when `signal` aborts first
    */
-  async wait(subagentIds: string[]): Promise<Map<string, SubagentRecord>> {
+  async wait(
+    subagentIds: string[],
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<Map<string, SubagentRecord>> {
+    const { timeoutMs, signal } = options;
+
+    if (signal?.aborted) {
+      throw new DOMException('Wait aborted', 'AbortError');
+    }
+
     const pending: Promise<void>[] = [];
+    const waiterCleanups: Array<() => void> = [];
 
     for (const id of subagentIds) {
       const record = this._subagents.get(id);
@@ -274,15 +317,76 @@ export class SubagentManager {
         if (!record._resolveWait) {
           record._resolveWait = [];
         }
-        record._resolveWait.push(() => resolve());
+        const entry = () => resolve();
+        record._resolveWait.push(entry);
+        waiterCleanups.push(() => {
+          if (!record._resolveWait) return;
+          const idx = record._resolveWait.indexOf(entry);
+          if (idx >= 0) record._resolveWait.splice(idx, 1);
+          if (record._resolveWait.length === 0) {
+            record._resolveWait = null;
+          }
+        });
       });
       pending.push(promise);
     }
 
     if (pending.length > 0) {
-      await Promise.all(pending);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let onAbort: (() => void) | undefined;
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const settle = (fn: () => void) => {
+            if (settled) return;
+            settled = true;
+            fn();
+          };
+
+          void Promise.all(pending).then(
+            () => settle(() => resolve()),
+            (err: unknown) => settle(() => reject(err)),
+          );
+
+          if (timeoutMs !== undefined && timeoutMs >= 0) {
+            timer = setTimeout(() => {
+              settle(() => {
+                reject(
+                  new SubagentWaitTimeoutError(
+                    timeoutMs,
+                    this._statusSnapshot(subagentIds),
+                  ),
+                );
+              });
+            }, timeoutMs);
+            if (typeof timer === 'object' && timer && 'unref' in timer) {
+              (timer as NodeJS.Timeout).unref();
+            }
+          }
+
+          if (signal) {
+            onAbort = () => {
+              settle(() => reject(new DOMException('Wait aborted', 'AbortError')));
+            };
+            signal.addEventListener('abort', onAbort, { once: true });
+          }
+        });
+      } catch (err) {
+        // Timed out or aborted: detach this wait's resolvers only.
+        // Subagents keep their current state (still RUNNING, etc.).
+        for (const cleanup of waiterCleanups) cleanup();
+        throw err;
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+      }
     }
 
+    return this._collectRecords(subagentIds);
+  }
+
+  private _collectRecords(subagentIds: string[]): Map<string, SubagentRecord> {
     const results = new Map<string, SubagentRecord>();
     for (const id of subagentIds) {
       const record = this._subagents.get(id);
@@ -291,6 +395,25 @@ export class SubagentManager {
       }
     }
     return results;
+  }
+
+  /** Per-id status lines for wait timeout / abort diagnostics. */
+  private _statusSnapshot(subagentIds: string[]): string[] {
+    const lines: string[] = [];
+    for (const id of subagentIds) {
+      const record = this._subagents.get(id);
+      if (!record) {
+        lines.push(`${id}: not_found`);
+        continue;
+      }
+      const elapsed = record.endTime
+        ? record.endTime - record.startTime
+        : Date.now() - record.startTime;
+      lines.push(
+        `${id}: ${record.state} name="${record.label}" elapsed_ms=${elapsed}`,
+      );
+    }
+    return lines;
   }
 
   /**

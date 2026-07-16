@@ -369,8 +369,9 @@ describe('ToolRegistry', () => {
   // -- Edge cases ------------------------------------------------------------
 
   describe('edge cases', () => {
-    it('should handle empty filter array', () => {
+    it('should return zero tools for empty allowlist (empty means none, not all)', () => {
       registry.register(makeReadTool(), dummyHandler);
+      registry.register(makeGrepTool(), dummyHandler);
       const result = registry.filter([]);
       expect(result).toHaveLength(0);
     });

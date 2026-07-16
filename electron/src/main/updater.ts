@@ -16,6 +16,7 @@ import { autoUpdater, UpdateInfo } from 'electron-updater';
 import { app, BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../shared/types/ipc';
 import type { UpdaterState } from '../shared/types/ipc-boundary';
+import { getBackgroundStore } from './tools/process/background-store';
 
 export type { UpdaterState, UpdateStatus } from '../shared/types/ipc-boundary';
 
@@ -200,6 +201,12 @@ export async function downloadUpdate(): Promise<void> {
  * This will restart the app with the new version.
  */
 export function quitAndInstall(): void {
+  // before-quit is stripped below — kill bg process groups so they are not orphaned
+  try {
+    getBackgroundStore().terminateAll();
+  } catch (err) {
+    console.warn('Failed to terminate background processes before update install:', err);
+  }
   // Allow the quit to proceed (remove before-quit prevention)
   app.removeAllListeners('before-quit');
   autoUpdater.quitAndInstall(false, true);

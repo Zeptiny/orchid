@@ -3,12 +3,17 @@
  *
  * Params: subagent_ids (string array).
  * Returns results for each subagent (completed, failed, or interrupted).
+ * Times out after DEFAULT_WAIT_TIMEOUT_MS without cancelling subagents.
  *
  * Ported from Python `src/orchid/tools/subagent.py` (wait_for_subagent / execute_wait_for_subagent).
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
-import type { SubagentManager } from '../../agents/manager';
+import {
+  DEFAULT_WAIT_TIMEOUT_MS,
+  SubagentWaitTimeoutError,
+  type SubagentManager,
+} from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
 import { persistSubagentChains } from '../../agents/persist-subagent-chains';
 
@@ -25,7 +30,8 @@ export function buildWaitTool(
     description:
       'Wait for one or more subagents to complete and get their results. ' +
       "Returns the subagent's final output, status, and any errors. " +
-      'Use after delegate_to_subagent to collect results.',
+      'Use after delegate_to_subagent to collect results. ' +
+      'If the wait times out, subagents keep running — call again or interrupt_subagents.',
     inputSchema: z.object({
       subagent_ids: z
         .array(z.string())
@@ -43,7 +49,7 @@ export function buildWaitTool(
       return {
         display: 'No subagent IDs provided',
         content: 'Error: subagent_ids must be a non-empty list of IDs.',
-      isError: true,
+        isError: true,
       };
     }
 
@@ -58,7 +64,36 @@ export function buildWaitTool(
     // Wait only for records the caller owns. This must happen after filtering:
     // waiting for a peer record would otherwise block this turn and expose its
     // terminal state through timing even if its result were omitted.
-    const records = await manager.wait(ownedIds);
+    let records: Awaited<ReturnType<SubagentManager['wait']>>;
+    try {
+      records = await manager.wait(ownedIds, {
+        timeoutMs: DEFAULT_WAIT_TIMEOUT_MS,
+        signal: ctx?.abortSignal,
+      });
+    } catch (err) {
+      if (err instanceof SubagentWaitTimeoutError) {
+        const statusBlock =
+          err.statusSnapshot.length > 0
+            ? `\n<status>\n${err.statusSnapshot.join('\n')}\n</status>`
+            : '';
+        return {
+          display: `Wait timed out after ${Math.round(err.timeoutMs / 1000)}s`,
+          content: `${err.message}${statusBlock}`,
+          isError: true,
+        };
+      }
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return {
+          display: 'Wait aborted',
+          content:
+            'Wait aborted because the parent turn was cancelled. ' +
+            'Subagents were not cancelled or interrupted by this wait; ' +
+            'call interrupt_subagents to stop them if needed.',
+          isError: true,
+        };
+      }
+      throw err;
+    }
 
     // Persist latest subagent chains onto each owning session (not blindly active)
     try {

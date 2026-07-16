@@ -341,6 +341,22 @@ describe('quitAndInstall', () => {
 
     expect(mockApp.removeAllListeners).toHaveBeenCalledWith('before-quit');
   });
+
+  it('terminates background process groups before stripping before-quit', async () => {
+    const { getBackgroundStore, setBackgroundStore, BackgroundProcessStore } =
+      await import('../../src/main/tools/process/background-store');
+    const store = new BackgroundProcessStore();
+    setBackgroundStore(store);
+    const terminateAll = vi.spyOn(store, 'terminateAll');
+
+    updater.quitAndInstall();
+
+    expect(terminateAll).toHaveBeenCalled();
+    expect(mockApp.removeAllListeners).toHaveBeenCalledWith('before-quit');
+    // restore empty store for other tests
+    setBackgroundStore(new BackgroundProcessStore());
+    void getBackgroundStore;
+  });
 });
 
 // ===========================================================================

@@ -21,6 +21,8 @@ allowed_tools:
   - skill
   - rag_search
   - rag_index
+  - read_mcp_resource
+  - list_mcp_resources
   - mcp::context7::*
   - mcp::example::*
   - todo_create
@@ -32,6 +34,13 @@ allowed_tools:
   - find_symbol_references
   - replace_symbol
   - rename_symbol
+  - ast_index
+  - session_list
+  - session_create
+  - session_load
+  - session_rename
+  - session_delete
+  - session_change_model
 allowed_skills:
   - '*'
 ---

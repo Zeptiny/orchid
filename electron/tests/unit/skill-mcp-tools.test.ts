@@ -20,7 +20,8 @@ import {
   resolveSkillDependencies,
 } from '../../src/main/tools/skill/skill';
 import { buildMcpResourceTool } from '../../src/main/tools/mcp/resource';
-import type { MCPManager } from '../../src/main/mcp/manager';
+import { buildListMcpResourcesTool } from '../../src/main/tools/mcp/list-resources';
+import type { MCPManager, MCPResourceInfo } from '../../src/main/mcp/manager';
 
 // ---------------------------------------------------------------------------
 // Temp dir helpers
@@ -850,6 +851,66 @@ describe('MCP Resource Tool', () => {
     };
 
     expect(result.content).toBe('Part 1\nPart 2');
+  });
+});
+
+// ===========================================================================
+// list_mcp_resources tool
+// ===========================================================================
+
+describe('list_mcp_resources tool', () => {
+  function createMockManager(resources: MCPResourceInfo[] = []): MCPManager {
+    return {
+      listResources: () => resources,
+      getResourceServer: (uri: string) =>
+        resources.find((r) => r.uri === uri)?.server,
+      readResource: async () => 'unused',
+    } as unknown as MCPManager;
+  }
+
+  it('should build a tool definition with correct metadata', () => {
+    const { definition } = buildListMcpResourcesTool(createMockManager());
+    expect(definition.name).toBe('list_mcp_resources');
+    expect(definition.description).toContain('List resources');
+    expect(definition.category).toBe('mcp');
+  });
+
+  it('should return empty message when uri map is empty', async () => {
+    const { handler } = buildListMcpResourcesTool(createMockManager([]));
+    const result = (await handler({}, { cwd: '/tmp' })) as {
+      display: string;
+      content: string;
+    };
+    expect(result.display).toBe('No MCP resources');
+    expect(result.content).toContain('No MCP resources available');
+  });
+
+  it('should list resources from mock uri map', async () => {
+    const resources: MCPResourceInfo[] = [
+      {
+        uri: 'docs://api/reference',
+        server: 'docs-server',
+        name: 'API Reference',
+        description: 'Full API docs',
+      },
+      {
+        uri: 'file:///data',
+        server: 'fs-server',
+      },
+    ];
+    const { handler } = buildListMcpResourcesTool(createMockManager(resources));
+    const result = (await handler({}, { cwd: '/tmp' })) as {
+      display: string;
+      content: string;
+    };
+
+    expect(result.display).toBe('2 MCP resource(s)');
+    expect(result.content).toContain('uri=docs://api/reference');
+    expect(result.content).toContain('server=docs-server');
+    expect(result.content).toContain('name=API Reference');
+    expect(result.content).toContain('description=Full API docs');
+    expect(result.content).toContain('uri=file:///data');
+    expect(result.content).toContain('server=fs-server');
   });
 });
 

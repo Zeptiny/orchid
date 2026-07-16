@@ -547,4 +547,31 @@ describe('SubagentManager', () => {
     expect(results.get(a.id)?.result).toBe('result a');
     expect(results.get(b.id)?.result).toBe('result b');
   });
+
+  it('wait timeout errors without cancelling running subagents', async () => {
+    const record = manager.spawn('hang', 'never ends', mockAgent);
+    manager.markRunning(record.id);
+
+    await expect(
+      manager.wait([record.id], { timeoutMs: 30 }),
+    ).rejects.toMatchObject({
+      name: 'SubagentWaitTimeoutError',
+      message: expect.stringContaining('Only the wait tool stopped waiting'),
+    });
+
+    expect(record.state).toBe(SubagentState.RUNNING);
+    expect(record._resolveWait).toBeNull();
+  });
+
+  it('wait abort signal unblocks without cancelling children', async () => {
+    const record = manager.spawn('hang', 'never ends', mockAgent);
+    manager.markRunning(record.id);
+    const ac = new AbortController();
+
+    const waitPromise = manager.wait([record.id], { signal: ac.signal });
+    setTimeout(() => ac.abort(), 20);
+
+    await expect(waitPromise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(record.state).toBe(SubagentState.RUNNING);
+  });
 });

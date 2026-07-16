@@ -6,7 +6,8 @@
  *
  * Features:
  * - 60s timeout (configurable via `command_timeout` config)
- * - Certain tools exempt from timeout (e.g., `wait_for_subagent`, AST tools)
+ * - Certain tools exempt from timeout (e.g., AST tools, `read_output`)
+ * - `wait_for_subagent` uses a longer dedicated outer timeout (300s)
  * - Output offloading: outputs >20KB written to cache files, replaced with
  *   pointer message
  * - Certain tools exempt from offloading (read, grep, glob, etc.)
@@ -25,6 +26,7 @@ import { makeToolResultMessage } from './message-factories';
 import { normalizeToolHandlerResult } from '../tools/result';
 import type { ToolExecutionContext } from '../tools/types';
 import type { ProjectRuntime } from '../project/runtime';
+import { DEFAULT_WAIT_TIMEOUT_MS } from '../agents/manager';
 
 // ---------------------------------------------------------------------------
 // Constants — match Python client.py:44, 48-56
@@ -34,11 +36,18 @@ import type { ProjectRuntime } from '../project/runtime';
 const DEFAULT_TOOL_TIMEOUT_S = 60;
 
 /**
+ * Outer dispatch timeout for `wait_for_subagent` (seconds).
+ * Slightly longer than the wait tool's internal DEFAULT_WAIT_TIMEOUT_MS so
+ * the structured "still running" tool result wins; this is a backstop.
+ */
+const WAIT_TOOL_OUTER_TIMEOUT_S = Math.ceil(DEFAULT_WAIT_TIMEOUT_MS / 1000) + 5;
+
+/**
  * Tools exempt from timeout.
- * Matches Python `_TOOLS_WITHOUT_TIMEOUT` (client.py:48-56).
+ * Matches Python `_TOOLS_WITHOUT_TIMEOUT` (client.py:48-56) except
+ * `wait_for_subagent`, which must observe an outer timeout (M-P0-011).
  */
 const TOOLS_WITHOUT_TIMEOUT = new Set([
-  'wait_for_subagent',
   'get_file_skeleton',
   'get_function',
   'find_symbol_references',
@@ -54,6 +63,12 @@ const TOOLS_WITHOUT_TIMEOUT = new Set([
 export interface ToolDispatchOptions {
   /** Tool timeout in seconds. Defaults to 60. */
   timeoutSeconds?: number;
+  /**
+   * Outer timeout for `wait_for_subagent` only (seconds).
+   * Defaults to DEFAULT_WAIT_TIMEOUT_MS / 1000 (300). Independent of
+   * `timeoutSeconds` / command_timeout so waits are not cut short by 30–60s.
+   */
+  waitTimeoutSeconds?: number;
   /** Session ID for output offloading cache. */
   sessionId?: string;
   /**
@@ -65,6 +80,8 @@ export interface ToolDispatchOptions {
   agentScopeId?: string;
   /** Immutable project definitions captured when this turn began. */
   projectRuntime?: ProjectRuntime;
+  /** Parent-turn abort signal (unblocks wait without cancelling children). */
+  abortSignal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +138,12 @@ export async function executeToolCall(
     );
   }
 
+  // Validate arguments against the tool's Zod schema (agent path)
+  const validation = registry.validate(name, args);
+  if (!validation.ok) {
+    return makeToolResultMessage(toolCall.id, name, validation.error, true);
+  }
+
   if (!options.cwd || options.cwd.trim() === '') {
     return makeToolResultMessage(
       toolCall.id,
@@ -130,22 +153,43 @@ export async function executeToolCall(
     );
   }
 
+  // Timeout AbortController — aborted by runWithToolTimeout so foreground
+  // process tools can kill the live ChildProcess handle (not only reject).
+  const timeoutAbort = new AbortController();
+  const parentAbort = options.abortSignal;
+  const combinedAbort =
+    parentAbort !== undefined
+      ? AbortSignal.any([parentAbort, timeoutAbort.signal])
+      : timeoutAbort.signal;
+
   const toolCtx: ToolExecutionContext = {
     cwd: options.cwd,
     sessionId: options.sessionId,
     projectRuntime: options.projectRuntime,
     agentScopeId: options.agentScopeId,
+    abortSignal: combinedAbort,
   };
 
+  // wait_for_subagent uses a dedicated outer budget (default 300s), not
+  // command_timeout, so the tool can return its structured timeout message
+  // (subagents stay running) before the dispatch race fires.
+  const effectiveTimeoutSeconds =
+    name === 'wait_for_subagent'
+      ? (options.waitTimeoutSeconds ?? WAIT_TOOL_OUTER_TIMEOUT_S)
+      : timeoutSeconds;
+
   // Execute with optional timeout (shared policy with MCP wrappers)
+  // Prefer Zod-parsed data so defaults/coercions reach the handler.
+  const handlerArgs = validation.data;
   let result: unknown;
   try {
     result = await runWithToolTimeout(
-      () => registered.handler(args, toolCtx),
+      () => registered.handler(handlerArgs, toolCtx),
       name,
       {
-        timeoutSeconds,
+        timeoutSeconds: effectiveTimeoutSeconds,
         noTimeout: Boolean(registered.definition.noTimeout),
+        abortController: timeoutAbort,
       },
     );
   } catch (err) {
@@ -266,13 +310,18 @@ export class ToolTimeoutError extends Error {
  * Rejects with `ToolTimeoutError` if the timeout fires first.
  * Clears the timer on settle and swallows late rejections from the work
  * promise so a timed-out tool does not surface as an unhandled rejection.
+ *
+ * When `abortController` is provided, it is aborted on timeout so tools that
+ * hold live ChildProcess handles can kill them (not only reject the Promise).
  */
 export function withTimeout<T>(
   work: () => Promise<T>,
   ms: number,
   message: string,
+  abortController?: AbortController,
 ): Promise<T> {
   if (!Number.isFinite(ms) || ms <= 0) {
+    abortController?.abort();
     return Promise.reject(new ToolTimeoutError(message));
   }
 
@@ -283,6 +332,7 @@ export function withTimeout<T>(
   const timeoutPromise = new Promise<T>((_, reject) => {
     timer = setTimeout(() => {
       timedOut = true;
+      abortController?.abort();
       reject(new ToolTimeoutError(message));
     }, ms);
     // Unref so the timer doesn't keep the process alive in tests/CLI
@@ -322,7 +372,11 @@ export function withTimeout<T>(
 export async function runWithToolTimeout<T>(
   work: () => Promise<T>,
   toolName: string,
-  options: { timeoutSeconds?: number; noTimeout?: boolean } = {},
+  options: {
+    timeoutSeconds?: number;
+    noTimeout?: boolean;
+    abortController?: AbortController;
+  } = {},
 ): Promise<T> {
   if (options.noTimeout || TOOLS_WITHOUT_TIMEOUT.has(toolName)) {
     return work();
@@ -332,6 +386,7 @@ export async function runWithToolTimeout<T>(
     work,
     timeoutSeconds * 1000,
     `Tool '${toolName}' timed out after ${timeoutSeconds}s.`,
+    options.abortController,
   );
 }
 
