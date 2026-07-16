@@ -245,12 +245,14 @@ export function buildPersonalityResults(
 
 /**
  * Build model picker results for `/model`.
- * @param currentModel  Active session / default model id
- * @param models  `provider/model` ids from config providers
+ * @param currentModel  Active opaque selection key
+ * @param models  Opaque connection-scoped selection keys
+ * @param labels  Optional human-readable labels keyed by selection key
  */
 export function buildModelResults(
   currentModel: string,
   models: readonly string[] = [],
+  labels: Readonly<Record<string, string>> = {},
 ): PaletteResult[] {
   if (models.length === 0) {
     return [
@@ -265,16 +267,19 @@ export function buildModelResults(
     ];
   }
 
-  return models.map((model) => ({
-    id: `model:${model}`,
-    label: model,
-    description: model === currentModel ? 'Current model' : `Switch to ${model}`,
-    category: 'commands' as CommandCategory,
-    icon: model === currentModel ? '\u25cf' : '\u25cb',
-    commandName: '/model',
-    action: 'model' as const,
-    value: model,
-  }));
+  return models.map((model) => {
+    const label = labels[model] ?? model;
+    return {
+      id: `model:${model}`,
+      label,
+      description: model === currentModel ? 'Current model' : `Switch to ${label}`,
+      category: 'commands' as CommandCategory,
+      icon: model === currentModel ? '\u25cf' : '\u25cb',
+      commandName: '/model',
+      action: 'model' as const,
+      value: model,
+    };
+  });
 }
 
 /** Build session list for `/sessions` sub-picker. */

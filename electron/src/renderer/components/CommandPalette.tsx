@@ -20,6 +20,8 @@ import {
 } from '../commands/registry';
 import { useFocusTrap } from '../keyboard';
 import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
+import type { ProviderModelOption } from '../../shared/types/ipc';
+import { resolveModelNotifyLabel } from '../utils/provider-selection';
 import { Icon, type IconName } from './Icon';
 import { Keycaps } from './Keycaps';
 
@@ -32,6 +34,9 @@ export interface CommandPaletteProps {
   currentPersonality: string;
   /** Personality names loaded from disk. */
   personalityNames?: readonly string[];
+  /** Display labels for opaque connection-scoped model keys. */
+  modelLabels?: Readonly<Record<string, string>>;
+  modelDetails?: Readonly<Record<string, ProviderModelOption>>;
 }
 
 const CATEGORY_LABELS: Record<CommandCategory, string> = {
@@ -58,6 +63,8 @@ export function CommandPalette({
   currentTheme,
   currentPersonality,
   personalityNames = [],
+  modelLabels,
+  modelDetails,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -71,6 +78,13 @@ export function CommandPalette({
     containerRef: panelRef,
     initialFocusRef: inputRef,
   });
+
+  const modelNotifyLabels = useMemo(() => {
+    const keys = context.getAvailableModels();
+    return Object.fromEntries(
+      keys.map((key) => [key, resolveModelNotifyLabel(key, modelDetails, modelLabels)]),
+    );
+  }, [context, modelDetails, modelLabels]);
 
   const results = useMemo<PaletteResult[]>(() => {
     if (subPicker === '/theme') {
@@ -87,6 +101,7 @@ export function CommandPalette({
         buildModelResults(
           context.getCurrentModel(),
           context.getAvailableModels(),
+          modelNotifyLabels,
         ),
         query,
       );
@@ -237,6 +252,7 @@ export function CommandPalette({
     currentPersonality,
     personalityNames,
     context,
+    modelNotifyLabels,
   ]);
 
   const groupedResults = useMemo(() => {
@@ -305,7 +321,10 @@ export function CommandPalette({
 
       if (result.action === 'model' && result.value) {
         await context.onSetModel(result.value);
-        context.onNotify(`Model changed to ${result.label}`, 'info');
+        context.onNotify(
+          `Model changed to ${resolveModelNotifyLabel(result.value, modelDetails, modelLabels)}`,
+          'info',
+        );
         onClose();
         return;
       }
@@ -363,7 +382,7 @@ export function CommandPalette({
         }
       }
     },
-    [context, onClose],
+    [context, onClose, modelDetails, modelLabels],
   );
 
   const handleKeyDown = useCallback(

@@ -26,6 +26,26 @@ export function providerModelOptionLabel(option: ProviderModelOption): string {
   return `${providerModelOptionContextLabel(option)} · ${providerModelOptionDisplayName(option)}`;
 }
 
+/** Toast / notification label: provider name and model display name only. */
+export function providerModelOptionNotifyLabel(option: ProviderModelOption): string {
+  const provider = option.providerDisplayName ?? option.providerId;
+  return `${provider} · ${providerModelOptionDisplayName(option)}`;
+}
+
+/**
+ * Resolve a human-readable model label for opaque picker keys.
+ * Prefer typed option metadata; fall back to a labels map or the raw key.
+ */
+export function resolveModelNotifyLabel(
+  key: string,
+  optionDetails?: Readonly<Record<string, ProviderModelOption>>,
+  optionLabels?: Readonly<Record<string, string>>,
+): string {
+  const detail = optionDetails?.[key];
+  if (detail) return providerModelOptionNotifyLabel(detail);
+  return optionLabels?.[key] ?? key;
+}
+
 export function selectionMatchesOption(
   selection: ModelSelection | null | undefined,
   option: ProviderModelOption,

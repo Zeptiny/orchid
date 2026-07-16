@@ -5,7 +5,9 @@ import {
   providerModelOptionDisplayName,
   providerModelOptionKey,
   providerModelOptionLabel,
+  providerModelOptionNotifyLabel,
   providerStatusConnectionId,
+  resolveModelNotifyLabel,
   selectionMatchesOption,
 } from '../../src/renderer/utils/provider-selection';
 import type { ProviderConnectionView } from '../../src/shared/types/ipc';
@@ -51,6 +53,29 @@ describe('provider selection view model', () => {
     expect(providerModelOptionDisplayName(model)).toBe('Model display');
     expect(providerModelOptionContextLabel(model)).toBe('OpenAI · Work');
     expect(providerModelOptionLabel(model)).toBe('OpenAI · Work · Model display');
+    expect(providerModelOptionNotifyLabel(model)).toBe('OpenAI · Model display');
+  });
+
+  it('resolves notify labels without opaque connection ids', () => {
+    const connectionId = 'cad8fcc6-8d34-408e-95a9-820b35020f47';
+    const modelId = 'deepseek-v4-flash';
+    const model = {
+      ...option(connectionId, modelId),
+      connectionName: 'DeepSeek',
+      providerId: 'deepseek',
+      providerDisplayName: 'DeepSeek',
+      model: {
+        ...option(connectionId, modelId).model,
+        id: modelId,
+        displayName: 'DeepSeek V4 Flash',
+      },
+    };
+    const key = providerModelOptionKey(model);
+
+    expect(key).toContain(connectionId);
+    expect(resolveModelNotifyLabel(key, { [key]: model })).toBe('DeepSeek · DeepSeek V4 Flash');
+    expect(resolveModelNotifyLabel(key, undefined, { [key]: 'Fallback Label' })).toBe('Fallback Label');
+    expect(resolveModelNotifyLabel(key)).toBe(key);
   });
 
   it('separates chat and embedding model roles by output capability', () => {

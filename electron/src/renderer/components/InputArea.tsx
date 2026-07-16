@@ -22,6 +22,7 @@ import {
   fuzzyMatch,
   type PaletteResult,
 } from '../commands/registry';
+import { resolveModelNotifyLabel } from '../utils/provider-selection';
 import { Icon } from './Icon';
 import { ModelPicker } from './ModelPicker';
 import { SlashCommandMenu } from './SlashCommandMenu';
@@ -111,6 +112,16 @@ export function InputArea({
 
   const availableModels = commandContext?.getAvailableModels() ?? [];
 
+  const modelNotifyLabels = useMemo(
+    () => Object.fromEntries(
+      availableModels.map((key) => [
+        key,
+        resolveModelNotifyLabel(key, modelDetails, modelLabels),
+      ]),
+    ),
+    [availableModels, modelDetails, modelLabels],
+  );
+
   const slashResults = useMemo<PaletteResult[]>(() => {
     if (!isSlashMode || !commandContext) return [];
 
@@ -128,6 +139,7 @@ export function InputArea({
         buildModelResults(
           commandContext.getCurrentModel(),
           commandContext.getAvailableModels(),
+          modelNotifyLabels,
         ),
         input,
       );
@@ -177,6 +189,7 @@ export function InputArea({
     currentPersonality,
     personalityNames,
     sessions,
+    modelNotifyLabels,
   ]);
 
   // Keep selection in range when results change
@@ -243,7 +256,10 @@ export function InputArea({
 
       if (result.action === 'model' && result.value) {
         await slashContext.onSetModel(result.value);
-        slashContext.onNotify(`Model changed to ${result.label}`, 'info');
+        slashContext.onNotify(
+          `Model changed to ${resolveModelNotifyLabel(result.value, modelDetails, modelLabels)}`,
+          'info',
+        );
         clearAndClose();
         return;
       }
@@ -289,7 +305,7 @@ export function InputArea({
         clearAndClose();
       }
     },
-    [slashContext, clearAndClose],
+    [slashContext, clearAndClose, modelDetails, modelLabels],
   );
 
   const handleSelectModel = useCallback(
@@ -297,12 +313,15 @@ export function InputArea({
       if (!commandContext || next === model) return;
       try {
         await commandContext.onSetModel(next);
-        commandContext.onNotify(`Model changed to ${next}`, 'info');
+        commandContext.onNotify(
+          `Model changed to ${resolveModelNotifyLabel(next, modelDetails, modelLabels)}`,
+          'info',
+        );
       } catch {
         // Non-fatal — parent may already toast
       }
     },
-    [commandContext, model],
+    [commandContext, model, modelDetails, modelLabels],
   );
 
   const resizeTextarea = useCallback(() => {

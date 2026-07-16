@@ -1056,6 +1056,8 @@ export function ChatView() {
         currentTheme={currentTheme}
         currentPersonality={currentPersonality}
         personalityNames={personalityNames}
+        modelLabels={providerModelLabels}
+        modelDetails={providerModelDetails}
       />
 
       <ShortcutsHelp isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
