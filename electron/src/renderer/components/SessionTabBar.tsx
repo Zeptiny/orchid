@@ -95,17 +95,15 @@ export function SessionTabBar({
               key={id}
               className={`session-tab ${active ? 'session-tab-active' : ''}`}
               data-tab-active={active ? 'true' : 'false'}
+              onAuxClick={(e) => {
+                if (e.button === 1) {
+                  e.preventDefault();
+                  onClose(id);
+                }
+              }}
             >
-              <button
-                type="button"
+              <div
                 className="session-tab-select"
-                onClick={() => onSelect(id)}
-                onAuxClick={(e) => {
-                  if (e.button === 1) {
-                    e.preventDefault();
-                    onClose(id);
-                  }
-                }}
                 title={
                   multiProject && project
                     ? `${project} / ${title}`
@@ -125,14 +123,21 @@ export function SessionTabBar({
                   <SessionNameEditor
                     name={title}
                     className="session-tab-label truncate"
-                    title={`${title} (double-click to rename)`}
+                    title={`${title} (double-click or F2 to rename)`}
+                    onSelect={() => onSelect(id)}
                     onBeginEdit={() => onSelect(id)}
                     onRename={(next) => onRename(id, next)}
                   />
                 ) : (
-                  <span className="session-tab-label truncate">{title}</span>
+                  <button
+                    type="button"
+                    className="session-tab-label-button truncate"
+                    onClick={() => onSelect(id)}
+                  >
+                    <span className="session-tab-label truncate">{title}</span>
+                  </button>
                 )}
-              </button>
+              </div>
               <button
                 type="button"
                 className="session-tab-close btn btn-ghost btn-xs btn-square"

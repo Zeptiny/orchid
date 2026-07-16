@@ -14,6 +14,14 @@ function ownerFromEvent(event: { sender?: { id?: number } }): string {
   return id != null ? String(id) : '__primary__';
 }
 
+function sameOpenIds(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 function broadcastOpenSet(snapshot: WorkingSetSnapshot, sourceOwnerId: string): void {
   const windows =
     typeof BrowserWindow?.getAllWindows === 'function'
@@ -71,31 +79,55 @@ export function tryListSessionCatalog(): SessionCatalog {
   }
 }
 
-function filterIfCatalogOk(ownerId: string): WorkingSetSnapshot {
+/**
+ * Filter missing sessions when catalog is readable.
+ * Returns the requesting owner's snapshot. Does not persist/broadcast.
+ */
+function filterIfCatalogOk(ownerId: string): {
+  snapshot: WorkingSetSnapshot;
+  membershipChanged: boolean;
+} {
   const catalog = tryListSessionCatalog();
   if (catalog.status === 'io_error') {
     console.error('[working-set] skip filterExisting; session list I/O failed', catalog.error);
-    return sessionWorkingSet.getSnapshot(ownerId);
+    return {
+      snapshot: sessionWorkingSet.getSnapshot(ownerId),
+      membershipChanged: false,
+    };
   }
-  return sessionWorkingSet.filterExisting(catalog.ids);
+  const before = sessionWorkingSet.getSnapshot(ownerId).openSessionIds;
+  const snapshot = sessionWorkingSet.filterExisting(catalog.ids, ownerId);
+  return {
+    snapshot,
+    membershipChanged: !sameOpenIds(before, snapshot.openSessionIds),
+  };
 }
 
 export function bootstrapWorkingSet(): WorkingSetSnapshot {
   sessionWorkingSet.loadFromDisk();
-  return mutateAndPersist('__primary__', () => filterIfCatalogOk('__primary__'));
+  return mutateAndPersist('__primary__', () => filterIfCatalogOk('__primary__').snapshot);
 }
 
 export function registerSessionWorkingSetIPC(): void {
   try {
     sessionWorkingSet.loadFromDisk();
-    mutateAndPersist('__primary__', () => filterIfCatalogOk('__primary__'));
+    mutateAndPersist('__primary__', () => filterIfCatalogOk('__primary__').snapshot);
   } catch {
     // empty store
   }
 
   ipcMain.handle(IPC_CHANNELS.SESSION_WORKING_SET_GET, async (event) => {
     const ownerId = ownerFromEvent(event);
-    return filterIfCatalogOk(ownerId);
+    const { snapshot, membershipChanged } = filterIfCatalogOk(ownerId);
+    if (membershipChanged) {
+      try {
+        sessionWorkingSet.saveToDisk();
+      } catch (err) {
+        console.error('[working-set] failed to persist ui-state.json', err);
+      }
+      broadcastOpenSet(snapshot, ownerId);
+    }
+    return snapshot;
   });
 
   ipcMain.handle(

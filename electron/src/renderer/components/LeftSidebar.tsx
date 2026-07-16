@@ -671,17 +671,16 @@ function SessionRow({
       className={`session-row group ${isKeyboardActive ? 'session-row-keyboard' : ''}`}
       data-session-index={sessionIndex}
     >
-      <button
+      <div
         id={optionId}
-        type="button"
         role="option"
         aria-selected={isActive}
         tabIndex={-1}
         className={`session-item ${isActive ? 'session-item-active' : ''} ${
           isKeyboardActive ? 'session-item-keyboard' : ''
         }`}
-        onClick={() => onSelect(session.id)}
         title={session.cwd ?? session.name}
+        onClick={() => onSelect(session.id)}
       >
         {activity && (
           <span
@@ -714,7 +713,8 @@ function SessionRow({
             <SessionNameEditor
               name={session.name}
               className="session-item-name truncate"
-              title={`${session.name} (double-click to rename)`}
+              title={`${session.name} (double-click or F2 to rename)`}
+              onSelect={() => onSelect(session.id)}
               onBeginEdit={() => onSelect(session.id)}
               onRename={(next) => onRename(session.id, next)}
             />
@@ -728,7 +728,7 @@ function SessionRow({
           )}
         </span>
         {isActive && <span className="badge badge-xs badge-ghost">selected</span>}
-      </button>
+      </div>
       <button
         className="btn btn-ghost btn-xs btn-square session-item-delete"
         tabIndex={-1}

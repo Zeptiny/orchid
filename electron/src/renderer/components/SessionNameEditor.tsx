@@ -11,12 +11,14 @@ interface SessionNameEditorProps {
   className?: string;
   title?: string;
   onRename: (nextName: string) => void | Promise<void>;
-  /** Optional: run when double-click starts edit (e.g. ensure session is selected). */
+  /** Single-click / Enter / Space: select the session without renaming. */
+  onSelect?: () => void;
+  /** Optional: run when edit begins (e.g. ensure session is selected). */
   onBeginEdit?: () => void;
 }
 
 /**
- * Displays a session name; double-click enters inline rename.
+ * Displays a session name; double-click or F2 enters inline rename.
  * Enter commits, Escape cancels, blur commits when non-empty.
  */
 export function SessionNameEditor({
@@ -24,6 +26,7 @@ export function SessionNameEditor({
   className,
   title,
   onRename,
+  onSelect,
   onBeginEdit,
 }: SessionNameEditorProps) {
   const [editing, setEditing] = useState(false);
@@ -57,12 +60,16 @@ export function SessionNameEditor({
     setEditing(false);
   };
 
-  const startEdit = (event: ReactMouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
+  const beginEdit = () => {
     onBeginEdit?.();
     setDraft(name);
     setEditing(true);
+  };
+
+  const startEditFromPointer = (event: ReactMouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    beginEdit();
   };
 
   if (editing) {
@@ -94,9 +101,28 @@ export function SessionNameEditor({
 
   return (
     <span
+      role="button"
+      tabIndex={0}
       className={`session-name-editor-label ${className ?? ''}`}
-      title={title ?? `${name} (double-click to rename)`}
-      onDoubleClick={startEdit}
+      title={title ?? `${name} (double-click or F2 to rename)`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelect?.();
+      }}
+      onDoubleClick={startEditFromPointer}
+      onKeyDown={(e: ReactKeyboardEvent<HTMLSpanElement>) => {
+        if (e.key === 'F2') {
+          e.preventDefault();
+          e.stopPropagation();
+          beginEdit();
+          return;
+        }
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          onSelect?.();
+        }
+      }}
     >
       {name}
     </span>

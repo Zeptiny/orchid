@@ -27,7 +27,10 @@ export class WorkingSetStore {
   private readonly focusedByOwner = new Map<string, string | null>();
   private readonly mruByOwner = new Map<string, string[]>();
   private readonly statePath: string;
+  /** Last known primary-window focus for cold start before a real owner attaches. */
   private restoredPrimaryFocus: string | null = null;
+  /** Real window owner whose focus is persisted (promoted from PRIMARY_OWNER on first mutation). */
+  private primaryOwnerId: string = PRIMARY_OWNER;
 
   constructor(options?: WorkingSetOptions) {
     this.statePath = options?.statePath ?? DEFAULT_STATE_PATH;
@@ -47,21 +50,21 @@ export class WorkingSetStore {
   }
 
   openOrFocus(id: string, ownerId: string = PRIMARY_OWNER): WorkingSetSnapshot {
-    const owner = ownerId || PRIMARY_OWNER;
+    const owner = this.touchPrimaryOwner(ownerId || PRIMARY_OWNER);
     if (!this.openSessionIds.includes(id)) {
       this.openSessionIds.push(id);
     }
     this.moveToMruFront(id);
     this.moveOwnerMruFront(owner, id);
     this.focusedByOwner.set(owner, id);
-    if (owner === PRIMARY_OWNER || this.focusedByOwner.size === 1) {
+    if (owner === this.primaryOwnerId) {
       this.restoredPrimaryFocus = id;
     }
     return this.getSnapshot(owner);
   }
 
   close(id: string, ownerId: string = PRIMARY_OWNER): WorkingSetSnapshot {
-    const owner = ownerId || PRIMARY_OWNER;
+    const owner = this.touchPrimaryOwner(ownerId || PRIMARY_OWNER);
     const idx = this.openSessionIds.indexOf(id);
     if (idx === -1) return this.getSnapshot(owner);
 
@@ -89,22 +92,29 @@ export class WorkingSetStore {
   }
 
   setFocus(id: string | null, ownerId: string = PRIMARY_OWNER): WorkingSetSnapshot {
-    const owner = ownerId || PRIMARY_OWNER;
+    const owner = this.touchPrimaryOwner(ownerId || PRIMARY_OWNER);
     if (id === null) {
       this.focusedByOwner.set(owner, null);
+      if (owner === this.primaryOwnerId) {
+        this.restoredPrimaryFocus = null;
+      }
       return this.getSnapshot(owner);
     }
     if (!this.openSessionIds.includes(id)) return this.getSnapshot(owner);
     this.focusedByOwner.set(owner, id);
     this.moveToMruFront(id);
     this.moveOwnerMruFront(owner, id);
-    if (owner === PRIMARY_OWNER) {
+    if (owner === this.primaryOwnerId) {
       this.restoredPrimaryFocus = id;
     }
     return this.getSnapshot(owner);
   }
 
-  filterExisting(existingIds: ReadonlySet<string> | string[]): WorkingSetSnapshot {
+  filterExisting(
+    existingIds: ReadonlySet<string> | string[],
+    ownerId: string = PRIMARY_OWNER,
+  ): WorkingSetSnapshot {
+    const owner = ownerId || PRIMARY_OWNER;
     const set = existingIds instanceof Set
       ? existingIds
       : new Set(existingIds);
@@ -121,7 +131,7 @@ export class WorkingSetStore {
     if (this.restoredPrimaryFocus !== null && !set.has(this.restoredPrimaryFocus)) {
       this.restoredPrimaryFocus = this.pickMruAmong(this.openSessionIds);
     }
-    return this.getSnapshot(PRIMARY_OWNER);
+    return this.getSnapshot(owner);
   }
 
   loadFromDisk(): WorkingSetSnapshot {
@@ -132,11 +142,20 @@ export class WorkingSetStore {
         const ws = parsed.workingSet;
         this.openSessionIds = asStringIdList(ws.openSessionIds);
         this.mruSessionIds = asStringIdList(ws.mruSessionIds);
-        const focus =
-          typeof ws.focusedSessionId === 'string' && this.openSessionIds.includes(ws.focusedSessionId)
-            ? ws.focusedSessionId
-            : this.pickMruAmong(this.openSessionIds);
+        let focus: string | null;
+        if (ws.focusedSessionId === null) {
+          focus = null;
+        } else if (
+          typeof ws.focusedSessionId === 'string'
+          && this.openSessionIds.includes(ws.focusedSessionId)
+        ) {
+          focus = ws.focusedSessionId;
+        } else {
+          focus = this.pickMruAmong(this.openSessionIds);
+        }
         this.restoredPrimaryFocus = focus;
+        this.primaryOwnerId = PRIMARY_OWNER;
+        this.focusedByOwner.clear();
         this.focusedByOwner.set(PRIMARY_OWNER, focus);
         if (focus) {
           this.mruByOwner.set(PRIMARY_OWNER, [...this.mruSessionIds]);
@@ -149,18 +168,40 @@ export class WorkingSetStore {
   }
 
   saveToDisk(): void {
-    const primaryFocus =
-      this.focusedByOwner.get(PRIMARY_OWNER)
-      ?? this.restoredPrimaryFocus
-      ?? this.pickMruAmong(this.openSessionIds);
+    const owner = this.primaryOwnerId;
+    let focusedSessionId: string | null;
+    if (this.focusedByOwner.has(owner)) {
+      // Explicit entry (including intentional null) wins over restored fallback.
+      focusedSessionId = this.focusedByOwner.get(owner) ?? null;
+    } else if (this.focusedByOwner.has(PRIMARY_OWNER)) {
+      focusedSessionId = this.focusedByOwner.get(PRIMARY_OWNER) ?? null;
+    } else {
+      focusedSessionId = this.restoredPrimaryFocus;
+    }
     const data: PersistedShape = {
       workingSet: {
         openSessionIds: [...this.openSessionIds],
-        focusedSessionId: primaryFocus,
+        focusedSessionId,
         mruSessionIds: [...this.mruSessionIds],
       },
     };
     atomicWriteJson(this.statePath, data);
+  }
+
+  /** Promote sentinel primary to the first real window owner and migrate focus/MRU. */
+  private touchPrimaryOwner(owner: string): string {
+    if (this.primaryOwnerId === PRIMARY_OWNER && owner !== PRIMARY_OWNER) {
+      this.primaryOwnerId = owner;
+      if (!this.focusedByOwner.has(owner) && this.focusedByOwner.has(PRIMARY_OWNER)) {
+        this.focusedByOwner.set(owner, this.focusedByOwner.get(PRIMARY_OWNER) ?? null);
+        this.focusedByOwner.delete(PRIMARY_OWNER);
+      }
+      if (!this.mruByOwner.has(owner) && this.mruByOwner.has(PRIMARY_OWNER)) {
+        this.mruByOwner.set(owner, this.mruByOwner.get(PRIMARY_OWNER) ?? []);
+        this.mruByOwner.delete(PRIMARY_OWNER);
+      }
+    }
+    return owner;
   }
 
   private moveToMruFront(id: string): void {

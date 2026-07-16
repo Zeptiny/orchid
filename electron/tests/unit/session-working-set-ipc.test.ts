@@ -139,6 +139,21 @@ describe('session working-set IPC', () => {
     const get = mocks.handlers.get(IPC_CHANNELS.SESSION_WORKING_SET_GET)!;
     const snap = await get(event());
     expect(snap.openSessionIds).toEqual([A]);
+    expect(mocks.send).toHaveBeenCalledWith(
+      IPC_CHANNELS.SESSION_WORKING_SET_CHANGED,
+      expect.objectContaining({
+        snapshot: expect.objectContaining({ openSessionIds: [A] }),
+      }),
+    );
+  });
+
+  it('get is non-mutating when membership is unchanged', async () => {
+    workingSetOpenOrFocus(A, '1');
+    mocks.send.mockClear();
+    const get = mocks.handlers.get(IPC_CHANNELS.SESSION_WORKING_SET_GET)!;
+    const snap = await get(event());
+    expect(snap.openSessionIds).toEqual([A]);
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 
   it('tryListSessionCatalog returns ok for readable sessions dir', () => {

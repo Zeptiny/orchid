@@ -127,6 +127,31 @@ describe('WorkingSetStore', () => {
     expect(snap.focusedSessionId).toBeNull();
   });
 
+  it('persists explicit null focus across restart', () => {
+    const statePath = tmpStatePath();
+    const writer = new WorkingSetStore({ statePath });
+    writer.openOrFocus('a', 'win-1');
+    writer.openOrFocus('b', 'win-1');
+    writer.setFocus(null, 'win-1');
+    writer.saveToDisk();
+
+    const reader = new WorkingSetStore({ statePath });
+    reader.loadFromDisk();
+    expect(reader.getSnapshot().openSessionIds).toEqual(['a', 'b']);
+    expect(reader.getSnapshot().focusedSessionId).toBeNull();
+  });
+
+  it('filterExisting returns snapshot for requesting owner', () => {
+    store.openOrFocus('a', 'win-1');
+    store.openOrFocus('b', 'win-2');
+    store.setFocus('a', 'win-1');
+    store.setFocus('b', 'win-2');
+
+    const snap = store.filterExisting(new Set(['a', 'b']), 'win-2');
+    expect(snap.openSessionIds).toEqual(['a', 'b']);
+    expect(snap.focusedSessionId).toBe('b');
+  });
+
   it('setFocus updates MRU order', () => {
     store.openOrFocus('a');
     store.openOrFocus('b');

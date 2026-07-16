@@ -18,7 +18,7 @@ import {
   selectionMatchesOption,
 } from '../utils/provider-selection';
 import { isTextGenerationModel } from '../utils/models';
-import { useGlobalShortcuts } from '../keyboard';
+import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import type { ModelSelection } from '../../shared/types/provider';
 import { flattenSessionMessages, type Session } from '../../shared/types/session';
 import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus, CommandContext } from '../../shared/types/ipc-boundary';
@@ -52,6 +52,8 @@ export function ChatView() {
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [closeConfirmId, setCloseConfirmId] = useState<string | null>(null);
+  const closeConfirmRef = useRef<HTMLDivElement>(null);
+  const closeConfirmCancelRef = useRef<HTMLButtonElement>(null);
   const [draftTabVisible, setDraftTabVisible] = useState(false);
   const [composerDraftKey, setComposerDraftKey] = useState(0);
   const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
@@ -645,16 +647,35 @@ export function ChatView() {
       // Always allow palette / help toggles (they close themselves).
       if (id === 'palette.toggle' || id === 'shortcuts.help') return true;
       // Suppress other globals while overlays own the keyboard.
-      if (paletteOpen || helpOpen) return false;
+      if (paletteOpen || helpOpen || closeConfirmId) return false;
       return true;
     },
-    [paletteOpen, helpOpen],
+    [paletteOpen, helpOpen, closeConfirmId],
   );
 
   useGlobalShortcuts({
     handlers: shortcutHandlers,
     isEnabled: shortcutGate,
   });
+
+  useFocusTrap({
+    enabled: closeConfirmId != null,
+    containerRef: closeConfirmRef,
+    initialFocusRef: closeConfirmCancelRef,
+  });
+
+  useEffect(() => {
+    if (!closeConfirmId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setCloseConfirmId(null);
+      }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => document.removeEventListener('keydown', onKeyDown, true);
+  }, [closeConfirmId]);
 
   const refreshMCP = useCallback(async () => {
     try {
@@ -904,13 +925,24 @@ export function ChatView() {
           workspace={session.workspace}
         />
         {closeConfirmId ? (
-          <div className="session-tab-confirm" role="alertdialog" aria-modal="true">
+          <div
+            ref={closeConfirmRef}
+            className="session-tab-confirm"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="session-tab-confirm-title"
+            aria-describedby="session-tab-confirm-desc"
+          >
             <div className="session-tab-confirm-card">
-              <p className="session-tab-confirm-text">
+              <p id="session-tab-confirm-title" className="session-tab-confirm-text">
+                Close running session tab?
+              </p>
+              <p id="session-tab-confirm-desc" className="session-tab-confirm-text session-tab-confirm-desc">
                 This session is still running. Close the tab and keep the agent working in the background?
               </p>
               <div className="session-tab-confirm-actions">
                 <button
+                  ref={closeConfirmCancelRef}
                   type="button"
                   className="btn btn-ghost btn-sm"
                   onClick={() => setCloseConfirmId(null)}
