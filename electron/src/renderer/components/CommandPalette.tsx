@@ -14,7 +14,6 @@ import {
   buildSessionResults,
   fuzzyMatch,
   highlightMatch,
-  type Command,
   type CommandCategory,
   type PaletteResult,
 } from '../commands/registry';
@@ -116,7 +115,7 @@ export function CommandPalette({
       const recent = getRecentCommands();
       const recentCommands = recent
         .map((name) => COMMANDS.find((c) => c.name === name))
-        .filter((cmd): cmd is Command => cmd !== undefined);
+        .filter((cmd): cmd is (typeof COMMANDS)[number] => cmd !== undefined);
 
       for (const cmd of recentCommands) {
         items.push({
