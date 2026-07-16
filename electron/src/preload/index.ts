@@ -68,13 +68,13 @@ import type {
 // ── Security helpers ─────────────────────────────────────────────────────────
 
 function assertAllowedInvoke(channel: string): void {
-  if (!ALLOWED_INVOKE_CHANNELS.includes(channel)) {
+  if (!(ALLOWED_INVOKE_CHANNELS as readonly string[]).includes(channel)) {
     throw new Error(`IPC channel '${channel}' is not allowed for invoke`);
   }
 }
 
 function assertAllowedEvent(channel: string): void {
-  if (!ALLOWED_EVENT_CHANNELS.includes(channel)) {
+  if (!(ALLOWED_EVENT_CHANNELS as readonly string[]).includes(channel)) {
     throw new Error(`IPC channel '${channel}' is not allowed for events`);
   }
 }

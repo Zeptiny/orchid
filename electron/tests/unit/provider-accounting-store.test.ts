@@ -88,12 +88,36 @@ describe('ProviderAccountingStore', () => {
       store.finalize(id, { outcome: 'succeeded', usage: null, providerEvidence: {}, cost });
     }
 
-    expect(store.getSessionTotals('session-1')).toEqual([{
-      currency: 'USD', amount: '0.3', recordCount: 2, unknownCount: 1,
-    }]);
-    expect(store.getChainTotals('chain-1')).toEqual([{
-      currency: 'USD', amount: '0.3', recordCount: 2, unknownCount: 1,
-    }]);
+    expect(store.getSessionTotals('session-1')).toEqual({
+      currencies: [{ currency: 'USD', amount: '0.3', recordCount: 2 }],
+      unknownCount: 1,
+    });
+    expect(store.getChainTotals('chain-1')).toEqual({
+      currencies: [{ currency: 'USD', amount: '0.3', recordCount: 2 }],
+      unknownCount: 1,
+    });
+    store.close();
+  });
+
+  it('attaches unknownCount once at the summary level across multiple currencies', () => {
+    const store = createStore();
+    for (const [id, cost] of [
+      ['a', { state: 'calculated' as const, source: 'token-formula' as const, currency: 'USD', amount: '0.1' }],
+      ['b', { state: 'calculated' as const, source: 'token-formula' as const, currency: 'EUR', amount: '0.2' }],
+      ['c', { state: 'unknown' as const, source: 'unknown' as const, reason: 'quota only' }],
+      ['d', { state: 'unknown' as const, source: 'unknown' as const, reason: 'subscription' }],
+    ] as const) {
+      store.insertPending({ attemptId: id, sessionId: 'session-2', chainId: 'chain-2', turnId: 'turn-1', sdkCallId: null, snapshot: snapshot() });
+      store.finalize(id, { outcome: 'succeeded', usage: null, providerEvidence: {}, cost });
+    }
+
+    const totals = store.getSessionTotals('session-2');
+    expect(totals.unknownCount).toBe(2);
+    expect(totals.currencies).toEqual([
+      { currency: 'USD', amount: '0.1', recordCount: 1 },
+      { currency: 'EUR', amount: '0.2', recordCount: 1 },
+    ]);
+    expect(totals.currencies.every((row) => !('unknownCount' in row))).toBe(true);
     store.close();
   });
 

@@ -11,10 +11,11 @@ export interface GenericEndpoint {
 }
 
 function isLoopbackHost(hostname: string): boolean {
+  // Exact loopback only. Do not treat `127.*` hostnames (e.g. 127.evil.com)
+  // or other 127.0.0.0/8 addresses as local — those require explicit confirmation.
   return hostname === 'localhost'
     || hostname === '127.0.0.1'
-    || hostname === '::1'
-    || hostname.startsWith('127.');
+    || hostname === '::1';
 }
 
 /** Validate endpoints before a generic credential can be sent to them. */

@@ -389,14 +389,16 @@ describe('provider end-to-end public contracts', () => {
       costState: 'reported',
       costAmount: '0.0012',
     });
-    expect(restartedLedger.getSessionTotals('provider-e2e-session')).toEqual([
-      {
-        currency: 'USD',
-        amount: '0.0012',
-        recordCount: 1,
-        unknownCount: 0,
-      },
-    ]);
+    expect(restartedLedger.getSessionTotals('provider-e2e-session')).toEqual({
+      currencies: [
+        {
+          currency: 'USD',
+          amount: '0.0012',
+          recordCount: 1,
+        },
+      ],
+      unknownCount: 0,
+    });
   });
 
   it('AE9 passes Lilac supply-discount data through a local fixture status contract without affecting typed send eligibility', async () => {
@@ -653,12 +655,14 @@ describe('provider end-to-end public contracts', () => {
       providerEvidence: { quotaUsed: 1, quotaLimit: 10 },
       cost: { state: 'unknown', source: 'unknown' },
     });
-    expect(ledger.getSessionTotals('unknown-cost-session')).toEqual([{
-      currency: 'USD',
-      amount: '0.25',
-      recordCount: 1,
+    expect(ledger.getSessionTotals('unknown-cost-session')).toEqual({
+      currencies: [{
+        currency: 'USD',
+        amount: '0.25',
+        recordCount: 1,
+      }],
       unknownCount: 1,
-    }]);
+    });
   });
 
   it('AE8/AE11 constructs each declared compatible protocol without parsing slash-containing model IDs', async () => {

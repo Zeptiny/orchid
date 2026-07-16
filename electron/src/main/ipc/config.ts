@@ -1,10 +1,9 @@
 /**
  * Config IPC handlers — config:get, config:save.
  *
- * Wraps ConfigManager from U3 with zod-validated payloads.
- * Provider connections no longer belong to the general configuration document.
- * Their dedicated, main-process IPC contract is introduced in U8; until then
- * this boundary fails closed for legacy provider aliases and secrets.
+ * Wraps ConfigManager with zod-validated payloads.
+ * Provider connections live in their own store and IPC surface; this boundary
+ * fails closed for legacy provider aliases and secrets in the config document.
  */
 import { ipcMain } from 'electron';
 import { z } from 'zod';

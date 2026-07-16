@@ -38,9 +38,6 @@ export function applyTheme(name: ThemeName): void {
   link.id = 'orchid-theme';
   link.rel = 'stylesheet';
   link.href = `./themes/${name}.css`;
-  link.addEventListener('load', () => {
-    window.dispatchEvent(new CustomEvent('orchid:theme-applied', { detail: { theme: name } }));
-  }, { once: true });
   document.head.appendChild(link);
 }
 

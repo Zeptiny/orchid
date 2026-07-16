@@ -96,9 +96,12 @@ const chatStopSchema = z.object({
   sessionId: z.string().uuid(),
 });
 
+/** Upper bound for bgcmd:snapshot lastN (prevents unbounded payload reads). */
+const BG_CMD_SNAPSHOT_MAX_LAST_N = 1000;
+
 const bgCommandSnapshotSchema = z.object({
   commandId: z.number().int().positive(),
-  lastN: z.number().int().positive().optional(),
+  lastN: z.number().int().positive().max(BG_CMD_SNAPSHOT_MAX_LAST_N).optional(),
 });
 
 // ── Active actor tracking ────────────────────────────────────────────────────
@@ -1771,18 +1774,11 @@ export function unregisterChatIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_SNAPSHOT);
   ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_SNAPSHOT);
 
-  // Cancel all active agents
-  for (const [, agent] of activeAgents) {
+  // Tear down active agents via dispose so MCP project leases are released.
+  for (const [sessionId, agent] of [...activeAgents.entries()]) {
     agent.agentCancelled = true;
     agent.finalized = true;
-    agent.unsubscribe();
-    agent.interruptUnsubscribe();
-    if (agent.interruptResetTimer) {
-      clearTimeout(agent.interruptResetTimer);
-    }
-    agent.abortController.abort();
-    agent.actor.stop();
-    agent.interruptActor.stop();
+    disposeActiveAgent(sessionId, agent);
   }
   activeAgents.clear();
   sessionsStarting.clear();

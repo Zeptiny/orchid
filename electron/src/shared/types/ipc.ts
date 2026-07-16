@@ -231,7 +231,7 @@ export interface ChatToolCallUpdateEvent extends ChatEventIdentity {
 export interface BgCommandSnapshotRequest {
   /** The background command ID. */
   commandId: number;
-  /** Optional last N lines to retrieve (default: 50). */
+  /** Optional last N lines to retrieve (default: 50, max: 1000). */
   lastN?: number;
 }
 
@@ -835,7 +835,7 @@ export type IPCChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 
 // ── Allowed invoke channels (preload security gate) ──────────────────────────
 
-export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
+export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.CHAT_SEND,
   IPC_CHANNELS.CHAT_CANCEL,
   IPC_CHANNELS.CHAT_STOP,
@@ -891,11 +891,11 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.AST_INDEX,
   IPC_CHANNELS.AST_INDEX_STATE,
   IPC_CHANNELS.BG_CMD_SNAPSHOT,
-];
+] as const satisfies readonly IPCChannel[];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────
 
-export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
+export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.CHAT_CHUNK,
   IPC_CHANNELS.CHAT_THINKING,
   IPC_CHANNELS.CHAT_STATE,
@@ -918,7 +918,7 @@ export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
   IPC_CHANNELS.UPDATER_STATUS_UPDATE,
   IPC_CHANNELS.UPDATER_PROGRESS,
   IPC_CHANNELS.UPDATER_ERROR,
-];
+] as const satisfies readonly IPCChannel[];
 
 // ── Window type augmentation (renderer-side) ─────────────────────────────────
 

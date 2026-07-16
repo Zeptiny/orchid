@@ -78,9 +78,9 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
   );
 
   const handleNumberChange = useCallback(
-    (field: keyof RAGConfig, value: string) => {
+    (field: keyof RAGConfig, value: string, min = 1) => {
       const num = parseInt(value, 10);
-      if (!isNaN(num) && num > 0) {
+      if (!Number.isNaN(num) && num >= min) {
         updateField(field, num as RAGConfig[typeof field]);
       }
     },
@@ -151,7 +151,7 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
               id="rag-chunk-overlap"
               type="number"
               value={rag.chunk_overlap}
-              onChange={(e) => handleNumberChange('chunk_overlap', e.target.value)}
+              onChange={(e) => handleNumberChange('chunk_overlap', e.target.value, 0)}
               className="input config-control"
               min={0}
               max={2000}

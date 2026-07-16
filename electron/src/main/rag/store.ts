@@ -248,6 +248,7 @@ function openDatabase(dbPath: string): BetterSqlite3Database {
     const Database = require('better-sqlite3') as new (path: string) => BetterSqlite3Database;
     const db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
+    db.pragma('busy_timeout = 5000');
     return db;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);

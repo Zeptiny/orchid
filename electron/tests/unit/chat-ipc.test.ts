@@ -1810,3 +1810,85 @@ describe('chat IPC provider gates', () => {
     warn.mockRestore();
   });
 });
+
+describe('chat IPC teardown and bgcmd bounds', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    mocks.streamResponses.length = 0;
+    mocks.streamEventSequences.length = 0;
+    mocks.runtimeRegistry._reset();
+    mocks.sessionManager._reset();
+    chatIpc = await import('../../src/main/ipc/chat');
+    chatIpc.registerChatIPC();
+  });
+
+  afterEach(() => {
+    chatIpc.unregisterChatIPC();
+    mocks.handlers.clear();
+    mocks.sessionManager._reset();
+  });
+
+  it('unregisterChatIPC releases MCP project leases for active agents', async () => {
+    const projectRegistry = await import('../../src/main/mcp/project-registry');
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession('cccccccc-cccc-4ccc-8ccc-cccccccccccc'),
+      selection,
+      modelLabel: selection.modelId,
+    });
+
+    let releaseStream: (() => void) | undefined;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'partial' };
+      await streamGate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    const sendResult = await chatSend(
+      { sender: { id: 910, send } },
+      { message: 'Hold open for teardown' },
+    );
+    expect(sendResult).toMatchObject({ status: 'started' });
+
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline && mocks.streamChat.mock.calls.length === 0) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(mocks.streamChat).toHaveBeenCalled();
+    expect(projectRegistry.acquireProjectMCPManager).toHaveBeenCalled();
+
+    chatIpc.unregisterChatIPC();
+    chatIpc.registerChatIPC();
+
+    expect(projectRegistry.releaseProjectMCPManager).toHaveBeenCalled();
+    releaseStream?.();
+  });
+
+  it('bgcmd:snapshot rejects lastN above the upper bound', async () => {
+    const snap = mocks.handlers.get(IPC_CHANNELS.BG_CMD_SNAPSHOT);
+    expect(snap).toBeDefined();
+
+    await expect(
+      snap!({ sender: { id: 911, send: vi.fn() } }, { commandId: 1, lastN: 1001 }),
+    ).rejects.toThrow(/Invalid bgcmd:snapshot/);
+  });
+
+  it('bgcmd:snapshot accepts lastN at the upper bound', async () => {
+    const snap = mocks.handlers.get(IPC_CHANNELS.BG_CMD_SNAPSHOT)!;
+
+    const result = await snap(
+      { sender: { id: 912, send: vi.fn() } },
+      { commandId: 999_999, lastN: 1000 },
+    );
+    expect(result).toEqual({ tail: '', exitCode: null });
+  });
+});

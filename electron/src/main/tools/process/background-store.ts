@@ -63,7 +63,6 @@ export interface ProcessEntry {
   sessionId: string | null;
   agentScopeId: string;
   description: string;
-  drainAbort: AbortController | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,7 +98,6 @@ export class BackgroundProcessStore {
     const now = Date.now();
 
     let proc: ChildProcess | IPty;
-    const abort = new AbortController();
 
     if (interactive) {
       const env = { ...process.env, ...PTY_ENV_SUPPRESSION };
@@ -174,7 +172,6 @@ export class BackgroundProcessStore {
       sessionId,
       agentScopeId,
       description,
-      drainAbort: interactive ? null : abort,
     };
     this._entries.set(procId, entry);
 

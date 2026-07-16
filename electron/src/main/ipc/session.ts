@@ -289,7 +289,19 @@ export function registerSessionIPC(): void {
     }
 
     const manager = getSessionManager();
+    const existing = manager.getSession(parsed.data.id);
+    if (!existing) {
+      return { status: 'not_found' };
+    }
+    if (existing.name === parsed.data.name) {
+      return { status: 'unchanged', name: existing.name };
+    }
+
     manager.rename(parsed.data.id, parsed.data.name);
+    const after = manager.getSession(parsed.data.id);
+    if (!after || after.name !== parsed.data.name) {
+      return { status: 'not_active' };
+    }
 
     // Push rename event to renderer so sidebar/list updates reactively
     event.sender.send(IPC_CHANNELS.SESSION_RENAMED, {
@@ -308,19 +320,44 @@ export function registerSessionIPC(): void {
     }
 
     const manager = getSessionManager();
-    manager.changeModel(
-      parsed.data.id,
-      parsed.data.selection,
-      parsed.data.modelLabel ?? parsed.data.selection?.modelId ?? null,
-    );
-    const active = manager.getSession(parsed.data.id);
-    if (!active || active.id !== parsed.data.id) {
+    const existing = manager.getSession(parsed.data.id);
+    if (!existing) {
+      return { status: 'not_found' };
+    }
+
+    const nextLabel = parsed.data.modelLabel ?? parsed.data.selection?.modelId ?? null;
+    const sameSelection =
+      (existing.selection === null && parsed.data.selection === null) ||
+      (existing.selection !== null &&
+        parsed.data.selection !== null &&
+        existing.selection.connectionId === parsed.data.selection.connectionId &&
+        existing.selection.modelId === parsed.data.selection.modelId);
+    if (sameSelection && existing.modelLabel === nextLabel) {
+      return {
+        status: 'unchanged',
+        selection: existing.selection,
+        modelLabel: existing.modelLabel,
+      };
+    }
+
+    manager.changeModel(parsed.data.id, parsed.data.selection, nextLabel);
+    const after = manager.getSession(parsed.data.id);
+    if (!after) {
+      return { status: 'not_found' };
+    }
+    const afterSame =
+      (after.selection === null && parsed.data.selection === null) ||
+      (after.selection !== null &&
+        parsed.data.selection !== null &&
+        after.selection.connectionId === parsed.data.selection.connectionId &&
+        after.selection.modelId === parsed.data.selection.modelId);
+    if (!afterSame || after.modelLabel !== nextLabel) {
       return { status: 'not_active' };
     }
     return {
       status: 'changed',
-      selection: active.selection,
-      modelLabel: active.modelLabel,
+      selection: after.selection,
+      modelLabel: after.modelLabel,
     };
   });
 

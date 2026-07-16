@@ -30,11 +30,13 @@ src/
 │   ├── agents/              # Agent definitions and state machines
 │   │   ├── registry.ts      # Load agent YAML/JSON from ~/.orchid/agents/
 │   │   ├── manager.ts       # SubagentManager — spawn/wait/interrupt subagents
+│   │   ├── subagent-runner.ts        # Run subagent turns against project runtime
+│   │   ├── wire-subagents.ts         # Wire subagent lifecycle into manager
+│   │   ├── persist-subagent-chains.ts # Persist subagent chain messages
 │   │   ├── defaults/        # Built-in agent definitions
 │   │   └── xstate/          # XState machines
 │   │       ├── agent-machine.ts      # Core agent loop (idle→streaming→toolExec→idle)
-│   │       ├── subagent-machine.ts   # Subagent lifecycle
-│   │       ├── session-machine.ts    # Session-level orchestration
+│   │       ├── events.ts             # Agent machine event types
 │   │       └── interrupt-machine.ts  # Two-phase Esc cancellation
 │   ├── llm/                 # LLM integration
 │   │   ├── orchestrator.ts  # streamChat() — async generator yielding StreamEvents
@@ -75,14 +77,17 @@ src/
 │   ├── ipc/                 # IPC handlers (main process side)
 │   │   ├── index.ts         # registerAllIPC() / unregisterAllIPC()
 │   │   ├── chat.ts          # chat:send, chat:cancel — main agentic loop entry
+│   │   ├── chat-history.ts  # chat history helpers
 │   │   ├── config.ts        # config:get, config:save
-│   │   ├── session.ts       # session CRUD
+│   │   ├── session.ts       # session CRUD / workspace bind
+│   │   ├── session-activity.ts # session activity events
+│   │   ├── session-working-set.ts # working-set IPC
 │   │   ├── tool.ts          # tool:execute
-│   │   ├── agent.ts         # agent:list, agent:spawn
+│   │   ├── definitions.ts   # agents/skills/personalities listing
+│   │   ├── providers.ts     # provider connection CRUD / models / status
 │   │   ├── mcp.ts           # mcp:status
 │   │   ├── rag.ts           # rag:status, rag:index, rag:clear
-│   │   ├── ast.ts           # ast:status, ast:index
-│   │   └── updater.ts       # updater:check, updater:install
+│   │   └── ast.ts           # ast:status, ast:index
 │   ├── config/              # Configuration system
 │   │   ├── schema.ts        # Zod schemas — single source of truth for config fields
 │   │   ├── loader.ts        # ensureHomeConfig(), ConfigManager — ~/.orchid/ management
@@ -96,8 +101,8 @@ src/
 │   ├── project/             # Workspace binding (session cwd / sticky default)
 │   │   ├── path.ts          # inspect/canonicalize absolute project directories
 │   │   ├── workspace.ts     # draft cwd, sticky default_project_dir, resolveWorkspace*
-│   │   ├── layers.ts        # apply project .orchid.json + agents/skills overlays
-│   │   └── index.ts         # public re-exports
+│   │   ├── runtime.ts       # ProjectRuntime — config + agents/skills/personalities overlays
+│   │   └── personality.ts   # project personality helpers
 │   ├── mcp/                 # Model Context Protocol client
 │   │   ├── index.ts         # MCPManager export
 │   │   ├── manager.ts       # MCPManager — start/stop/call/list tools
@@ -115,10 +120,8 @@ src/
 │   ├── skills/              # Skill system
 │   │   ├── registry.ts      # loadSkills() from ~/.orchid/skills/
 │   │   └── defaults/        # Built-in skills
-│   ├── commands/            # Command registry
-│   │   └── registry.ts      # Slash commands (/settings, /clear, etc.)
 │   ├── logging.ts           # FileLogger — ~/.orchid/logs/orchid.log
-│   ├── updater.ts           # Auto-update via electron-updater
+│   ├── updater.ts           # Auto-update via electron-updater (events: updater:status_update, updater:progress, updater:error)
 │   └── utils/
 │       └── esm-import.ts    # importESM() — dynamic ESM import for CJS context
 ├── preload/
@@ -173,7 +176,7 @@ src/
     │   ├── todo.ts          # TodoItem, TodoStatus
     │   ├── chain.ts         # Chain (conversation thread) types
     │   └── index.ts         # Barrel re-exports
-    ├── commands.ts          # Shared command definitions
+    ├── commands.ts          # Shared command types + fuzzy-match utilities (definitions live in renderer)
     └── utils/
         └── frontmatter.ts   # YAML frontmatter parser for agent/skill files
 ```
@@ -250,7 +253,7 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 
 ### LLM Provider Resolution
 - Model identity is always a typed `{ connectionId, modelId }`; slash-delimited model IDs remain opaque and are never parsed as provider aliases
-- Connections store non-secret provider/auth/protocol metadata in `~/.orchid/connections.json`; secrets stay behind opaque handles in the encrypted credential vault
+- Connections store non-secret provider/auth/protocol metadata in `~/.orchid/providers.json`; secrets stay behind opaque handles in the encrypted credential vault
 - `ProviderRuntime.resolveExecution()` resolves one catalog snapshot, validates the credential binding, constructs the code-owned driver adapter, and freezes accounting/provenance for the request
 - Remote catalogs may describe models and pricing but cannot supply executable modules, origins, auth rules, headers, or credential routing
 - Generic OpenAI- and Anthropic-compatible connections are explicit custom-endpoint drivers; specialized drivers own their origins in code
@@ -312,8 +315,9 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 
 ### Config Locations
 - User config: `~/.orchid/config.json`
-- Project config: `.orchid/config.json` (in project root)
-- Merged: project overrides user, deep-merged
+- Project config: `.orchid.json` (in project root)
+- Provider connections (non-secret): `~/.orchid/providers.json`
+- Merged: defaults → home → project → env overrides (deep-merged)
 
 ## Coding Conventions
 

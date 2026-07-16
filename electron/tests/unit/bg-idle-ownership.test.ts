@@ -30,7 +30,6 @@ describe('BackgroundProcessStore.checkIdleOwnership', () => {
       sessionId: null,
       agentScopeId: 'main',
       description: '',
-      drainAbort: null,
     };
     // Access private map via cast for unit isolation
     (store as unknown as { _entries: Map<number, typeof entry> })._entries.set(1, entry);

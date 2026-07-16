@@ -338,7 +338,7 @@ export function buildWebFetchTool(
       return {
         display: `Fetched and summarized ${finalUrl}`,
         content:
-          `<web_fetch_summarize url="${finalUrl}" title="${title || '(none)'}" content_type="${contentType}" length="${content.length}">\n` +
+          `<web_fetch_summarize url="${escapeXmlAttr(finalUrl)}" title="${escapeXmlAttr(title || '(none)')}" content_type="${escapeXmlAttr(contentType)}" length="${content.length}">\n` +
           `${answer}\n` +
           `</web_fetch_summarize>`,
       };
@@ -359,6 +359,15 @@ export function buildWebFetchTool(
 // Raw result builder
 // ---------------------------------------------------------------------------
 
+/** Escape a value for use inside a double-quoted XML attribute. */
+function escapeXmlAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 /**
  * Build the raw mode result. If content exceeds threshold and a session ID
  * is available, writes to a cache file.
@@ -372,9 +381,9 @@ function buildRawResult(
   cacheRoot: string = HOME_CONFIG_DIR,
 ): WebFetchResult {
   const attrs =
-    `url="${url}"` +
-    (title ? ` title="${title}"` : '') +
-    ` content_type="${contentType}"` +
+    `url="${escapeXmlAttr(url)}"` +
+    (title ? ` title="${escapeXmlAttr(title)}"` : '') +
+    ` content_type="${escapeXmlAttr(contentType)}"` +
     ` length="${content.length}"`;
 
   // Small content: return inline

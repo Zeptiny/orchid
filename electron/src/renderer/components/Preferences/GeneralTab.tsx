@@ -62,9 +62,9 @@ export function GeneralTab({
       : [...personalities];
 
   const handleNumberChange = useCallback(
-    (field: string, value: string) => {
+    (field: string, value: string, min = 1) => {
       const num = parseFloat(value);
-      if (!isNaN(num) && num > 0) {
+      if (!Number.isNaN(num) && num >= min) {
         onChange({ [field]: num });
       }
     },
@@ -263,7 +263,7 @@ export function GeneralTab({
               id="general-stream-retries"
               type="number"
               value={llmStreamRetries}
-              onChange={(e) => handleNumberChange('llm_stream_retries', e.target.value)}
+              onChange={(e) => handleNumberChange('llm_stream_retries', e.target.value, 0)}
               className="input config-control"
               min={0}
               max={10}

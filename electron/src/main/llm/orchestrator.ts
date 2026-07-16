@@ -242,12 +242,22 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       const content: AssistantContent = msg.tool_calls
         ? [
             ...contentArray,
-            ...msg.tool_calls.map((tc) => ({
-              type: 'tool-call' as const,
-              toolCallId: tc.id,
-              toolName: tc.function.name,
-              input: JSON.parse(tc.function.arguments),
-            })),
+            ...msg.tool_calls.flatMap((tc) => {
+              let input: unknown;
+              try {
+                input = JSON.parse(tc.function.arguments);
+              } catch {
+                return [];
+              }
+              return [
+                {
+                  type: 'tool-call' as const,
+                  toolCallId: tc.id,
+                  toolName: tc.function.name,
+                  input,
+                },
+              ];
+            }),
           ]
         : contentArray.length === 1 && contentArray[0].type === 'text'
           ? contentArray[0].text

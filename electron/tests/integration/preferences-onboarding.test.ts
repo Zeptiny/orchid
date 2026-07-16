@@ -10,6 +10,10 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { defaults } from '../../src/main/config/schema';
+import {
+  eventMatchesChord,
+  getShortcut,
+} from '../../src/renderer/keyboard';
 
 // ─── Mock Setup ──────────────────────────────────────────────────────────────
 
@@ -260,24 +264,44 @@ describe('Preferences & Onboarding File Structure', () => {
 
 // ─── Keyboard Shortcuts ──────────────────────────────────────────────────────
 
+function fakeKeyEvent(
+  partial: Partial<KeyboardEvent> & { key: string },
+): KeyboardEvent {
+  return {
+    key: partial.key,
+    code: partial.code ?? '',
+    ctrlKey: partial.ctrlKey ?? false,
+    metaKey: partial.metaKey ?? false,
+    shiftKey: partial.shiftKey ?? false,
+    altKey: partial.altKey ?? false,
+    defaultPrevented: false,
+    preventDefault() {
+      (this as { defaultPrevented: boolean }).defaultPrevented = true;
+    },
+    target: partial.target ?? null,
+  } as KeyboardEvent;
+}
+
 describe('Preferences Keyboard Shortcuts', () => {
-  it('Ctrl+S triggers save', () => {
-    const key = 's';
-    const ctrlKey = true;
-    const shouldSave = ctrlKey && key === 's';
-    expect(shouldSave).toBe(true);
+  it('Ctrl+S triggers save via registry', () => {
+    const def = getShortcut('config.save');
+    expect(def).toBeDefined();
+    expect(def!.chord).toEqual({ key: 's', mod: true });
+    expect(eventMatchesChord(fakeKeyEvent({ key: 's', ctrlKey: true }), def!.chord)).toBe(true);
   });
 
-  it('Cmd+S triggers save on macOS', () => {
-    const key = 's';
-    const metaKey = true;
-    const shouldSave = metaKey && key === 's';
-    expect(shouldSave).toBe(true);
+  it('Cmd+S triggers save on macOS via registry', () => {
+    const def = getShortcut('config.save');
+    expect(def).toBeDefined();
+    expect(eventMatchesChord(fakeKeyEvent({ key: 's', metaKey: true }), def!.chord)).toBe(true);
+    expect(eventMatchesChord(fakeKeyEvent({ key: 's' }), def!.chord)).toBe(false);
   });
 
-  it('Escape triggers close check', () => {
-    const key = 'Escape';
-    expect(key).toBe('Escape');
+  it('Escape closes settings via registry', () => {
+    const def = getShortcut('config.close');
+    expect(def).toBeDefined();
+    expect(def!.chord).toEqual({ key: 'Escape' });
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'Escape' }), def!.chord)).toBe(true);
   });
 });
 

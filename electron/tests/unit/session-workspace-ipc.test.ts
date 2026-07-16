@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => {
     updatedAt: string;
     subagentChains: unknown[];
     todoStore: { tasks: unknown[] };
+    selection?: { connectionId: string; modelId: string } | null;
+    modelLabel?: string | null;
   };
 
   let activeSession: SessionShape | null = null;
@@ -86,9 +88,25 @@ const mocks = vi.hoisted(() => {
       activeSession = { ...activeSession, cwd: real };
       return activeSession;
     }),
-    rename: vi.fn(),
+    getSession: vi.fn((id: string) => (activeSession?.id === id ? activeSession : null)),
+    rename: vi.fn((id: string, name: string) => {
+      if (!activeSession || activeSession.id !== id) return;
+      activeSession = { ...activeSession, name };
+    }),
     delete: vi.fn(() => true),
-    changeModel: vi.fn(),
+    changeModel: vi.fn((
+      id: string,
+      selection: { connectionId: string; modelId: string } | null,
+      modelLabel: string | null = selection?.modelId ?? null,
+    ) => {
+      if (!activeSession || activeSession.id !== id) return;
+      activeSession = {
+        ...activeSession,
+        selection,
+        modelLabel,
+        model: modelLabel ?? activeSession.model,
+      };
+    }),
     listSaved: vi.fn(() => []),
     _reset: () => {
       activeSession = null;
@@ -98,6 +116,9 @@ const mocks = vi.hoisted(() => {
       sessionManager.switchTo.mockClear();
       sessionManager.changeCwd.mockClear();
       sessionManager.clearActive.mockClear();
+      sessionManager.getSession.mockClear();
+      sessionManager.rename.mockClear();
+      sessionManager.changeModel.mockClear();
     },
   };
 
@@ -203,6 +224,7 @@ beforeEach(async () => {
     switchTo: mocks.sessionManager.switchTo,
     load: mocks.sessionManager.load,
     changeCwd: mocks.sessionManager.changeCwd,
+    getSession: mocks.sessionManager.getSession,
     rename: mocks.sessionManager.rename,
     delete: mocks.sessionManager.delete,
     changeModel: mocks.sessionManager.changeModel,
@@ -463,5 +485,94 @@ describe('session workspace IPC', () => {
     const result = await getWs({ sender: sender(11) });
     expect(result.source).toBe('draft');
     expect(result.cwd).toBe(fs.realpathSync(tmpProject));
+  });
+
+  it('session:rename returns unchanged and skips emit when name is already set', async () => {
+    mocks.sessionManager.create('test/model', { cwd: tmpProject });
+    const active = mocks.sessionManager.getActive()!;
+    active.name = 'Same Name';
+    const rename = mocks.handlers.get(IPC_CHANNELS.SESSION_RENAME);
+    expect(rename).toBeDefined();
+    const s = sender(12);
+
+    const result = await rename!({ sender: s }, { id: active.id, name: 'Same Name' });
+
+    expect(result).toEqual({ status: 'unchanged', name: 'Same Name' });
+    expect(mocks.sessionManager.rename).not.toHaveBeenCalled();
+    expect(s.send).not.toHaveBeenCalled();
+  });
+
+  it('session:rename emits renamed when name changes', async () => {
+    mocks.sessionManager.create('test/model', { cwd: tmpProject });
+    const active = mocks.sessionManager.getActive()!;
+    active.name = 'Old Name';
+    const rename = mocks.handlers.get(IPC_CHANNELS.SESSION_RENAME)!;
+    const s = sender(13);
+
+    const result = await rename({ sender: s }, { id: active.id, name: 'New Name' });
+
+    expect(result).toEqual({ status: 'renamed' });
+    expect(mocks.sessionManager.rename).toHaveBeenCalledWith(active.id, 'New Name');
+    expect(s.send).toHaveBeenCalledWith(IPC_CHANNELS.SESSION_RENAMED, {
+      id: active.id,
+      name: 'New Name',
+    });
+  });
+
+  it('session:change_model returns unchanged when selection is already the same', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager.create('test/model', { cwd: tmpProject });
+    const active = mocks.sessionManager.getActive()!;
+    active.selection = selection;
+    active.modelLabel = selection.modelId;
+    const changeModel = mocks.handlers.get(IPC_CHANNELS.SESSION_CHANGE_MODEL);
+    expect(changeModel).toBeDefined();
+
+    const result = await changeModel!(
+      { sender: sender(14) },
+      { id: active.id, selection, modelLabel: selection.modelId },
+    );
+
+    expect(result).toEqual({
+      status: 'unchanged',
+      selection,
+      modelLabel: selection.modelId,
+    });
+    expect(mocks.sessionManager.changeModel).not.toHaveBeenCalled();
+  });
+
+  it('session:change_model returns changed when selection differs', async () => {
+    const prev = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    const next = {
+      connectionId: '22222222-2222-4222-8222-222222222222',
+      modelId: 'other/model',
+    };
+    mocks.sessionManager.create('test/model', { cwd: tmpProject });
+    const active = mocks.sessionManager.getActive()!;
+    active.selection = prev;
+    active.modelLabel = prev.modelId;
+    const changeModel = mocks.handlers.get(IPC_CHANNELS.SESSION_CHANGE_MODEL)!;
+
+    const result = await changeModel(
+      { sender: sender(15) },
+      { id: active.id, selection: next },
+    );
+
+    expect(result).toEqual({
+      status: 'changed',
+      selection: next,
+      modelLabel: next.modelId,
+    });
+    expect(mocks.sessionManager.changeModel).toHaveBeenCalledWith(
+      active.id,
+      next,
+      next.modelId,
+    );
   });
 });

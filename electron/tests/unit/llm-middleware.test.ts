@@ -466,6 +466,31 @@ describe('Throttle middleware', () => {
     const third = await reader.read();
     expect(third.value).toEqual({ type: 'text-delta', id: 'txt-0', delta: 'Answer' });
   });
+
+  it('does not enqueue after stream cancel when timer fires', async () => {
+    const middleware = createThrottleMiddleware({ intervalMs: 100 });
+    const chunks: LanguageModelV4StreamPart[] = [
+      { type: 'reasoning-delta', id: 'reasoning-0', delta: 'first' },
+      { type: 'reasoning-delta', id: 'reasoning-0', delta: ' buffered' },
+    ];
+
+    const result = await middleware.wrapStream!({
+      doStream: createMockDoStream(chunks),
+      doGenerate: mockDoGenerate,
+      params: mockParams(),
+      model: mockModel(),
+    });
+
+    const reader = result.stream.getReader();
+    const first = await reader.read();
+    expect(first.value).toEqual({ type: 'reasoning-delta', id: 'reasoning-0', delta: 'first' });
+
+    await reader.cancel();
+    await vi.advanceTimersByTimeAsync(200);
+
+    const after = await reader.read();
+    expect(after.done).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

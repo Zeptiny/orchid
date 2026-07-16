@@ -862,5 +862,32 @@ describe('Web Fetch Tools', () => {
         globalThis.fetch = originalFetch;
       }
     });
+
+    it('should escape XML special characters in raw result attributes', async () => {
+      const html =
+        '<html><head><title>A & B "quoted" <tag></title></head><body>Body</body></html>';
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        url: 'https://example.com/?q=a&b="c"',
+        status: 200,
+        headers: new Map([['content-type', 'text/html']]),
+        arrayBuffer: () => Promise.resolve(new TextEncoder().encode(html).buffer),
+      } as unknown as Response);
+
+      try {
+        const { handler } = buildWebFetchTool();
+        const result = (await callTool(handler, {
+          url: 'https://example.com/?q=a&b="c"',
+        })) as { content: string };
+
+        expect(result.content).toContain('url="https://example.com/?q=a&amp;b=&quot;c&quot;"');
+        expect(result.content).toContain('title="A &amp; B &quot;quoted&quot; &lt;tag&gt;"');
+        expect(result.content).not.toContain('url="https://example.com/?q=a&b=');
+        expect(result.content).not.toContain('title="A & B');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
   });
 });

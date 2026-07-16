@@ -144,6 +144,15 @@ interface ProviderIPCServices {
 }
 
 let testServices: ProviderIPCServices | null = null;
+/** Process-lifetime driver registry — rebuilt only when tests clear services. */
+let cachedDriverRegistry: ProviderDriverRegistry | null = null;
+
+function getCachedDriverRegistry(): ProviderDriverRegistry {
+  if (!cachedDriverRegistry) {
+    cachedDriverRegistry = createDefaultProviderDriverRegistry();
+  }
+  return cachedDriverRegistry;
+}
 
 function services(): ProviderIPCServices {
   if (testServices) return testServices;
@@ -152,13 +161,18 @@ function services(): ProviderIPCServices {
     connections: getProviderConnectionStore(),
     vault: getProviderCredentialVault(),
     status: getProviderStatusService(),
-    registry: createDefaultProviderDriverRegistry(),
+    registry: getCachedDriverRegistry(),
   };
 }
 
 /** @internal Injection seam for isolated IPC tests. */
 export function _setProviderIPCServicesForTests(value: ProviderIPCServices | null): void {
   testServices = value;
+  // Drop the production registry cache so a later non-test services() call
+  // cannot retain a registry from a prior process lifetime across test isolation.
+  if (value === null) {
+    cachedDriverRegistry = null;
+  }
 }
 
 // ── Per-connection mutation lock ────────────────────────────────────────────

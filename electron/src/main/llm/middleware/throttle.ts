@@ -62,59 +62,49 @@ export function createThrottleMiddleware(
       let lastThinkingYield = 0;
       let pendingThinkingDelta = '';
       let flushTimer: ReturnType<typeof setTimeout> | null = null;
+      let closed = false;
 
-      const throttledStream = stream.pipeThrough(
-        new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
-          transform(chunk, controller) {
-            if (chunk.type === 'reasoning-delta' && chunk.delta.length > 0) {
-              const now = Date.now();
-              const elapsed = now - lastThinkingYield;
+      const clearFlushTimer = (): void => {
+        if (flushTimer !== null) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+      };
 
-              if (elapsed >= intervalMs) {
-                lastThinkingYield = now;
-                controller.enqueue(chunk);
-              } else {
-                pendingThinkingDelta += chunk.delta;
-                if (flushTimer === null) {
-                  const remaining = intervalMs - elapsed;
-                  flushTimer = setTimeout(() => {
-                    flushTimer = null;
-                    if (pendingThinkingDelta.length > 0) {
-                      lastThinkingYield = Date.now();
-                      controller.enqueue({
-                        type: 'reasoning-delta',
-                        id: 'reasoning-0',
-                        delta: pendingThinkingDelta,
-                      } as LanguageModelV4StreamPart);
-                      pendingThinkingDelta = '';
-                    }
-                  }, remaining);
-                }
-              }
-            } else {
-              if (pendingThinkingDelta.length > 0) {
-                if (flushTimer !== null) {
-                  clearTimeout(flushTimer);
-                  flushTimer = null;
-                }
-                lastThinkingYield = Date.now();
-                controller.enqueue({
-                  type: 'reasoning-delta',
-                  id: 'reasoning-0',
-                  delta: pendingThinkingDelta,
-                } as LanguageModelV4StreamPart);
-                pendingThinkingDelta = '';
-              }
+      const transformer: Transformer<LanguageModelV4StreamPart, LanguageModelV4StreamPart> & {
+        cancel?: () => void;
+      } = {
+        transform(chunk, controller) {
+          if (closed) return;
+
+          if (chunk.type === 'reasoning-delta' && chunk.delta.length > 0) {
+            const now = Date.now();
+            const elapsed = now - lastThinkingYield;
+
+            if (elapsed >= intervalMs) {
+              lastThinkingYield = now;
               controller.enqueue(chunk);
-            }
-          },
-
-          flush(controller) {
-            if (pendingThinkingDelta.length > 0) {
-              if (flushTimer !== null) {
-                clearTimeout(flushTimer);
-                flushTimer = null;
+            } else {
+              pendingThinkingDelta += chunk.delta;
+              if (flushTimer === null) {
+                const remaining = intervalMs - elapsed;
+                flushTimer = setTimeout(() => {
+                  flushTimer = null;
+                  if (closed || pendingThinkingDelta.length === 0) return;
+                  lastThinkingYield = Date.now();
+                  controller.enqueue({
+                    type: 'reasoning-delta',
+                    id: 'reasoning-0',
+                    delta: pendingThinkingDelta,
+                  } as LanguageModelV4StreamPart);
+                  pendingThinkingDelta = '';
+                }, remaining);
               }
+            }
+          } else {
+            if (pendingThinkingDelta.length > 0) {
+              clearFlushTimer();
+              lastThinkingYield = Date.now();
               controller.enqueue({
                 type: 'reasoning-delta',
                 id: 'reasoning-0',
@@ -122,8 +112,32 @@ export function createThrottleMiddleware(
               } as LanguageModelV4StreamPart);
               pendingThinkingDelta = '';
             }
-          },
-        }),
+            controller.enqueue(chunk);
+          }
+        },
+
+        flush(controller) {
+          clearFlushTimer();
+          if (!closed && pendingThinkingDelta.length > 0) {
+            controller.enqueue({
+              type: 'reasoning-delta',
+              id: 'reasoning-0',
+              delta: pendingThinkingDelta,
+            } as LanguageModelV4StreamPart);
+            pendingThinkingDelta = '';
+          }
+          closed = true;
+        },
+
+        cancel() {
+          closed = true;
+          clearFlushTimer();
+          pendingThinkingDelta = '';
+        },
+      };
+
+      const throttledStream = stream.pipeThrough(
+        new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>(transformer),
       );
 
       return { stream: throttledStream, ...rest };

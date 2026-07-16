@@ -116,7 +116,7 @@ export function CommandPalette({
       const recent = getRecentCommands();
       const recentCommands = recent
         .map((name) => COMMANDS.find((c) => c.name === name))
-        .filter(Boolean) as Command[];
+        .filter((cmd): cmd is Command => cmd !== undefined);
 
       for (const cmd of recentCommands) {
         items.push({

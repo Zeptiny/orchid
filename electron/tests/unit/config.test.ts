@@ -20,7 +20,7 @@ import {
   defaults,
   parsePartial,
   deepMerge,
-  deepMergeProviderDict,
+  deepMergeNamedEntryDict,
   mergeConfigUpdates,
   mergeLayers,
   applyEnvOverrides,
@@ -409,9 +409,9 @@ describe('mergeConfigUpdates (config:save)', () => {
   });
 });
 
-describe('deepMergeProviderDict', () => {
+describe('deepMergeNamedEntryDict', () => {
   it('keeps home-only entries', () => {
-    const result = deepMergeProviderDict(
+    const result = deepMergeNamedEntryDict(
       { home_server: { command: 'cmd' } },
       {},
     );
@@ -419,7 +419,7 @@ describe('deepMergeProviderDict', () => {
   });
 
   it('takes project-only entries', () => {
-    const result = deepMergeProviderDict(
+    const result = deepMergeNamedEntryDict(
       {},
       { project_server: { command: 'cmd' } },
     );
@@ -427,7 +427,7 @@ describe('deepMergeProviderDict', () => {
   });
 
   it('merges entries present in both (shallow merge)', () => {
-    const result = deepMergeProviderDict(
+    const result = deepMergeNamedEntryDict(
       { srv: { command: 'old', args: ['a'] } },
       { srv: { command: 'new' } },
     );
@@ -435,7 +435,7 @@ describe('deepMergeProviderDict', () => {
   });
 
   it('merges nested models sub-dict', () => {
-    const result = deepMergeProviderDict(
+    const result = deepMergeNamedEntryDict(
       { prov: { base_url: 'url', models: { m1: {} } } },
       { prov: { models: { m2: {} } } },
     );
@@ -445,7 +445,7 @@ describe('deepMergeProviderDict', () => {
   });
 
   it('project wins when either side is non-dict', () => {
-    const result = deepMergeProviderDict(
+    const result = deepMergeNamedEntryDict(
       { srv: 'home-value' as unknown as Record<string, unknown> },
       { srv: 'project-value' as unknown as Record<string, unknown> },
     );
@@ -579,6 +579,21 @@ describe('applyEnvOverrides', () => {
     const cfg = { default_model: 'original' } as Record<string, unknown>;
     applyEnvOverrides(cfg);
     expect(cfg['default_model']).toBe('original');
+  });
+
+  it('rejects non-finite numeric env overrides', () => {
+    process.env['ORCHID_COMMAND_TIMEOUT'] = 'not-a-number';
+    process.env['ORCHID_MCP_STARTUP_TIMEOUT'] = 'NaN';
+    process.env['ORCHID_LLM_STREAM_IDLE_TIMEOUT'] = 'Infinity';
+    const cfg = {
+      command_timeout: 30,
+      mcp_startup_timeout: 60,
+      llm_stream_idle_timeout: 300,
+    } as Record<string, unknown>;
+    applyEnvOverrides(cfg);
+    expect(cfg['command_timeout']).toBe(30);
+    expect(cfg['mcp_startup_timeout']).toBe(60);
+    expect(cfg['llm_stream_idle_timeout']).toBe(300);
   });
 });
 
@@ -1081,10 +1096,10 @@ describe('prototype pollution protection', () => {
     expect(result).toEqual({ a: 1 });
   });
 
-  it('deepMergeProviderDict ignores __proto__ alias', () => {
+  it('deepMergeNamedEntryDict ignores __proto__ alias', () => {
     const home = { good: { command: 'cmd' } };
     const project = { __proto__: { command: 'evil' } } as Record<string, unknown>;
-    const result = deepMergeProviderDict(home, project);
+    const result = deepMergeNamedEntryDict(home, project);
     expect(result).toEqual({ good: { command: 'cmd' } });
     expect(result).not.toHaveProperty('__proto__');
   });

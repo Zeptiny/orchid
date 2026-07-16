@@ -17,6 +17,10 @@ import {
   buildPersonalityResults,
   fuzzyMatch,
 } from '../../src/renderer/commands/registry';
+import {
+  eventMatchesChord,
+  getShortcut,
+} from '../../src/renderer/keyboard';
 
 const findCommand = (name: string) =>
   COMMANDS.find((command) => command.name === name);
@@ -470,39 +474,59 @@ describe('Command Execution', () => {
 
 // ─── Keyboard Shortcuts ──────────────────────────────────────────────────────
 
+function fakeKeyEvent(
+  partial: Partial<KeyboardEvent> & { key: string },
+): KeyboardEvent {
+  return {
+    key: partial.key,
+    code: partial.code ?? '',
+    ctrlKey: partial.ctrlKey ?? false,
+    metaKey: partial.metaKey ?? false,
+    shiftKey: partial.shiftKey ?? false,
+    altKey: partial.altKey ?? false,
+    defaultPrevented: false,
+    preventDefault() {
+      (this as { defaultPrevented: boolean }).defaultPrevented = true;
+    },
+    target: partial.target ?? null,
+  } as KeyboardEvent;
+}
+
 describe('Command Palette Keyboard Shortcuts', () => {
-  it('Cmd+K / Ctrl+K opens palette', () => {
-    const key = 'k';
-    const metaKey = true;
-    const shouldOpen = (metaKey || false) && key === 'k';
-    expect(shouldOpen).toBe(true);
+  it('Cmd+K / Ctrl+K opens palette via registry', () => {
+    const def = getShortcut('palette.toggle');
+    expect(def).toBeDefined();
+    expect(def!.chord).toEqual({ key: 'k', mod: true });
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'k', metaKey: true }), def!.chord)).toBe(true);
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'k', ctrlKey: true }), def!.chord)).toBe(true);
   });
 
-  it('Ctrl+K opens palette on Windows/Linux', () => {
-    const key = 'k';
-    const ctrlKey = true;
-    const shouldOpen = ctrlKey && key === 'k';
-    expect(shouldOpen).toBe(true);
+  it('Ctrl+K opens palette on Windows/Linux via registry', () => {
+    const def = getShortcut('palette.toggle');
+    expect(def).toBeDefined();
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'k', ctrlKey: true }), def!.chord)).toBe(true);
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'k' }), def!.chord)).toBe(false);
   });
 
-  it('ArrowDown moves selection down', () => {
-    const key = 'ArrowDown';
-    expect(key).toBe('ArrowDown');
+  it('ArrowDown navigates palette via registry', () => {
+    const def = getShortcut('palette.navigate');
+    expect(def).toBeDefined();
+    expect(def!.chord).toEqual({ key: 'ArrowDown' });
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'ArrowDown' }), def!.chord)).toBe(true);
   });
 
-  it('ArrowUp moves selection up', () => {
-    const key = 'ArrowUp';
-    expect(key).toBe('ArrowUp');
+  it('Enter selects palette result via registry', () => {
+    const def = getShortcut('palette.select');
+    expect(def).toBeDefined();
+    expect(def!.chord).toEqual({ key: 'Enter' });
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'Enter' }), def!.chord)).toBe(true);
   });
 
-  it('Enter executes selected command', () => {
-    const key = 'Enter';
-    expect(key).toBe('Enter');
-  });
-
-  it('Escape closes palette', () => {
-    const key = 'Escape';
-    expect(key).toBe('Escape');
+  it('Escape closes palette via registry', () => {
+    const def = getShortcut('palette.close');
+    expect(def).toBeDefined();
+    expect(def!.chord).toEqual({ key: 'Escape' });
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'Escape' }), def!.chord)).toBe(true);
   });
 });
 

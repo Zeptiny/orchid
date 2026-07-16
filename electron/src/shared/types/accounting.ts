@@ -85,9 +85,18 @@ export interface ProviderAttemptRecord {
   readonly error: string | null;
 }
 
+/** Per-currency known cost sum (unknown costs are not included here). */
 export interface KnownCostTotals {
   readonly currency: string;
   readonly amount: DecimalText;
   readonly recordCount: number;
+}
+
+/**
+ * Aggregate cost view for a session or chain.
+ * `unknownCount` is attached once at this level — not duplicated per currency row.
+ */
+export interface CostTotalsSummary {
+  readonly currencies: readonly KnownCostTotals[];
   readonly unknownCount: number;
 }

@@ -5,6 +5,7 @@ import Decimal from 'decimal.js';
 import { z } from 'zod';
 import {
   type FrozenProviderRequestSnapshot,
+  type CostTotalsSummary,
   type KnownCostTotals,
   type NormalizedProviderUsage,
   type ProviderAttemptRecord,
@@ -290,15 +291,15 @@ export class ProviderAccountingStore {
     return (rows as AttemptRow[]).map(rowToRecord);
   }
 
-  getSessionTotals(sessionId: string): readonly KnownCostTotals[] {
+  getSessionTotals(sessionId: string): CostTotalsSummary {
     return this.totals('session_id', sessionId);
   }
 
-  getChainTotals(chainId: string): readonly KnownCostTotals[] {
+  getChainTotals(chainId: string): CostTotalsSummary {
     return this.totals('chain_id', chainId);
   }
 
-  private totals(column: 'session_id' | 'chain_id', value: string): readonly KnownCostTotals[] {
+  private totals(column: 'session_id' | 'chain_id', value: string): CostTotalsSummary {
     const rows = this.connection().prepare(
       `SELECT currency, cost_amount, cost_state FROM provider_attempts WHERE ${column} = ?`,
     ).all(value) as Array<{ currency: string | null; cost_amount: string | null; cost_state: string }>;
@@ -322,12 +323,12 @@ export class ProviderAccountingStore {
         unknownCount += 1;
       }
     }
-    return [...sums.entries()].map(([currency, entry]) => ({
+    const currencies: KnownCostTotals[] = [...sums.entries()].map(([currency, entry]) => ({
       currency,
       amount: entry.amount.toFixed(),
       recordCount: entry.recordCount,
-      unknownCount,
     }));
+    return { currencies, unknownCount };
   }
 
   private connection(): Database.Database {

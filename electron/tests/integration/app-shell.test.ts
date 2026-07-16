@@ -491,7 +491,7 @@ describe('Theme Loader', () => {
     const loader = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/themes/index.ts'), 'utf-8');
     const viteConfig = fs.readFileSync(path.resolve(__dirname, '../../vite.config.ts'), 'utf-8');
     expect(loader).toContain('document.documentElement.dataset.theme');
-    expect(loader).toContain("orchid:theme-applied");
+    expect(loader).not.toContain('orchid:theme-applied');
     expect(viteConfig).toContain('orchid-theme-assets');
     expect(viteConfig).toContain('themes/${fileName}');
   });

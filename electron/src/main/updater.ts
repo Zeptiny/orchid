@@ -7,8 +7,8 @@
  * - Gate auto-update to signed releases (macOS Gatekeeper blocks unsigned)
  * - For unsigned beta builds: disable auto-download, allow manual check only
  *
- * Events emitted to renderer via IPC:
- * - updater:status — current update status object
+ * Events emitted to renderer via IPC (`IPC_CHANNELS`):
+ * - updater:status_update — current update status object
  * - updater:progress — download progress percentage
  * - updater:error — error message
  */

@@ -5,7 +5,7 @@
 **Dedup rules:** Same root cause / same primary fix site → one master row. Cross-section corroboration listed in **Sections**. Severity = highest reported. Confidence = max. Autofix = most conservative when mixed.
 
 **Totals after cross-section dedup:** **24 P0 · 111 P1 · 115 P2 · 32 P3 = 282 unique findings**  
-**Remediation (this branch):** **16 P0 fixed** (M-P0-009…024) · **8 P0 open** (M-P0-001…008) · **P1–P3 open**
+**Remediation (this branch):** **16 P0 + 32 safe_auto (P1–P3) fixed** · **Open:** 8 P0 (001–008) · remaining gated_auto/manual/advisory · **safe_auto residual:** none open (M-P0-022 fixed earlier)
 
 Section raw tables (before cross-dedup) had ~320+ row citations; cross-section merges collapsed repeated root causes into single master IDs.
 
@@ -255,119 +255,119 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ## P1 — High (98)
 
-| ID | Title | Primary file | Sections | Conf | Autofix |
-|----|-------|--------------|----------|------|---------|
-| M-P1-001 | `bgcmd:snapshot` has no session/window ownership check | `main/ipc/chat.ts:1733` | S1 | 100 | gated_auto |
-| M-P1-002 | `session:change_model` reports success on no-op | `main/ipc/session.ts:304` | S1 | 100 | safe_auto |
-| M-P1-003 | `session:rename` always emits renamed on no-op | `main/ipc/session.ts:285` | S1 | 100 | safe_auto |
-| M-P1-004 | `unregisterChatIPC` tears down agents without releasing MCP leases | `main/ipc/chat.ts:1762` | S1, S2 | 100 | safe_auto |
-| M-P1-005 | macOS signed-build detection uses build-time env vars at runtime | `main/index.ts:277` | S1 | 100 | gated_auto |
-| M-P1-006 | macOS `activate` recreates window without rebinding updater `mainWindowRef` | `main/index.ts:306` | S1 | 75 | gated_auto |
-| M-P1-007 | `chat:send` with `sessionId` re-selects session mid-flight (selection steal) | `main/ipc/chat.ts:577` | S1 | 75 | gated_auto |
-| M-P1-008 | `before-quit` always `preventDefault` without re-entrancy/deadline | `main/index.ts:314` | S1 | 75 | gated_auto |
-| M-P1-009 | Graceful shutdown can hang: `FileLogger.close` has no timeout | `main/index.ts` + `logging.ts` | S1 | 75 | gated_auto |
-| M-P1-010 | MCP SSE `url` from config enables main-process SSRF | `mcp/transport.ts:32` | S1, S4 | 75 | gated_auto |
-| M-P1-011 | `session:set_workspace` binds any absolute readable dir without dialog | `main/ipc/session.ts:355` | S1 | 100 | gated_auto |
-| M-P1-012 | Composition: `set_workspace` + `tool:execute` rebinds cwd then reads secrets | session + tool IPC | S1 | 100 | manual |
-| M-P1-013 | Concurrent draft `chat:send` creates duplicate sessions / dual streams | `main/ipc/chat.ts:563` | S1 | 75 | manual |
-| M-P1-014 | Updater events allowlisted/emitted but never on `OrchidAPI`/preload | `preload/index.ts:360` | S1, S6 | 100 | manual |
-| M-P1-015 | Preload event listeners trust unchecked `as Event` casts | `preload/index.ts:118` | S1 | 100 | gated_auto |
-| M-P1-016 | `invoke()` return type is an unchecked `Promise` cast | `preload/index.ts:84` | S1 | 100 | gated_auto |
-| M-P1-017 | Allowlists are `readonly string[]` instead of `IPCChannel` literals | `shared/types/ipc.ts:838` | S1 | 100 | safe_auto |
-| M-P1-018 | `ChatSendResult` is open `status`/`kind` strings, not a closed union | `shared/types/ipc.ts:512` | S1 | 100 | manual |
-| M-P1-019 | `ConfigSaveMessage` is `Partial<Config>` but runtime is tombstone PATCH | `shared/types/ipc.ts:247` | S1, S3 | 92 | manual |
-| M-P1-020 | `chat.ts` is a ~1779-line god module | `main/ipc/chat.ts:1` | S1 | 100 | manual |
-| M-P1-021 | `providers` IPC imports `main/index` → circular dependency | `main/ipc/providers.ts:30` | S1, S3 | 100 | gated_auto |
-| M-P1-022 | app-shell IPC Zod tests reimplement weaker schemas than production | `tests/integration/app-shell.test.ts:142` | S1 | 100 | gated_auto |
-| M-P1-023 | Critical IPC modules lack dedicated handler tests | `electron/tests/unit` | S1 | 100 | manual |
-| M-P1-024 | No first-class agent-native command surface for full UI capability set | `shared/commands.ts` + tools | S1, S6 | 85 | advisory |
-| M-P1-025 | `JSON.parse` on history tool_calls can crash entire stream turn | `llm/orchestrator.ts:249` | S2 | 100 | safe_auto |
-| M-P1-026 | Subagent final result ignores tool-only work (empty wait payload) | `agents/manager.ts:463` | S2 | 100 | gated_auto |
-| M-P1-027 | Interrupted subagent drops in-flight partial assistant text | `agents/manager.ts:533` | S2 | 75 | gated_auto |
-| M-P1-028 | `toApiMessages` match-set keeps filtered-out tool_call ids | `llm/history.ts:167` | S2 | 75 | gated_auto |
-| M-P1-029 | Tool timeout does not cancel underlying work | `llm/tool-dispatch.ts:270` | S2, S4 | 100 | gated_auto |
-| M-P1-030 | Retry backoff sleep ignores abort/cancel | `llm/middleware/retry.ts:43` | S2 | 100 | gated_auto |
-| M-P1-031 | Retry only covers `doStream()` setup, not mid-stream drops | `llm/middleware/retry.ts:86` | S2 | 75 | manual |
-| M-P1-032 | Conversation history unbounded; full re-send every turn | session + history + orchestrator | S2 | 90 | manual |
-| M-P1-033 | Every chain/subagent persist rewrites full pretty-printed session JSON + fsync | `session/storage.ts` | S2 | 85 | manual |
-| M-P1-034 | SubagentManager never prunes records (process lifetime) | `agents/manager.ts` | S2 | 93 | gated_auto |
-| M-P1-035 | Subagent tool events → debounced full-session rewrites of all chains | wire-subagents + persist | S2 | 80 | gated_auto |
-| M-P1-036 | Subagent `Chain.sessionId` is subagent id, not session UUID | `agents/manager.ts:656` | S2 | 90 | gated_auto |
-| M-P1-037 | Asymmetric restore: subagents → INTERRUPTED; chains keep ACTIVE | `shared/types/chain.ts` | S2 | 85 | gated_auto |
-| M-P1-038 | Dual SubagentRecord / status enums + third `SubagentState` prompt DTO | manager + subagent.ts + system-prompt | S2 | 90 | manual |
-| M-P1-039 | Explicit `any` tool map disables type checking at LLM tool boundary | `orchestrator.ts:726` | S2 | 92 | gated_auto |
-| M-P1-040 | Unsafe double cast Zod→AI SDK in context-snapshot | `context-snapshot.ts:32` | S2 | 88 | gated_auto |
-| M-P1-041 | `fullStream` / `onStepFinish` cast away SDK discriminants | `orchestrator.ts:411` | S2 | 80 | gated_auto |
-| M-P1-042 | Cancelled turns leave in-flight tools running (no abortSignal) | tool-dispatch + orchestrator | S2 | 85 | gated_auto |
-| M-P1-043 | CLAUDE.md documents non-existent agent modules | `electron/CLAUDE.md` | S2, S6 | 100 | safe_auto |
-| M-P1-044 | Tier override affects model selection but not `Agent.tier` on record | `tools/subagent/delegate.ts:107` | S2 | 75 | gated_auto |
-| M-P1-045 | Unscoped subagent persist falls back to active session | `persist-subagent-chains.ts:47` | S2 | 75 | gated_auto |
-| M-P1-046 | HTTPS custom endpoints: no destination allowlist (credential SSRF) | `drivers/compatible.ts:21` | S3 | 75 | manual |
-| M-P1-047 | Loopback check treats any hostname starting with `127.` as local | `drivers/compatible.ts:17` | S3 | 100 | safe_auto |
-| M-P1-048 | Vault + connection mutations multi-step without joint atomicity | `main/ipc/providers.ts:631` | S3 | 85 | manual |
-| M-P1-049 | `submit_api_key` binds vault origin from stale snapshot while endpoint mutates | `main/ipc/providers.ts` | S3 | 85 | manual |
-| M-P1-050 | Invalid home config fails closed by quitting entire app | `config/loader.ts:215` | S3 | 85 | gated_auto |
-| M-P1-051 | Dual model resolution: incomplete custom models allowed at resolve, rejected at gate | `providers/resolver.ts:70` | S3 | 88 | gated_auto |
-| M-P1-052 | `mcp_servers` untyped nested bag on Config / IPC boundary | `ipc-boundary.ts:114` | S1, S3, S4 | 88 | manual |
-| M-P1-053 | Agent has ~0% action parity on provider/config ops | tools + system-prompt | S3, S6 | 100 | manual |
-| M-P1-054 | Context starvation: no provider/config (and little product state) in system prompt | `llm/system-prompt.ts` | S3, S6 | 100 | gated_auto |
-| M-P1-055 | `providers:update` builds candidate via `as ProviderConnection` | `main/ipc/providers.ts:607` | S1, S3 | 78 | gated_auto |
-| M-P1-056 | Config dual source: hand-written `Config` vs Zod schema | `config/schema.ts` | S3 | 82 | manual |
-| M-P1-057 | Accounting middleware `wrapGenerate` completely untested | `accounting/middleware.ts:111` | S3 | 90 | manual |
-| M-P1-058 | Provider IPC `validate` / `enable` / `status_refresh` untested | `main/ipc/providers.ts:651` | S3 | 88 | manual |
-| M-P1-059 | Vault fail-closed/corruption paths largely untested | `credentials/vault.ts` | S3 | 85 | manual |
-| M-P1-060 | Accounting store singleton init/fail-closed API untested | `accounting/store.ts:356` | S3 | 85 | manual |
-| M-P1-061 | Middleware cost evidence (headers + Neuralwatt) never exercised | `accounting/middleware.ts:60` | S3 | 82 | manual |
-| M-P1-062 | Child processes inherit full `process.env` (secret leak) | background-store / execute | S4 | 75 | gated_auto |
-| M-P1-063 | AST `rename_symbol` requires `file_path` but never uses it | `tools/ast/rename-symbol.ts:21` | S4 | 95 | gated_auto |
-| M-P1-064 | RAG partial-path index deletes all other indexed files | `rag/indexer.ts:386` | S4 | 90 | gated_auto |
-| M-P1-065 | `rag_search` always local ONNX; index may use API embedder | `tools/rag/search.ts:72` | S4 | 90 | gated_auto |
-| M-P1-066 | `read_mcp_resource` treats MCP error strings as success | `tools/mcp/resource.ts:60` | S4 | 90 | gated_auto |
-| M-P1-067 | MCP runner shutdown abandons hung `client.close` after 3s | `mcp/manager.ts:497` | S4 | 82 | gated_auto |
-| M-P1-068 | HF model download fetch has no timeout | `rag/embedder.ts:572` | S4 | 95 | gated_auto |
-| M-P1-069 | AST/RAG index workers no overall timeout/cancel | `ast/indexer.ts:376` | S4 | 85 | gated_auto |
-| M-P1-070 | Foreground `waitForExit` unbounded after kill | `execute-command.ts:299` | S4 | 80 | gated_auto |
-| M-P1-071 | RAG SQLite no `busy_timeout` (AST has 5000) | `rag/store.ts:244` | S4 | 78 | safe_auto |
-| M-P1-072 | RAG holds full vector corpus as `number[][]` | rag indexer + store | S4 | 90 | manual |
-| M-P1-073 | `glob` fully sync + unbounded matches | `tools/filesystem/glob.ts` | S4 | 92 | gated_auto |
-| M-P1-074 | `grep` full-tree full-file load, no size bound | `tools/search/grep.ts` | S4 | 88 | gated_auto |
-| M-P1-075 | AST stores every reference; tools return unbounded | ast store + tools | S4 | 85 | gated_auto |
-| M-P1-076 | Main RAG search cache stale after worker reindex | `rag/store.ts` cache | S4 | 80 | gated_auto |
-| M-P1-077 | Concurrent AST rename partial multi-file write | `rename-symbol.ts` | S4 | 75 | gated_auto |
-| M-P1-078 | Explicit `any` in `zodToJsonSchema` conversion | `tools/registry.ts:84` | S4 | 95 | gated_auto |
-| M-P1-079 | Tree-sitter surface entirely `any`-typed | `ast/parser.ts:34` | S4 | 92 | gated_auto |
-| M-P1-080 | Fallback MCP manager partial object cast to full MCPManager | `tools/index.ts:67` | S4 | 90 | gated_auto |
-| M-P1-081 | MCP tool inputs passthrough Zod | `mcp/manager.ts:656` | S4 | 85 | gated_auto |
-| M-P1-082 | MCP config untyped Record cast at project boundary | `mcp/project-registry.ts:18` | S4 | 82 | manual |
-| M-P1-083 | Interactive PTY path untested | process tools | S4 | 90 | manual |
-| M-P1-084 | `rag_index` / `rag_search` handlers never executed in tests | tools/rag | S4 | 93 | manual |
-| M-P1-085 | AST indexing uses live `getConfig()`, not frozen project runtime | `ast/indexer.ts:217` | S4 | 90 | gated_auto |
-| M-P1-086 | `getBuiltinToolRegistryForRuntime` caches first options forever | `tools/index.ts:284` | S4 | 80 | gated_auto |
-| M-P1-087 | MCP allowlist naive regex vs minimatch for builtins | `llm/orchestrator.ts:784` | S4, S6 | 85 | gated_auto |
-| M-P1-088 | Composer `isSendingRef` sticks after silent send gates | `renderer/InputArea.tsx:383` | S5 | 100 | gated_auto |
-| M-P1-089 | Esc/cancel has no mutual exclusion across stages | `renderer/hooks/useChat.ts:757` | S5 | 75 | gated_auto |
-| M-P1-090 | `chat.send` catch leaves optimistic bubble + half-stream state | `renderer/hooks/useChat.ts:748` | S5 | 78 | gated_auto |
-| M-P1-091 | GeneralTab cannot set `llm_stream_retries` to 0 | `Preferences/GeneralTab.tsx:64` | S5 | 95 | safe_auto |
-| M-P1-092 | RAGTab cannot set `chunk_overlap` to 0 | `Preferences/RAGTab.tsx:80` | S5 | 93 | safe_auto |
-| M-P1-093 | Config draft is untyped `Record` with cast-to-Config | `ConfigView.tsx:65` | S5 | 90 | gated_auto |
-| M-P1-094 | `orchid:config-updated` treats `default_model` as ModelSelection without narrowing | `ChatView.tsx:181` | S5 | 82 | gated_auto |
-| M-P1-095 | 100ms elapsed ticker rebuilds full chat history every tick | `useChat.ts:317` + ChatStream | S5 | 95 | gated_auto |
-| M-P1-096 | Unbatched per-token stream updates thrash ChatView tree | `useChat.ts:342` | S5 | 92 | gated_auto |
-| M-P1-097 | Streaming assistant fully re-parses markdown every chunk | `MarkdownContent.tsx:91` | S5 | 90 | gated_auto |
-| M-P1-098 | Command palette navigation dispatches dead `orchid:navigate` | `CommandPalette.tsx:345` | S5 | 100 | gated_auto |
-| M-P1-099 | Domain hook `useChat` imports UI `ContextGrid` for pure math | `useChat.ts:29` | S5 | 88 | gated_auto |
-| M-P1-100 | `useChat` / `useSession` / `useSessionTabs` behavioral surface almost untested | renderer hooks + tests | S5 | 90 | manual |
-| M-P1-101 | Preferences/onboarding tests assert mocks/booleans, not ConfigView | `preferences-onboarding.test.ts` | S5 | 95 | manual |
-| M-P1-102 | Omitted `allowed_skills` defaults to `['*']` for several default agents | `agents/registry.ts:87` | S6 | 100 | gated_auto |
-| M-P1-103 | Skill discovery claimed in system prompt but prompt injects no skill inventory | system-prompt + skill.ts | S6 | 100 | gated_auto |
-| M-P1-104 | general AGENT.md identity: “terminal-based coding agent” in Electron desktop | `general/AGENT.md:39` | S6 | 100 | safe_auto |
-| M-P1-105 | Command palette actions without agent tools (/cd, /model, /sessions, …) | `renderer/commands/registry.ts` | S6 | 85 | manual |
-| M-P1-106 | Workspace rebind (`/cd`) no agent equivalent | session IPC | S6 | 100 | manual |
-| M-P1-107 | Personality switch UI-only | commands | S6 | 100 | manual |
-| M-P1-108 | Definition CRUD (agents/skills/personalities) UI-only | defs IPC | S6 | 100 | manual |
-| M-P1-109 | General MCP allowlist hard-coded to context7/example | `general/AGENT.md` | S6 | 75 | gated_auto |
-| M-P1-110 | system-prompt branches largely untested | `llm/system-prompt.ts` | S6 | 100 | manual |
-| M-P1-111 | web-fetch summarizer production wiring untested | `tools/index.ts` | S6 | 75 | manual |
+| ID | Title | Primary file | Sections | Conf | Autofix | Status |
+|----|-------|--------------|----------|------|---------|--------|
+| M-P1-001 | `bgcmd:snapshot` has no session/window ownership check | `main/ipc/chat.ts:1733` | S1 | 100 | gated_auto | open |
+| M-P1-002 | `session:change_model` reports success on no-op | `main/ipc/session.ts:304` | S1 | 100 | safe_auto | fixed |
+| M-P1-003 | `session:rename` always emits renamed on no-op | `main/ipc/session.ts:285` | S1 | 100 | safe_auto | fixed |
+| M-P1-004 | `unregisterChatIPC` tears down agents without releasing MCP leases | `main/ipc/chat.ts:1762` | S1, S2 | 100 | safe_auto | fixed |
+| M-P1-005 | macOS signed-build detection uses build-time env vars at runtime | `main/index.ts:277` | S1 | 100 | gated_auto | open |
+| M-P1-006 | macOS `activate` recreates window without rebinding updater `mainWindowRef` | `main/index.ts:306` | S1 | 75 | gated_auto | open |
+| M-P1-007 | `chat:send` with `sessionId` re-selects session mid-flight (selection steal) | `main/ipc/chat.ts:577` | S1 | 75 | gated_auto | open |
+| M-P1-008 | `before-quit` always `preventDefault` without re-entrancy/deadline | `main/index.ts:314` | S1 | 75 | gated_auto | open |
+| M-P1-009 | Graceful shutdown can hang: `FileLogger.close` has no timeout | `main/index.ts` + `logging.ts` | S1 | 75 | gated_auto | open |
+| M-P1-010 | MCP SSE `url` from config enables main-process SSRF | `mcp/transport.ts:32` | S1, S4 | 75 | gated_auto | open |
+| M-P1-011 | `session:set_workspace` binds any absolute readable dir without dialog | `main/ipc/session.ts:355` | S1 | 100 | gated_auto | open |
+| M-P1-012 | Composition: `set_workspace` + `tool:execute` rebinds cwd then reads secrets | session + tool IPC | S1 | 100 | manual | open |
+| M-P1-013 | Concurrent draft `chat:send` creates duplicate sessions / dual streams | `main/ipc/chat.ts:563` | S1 | 75 | manual | open |
+| M-P1-014 | Updater events allowlisted/emitted but never on `OrchidAPI`/preload | `preload/index.ts:360` | S1, S6 | 100 | manual | open |
+| M-P1-015 | Preload event listeners trust unchecked `as Event` casts | `preload/index.ts:118` | S1 | 100 | gated_auto | open |
+| M-P1-016 | `invoke()` return type is an unchecked `Promise` cast | `preload/index.ts:84` | S1 | 100 | gated_auto | open |
+| M-P1-017 | Allowlists are `readonly string[]` instead of `IPCChannel` literals | `shared/types/ipc.ts:838` | S1 | 100 | safe_auto | fixed |
+| M-P1-018 | `ChatSendResult` is open `status`/`kind` strings, not a closed union | `shared/types/ipc.ts:512` | S1 | 100 | manual | open |
+| M-P1-019 | `ConfigSaveMessage` is `Partial<Config>` but runtime is tombstone PATCH | `shared/types/ipc.ts:247` | S1, S3 | 92 | manual | open |
+| M-P1-020 | `chat.ts` is a ~1779-line god module | `main/ipc/chat.ts:1` | S1 | 100 | manual | open |
+| M-P1-021 | `providers` IPC imports `main/index` → circular dependency | `main/ipc/providers.ts:30` | S1, S3 | 100 | gated_auto | open |
+| M-P1-022 | app-shell IPC Zod tests reimplement weaker schemas than production | `tests/integration/app-shell.test.ts:142` | S1 | 100 | gated_auto | open |
+| M-P1-023 | Critical IPC modules lack dedicated handler tests | `electron/tests/unit` | S1 | 100 | manual | open |
+| M-P1-024 | No first-class agent-native command surface for full UI capability set | `shared/commands.ts` + tools | S1, S6 | 85 | advisory | open |
+| M-P1-025 | `JSON.parse` on history tool_calls can crash entire stream turn | `llm/orchestrator.ts:249` | S2 | 100 | safe_auto | fixed |
+| M-P1-026 | Subagent final result ignores tool-only work (empty wait payload) | `agents/manager.ts:463` | S2 | 100 | gated_auto | open |
+| M-P1-027 | Interrupted subagent drops in-flight partial assistant text | `agents/manager.ts:533` | S2 | 75 | gated_auto | open |
+| M-P1-028 | `toApiMessages` match-set keeps filtered-out tool_call ids | `llm/history.ts:167` | S2 | 75 | gated_auto | open |
+| M-P1-029 | Tool timeout does not cancel underlying work | `llm/tool-dispatch.ts:270` | S2, S4 | 100 | gated_auto | open |
+| M-P1-030 | Retry backoff sleep ignores abort/cancel | `llm/middleware/retry.ts:43` | S2 | 100 | gated_auto | open |
+| M-P1-031 | Retry only covers `doStream()` setup, not mid-stream drops | `llm/middleware/retry.ts:86` | S2 | 75 | manual | open |
+| M-P1-032 | Conversation history unbounded; full re-send every turn | session + history + orchestrator | S2 | 90 | manual | open |
+| M-P1-033 | Every chain/subagent persist rewrites full pretty-printed session JSON + fsync | `session/storage.ts` | S2 | 85 | manual | open |
+| M-P1-034 | SubagentManager never prunes records (process lifetime) | `agents/manager.ts` | S2 | 93 | gated_auto | open |
+| M-P1-035 | Subagent tool events → debounced full-session rewrites of all chains | wire-subagents + persist | S2 | 80 | gated_auto | open |
+| M-P1-036 | Subagent `Chain.sessionId` is subagent id, not session UUID | `agents/manager.ts:656` | S2 | 90 | gated_auto | open |
+| M-P1-037 | Asymmetric restore: subagents → INTERRUPTED; chains keep ACTIVE | `shared/types/chain.ts` | S2 | 85 | gated_auto | open |
+| M-P1-038 | Dual SubagentRecord / status enums + third `SubagentState` prompt DTO | manager + subagent.ts + system-prompt | S2 | 90 | manual | open |
+| M-P1-039 | Explicit `any` tool map disables type checking at LLM tool boundary | `orchestrator.ts:726` | S2 | 92 | gated_auto | open |
+| M-P1-040 | Unsafe double cast Zod→AI SDK in context-snapshot | `context-snapshot.ts:32` | S2 | 88 | gated_auto | open |
+| M-P1-041 | `fullStream` / `onStepFinish` cast away SDK discriminants | `orchestrator.ts:411` | S2 | 80 | gated_auto | open |
+| M-P1-042 | Cancelled turns leave in-flight tools running (no abortSignal) | tool-dispatch + orchestrator | S2 | 85 | gated_auto | open |
+| M-P1-043 | CLAUDE.md documents non-existent agent modules | `electron/CLAUDE.md` | S2, S6 | 100 | safe_auto | fixed |
+| M-P1-044 | Tier override affects model selection but not `Agent.tier` on record | `tools/subagent/delegate.ts:107` | S2 | 75 | gated_auto | open |
+| M-P1-045 | Unscoped subagent persist falls back to active session | `persist-subagent-chains.ts:47` | S2 | 75 | gated_auto | open |
+| M-P1-046 | HTTPS custom endpoints: no destination allowlist (credential SSRF) | `drivers/compatible.ts:21` | S3 | 75 | manual | open |
+| M-P1-047 | Loopback check treats any hostname starting with `127.` as local | `drivers/compatible.ts:17` | S3 | 100 | safe_auto | fixed |
+| M-P1-048 | Vault + connection mutations multi-step without joint atomicity | `main/ipc/providers.ts:631` | S3 | 85 | manual | open |
+| M-P1-049 | `submit_api_key` binds vault origin from stale snapshot while endpoint mutates | `main/ipc/providers.ts` | S3 | 85 | manual | open |
+| M-P1-050 | Invalid home config fails closed by quitting entire app | `config/loader.ts:215` | S3 | 85 | gated_auto | open |
+| M-P1-051 | Dual model resolution: incomplete custom models allowed at resolve, rejected at gate | `providers/resolver.ts:70` | S3 | 88 | gated_auto | open |
+| M-P1-052 | `mcp_servers` untyped nested bag on Config / IPC boundary | `ipc-boundary.ts:114` | S1, S3, S4 | 88 | manual | open |
+| M-P1-053 | Agent has ~0% action parity on provider/config ops | tools + system-prompt | S3, S6 | 100 | manual | open |
+| M-P1-054 | Context starvation: no provider/config (and little product state) in system prompt | `llm/system-prompt.ts` | S3, S6 | 100 | gated_auto | open |
+| M-P1-055 | `providers:update` builds candidate via `as ProviderConnection` | `main/ipc/providers.ts:607` | S1, S3 | 78 | gated_auto | open |
+| M-P1-056 | Config dual source: hand-written `Config` vs Zod schema | `config/schema.ts` | S3 | 82 | manual | open |
+| M-P1-057 | Accounting middleware `wrapGenerate` completely untested | `accounting/middleware.ts:111` | S3 | 90 | manual | open |
+| M-P1-058 | Provider IPC `validate` / `enable` / `status_refresh` untested | `main/ipc/providers.ts:651` | S3 | 88 | manual | open |
+| M-P1-059 | Vault fail-closed/corruption paths largely untested | `credentials/vault.ts` | S3 | 85 | manual | open |
+| M-P1-060 | Accounting store singleton init/fail-closed API untested | `accounting/store.ts:356` | S3 | 85 | manual | open |
+| M-P1-061 | Middleware cost evidence (headers + Neuralwatt) never exercised | `accounting/middleware.ts:60` | S3 | 82 | manual | open |
+| M-P1-062 | Child processes inherit full `process.env` (secret leak) | background-store / execute | S4 | 75 | gated_auto | open |
+| M-P1-063 | AST `rename_symbol` requires `file_path` but never uses it | `tools/ast/rename-symbol.ts:21` | S4 | 95 | gated_auto | open |
+| M-P1-064 | RAG partial-path index deletes all other indexed files | `rag/indexer.ts:386` | S4 | 90 | gated_auto | open |
+| M-P1-065 | `rag_search` always local ONNX; index may use API embedder | `tools/rag/search.ts:72` | S4 | 90 | gated_auto | open |
+| M-P1-066 | `read_mcp_resource` treats MCP error strings as success | `tools/mcp/resource.ts:60` | S4 | 90 | gated_auto | open |
+| M-P1-067 | MCP runner shutdown abandons hung `client.close` after 3s | `mcp/manager.ts:497` | S4 | 82 | gated_auto | open |
+| M-P1-068 | HF model download fetch has no timeout | `rag/embedder.ts:572` | S4 | 95 | gated_auto | open |
+| M-P1-069 | AST/RAG index workers no overall timeout/cancel | `ast/indexer.ts:376` | S4 | 85 | gated_auto | open |
+| M-P1-070 | Foreground `waitForExit` unbounded after kill | `execute-command.ts:299` | S4 | 80 | gated_auto | open |
+| M-P1-071 | RAG SQLite no `busy_timeout` (AST has 5000) | `rag/store.ts:244` | S4 | 78 | safe_auto | fixed |
+| M-P1-072 | RAG holds full vector corpus as `number[][]` | rag indexer + store | S4 | 90 | manual | open |
+| M-P1-073 | `glob` fully sync + unbounded matches | `tools/filesystem/glob.ts` | S4 | 92 | gated_auto | open |
+| M-P1-074 | `grep` full-tree full-file load, no size bound | `tools/search/grep.ts` | S4 | 88 | gated_auto | open |
+| M-P1-075 | AST stores every reference; tools return unbounded | ast store + tools | S4 | 85 | gated_auto | open |
+| M-P1-076 | Main RAG search cache stale after worker reindex | `rag/store.ts` cache | S4 | 80 | gated_auto | open |
+| M-P1-077 | Concurrent AST rename partial multi-file write | `rename-symbol.ts` | S4 | 75 | gated_auto | open |
+| M-P1-078 | Explicit `any` in `zodToJsonSchema` conversion | `tools/registry.ts:84` | S4 | 95 | gated_auto | open |
+| M-P1-079 | Tree-sitter surface entirely `any`-typed | `ast/parser.ts:34` | S4 | 92 | gated_auto | open |
+| M-P1-080 | Fallback MCP manager partial object cast to full MCPManager | `tools/index.ts:67` | S4 | 90 | gated_auto | open |
+| M-P1-081 | MCP tool inputs passthrough Zod | `mcp/manager.ts:656` | S4 | 85 | gated_auto | open |
+| M-P1-082 | MCP config untyped Record cast at project boundary | `mcp/project-registry.ts:18` | S4 | 82 | manual | open |
+| M-P1-083 | Interactive PTY path untested | process tools | S4 | 90 | manual | open |
+| M-P1-084 | `rag_index` / `rag_search` handlers never executed in tests | tools/rag | S4 | 93 | manual | open |
+| M-P1-085 | AST indexing uses live `getConfig()`, not frozen project runtime | `ast/indexer.ts:217` | S4 | 90 | gated_auto | open |
+| M-P1-086 | `getBuiltinToolRegistryForRuntime` caches first options forever | `tools/index.ts:284` | S4 | 80 | gated_auto | open |
+| M-P1-087 | MCP allowlist naive regex vs minimatch for builtins | `llm/orchestrator.ts:784` | S4, S6 | 85 | gated_auto | open |
+| M-P1-088 | Composer `isSendingRef` sticks after silent send gates | `renderer/InputArea.tsx:383` | S5 | 100 | gated_auto | open |
+| M-P1-089 | Esc/cancel has no mutual exclusion across stages | `renderer/hooks/useChat.ts:757` | S5 | 75 | gated_auto | open |
+| M-P1-090 | `chat.send` catch leaves optimistic bubble + half-stream state | `renderer/hooks/useChat.ts:748` | S5 | 78 | gated_auto | open |
+| M-P1-091 | GeneralTab cannot set `llm_stream_retries` to 0 | `Preferences/GeneralTab.tsx:64` | S5 | 95 | safe_auto | fixed |
+| M-P1-092 | RAGTab cannot set `chunk_overlap` to 0 | `Preferences/RAGTab.tsx:80` | S5 | 93 | safe_auto | fixed |
+| M-P1-093 | Config draft is untyped `Record` with cast-to-Config | `ConfigView.tsx:65` | S5 | 90 | gated_auto | open |
+| M-P1-094 | `orchid:config-updated` treats `default_model` as ModelSelection without narrowing | `ChatView.tsx:181` | S5 | 82 | gated_auto | open |
+| M-P1-095 | 100ms elapsed ticker rebuilds full chat history every tick | `useChat.ts:317` + ChatStream | S5 | 95 | gated_auto | open |
+| M-P1-096 | Unbatched per-token stream updates thrash ChatView tree | `useChat.ts:342` | S5 | 92 | gated_auto | open |
+| M-P1-097 | Streaming assistant fully re-parses markdown every chunk | `MarkdownContent.tsx:91` | S5 | 90 | gated_auto | open |
+| M-P1-098 | Command palette navigation dispatches dead `orchid:navigate` | `CommandPalette.tsx:345` | S5 | 100 | gated_auto | open |
+| M-P1-099 | Domain hook `useChat` imports UI `ContextGrid` for pure math | `useChat.ts:29` | S5 | 88 | gated_auto | open |
+| M-P1-100 | `useChat` / `useSession` / `useSessionTabs` behavioral surface almost untested | renderer hooks + tests | S5 | 90 | manual | open |
+| M-P1-101 | Preferences/onboarding tests assert mocks/booleans, not ConfigView | `preferences-onboarding.test.ts` | S5 | 95 | manual | open |
+| M-P1-102 | Omitted `allowed_skills` defaults to `['*']` for several default agents | `agents/registry.ts:87` | S6 | 100 | gated_auto | open |
+| M-P1-103 | Skill discovery claimed in system prompt but prompt injects no skill inventory | system-prompt + skill.ts | S6 | 100 | gated_auto | open |
+| M-P1-104 | general AGENT.md identity: “terminal-based coding agent” in Electron desktop | `general/AGENT.md:39` | S6 | 100 | safe_auto | fixed |
+| M-P1-105 | Command palette actions without agent tools (/cd, /model, /sessions, …) | `renderer/commands/registry.ts` | S6 | 85 | manual | open |
+| M-P1-106 | Workspace rebind (`/cd`) no agent equivalent | session IPC | S6 | 100 | manual | open |
+| M-P1-107 | Personality switch UI-only | commands | S6 | 100 | manual | open |
+| M-P1-108 | Definition CRUD (agents/skills/personalities) UI-only | defs IPC | S6 | 100 | manual | open |
+| M-P1-109 | General MCP allowlist hard-coded to context7/example | `general/AGENT.md` | S6 | 75 | gated_auto | open |
+| M-P1-110 | system-prompt branches largely untested | `llm/system-prompt.ts` | S6 | 100 | manual | open |
+| M-P1-111 | web-fetch summarizer production wiring untested | `tools/index.ts` | S6 | 75 | manual | open |
 
 *Note: M-P1-053/054/014/024/043/087/052 are cross-section merges; original S3 “config agent orphan P0” is M-P1-053.*
 
@@ -375,162 +375,162 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ## P2 — Moderate (89)
 
-| ID | Title | Primary file | Sections | Conf | Autofix |
-|----|-------|--------------|----------|------|---------|
-| M-P2-001 | Stream error path never completes activity to terminal idle | `chat.ts:1499` | S1 | 50 | advisory |
-| M-P2-002 | Auto-update `signed` gate ineffective on non-macOS packaged builds | `index.ts:277` | S1 | 50 | gated_auto |
-| M-P2-003 | `quitAndInstall` strips all `before-quit` cleanup | `updater.ts:202` | S1 | 75 | gated_auto |
-| M-P2-004 | `tool:execute` has no timeout or abort | `tool.ts:113` | S1 | 75 | gated_auto |
-| M-P2-005 | RAG/AST index IPC has no cancel/abort once started | `ipc/rag.ts:58` | S1 | 50 | manual |
-| M-P2-006 | Cancel/stop status kinds untyped (`status: string`) | `ipc.ts` / OrchidAPI | S1, S5 | 100 | manual |
-| M-P2-007 | `session:change_model` response richer than OrchidAPI documents | `ipc.ts:614` | S1 | 100 | manual |
-| M-P2-008 | `ChatStateEvent.state` widened to `string` vs closed snapshot union | `ipc.ts:172` | S1 | 100 | manual |
-| M-P2-009 | Inconsistent IPC error shapes (throw vs structured vs soft-success) | multi IPC | S1, S3 | 82 | manual |
-| M-P2-010 | Definition save Zod accepts names `DEFINITION_NAME_PATTERN` later rejects | `ipc/definitions.ts:31` | S1 | 75 | manual |
-| M-P2-011 | `config:save` double `unknown` cast for merge | `ipc/config.ts:166` | S1 | 75 | gated_auto |
-| M-P2-012 | Status-bearing IPC results mostly `{ status: string }` | `ipc.ts:555` | S1 | 75 | manual |
-| M-P2-013 | Unbounded `chat:send` message size | `chat.ts:79` | S1 | 75 | gated_auto |
-| M-P2-014 | Definition save unbounded `system_prompt`/content | `definitions.ts:33` | S1 | 75 | gated_auto |
-| M-P2-015 | `chat:stop`/`chat:cancel` any `sessionId` without ownership | `chat.ts:1589` | S1 | 75 | gated_auto |
-| M-P2-016 | `bgcmd:snapshot` `lastN` has no upper bound | `chat.ts:99` | S1 | 75 | safe_auto |
-| M-P2-017 | `chat-history` params/docs still say `windowId`, callers use `sessionId` | `chat-history.ts:10` | S1 | 100 | safe_auto |
-| M-P2-018 | IPC Zod schemas private; no shared export for contract tests | `main/ipc/` | S1 | 100 | manual |
-| M-P2-019 | `providers.ts` second large mixed-concern module (~801 lines) | `ipc/providers.ts` | S1, S3 | 75 | manual |
-| M-P2-020 | Allowlist completeness tests partial vs full `IPC_CHANNELS` | `app-shell.test.ts:80` | S1 | 100 | gated_auto |
-| M-P2-021 | `electron/CLAUDE.md` documents non-existent IPC modules / wrong paths | `electron/CLAUDE.md` | S1, S3, S4, S6 | 100 | safe_auto |
-| M-P2-022 | `tool:execute` no IPC tests and no renderer consumers | `ipc/tool.ts` | S1 | 75 | manual |
-| M-P2-023 | XState snapshot context repeatedly asserted as `AgentContext` | `chat.ts:300` | S1 | 50 | gated_auto |
-| M-P2-024 | `ActiveAgent.abortController` never wired to stream AbortController | `ipc/chat.ts:1035` | S2 | 75 | gated_auto |
-| M-P2-025 | Esc phase 2 does not cancel subagents until third Esc (design + orphaning) | `chat.ts:1638` | S2 | 75 | advisory |
-| M-P2-026 | Agent machine ERROR nulls abortController while invoke races | `agent-machine.ts:394` | S2 | 50 | gated_auto |
-| M-P2-027 | Provider-quirks mid-stream suppression cannot see stream errors | `provider-quirks.ts:99` | S2 | 75 | gated_auto |
-| M-P2-028 | Throttle timer can fire after stream teardown | `throttle.ts:80` | S2 | 75 | safe_auto |
-| M-P2-029 | `toolsInFlight` can stick if tool-result never arrives | `orchestrator.ts:346` | S2 | 75 | gated_auto |
-| M-P2-030 | No concurrency/spawn-rate limit on `delegate_to_subagent` | delegate + manager | S2 | 80 | gated_auto |
-| M-P2-031 | `wait_for_subagent` injects full result without offload | `wait.ts` | S2 | 72 | gated_auto |
-| M-P2-032 | Historical THINKING fully replayed every request | `history.ts` | S2 | 70 | gated_auto |
-| M-P2-033 | Two public SubagentRecord shapes (runtime vs domain) | manager vs shared | S2 | 80 | manual |
-| M-P2-034 | Domain SubagentRecord mixes snake_case and camelCase | `subagent.ts:29` | S2 | 75 | manual |
-| M-P2-035 | `subagentRecordSchema` incomplete vs type | `subagent.ts:61` | S2 | 70 | manual |
-| M-P2-036 | Domain agent type/tier plain `string` | `subagent.ts:32` | S2 | 82 | gated_auto |
-| M-P2-037 | Enum narrowing via Set + assertion | `agents/registry.ts:96` | S2 | 78 | gated_auto |
-| M-P2-038 | Session load trusts `JSON.parse` cast | `session/storage.ts:224` | S2 | 72 | gated_auto |
-| M-P2-039 | Mid-turn cancel: tool_call without tool_result until filter drops | chat + history | S2 | 78 | gated_auto |
-| M-P2-040 | Overlapping chat:send after hydrate can abort just-started peer turn | `chat.ts` | S2 | 72 | gated_auto |
-| M-P2-041 | God-modules: orchestrator ~930 + session/agent managers | multi | S2 | 75 | manual |
-| M-P2-042 | Tool handlers type assertions vs Zod parse | subagent tools | S2 | 65 | gated_auto |
-| M-P2-043 | Log redaction misses non-`sk-` key formats | `logging.ts:55` | S3 | 50 | safe_auto |
-| M-P2-044 | `storeApiKey` appends generations (orphan secrets) | `vault.ts:331` | S3 | 100 | gated_auto |
-| M-P2-045 | Session cost totals attach global `unknownCount` to every currency row | `accounting/store.ts:329` | S3 | 100 | safe_auto |
-| M-P2-046 | Stream attempt can finalize succeeded without finish usage | `accounting/middleware.ts:201` | S3 | 75 | gated_auto |
-| M-P2-047 | `config:save` persists values `validateConfig` rejects | `ipc/config.ts:171` | S3 | 75 | gated_auto |
-| M-P2-048 | ProviderStatusCache `put()` no write serialization | `status/cache.ts:162` | S3 | 85 | gated_auto |
-| M-P2-049 | Status refresh coalescing ignores manual vs automatic | `status/service.ts:140` | S3 | 80 | gated_auto |
-| M-P2-050 | Corrupt config JSON silently treated as empty layer | `loader.ts:49` | S3 | 75 | gated_auto |
-| M-P2-051 | `config:save` rejects `providers` while types/tombstones still treat it writable | multi | S3 | 88 | manual |
-| M-P2-052 | `ProviderStatusView.data` unversioned open bag | `ipc.ts:311` | S1, S3 | 72 | manual |
-| M-P2-053 | `FrozenProviderRequestSnapshot.protocol` is `string` | `accounting.ts:59` | S3 | 85 | gated_auto |
-| M-P2-054 | Accounting provenance bags open `unknown` | `accounting.ts:37` | S3 | 76 | manual |
-| M-P2-055 | SQLite rows cast to `AttemptRow` without row Zod | `accounting/store.ts:282` | S3 | 74 | gated_auto |
-| M-P2-056 | Config validation blanket unknown casts | `validation.ts:113` | S3 | 72 | gated_auto |
-| M-P2-057 | `environmentVariable!` non-null assertion | `ipc/providers.ts:549` | S3 | 70 | gated_auto |
-| M-P2-058 | Connection rules triplicated (IPC / resolver / registry) | multi | S3 | 75 | manual |
-| M-P2-059 | Fresh driver registry on every `services()` | `ipc/providers.ts:148` | S3 | 75 | safe_auto |
-| M-P2-060 | `deepMergeProviderDict` name obsolete | `config/merge.ts:76` | S3 | 75 | safe_auto |
-| M-P2-061 | Empty `providers` config field permanent shim | `schema.ts:41` | S3 | 75 | manual |
-| M-P2-062 | Zod and `validateConfig` duplicate constraints | `validation.ts:89` | S3 | 75 | manual |
-| M-P2-063 | `customModels` can override catalog model metadata for same id | `resolver.ts` | S3 | 85 | gated_auto |
-| M-P2-064 | Disconnect deletes vault before health flips (race window) | `ipc/providers.ts` | S3 | 75 | gated_auto |
-| M-P2-065 | Resolver lifecycle unavailability reasons untested | `resolver.ts` | S3 | 80 | manual |
-| M-P2-066 | Config IPC `model_metadata` / `list_personalities` / unknown-key untested | `ipc/config.ts` | S3 | 78 | manual |
-| M-P2-067 | Catalog transport/coalescing under-tested | catalog updater | S3 | 75 | manual |
-| M-P2-068 | Cost formula reasoning branches under-tested | `cost.ts` | S3 | 75 | manual |
-| M-P2-069 | Docs: `connections.json` vs actual `providers.json` | CLAUDE.md vs store | S3 | 80 | safe_auto |
-| M-P2-070 | Docs: project config path `.orchid/config.json` vs `.orchid.json` | CLAUDE.md vs loader | S3 | 80 | safe_auto |
-| M-P2-071 | `config:model_metadata` skips Zod at IPC boundary | `ipc/config.ts:128` | S3 | 90 | gated_auto |
-| M-P2-072 | Skill resource path no realpath (symlink escape) | `skill/skill.ts:202` | S4 | 75 | gated_auto |
-| M-P2-073 | AST rename write without containment | `rename-symbol.ts:111` | S4 | 50 | gated_auto |
-| M-P2-074 | web_fetch unescaped URL/title in XML | `fetch.ts:341` | S4 | 50 | safe_auto |
-| M-P2-075 | Glob/grep from `/` when absolute directory_path | multi | S4 | 75 | gated_auto |
-| M-P2-076 | ensureIndexed waiters after failed concurrent index | `ast/indexer.ts:123` | S4 | 88 | gated_auto |
-| M-P2-077 | Sticky `default_project_dir` memory vs disk abort | `workspace.ts:89` | S4 | 85 | gated_auto |
-| M-P2-078 | RAG `readAndHash` ignores frozen config for max_file_size | `indexer.ts:597` | S4 | 82 | gated_auto |
-| M-P2-079 | AST `initializedProjects` never re-indexes if DB cleared | `indexer.ts:156` | S4 | 80 | gated_auto |
-| M-P2-080 | grep concurrent can exceed max_results | `grep.ts:261` | S4 | 78 | gated_auto |
-| M-P2-081 | background_command_idle_timeout never kills idle processes | background-store | S4 | 72 | advisory |
-| M-P2-082 | HeadTailBuffer Buffer.concat every append | head-tail-buffer | S4 | 82 | gated_auto |
-| M-P2-083 | RAG/AST discovery Promise.all fan-out | indexers | S4 | 78 | gated_auto |
-| M-P2-084 | MCP sequential server startup | manager.ts | S4 | 76 | gated_auto |
-| M-P2-085 | callTool timeout does not cancel server work | manager.ts | S4 | 75 | gated_auto |
-| M-P2-086 | write/edit full content / LCS blowup | write/edit | S4 | 80 | gated_auto |
-| M-P2-087 | atomicWrite temp name collision concurrent writers | ast/utils | S4 | 70 | gated_auto |
-| M-P2-088 | Background process union not discriminated | background-store | S4 | 80 | gated_auto |
-| M-P2-089 | Todo storage unchecked casts | `shared/todo.ts` | S4 | 78 | gated_auto |
-| M-P2-090 | send_input / wait_ms / agentScope visibility test gaps | process tools tests | S4 | 90 | manual |
-| M-P2-091 | CLAUDE.md documents non-existent `layers.ts` | CLAUDE.md | S4 | 100 | safe_auto |
-| M-P2-092 | loadSkills mutates process-wide registry | skills/registry | S4, S6 | 80 | gated_auto |
-| M-P2-093 | `hydrateSnapshot` drops buffered events when `live` is null | `useChat.ts:917` | S5 | 72 | gated_auto |
-| M-P2-094 | Config session delete/create does not refresh ChatView list | ConfigView | S5 | 80 | gated_auto |
-| M-P2-095 | New stream always yanks scroll to bottom | `ChatStream.tsx:184` | S5 | 75 | gated_auto |
-| M-P2-096 | MCP server config stays `Record` with unchecked casts (renderer) | MCPServersTab | S5 | 80 | gated_auto |
-| M-P2-097 | RAG number handler casts onto every RAGConfig field | RAGTab | S5 | 78 | gated_auto |
-| M-P2-098 | OrchidAPI required on Window but renderer uses optional everywhere | hooks | S5 | 74 | advisory |
-| M-P2-099 | Message list fully mounted; no virtualization/memo | ChatStream | S5 | 82 | gated_auto |
-| M-P2-100 | smooth `scrollIntoView` every streamingContent change | ChatStream | S5 | 85 | gated_auto |
-| M-P2-101 | `toolBlocks` in history deps forces O(n) rebuild on tool churn | ChatStream | S5 | 80 | gated_auto |
-| M-P2-102 | Slash menu + palette duplicate selection/filter pipelines | InputArea + CommandPalette | S5 | 92 | manual |
-| M-P2-103 | ChatView monolithic orchestrator (~1.1k LOC) | ChatView | S5 | 80 | manual |
-| M-P2-104 | `orchid:theme-applied` dispatched with no product listeners | themes/index.ts | S5 | 95 | safe_auto |
-| M-P2-105 | `useGlobalShortcuts` / ChatView orchestration / focus trap test gaps | keyboard + ChatView | S5 | 85 | manual |
-| M-P2-106 | Roving-list test reimplements clamp math instead of hook | roving-list-index.test.ts | S5 | 80 | gated_auto |
-| M-P2-107 | loadAgents/loadSkills mutate process-wide tool singleton | registries | S6 | 75 | gated_auto |
-| M-P2-108 | docs/solutions Python-only; Electron domains unrepresented | docs/solutions | S1–S6 | 100 | advisory |
-| M-P2-109 | Runtime tool registry WeakMap cache untested | tools/index.ts | S6 | 75 | manual |
-| M-P2-110 | Agent invalid-tier skip untested | agents/registry | S6 | 100 | manual |
-| M-P2-111 | Reserved internal agents only partially guarded in tests | agents/registry | S6 | 75 | manual |
-| M-P2-112 | buildModelResults/buildSessionResults untested | commands/registry | S6 | 100 | manual |
-| M-P2-113 | Command execute error paths untested | commands/registry | S6 | 75 | manual |
-| M-P2-114 | File delete no first-class tool (shell only) | tools | S6 | 75 | manual |
-| M-P2-115 | `rag_index` Decision-enum mild anti-pattern | tools/rag | S6 | 70 | advisory |
+| ID | Title | Primary file | Sections | Conf | Autofix | Status |
+|----|-------|--------------|----------|------|---------|--------|
+| M-P2-001 | Stream error path never completes activity to terminal idle | `chat.ts:1499` | S1 | 50 | advisory | open |
+| M-P2-002 | Auto-update `signed` gate ineffective on non-macOS packaged builds | `index.ts:277` | S1 | 50 | gated_auto | open |
+| M-P2-003 | `quitAndInstall` strips all `before-quit` cleanup | `updater.ts:202` | S1 | 75 | gated_auto | open |
+| M-P2-004 | `tool:execute` has no timeout or abort | `tool.ts:113` | S1 | 75 | gated_auto | open |
+| M-P2-005 | RAG/AST index IPC has no cancel/abort once started | `ipc/rag.ts:58` | S1 | 50 | manual | open |
+| M-P2-006 | Cancel/stop status kinds untyped (`status: string`) | `ipc.ts` / OrchidAPI | S1, S5 | 100 | manual | open |
+| M-P2-007 | `session:change_model` response richer than OrchidAPI documents | `ipc.ts:614` | S1 | 100 | manual | open |
+| M-P2-008 | `ChatStateEvent.state` widened to `string` vs closed snapshot union | `ipc.ts:172` | S1 | 100 | manual | open |
+| M-P2-009 | Inconsistent IPC error shapes (throw vs structured vs soft-success) | multi IPC | S1, S3 | 82 | manual | open |
+| M-P2-010 | Definition save Zod accepts names `DEFINITION_NAME_PATTERN` later rejects | `ipc/definitions.ts:31` | S1 | 75 | manual | open |
+| M-P2-011 | `config:save` double `unknown` cast for merge | `ipc/config.ts:166` | S1 | 75 | gated_auto | open |
+| M-P2-012 | Status-bearing IPC results mostly `{ status: string }` | `ipc.ts:555` | S1 | 75 | manual | open |
+| M-P2-013 | Unbounded `chat:send` message size | `chat.ts:79` | S1 | 75 | gated_auto | open |
+| M-P2-014 | Definition save unbounded `system_prompt`/content | `definitions.ts:33` | S1 | 75 | gated_auto | open |
+| M-P2-015 | `chat:stop`/`chat:cancel` any `sessionId` without ownership | `chat.ts:1589` | S1 | 75 | gated_auto | open |
+| M-P2-016 | `bgcmd:snapshot` `lastN` has no upper bound | `chat.ts:99` | S1 | 75 | safe_auto | fixed |
+| M-P2-017 | `chat-history` params/docs still say `windowId`, callers use `sessionId` | `chat-history.ts:10` | S1 | 100 | safe_auto | fixed |
+| M-P2-018 | IPC Zod schemas private; no shared export for contract tests | `main/ipc/` | S1 | 100 | manual | open |
+| M-P2-019 | `providers.ts` second large mixed-concern module (~801 lines) | `ipc/providers.ts` | S1, S3 | 75 | manual | open |
+| M-P2-020 | Allowlist completeness tests partial vs full `IPC_CHANNELS` | `app-shell.test.ts:80` | S1 | 100 | gated_auto | open |
+| M-P2-021 | `electron/CLAUDE.md` documents non-existent IPC modules / wrong paths | `electron/CLAUDE.md` | S1, S3, S4, S6 | 100 | safe_auto | fixed |
+| M-P2-022 | `tool:execute` no IPC tests and no renderer consumers | `ipc/tool.ts` | S1 | 75 | manual | open |
+| M-P2-023 | XState snapshot context repeatedly asserted as `AgentContext` | `chat.ts:300` | S1 | 50 | gated_auto | open |
+| M-P2-024 | `ActiveAgent.abortController` never wired to stream AbortController | `ipc/chat.ts:1035` | S2 | 75 | gated_auto | open |
+| M-P2-025 | Esc phase 2 does not cancel subagents until third Esc (design + orphaning) | `chat.ts:1638` | S2 | 75 | advisory | open |
+| M-P2-026 | Agent machine ERROR nulls abortController while invoke races | `agent-machine.ts:394` | S2 | 50 | gated_auto | open |
+| M-P2-027 | Provider-quirks mid-stream suppression cannot see stream errors | `provider-quirks.ts:99` | S2 | 75 | gated_auto | open |
+| M-P2-028 | Throttle timer can fire after stream teardown | `throttle.ts:80` | S2 | 75 | safe_auto | fixed |
+| M-P2-029 | `toolsInFlight` can stick if tool-result never arrives | `orchestrator.ts:346` | S2 | 75 | gated_auto | open |
+| M-P2-030 | No concurrency/spawn-rate limit on `delegate_to_subagent` | delegate + manager | S2 | 80 | gated_auto | open |
+| M-P2-031 | `wait_for_subagent` injects full result without offload | `wait.ts` | S2 | 72 | gated_auto | open |
+| M-P2-032 | Historical THINKING fully replayed every request | `history.ts` | S2 | 70 | gated_auto | open |
+| M-P2-033 | Two public SubagentRecord shapes (runtime vs domain) | manager vs shared | S2 | 80 | manual | open |
+| M-P2-034 | Domain SubagentRecord mixes snake_case and camelCase | `subagent.ts:29` | S2 | 75 | manual | open |
+| M-P2-035 | `subagentRecordSchema` incomplete vs type | `subagent.ts:61` | S2 | 70 | manual | open |
+| M-P2-036 | Domain agent type/tier plain `string` | `subagent.ts:32` | S2 | 82 | gated_auto | open |
+| M-P2-037 | Enum narrowing via Set + assertion | `agents/registry.ts:96` | S2 | 78 | gated_auto | open |
+| M-P2-038 | Session load trusts `JSON.parse` cast | `session/storage.ts:224` | S2 | 72 | gated_auto | open |
+| M-P2-039 | Mid-turn cancel: tool_call without tool_result until filter drops | chat + history | S2 | 78 | gated_auto | open |
+| M-P2-040 | Overlapping chat:send after hydrate can abort just-started peer turn | `chat.ts` | S2 | 72 | gated_auto | open |
+| M-P2-041 | God-modules: orchestrator ~930 + session/agent managers | multi | S2 | 75 | manual | open |
+| M-P2-042 | Tool handlers type assertions vs Zod parse | subagent tools | S2 | 65 | gated_auto | open |
+| M-P2-043 | Log redaction misses non-`sk-` key formats | `logging.ts:55` | S3 | 50 | safe_auto | fixed |
+| M-P2-044 | `storeApiKey` appends generations (orphan secrets) | `vault.ts:331` | S3 | 100 | gated_auto | open |
+| M-P2-045 | Session cost totals attach global `unknownCount` to every currency row | `accounting/store.ts:329` | S3 | 100 | safe_auto | fixed |
+| M-P2-046 | Stream attempt can finalize succeeded without finish usage | `accounting/middleware.ts:201` | S3 | 75 | gated_auto | open |
+| M-P2-047 | `config:save` persists values `validateConfig` rejects | `ipc/config.ts:171` | S3 | 75 | gated_auto | open |
+| M-P2-048 | ProviderStatusCache `put()` no write serialization | `status/cache.ts:162` | S3 | 85 | gated_auto | open |
+| M-P2-049 | Status refresh coalescing ignores manual vs automatic | `status/service.ts:140` | S3 | 80 | gated_auto | open |
+| M-P2-050 | Corrupt config JSON silently treated as empty layer | `loader.ts:49` | S3 | 75 | gated_auto | open |
+| M-P2-051 | `config:save` rejects `providers` while types/tombstones still treat it writable | multi | S3 | 88 | manual | open |
+| M-P2-052 | `ProviderStatusView.data` unversioned open bag | `ipc.ts:311` | S1, S3 | 72 | manual | open |
+| M-P2-053 | `FrozenProviderRequestSnapshot.protocol` is `string` | `accounting.ts:59` | S3 | 85 | gated_auto | open |
+| M-P2-054 | Accounting provenance bags open `unknown` | `accounting.ts:37` | S3 | 76 | manual | open |
+| M-P2-055 | SQLite rows cast to `AttemptRow` without row Zod | `accounting/store.ts:282` | S3 | 74 | gated_auto | open |
+| M-P2-056 | Config validation blanket unknown casts | `validation.ts:113` | S3 | 72 | gated_auto | open |
+| M-P2-057 | `environmentVariable!` non-null assertion | `ipc/providers.ts:549` | S3 | 70 | gated_auto | open |
+| M-P2-058 | Connection rules triplicated (IPC / resolver / registry) | multi | S3 | 75 | manual | open |
+| M-P2-059 | Fresh driver registry on every `services()` | `ipc/providers.ts:148` | S3 | 75 | safe_auto | fixed |
+| M-P2-060 | `deepMergeProviderDict` name obsolete | `config/merge.ts:76` | S3 | 75 | safe_auto | fixed |
+| M-P2-061 | Empty `providers` config field permanent shim | `schema.ts:41` | S3 | 75 | manual | open |
+| M-P2-062 | Zod and `validateConfig` duplicate constraints | `validation.ts:89` | S3 | 75 | manual | open |
+| M-P2-063 | `customModels` can override catalog model metadata for same id | `resolver.ts` | S3 | 85 | gated_auto | open |
+| M-P2-064 | Disconnect deletes vault before health flips (race window) | `ipc/providers.ts` | S3 | 75 | gated_auto | open |
+| M-P2-065 | Resolver lifecycle unavailability reasons untested | `resolver.ts` | S3 | 80 | manual | open |
+| M-P2-066 | Config IPC `model_metadata` / `list_personalities` / unknown-key untested | `ipc/config.ts` | S3 | 78 | manual | open |
+| M-P2-067 | Catalog transport/coalescing under-tested | catalog updater | S3 | 75 | manual | open |
+| M-P2-068 | Cost formula reasoning branches under-tested | `cost.ts` | S3 | 75 | manual | open |
+| M-P2-069 | Docs: `connections.json` vs actual `providers.json` | CLAUDE.md vs store | S3 | 80 | safe_auto | fixed |
+| M-P2-070 | Docs: project config path `.orchid/config.json` vs `.orchid.json` | CLAUDE.md vs loader | S3 | 80 | safe_auto | fixed |
+| M-P2-071 | `config:model_metadata` skips Zod at IPC boundary | `ipc/config.ts:128` | S3 | 90 | gated_auto | open |
+| M-P2-072 | Skill resource path no realpath (symlink escape) | `skill/skill.ts:202` | S4 | 75 | gated_auto | open |
+| M-P2-073 | AST rename write without containment | `rename-symbol.ts:111` | S4 | 50 | gated_auto | open |
+| M-P2-074 | web_fetch unescaped URL/title in XML | `fetch.ts:341` | S4 | 50 | safe_auto | fixed |
+| M-P2-075 | Glob/grep from `/` when absolute directory_path | multi | S4 | 75 | gated_auto | open |
+| M-P2-076 | ensureIndexed waiters after failed concurrent index | `ast/indexer.ts:123` | S4 | 88 | gated_auto | open |
+| M-P2-077 | Sticky `default_project_dir` memory vs disk abort | `workspace.ts:89` | S4 | 85 | gated_auto | open |
+| M-P2-078 | RAG `readAndHash` ignores frozen config for max_file_size | `indexer.ts:597` | S4 | 82 | gated_auto | open |
+| M-P2-079 | AST `initializedProjects` never re-indexes if DB cleared | `indexer.ts:156` | S4 | 80 | gated_auto | open |
+| M-P2-080 | grep concurrent can exceed max_results | `grep.ts:261` | S4 | 78 | gated_auto | open |
+| M-P2-081 | background_command_idle_timeout never kills idle processes | background-store | S4 | 72 | advisory | open |
+| M-P2-082 | HeadTailBuffer Buffer.concat every append | head-tail-buffer | S4 | 82 | gated_auto | open |
+| M-P2-083 | RAG/AST discovery Promise.all fan-out | indexers | S4 | 78 | gated_auto | open |
+| M-P2-084 | MCP sequential server startup | manager.ts | S4 | 76 | gated_auto | open |
+| M-P2-085 | callTool timeout does not cancel server work | manager.ts | S4 | 75 | gated_auto | open |
+| M-P2-086 | write/edit full content / LCS blowup | write/edit | S4 | 80 | gated_auto | open |
+| M-P2-087 | atomicWrite temp name collision concurrent writers | ast/utils | S4 | 70 | gated_auto | open |
+| M-P2-088 | Background process union not discriminated | background-store | S4 | 80 | gated_auto | open |
+| M-P2-089 | Todo storage unchecked casts | `shared/todo.ts` | S4 | 78 | gated_auto | open |
+| M-P2-090 | send_input / wait_ms / agentScope visibility test gaps | process tools tests | S4 | 90 | manual | open |
+| M-P2-091 | CLAUDE.md documents non-existent `layers.ts` | CLAUDE.md | S4 | 100 | safe_auto | fixed |
+| M-P2-092 | loadSkills mutates process-wide registry | skills/registry | S4, S6 | 80 | gated_auto | open |
+| M-P2-093 | `hydrateSnapshot` drops buffered events when `live` is null | `useChat.ts:917` | S5 | 72 | gated_auto | open |
+| M-P2-094 | Config session delete/create does not refresh ChatView list | ConfigView | S5 | 80 | gated_auto | open |
+| M-P2-095 | New stream always yanks scroll to bottom | `ChatStream.tsx:184` | S5 | 75 | gated_auto | open |
+| M-P2-096 | MCP server config stays `Record` with unchecked casts (renderer) | MCPServersTab | S5 | 80 | gated_auto | open |
+| M-P2-097 | RAG number handler casts onto every RAGConfig field | RAGTab | S5 | 78 | gated_auto | open |
+| M-P2-098 | OrchidAPI required on Window but renderer uses optional everywhere | hooks | S5 | 74 | advisory | open |
+| M-P2-099 | Message list fully mounted; no virtualization/memo | ChatStream | S5 | 82 | gated_auto | open |
+| M-P2-100 | smooth `scrollIntoView` every streamingContent change | ChatStream | S5 | 85 | gated_auto | open |
+| M-P2-101 | `toolBlocks` in history deps forces O(n) rebuild on tool churn | ChatStream | S5 | 80 | gated_auto | open |
+| M-P2-102 | Slash menu + palette duplicate selection/filter pipelines | InputArea + CommandPalette | S5 | 92 | manual | open |
+| M-P2-103 | ChatView monolithic orchestrator (~1.1k LOC) | ChatView | S5 | 80 | manual | open |
+| M-P2-104 | `orchid:theme-applied` dispatched with no product listeners | themes/index.ts | S5 | 95 | safe_auto | fixed |
+| M-P2-105 | `useGlobalShortcuts` / ChatView orchestration / focus trap test gaps | keyboard + ChatView | S5 | 85 | manual | open |
+| M-P2-106 | Roving-list test reimplements clamp math instead of hook | roving-list-index.test.ts | S5 | 80 | gated_auto | open |
+| M-P2-107 | loadAgents/loadSkills mutate process-wide tool singleton | registries | S6 | 75 | gated_auto | open |
+| M-P2-108 | docs/solutions Python-only; Electron domains unrepresented | docs/solutions | S1–S6 | 100 | advisory | open |
+| M-P2-109 | Runtime tool registry WeakMap cache untested | tools/index.ts | S6 | 75 | manual | open |
+| M-P2-110 | Agent invalid-tier skip untested | agents/registry | S6 | 100 | manual | open |
+| M-P2-111 | Reserved internal agents only partially guarded in tests | agents/registry | S6 | 75 | manual | open |
+| M-P2-112 | buildModelResults/buildSessionResults untested | commands/registry | S6 | 100 | manual | open |
+| M-P2-113 | Command execute error paths untested | commands/registry | S6 | 75 | manual | open |
+| M-P2-114 | File delete no first-class tool (shell only) | tools | S6 | 75 | manual | open |
+| M-P2-115 | `rag_index` Decision-enum mild anti-pattern | tools/rag | S6 | 70 | advisory | open |
 
 ---
 
 ## P3 — Low (28)
 
-| ID | Title | Primary file | Sections | Conf | Autofix |
-|----|-------|--------------|----------|------|---------|
-| M-P3-001 | Updater channel docs disagree with `IPC_CHANNELS` names | `updater.ts:10` | S1 | 100 | safe_auto |
-| M-P3-002 | No IPC versioning/deprecation surface | `ipc.ts:718` | S1 | 50 | advisory |
-| M-P3-003 | Updater check/download no concurrency/hang guard | `updater.ts:164` | S1 | 50 | gated_auto |
-| M-P3-004 | No rate limits on expensive IPC (index, tool, chat) | `rag.ts:59` | S1 | 75 | advisory |
-| M-P3-005 | Message factories omit `MessageType.ERROR` | message-factories.ts | S2 | 65 | gated_auto |
-| M-P3-006 | `ApiMessage` untyped role/content unions | message.ts:121 | S2 | 65 | gated_auto |
-| M-P3-007 | Duplicate `toApiMessages edge cases` describe block in tests | llm-orchestrator.test.ts | S2 | 75 | safe_auto |
-| M-P3-008 | `wait_for_subagent` under-signals ownership/not-found (`isError`) | wait.ts:70 | S2 | 65 | gated_auto |
-| M-P3-009 | XState is thin stream shell; docs imply full agentic loop | agent-machine + CLAUDE | S2 | 75 | advisory |
-| M-P3-010 | Env numeric overrides can inject NaN | merge.ts:338 | S3 | 75 | safe_auto |
-| M-P3-011 | Disconnect interrupt wins over late stream success (cost loss) | accounting store | S3 | 75 | advisory |
-| M-P3-012 | `validateConfig` errors never enforced at runtime | loader.ts:294 | S3 | 70 | gated_auto |
-| M-P3-013 | Provider create `modelIds` required in TS, defaulted in Zod | ipc.ts | S3 | 78 | gated_auto |
-| M-P3-014 | Accounting types internal-only (no IPC) | accounting.ts | S3 | 70 | advisory |
-| M-P3-015 | Stale U8 “until then” comment on config IPC | ipc/config.ts:5 | S3 | 100 | safe_auto |
-| M-P3-016 | No permanent connection hard-delete API | connection-store | S3 | 100 | advisory |
-| M-P3-017 | Interactive PTY uses user SHELL with full env | background-store | S4 | 50 | advisory |
-| M-P3-018 | MCP error prefix-based detection fragile | manager.ts | S4 | 75 | gated_auto |
-| M-P3-019 | drainAbort controllers unused | background-store | S4 | 65 | safe_auto |
-| M-P3-020 | Runtime registry keyed by untyped `object` | tools/index.ts | S4 | 80 | gated_auto |
-| M-P3-021 | Embedder non-null tensor assertions | embedder.ts | S4 | 72 | gated_auto |
-| M-P3-022 | Skill catalog embedded in Zod `.describe()` | skill.ts | S4 | 65 | gated_auto |
-| M-P3-023 | Todo notify createRequire electron | tools/index.ts | S4 | 70 | manual |
-| M-P3-024 | MCP string `Error:` protocol vs structured isError | manager + orchestrator | S4 | 75 | gated_auto |
-| M-P3-025 | `acceptChatEvent` can latch streamSessionId on first draft event | useChat | S5 | 55 | gated_auto |
-| M-P3-026 | GeneralTab number handler ignores invalid/zero (UX snap-back) | GeneralTab | S5 | 70 | gated_auto |
-| M-P3-027 | Custom DOM events use unchecked CustomEvent casts | App.tsx | S5 | 72 | gated_auto |
-| M-P3-028 | `filter(Boolean) as Command[]` | CommandPalette | S5 | 68 | safe_auto |
-| M-P3-029 | Vacuous keyboard shortcut tests (literal equality) | command-palette / preferences tests | S5, S6 | 100 | safe_auto |
-| M-P3-030 | Silent agent skip on invalid frontmatter (no log) | agents/registry | S6 | 85 | gated_auto |
-| M-P3-031 | shared/commands.ts overclaimed as command inventory | CLAUDE.md | S6 | 100 | safe_auto |
-| M-P3-032 | Theme / working-set / activity chrome intentionally agent-out | — | S6 | — | advisory |
+| ID | Title | Primary file | Sections | Conf | Autofix | Status |
+|----|-------|--------------|----------|------|---------|--------|
+| M-P3-001 | Updater channel docs disagree with `IPC_CHANNELS` names | `updater.ts:10` | S1 | 100 | safe_auto | fixed |
+| M-P3-002 | No IPC versioning/deprecation surface | `ipc.ts:718` | S1 | 50 | advisory | open |
+| M-P3-003 | Updater check/download no concurrency/hang guard | `updater.ts:164` | S1 | 50 | gated_auto | open |
+| M-P3-004 | No rate limits on expensive IPC (index, tool, chat) | `rag.ts:59` | S1 | 75 | advisory | open |
+| M-P3-005 | Message factories omit `MessageType.ERROR` | message-factories.ts | S2 | 65 | gated_auto | open |
+| M-P3-006 | `ApiMessage` untyped role/content unions | message.ts:121 | S2 | 65 | gated_auto | open |
+| M-P3-007 | Duplicate `toApiMessages edge cases` describe block in tests | llm-orchestrator.test.ts | S2 | 75 | safe_auto | fixed |
+| M-P3-008 | `wait_for_subagent` under-signals ownership/not-found (`isError`) | wait.ts:70 | S2 | 65 | gated_auto | open |
+| M-P3-009 | XState is thin stream shell; docs imply full agentic loop | agent-machine + CLAUDE | S2 | 75 | advisory | open |
+| M-P3-010 | Env numeric overrides can inject NaN | merge.ts:338 | S3 | 75 | safe_auto | fixed |
+| M-P3-011 | Disconnect interrupt wins over late stream success (cost loss) | accounting store | S3 | 75 | advisory | open |
+| M-P3-012 | `validateConfig` errors never enforced at runtime | loader.ts:294 | S3 | 70 | gated_auto | open |
+| M-P3-013 | Provider create `modelIds` required in TS, defaulted in Zod | ipc.ts | S3 | 78 | gated_auto | open |
+| M-P3-014 | Accounting types internal-only (no IPC) | accounting.ts | S3 | 70 | advisory | open |
+| M-P3-015 | Stale U8 “until then” comment on config IPC | ipc/config.ts:5 | S3 | 100 | safe_auto | fixed |
+| M-P3-016 | No permanent connection hard-delete API | connection-store | S3 | 100 | advisory | open |
+| M-P3-017 | Interactive PTY uses user SHELL with full env | background-store | S4 | 50 | advisory | open |
+| M-P3-018 | MCP error prefix-based detection fragile | manager.ts | S4 | 75 | gated_auto | open |
+| M-P3-019 | drainAbort controllers unused | background-store | S4 | 65 | safe_auto | fixed |
+| M-P3-020 | Runtime registry keyed by untyped `object` | tools/index.ts | S4 | 80 | gated_auto | open |
+| M-P3-021 | Embedder non-null tensor assertions | embedder.ts | S4 | 72 | gated_auto | open |
+| M-P3-022 | Skill catalog embedded in Zod `.describe()` | skill.ts | S4 | 65 | gated_auto | open |
+| M-P3-023 | Todo notify createRequire electron | tools/index.ts | S4 | 70 | manual | open |
+| M-P3-024 | MCP string `Error:` protocol vs structured isError | manager + orchestrator | S4 | 75 | gated_auto | open |
+| M-P3-025 | `acceptChatEvent` can latch streamSessionId on first draft event | useChat | S5 | 55 | gated_auto | open |
+| M-P3-026 | GeneralTab number handler ignores invalid/zero (UX snap-back) | GeneralTab | S5 | 70 | gated_auto | open |
+| M-P3-027 | Custom DOM events use unchecked CustomEvent casts | App.tsx | S5 | 72 | gated_auto | open |
+| M-P3-028 | `filter(Boolean) as Command[]` | CommandPalette | S5 | 68 | safe_auto | fixed |
+| M-P3-029 | Vacuous keyboard shortcut tests (literal equality) | command-palette / preferences tests | S5, S6 | 100 | safe_auto | fixed |
+| M-P3-030 | Silent agent skip on invalid frontmatter (no log) | agents/registry | S6 | 85 | gated_auto | open |
+| M-P3-031 | shared/commands.ts overclaimed as command inventory | CLAUDE.md | S6 | 100 | safe_auto | fixed |
+| M-P3-032 | Theme / working-set / activity chrome intentionally agent-out | — | S6 | — | advisory | open |
 
 ---
 
@@ -570,12 +570,12 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 | Severity | Unique findings | ID range | Fixed (this branch) | Open |
 |----------|-----------------|----------|---------------------|------|
 | **P0** | **24** | M-P0-001 … M-P0-024 | **16** (009–024) | **8** (001–008) |
-| **P1** | **111** | M-P1-001 … M-P1-111 | 0 | 111 |
-| **P2** | **115** | M-P2-001 … M-P2-115 | 0 | 115 |
-| **P3** | **32** | M-P3-001 … M-P3-032 | 0 | 32 |
-| **Total** | **282** | | **16** | **266** |
+| **P1** | **111** | M-P1-001 … M-P1-111 | **11** (safe_auto) | **100** |
+| **P2** | **115** | M-P2-001 … M-P2-115 | **13** (safe_auto) | **102** |
+| **P3** | **32** | M-P3-001 … M-P3-032 | **8** (safe_auto) | **24** |
+| **Total** | **282** | | **48** | **234** |
 
-P1–P3 tables have no **Status** column yet (all open). Add when remediated.
+All `safe_auto` findings are **fixed** on this branch. Remaining open items are `gated_auto` / `manual` / `advisory`.
 
 ---
 
@@ -612,4 +612,4 @@ Overlaps mean sum > 282.
 | **This file** | Complete deduplicated master table |
 
 **Generated:** 2026-07-16 · Full re-read of all six section reports before merge.  
-**Remediation update:** 2026-07-16 · M-P0-009…024 marked `fixed` on `fix/full-audit-2026-07-16`.
+**Remediation update:** 2026-07-16 · M-P0-009…024 fixed · all `safe_auto` P1–P3 fixed on `fix/full-audit-2026-07-16`.
