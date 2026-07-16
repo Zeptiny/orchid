@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
+import type { Agent } from '../../src/shared/types/agent';
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -29,16 +30,25 @@ const mocks = vi.hoisted(() => {
   const workspaceByWindow = new Map<string, string>();
   const generalAgent = {
     name: 'general',
-    type: 'subagent' as const,
+    type: 'internal' as const,
     tier: 'bloom' as const,
     description: 'General-purpose agent',
     system_prompt: 'You are a helpful assistant.',
     allowed_tools: ['*'],
     allowed_skills: ['*'],
-  };
+  } satisfies Agent;
+  const sessionNamerAgent = {
+    name: 'session-namer',
+    type: 'internal' as const,
+    tier: 'seed' as const,
+    description: 'Generates concise session titles',
+    system_prompt: 'Return one concise title for the supplied conversation.',
+    allowed_tools: [],
+    allowed_skills: [],
+  } satisfies Agent;
   const runtimeByCwd = new Map<string, {
     config: Record<string, unknown>;
-    agents: Map<string, typeof generalAgent>;
+    agents: Map<string, Agent>;
     skills: Map<string, unknown>;
     personalities: Map<string, string>;
   }>();
@@ -52,16 +62,20 @@ const mocks = vi.hoisted(() => {
           default_model: null,
           tier_models: { bloom: null },
           command_timeout: 30,
+          llm_stream_idle_timeout: 60,
           llm_stream_retries: 0,
         },
-        agents: new Map([['general', generalAgent]]),
+        agents: new Map([
+          ['general', generalAgent],
+          ['session-namer', sessionNamerAgent],
+        ]),
         skills: new Map(),
         personalities: new Map(),
       };
     }),
     _set: (cwd: string, runtime: {
       config?: Record<string, unknown>;
-      agents?: Map<string, typeof generalAgent>;
+      agents?: Map<string, Agent>;
       skills?: Map<string, unknown>;
       personalities?: Map<string, string>;
     }) => {
@@ -70,9 +84,13 @@ const mocks = vi.hoisted(() => {
           default_model: null,
           tier_models: { bloom: null },
           command_timeout: 30,
+          llm_stream_idle_timeout: 60,
           llm_stream_retries: 0,
         },
-        agents: runtime.agents ?? new Map([['general', generalAgent]]),
+        agents: runtime.agents ?? new Map([
+          ['general', generalAgent],
+          ['session-namer', sessionNamerAgent],
+        ]),
         skills: runtime.skills ?? new Map(),
         personalities: runtime.personalities ?? new Map(),
       });
@@ -109,6 +127,10 @@ const mocks = vi.hoisted(() => {
       },
     })),
   };
+  const aiGenerateText = vi.fn(async () => ({ text: 'Investigate Session Naming' }));
+  const wrappedTitleModel = { provider: 'wrapped-title-model' };
+  const aiWrapLanguageModel = vi.fn(() => wrappedTitleModel);
+  const createMiddlewareStack = vi.fn(() => []);
   const accountingStore = {};
   const buildSystemPromptContext = vi.fn(async ({ cwd }: { cwd: string }) => ({
     cwd,
@@ -227,7 +249,15 @@ const mocks = vi.hoisted(() => {
       return activeSession;
     }),
     autoNameActive: vi.fn(async () => activeSession),
-    autoName: vi.fn(async () => activeSession),
+    autoName: vi.fn(async (
+      _sessionId: string,
+      generateTitle?: (session: NonNullable<typeof activeSession>) => Promise<string | null>,
+    ) => {
+      if (!activeSession || !generateTitle) return activeSession;
+      const title = await generateTitle(activeSession);
+      if (title) activeSession = { ...activeSession, name: title };
+      return activeSession;
+    }),
     /** Test helper: reset between cases */
     _reset: () => {
       activeSession = null;
@@ -316,9 +346,15 @@ const mocks = vi.hoisted(() => {
     completeSessionActivity: vi.fn(),
     electronWebContents,
     runtimeRegistry,
+    generalAgent,
+    sessionNamerAgent,
     toolRegistry,
     modelInstance,
     providerRuntime,
+    aiGenerateText,
+    aiWrapLanguageModel,
+    wrappedTitleModel,
+    createMiddlewareStack,
     buildSystemPromptContext,
     mcpManager,
     accountingStore,
@@ -335,10 +371,18 @@ vi.mock('electron', () => ({
 
 vi.mock('../../src/main/config/loader', () => ({
   HOME_PERSONALITIES_DIR: '/tmp/orchid-test-personalities',
+  getTierModelSelection: (
+    config: {
+      default_model: unknown;
+      tier_models: Record<string, unknown>;
+    },
+    tier: string,
+  ) => config.tier_models[tier] ?? config.default_model,
   getConfig: vi.fn(() => ({
     default_model: null,
     tier_models: { bloom: null },
     command_timeout: 30,
+    llm_stream_idle_timeout: 60,
     llm_stream_retries: 0,
   })),
 }));
@@ -352,6 +396,22 @@ vi.mock('../../src/main/tools', () => ({
 
 vi.mock('../../src/main/llm/orchestrator', () => ({
   streamChat: mocks.streamChat,
+}));
+
+vi.mock('../../src/main/llm/middleware', () => ({
+  createMiddlewareStack: mocks.createMiddlewareStack,
+}));
+
+vi.mock('../../src/main/utils/esm-import', () => ({
+  importESM: vi.fn(async (specifier: string) => {
+    if (specifier === 'ai') {
+      return {
+        generateText: mocks.aiGenerateText,
+        wrapLanguageModel: mocks.aiWrapLanguageModel,
+      };
+    }
+    throw new Error(`Unexpected importESM specifier in chat IPC test: ${specifier}`);
+  }),
 }));
 
 vi.mock('../../src/main/providers', () => ({
@@ -659,6 +719,7 @@ describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
         default_model: 'project-a/model',
         tier_models: { bloom: 'project-a/model' },
         command_timeout: 30,
+        llm_stream_idle_timeout: 60,
         llm_stream_retries: 0,
         personality: 'voice',
       },
@@ -678,6 +739,7 @@ describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
         default_model: 'project-b/model',
         tier_models: { bloom: 'project-b/model' },
         command_timeout: 30,
+        llm_stream_idle_timeout: 60,
         llm_stream_retries: 0,
         personality: 'voice',
       },
@@ -1381,6 +1443,10 @@ describe('chat IPC provider gates', () => {
     mocks.streamEventSequences.length = 0;
     mocks.runtimeRegistry._reset();
     mocks.sessionManager._reset();
+    mocks.aiGenerateText.mockReset();
+    mocks.aiGenerateText.mockResolvedValue({ text: 'Investigate Session Naming' });
+    mocks.aiWrapLanguageModel.mockClear();
+    mocks.createMiddlewareStack.mockClear();
     chatIpc = await import('../../src/main/ipc/chat');
     chatIpc.registerChatIPC();
   });
@@ -1479,5 +1545,109 @@ describe('chat IPC provider gates', () => {
       agentScopeId: 'main',
     }));
     expect(mocks.toolRegistry.get).not.toHaveBeenCalled();
+  });
+
+  it('auto-names a completed default session through the internal session-namer agent', async () => {
+    const turnSelection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/chat-model',
+    };
+    const titleSelection = {
+      connectionId: '22222222-2222-4222-8222-222222222222',
+      modelId: 'vendor/path/sprout-model',
+    };
+    const sessionNamerAgent = {
+      ...mocks.sessionNamerAgent,
+      tier: 'sprout' as const,
+      system_prompt: 'Create one compact title using 3-6 words.',
+    };
+    mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
+      config: {
+        default_model: turnSelection,
+        tier_models: {
+          seed: {
+            connectionId: '33333333-3333-4333-8333-333333333333',
+            modelId: 'vendor/path/unused-seed-model',
+          },
+          sprout: titleSelection,
+          bloom: null,
+        },
+        command_timeout: 30,
+        llm_stream_idle_timeout: 60,
+        llm_stream_retries: 0,
+      },
+      agents: new Map([
+        ['general', mocks.generalAgent],
+        ['session-namer', sessionNamerAgent],
+      ]),
+    });
+    mocks.sessionManager._setActive({
+      ...makeSession('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+      selection: turnSelection,
+      modelLabel: turnSelection.modelId,
+    });
+    mocks.streamResponses.push('The placeholder callback disables naming.');
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+
+    await chatSend!({ sender: { id: 905, send } }, { message: 'Why are sessions unnamed?' });
+    await waitForChannelCount(send, IPC_CHANNELS.SESSION_RENAMED, 1);
+
+    expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(titleSelection);
+    expect(mocks.createMiddlewareStack).toHaveBeenCalledWith({
+      retry: { maxRetries: 0 },
+      accounting: expect.objectContaining({
+        store: mocks.accountingStore,
+        sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        chainId: 'chain-1',
+        turnId: 'chain-1',
+        snapshot: expect.objectContaining({ modelId: 'vendor/path/model' }),
+      }),
+    });
+    expect(mocks.aiGenerateText).toHaveBeenCalledWith(expect.objectContaining({
+      model: mocks.wrappedTitleModel,
+      instructions: sessionNamerAgent.system_prompt,
+      abortSignal: expect.any(AbortSignal),
+      messages: [expect.objectContaining({
+        role: 'user',
+        content: expect.stringContaining('Why are sessions unnamed?'),
+      })],
+      maxRetries: 0,
+    }));
+    expect(channelEvents(send, IPC_CHANNELS.SESSION_RENAMED).at(-1)?.[1]).toEqual({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      name: 'Investigate Session Naming',
+    });
+  });
+
+  it('logs a visible warning when title generation fails', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.streamResponses.push('Naming should fail without failing the turn.');
+    mocks.aiGenerateText.mockRejectedValueOnce(new Error('title provider unavailable'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+
+    await chatSend!({ sender: { id: 906, send } }, { message: 'Trigger naming' });
+    await waitForChannelCount(send, IPC_CHANNELS.SESSION_RENAMED, 1);
+
+    expect(warn).toHaveBeenCalledWith(
+      '[auto-name] Title generation failed; keeping the default session name:',
+      expect.any(Error),
+    );
+    expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(selection);
+    expect(channelEvents(send, IPC_CHANNELS.SESSION_RENAMED).at(-1)?.[1]).toEqual({
+      id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      name: 'Session bbbbbbbb',
+    });
+    warn.mockRestore();
   });
 });

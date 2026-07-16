@@ -107,6 +107,26 @@ describe('auto-naming happy path', () => {
     expect(sessions[0].name).toBe('Refactor Database Layer');
     expect(sessions[0].id).toBe(session.id);
   });
+
+  it('does not overwrite a manual rename while title generation is in flight', async () => {
+    let resolveTitle: ((title: string) => void) | undefined;
+    const title = new Promise<string>((resolve) => {
+      resolveTitle = resolve;
+    });
+    const manager = new SessionManager({
+      generateTitle: async () => title,
+      storage: storageOpts,
+    });
+    const session = manager.create('gpt-4o');
+
+    const naming = manager.autoNameActive();
+    manager.rename(session.id, 'Manual Session Name');
+    resolveTitle!('Generated Session Name');
+    await naming;
+
+    expect(manager.getActive()!.name).toBe('Manual Session Name');
+    expect(loadSession(session.id, storageOpts)!.name).toBe('Manual Session Name');
+  });
 });
 
 // ===========================================================================

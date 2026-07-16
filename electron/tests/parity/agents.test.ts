@@ -16,10 +16,11 @@ import {
 } from '../../src/main/agents/registry';
 import { AgentType, AgentTier } from '../../src/shared/types/agent';
 
-// ── Expected agents (26 total) ─────────────────────────────────────────────
+// ── Expected agents (27 total) ─────────────────────────────────────────────
 
 const EXPECTED_AGENTS = [
   { name: 'general', type: 'internal', tier: 'bloom' },
+  { name: 'session-namer', type: 'internal', tier: 'seed' },
   { name: 'web-fetch', type: 'internal', tier: 'seed' },
   { name: 'implementer', type: 'subagent', tier: 'bloom' },
   { name: 'explorer', type: 'subagent', tier: 'seed' },
@@ -68,13 +69,13 @@ afterEach(() => {
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('Agent Parity', () => {
-  it('all 26 agents load from defaults', () => {
+  it('all 27 agents load from defaults', () => {
     const agents = loadAgents({
       homeDir: path.join(__dirname, '../../src/main/agents/defaults'),
       projectDir: path.join(tmpDir, 'empty-project'),
     });
 
-    expect(agents.size).toBe(26);
+    expect(agents.size).toBe(27);
   });
 
   it('all expected agent names are present', () => {
@@ -125,7 +126,7 @@ describe('Agent Parity', () => {
     }
   });
 
-  it('internal agents (general, web-fetch) have correct allowed_tools', () => {
+  it('internal agents have correct allowed_tools', () => {
     loadAgents({
       homeDir: path.join(__dirname, '../../src/main/agents/defaults'),
       projectDir: path.join(tmpDir, 'empty-project'),
@@ -141,6 +142,9 @@ describe('Agent Parity', () => {
 
     const webFetch = getAgent('web-fetch')!;
     expect(webFetch.allowed_tools).toEqual([]);
+
+    const sessionNamer = getAgent('session-namer')!;
+    expect(sessionNamer.allowed_tools).toEqual([]);
   });
 
   it('explorer has read-only tools (no edit/write)', () => {
@@ -157,7 +161,7 @@ describe('Agent Parity', () => {
     expect(explorer.allowed_tools).not.toContain('write');
   });
 
-  it('tier distribution matches Python defaults', () => {
+  it('tier distribution matches bundled defaults', () => {
     loadAgents({
       homeDir: path.join(__dirname, '../../src/main/agents/defaults'),
       projectDir: path.join(tmpDir, 'empty-project'),
@@ -170,13 +174,13 @@ describe('Agent Parity', () => {
       tierCounts[agent.tier]++;
     }
 
-    expect(tierCounts.seed).toBe(2);   // explorer, web-fetch
+    expect(tierCounts.seed).toBe(3);   // explorer, web-fetch, session-namer
     expect(tierCounts.sprout).toBe(2); // web-researcher, learnings-researcher
     expect(tierCounts.bloom).toBe(11); // general, implementer, api-contract, etc.
     expect(tierCounts.crown).toBe(11); // reviewers, adversarial, etc.
   });
 
-  it('type distribution matches Python defaults', () => {
+  it('type distribution matches bundled defaults', () => {
     loadAgents({
       homeDir: path.join(__dirname, '../../src/main/agents/defaults'),
       projectDir: path.join(tmpDir, 'empty-project'),
@@ -186,7 +190,7 @@ describe('Agent Parity', () => {
     const internalAgents = agents.filter((a) => a.type === AgentType.INTERNAL);
     const subagentAgents = agents.filter((a) => a.type === AgentType.SUBAGENT);
 
-    expect(internalAgents).toHaveLength(2);
+    expect(internalAgents).toHaveLength(3);
     expect(subagentAgents).toHaveLength(24);
   });
 

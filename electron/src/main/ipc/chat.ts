@@ -13,7 +13,8 @@ import { z } from 'zod';
 import { agentMachine, type AgentContext } from '../agents/xstate/agent-machine';
 import { interruptMachine } from '../agents/xstate/interrupt-machine';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
-import type { Agent } from '../../shared/types/agent';
+import { createMiddlewareStack } from '../llm/middleware';
+import { AgentType, type Agent } from '../../shared/types/agent';
 import { modelSelectionSchema, type ModelSelection } from '../../shared/types/provider';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { MessageRole, MessageType } from '../../shared/types/message';
@@ -69,6 +70,8 @@ import { getProviderRuntime } from '../providers';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { getProviderAccountingStore } from '../providers/accounting/store';
 import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
+import { importESM } from '../utils/esm-import';
+import { getTierModelSelection } from '../config/loader';
 
 // ── Zod validation schemas ───────────────────────────────────────────────────
 
@@ -794,15 +797,81 @@ function createProviderStreamFn(input: {
 
 // ── Auto-naming callback factory ─────────────────────────────────────────────
 
+const SESSION_NAMER_AGENT_NAME = 'session-namer';
+
 /**
- * Creates a GenerateTitleCallback that uses the seed-tier model to produce
- * a short descriptive title from the first user/assistant exchange.
+ * Creates a GenerateTitleCallback that uses the bundled internal session-namer
+ * agent to produce a short title from the first user/assistant exchange.
  *
  * Non-fatal on failure — returns null so the session keeps its default name.
  */
-function createGenerateTitleCallback(): GenerateTitleCallback {
-  // Auto-naming resumes once U4 can resolve a frozen selection to a driver.
-  return async () => null;
+function createGenerateTitleCallback(input: {
+  runtime: ProjectRuntime;
+  messages: readonly Message[];
+  fallbackSelection: ModelSelection;
+  accounting: Omit<ProviderAttemptAccountingContext, 'snapshot'>;
+}): GenerateTitleCallback {
+  return async () => {
+    const userMessage = input.messages.find(
+      (message) => message.role === MessageRole.USER && message.type === MessageType.TEXT,
+    );
+    const assistantMessage = input.messages.find(
+      (message) => message.role === MessageRole.ASSISTANT && message.type === MessageType.TEXT,
+    );
+    if (!userMessage || !assistantMessage) {
+      console.warn(
+        '[auto-name] Completed exchange has no user/assistant text; keeping the default session name.',
+      );
+      return null;
+    }
+
+    try {
+      const titleAgent = input.runtime.agents.get(SESSION_NAMER_AGENT_NAME);
+      if (!titleAgent || titleAgent.type !== AgentType.INTERNAL) {
+        console.warn(
+          `[auto-name] Internal agent "${SESSION_NAMER_AGENT_NAME}" is unavailable; ` +
+          'keeping the default session name.',
+        );
+        return null;
+      }
+      const titleSelection =
+        getTierModelSelection(input.runtime.config, titleAgent.tier) ??
+        input.fallbackSelection;
+      const execution = await getProviderRuntime().resolveExecution(titleSelection);
+      const { generateText, wrapLanguageModel } = await importESM<typeof import('ai')>('ai');
+      const model = wrapLanguageModel({
+        model: execution.modelInstance,
+        middleware: createMiddlewareStack({
+          retry: { maxRetries: input.runtime.config.llm_stream_retries },
+          accounting: { ...input.accounting, snapshot: execution.snapshot },
+        }),
+      });
+      const result = await generateText({
+        model,
+        instructions: titleAgent.system_prompt,
+        abortSignal: AbortSignal.timeout(
+          Math.max(1, input.runtime.config.llm_stream_idle_timeout * 1000),
+        ),
+        messages: [
+          {
+            role: 'user',
+            content:
+              `User: ${userMessage.content.slice(0, 500)}\n\n` +
+              `Assistant: ${assistantMessage.content.slice(0, 500)}`,
+          },
+        ],
+        // Orchid's accounting-aware retry middleware owns every retry attempt.
+        maxRetries: 0,
+      });
+      return result.text.trim().split('\n')[0]?.trim() || null;
+    } catch (error) {
+      console.warn(
+        '[auto-name] Title generation failed; keeping the default session name:',
+        error,
+      );
+      return null;
+    }
+  };
 }
 
 // ── IPC registration ─────────────────────────────────────────────────────────
@@ -1143,7 +1212,17 @@ export function registerChatIPC(): void {
       if (!opts.interrupted) {
         // Auto-name after first successful exchange (non-blocking)
         const sessionManager = getSessionManager();
-        const generateTitle = createGenerateTitleCallback();
+        const generateTitle = createGenerateTitleCallback({
+          runtime,
+          messages: fullHistory,
+          fallbackSelection: activeAgent.selection,
+          accounting: {
+            store: accountingStore,
+            sessionId,
+            chainId,
+            turnId,
+          },
+        });
         sessionManager
           .autoName(sessionId, generateTitle)
           .then((updated) => {
@@ -1155,7 +1234,7 @@ export function registerChatIPC(): void {
             }
           })
           .catch((err) => {
-            console.debug('Auto-naming failed (non-fatal):', err);
+            console.warn('Auto-naming failed (non-fatal):', err);
           });
       }
     };

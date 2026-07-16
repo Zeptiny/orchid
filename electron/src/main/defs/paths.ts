@@ -22,7 +22,11 @@ import {
 export type DefinitionKind = 'skills' | 'agents' | 'personalities';
 
 /** Built-in internal agents that must never be project-overlaid or IPC-deleted. */
-export const RESERVED_INTERNAL_AGENT_NAMES = new Set(['general', 'web-fetch']);
+export const RESERVED_INTERNAL_AGENT_NAMES = new Set([
+  'general',
+  'session-namer',
+  'web-fetch',
+]);
 
 export function validateDefinitionName(name: string): string {
   const trimmed = name.trim().toLowerCase();

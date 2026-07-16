@@ -3,7 +3,7 @@
  *
  * Covers:
  * - Frontmatter parsing (key-value, lists, body extraction)
- * - Load all 26 agents → correct tiers, types, tools
+ * - Load all 27 agents → correct tiers, types, tools
  * - Load all 15 skills → correct dependencies, resources
  * - Merge: home overlaid by project (project wins on conflict)
  * - Seeding: empty dirs → defaults copied, existing → not overwritten
@@ -206,17 +206,17 @@ describe('getStringArray', () => {
 });
 
 // ===========================================================================
-// Agent Loading — All 26 Defaults
+// Agent Loading — All 27 Defaults
 // ===========================================================================
 
 describe('Agent Loading — Defaults', () => {
-  it('should load all 26 default agents', () => {
+  it('should load all 27 default agents', () => {
     const agents = loadAgents({
       homeDir: path.join(__dirname, '../../src/main/agents/defaults'),
       projectDir: path.join(tmpDir, 'empty-project'),
     });
 
-    expect(agents.size).toBe(26);
+    expect(agents.size).toBe(27);
 
     const names = Array.from(agents.keys()).sort();
     expect(names).toEqual([
@@ -242,6 +242,7 @@ describe('Agent Loading — Defaults', () => {
       'reviewer',
       'scope-guardian-reviewer',
       'security-reviewer',
+      'session-namer',
       'spec-flow-analyzer',
       'testing-reviewer',
       'web-fetch',
@@ -312,6 +313,21 @@ describe('Agent Loading — Defaults', () => {
     expect(webFetch!.allowed_tools).toEqual([]);
   });
 
+  it('should load session-namer as a tool-free internal seed agent', () => {
+    loadAgents({
+      homeDir: path.join(__dirname, '../../src/main/agents/defaults'),
+      projectDir: path.join(tmpDir, 'empty-project'),
+    });
+
+    const sessionNamer = getAgent('session-namer');
+    expect(sessionNamer).toBeDefined();
+    expect(sessionNamer!.type).toBe(AgentType.INTERNAL);
+    expect(sessionNamer!.tier).toBe(AgentTier.SEED);
+    expect(sessionNamer!.allowed_tools).toEqual([]);
+    expect(sessionNamer!.allowed_skills).toEqual([]);
+    expect(sessionNamer!.system_prompt).toContain('3-6 word');
+  });
+
   it('should load implementer agent with correct tools and skills', () => {
     loadAgents({
       homeDir: path.join(__dirname, '../../src/main/agents/defaults'),
@@ -350,7 +366,7 @@ describe('Agent Loading — Defaults', () => {
     }
 
     // Verify tier distribution matches Python defaults
-    expect(tierCounts.seed).toBe(2); // explorer, web-fetch
+    expect(tierCounts.seed).toBe(3); // explorer, web-fetch, session-namer
     expect(tierCounts.sprout).toBe(2); // web-researcher, learnings-researcher
     expect(tierCounts.bloom).toBe(11); // general, implementer, api-contract, etc.
     expect(tierCounts.crown).toBe(11); // reviewers, adversarial, etc.
@@ -368,10 +384,11 @@ describe('Agent Loading — Defaults', () => {
       (a) => a.type === AgentType.SUBAGENT,
     );
 
-    // Only general and web-fetch are internal
-    expect(internalAgents).toHaveLength(2);
+    // Only bundled runtime-only agents are internal
+    expect(internalAgents).toHaveLength(3);
     expect(internalAgents.map((a) => a.name).sort()).toEqual([
       'general',
+      'session-namer',
       'web-fetch',
     ]);
 
@@ -386,7 +403,7 @@ describe('Agent Loading — Defaults', () => {
     });
 
     const agents = listAgents();
-    expect(agents).toHaveLength(26);
+    expect(agents).toHaveLength(27);
     expect(agents.every((a) => a.name && a.description)).toBe(true);
   });
 });
@@ -650,12 +667,12 @@ describe('Seeding', () => {
     const targetDir = path.join(tmpDir, 'agents-target');
     seedAgentsDir(targetDir);
 
-    // Should have all 26 agent subdirectories
+    // Should have all 27 agent subdirectories
     const entries = fs.readdirSync(targetDir).filter((e) => {
       const stat = fs.statSync(path.join(targetDir, e));
       return stat.isDirectory();
     });
-    expect(entries.length).toBe(26);
+    expect(entries.length).toBe(27);
 
     // Each should have an AGENT.md
     for (const entry of entries) {

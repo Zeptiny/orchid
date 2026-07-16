@@ -723,9 +723,11 @@ export class SessionManager {
 
     try {
       const title = await callback(session);
+      const current = this.ensureSession(sessionId);
+      if (!current || current.name !== session.name) return current;
       if (title && title.length < 80) {
         const updated = {
-          ...session,
+          ...current,
           name: title,
           updatedAt: new Date().toISOString(),
         };
@@ -735,7 +737,7 @@ export class SessionManager {
       }
     } catch (err) {
       // Auto-naming failure is non-fatal (matching Python)
-      console.debug('Auto-naming failed, keeping default name:', err);
+      console.warn('Auto-naming failed, keeping default name:', err);
     }
 
     return this.ensureSession(sessionId);
