@@ -23,6 +23,8 @@ export interface GeneralTabProps {
   grepMaxResults: number;
   directoryTreeDepth: number;
   astMaxFileSize: number;
+  mcpStartupTimeout: number;
+  mcpPerServerTimeout: number;
   llmStreamIdleTimeout: number;
   llmStreamRetries: number;
   backgroundCommandIdleTimeout: number;
@@ -48,6 +50,8 @@ export function GeneralTab({
   grepMaxResults,
   directoryTreeDepth,
   astMaxFileSize,
+  mcpStartupTimeout,
+  mcpPerServerTimeout,
   llmStreamIdleTimeout,
   llmStreamRetries,
   backgroundCommandIdleTimeout,
@@ -214,6 +218,36 @@ export function GeneralTab({
               className="input config-control"
               min={1}
             />
+          </div>
+        </div>
+      </section>
+
+      <section className="config-fieldset">
+        <div className="config-fieldset-legend">MCP</div>
+        <div className="config-form-grid">
+          <div className="config-field">
+            <label htmlFor="general-mcp-startup-timeout">MCP Startup Timeout (s)</label>
+            <input
+              id="general-mcp-startup-timeout"
+              type="number"
+              value={mcpStartupTimeout}
+              onChange={(e) => handleNumberChange('mcp_startup_timeout', e.target.value)}
+              className="input config-control"
+              min={1}
+            />
+            <span className="config-field-hint">Overall budget for starting all MCP servers.</span>
+          </div>
+          <div className="config-field">
+            <label htmlFor="general-mcp-per-server-timeout">MCP Per-Server Timeout (s)</label>
+            <input
+              id="general-mcp-per-server-timeout"
+              type="number"
+              value={mcpPerServerTimeout}
+              onChange={(e) => handleNumberChange('mcp_per_server_timeout', e.target.value)}
+              className="input config-control"
+              min={1}
+            />
+            <span className="config-field-hint">Connect timeout applied to each MCP server.</span>
           </div>
         </div>
       </section>

@@ -78,6 +78,8 @@ describe('Config Defaults for Onboarding', () => {
     expect(config).toHaveProperty('theme');
     expect(config).toHaveProperty('personality');
     expect(config).toHaveProperty('command_timeout');
+    expect(config).toHaveProperty('mcp_startup_timeout');
+    expect(config).toHaveProperty('mcp_per_server_timeout');
     expect(config).toHaveProperty('has_completed_onboarding');
     expect(config.has_completed_onboarding).toBe(false);
     expect(config.mcp_servers).toEqual({});
@@ -228,6 +230,19 @@ describe('Preferences & Onboarding File Structure', () => {
     expect(
       fs.existsSync(path.join(componentsDir, 'Preferences', 'GeneralTab.tsx')),
     ).toBe(true);
+  });
+
+  it('GeneralTab exposes MCP timeout fields', () => {
+    const generalTab = fs.readFileSync(
+      path.join(componentsDir, 'Preferences', 'GeneralTab.tsx'),
+      'utf8',
+    );
+    expect(generalTab).toContain('mcpStartupTimeout');
+    expect(generalTab).toContain('mcpPerServerTimeout');
+    expect(generalTab).toContain('mcp_startup_timeout');
+    expect(generalTab).toContain('mcp_per_server_timeout');
+    expect(generalTab).toContain('MCP Startup Timeout (s)');
+    expect(generalTab).toContain('MCP Per-Server Timeout (s)');
   });
 
   it('Onboarding directory exists', () => {
