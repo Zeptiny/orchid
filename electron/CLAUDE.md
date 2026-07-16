@@ -84,7 +84,7 @@ src/
 │   │   ├── ast.ts           # ast:status, ast:index
 │   │   └── updater.ts       # updater:check, updater:install
 │   ├── config/              # Configuration system
-│   │   ├── schema.ts        # Zod schemas — single source of truth for 22 config fields
+│   │   ├── schema.ts        # Zod schemas — single source of truth for config fields
 │   │   ├── loader.ts        # ensureHomeConfig(), ConfigManager — ~/.orchid/ management
 │   │   ├── merge.ts         # Deep merge for project + user configs
 │   │   ├── validation.ts    # Config validation utilities
@@ -302,7 +302,8 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 | `ast_max_file_size` | 1MB | Max file for AST indexing |
 | `mcp_startup_timeout` | 60s | MCP server startup timeout |
 | `mcp_per_server_timeout` | 10s | Per-MCP-server timeout |
-| `mcp_servers` | `{context7: ...}` | MCP server configs |
+| `mcp_servers` | `{}` | MCP server configs (recommended servers opt-in during onboarding) |
+| `has_completed_onboarding` | `false` | First-run wizard completed/skipped; existing installs missing the key load as `true` |
 | `providers` | `{}` | Deprecated compatibility field; must remain empty because connections live in their own store |
 | `llm_stream_idle_timeout` | 300s | Stream idle timeout |
 | `llm_stream_retries` | 3 | LLM retry count |

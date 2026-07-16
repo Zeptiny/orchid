@@ -20,11 +20,12 @@ describe('provider onboarding and disconnected UX', () => {
     expect(methods).toHaveLength(10);
   });
 
-  it('opens onboarding based on usable connections, not session presence', () => {
+  it('opens onboarding based on has_completed_onboarding, not provider readiness', () => {
     const app = source('App.tsx');
-    expect(app).toContain('window.orchid?.providers?.list');
-    expect(app).toContain("connection.health === 'ready'");
-    expect(app).toContain('provider onboarding is driven by connection readiness');
+    expect(app).toContain('window.orchid?.config?.get');
+    expect(app).toContain('has_completed_onboarding');
+    expect(app).toContain('First-run wizard opens only until finish/skip');
+    expect(app).not.toContain("connection.health === 'ready'");
   });
 
   it('keeps plain chat disabled with an accessible provider-setup path', () => {
@@ -110,10 +111,18 @@ describe('provider onboarding and disconnected UX', () => {
 
     expect(onboarding).toContain("'providers'");
     expect(onboarding).toContain("'models'");
+    expect(onboarding).toContain("'appearance'");
+    expect(onboarding).toContain("'project'");
+    expect(onboarding).toContain("'rag'");
+    expect(onboarding).toContain("'mcp'");
     expect(onboarding).toContain('Add another provider');
     expect(onboarding).toContain('default_model');
     expect(onboarding).toContain('tier_models');
+    expect(onboarding).toContain('has_completed_onboarding');
     expect(onboarding).toContain('window.orchid.config.save');
+    expect(onboarding).toContain('RECOMMENDED_MCP_SERVERS');
+    expect(onboarding).toContain('Skip onboarding');
+    expect(onboarding).toContain('Finish onboarding');
   });
 
   it('renders Lilac supply discount and Neuralwatt quota as informational status', () => {

@@ -96,12 +96,7 @@ export const configSchema = z
     mcp_per_server_timeout: z.number().positive().default(10.0),
     mcp_servers: z
       .record(z.string(), z.record(z.string(), z.unknown()))
-      .default({
-        context7: {
-          command: 'npx',
-          args: ['-y', '@upstash/context7-mcp'],
-        },
-      }),
+      .default({}),
     providers: deprecatedProvidersSchema.default({}),
     llm_stream_idle_timeout: z.number().positive().default(300.0),
     llm_stream_retries: z.number().int().nonnegative().default(3),
@@ -131,6 +126,12 @@ export const configSchema = z
      * tool rows). When false (default), groups stay collapsed until clicked.
      */
     always_expand_tool_groups: z.boolean().default(false),
+    /**
+     * When true, first-run onboarding has been finished or skipped and must
+     * not auto-open again. New installs default to false; existing home
+     * configs missing this key are upgraded to true at load time.
+     */
+    has_completed_onboarding: z.boolean().default(false),
   })
   .strict();
 

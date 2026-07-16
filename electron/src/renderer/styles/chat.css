@@ -1411,8 +1411,11 @@
   inset: 0;
   z-index: 4000;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: var(--space-6) 0;
   background: var(--bg-primary);
 }
 
@@ -1510,14 +1513,16 @@
 /* ── Container ────────────────────────────────────────────────────────────── */
 
 .onb-container {
-  width: 640px;
+  width: min(720px, 92vw);
   max-width: 92vw;
-  max-height: 90vh;
+  /* Scroll on the overlay, not here — overflow clips ModelPicker menus. */
+  max-height: none;
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
+  margin-block: auto;
   padding: var(--space-8);
-  overflow-y: auto;
+  overflow: visible;
 }
 
 /* ── Progress ─────────────────────────────────────────────────────────────── */
@@ -1594,6 +1599,28 @@
   flex-direction: column;
   gap: var(--space-4);
   text-align: center;
+  overflow: visible;
+}
+
+/* Keep icons/copy off alert edges and badges from sitting flush. */
+.onb-step .alert {
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  align-items: center;
+}
+
+.onb-step .alert > :where(svg, .icon, [data-icon]) {
+  flex-shrink: 0;
+}
+
+.onb-step .alert > span {
+  min-width: 0;
+  padding-inline: 0.125rem;
+}
+
+.onb-step .badge {
+  margin-inline-start: 0.35rem;
+  flex-shrink: 0;
 }
 
 .onb-step h1,
@@ -4503,6 +4530,15 @@ button.inspector-row:hover {
 .tier-model-picker {
   width: min(320px, 100%);
   flex-shrink: 0;
+}
+
+/* Onboarding model menus must paint above step chrome and not inherit clip. */
+.onb-step .model-picker-menu,
+.onb-step .tier-model-picker .model-picker-menu,
+.onb-step .config-model-picker .model-picker-menu {
+  z-index: 4500;
+  width: min(620px, calc(100vw - 48px));
+  max-width: min(620px, calc(100vw - 48px));
 }
 .composer-model-picker {
   width: 180px;

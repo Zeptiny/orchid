@@ -43,15 +43,11 @@ function App() {
 
     async function checkOnboarding() {
       try {
-        if (window.orchid?.providers?.list) {
-          const overview = await window.orchid.providers.list();
-          // U8: provider onboarding is driven by connection readiness, never
-          // by whether the user already has local sessions or history.
-          setOnboardingOpen(!overview.connections.some((connection) => connection.health === 'ready'));
-        } else if (window.orchid?.session?.list) {
-          // Compatibility fallback only for an older preload during dev.
-          const sessions = await window.orchid.session.list();
-          setOnboardingOpen(sessions.length === 0);
+        if (window.orchid?.config?.get) {
+          const config = await window.orchid.config.get();
+          // First-run wizard opens only until finish/skip; provider recovery
+          // after completion uses Settings / composer setup paths.
+          setOnboardingOpen(config.has_completed_onboarding !== true);
         }
       } catch {
         // Non-fatal — skip onboarding check

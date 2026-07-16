@@ -191,7 +191,14 @@ function loadConfigWithDiagnostics(options?: LoadConfigOptions | string): {
   const mergedDict = defaultCfg as unknown as Record<string, unknown>;
 
   // Layer 1: home config
-  const home = sanitizeConfigLayer(loadJson(homePath));
+  const homeExists = fs.existsSync(homePath);
+  const homeRaw = loadJson(homePath);
+  const home = sanitizeConfigLayer(homeRaw);
+  // Upgrade: existing installs without the flag are treated as completed so
+  // multi-step onboarding does not re-open after schema introduction.
+  if (homeExists && !Object.prototype.hasOwnProperty.call(homeRaw, 'has_completed_onboarding')) {
+    home.config.has_completed_onboarding = true;
+  }
 
   // Layer 2: project config
   const projectPath = path.join(projectDir, PROJECT_CONFIG_NAME);

@@ -205,7 +205,9 @@ MCP connects Orchid agents to external tool and resource servers, expanding capa
 3. **Dynamic tool registration** — tools exposed by MCP servers are automatically registered with prefix `mcp::server::tool`
 4. **Resource reading** — `read_mcp_resource` lets agents read resources exposed by MCP servers
 
-### Default Servers
+### Recommended Servers
+
+No MCP servers ship enabled by default. First-run onboarding can opt in to recommended servers (currently **context7**). You can also add them in **Settings → MCP**.
 
 | Server | Description |
 |--------|-------------|
@@ -280,7 +282,8 @@ Index location: `.orchid/rag/` in the project directory.
 | `default_model` | `{ connectionId, modelId } \| null` | `null` | Default connection-scoped model selection |
 | `tier_models` | `dict` | all `null` | Tier-to-connection/model selections |
 | `providers` | `dict` | `{}` | Deprecated legacy field; provider connections are managed separately |
-| `mcp_servers` | `dict` | context7 | Configured MCP servers |
+| `mcp_servers` | `dict` | `{}` | Configured MCP servers (opt-in; recommended list on onboarding) |
+| `has_completed_onboarding` | `bool` | `false` | First-run wizard finished/skipped |
 | `theme` | `string` | `"default"` | App visual theme |
 | `personality` | `string` | `"default"` | Active agent personality |
 | `command_timeout` | `int` | `30` | Shell command timeout (seconds) |
@@ -537,7 +540,7 @@ electron/
         CommandPalette.tsx
         ToolWidgets/                # Monaco diff, xterm.js, file preview, results table
         Preferences/                # 5-tab preferences window
-        Onboarding/                 # 6-step first-run onboarding
+        Onboarding/                 # Multi-step first-run onboarding
       hooks/                        # useChat, useSession, useSubagents, useTodos
       themes/                       # 5 CSS themes
     shared/                         # Shared types (IPC boundary contracts)

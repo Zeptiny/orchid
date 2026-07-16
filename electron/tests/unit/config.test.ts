@@ -151,6 +151,8 @@ describe('schema & defaults', () => {
     expect(cfg.default_project_dir).toBeNull();
     // Tool activity groups stay collapsed unless the user opts in
     expect(cfg.always_expand_tool_groups).toBe(false);
+    // First-run onboarding incomplete until finish/skip
+    expect(cfg.has_completed_onboarding).toBe(false);
 
     // tier_models
     expect(cfg.tier_models).toEqual({
@@ -175,9 +177,8 @@ describe('schema & defaults', () => {
     expect(cfg.rag.embedding_threads).toBe(2);
     expect(cfg.rag.embedding_batch_size).toBe(16);
 
-    // mcp_servers
-    expect(cfg.mcp_servers).toHaveProperty('context7');
-    expect(cfg.mcp_servers['context7']!['command']).toBe('npx');
+    // mcp_servers: empty by default (recommended servers are opt-in onboarding)
+    expect(cfg.mcp_servers).toEqual({});
 
     // Deprecated IPC compatibility map stays empty.
     expect(cfg.providers).toEqual({});
@@ -807,12 +808,51 @@ describe('loadConfig', () => {
       homeConfigPath: homeConfig,
     });
 
-    // Default context7 present
-    expect(cfg.mcp_servers).toHaveProperty('context7');
+    // Defaults no longer inject context7
+    expect(cfg.mcp_servers).not.toHaveProperty('context7');
     // Home server present
     expect(cfg.mcp_servers).toHaveProperty('home_server');
     // Project server present
     expect(cfg.mcp_servers).toHaveProperty('project_server');
+  });
+
+  it('upgrades existing home config missing has_completed_onboarding to true', () => {
+    const homeConfig = path.join(tmpDir, 'upgrade-home-config.json');
+    writeJson(homeConfig, {
+      theme: 'bluey',
+      mcp_servers: {
+        context7: { command: 'npx', args: ['-y', '@upstash/context7-mcp'] },
+      },
+    });
+
+    const cfg = loadConfig({
+      projectDir: tmpDir,
+      homeConfigPath: homeConfig,
+    });
+
+    expect(cfg.has_completed_onboarding).toBe(true);
+    expect(cfg.theme).toBe('bluey');
+    expect(cfg.mcp_servers).toHaveProperty('context7');
+  });
+
+  it('keeps has_completed_onboarding false for brand-new defaults with no home file', () => {
+    const cfg = loadConfig({
+      projectDir: tmpDir,
+      homeConfigPath: NO_HOME_CONFIG,
+    });
+    expect(cfg.has_completed_onboarding).toBe(false);
+    expect(cfg.mcp_servers).toEqual({});
+  });
+
+  it('respects explicit has_completed_onboarding false in home config', () => {
+    const homeConfig = path.join(tmpDir, 'explicit-false-home.json');
+    writeJson(homeConfig, { has_completed_onboarding: false });
+
+    const cfg = loadConfig({
+      projectDir: tmpDir,
+      homeConfigPath: homeConfig,
+    });
+    expect(cfg.has_completed_onboarding).toBe(false);
   });
 });
 
@@ -924,9 +964,8 @@ describe('edge cases', () => {
       },
     });
     const cfg = loadNoHome();
-    // Default context7 preserved
-    expect(cfg.mcp_servers).toHaveProperty('context7');
-    // Custom server added
+    // Defaults start empty; project server is the only entry
+    expect(cfg.mcp_servers).not.toHaveProperty('context7');
     expect(cfg.mcp_servers).toHaveProperty('custom');
     expect(cfg.mcp_servers['custom']!['command']).toBe('my-server');
   });
@@ -1177,6 +1216,7 @@ describe('config save IPC schema validation', () => {
     expect(knownKeys).toContain('command_timeout');
     expect(knownKeys).toContain('default_project_dir');
     expect(knownKeys).toContain('always_expand_tool_groups');
+    expect(knownKeys).toContain('has_completed_onboarding');
     expect(knownKeys).not.toContain('typo_key');
     expect(knownKeys).not.toContain('providres');
   });
@@ -1189,5 +1229,15 @@ describe('config save IPC schema validation', () => {
   it('accepts always_expand_tool_groups true', () => {
     const parsed = configSchema.parse({ always_expand_tool_groups: true });
     expect(parsed.always_expand_tool_groups).toBe(true);
+  });
+
+  it('defaults has_completed_onboarding to false', () => {
+    const parsed = configSchema.parse({});
+    expect(parsed.has_completed_onboarding).toBe(false);
+  });
+
+  it('accepts has_completed_onboarding true', () => {
+    const parsed = configSchema.parse({ has_completed_onboarding: true });
+    expect(parsed.has_completed_onboarding).toBe(true);
   });
 });

@@ -135,6 +135,12 @@ export interface Config {
    * (showing individual tool rows). Default false — groups stay collapsed.
    */
   always_expand_tool_groups: boolean;
+  /**
+   * When true, first-run onboarding has been finished or skipped.
+   * New installs default to false; missing key on existing home configs
+   * is treated as true at load so upgrades are not re-onboarded.
+   */
+  has_completed_onboarding: boolean;
 }
 
 // ── MCP ─────────────────────────────────────────────────────────────────────

@@ -74,6 +74,9 @@ describe('Config Defaults for Onboarding', () => {
     expect(config).toHaveProperty('theme');
     expect(config).toHaveProperty('personality');
     expect(config).toHaveProperty('command_timeout');
+    expect(config).toHaveProperty('has_completed_onboarding');
+    expect(config.has_completed_onboarding).toBe(false);
+    expect(config.mcp_servers).toEqual({});
   });
 
   it('tier_models has all 4 tiers', () => {
@@ -134,22 +137,30 @@ describe('Preferences Window Behavior', () => {
 // ─── Onboarding Flow ─────────────────────────────────────────────────────────
 
 describe('Local-only onboarding defaults', () => {
-  it('onboarding skip uses defaults', () => {
+  it('onboarding skip uses defaults and marks onboarding complete', () => {
     const defaultConfig = defaults();
     // Skip enters local-only Orchid with no inferred provider/model.
     expect(defaultConfig.default_model).toBeNull();
     expect(defaultConfig.providers).toEqual({});
+    expect(defaultConfig.mcp_servers).toEqual({});
     expect(defaultConfig.theme).toBeTruthy();
     expect(defaultConfig.personality).toBeTruthy();
+    expect(defaultConfig.has_completed_onboarding).toBe(false);
   });
 
-  it('onboarding complete saves only ordinary local preferences', async () => {
-    const config = {
+  it('onboarding complete can persist expanded first-run preferences', async () => {
+    const updates = {
       theme: 'default',
+      personality: 'default',
+      has_completed_onboarding: true,
+      rag: {
+        embedding_model: 'fastembed/BAAI/bge-small-en-v1.5',
+        embedding_api_model: null,
+      },
     };
 
-    await mockOrchid.config.save({ updates: config });
-    expect(mockOrchid.config.save).toHaveBeenCalledWith({ updates: config });
+    await mockOrchid.config.save({ updates });
+    expect(mockOrchid.config.save).toHaveBeenCalledWith({ updates });
   });
 });
 

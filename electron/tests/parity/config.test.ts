@@ -108,6 +108,7 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
   },
   // Desktop UI preference outside the migrated core configuration contract.
   { field: 'always_expand_tool_groups', type: 'boolean', defaultValue: false },
+  { field: 'has_completed_onboarding', type: 'boolean', defaultValue: false },
 ];
 
 const EXPECTED_RAG_FIELDS = [
@@ -174,6 +175,7 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('max_tool_steps');
       expect(cfg).toHaveProperty('default_project_dir');
       expect(cfg).toHaveProperty('always_expand_tool_groups');
+      expect(cfg).toHaveProperty('has_completed_onboarding');
 
       // RAG nested fields (5)
       expect(cfg.rag).toHaveProperty('chunk_size');
@@ -183,11 +185,11 @@ describe('Config Parity', () => {
       expect(cfg.rag).toHaveProperty('embedding_model');
     });
 
-    it('top-level field count matches expected (20 top-level + 8 rag nested fields)', () => {
+    it('top-level field count matches expected (22 top-level + 8 rag nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(21); // 21 top-level fields (rag is nested)
+      expect(topLevelKeys).toHaveLength(22); // 22 top-level fields (rag is nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);
@@ -228,10 +230,9 @@ describe('Config Parity', () => {
       expect(cfg.ignored_dirs).toContain('__pycache__');
     });
 
-    it('mcp_servers has context7 default', () => {
+    it('mcp_servers defaults to empty (recommended servers are opt-in)', () => {
       const cfg = defaults();
-      expect(cfg.mcp_servers).toHaveProperty('context7');
-      expect(cfg.mcp_servers['context7']!['command']).toBe('npx');
+      expect(cfg.mcp_servers).toEqual({});
     });
 
     it('providers remains an empty deprecated compatibility map', () => {
