@@ -4,8 +4,9 @@
  * Provides:
  * - Todo list from active session
  * - Loading/error states (interaction states)
+ * - applyFromSession to avoid a second load peek on session switch
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Todo } from '../../shared/types/todo';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -21,12 +22,31 @@ export interface UseTodosReturn {
   state: TodoListState;
   /** Refresh todo list from active session. */
   refresh: () => Promise<void>;
+  /**
+   * Apply todos already loaded with the session (avoids a second session.load
+   * peek and spinner flash on session switch).
+   */
+  applyFromSession: (todos: readonly Todo[]) => void;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function listStateFrom(todos: readonly Todo[]): TodoListState {
+  return todos.length === 0
+    ? { status: 'empty' }
+    : { status: 'ready', todos };
 }
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useTodos(activeSessionId: string | null): UseTodosReturn {
   const [state, setState] = useState<TodoListState>({ status: 'loading' });
+  const sessionIdRef = useRef(activeSessionId);
+  sessionIdRef.current = activeSessionId;
+
+  const applyFromSession = useCallback((todos: readonly Todo[]) => {
+    setState(listStateFrom(todos));
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!activeSessionId || !window.orchid?.session?.load) {
@@ -34,32 +54,35 @@ export function useTodos(activeSessionId: string | null): UseTodosReturn {
       return;
     }
 
+    const requestId = activeSessionId;
     try {
       // Peek only — do not switch active session or reseed chat history.
       const session = await window.orchid.session.load({
         id: activeSessionId,
         activate: false,
       });
+      if (sessionIdRef.current !== requestId) return;
       if (!session) {
         setState({ status: 'empty' });
         return;
       }
 
-      const todos = session.todoStore.tasks;
-      if (todos.length === 0) {
-        setState({ status: 'empty' });
-      } else {
-        setState({ status: 'ready', todos });
-      }
+      setState(listStateFrom(session.todoStore.tasks));
     } catch (err) {
+      if (sessionIdRef.current !== requestId) return;
       const error = err instanceof Error ? err.message : String(err);
       setState({ status: 'error', error });
     }
   }, [activeSessionId]);
 
+  // Stale-while-revalidate: do not blank ready data before the peek resolves.
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    if (!activeSessionId) {
+      setState({ status: 'empty' });
+      return;
+    }
+    void refresh();
+  }, [activeSessionId, refresh]);
 
   // Live updates when tools mutate the session-scoped todo store.
   useEffect(() => {
@@ -76,5 +99,5 @@ export function useTodos(activeSessionId: string | null): UseTodosReturn {
     });
   }, [activeSessionId, refresh]);
 
-  return { state, refresh };
+  return { state, refresh, applyFromSession };
 }

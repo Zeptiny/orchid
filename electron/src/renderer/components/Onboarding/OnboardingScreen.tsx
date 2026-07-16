@@ -82,7 +82,6 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
   const [step, setStep] = useState<OnboardingStep>('providers');
   const [wizardOpen, setWizardOpen] = useState(false);
   const [modelOptions, setModelOptions] = useState<readonly ProviderModelOption[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
   const [defaultModel, setDefaultModel] = useState<ModelSelection | null>(null);
   const [tierModels, setTierModels] = useState<Record<string, ModelSelection | null>>(
@@ -122,7 +121,6 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
     setStep('providers');
     setWizardOpen(false);
     setModelOptions([]);
-    setModelsLoading(false);
     setModelError(null);
     setDefaultModel(null);
     setTierModels(EMPTY_TIER_MODELS);
@@ -174,43 +172,31 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
     return () => { cancelled = true; };
   }, [isOpen]);
 
+  // Keep local model options in sync with the shared catalog (already warm
+  // after goNext from providers). Seed default + tiers atomically when first
+  // options appear so pickers never flash "Not configured".
   useEffect(() => {
-    if (!isOpen || (step !== 'models' && step !== 'rag') || !providers.overview) return;
-    let cancelled = false;
-    if (step === 'models') {
-      setModelsLoading(true);
-      setModelError(null);
-    }
-    void providers.modelList().then((options) => {
-      if (cancelled) return;
-      if (step === 'models') {
-        setModelOptions(options.filter(
-          (option) => option.available && isTextGenerationModel(option.model),
-        ));
-      }
-      setEmbeddingOptions(options.filter((option) => (
-        option.available && option.embeddingSupported === true && isEmbeddingModel(option.model)
-      )));
-    }).catch((error: unknown) => {
-      if (!cancelled && step === 'models') {
-        setModelOptions([]);
-        setModelError(error instanceof Error ? error.message : 'Models could not be loaded.');
-      }
-    }).finally(() => {
-      if (!cancelled && step === 'models') setModelsLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, [connectionSignature, isOpen, providers.modelList, providers.overview, step]);
-
-  useEffect(() => {
-    if (!isOpen || step !== 'models' || modelSeededRef.current || modelOptions.length === 0) return;
-    const firstSelection = copySelection(modelOptions[0].selection);
-    setDefaultModel(firstSelection);
-    setTierModels(Object.fromEntries(
-      MODEL_ASSIGNMENT_TIERS.map((tier) => [tier.id, copySelection(firstSelection)]),
+    if (!isOpen || providers.modelOptions == null) return;
+    const chatOptions = providers.modelOptions.filter(
+      (option) => option.available && isTextGenerationModel(option.model),
+    );
+    const embedOptions = providers.modelOptions.filter((option) => (
+      option.available && option.embeddingSupported === true && isEmbeddingModel(option.model)
     ));
-    modelSeededRef.current = true;
-  }, [isOpen, modelOptions, step]);
+    setEmbeddingOptions(embedOptions);
+
+    if (!modelSeededRef.current && chatOptions.length > 0) {
+      const firstSelection = copySelection(chatOptions[0].selection);
+      setModelOptions(chatOptions);
+      setDefaultModel(firstSelection);
+      setTierModels(Object.fromEntries(
+        MODEL_ASSIGNMENT_TIERS.map((tier) => [tier.id, copySelection(firstSelection)]),
+      ));
+      modelSeededRef.current = true;
+    } else {
+      setModelOptions(chatOptions);
+    }
+  }, [isOpen, providers.modelOptions, connectionSignature]);
 
   const restoreConfigTheme = useCallback(() => {
     window.dispatchEvent(new CustomEvent('orchid:set-theme', {
@@ -382,11 +368,22 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
 
   const currentStepIndex = stepIndex(step);
 
-  const goNext = useCallback(() => {
+  const goNext = useCallback(async () => {
     setSaveError(null);
     const next = STEPS[currentStepIndex + 1];
-    if (next) setStep(next.id);
-  }, [currentStepIndex]);
+    if (!next) return;
+    // Gate step change until target data is ready — keep painting current step.
+    if (next.id === 'models' || next.id === 'rag') {
+      setModelError(null);
+      try {
+        await providers.ensureModelList();
+      } catch (error: unknown) {
+        setModelError(error instanceof Error ? error.message : 'Models could not be loaded.');
+        if (next.id === 'models') return;
+      }
+    }
+    setStep(next.id);
+  }, [currentStepIndex, providers.ensureModelList]);
 
   const goBack = useCallback(() => {
     setSaveError(null);
@@ -490,7 +487,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                 </button>
                 <button
                   className="btn btn-primary"
-                  onClick={goNext}
+                  onClick={() => { void goNext(); }}
                   type="button"
                   disabled={readyConnections.length === 0}
                 >
@@ -509,21 +506,14 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                 </p>
               </div>
 
-              {modelsLoading ? (
-                <div role="status" className="alert alert-info">
-                  <span className="loading loading-spinner loading-sm" aria-hidden="true" />
-                  <span>Loading models…</span>
-                </div>
-              ) : (
-                <ModelAssignments
-                  options={modelOptions}
-                  defaultModel={defaultModel}
-                  tierModels={tierModels}
-                  onDefaultModelChange={setDefaultModel}
-                  onTierModelsChange={setTierModels}
-                  disabled={saving}
-                />
-              )}
+              <ModelAssignments
+                options={modelOptions}
+                defaultModel={defaultModel}
+                tierModels={tierModels}
+                onDefaultModelChange={setDefaultModel}
+                onTierModelsChange={setTierModels}
+                disabled={saving}
+              />
 
               {(modelError || saveError) && (
                 <div role="alert" className="alert alert-error">
@@ -538,9 +528,9 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                 </button>
                 <button
                   className="btn btn-primary"
-                  onClick={goNext}
+                  onClick={() => { void goNext(); }}
                   type="button"
-                  disabled={saving || modelsLoading || modelOptions.length === 0 || !defaultModel}
+                  disabled={saving || modelOptions.length === 0 || !defaultModel}
                 >
                   Next: appearance
                 </button>
@@ -603,7 +593,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                 <button className="btn btn-ghost" onClick={goBack} type="button" disabled={saving}>
                   Back
                 </button>
-                <button className="btn btn-primary" onClick={goNext} type="button" disabled={saving}>
+                <button className="btn btn-primary" onClick={() => { void goNext(); }} type="button" disabled={saving}>
                   Next: project
                 </button>
               </div>
@@ -652,7 +642,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                   <Icon name="folder" size={15} />
                   {projectPath ? 'Change folder' : 'Choose folder'}
                 </button>
-                <button className="btn btn-primary" onClick={goNext} type="button" disabled={saving}>
+                <button className="btn btn-primary" onClick={() => { void goNext(); }} type="button" disabled={saving}>
                   Next: RAG
                 </button>
               </div>
@@ -699,7 +689,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                 <button className="btn btn-ghost" onClick={goBack} type="button" disabled={saving}>
                   Back
                 </button>
-                <button className="btn btn-primary" onClick={goNext} type="button" disabled={saving}>
+                <button className="btn btn-primary" onClick={() => { void goNext(); }} type="button" disabled={saving}>
                   Next: MCP
                 </button>
               </div>

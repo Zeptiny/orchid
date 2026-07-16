@@ -59,6 +59,11 @@ export interface UseSubagentsReturn {
   usageByParentChain: ReadonlyMap<number, Usage>;
   /** Refresh subagent list from active session. */
   refresh: () => Promise<void>;
+  /**
+   * Apply subagent chains already loaded with the session (avoids a second
+   * session.load peek and spinner flash on session switch).
+   */
+  applyFromSession: (subagents: readonly SubagentRecord[]) => void;
   /** Currently expanded subagent ID (null = none expanded). */
   selectedId: string | null;
   /** Select/deselect a subagent for detail view. */
@@ -105,11 +110,24 @@ function buildDetail(record: SubagentRecord, now: number): SubagentDetail {
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
+function listStateFrom(subagents: readonly SubagentRecord[]): SubagentListState {
+  return subagents.length === 0
+    ? { status: 'empty' }
+    : { status: 'ready', subagents };
+}
+
 export function useSubagents(activeSessionId: string | null): UseSubagentsReturn {
   const [state, setState] = useState<SubagentListState>({ status: 'loading' });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sessionIdRef = useRef(activeSessionId);
+  sessionIdRef.current = activeSessionId;
+
+  const applyFromSession = useCallback((subagents: readonly SubagentRecord[]) => {
+    setSelectedId(null);
+    setState(listStateFrom(subagents));
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!activeSessionId || !window.orchid?.session?.load) {
@@ -118,36 +136,39 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
       return;
     }
 
+    const requestId = activeSessionId;
     try {
       // Peek only — do not switch active session or reseed chat history.
       const session = await window.orchid.session.load({
         id: activeSessionId,
         activate: false,
       });
+      // Stale response after a newer session switch — drop.
+      if (sessionIdRef.current !== requestId) return;
       if (!session) {
         setState({ status: 'empty' });
         setSelectedId(null);
         return;
       }
 
-      const subagents = session.subagentChains;
-      if (subagents.length === 0) {
-        setState({ status: 'empty' });
-      } else {
-        setState({ status: 'ready', subagents });
-      }
+      setState(listStateFrom(session.subagentChains));
     } catch (err) {
+      if (sessionIdRef.current !== requestId) return;
       const error = err instanceof Error ? err.message : String(err);
       setState({ status: 'error', error });
     }
   }, [activeSessionId]);
 
-  // Clear selection when the active session changes so detail from the
-  // previous session cannot linger in the right sidebar.
+  // On session change: clear selection and revalidate without blanking ready
+  // data first (stale-while-revalidate — avoids spinner flash).
   useEffect(() => {
     setSelectedId(null);
+    if (!activeSessionId) {
+      setState({ status: 'empty' });
+      return;
+    }
     void refresh();
-  }, [refresh]);
+  }, [activeSessionId, refresh]);
 
   // Live updates when main process persists subagent_chains (spawn/wait/complete).
   useEffect(() => {
@@ -223,6 +244,7 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
     totalUsage,
     usageByParentChain,
     refresh,
+    applyFromSession,
     selectedId,
     select,
     getDetail,

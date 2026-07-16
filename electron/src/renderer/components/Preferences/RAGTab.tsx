@@ -52,28 +52,23 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
   const [providerEmbeddingOptions, setProviderEmbeddingOptions] = useState<readonly ProviderModelOption[]>([]);
 
   useEffect(() => {
-    if (!providers.overview) {
-      setProviderEmbeddingOptions([]);
-      return;
-    }
-    let cancelled = false;
-    void providers.modelList().then((options) => {
-      if (!cancelled) {
-        setProviderEmbeddingOptions(options.filter((option) => (
-          option.available && option.embeddingSupported === true && isEmbeddingModel(option.model)
-        )));
-      }
-    }).catch(() => {
-      if (!cancelled) setProviderEmbeddingOptions([]);
-    });
-    return () => { cancelled = true; };
-  }, [providers.modelList, providers.overview]);
+    void providers.ensureModelList();
+  }, [providers.ensureModelList]);
 
   useEffect(() => {
-    const refreshProviders = () => { void providers.refresh(); };
+    if (providers.modelOptions == null) return;
+    setProviderEmbeddingOptions(providers.modelOptions.filter((option) => (
+      option.available && option.embeddingSupported === true && isEmbeddingModel(option.model)
+    )));
+  }, [providers.modelOptions]);
+
+  useEffect(() => {
+    const refreshProviders = () => {
+      void providers.refresh().then(() => providers.ensureModelList());
+    };
     window.addEventListener('orchid:providers-updated', refreshProviders);
     return () => window.removeEventListener('orchid:providers-updated', refreshProviders);
-  }, [providers.refresh]);
+  }, [providers.refresh, providers.ensureModelList]);
 
   const updateField = useCallback(
     <K extends keyof RAGConfig>(field: K, value: RAGConfig[K]) => {

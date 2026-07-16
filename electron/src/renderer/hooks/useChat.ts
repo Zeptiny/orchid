@@ -122,10 +122,16 @@ export interface UseChatReturn extends ChatState {
   setMessages: (messages: Message[]) => void;
   /** Read live state for a session without changing selection. */
   getSnapshot: (sessionId: string) => Promise<ChatSessionSnapshot | null>;
-  /** Bind event affinity immediately and buffer the target while it hydrates. */
+  /**
+   * Bind event affinity immediately and buffer the target while it hydrates.
+   * Keeps previous messages/usage painted until hydrate so sidebar/footer
+   * do not flash zeros during the async session load.
+   */
   beginSessionSwitch: (sessionId: string | null) => void;
   /** Apply a snapshot after the caller has committed a session selection. */
   hydrateSnapshot: (snapshot: ChatSessionSnapshot | null) => void;
+  /** True while a session switch is in flight (affinity rebound, not yet hydrated). */
+  isSwitchingSession: boolean;
 }
 
 export interface ChatEventAffinity {
@@ -188,6 +194,8 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const [interruptState, setInterruptState] = useState<InterruptState>('idle');
   const [interrupted, setInterrupted] = useState(false);
   const [cwd, setCwd] = useState('');
+  /** Affinity rebound but messages not yet replaced — hold previous UI. */
+  const [isSwitchingSession, setIsSwitchingSession] = useState(false);
 
   // Context breakdown from messages + usage
   const contextBreakdown = useMemo(
@@ -231,6 +239,9 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   } | null>(null);
 
   useEffect(() => {
+    // During gate-until-ready switch, beginSessionSwitch owns affinity.
+    // Do not clobber refs back to the still-painted previous activeSessionId.
+    if (isSwitchingSession) return;
     const switchedSession = priorActiveSessionIdRef.current !== activeSessionId;
     const streamAlreadyBelongsToSelection =
       streamSessionIdRef.current === activeSessionId;
@@ -241,7 +252,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       lastSequenceRef.current = -1;
     }
     priorActiveSessionIdRef.current = activeSessionId;
-  }, [activeSessionId]);
+  }, [activeSessionId, isSwitchingSession]);
 
   const acceptsEvent = useCallback((event: {
     sessionId: string;
@@ -627,6 +638,8 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     async (message: string, options?: ChatSendOptions) => {
       // isSendingRef is synchronous; status alone can be stale across rapid Enter.
       if (!message.trim() || status === 'streaming' || isSendingRef.current) return;
+      // Affinity already rebound but UI still shows previous session — do not send.
+      if (isSwitchingSession) return;
       if (!window.orchid?.chat) {
         setError('Chat IPC not available');
         return;
@@ -738,11 +751,13 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         setStatus('error');
       }
     },
-    [status, error, applyToolBlocks, applyStreamSegments],
+    [status, error, isSwitchingSession, applyToolBlocks, applyStreamSegments],
   );
 
   const cancel = useCallback(async () => {
     if (!window.orchid?.chat) return;
+    // Do not cancel the target session while still painting the previous one.
+    if (isSwitchingSession) return;
     try {
       const sessionId = activeSessionIdRef.current ?? streamSessionIdRef.current;
       const result = await window.orchid.chat.cancel(
@@ -807,7 +822,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     } catch {
       // Ignore cancel errors
     }
-  }, [applyToolBlocks]);
+  }, [applyToolBlocks, isSwitchingSession]);
 
   const stop = useCallback(async (sessionId: string) => {
     if (!window.orchid?.chat?.stop) return;
@@ -847,6 +862,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     accumulatedThinkingRef.current = '';
     streamTurnIdRef.current = null;
     lastSequenceRef.current = -1;
+    setIsSwitchingSession(false);
   }, [applyToolBlocks, applyStreamSegments]);
 
   const beginSessionSwitch = useCallback((sessionId: string | null) => {
@@ -862,8 +878,11 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     streamTurnIdRef.current = affinity.streamTurnId;
     lastSequenceRef.current = affinity.lastSequence;
     hydrationRef.current = sessionId ? { sessionId, events: [] } : null;
-    replaceMessages([]);
-  }, [replaceMessages]);
+    // Do not clear messages/tools/usage here — keep painting the previous
+    // session until hydrate/replaceMessages commits the next view in one shot.
+    isSendingRef.current = false;
+    setIsSwitchingSession(true);
+  }, []);
 
   const getSnapshot = useCallback(async (
     sessionId: string,
@@ -878,14 +897,21 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
   const hydrateSnapshot = useCallback((snapshot: ChatSessionSnapshot | null) => {
     const hydration = hydrationRef.current;
-    hydrationRef.current = null;
     if (!snapshot) {
+      hydrationRef.current = null;
       // Snapshot IPC failed after navigation. Keep the loaded history and let
       // target-session events observed during the request advance the view.
+      setIsSwitchingSession(false);
       for (const apply of hydration?.events ?? []) apply();
       return;
     }
-    if (snapshot.sessionId !== activeSessionIdRef.current) return;
+    if (snapshot.sessionId !== activeSessionIdRef.current) {
+      // Affinity moved again; drop buffer without stranding the switch flag.
+      hydrationRef.current = null;
+      setIsSwitchingSession(false);
+      return;
+    }
+    hydrationRef.current = null;
 
     replaceMessages(snapshot.messages);
     const live: ChatSnapshot | null = snapshot.live;
@@ -966,6 +992,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     hydrateSnapshot,
     clearError,
     setMessages: replaceMessages,
+    isSwitchingSession,
   };
 }
 

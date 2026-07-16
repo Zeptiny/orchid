@@ -1,11 +1,11 @@
 /**
  * Connection-centred provider state for renderer surfaces.
  *
- * This hook deliberately works only with the redacted provider IPC API. It
- * never receives credential handles, reusable secret values, or driver-owned
- * endpoint configuration.
+ * Shared module cache so Chat, Onboarding, and Config tabs reuse one overview
+ * instead of each mounting with status:'loading' and an independent IPC fetch.
+ * Works only with the redacted provider IPC API — never credentials or drivers.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type {
   ProviderConnectionCreateMessage,
   ProviderConnectionIdMessage,
@@ -34,7 +34,17 @@ export interface UseProvidersReturn {
   readonly isLoading: boolean;
   readonly error: string | null;
   readonly hasUsableConnection: boolean;
+  /**
+   * Shared model catalog for the full overview (null until ensureModelList
+   * has resolved at least once for the current overview epoch).
+   */
+  readonly modelOptions: readonly ProviderModelOption[] | null;
   readonly refresh: () => Promise<ProviderOverview | null>;
+  /**
+   * Ensures overview is ready and the shared model list is populated.
+   * Resolves with the catalog (possibly empty). Coalesces concurrent callers.
+   */
+  readonly ensureModelList: () => Promise<readonly ProviderModelOption[]>;
   readonly clearError: () => void;
   readonly createConnection: (
     message: ProviderConnectionCreateMessage,
@@ -83,19 +93,252 @@ function announceProviderUpdate(): void {
   window.dispatchEvent(new CustomEvent('orchid:providers-updated'));
 }
 
+// ── Shared store (one overview for all useProviders() callers) ───────────────
+
+type Listener = () => void;
+
+interface SharedSnapshot {
+  readonly state: ProvidersState;
+  readonly modelOptions: readonly ProviderModelOption[] | null;
+}
+
+let sharedState: ProvidersState = INITIAL_STATE;
+/** Full model catalog for current overview epoch; null = not fetched yet. */
+let sharedModelOptions: readonly ProviderModelOption[] | null = null;
+/** Stable snapshot for useSyncExternalStore (Object.is between emits). */
+let cachedSnapshot: SharedSnapshot = {
+  state: sharedState,
+  modelOptions: sharedModelOptions,
+};
+let overviewEpoch = 0;
+let modelListEpoch = -1;
+let inFlightRefresh: Promise<ProviderOverview | null> | null = null;
+let inFlightModelList: Promise<readonly ProviderModelOption[]> | null = null;
+let bootstrapped = false;
+const listeners = new Set<Listener>();
+
+function emit(): void {
+  for (const listener of listeners) listener();
+}
+
+function rebuildSnapshot(): void {
+  cachedSnapshot = { state: sharedState, modelOptions: sharedModelOptions };
+  emit();
+}
+
+function setSharedState(next: ProvidersState | ((previous: ProvidersState) => ProvidersState)): void {
+  const previous = sharedState;
+  sharedState = typeof next === 'function' ? next(previous) : next;
+  if (sharedState === previous) return;
+  rebuildSnapshot();
+}
+
+function setSharedModelOptions(next: readonly ProviderModelOption[] | null): void {
+  if (sharedModelOptions === next) return;
+  sharedModelOptions = next;
+  rebuildSnapshot();
+}
+
+function subscribe(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function getSnapshot(): SharedSnapshot {
+  return cachedSnapshot;
+}
+
+function invalidateModelList(): void {
+  modelListEpoch = -1;
+  // Keep in-flight promise; its epoch check will no-op on publish.
+  if (sharedModelOptions !== null) {
+    sharedModelOptions = null;
+    rebuildSnapshot();
+  } else {
+    modelListEpoch = -1;
+  }
+}
+
+async function refreshShared(): Promise<ProviderOverview | null> {
+  if (!window.orchid?.providers?.list) {
+    const error = unavailableApiError();
+    setSharedState((previous) => ({
+      ...previous,
+      status: previous.overview ? 'ready' : 'error',
+      error: errorMessage(error),
+    }));
+    return null;
+  }
+
+  if (inFlightRefresh) return inFlightRefresh;
+
+  const epoch = ++overviewEpoch;
+  invalidateModelList();
+  setSharedState((previous) => ({
+    ...previous,
+    status: previous.overview ? 'ready' : 'loading',
+    error: null,
+  }));
+
+  const flightHolder: { current: Promise<ProviderOverview | null> | null } = { current: null };
+  const flight = (async () => {
+    try {
+      const overview = await window.orchid!.providers!.list();
+      if (epoch === overviewEpoch) {
+        setSharedState({ status: 'ready', overview, error: null });
+      }
+      return overview;
+    } catch (error) {
+      if (epoch === overviewEpoch) {
+        setSharedState((previous) => ({
+          ...previous,
+          status: previous.overview ? 'ready' : 'error',
+          error: errorMessage(error),
+        }));
+      }
+      return null;
+    } finally {
+      if (inFlightRefresh === flightHolder.current) inFlightRefresh = null;
+    }
+  })();
+  flightHolder.current = flight;
+  inFlightRefresh = flight;
+
+  return flight;
+}
+
+async function ensureModelListShared(): Promise<readonly ProviderModelOption[]> {
+  if (!window.orchid?.providers?.modelList) {
+    setSharedModelOptions([]);
+    modelListEpoch = overviewEpoch;
+    return [];
+  }
+
+  if (sharedModelOptions != null && modelListEpoch === overviewEpoch) {
+    return sharedModelOptions;
+  }
+  if (inFlightModelList) return inFlightModelList;
+
+  const flightHolder: { current: Promise<readonly ProviderModelOption[]> | null } = { current: null };
+  const flight = (async () => {
+    try {
+      if (!sharedState.overview) {
+        await refreshShared();
+      }
+      // Capture epoch only after overview is current so a cold refresh does not
+      // discard a successful modelList write.
+      const epoch = overviewEpoch;
+      if (!window.orchid?.providers?.modelList) {
+        if (epoch === overviewEpoch) {
+          setSharedModelOptions([]);
+          modelListEpoch = overviewEpoch;
+        }
+        return [];
+      }
+      const options = await window.orchid.providers.modelList();
+      if (epoch === overviewEpoch) {
+        setSharedModelOptions(options);
+        modelListEpoch = overviewEpoch;
+        return options;
+      }
+      // Overview changed mid-flight — retry against the new epoch.
+      return ensureModelListShared();
+    } catch {
+      // Leave modelOptions null so callers can retry; do not cache [] as success.
+      return sharedModelOptions ?? [];
+    } finally {
+      if (inFlightModelList === flightHolder.current) inFlightModelList = null;
+    }
+  })();
+  flightHolder.current = flight;
+  inFlightModelList = flight;
+
+  return flight;
+}
+
+function ensureBootstrapped(): void {
+  if (bootstrapped) return;
+  bootstrapped = true;
+  void refreshShared();
+}
+
+function applyMutationToShared(result: ProviderMutationResult): void {
+  overviewEpoch += 1;
+  invalidateModelList();
+  announceProviderUpdate();
+  setSharedState((previous) => {
+    if (!previous.overview) return previous;
+    const hasConnection = previous.overview.connections.some(
+      (connection) => connection.id === result.connection.id,
+    );
+    const connections: readonly ProviderConnectionView[] = hasConnection
+      ? previous.overview.connections.map((connection) =>
+          connection.id === result.connection.id ? result.connection : connection,
+        )
+      : [...previous.overview.connections, result.connection];
+    return {
+      status: 'ready',
+      error: null,
+      overview: { ...previous.overview, connections },
+    };
+  });
+}
+
+function applyStatusToShared(observation: ProviderStatusView): void {
+  // Status observations do not change the model catalog — keep modelListEpoch.
+  announceProviderUpdate();
+  setSharedState((previous) => {
+    if (!previous.overview) return previous;
+    const hasObservation = previous.overview.statuses.some(
+      (status) => status.providerId === observation.providerId,
+    );
+    const statuses = hasObservation
+      ? previous.overview.statuses.map((status) =>
+          status.providerId === observation.providerId ? observation : status,
+        )
+      : [...previous.overview.statuses, observation];
+    return {
+      status: 'ready',
+      error: null,
+      overview: { ...previous.overview, statuses },
+    };
+  });
+}
+
+/** Test-only access to the shared cache (not for product code). */
+export const __providersCacheTest = {
+  reset(): void {
+    sharedState = INITIAL_STATE;
+    sharedModelOptions = null;
+    cachedSnapshot = { state: sharedState, modelOptions: sharedModelOptions };
+    overviewEpoch = 0;
+    modelListEpoch = -1;
+    inFlightRefresh = null;
+    inFlightModelList = null;
+    bootstrapped = false;
+    listeners.clear();
+  },
+  getState: () => sharedState,
+  getModelOptions: () => sharedModelOptions,
+  getSnapshot,
+  refresh: refreshShared,
+  ensureModelList: ensureModelListShared,
+  subscribe,
+};
+
 /**
  * Keeps provider settings, onboarding, and model selection synchronised after
  * mutations without exposing a broad renderer-side persistence API.
  */
 export function useProviders(): UseProvidersReturn {
-  const [state, setState] = useState<ProvidersState>(INITIAL_STATE);
+  ensureBootstrapped();
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const state = snapshot.state;
   const mountedRef = useRef(true);
-  /** Invalidates stale list responses after a successful mutation. */
-  const overviewEpochRef = useRef(0);
 
   useEffect(() => {
-    // React development StrictMode mounts, cleans up, and mounts effects once
-    // more. Resetting here keeps asynchronous IPC state updates live then.
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
@@ -104,7 +347,7 @@ export function useProviders(): UseProvidersReturn {
 
   const setActionError = useCallback((error: unknown) => {
     if (!mountedRef.current) return;
-    setState((previous) => ({
+    setSharedState((previous) => ({
       ...previous,
       status: previous.overview ? 'ready' : 'error',
       error: errorMessage(error),
@@ -112,63 +355,15 @@ export function useProviders(): UseProvidersReturn {
   }, []);
 
   const refresh = useCallback(async (): Promise<ProviderOverview | null> => {
-    if (!window.orchid?.providers?.list) {
-      const error = unavailableApiError();
-      setActionError(error);
-      return null;
-    }
+    return refreshShared();
+  }, []);
 
-    const epoch = ++overviewEpochRef.current;
-    if (mountedRef.current) {
-      setState((previous) => ({
-        ...previous,
-        status: previous.overview ? 'ready' : 'loading',
-        error: null,
-      }));
-    }
-
-    try {
-      const overview = await window.orchid.providers.list();
-      if (mountedRef.current && epoch === overviewEpochRef.current) {
-        setState({ status: 'ready', overview, error: null });
-      }
-      return overview;
-    } catch (error) {
-      if (mountedRef.current && epoch === overviewEpochRef.current) {
-        setState((previous) => ({
-          ...previous,
-          status: previous.overview ? 'ready' : 'error',
-          error: errorMessage(error),
-        }));
-      }
-      return null;
-    }
-  }, [setActionError]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const ensureModelList = useCallback(async (): Promise<readonly ProviderModelOption[]> => {
+    return ensureModelListShared();
+  }, []);
 
   const applyMutation = useCallback((result: ProviderMutationResult) => {
-    overviewEpochRef.current += 1;
-    announceProviderUpdate();
-    if (!mountedRef.current) return;
-    setState((previous) => {
-      if (!previous.overview) return previous;
-      const hasConnection = previous.overview.connections.some(
-        (connection) => connection.id === result.connection.id,
-      );
-      const connections: readonly ProviderConnectionView[] = hasConnection
-        ? previous.overview.connections.map((connection) =>
-            connection.id === result.connection.id ? result.connection : connection,
-          )
-        : [...previous.overview.connections, result.connection];
-      return {
-        status: 'ready',
-        error: null,
-        overview: { ...previous.overview, connections },
-      };
-    });
+    applyMutationToShared(result);
   }, []);
 
   const runMutation = useCallback(
@@ -246,25 +441,7 @@ export function useProviders(): UseProvidersReturn {
       runMutation(
         (providers) => providers.refreshStatus(message),
         (observation) => {
-          overviewEpochRef.current += 1;
-          if (observation) announceProviderUpdate();
-          if (!observation || !mountedRef.current) return;
-          setState((previous) => {
-            if (!previous.overview) return previous;
-            const hasObservation = previous.overview.statuses.some(
-              (status) => status.providerId === observation.providerId,
-            );
-            const statuses = hasObservation
-              ? previous.overview.statuses.map((status) =>
-                  status.providerId === observation.providerId ? observation : status,
-                )
-              : [...previous.overview.statuses, observation];
-            return {
-              status: 'ready',
-              error: null,
-              overview: { ...previous.overview, statuses },
-            };
-          });
+          if (observation) applyStatusToShared(observation);
         },
       ),
     [runMutation],
@@ -272,7 +449,7 @@ export function useProviders(): UseProvidersReturn {
 
   const clearError = useCallback(() => {
     if (!mountedRef.current) return;
-    setState((previous) => ({ ...previous, error: null }));
+    setSharedState((previous) => ({ ...previous, error: null }));
   }, []);
 
   const hasUsableConnection = useMemo(
@@ -286,7 +463,9 @@ export function useProviders(): UseProvidersReturn {
     isLoading: state.status === 'loading',
     error: state.error,
     hasUsableConnection,
+    modelOptions: snapshot.modelOptions,
     refresh,
+    ensureModelList,
     clearError,
     createConnection,
     updateConnection,

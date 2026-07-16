@@ -1,6 +1,5 @@
-/** Typed connection-scoped tier assignments. */
-import { useEffect, useState } from 'react';
-import type { ProviderModelOption } from '../../../shared/types/ipc';
+/** Typed connection-scoped tier assignments. Uses shared model catalog. */
+import { useEffect, useMemo } from 'react';
 import type { ModelSelection } from '../../../shared/types/provider';
 import { useProviders } from '../../hooks/useProviders';
 import { isTextGenerationModel } from '../../utils/models';
@@ -20,27 +19,24 @@ export function TierModelsTab({
   onChange,
 }: TierModelsTabProps) {
   const providers = useProviders();
-  const [options, setOptions] = useState<readonly ProviderModelOption[]>([]);
+
+  // ConfigView only mounts this tab after ensureModelList; keep catalog warm.
+  useEffect(() => {
+    void providers.ensureModelList();
+  }, [providers.ensureModelList]);
 
   useEffect(() => {
-    const refresh = () => { void providers.refresh(); };
+    const refresh = () => { void providers.refresh().then(() => providers.ensureModelList()); };
     window.addEventListener('orchid:providers-updated', refresh);
     return () => window.removeEventListener('orchid:providers-updated', refresh);
-  }, [providers.refresh]);
+  }, [providers.refresh, providers.ensureModelList]);
 
-  useEffect(() => {
-    if (!providers.overview) {
-      setOptions([]);
-      return;
-    }
-    let cancelled = false;
-    void providers.modelList().then((next) => {
-      if (!cancelled) setOptions(next.filter((option) => option.available && isTextGenerationModel(option.model)));
-    }).catch(() => {
-      if (!cancelled) setOptions([]);
-    });
-    return () => { cancelled = true; };
-  }, [providers.modelList, providers.overview]);
+  const options = useMemo(
+    () => (providers.modelOptions ?? []).filter(
+      (option) => option.available && isTextGenerationModel(option.model),
+    ),
+    [providers.modelOptions],
+  );
 
   return (
     <div className="config-form">

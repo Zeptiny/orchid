@@ -11,6 +11,7 @@ import { RAGTab } from './Preferences/RAGTab';
 import { SkillsTab } from './Preferences/SkillsTab';
 import { TierModelsTab } from './Preferences/TierModelsTab';
 import { LeftSidebar } from './LeftSidebar';
+import { useProviders } from '../hooks/useProviders';
 import { useSession } from '../hooks/useSession';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import { Icon } from './Icon';
@@ -50,9 +51,12 @@ interface ConfigViewProps {
 
 export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps) {
   const session = useSession();
+  const providers = useProviders();
   const rootRef = useRef<HTMLDivElement>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
+  /** Tab currently painted — only advances after target tab data is ready. */
   const [activeTab, setActiveTab] = useState<TabId>(initialTab);
+  const [pendingTab, setPendingTab] = useState<TabId | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +72,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
    */
   const [definitions, setDefinitions] = useState<DefinitionsListResult | null>(null);
   const [defsLoading, setDefsLoading] = useState(true);
+  const tabSwitchGen = useRef(0);
 
   useFocusTrap({
     enabled: true,
@@ -75,7 +80,9 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
   });
 
   useEffect(() => {
+    tabSwitchGen.current += 1;
     setActiveTab(initialTab);
+    setPendingTab(null);
   }, [initialTab]);
 
   const isDirty = Object.keys(draft).length > 0;
@@ -110,6 +117,40 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
     }
   }, [applyDefinitions]);
 
+  /**
+   * Switch tabs only after the target surface's data is ready — keep painting
+   * the previous tab (no spinner / empty intermediate state).
+   */
+  const requestTab = useCallback(async (tab: TabId) => {
+    if (tab === activeTab && pendingTab == null) return;
+    const gen = ++tabSwitchGen.current;
+    setPendingTab(tab);
+
+    try {
+      if (tab === 'providers') {
+        if (!providers.overview) await providers.refresh();
+      } else if (tab === 'tier-models' || tab === 'rag') {
+        await providers.ensureModelList();
+      } else if (tab === 'skills' || tab === 'agents' || tab === 'personalities') {
+        if (!definitions) await loadDefinitions({ silent: true });
+      }
+    } catch {
+      // Still switch — tab will show its own error/empty content.
+    }
+
+    if (gen !== tabSwitchGen.current) return;
+    setActiveTab(tab);
+    setPendingTab(null);
+  }, [
+    activeTab,
+    pendingTab,
+    providers.overview,
+    providers.refresh,
+    providers.ensureModelList,
+    definitions,
+    loadDefinitions,
+  ]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -125,6 +166,9 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
           window.orchid.config.diagnostics
             ? window.orchid.config.diagnostics()
             : Promise.resolve([]),
+          // Warm provider + model caches so Providers / Tier Models tabs
+          // can switch without an intermediate empty frame.
+          providers.ensureModelList().catch(() => undefined),
         ]);
         if (!cancelled) {
           setOriginalConfig(config);
@@ -144,7 +188,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
     void loadConfig();
     void loadDefinitions();
     return () => { cancelled = true; };
-  }, [loadDefinitions]);
+  }, [loadDefinitions, providers.ensureModelList]);
 
   // Refresh when workspace binding changes; drop in-progress definition edits.
   useEffect(() => {
@@ -339,8 +383,9 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
             <button
               key={tab.id}
               className={`config-tab ${activeTab === tab.id ? 'config-tab-active' : ''}`}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => { void requestTab(tab.id); }}
               type="button"
+              aria-busy={pendingTab === tab.id || undefined}
             >
               {tab.label}
             </button>
@@ -426,22 +471,13 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
   );
 }
 
-function DefinitionsLoading() {
-  return (
-    <div className="flex items-center gap-3 py-6 text-base-content/60">
-      <span className="loading loading-spinner loading-sm" />
-      <span>Loading definitions…</span>
-    </div>
-  );
-}
-
 function renderTab(
   activeTab: TabId,
   config: Config,
   updateDraft: (updates: Record<string, unknown>) => void,
   personalities: readonly string[] = [],
   definitions: DefinitionsListResult | null = null,
-  defsLoading = false,
+  _defsLoading = false,
   reloadDefinitions: () => Promise<void> = async () => {},
 ) {
   switch (activeTab) {
@@ -491,8 +527,9 @@ function renderTab(
         />
       );
     case 'skills':
+      // requestTab gates until definitions are loaded — only show error if failed.
       if (!definitions) {
-        return defsLoading ? <DefinitionsLoading /> : (
+        return (
           <div className="alert alert-warning">
             <span>Skills could not be loaded.</span>
           </div>
@@ -501,7 +538,7 @@ function renderTab(
       return <SkillsTab data={definitions} onReload={reloadDefinitions} />;
     case 'agents':
       if (!definitions) {
-        return defsLoading ? <DefinitionsLoading /> : (
+        return (
           <div className="alert alert-warning">
             <span>Agents could not be loaded.</span>
           </div>
@@ -510,7 +547,7 @@ function renderTab(
       return <AgentsTab data={definitions} onReload={reloadDefinitions} />;
     case 'personalities':
       if (!definitions) {
-        return defsLoading ? <DefinitionsLoading /> : (
+        return (
           <div className="alert alert-warning">
             <span>Personalities could not be loaded.</span>
           </div>

@@ -84,27 +84,24 @@ export function ChatView() {
     [providers.overview?.connections],
   );
 
+  // Shared catalog — never blank mid-switch; only update when a full list arrives.
   useEffect(() => {
-    if (!providers.overview) {
-      setProviderModelOptions([]);
-      return;
+    if (providers.modelOptions != null) {
+      setProviderModelOptions(providers.modelOptions);
     }
-    let cancelled = false;
-    void providers.modelList().then((options) => {
-      if (!cancelled) setProviderModelOptions(options);
-    }).catch(() => {
-      if (!cancelled) setProviderModelOptions([]);
-    });
-    return () => { cancelled = true; };
-  }, [connectionStateSignature, providers.modelList, providers.overview]);
+  }, [providers.modelOptions]);
+
+  useEffect(() => {
+    void providers.ensureModelList();
+  }, [connectionStateSignature, providers.ensureModelList]);
 
   useEffect(() => {
     const refreshProviders = () => {
-      void providers.refresh();
+      void providers.refresh().then(() => providers.ensureModelList());
     };
     window.addEventListener('orchid:providers-updated', refreshProviders);
     return () => window.removeEventListener('orchid:providers-updated', refreshProviders);
-  }, [providers.refresh]);
+  }, [providers.refresh, providers.ensureModelList]);
 
   useEffect(() => {
     const applyCreatedSelection = (event: Event) => {
@@ -225,11 +222,27 @@ export function ChatView() {
     (loadedSession: Session | null) => {
       if (!loadedSession) {
         chat.setMessages([]);
+        subagents.applyFromSession([]);
+        todos.applyFromSession([]);
         return;
       }
       chat.setMessages(flattenSessionMessages(loadedSession));
+      subagents.applyFromSession(loadedSession.subagentChains);
+      todos.applyFromSession(loadedSession.todoStore.tasks);
     },
-    [chat],
+    [chat, subagents.applyFromSession, todos.applyFromSession],
+  );
+
+  /**
+   * Commit a fully-loaded session in one paint: messages, sidebar lists, and
+   * live snapshot. Call only after peek + snapshot are both ready.
+   */
+  const commitSessionView = useCallback(
+    (loadedSession: Session | null, snapshot: Awaited<ReturnType<typeof chat.getSnapshot>>) => {
+      applySessionMessages(loadedSession);
+      chat.hydrateSnapshot(snapshot);
+    },
+    [applySessionMessages, chat],
   );
 
   const handleSessionSelect = useCallback(
@@ -241,33 +254,48 @@ export function ChatView() {
 
       const gen = ++sessionSwitchGen.current;
 
-      // Rebind stream affinity before the async load so previous-session
-      // events cannot repopulate the pane during navigation.
+      // Rebind stream affinity immediately so previous-session events cannot
+      // repopulate the pane — but keep painting the previous session until
+      // the full target payload is ready (no intermediate empty/zero state).
       chat.beginSessionSwitch(id);
-      setDraftTabVisible(false);
 
-      const loadedSession = await session.load(id);
-      // A newer click/create won the race — drop this result.
-      if (gen !== sessionSwitchGen.current) {
-        return;
+      // Peek without activating so activeSession / left rail stay on the
+      // previous session until we commit.
+      let loadedSession: Session | null = null;
+      try {
+        if (window.orchid?.session?.load) {
+          loadedSession = await window.orchid.session.load({ id, activate: false });
+        }
+      } catch {
+        loadedSession = null;
       }
+      if (gen !== sessionSwitchGen.current) return;
+
       if (!loadedSession) {
         console.error('Failed to load session:', id);
-        chat.hydrateSnapshot(null);
+        // Fall back to activating load so workspace still updates if possible.
+        const activated = await session.load(id);
+        if (gen !== sessionSwitchGen.current) return;
+        if (!activated) {
+          // Keep previous paint; clear switch hold without blanking the pane.
+          chat.hydrateSnapshot(null);
+          return;
+        }
+        commitSessionView(activated, null);
+        setDraftTabVisible(false);
         return;
       }
-      applySessionMessages(loadedSession);
 
-      // Returning to a running session needs the main process's latest state,
-      // not only persisted chain messages. The snapshot's sequence lets the
-      // hook reject delayed events that were already included in this view.
       const snapshot = await chat.getSnapshot(loadedSession.id);
-      if (gen !== sessionSwitchGen.current) {
-        return;
-      }
-      chat.hydrateSnapshot(snapshot);
+      if (gen !== sessionSwitchGen.current) return;
+
+      // Activate only after data is ready so UI swaps in one commit.
+      const activated = await session.load(id);
+      if (gen !== sessionSwitchGen.current) return;
+      setDraftTabVisible(false);
+      commitSessionView(activated ?? loadedSession, snapshot);
     },
-    [session, chat, applySessionMessages, draftTabVisible],
+    [session, chat, commitSessionView, draftTabVisible],
   );
 
   const enterDraftMode = useCallback(async (opts?: { clearComposer?: boolean }) => {
@@ -534,6 +562,7 @@ export function ChatView() {
   const handleSend = useCallback(
     async (message: string) => {
       // UI gate (R3): reinforce main-process unbound_workspace rejection.
+      if (chat.isSwitchingSession) return;
       if (!workspaceBound) {
         notify(
           'Choose a project folder before sending a message.',
@@ -560,6 +589,7 @@ export function ChatView() {
     },
     [
       chat,
+      chat.isSwitchingSession,
       session.activeSession?.id,
       session.activeSession?.selection,
       session.draftGeneration,
@@ -825,17 +855,20 @@ export function ChatView() {
       return;
     }
     if (!model || !window.orchid?.config?.modelMetadata) {
-      setMaxContext(null);
+      // Hold previous maxContext while session is switching so the footer
+      // radial does not drop to 0% before the next model is known.
+      if (!chat.isSwitchingSession) setMaxContext(null);
       return;
     }
     let cancelled = false;
     window.orchid.config.modelMetadata(model).then((meta) => {
       if (!cancelled) setMaxContext(meta?.max_input_tokens ?? null);
     }).catch(() => {
-      if (!cancelled) setMaxContext(null);
+      // Keep previous window size on transient metadata failure.
+      if (!cancelled && !chat.isSwitchingSession) setMaxContext(null);
     });
     return () => { cancelled = true; };
-  }, [model, selectedProviderModel]);
+  }, [model, selectedProviderModel, chat.isSwitchingSession]);
 
   const sessions =
     session.listState.status === 'ready' || session.listState.status === 'partial'
