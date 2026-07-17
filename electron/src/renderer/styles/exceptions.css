@@ -92,13 +92,14 @@
   box-shadow: none !important;
   font-size: 12px;
   line-height: 1.4;
-  /* Room on the right is the in-shell send button; keep left padding modest. */
-  padding: 6px 6px 6px 2px;
+  /* In-shell padding so text isn't flush to the field edge. */
+  padding: 8px 8px 8px 12px;
   color: var(--text-primary, var(--color-base-content));
 }
 
 .orchid-composer-shell {
   box-sizing: border-box;
+  padding: 4px 4px 4px 4px !important;
 }
 
 .orchid-composer-area {

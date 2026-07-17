@@ -555,7 +555,7 @@
     border: 1px solid var(--border-default, var(--color-base-300));
     border-radius: 0.5rem;
     background: var(--input-bg, var(--color-base-200));
-    padding: 4px 4px 4px 10px;
+    padding: 4px;
     transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
 
