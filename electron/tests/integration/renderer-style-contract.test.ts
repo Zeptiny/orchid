@@ -597,7 +597,7 @@ const BASELINE_NON_TOKEN_COLORS: ReadonlySet<string> = new Set([
   'styles/components.css:L734:#000',
 ]);
 
-const CHAT_CSS_BASELINE_LINES = 2016;
+const CHAT_CSS_BASELINE_LINES = 1847;
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 

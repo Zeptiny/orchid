@@ -753,4 +753,134 @@
   .model-picker-empty {
     @apply px-3 py-4 text-center text-xs text-base-content/60;
   }
+
+  /* ── Keyboard shortcuts help modal ────────────────────────────────────────── */
+
+  .orchid-shortcuts-help-overlay {
+    @apply fixed inset-0 z-[1100] flex items-start justify-center;
+    padding: 10vh 16px 24px;
+    background: color-mix(in srgb, var(--overlay-color) 62%, transparent);
+    backdrop-filter: blur(3px);
+  }
+  .orchid-shortcuts-help-dialog {
+    @apply flex flex-col overflow-hidden rounded-xl;
+    width: min(520px, 100%);
+    max-height: min(640px, 82vh);
+    border: 1px solid color-mix(in srgb, var(--border-default) 85%, var(--accent-primary));
+    background:
+      linear-gradient(
+        165deg,
+        color-mix(in srgb, var(--bg-secondary) 92%, var(--accent-primary)) 0%,
+        var(--bg-surface-deep) 42%,
+        var(--bg-surface-deep) 100%
+      );
+    box-shadow:
+      0 24px 64px color-mix(in srgb, var(--overlay-color) 55%, transparent),
+      0 0 0 1px color-mix(in srgb, var(--text-primary) 3%, transparent) inset;
+    color: var(--text-primary);
+  }
+  .orchid-shortcuts-help-dialog :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent-primary) 80%, transparent);
+    outline-offset: 2px;
+  }
+  .orchid-shortcuts-help-header {
+    @apply flex items-start justify-between gap-3;
+    padding: 16px 16px 14px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-default) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-secondary) 70%, transparent);
+  }
+  .shortcuts-help-title-block {
+    @apply flex items-start gap-3 min-w-0;
+  }
+  .shortcuts-help-icon-wrap {
+    @apply inline-flex items-center justify-center w-8 h-8 rounded-lg shrink-0;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, var(--border-default));
+    background: color-mix(in srgb, var(--accent-primary) 12%, var(--bg-secondary));
+    color: color-mix(in srgb, var(--accent-primary-hover) 90%, var(--text-primary));
+  }
+  .shortcuts-help-title-text {
+    @apply min-w-0;
+    padding-top: 1px;
+  }
+  .shortcuts-help-title-text h2 {
+    @apply m-0 font-semibold leading-tight;
+    font-size: 14px;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+  }
+  .shortcuts-help-title-text p {
+    margin: 4px 0 0;
+    font-size: 11px;
+    line-height: 1.35;
+    color: color-mix(in srgb, var(--text-secondary) 95%, transparent);
+  }
+  .shortcuts-help-close {
+    margin-top: -2px;
+    margin-right: -4px;
+    color: var(--text-secondary);
+  }
+  .orchid-shortcuts-help-body {
+    @apply flex flex-col min-h-0 overflow-y-auto;
+    flex: 1 1 auto;
+    padding: 14px 14px 10px;
+    gap: 14px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-default) transparent;
+  }
+  .orchid-shortcuts-help-body::-webkit-scrollbar {
+    width: 6px;
+  }
+  .orchid-shortcuts-help-body::-webkit-scrollbar-thumb {
+    @apply rounded-full;
+    background: var(--border-default);
+  }
+  .orchid-shortcuts-help-section {
+    @apply m-0;
+    padding: 10px 10px 8px;
+    border: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  }
+  .orchid-shortcuts-help-section-title {
+    @apply uppercase;
+    margin: 0 0 8px;
+    padding: 0 4px 6px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    color: color-mix(in srgb, var(--text-secondary) 78%, var(--accent-primary));
+  }
+  .shortcuts-help-list {
+    @apply list-none m-0 p-0 flex flex-col gap-0.5;
+  }
+  .shortcuts-help-row {
+    @apply flex items-center justify-between gap-4 min-h-8 rounded-md;
+    padding: 6px 8px;
+    transition: background 120ms ease;
+  }
+  .shortcuts-help-row:hover {
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+  }
+  .shortcuts-help-label {
+    @apply min-w-0;
+    font-size: 12px;
+    line-height: 1.35;
+    color: color-mix(in srgb, var(--text-primary) 88%, transparent);
+  }
+  .orchid-shortcuts-help-footer {
+    @apply flex flex-wrap items-center;
+    gap: 8px 10px;
+    padding: 10px 16px 12px;
+    border-top: 1px solid color-mix(in srgb, var(--border-default) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-primary) 80%, var(--bg-secondary));
+    color: color-mix(in srgb, var(--text-secondary) 90%, transparent);
+    font-size: 10px;
+  }
+  .orchid-shortcuts-help-footer-hint {
+    @apply inline-flex items-center gap-1.5;
+  }
+  .orchid-shortcuts-help-footer-dot {
+    @apply opacity-35 select-none;
+  }
 }
