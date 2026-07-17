@@ -7,6 +7,9 @@ import {
   providerModelOptionKey,
   selectionKey,
 } from '../../utils/provider-selection';
+import { Panel } from '../ui/Panel';
+import { SectionHeader } from '../ui/SectionHeader';
+import { StateMessage } from '../ui/StateMessage';
 
 export interface ModelAssignmentTier {
   readonly id: string;
@@ -75,16 +78,16 @@ export function ModelAssignments({
   const defaultAvailable = !defaultModel || byKey.has(defaultKey);
 
   return (
-    <div className={`grid gap-5 ${className}`.trim()}>
-      <section className="config-fieldset">
-        <div className="config-fieldset-legend">Default model</div>
-        <p className="mb-4 text-sm text-base-content/70">
-          This model is selected for new chats. Each tier can override it for agent work.
-        </p>
+    <div className={`grid gap-4 ${className}`.trim()}>
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader
+          title="Default model"
+          description="This model is selected for new chats. Each tier can override it for agent work."
+        />
         {!defaultAvailable && (
-          <p className="mb-3 text-xs text-warning">
-            The current default is unavailable; choose a ready connection.
-          </p>
+          <div role="status" className="alert alert-warning text-sm">
+            <span>The current default is unavailable; choose a ready connection.</span>
+          </div>
         )}
         <ModelPicker
           value={defaultAvailable ? defaultKey : ''}
@@ -99,17 +102,19 @@ export function ModelAssignments({
           emptyMessage="No ready chat models available"
           onChange={(value) => updateSelection(value, onDefaultModelChange)}
         />
-      </section>
+      </Panel>
 
-      <section className="config-fieldset">
-        <div className="config-fieldset-legend">Tier Models</div>
-        <p className="mb-4 text-sm text-base-content/70">
-          Assign a model to each tier. A tier left unconfigured falls back to the default model.
-        </p>
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader
+          title="Tier Models"
+          description="Assign a model to each tier. A tier left unconfigured falls back to the default model."
+        />
         {options.length === 0 && (
-          <div role="status" className="alert alert-info mb-4">
-            <span>Connect and validate a provider before assigning models.</span>
-          </div>
+          <StateMessage
+            kind="info"
+            title="Connect and validate a provider before assigning models."
+            className="py-4"
+          />
         )}
 
         <div className="config-card-list">
@@ -118,39 +123,41 @@ export function ModelAssignments({
             const currentKey = selectionKey(selected);
             const currentAvailable = !selected || byKey.has(currentKey);
             return (
-              <div key={tier.id} className="config-card config-card-row">
-                <div className="min-w-0">
-                  <div className="config-card-title">{tier.label}</div>
-                  <p className="config-card-desc">{tier.description}</p>
-                  {!currentAvailable && (
-                    <p className="mt-1 text-xs text-warning">
-                      Current selection is unavailable; choose a ready connection.
-                    </p>
-                  )}
+              <div key={tier.id} className="config-card card bg-base-100 border border-base-300">
+                <div className="config-card-row card-body p-4 flex-row items-center gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="config-card-title font-semibold">{tier.label}</div>
+                    <p className="config-card-desc text-sm text-base-content/70">{tier.description}</p>
+                    {!currentAvailable && (
+                      <p className="mt-1 text-xs text-warning">
+                        Current selection is unavailable; choose a ready connection.
+                      </p>
+                    )}
+                  </div>
+                  <ModelPicker
+                    value={currentAvailable ? currentKey : ''}
+                    options={options.map(providerModelOptionKey)}
+                    optionLabels={optionLabels}
+                    optionDetails={optionDetails}
+                    additionalOptions={[{ value: '', label: 'Use default model' }]}
+                    label={`${tier.label} tier model`}
+                    align="end"
+                    className="tier-model-picker"
+                    disabled={disabled || options.length === 0}
+                    emptyMessage="No ready chat models available"
+                    onChange={(value) => {
+                      const next = { ...tierModels };
+                      const option = byKey.get(value);
+                      next[tier.id] = option ? optionSelection(option) : null;
+                      onTierModelsChange(next);
+                    }}
+                  />
                 </div>
-                <ModelPicker
-                  value={currentAvailable ? currentKey : ''}
-                  options={options.map(providerModelOptionKey)}
-                  optionLabels={optionLabels}
-                  optionDetails={optionDetails}
-                  additionalOptions={[{ value: '', label: 'Use default model' }]}
-                  label={`${tier.label} tier model`}
-                  align="end"
-                  className="tier-model-picker"
-                  disabled={disabled || options.length === 0}
-                  emptyMessage="No ready chat models available"
-                  onChange={(value) => {
-                    const next = { ...tierModels };
-                    const option = byKey.get(value);
-                    next[tier.id] = option ? optionSelection(option) : null;
-                    onTierModelsChange(next);
-                  }}
-                />
               </div>
             );
           })}
         </div>
-      </section>
+      </Panel>
     </div>
   );
 }

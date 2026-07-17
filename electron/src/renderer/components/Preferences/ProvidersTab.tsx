@@ -9,6 +9,7 @@ import {
 } from '../Providers/ConnectionWizard';
 import { ConnectionList } from '../Providers/ConnectionList';
 import { Icon } from '../Icon';
+import { StateMessage } from '../ui/StateMessage';
 
 export function ProvidersTab() {
   const providers = useProviders();
@@ -29,19 +30,21 @@ export function ProvidersTab() {
   // ConfigView gates tab mount until overview is ready — no intermediate spinner.
   if (!providers.overview) {
     return (
-      <div role="alert" className="alert alert-warning">
-        <Icon name="alert" size={16} />
-        <span>{providers.error ?? 'Provider connections are unavailable in this build.'}</span>
-        <button type="button" className="btn btn-sm" onClick={() => void providers.refresh()}>
-          Retry
-        </button>
-      </div>
+      <StateMessage
+        kind="warning"
+        title={providers.error ?? 'Provider connections are unavailable in this build.'}
+        action={
+          <button type="button" className="btn btn-sm" onClick={() => void providers.refresh()}>
+            Retry
+          </button>
+        }
+      />
     );
   }
 
   const { overview } = providers;
   return (
-    <div className="config-form">
+    <div className="config-form flex flex-col gap-4">
       {!overview.secureStorage.available && (
         <div role="alert" className="alert alert-warning">
           <Icon name="alert" size={16} />
@@ -93,7 +96,6 @@ export function ProvidersTab() {
         onUpdate={providers.updateConnection}
         onSubmitApiKey={providers.submitApiKey}
         onValidate={providers.validateConnection}
-
         onComplete={completeConnection}
       />
     </div>

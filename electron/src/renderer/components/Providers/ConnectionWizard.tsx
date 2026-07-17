@@ -23,13 +23,14 @@ import type {
   ProviderAuthMethod,
   ProviderProtocol,
 } from '../../../shared/types/provider';
-import { useFocusTrap } from '../../keyboard';
 import { isTextGenerationModel } from '../../utils/models';
 import { Icon } from '../Icon';
 import { SearchableOptionPicker, type SearchableOption } from '../SearchableOptionPicker';
+import { DialogSurface } from '../ui/DialogSurface';
 import { FormField } from '../ui/FormField';
 import { IconButton } from '../ui/IconButton';
 import { SectionHeader } from '../ui/SectionHeader';
+import { StatusBadge } from '../ui/StatusBadge';
 import {
   ConnectionModelsEditor,
   connectionCustomModelDrafts,
@@ -100,7 +101,6 @@ export function ConnectionWizard({
   onValidate,
   onComplete,
 }: ConnectionWizardProps) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const wasOpenRef = useRef(false);
   const previousTargetIdRef = useRef<string | null>(null);
@@ -153,12 +153,6 @@ export function ConnectionWizard({
       || endpointChanged
   );
   const metadataLocked = submitting || (pendingConnection !== null && !existingConnection);
-
-  useFocusTrap({
-    enabled: isOpen,
-    containerRef: dialogRef,
-    initialFocusRef: nameInputRef,
-  });
 
   const resetForDefinition = useCallback((definition: ProviderDefinitionView | undefined) => {
     const nextProtocol = defaultProtocol(definition);
@@ -413,21 +407,19 @@ export function ConnectionWizard({
     }
   };
 
-  if (!isOpen) return null;
-
   return (
-    <dialog
-      ref={dialogRef}
-      className="modal modal-open provider-connection-wizard"
-      open
-      aria-modal="true"
-      aria-labelledby="provider-connection-wizard-title"
-      onCancel={(event) => {
-        event.preventDefault();
-        close();
-      }}
+    <DialogSurface
+      isOpen={isOpen}
+      onClose={() => close()}
+      labelledBy="provider-connection-wizard-title"
+      initialFocusRef={nameInputRef}
+      variant="modal"
+      closeOnBackdrop={!submitting}
+      closeOnEscape={!submitting}
+      className="provider-connection-wizard"
+      overlayClassName="modal modal-open provider-connection-wizard"
+      panelClassName="modal-box"
     >
-      <div className="modal-box">
         <SectionHeader
           className="provider-wizard-header"
           title={
@@ -469,7 +461,9 @@ export function ConnectionWizard({
                 {existingConnection ? (
                   <div className="flex items-center justify-between gap-3 rounded-box bg-base-200 px-3 py-2">
                     <span className="text-sm text-base-content/70">Provider</span>
-                    <span className="badge">{selectedDefinition?.displayName ?? providerId}</span>
+                    <StatusBadge tone="neutral" size="sm">
+                      {selectedDefinition?.displayName ?? providerId}
+                    </StatusBadge>
                   </div>
                 ) : (
                   <>
@@ -715,18 +709,7 @@ export function ConnectionWizard({
             </div>
           </form>
         )}
-      </div>
-      <form method="dialog" className="modal-backdrop">
-        <button
-          type="button"
-          aria-label="Close provider connection setup"
-          onClick={() => close()}
-          disabled={submitting}
-        >
-          close
-        </button>
-      </form>
-    </dialog>
+    </DialogSurface>
   );
 }
 

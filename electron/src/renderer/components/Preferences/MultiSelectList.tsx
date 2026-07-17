@@ -5,6 +5,8 @@
  * currently selected values that are not in the catalog (orphan / custom globs).
  */
 import { useMemo, useState } from 'react';
+import { StateMessage } from '../ui/StateMessage';
+import { StatusBadge } from '../ui/StatusBadge';
 
 export interface MultiSelectListProps {
   /** Catalog of selectable values. */
@@ -87,11 +89,11 @@ export function MultiSelectList({
   const clearAll = () => onChange([]);
 
   if (ordered.length === 0) {
-    return <p className="text-sm text-base-content/50 py-2">{emptyLabel}</p>;
+    return <StateMessage kind="empty" title={emptyLabel} className="py-4" />;
   }
 
   return (
-    <div className="flex min-w-0 flex-col gap-2.5">
+    <div className="flex min-w-0 flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1">
           <button
@@ -109,15 +111,15 @@ export function MultiSelectList({
             Clear
           </button>
         </div>
-        <span className="badge badge-sm badge-ghost ml-auto whitespace-nowrap">
+        <StatusBadge tone="neutral" size="sm" outline className="ml-auto whitespace-nowrap">
           {selected.length} selected
-        </span>
+        </StatusBadge>
       </div>
 
       {ordered.length > 8 && (
         <input
           type="search"
-          className="input input-sm h-9 min-h-9 w-full"
+          className="input input-bordered input-sm w-full"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder={searchPlaceholder}
@@ -138,14 +140,14 @@ export function MultiSelectList({
                 <li key={opt}>
                   <label
                     className={[
-                      'flex min-h-11 cursor-pointer items-center gap-2.5 rounded-md border border-transparent px-3 py-2.5',
+                      'flex min-h-11 cursor-pointer items-center gap-2.5 rounded-box border border-transparent px-3 py-2.5',
                       'hover:bg-base-200/80 transition-colors',
                       checked ? 'border-primary/20 bg-primary/10' : '',
                     ].join(' ')}
                   >
                     <input
                       type="checkbox"
-                      className="sr-only"
+                      className="checkbox checkbox-sm"
                       checked={checked}
                       onChange={() => toggle(opt)}
                     />
@@ -154,9 +156,9 @@ export function MultiSelectList({
                         {label}
                       </span>
                       {isOrphan && (
-                        <span className="badge badge-sm badge-ghost shrink-0">
+                        <StatusBadge tone="neutral" size="xs" outline>
                           custom
-                        </span>
+                        </StatusBadge>
                       )}
                     </span>
                   </label>
@@ -165,9 +167,11 @@ export function MultiSelectList({
             })}
           </ul>
         ) : (
-          <p className="px-3 py-4 text-sm text-base-content/50">
-            No options match “{query}”.
-          </p>
+          <StateMessage
+            kind="empty"
+            title={`No options match “${query}”.`}
+            className="py-4"
+          />
         )}
       </div>
     </div>

@@ -11,6 +11,10 @@ import type {
 } from '../../../shared/types/ipc';
 import { providerStatusConnectionId } from '../../utils/provider-selection';
 import { Icon } from '../Icon';
+import { Panel } from '../ui/Panel';
+import { SectionHeader } from '../ui/SectionHeader';
+import { StateMessage } from '../ui/StateMessage';
+import { StatusBadge } from '../ui/StatusBadge';
 import { ProviderStatus } from './ProviderStatus';
 
 export interface ConnectionListProps {
@@ -49,18 +53,20 @@ function healthLabel(health: ProviderConnectionView['health']): string {
   }
 }
 
-function healthBadgeClass(health: ProviderConnectionView['health']): string {
+function healthBadgeTone(
+  health: ProviderConnectionView['health'],
+): 'success' | 'warning' | 'neutral' | 'error' | 'info' {
   switch (health) {
     case 'ready':
-      return 'badge badge-success badge-soft';
+      return 'success';
     case 'needs_attention':
-      return 'badge badge-warning badge-soft';
+      return 'warning';
     case 'disabled':
-      return 'badge badge-neutral badge-soft';
+      return 'neutral';
     case 'disconnected':
-      return 'badge badge-error badge-soft';
+      return 'error';
     case 'draft':
-      return 'badge badge-info badge-soft';
+      return 'info';
   }
 }
 
@@ -107,43 +113,49 @@ export function ConnectionList({
 
   if (connections.length === 0) {
     return (
-      <section aria-labelledby="provider-connections-title" className="config-fieldset">
-        <div className="config-fieldset-legend">
-          <span id="provider-connections-title">Connections</span>
-        </div>
-        <div role="status" className="alert alert-info sm:alert-horizontal">
-          <Icon name="cpu" size={16} />
-          <span>
-            No provider connections yet. Local workspace, history, and settings stay available.
-          </span>
-          {onAddConnection && (
+      <Panel
+        as="section"
+        aria-labelledby="provider-connections-title"
+        className="config-fieldset flex flex-col gap-3"
+      >
+        <SectionHeader title={<span id="provider-connections-title">Connections</span>} />
+        <StateMessage
+          kind="info"
+          icon="cpu"
+          title="No provider connections yet"
+          className="py-4"
+        >
+          Local workspace, history, and settings stay available.
+        </StateMessage>
+        {onAddConnection && (
+          <div className="flex justify-center">
             <button type="button" className="btn btn-sm" onClick={onAddConnection}>
               Add a connection
             </button>
-          )}
-        </div>
-      </section>
+          </div>
+        )}
+      </Panel>
     );
   }
 
   return (
-    <section aria-labelledby="provider-connections-title" className="config-fieldset">
-      <div className="config-fieldset-legend">
-        <div className="min-w-0">
-          <h2 id="provider-connections-title" className="text-sm font-semibold">
-            Connections
-          </h2>
-          <p className="mt-1 text-xs font-normal text-base-content/70">
-            Each connection is a separate provider account or endpoint.
-          </p>
-        </div>
-        {onAddConnection && (
-          <button type="button" className="btn btn-sm" onClick={onAddConnection}>
-            <Icon name="plus" size={15} />
-            Add connection
-          </button>
-        )}
-      </div>
+    <Panel
+      as="section"
+      aria-labelledby="provider-connections-title"
+      className="config-fieldset flex flex-col gap-3"
+    >
+      <SectionHeader
+        title={<h2 id="provider-connections-title" className="text-sm font-semibold">Connections</h2>}
+        description="Each connection is a separate provider account or endpoint."
+        actions={
+          onAddConnection ? (
+            <button type="button" className="btn btn-sm" onClick={onAddConnection}>
+              <Icon name="plus" size={15} />
+              Add connection
+            </button>
+          ) : undefined
+        }
+      />
 
       {message && (
         <div role="status" aria-live="polite" className="alert alert-info">
@@ -176,18 +188,18 @@ export function ConnectionList({
             connection.providerId,
           ) === connection.id;
           return (
-            <article key={connection.id} className="config-card">
-              <div className="flex flex-col gap-4">
+            <article key={connection.id} className="config-card card bg-base-100 border border-base-300">
+              <div className="card-body flex flex-col gap-4 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h3 className="config-card-title">{connection.name}</h3>
-                    <p className="config-card-desc">
+                    <h3 className="config-card-title font-semibold">{connection.name}</h3>
+                    <p className="config-card-desc text-sm text-base-content/70">
                       {connection.providerDisplayName ?? connection.providerId}
                     </p>
                   </div>
-                  <span className={healthBadgeClass(connection.health)}>
+                  <StatusBadge tone={healthBadgeTone(connection.health)} size="sm">
                     {healthLabel(connection.health)}
-                  </span>
+                  </StatusBadge>
                 </div>
 
                 <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[auto_1fr]">
@@ -357,6 +369,6 @@ export function ConnectionList({
           );
         })}
       </div>
-    </section>
+    </Panel>
   );
 }

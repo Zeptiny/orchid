@@ -30,6 +30,8 @@ import {
 } from '../Preferences/ModelAssignments';
 import { ModelPicker } from '../ModelPicker';
 import { Icon } from '../Icon';
+import { FormField } from '../ui/FormField';
+import { StatusBadge } from '../ui/StatusBadge';
 import { THEMES, THEME_NAMES, type ThemeName } from '../../themes';
 import orchidIcon from '../../assets/orchid-icon.svg';
 
@@ -441,11 +443,12 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                             {connection.providerDisplayName ?? connection.providerId}
                           </p>
                         </div>
-                        <span className={connection.health === 'ready'
-                          ? 'badge badge-success badge-soft'
-                          : 'badge badge-warning badge-soft'}>
+                        <StatusBadge
+                          tone={connection.health === 'ready' ? 'success' : 'warning'}
+                          size="sm"
+                        >
                           {connection.health === 'ready' ? 'Ready' : 'Needs attention'}
-                        </span>
+                        </StatusBadge>
                       </div>
                       <p className="mt-3 text-xs text-base-content/70">
                         {connection.modelIds.length} model{connection.modelIds.length === 1 ? '' : 's'} selected
@@ -547,15 +550,14 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                 </p>
               </div>
 
-              <div className="config-form">
+              <div className="config-form flex flex-col gap-4">
                 <div className="config-form-grid">
-                  <div className="config-field">
-                    <label htmlFor="onb-theme">Theme</label>
+                  <FormField label="Theme" htmlFor="onb-theme" className="config-field">
                     <select
                       id="onb-theme"
                       value={theme}
                       onChange={(e) => handleThemeChange(e.target.value as ThemeName)}
-                      className="select config-control"
+                      className="select select-bordered w-full"
                       disabled={saving}
                     >
                       {THEME_NAMES.map((name) => (
@@ -564,21 +566,20 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                         </option>
                       ))}
                     </select>
-                  </div>
-                  <div className="config-field">
-                    <label htmlFor="onb-personality">Personality</label>
+                  </FormField>
+                  <FormField label="Personality" htmlFor="onb-personality" className="config-field">
                     <select
                       id="onb-personality"
                       value={personality}
                       onChange={(e) => setPersonality(e.target.value)}
-                      className="select config-control"
+                      className="select select-bordered w-full"
                       disabled={saving}
                     >
                       {personalityOptions.map((name) => (
                         <option key={name} value={name}>{name}</option>
                       ))}
                     </select>
-                  </div>
+                  </FormField>
                 </div>
               </div>
 
@@ -659,8 +660,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                 </p>
               </div>
 
-              <div className="config-field">
-                <label>Model</label>
+              <FormField label="Model" htmlFor="onb-embedding-model" className="config-field">
                 <ModelPicker
                   id="onb-embedding-model"
                   value={activeEmbeddingValue}
@@ -676,7 +676,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                   emptyMessage="No embedding models available"
                   disabled={saving}
                 />
-              </div>
+              </FormField>
 
               {saveError && (
                 <div role="alert" className="alert alert-error">
@@ -726,7 +726,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                           <div className="config-card-title flex items-center gap-3">
                             {server.title}
                             {server.id === 'context7' && (
-                              <span className="badge badge-soft badge-primary">Recommended</span>
+                              <StatusBadge tone="primary" size="sm">Recommended</StatusBadge>
                             )}
                           </div>
                           <p className="config-card-desc mt-1">{server.description}</p>

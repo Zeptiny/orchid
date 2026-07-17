@@ -10,6 +10,9 @@ import type {
   ManagedPersonality,
 } from '../../../shared/types/definitions';
 import { DefinitionActions } from './DefinitionActions';
+import { Panel } from '../ui/Panel';
+import { SectionHeader } from '../ui/SectionHeader';
+import { StateMessage } from '../ui/StateMessage';
 import { ScopeBadge, ScopeToggle, type ScopeFilter } from './ScopeToggle';
 
 export interface PersonalitiesTabProps {
@@ -148,19 +151,19 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
           <label>Name</label>
           <input
             type="text"
-            className="input config-control"
+            className="input input-bordered w-full"
             value={f.name}
             onChange={(e) => setForm({ ...f, name: e.target.value })}
             placeholder="my-tone"
           />
-          <span className="config-field-hint">
+          <span className="label py-0 text-base-content/60">
             File will be saved as {'{name}'}.md
           </span>
         </div>
         <div className="config-field">
           <label>Scope</label>
           <select
-            className="select config-control"
+            className="select select-bordered w-full"
             value={f.scope}
             onChange={(e) =>
               setForm({ ...f, scope: e.target.value as DefinitionScope })
@@ -181,7 +184,7 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
         <div className="config-field config-form-grid-full">
           <label>Personality prompt (markdown)</label>
           <textarea
-            className="textarea config-textarea font-mono text-xs"
+            className="textarea textarea-bordered w-full font-mono text-xs"
             rows={12}
             value={f.content}
             onChange={(e) => setForm({ ...f, content: e.target.value })}
@@ -206,20 +209,22 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
   );
 
   return (
-    <div className="config-form">
-      <section className="config-fieldset">
-        <div className="config-fieldset-legend">
-          <span>Personalities</span>
-          {!isAdding && !editingKey && (
-            <button
-              className="btn btn-ghost btn-xs font-normal text-primary hover:bg-primary/10"
-              type="button"
-              onClick={startAdd}
-            >
-              + Add Personality
-            </button>
-          )}
-        </div>
+    <div className="config-form flex flex-col gap-4">
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader
+          title="Personalities"
+          actions={
+            !isAdding && !editingKey ? (
+              <button
+                className="btn btn-ghost btn-xs font-normal text-primary hover:bg-primary/10"
+                type="button"
+                onClick={startAdd}
+              >
+                + Add Personality
+              </button>
+            ) : undefined
+          }
+        />
 
         <div className="config-scope-bar">
           <ScopeToggle
@@ -241,20 +246,20 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
 
         <div className="config-card-list">
           {visible.map((p) => (
-            <div key={entryKey(p)} className="config-card">
+            <div key={entryKey(p)} className="config-card card bg-base-100 border border-base-300">
               {editingKey === entryKey(p) && form ? (
                 renderForm(form, '')
               ) : (
-                <div className="config-card-row">
+                <div className="config-card-row flex items-start justify-between gap-3 p-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <div className="config-card-title">{p.name}</div>
+                      <div className="config-card-title font-semibold">{p.name}</div>
                       <ScopeBadge
                         scope={p.scope}
                         overriddenByProject={p.overriddenByProject}
                       />
                     </div>
-                    <p className="config-card-desc line-clamp-3 whitespace-pre-wrap">
+                    <p className="config-card-desc text-sm text-base-content/70 line-clamp-3 whitespace-pre-wrap">
                       {p.content}
                     </p>
                   </div>
@@ -269,23 +274,21 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
           ))}
 
           {isAdding && form && (
-            <div className="config-card border-primary/30 bg-primary/5">
+            <div className="config-card card border border-primary/30 bg-primary/5">
               {renderForm(form, 'New Personality')}
             </div>
           )}
 
           {!isAdding && visible.length === 0 && (
-            <p className="text-sm text-base-content/50 py-2">
-              No personalities in this view. Add one or switch scope filter.
-            </p>
+            <StateMessage kind="empty" title="No personalities in this view. Add one or switch scope filter." className="py-4" />
           )}
         </div>
 
-        <div className="config-note">
+        <div className="config-note text-xs text-base-content/60 mt-2">
           Active personality is selected under General. Project personalities
           override global ones with the same name when a workspace is bound.
         </div>
-      </section>
+      </Panel>
     </div>
   );
 }

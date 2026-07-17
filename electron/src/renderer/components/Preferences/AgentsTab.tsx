@@ -15,6 +15,10 @@ import type {
   ManagedAgent,
 } from '../../../shared/types/definitions';
 import { DefinitionActions } from './DefinitionActions';
+import { Panel } from '../ui/Panel';
+import { SectionHeader } from '../ui/SectionHeader';
+import { StateMessage } from '../ui/StateMessage';
+import { StatusBadge } from '../ui/StatusBadge';
 import { MultiSelectList } from './MultiSelectList';
 import { ScopeBadge, ScopeToggle, type ScopeFilter } from './ScopeToggle';
 import { TierPicker } from './TierPicker';
@@ -213,7 +217,7 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
           <label>Name</label>
           <input
             type="text"
-            className="input config-control"
+            className="input input-bordered w-full"
             value={f.name}
             onChange={(e) => setForm({ ...f, name: e.target.value })}
             placeholder="my-agent"
@@ -228,7 +232,7 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
         <div className="config-field">
           <label>Scope</label>
           <select
-            className="select config-control"
+            className="select select-bordered w-full"
             value={f.scope}
             onChange={(e) =>
               setForm({ ...f, scope: e.target.value as DefinitionScope })
@@ -250,7 +254,7 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
           <label>Type</label>
           <input
             type="text"
-            className="input config-control opacity-80"
+            className="input input-bordered w-full opacity-80"
             value={f.type}
             disabled
             readOnly
@@ -260,7 +264,7 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
                 : 'New agents are always subagents. Type is not user-editable.'
             }
           />
-          <span className="config-field-hint">
+          <span className="label py-0 text-base-content/60">
             {f.type === AgentType.INTERNAL
               ? 'Internal — editable, not deletable'
               : 'Subagent — type is fixed'}
@@ -277,7 +281,7 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
           <label>Description</label>
           <input
             type="text"
-            className="input config-control"
+            className="input input-bordered w-full"
             value={f.description}
             onChange={(e) => setForm({ ...f, description: e.target.value })}
             placeholder="When to use this agent…"
@@ -312,7 +316,7 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
         <div className="config-field config-form-grid-full">
           <label>System prompt</label>
           <textarea
-            className="textarea config-textarea font-mono text-xs"
+            className="textarea textarea-bordered w-full font-mono text-xs"
             rows={10}
             value={f.system_prompt}
             onChange={(e) => setForm({ ...f, system_prompt: e.target.value })}
@@ -342,20 +346,22 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
   );
 
   return (
-    <div className="config-form">
-      <section className="config-fieldset">
-        <div className="config-fieldset-legend">
-          <span>Agents</span>
-          {!isAdding && !editingKey && (
-            <button
-              className="btn btn-ghost btn-xs font-normal text-primary hover:bg-primary/10"
-              type="button"
-              onClick={startAdd}
-            >
-              + Add Agent
-            </button>
-          )}
-        </div>
+    <div className="config-form flex flex-col gap-4">
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader
+          title="Agents"
+          actions={
+            !isAdding && !editingKey ? (
+              <button
+                className="btn btn-ghost btn-xs font-normal text-primary hover:bg-primary/10"
+                type="button"
+                onClick={startAdd}
+              >
+                + Add Agent
+              </button>
+            ) : undefined
+          }
+        />
 
         <div className="config-scope-bar">
           <ScopeToggle
@@ -379,31 +385,34 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
           {visible.map((a) => {
             const isInternal = a.type === AgentType.INTERNAL;
             return (
-              <div key={entryKey(a)} className="config-card">
+              <div key={entryKey(a)} className="config-card card bg-base-100 border border-base-300">
                 {editingKey === entryKey(a) && form ? (
                   renderForm(form, '')
                 ) : (
-                  <div className="config-card-row">
+                  <div className="config-card-row flex items-start justify-between gap-3 p-4">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <div className="config-card-title">{a.name}</div>
+                        <div className="config-card-title font-semibold">{a.name}</div>
                         <ScopeBadge
                           scope={a.scope}
                           overriddenByProject={a.overriddenByProject}
                         />
-                        <span className="badge badge-xs badge-ghost">{a.type}</span>
-                        <span className="badge badge-xs badge-outline">{a.tier}</span>
+                        <StatusBadge tone="neutral" size="xs" outline>{a.type}</StatusBadge>
+                        <StatusBadge tone="neutral" size="xs" outline>{a.tier}</StatusBadge>
                         {isInternal && (
-                          <span
-                            className="badge badge-xs badge-ghost opacity-70"
+                          <StatusBadge
+                            tone="neutral"
+                            size="xs"
+                            outline
+                            className="opacity-70"
                             title="Internal agents can be edited but not deleted"
                           >
                             no delete
-                          </span>
+                          </StatusBadge>
                         )}
                       </div>
-                      <p className="config-card-desc line-clamp-2">{a.description}</p>
-                      <p className="config-card-desc mt-1">
+                      <p className="config-card-desc text-sm text-base-content/70 line-clamp-2">{a.description}</p>
+                      <p className="config-card-desc text-sm text-base-content/70 mt-1">
                         {a.allowed_tools.length} tools · {a.allowed_skills.join(', ') || '—'} skills
                       </p>
                     </div>
@@ -421,24 +430,22 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
           })}
 
           {isAdding && form && (
-            <div className="config-card border-primary/30 bg-primary/5">
+            <div className="config-card card border border-primary/30 bg-primary/5">
               {renderForm(form, 'New Agent')}
             </div>
           )}
 
           {!isAdding && visible.length === 0 && (
-            <p className="text-sm text-base-content/50 py-2">
-              No agents in this view. Add one or switch scope filter.
-            </p>
+            <StateMessage kind="empty" title="No agents in this view. Add one or switch scope filter." className="py-4" />
           )}
         </div>
 
-        <div className="config-note">
+        <div className="config-note text-xs text-base-content/60 mt-2">
           Internal agents are listed first — they can be edited but not deleted.
           New agents are always subagents. Project agents override global ones with
           the same name.
         </div>
-      </section>
+      </Panel>
     </div>
   );
 }
