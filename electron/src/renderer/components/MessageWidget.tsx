@@ -71,7 +71,9 @@ export function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
 
 function UserMessage({ message }: { message: Message }) {
   return (
-    <div className="orchid-msg orchid-msg-user">{message.content}</div>
+    <div className="orchid-msg orchid-msg-user px-4 py-3 rounded-md">
+      {message.content}
+    </div>
   );
 }
 
@@ -84,7 +86,7 @@ function AssistantMessage({
 }) {
   if (!message.content && !isStreaming) return null;
   return (
-    <div className="orchid-msg orchid-msg-assistant">
+    <div className="orchid-msg orchid-msg-assistant px-1 py-1">
       {message.content ? <MarkdownContent content={message.content} /> : null}
       {isStreaming && (
         <span className="streaming-cursor" aria-hidden />

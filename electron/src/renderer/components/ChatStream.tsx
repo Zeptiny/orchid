@@ -271,7 +271,7 @@ export function ChatStream({
     !error
   ) {
     return (
-      <div className="orchid-chat-scroll flex min-h-0 flex-1 items-center justify-center">
+      <div className="orchid-chat-scroll flex min-h-0 flex-1 items-center justify-center px-6 py-5">
         <div className="orchid-chat-empty">
           <div className="orchid-chat-empty-icon" aria-hidden>
             <img src={orchidIcon} alt="" width={96} height={96} />
@@ -310,7 +310,7 @@ export function ChatStream({
   }
 
   return (
-    <div className="orchid-chat-scroll" ref={containerRef}>
+    <div className="orchid-chat-scroll px-6 py-5" ref={containerRef}>
       {error && (
         <div className="orchid-error-slot">
           <ErrorBanner
