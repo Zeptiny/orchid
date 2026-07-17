@@ -176,6 +176,43 @@ export function shouldBufferChatEvent(
   return hydratingSessionId != null && event.sessionId === hydratingSessionId;
 }
 
+/**
+ * Seed stream affinity from a live snapshot so replayed buffered events are
+ * sequence-gated against the snapshot high-water mark.
+ */
+export function seedAffinityFromLive(
+  affinity: ChatEventAffinity,
+  live: Pick<ChatSnapshot, 'sessionId' | 'turnId' | 'sequence'>,
+): void {
+  affinity.streamSessionId = live.sessionId;
+  affinity.streamTurnId = live.turnId;
+  affinity.lastSequence = live.sequence;
+}
+
+export type BufferedHydrationEvent = {
+  event: { sessionId: string; turnId: string; sequence: number };
+  apply: () => void;
+};
+
+/**
+ * Replay buffered hydration applies through the same sequence-affinity gate
+ * used by live IPC delivery. Mutates affinity as each event is accepted so
+ * stale sequences / wrong-session / wrong-turn events are discarded.
+ */
+export function drainBufferedHydrationEvents(
+  affinity: ChatEventAffinity,
+  events: ReadonlyArray<BufferedHydrationEvent>,
+  isSending: boolean,
+): number {
+  let applied = 0;
+  for (const item of events) {
+    if (!acceptChatEvent(affinity, item.event, isSending)) continue;
+    item.apply();
+    applied += 1;
+  }
+  return applied;
+}
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useChat(activeSessionId: string | null = null): UseChatReturn {
@@ -237,7 +274,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const priorActiveSessionIdRef = useRef<string | null>(activeSessionId);
   const hydrationRef = useRef<{
     sessionId: string;
-    events: Array<() => void>;
+    events: BufferedHydrationEvent[];
   } | null>(null);
 
   useEffect(() => {
@@ -275,16 +312,17 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   }, []);
 
   const deliverEvent = useCallback((
-    event: { sessionId: string },
+    event: { sessionId: string; turnId: string; sequence: number },
     apply: () => void,
   ) => {
     const hydration = hydrationRef.current;
     if (shouldBufferChatEvent(hydration?.sessionId ?? null, event)) {
-      hydration?.events.push(apply);
+      hydration?.events.push({ event, apply });
       return;
     }
+    if (!acceptsEvent(event)) return;
     apply();
-  }, []);
+  }, [acceptsEvent]);
 
   /**
    * Update toolBlocksRef synchronously, then mirror into React state.
@@ -343,7 +381,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubChunk = window.orchid.chat.onChunk((event: ChatChunkEvent) => {
       deliverEvent(event, () => {
-        if (!acceptsEvent(event)) return;
         accumulatedContentRef.current += event.data;
         setStreamingContent(accumulatedContentRef.current);
         // Append to last text segment, or open a new one (preserves tool→text→tool order).
@@ -366,7 +403,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     const unsubThinking =
       window.orchid.chat.onThinking?.((event: ChatThinkingEvent) => {
         deliverEvent(event, () => {
-          if (!acceptsEvent(event)) return;
           accumulatedThinkingRef.current += event.data;
           setStreamingThinking(accumulatedThinkingRef.current);
           // Chronological thinking segments → Thought widgets in ChatStream
@@ -388,7 +424,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubState = window.orchid.chat.onState((event: ChatStateEvent) => {
       deliverEvent(event, () => {
-        if (!acceptsEvent(event)) return;
         if (event.state === 'streaming') {
           setStatus('streaming');
         } else if (event.state === 'error') {
@@ -413,7 +448,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubDone = window.orchid.chat.onDone((event: ChatDoneEvent) => {
       deliverEvent(event, () => {
-      if (!acceptsEvent(event)) return;
       if (event.usage) {
         setUsage(event.usage);
         usageRef.current = event.usage;
@@ -493,7 +527,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubError = window.orchid.chat.onError((event: ChatErrorEvent) => {
       deliverEvent(event, () => {
-      if (!acceptsEvent(event)) return;
       // Prefer title + detail for banner classification when available
       const display =
         event.title && event.error && !event.error.startsWith(event.title)
@@ -541,7 +574,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubUsage = window.orchid.chat.onUsage((event: ChatUsageEvent) => {
       deliverEvent(event, () => {
-        if (!acceptsEvent(event)) return;
         setUsage(event.usage);
         usageRef.current = event.usage;
       });
@@ -549,7 +581,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubToolStart = window.orchid.chat.onToolCallStart?.((event: ChatToolCallStartEvent) => {
       deliverEvent(event, () => {
-      if (!acceptsEvent(event)) return;
       applyToolBlocks((prev) => upsertToolBlock(prev, {
         id: event.toolCallId,
         toolName: event.toolName,
@@ -576,7 +607,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubToolDelta = window.orchid.chat.onToolCallDelta?.((event: ChatToolCallDeltaEvent) => {
       deliverEvent(event, () => {
-      if (!acceptsEvent(event)) return;
       applyToolBlocks((prev) => prev.map((block) => {
         if (block.id !== event.toolCallId) return block;
         return {
@@ -592,7 +622,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubToolUpdate = window.orchid.chat.onToolCallUpdate?.((event: ChatToolCallUpdateEvent) => {
       deliverEvent(event, () => {
-      if (!acceptsEvent(event)) return;
       applyToolBlocks((prev) => upsertToolBlock(prev, {
         id: event.toolCallId,
         toolName: event.toolName ?? 'unknown',
@@ -727,6 +756,12 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           });
           setStreamStartTime(null);
           setElapsedSeconds(0);
+          setStreamingContent('');
+          setStreamingThinking('');
+          applyToolBlocks([]);
+          applyStreamSegments([]);
+          accumulatedContentRef.current = '';
+          accumulatedThinkingRef.current = '';
           return;
         }
 
@@ -919,14 +954,34 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     }
   }, []);
 
+  const replayHydrationBuffer = useCallback((
+    buffered: BufferedHydrationEvent[],
+    seedLive: Pick<ChatSnapshot, 'sessionId' | 'turnId' | 'sequence'> | null,
+  ) => {
+    const affinity: ChatEventAffinity = {
+      selectedSessionId: activeSessionIdRef.current,
+      streamSessionId: streamSessionIdRef.current,
+      streamTurnId: streamTurnIdRef.current,
+      lastSequence: lastSequenceRef.current,
+    };
+    if (seedLive) {
+      seedAffinityFromLive(affinity, seedLive);
+    }
+    drainBufferedHydrationEvents(affinity, buffered, isSendingRef.current);
+    streamSessionIdRef.current = affinity.streamSessionId;
+    streamTurnIdRef.current = affinity.streamTurnId;
+    lastSequenceRef.current = affinity.lastSequence;
+  }, []);
+
   const hydrateSnapshot = useCallback((snapshot: ChatSessionSnapshot | null) => {
     const hydration = hydrationRef.current;
     if (!snapshot) {
       hydrationRef.current = null;
       // Snapshot IPC failed after navigation. Keep the loaded history and let
-      // target-session events observed during the request advance the view.
+      // target-session events observed during the request advance the view —
+      // still sequence-affinity gated so a previous generation cannot land.
       setIsSwitchingSession(false);
-      for (const apply of hydration?.events ?? []) apply();
+      replayHydrationBuffer(hydration?.events ?? [], null);
       return;
     }
     if (snapshot.sessionId !== activeSessionIdRef.current) {
@@ -936,16 +991,16 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       return;
     }
     hydrationRef.current = null;
+    const bufferedEvents =
+      hydration?.sessionId === snapshot.sessionId ? hydration.events : [];
 
     replaceMessages(snapshot.messages);
     const live: ChatSnapshot | null = snapshot.live;
     if (!live) {
-      // With no live actor, the coherent history is authoritative. Drain any
-      // buffered target-session events that arrived during hydration so a null
-      // live tail does not leave the stream stuck behind a stale queue.
-      if (hydration?.sessionId === snapshot.sessionId) {
-        for (const apply of hydration.events) apply();
-      }
+      // No live actor: history is the base. Drain only events that pass
+      // sequence affinity for the selected session so stale turn/sequence
+      // leftovers from a prior generation are discarded (not blindly applied).
+      replayHydrationBuffer(bufferedEvents, null);
       return;
     }
 
@@ -985,12 +1040,9 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         : 0,
     );
 
-    // The snapshot is the base state. Replaying through acceptsEvent drops
-    // queued events already covered by its sequence and applies only newer ones.
-    if (hydration?.sessionId === snapshot.sessionId) {
-      for (const apply of hydration.events) apply();
-    }
-  }, [applyToolBlocks, applyStreamSegments, replaceMessages]);
+    // Snapshot is the sequence high-water mark; drain only newer events.
+    replayHydrationBuffer(bufferedEvents, live);
+  }, [applyToolBlocks, applyStreamSegments, replaceMessages, replayHydrationBuffer]);
 
   const clearError = useCallback(() => {
     setError(null);

@@ -95,10 +95,19 @@ describe('chat rendering contract (U5)', () => {
       expect(throwCleanup).toBe(true);
     });
 
-    it('null live snapshot drains buffered hydration events', () => {
+    it('null live snapshot drains buffered events through sequence affinity', () => {
       const src = read('hooks/useChat.ts');
       expect(src).toMatch(/if \(!live\)/);
-      expect(src).toMatch(/buffered target-session events|hydration\.events/);
+      expect(src).toMatch(/drainBufferedHydrationEvents|replayHydrationBuffer/);
+      expect(src).toMatch(/BufferedHydrationEvent/);
+      // Structured error path clears residual stream state like the throw path
+      expect(src).toMatch(/result\.status === 'error'/);
+      const errorBranch = src.slice(
+        src.indexOf("if (result.status === 'error')"),
+        src.indexOf('// Only adopt send resolution'),
+      );
+      expect(errorBranch).toMatch(/applyStreamSegments\(\[\]\)/);
+      expect(errorBranch).toMatch(/setStreamingContent\(''\)/);
     });
 
     it('streaming cursor remains on assistant and thought paths', () => {
