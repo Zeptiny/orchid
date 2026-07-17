@@ -68,13 +68,32 @@
     border-radius: 5px;
   }
 
+  /* DaisyUI badges — keep label off the border (scoped via :where so we do not
+     redefine reserved DaisyUI component selectors at the top level). */
+  :where(.badge) {
+    padding-inline: 0.5rem;
+    padding-block: 0.2rem;
+    gap: 0.25rem;
+    line-height: 1.25;
+  }
+
+  :where(.badge-xs) {
+    padding-inline: 0.4rem;
+    padding-block: 0.15rem;
+  }
+
+  :where(.badge-sm) {
+    padding-inline: 0.5rem;
+    padding-block: 0.2rem;
+  }
+
   /* Compact shortcut hint bars (palette footer,
   config footer) */
   .orchid-shortcut-bar {
     @apply flex flex-wrap items-center;
     gap: 10px 14px;
-    min-height: 30px;
-    padding: 6px 12px;
+    min-height: 34px;
+    padding: 8px 16px;
     border-top: 1px solid color-mix(in srgb, var(--border-default) 90%, transparent);
     background: color-mix(in srgb, var(--bg-primary) 88%, var(--bg-secondary));
     color: color-mix(in srgb, var(--text-secondary) 92%, transparent);
@@ -564,8 +583,9 @@
   }
 
   .orchid-chat-footer {
-    @apply flex shrink-0 items-center justify-between gap-2.5 border-t border-base-content/10 bg-base-100 px-3 py-1 text-xs text-base-content/70;
-    min-height: 30px;
+    @apply flex shrink-0 items-center justify-between gap-2.5 border-t border-base-content/10 bg-base-100 text-xs text-base-content/70;
+    min-height: 34px;
+    padding: 6px 14px 6px 16px;
   }
 
   .orchid-chat-footer-hint {
@@ -621,9 +641,22 @@
   }
 
   .orchid-model-picker-menu {
-    @apply flex flex-col overflow-hidden border border-base-300 bg-base-200 p-0 text-base-content shadow-xl;
+    @apply flex flex-col overflow-hidden p-0 text-base-content;
     width: min(620px, calc(100vw - 32px));
     max-height: min(430px, 72vh);
+    border-radius: 9px;
+    border: 1px solid var(--border-default, var(--color-base-300));
+    background: var(--bg-secondary, var(--color-base-200));
+    color: var(--text-primary, var(--color-base-content));
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color, #000) 55%, transparent);
+  }
+
+  .dropdown-content.orchid-model-picker-menu,
+  .orchid-model-picker > .dropdown-content {
+    border: 1px solid var(--border-default, var(--color-base-300));
+    background: var(--bg-secondary, var(--color-base-200));
+    color: var(--text-primary, var(--color-base-content));
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color, #000) 55%, transparent);
     border-radius: 9px;
   }
 
