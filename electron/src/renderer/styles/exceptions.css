@@ -145,6 +145,15 @@
   --thickness: 2px;
 }
 
+/* Composer + footer share the same horizontal inset from the pane edge. */
+.orchid-composer-area {
+  padding-inline: 16px !important;
+}
+
+.orchid-chat-footer {
+  padding-inline: 16px !important;
+}
+
 /* Context dropup: keep list content off the panel edge. */
 .orchid-footer-context-panel {
   padding: 0 !important;

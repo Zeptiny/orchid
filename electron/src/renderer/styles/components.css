@@ -534,14 +534,18 @@
 
   .orchid-composer-area {
     @apply relative flex flex-col shrink-0 border-t border-base-300 bg-base-100;
+    /* Keep composer controls off the pane edges (match footer inset). */
+    padding-inline: 16px;
   }
 
   .orchid-composer-gate {
-    @apply mx-3 mb-1.5 flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-xs;
+    @apply mb-1.5 flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-xs;
   }
 
   .orchid-composer {
-    @apply flex min-w-0 items-end gap-2 px-3.5 py-2;
+    @apply flex min-w-0 items-end gap-2 py-2;
+    /* Horizontal padding lives on the area so gates/slash menu share the inset. */
+    padding-inline: 0;
   }
 
   /* Textarea owns the free horizontal space; controls stay compact. */
@@ -584,7 +588,8 @@
   }
 
   .orchid-slash-menu {
-    @apply z-40 mx-2.5 flex max-h-64 flex-col overflow-hidden rounded-lg border border-base-300 bg-base-200 shadow-xl;
+    @apply z-40 flex max-h-64 flex-col overflow-hidden rounded-lg border border-base-300 bg-base-200 shadow-xl;
+    margin-inline: 0;
   }
 
   .orchid-slash-menu-header {
@@ -594,9 +599,9 @@
   .orchid-chat-footer {
     @apply flex shrink-0 items-center justify-between gap-2.5 border-t border-base-content/10 bg-base-100 text-xs text-base-content/70;
     min-height: 34px;
-    /* Horizontal inset so shortcuts/context sit off the pane edges. */
-    margin-inline: 10px;
-    padding: 6px 12px 8px;
+    /* Match composer-area inset so model/context controls clear the pane edge. */
+    margin-inline: 0;
+    padding: 6px 16px 10px;
   }
 
   .orchid-chat-footer-hint {
