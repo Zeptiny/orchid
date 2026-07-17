@@ -29,20 +29,15 @@
     opacity: 0.85;
   }
 
-  /* Theme-var key surface: border/gradient cannot be a single utility. */
+  /* Theme-var key surface — flat fill, no gradient. */
   .orchid-keycap {
     @apply inline-flex items-center justify-center m-0 font-mono leading-none whitespace-nowrap;
     min-width: 1.35em;
     border: 1px solid color-mix(in srgb, var(--border-default) 92%, var(--accent-primary));
     border-bottom-width: 2px;
     border-radius: 4px;
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--bg-surface-raised) 88%, var(--text-primary)) 0%,
-        color-mix(in srgb, var(--bg-secondary) 96%, var(--overlay-color)) 100%
-      );
-    color: color-mix(in srgb, var(--text-muted) 94%, var(--accent-primary));
+    background: color-mix(in srgb, var(--bg-secondary, var(--color-base-200)) 96%, var(--overlay-color, #000));
+    color: color-mix(in srgb, var(--text-muted, var(--color-base-content)) 94%, var(--accent-primary, var(--color-primary)));
     font-weight: 550;
     letter-spacing: 0.02em;
   }
