@@ -21,7 +21,7 @@ export function CollapsedChainStub({
   return (
     <button
       type="button"
-      className="collapsed-chain-stub"
+      className="collapsed-chain-stub orchid-collapsed-chain"
       onClick={() => onExpand(chainIndex)}
       aria-label={`Expand chain ${chainIndex + 1}: ${preview}`}
     >

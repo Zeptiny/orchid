@@ -6,7 +6,7 @@ interface ErrorVariant {
   kind: ErrorKind;
   title: string;
   icon: IconName;
-  iconColor: string;
+  alertClass: string;
 }
 
 interface ErrorBannerProps {
@@ -20,7 +20,12 @@ function classifyError(message: string): ErrorVariant {
   const lower = message.toLowerCase();
 
   if (lower.includes('rate limit') || lower.includes('429') || lower.includes('usage limit')) {
-    return { kind: 'rate-limit', title: 'Rate limited', icon: 'alert', iconColor: 'text-warning' };
+    return {
+      kind: 'rate-limit',
+      title: 'Rate limited',
+      icon: 'alert',
+      alertClass: 'alert-warning',
+    };
   }
   if (
     lower.includes('auth') ||
@@ -29,7 +34,12 @@ function classifyError(message: string): ErrorVariant {
     lower.includes('api key') ||
     lower.includes('invalid key')
   ) {
-    return { kind: 'auth', title: 'Authentication failed', icon: 'lock', iconColor: 'text-error' };
+    return {
+      kind: 'auth',
+      title: 'Authentication failed',
+      icon: 'lock',
+      alertClass: 'alert-error',
+    };
   }
   if (
     lower.includes('timeout') ||
@@ -37,9 +47,19 @@ function classifyError(message: string): ErrorVariant {
     lower.includes('network') ||
     lower.includes('connection')
   ) {
-    return { kind: 'stream', title: 'Stream failed', icon: 'alertCircle', iconColor: 'text-error' };
+    return {
+      kind: 'stream',
+      title: 'Stream failed',
+      icon: 'alertCircle',
+      alertClass: 'alert-error',
+    };
   }
-  return { kind: 'generic', title: 'Agent error', icon: 'alertCircle', iconColor: 'text-error' };
+  return {
+    kind: 'generic',
+    title: 'Agent error',
+    icon: 'alertCircle',
+    alertClass: 'alert-error',
+  };
 }
 
 function extractRetrySeconds(message: string): number | null {
@@ -53,12 +73,15 @@ export function ErrorBanner({ message, onDismiss, onOpenSettings, onRetry }: Err
   const retrySeconds = variant.kind === 'rate-limit' ? extractRetrySeconds(message) : null;
 
   return (
-    <div className="error-banner-inline">
-      <Icon name={variant.icon} size={16} className={`shrink-0 ${variant.iconColor}`} />
-      <div className="error-banner-body">
-        <div className="error-banner-title">{variant.title}</div>
-        <div className="error-banner-message">{message}</div>
-        <div className="error-banner-actions">
+    <div
+      className={`error-banner-inline orchid-error-banner alert ${variant.alertClass}`}
+      role="alert"
+    >
+      <Icon name={variant.icon} size={16} className="shrink-0" />
+      <div className="error-banner-body orchid-error-body">
+        <div className="error-banner-title orchid-error-title">{variant.title}</div>
+        <div className="error-banner-message orchid-error-message">{message}</div>
+        <div className="error-banner-actions orchid-error-actions">
           {(variant.kind === 'stream' || variant.kind === 'rate-limit' || variant.kind === 'generic') &&
             onRetry && (
               <button className="btn btn-primary btn-xs gap-1" onClick={onRetry} type="button">

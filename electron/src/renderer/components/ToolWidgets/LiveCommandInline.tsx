@@ -12,8 +12,9 @@
  * - 200ms throttle on updates (matching Python)
  * - Compact inline mode (no xterm.js — simple <pre> to avoid heavyweight deps)
  */
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useId } from 'react';
 import { useLiveCommandOutput } from '../../hooks/useLiveCommandOutput';
+import { StatusBadge } from '../ui/StatusBadge';
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,7 @@ export function LiveCommandInline({
   description,
 }: LiveCommandInlineProps) {
   const [expanded, setExpanded] = useState(false);
+  const panelId = useId();
 
   const toggle = useCallback(() => {
     setExpanded((prev) => !prev);
@@ -69,45 +71,39 @@ export function LiveCommandInline({
   }, [output]);
 
   return (
-    <div
-      className="collapse collapse-arrow bg-base-200 my-1"
-      style={{ fontSize: '13px' }}
-    >
-      <input type="checkbox" checked={expanded} onChange={toggle} />
-      <div className="collapse-title text-sm font-medium flex items-center gap-2">
-        <span
-          className="text-xs"
-          style={{ fontFamily: "'JetBrains Mono', 'Fira Code', monospace" }}
-        >
-          {title}
+    <div className="orchid-live-command">
+      <button
+        type="button"
+        className="orchid-live-command-title"
+        onClick={toggle}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+      >
+        <span className="font-mono text-xs min-w-0 truncate">{title}</span>
+        <span className="inline-flex shrink-0 items-center gap-1.5">
+          {isRunning && (
+            <span className="loading loading-dots loading-xs" aria-hidden />
+          )}
+          {!isRunning && exitCode === 0 && (
+            <StatusBadge tone="success" size="xs">ok</StatusBadge>
+          )}
+          {!isRunning && exitCode !== null && exitCode !== 0 && (
+            <StatusBadge tone="error" size="xs">fail</StatusBadge>
+          )}
         </span>
-        {isRunning && (
-          <span className="loading loading-dots loading-xs" />
-        )}
-        {!isRunning && exitCode === 0 && (
-          <span className="text-success text-xs">✓</span>
-        )}
-        {!isRunning && exitCode !== null && exitCode !== 0 && (
-          <span className="text-error text-xs">✗</span>
-        )}
-      </div>
-      <div className="collapse-content p-0">
-        <pre
-          className="text-xs overflow-x-auto p-3 bg-base-300 rounded-b-lg whitespace-pre-wrap"
-          style={{
-            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-            maxHeight: '300px',
-            overflowY: 'auto',
-          }}
-        >
-          {displayOutput || (isRunning ? '(waiting for output...)' : '(no output)')}
-        </pre>
-        {!isRunning && exitCode !== null && (
-          <div className="px-3 py-1 text-xs opacity-60 border-t border-base-content/10">
-            Process exited with code {exitCode}
-          </div>
-        )}
-      </div>
+      </button>
+      {expanded && (
+        <div id={panelId} className="orchid-live-command-body">
+          <pre className="orchid-live-command-pre">
+            {displayOutput || (isRunning ? '(waiting for output...)' : '(no output)')}
+          </pre>
+          {!isRunning && exitCode !== null && (
+            <div className="orchid-live-command-exit">
+              Process exited with code {exitCode}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

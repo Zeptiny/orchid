@@ -266,11 +266,15 @@ export function ContextGrid({ usage, messages, maxContext }: ContextGridProps) {
   return (
     <div>
       <div
-        className="grid"
-        style={{ gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`, gap: '2px', margin: '4px 0 8px' }}
+        className="orchid-context-grid"
+        style={{ gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)` }}
       >
         {blocks.map((color, i) => (
-          <div key={i} className="aspect-square rounded-sm" style={{ backgroundColor: color }} />
+          <div
+            key={i}
+            className="orchid-context-cell"
+            style={{ backgroundColor: color }}
+          />
         ))}
       </div>
 

@@ -748,6 +748,22 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         isSendingRef.current = false;
         setError(err instanceof Error ? err.message : String(err));
         setStatus('error');
+        // Drop the optimistic user bubble when send never started (throw path).
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.id === userMessage.id) {
+            return prev.slice(0, -1);
+          }
+          return prev;
+        });
+        setStreamStartTime(null);
+        setElapsedSeconds(0);
+        setStreamingContent('');
+        setStreamingThinking('');
+        applyToolBlocks([]);
+        applyStreamSegments([]);
+        accumulatedContentRef.current = '';
+        accumulatedThinkingRef.current = '';
       }
     },
     [status, error, isSwitchingSession, applyToolBlocks, applyStreamSegments],
@@ -915,8 +931,12 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     replaceMessages(snapshot.messages);
     const live: ChatSnapshot | null = snapshot.live;
     if (!live) {
-      // With no live actor, the coherent history is authoritative. Any queued
-      // terminal events were emitted before that history snapshot and are stale.
+      // With no live actor, the coherent history is authoritative. Drain any
+      // buffered target-session events that arrived during hydration so a null
+      // live tail does not leave the stream stuck behind a stale queue.
+      if (hydration?.sessionId === snapshot.sessionId) {
+        for (const apply of hydration.events) apply();
+      }
       return;
     }
 

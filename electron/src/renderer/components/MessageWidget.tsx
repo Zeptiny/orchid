@@ -1,11 +1,11 @@
 /**
  * MessageWidget — renders a single message based on its role/type.
  *
- * Iteration 012 mock-aligned: flat chat (no daisyUI bubbles), thought blocks.
- * Tool call/result messages fall back to ToolCallBlock for edge cases;
+ * Flat chat (no DaisyUI chat/chat-bubble). Thought blocks use disclosure
+ * chrome; tool call/result messages fall back to ToolCallBlock for edge cases.
  * ChatStream normally converts them into ToolBlocks for consistent ordering.
  */
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useId } from 'react';
 import type { Message } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import {
@@ -70,7 +70,9 @@ export function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
 }
 
 function UserMessage({ message }: { message: Message }) {
-  return <div className="msg msg-user">{message.content}</div>;
+  return (
+    <div className="msg msg-user orchid-msg orchid-msg-user">{message.content}</div>
+  );
 }
 
 function AssistantMessage({
@@ -82,9 +84,11 @@ function AssistantMessage({
 }) {
   if (!message.content && !isStreaming) return null;
   return (
-    <div className="msg msg-assistant">
+    <div className="msg msg-assistant orchid-msg orchid-msg-assistant">
       {message.content ? <MarkdownContent content={message.content} /> : null}
-      {isStreaming && <span className="streaming-cursor" />}
+      {isStreaming && (
+        <span className="streaming-cursor" aria-hidden />
+      )}
     </div>
   );
 }
@@ -99,6 +103,7 @@ function ThinkingMessage({
   // Stay open while reasoning streams; user can still toggle.
   const [expanded, setExpanded] = useState(Boolean(isStreaming));
   const [userToggled, setUserToggled] = useState(false);
+  const panelId = useId();
   const toggle = useCallback(() => {
     setUserToggled(true);
     setExpanded((prev) => !prev);
@@ -118,11 +123,19 @@ function ThinkingMessage({
   }, [isStreaming, userToggled]);
 
   return (
-    <div className={`thought-block ${isStreaming ? 'thought-block-streaming' : ''}`}>
-      <button type="button" className="thought-block-title" onClick={toggle}>
+    <div
+      className={`thought-block orchid-thought ${isStreaming ? 'thought-block-streaming' : ''}`}
+    >
+      <button
+        type="button"
+        className="thought-block-title orchid-thought-title"
+        onClick={toggle}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+      >
         <span className="inline-flex items-center gap-1.5">
           {isStreaming ? (
-            <Icon name="loader" size={12} className="animate-spin" />
+            <span className="loading loading-spinner loading-xs" aria-hidden />
           ) : (
             <Icon name="alertCircle" size={12} />
           )}
@@ -131,9 +144,9 @@ function ThinkingMessage({
         <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
       </button>
       {expanded && (
-        <div className="thought-block-content">
+        <div id={panelId} className="thought-block-content orchid-thought-content">
           {content}
-          {isStreaming && <span className="streaming-cursor" />}
+          {isStreaming && <span className="streaming-cursor" aria-hidden />}
         </div>
       )}
     </div>
@@ -196,20 +209,27 @@ function ToolResultMessage({ message }: { message: Message }) {
 
 function ErrorMessage({ message }: { message: Message }) {
   return (
-    <div className="error-banner-inline">
-      <Icon name="alertCircle" size={16} className="shrink-0 text-error" />
-      <div className="min-w-0 flex-1">
-        <div className="error-banner-title">Error</div>
-        <div className="error-banner-message">{message.content}</div>
+    <div
+      className="error-banner-inline orchid-error-banner alert alert-error"
+      role="alert"
+    >
+      <Icon name="alertCircle" size={16} className="shrink-0" />
+      <div className="min-w-0 flex-1 orchid-error-body">
+        <div className="error-banner-title orchid-error-title">Error</div>
+        <div className="error-banner-message orchid-error-message">{message.content}</div>
       </div>
     </div>
   );
 }
 
 function SystemMessage({ message }: { message: Message }) {
-  return <div className="msg-system">{message.content}</div>;
+  return (
+    <div className="msg-system orchid-msg-system">{message.content}</div>
+  );
 }
 
 function DefaultMessage({ message }: { message: Message }) {
-  return <div className="msg msg-assistant">{message.content}</div>;
+  return (
+    <div className="msg msg-assistant orchid-msg orchid-msg-assistant">{message.content}</div>
+  );
 }

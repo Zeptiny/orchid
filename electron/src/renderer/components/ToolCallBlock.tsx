@@ -1,6 +1,7 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useId, useMemo, useState, type ReactNode } from 'react';
 import type { ToolBlock } from '../hooks/useChat';
 import { Icon, type IconName } from './Icon';
+import { StatusBadge } from './ui/StatusBadge';
 
 interface ToolCallBlockProps {
   block: ToolBlock;
@@ -182,6 +183,7 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
   // Outputs always start collapsed; user expands on demand.
   // Title or expanded content both toggle (content click collapses).
   const [expanded, setExpanded] = useState(false);
+  const panelId = useId();
   const iconName = iconForTool(block.toolName);
   const argsText = block.args || block.partialArgs;
   const primaryValue = useMemo(
@@ -206,11 +208,11 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
 
   const badge =
     block.status === 'generating' ? (
-      <span className="badge badge-xs badge-info">generating</span>
+      <StatusBadge tone="info" size="xs">generating</StatusBadge>
     ) : block.status === 'running' ? (
-      <span className="badge badge-xs badge-warning">running</span>
+      <StatusBadge tone="warning" size="xs">running</StatusBadge>
     ) : block.status === 'failed' ? (
-      <span className="badge badge-xs badge-error">failed</span>
+      <StatusBadge tone="error" size="xs">failed</StatusBadge>
     ) : null;
 
   const titleText = (() => {
@@ -279,22 +281,23 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
   })();
 
   return (
-    <div className={`tool-block ${stateClass}`}>
+    <div className={`tool-block orchid-tool-block ${stateClass}`}>
       <button
-        className="tool-block-title"
+        className="tool-block-title orchid-tool-block-title"
         onClick={toggle}
         type="button"
         aria-expanded={expanded}
+        aria-controls={panelId}
       >
-        <span className="tool-block-title-left">
+        <span className="tool-block-title-left orchid-tool-block-title-left">
           {showLoader ? (
-            <Icon name="loader" size={12} className="animate-spin shrink-0" />
+            <span className="loading loading-spinner loading-xs shrink-0" aria-hidden />
           ) : (
             <Icon name={iconName} size={12} className="shrink-0" />
           )}
-          <span className="tool-block-title-text">{titleText}</span>
+          <span className="tool-block-title-text orchid-tool-block-title-text">{titleText}</span>
         </span>
-        <span className="tool-block-title-right">
+        <span className="tool-block-title-right orchid-tool-block-title-right">
           {badge}
           <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
         </span>
@@ -302,7 +305,8 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
 
       {expanded && (
         <div
-          className="tool-block-content"
+          id={panelId}
+          className="tool-block-content orchid-tool-block-content"
           onClick={collapse}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
@@ -315,25 +319,29 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
           title="Click to collapse"
         >
           {block.status === 'generating' && (
-            <div className="tool-args-stream">streaming args: {argsText || '{'}</div>
+            <div className="tool-args-stream orchid-tool-args-stream">
+              streaming args: {argsText || '{'}
+            </div>
           )}
           {block.status === 'running' && (
-            <div className="tool-running-hint">
+            <div className="tool-running-hint orchid-tool-running-hint">
               {primaryValue
                 ? `${runningVerb(block.toolName).toLowerCase()} ${primaryValue}…`
                 : 'running…'}
             </div>
           )}
           {block.status === 'completed' && block.result && (
-            <pre className="tool-result-body">{formatResultBody(block.result)}</pre>
+            <pre className="tool-result-body orchid-tool-result-body">
+              {formatResultBody(block.result)}
+            </pre>
           )}
           {block.status === 'failed' && (
-            <pre className="tool-result-body tool-result-error">
+            <pre className="tool-result-body tool-result-error orchid-tool-result-body orchid-tool-result-error">
               {parseToolPayload(block.error).body || block.error || 'Tool failed'}
             </pre>
           )}
           {block.status === 'completed' && !block.result && (
-            <div className="tool-running-hint">done</div>
+            <div className="tool-running-hint orchid-tool-running-hint">done</div>
           )}
         </div>
       )}

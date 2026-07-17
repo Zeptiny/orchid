@@ -181,12 +181,18 @@ export function ChatStream({
     scrollToBottom();
   }, [messages.length, streamingContent, toolBlocks, streamSegments, scrollToBottom]);
 
+  // When a new stream starts, pin to bottom only if the user was already near
+  // the bottom. Do not force-scroll readers who scrolled away mid-history.
+  const prevStatusRef = useRef(status);
   useEffect(() => {
-    if (status === 'streaming') {
-      setIsUserScrolledUp(false);
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (status === 'streaming' && prev !== 'streaming') {
+      if (shouldAutoScroll(isUserScrolledUp)) {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
     }
-  }, [status]);
+  }, [status, isUserScrolledUp]);
 
   // Reset expanded stubs only when the session is replaced (not every new turn).
   useEffect(() => {
@@ -253,15 +259,17 @@ export function ChatStream({
     !error
   ) {
     return (
-      <div className="chat-scroll flex min-h-0 flex-1 items-center justify-center">
-        <div className="empty-state">
-          <div className="empty-state-icon" aria-hidden>
+      <div className="chat-scroll orchid-chat-scroll flex min-h-0 flex-1 items-center justify-center">
+        <div className="empty-state orchid-chat-empty">
+          <div className="empty-state-icon orchid-chat-empty-icon" aria-hidden>
             <img src={orchidIcon} alt="" width={96} height={96} />
           </div>
           {workspaceUnbound ? (
             <>
-              <div className="empty-state-title">Choose a project folder</div>
-              <div className="empty-state-desc">
+              <div className="empty-state-title orchid-chat-empty-title">
+                Choose a project folder
+              </div>
+              <div className="empty-state-desc orchid-chat-empty-desc">
                 Orchid needs a working directory before the agent can run tools
                 or create sessions.
               </div>
@@ -278,8 +286,8 @@ export function ChatStream({
             </>
           ) : (
             <>
-              <div className="empty-state-title">Welcome to Orchid</div>
-              <div className="empty-state-desc">
+              <div className="empty-state-title orchid-chat-empty-title">Welcome to Orchid</div>
+              <div className="empty-state-desc orchid-chat-empty-desc">
                 Start a conversation by typing a message below.
               </div>
             </>
@@ -290,9 +298,9 @@ export function ChatStream({
   }
 
   return (
-    <div className="chat-scroll" ref={containerRef}>
+    <div className="chat-scroll orchid-chat-scroll" ref={containerRef}>
       {error && (
-        <div className="error-banner-slot">
+        <div className="error-banner-slot orchid-error-slot">
           <ErrorBanner
             message={error}
             onDismiss={onClearError}

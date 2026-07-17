@@ -8,13 +8,14 @@
  * Level 1 expand → finished thoughts + tool rows in chronological order
  * Level 2 → expand a tool row for details (existing ToolCallBlock)
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import type { Message } from '../../shared/types/message';
 import type { ToolBlock } from '../hooks/useChat';
 import { summarizeToolGroup } from '../utils/tool-grouping';
 import { Icon } from './Icon';
 import { MessageWidget } from './MessageWidget';
 import { ToolCallBlock } from './ToolCallBlock';
+import { StatusBadge } from './ui/StatusBadge';
 
 export type ActivityChild =
   | { kind: 'tool'; block: ToolBlock }
@@ -33,6 +34,7 @@ export function ToolActivityGroup({
   items,
   alwaysExpand = false,
 }: ToolActivityGroupProps) {
+  const panelId = useId();
   const tools = useMemo(
     () => items.filter((c): c is Extract<ActivityChild, { kind: 'tool' }> => c.kind === 'tool'),
     [items],
@@ -88,38 +90,39 @@ export function ToolActivityGroup({
   const badgeCount = tools.length > 0 ? tools.length : items.length;
 
   return (
-    <div className={`tool-activity-group ${stateClass}`}>
+    <div className={`tool-activity-group orchid-tool-activity ${stateClass}`}>
       <button
         type="button"
-        className="tool-activity-group-title"
+        className="tool-activity-group-title orchid-tool-activity-title"
         onClick={() => setExpanded((prev) => !prev)}
         aria-expanded={expanded}
+        aria-controls={panelId}
       >
-        <span className="tool-activity-group-title-left">
+        <span className="tool-activity-group-title-left orchid-tool-activity-title-left">
           {showLoader ? (
-            <Icon name="loader" size={12} className="animate-spin shrink-0" />
+            <span className="loading loading-spinner loading-xs shrink-0" aria-hidden />
           ) : (
             <Icon name={iconName} size={12} className="shrink-0" />
           )}
-          <span className="tool-activity-group-title-text">
+          <span className="tool-activity-group-title-text orchid-tool-activity-title-text">
             {summary.title || 'Activity'}
           </span>
-          <span className="tool-activity-group-count badge badge-ghost badge-xs">
+          <StatusBadge tone="neutral" size="xs" className="tool-activity-group-count badge-ghost">
             {badgeCount}
-          </span>
+          </StatusBadge>
         </span>
-        <span className="tool-activity-group-title-right">
+        <span className="tool-activity-group-title-right orchid-tool-activity-title-right">
           <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
         </span>
       </button>
 
       {expanded && (
-        <div className="tool-activity-group-body">
+        <div id={panelId} className="tool-activity-group-body orchid-tool-activity-body">
           <div
             className={
               overflow
-                ? 'tool-activity-group-children tool-activity-group-children-scroll'
-                : 'tool-activity-group-children'
+                ? 'tool-activity-group-children tool-activity-group-children-scroll orchid-tool-activity-children orchid-tool-activity-children-scroll'
+                : 'tool-activity-group-children orchid-tool-activity-children'
             }
           >
             {visible.map((child, i) => {
@@ -136,7 +139,7 @@ export function ToolActivityGroup({
             })}
           </div>
           {hiddenCount > 0 && (
-            <div className="tool-activity-group-overflow">
+            <div className="tool-activity-group-overflow orchid-tool-activity-overflow">
               +{hiddenCount} more
             </div>
           )}

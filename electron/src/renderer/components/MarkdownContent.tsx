@@ -46,7 +46,7 @@ function MarkdownCode({
     );
   }
   return (
-    <code className="code-token" {...props}>
+    <code className="code-token orchid-code-token" {...props}>
       {children}
     </code>
   );

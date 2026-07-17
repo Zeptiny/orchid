@@ -1,6 +1,7 @@
 import type { Usage } from '../../shared/types/message';
 import { hasUsage } from '../../shared/usage';
 import { Icon } from './Icon';
+import { StatusBadge } from './ui/StatusBadge';
 
 interface ChainFooterProps {
   usage: Usage | null;
@@ -28,20 +29,22 @@ export function ChainFooter({
   const showUsage = hasUsage(usage);
 
   return (
-    <div className="chain-footer">
+    <div className="chain-footer orchid-chain-footer">
       {interrupted && (
-        <span className="chain-footer-interrupted">
+        <StatusBadge tone="warning" size="xs" className="gap-1">
           <Icon name="square" size={12} />
           Interrupted
-        </span>
+        </StatusBadge>
       )}
       {failed && !interrupted && (
-        <span className="chain-footer-interrupted">
+        <StatusBadge tone="error" size="xs" className="gap-1">
           <Icon name="alert" size={12} />
           Failed
-        </span>
+        </StatusBadge>
       )}
-      {model ? <span className="chain-footer-model">{model}</span> : null}
+      {model ? (
+        <span className="chain-footer-model orchid-chain-footer-model">{model}</span>
+      ) : null}
       {showUsage && (
         <span>
           agent: in {agentIn} cached {agentCached} out {agentOut}
