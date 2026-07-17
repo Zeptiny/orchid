@@ -177,12 +177,6 @@ export function LeftSidebar({
         actions={
           <div className="panel-header-actions">
             <IconButton
-              label={`New session (${formatShortcut('session.new')})`}
-              icon="plus"
-              size="sm"
-              onClick={onSessionCreate}
-            />
-            <IconButton
               label={`Collapse sessions rail (${formatShortcut('sessionsRail.toggle')})`}
               icon="chevronLeft"
               size="sm"
@@ -210,10 +204,20 @@ export function LeftSidebar({
           projectPickerCreatesDraft={projectPickerCreatesDraft}
         />
 
+        <button
+          type="button"
+          className="btn btn-primary btn-sm session-new-btn"
+          onClick={onSessionCreate}
+          title={`New session (${formatShortcut('session.new')})`}
+        >
+          <Icon name="plus" size={14} />
+          <span>New Session</span>
+        </button>
+
         <div className="session-search">
           <Icon name="search" size={12} className="session-search-icon" />
           <input
-            className="input input-sm input-bordered session-search-input w-full"
+            className="session-search-input w-full"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search sessions..."

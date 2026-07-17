@@ -944,32 +944,48 @@
   white-space: nowrap;
 }
 
-/* Session search — mock: relative, margin-bottom 6px, icon left 6px */
+/* New session CTA above search */
+.session-new-btn {
+  width: 100%;
+  justify-content: flex-start !important;
+  gap: 8px !important;
+  min-height: 36px !important;
+  margin-bottom: 8px;
+  border-radius: 0.5rem !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+}
+
+/* Session search — padding aligned with composer textarea (12px left / 8px right). */
 .session-search {
   position: relative;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 .session-search-icon {
   position: absolute;
-  left: 6px;
+  left: 12px;
   top: 50%;
   transform: translateY(-50%);
   opacity: 0.4;
   pointer-events: none;
   color: var(--text-secondary);
+  z-index: 1;
 }
 .session-search-input {
   width: 100%;
-  min-height: 28px;
-  padding: 6px 8px 6px 22px !important;
-  border: 1px solid var(--border-default);
-  border-radius: 5px;
-  background: var(--input-bg);
-  color: var(--text-primary);
-  font-size: 11px;
+  min-height: 36px;
+  height: 36px;
+  padding: 0 8px 0 32px !important;
+  border: 1px solid var(--border-default, var(--color-base-300));
+  border-radius: 0.5rem;
+  background: var(--input-bg, var(--color-base-200));
+  color: var(--text-primary, var(--color-base-content));
+  font-size: 12px;
+  line-height: 36px;
+  box-sizing: border-box;
 }
 .session-search-input::placeholder {
-  color: var(--text-secondary);
+  color: var(--text-secondary, color-mix(in srgb, var(--color-base-content) 55%, transparent));
 }
 
 /* Session list — NO horizontal dividers (plain list, not daisyUI menu) */

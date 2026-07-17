@@ -202,9 +202,11 @@
   /* Flat message rows — not DaisyUI chat/chat-bubble.
      Padding is enforced unlayered in exceptions.css + Tailwind on JSX. */
   .orchid-msg {
-    @apply break-words text-sm leading-snug;
+    /* text-md ≈ Tailwind text-base (1rem); no text-md token in Tailwind 4. */
+    @apply break-words text-base leading-snug;
     max-width: min(85%, 740px);
     border-radius: 0.375rem;
+    font-size: 1rem;
   }
 
   .orchid-msg-user {
