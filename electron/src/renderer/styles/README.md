@@ -1,6 +1,6 @@
 # Renderer styling contract
 
-Maintainer-facing contract for Orchid’s Electron renderer UI. It freezes class-selection rules, approved exceptions, reserved DaisyUI selectors, theme requirements, and **layout preservation** so migrations can remove arbitrary utilities and legacy CSS without redesigning the product shell.
+Maintainer-facing contract for Orchid’s Electron renderer UI. Class selection, approved exceptions, reserved DaisyUI selectors, theme requirements, and **layout preservation** are frozen so UI work stays consistent without redesigning the product shell.
 
 Related tests: `electron/tests/integration/renderer-style-contract.test.ts`.
 
@@ -39,7 +39,7 @@ Do **not** use DaisyUI `chat` / `chat-bubble` for message bodies (flat chat pres
 - Prefer DaisyUI semantic colors (`base-100`, `primary`, `error`, …) over ad-hoc palette values in new markup.
 - Prefer standard spacing, text, and radius scales over arbitrary values (`text-[10px]`, `z-[1000]`, `rounded-[5px]`).
 - Keep dynamic values (grid tracks, textarea height, swatches, progress) as data via CSS variables or inline styles — not static utility classes.
-- Namespace new composites with `orchid-`. Temporary legacy selectors live only in the compatibility bridge while consumers migrate.
+- Namespace new composites with `orchid-`. Residual legacy selectors live only in `chat.css` while still consumed.
 - Do not redefine reserved DaisyUI selectors in feature CSS (see below).
 - Do not add CSS Modules or a second styling library for this migration.
 
@@ -51,22 +51,21 @@ Do not introduce top-level custom rules whose subject is a DaisyUI component cla
 
 Product-specific names that only *start* like a DaisyUI root but are not DaisyUI (for example `.input-area`) are allowed when they are not the reserved class itself.
 
-During migration, existing top-level redefinitions are recorded as an explicit **baseline** in the style contract test. New redefinitions fail the test. Zero reserved redefinitions is the U8 gate, not U1.
-
-Scoped overrides (e.g. `.composer .input`) are still inventory debt; prefer removing them when those surfaces are migrated rather than adding more.
+**U8 gate:** zero top-level reserved DaisyUI redefinitions in feature CSS. Scoped overrides (e.g. `.provider-connection-wizard .modal-box`) are allowed when they only adjust a product surface.
 
 ## Approved exception paths
 
 | Exception | Allowed location | Treatment |
 | --- | --- | --- |
 | Theme variables / `color-scheme` | `themes/*.css` | DaisyUI `--color-*` plus app-specific variables still consumed by the renderer |
-| Markdown / syntax highlighting | `styles/markdown.css` (target) | Nested element/token selectors; semantic theme variables |
-| Scrollbars | global exception layer | Browser-specific selectors; theme variables only |
-| Animations / streaming cursor | exception layer | Keyframes and pseudo-elements when utilities cannot express behavior |
+| Markdown / syntax highlighting | `styles/markdown.css` | Nested element/token selectors; semantic theme variables |
+| Scrollbars | `styles/exceptions.css` | Browser-specific selectors; theme variables only |
+| Animations / streaming cursor | `styles/exceptions.css` | Keyframes and pseudo-elements when utilities cannot express behavior |
 | Runtime layout dimensions | `ChatView.tsx` + `styles/exceptions.css` `.app-frame` | Set `--orchid-shell-left` / `--orchid-shell-right` from collapse state; center track stays `minmax(460px, 1fr)`; preserve grid/panel topology |
-| Runtime textarea height | `InputArea.tsx` | Keep resize behavior; do not encode generated pixel heights as static utilities |
+| Runtime textarea height | `InputArea.tsx` + `.composer-textarea` in exceptions | Keep resize behavior; do not encode generated pixel heights as static utilities |
 | Runtime swatches / progress | `ContextGrid.tsx`, `Footer.tsx`, `CommandPalette.tsx` | Dynamic colors/fractions as data; classes for surrounding geometry |
 | Focus / modal browser quirks | focused exception selectors | Only after smoke proves utilities/DaisyUI insufficient |
+| Residual product CSS | `styles/chat.css` | Unmigrated shell/onboarding/palette/config selectors still consumed by JSX; shrink further when dual-class consumers drop legacy names |
 
 Every exception needs a short comment or a row in this table explaining why a predefined class cannot replace it.
 
@@ -82,7 +81,11 @@ These files may use inline `style={...}` for runtime values without that usage c
 - `components/Preferences/ScopeToggle.tsx`
 - `components/ToolWidgets/LiveCommandInline.tsx`
 
-Static `className` strings in those files still must not introduce new arbitrary utilities outside baseline/approved lists.
+Static `className` strings in those files still must not introduce arbitrary utilities outside the approved list (currently empty).
+
+### Approved static arbitrary utilities
+
+**None.** After U8, static `className` strings must use predefined Tailwind utilities only. Prefer `text-xs`, `z-50`, `rounded-md`, `gap-px`, `max-h-96`, `max-w-xl`, etc. If exact geometry is behavior-critical, use an `orchid-*` composite or a dynamic CSS variable exception.
 
 ## Themes
 
@@ -101,10 +104,10 @@ Do not replace the runtime theme loader with compile-time-only DaisyUI theme blo
 | File | Role |
 | --- | --- |
 | `index.css` | **Canonical entry** (imported from `main.tsx`): Tailwind, DaisyUI plugin, document/root rules, layer imports |
-| `components.css` | `@layer components` `orchid-*` composites with `@apply` + semantic/theme tokens |
+| `components.css` | `@layer components` `orchid-*` composites with `@apply` + semantic/theme tokens (dual-named with legacy aliases where still needed) |
 | `markdown.css` | Markdown / GFM / highlight tokens |
-| `exceptions.css` | Scrollbars, keyframes, streaming cursor, DaisyUI menu border kill, browser quirks |
-| `chat.css` | Temporary compatibility bridge of unmigrated feature/legacy selectors until U8 |
+| `exceptions.css` | Scrollbars, keyframes, streaming cursor, shell grid tracks, composer height hooks |
+| `chat.css` | Residual compatibility bridge: command palette, onboarding/provider wizard, shell panels/session/config/shortcuts not fully dual-class only yet |
 | `README.md` | This contract |
 
 ### Import graph
@@ -116,48 +119,77 @@ main.tsx
         ├── components.css
         ├── markdown.css
         ├── exceptions.css
-        └── chat.css          ← compatibility bridge only
+        └── chat.css          ← residual bridge only
 ```
 
-Runtime themes are **not** part of this graph: `applyTheme()` swaps a single `#orchid-theme` stylesheet link (`themes/*.css`) and sets `document.documentElement.dataset.theme`. Do not migrate those files into compile-time `@plugin "daisyui/theme"` blocks in this migration.
+Runtime themes are **not** part of this graph: `applyTheme()` swaps a single `#orchid-theme` stylesheet link (`themes/*.css`) and sets `document.documentElement.dataset.theme`.
 
-### Compatibility bridge (`chat.css`)
+### Residual bridge (`chat.css`)
 
-- Still contains unmigrated feature CSS (shell, sidebars, composer, settings, onboarding, etc.).
-- Source-structure tests may still assert selectors live here; keep the bridge until consumers and tests move (U8).
+- Dead pre-migration legacy blocks (old `.message-*`, `.app-layout`, `.sidebar-*`, `.footer` layout, unused onboarding substeps without consumers) were removed in U8.
+- Migrated dual-class rules already owned by `components.css` were removed from the bridge.
+- Remaining rules still have JSX consumers (shell panels, session chrome, config/onboarding, command palette chrome, pickers, shortcuts help).
 - **Do not add new rules** to `chat.css`. New composites → `components.css`; markdown → `markdown.css`; browser exceptions → `exceptions.css`.
-- Custom `.btn` / `.btn-*` redefinitions were removed in U2 so DaisyUI owns button primitives in JSX.
 
-### Known reserved redefinitions (shrink toward zero by U8)
+### Known reserved redefinitions
 
-| Selector | Location | Why still present |
-| --- | --- | --- |
-| `.footer` | `chat.css` | Legacy footer layout block; live UI uses `chat-footer` / DaisyUI `footer` carefully — remove when legacy block is deleted |
-| `.menu` (+ li variants) | `exceptions.css` | Border-kill only; prefer not using DaisyUI `menu` for product lists |
-
-Do not delete legacy selectors without updating consumer inventory and source-structure tests.
+**None** after U8. Product lists use plain lists / PopoverList / custom menus rather than DaisyUI `menu`. Buttons are DaisyUI `btn` in JSX, not custom `.btn` CSS.
 
 ## Arbitrary utilities
 
-Static class strings (from `className` / `class` attributes and class-like string/template literals inside those attributes) must not introduce new Tailwind arbitrary values (tokens matching `utility-[...]`, including variants like `sm:grid-cols-[...]`).
+Static class strings (from `className` / `class` attributes and class-like string/template literals inside those attributes) must not introduce Tailwind arbitrary values (tokens matching `utility-[...]`, including variants like `sm:grid-cols-[...]`).
 
-- **Baseline**: pre-migration hits are listed in `BASELINE_ARBITRARY_UTILITIES` in the contract test. Shrink this set as surfaces migrate.
-- **Approved**: intentional long-lived exceptions go in `APPROVED_ARBITRARY_UTILITIES` and should be documented here.
+- **Approved**: intentional long-lived exceptions go in `APPROVED_ARBITRARY_UTILITIES` (currently empty) and must be documented here.
 - **Not scanned**: TypeScript arrays, generics, indexed access (`tierModels[tier.id]`), and `${...}` interiors of class templates — the scanner is class-bearing only.
 
-Prefer nearest predefined utilities (`text-xs`, `z-50`, `rounded-md`, `gap-px`, `max-h-96`, …). If exact geometry is behavior-critical, use an `orchid-*` composite or a dynamic CSS variable exception.
-
-## Migration posture
-
-1. **U1**: contract test + this README + baseline inventory (done).
-2. **U2**: canonical CSS layers + remove competing `.btn*` redefs (done). Baseline reserved redefs may only shrink or move with justification.
-3. **U3–U7**: shared primitives + feature migration; arbitrary-utility baseline may only shrink or move entries to approved exceptions with justification.
-4. **U8**: zero arbitrary utilities outside approved exceptions; zero top-level reserved DaisyUI redefinitions; remove or reduce `chat.css` compatibility bridge; full theme smoke matrix.
-
 ## How to add UI safely
+
+### Example 1 — DaisyUI component
+
+```tsx
+<button type="button" className="btn btn-primary btn-sm">Save</button>
+```
+
+### Example 2 — Tailwind utilities (one-off layout)
+
+```tsx
+<div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+  <p className="truncate text-sm text-base-content/70">{label}</p>
+</div>
+```
+
+### Example 3 — `orchid-*` composite (repeated product surface)
+
+In `components.css`:
+
+```css
+@layer components {
+  .orchid-chat-footer {
+    @apply flex shrink-0 items-center justify-between gap-2.5 border-t border-base-content/10 px-3 py-1 text-xs;
+  }
+}
+```
+
+In JSX: `className="orchid-chat-footer chat-footer"` (dual name only while a legacy alias remains useful).
+
+### Example 4 — Dynamic exception
+
+```tsx
+<div
+  className="app-frame"
+  style={{
+    ['--orchid-shell-left' as string]: leftCollapsed ? '56px' : '260px',
+    ['--orchid-shell-right' as string]: rightCollapsed ? '48px' : '300px',
+  }}
+/>
+```
+
+Document the path under **Approved dynamic style components** and keep static geometry in classes.
+
+### Checklist
 
 1. Prefer DaisyUI + predefined Tailwind in the feature JSX.
 2. If the same pattern appears twice (or encodes shared behavior), extract a small primitive or `orchid-*` composite.
 3. If you need a dynamic pixel/color/fraction, put it in an approved exception path as a CSS variable or inline style.
-4. Run `npm test -- tests/integration/renderer-style-contract.test.ts` from `electron/` before expanding the migration.
+4. Run `npm test -- tests/integration/renderer-style-contract.test.ts` from `electron/`.
 5. Never “fix” styling by redesigning shell layout.

@@ -1,11 +1,9 @@
 /**
- * Renderer style contract — U1 baseline.
+ * Renderer style contract — U8 zero-violation gate.
  *
  * Scans class-bearing source (className / class attributes) and feature CSS
- * for styling-contract violations. Existing violations are recorded as an
- * explicit baseline; the suite fails only when new violations appear.
- *
- * Zero-violation gate is mandatory after U8 cleanup, not U1.
+ * for styling-contract violations. Arbitrary utilities and top-level reserved
+ * DaisyUI redefinitions must be zero outside the approved exception registries.
  */
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
@@ -161,8 +159,8 @@ const RESERVED_MODIFIER_ROOTS = new Set([
 
 /**
  * Approved static arbitrary utilities that remain intentionally allowed
- * (documented in styles/README.md). Empty at U1 — migration removes baseline
- * entries rather than expanding this set without review.
+ * (documented in styles/README.md). U8 gate: empty — use predefined utilities,
+ * orchid-* composites, or dynamic CSS variables instead.
  */
 export const APPROVED_ARBITRARY_UTILITIES: ReadonlySet<string> = new Set([
   // format: "relative/path/from/renderer::token"
@@ -183,43 +181,16 @@ export const APPROVED_DYNAMIC_STYLE_PATHS: readonly string[] = [
 ];
 
 /**
- * Baseline arbitrary utilities present before migration (file::token).
- * New hits outside this set and APPROVED_ARBITRARY_UTILITIES fail the suite.
+ * Pre-migration baseline (U1). U8 cleared this set: zero unapproved arbitrary
+ * utilities remain in static class strings.
  */
-export const BASELINE_ARBITRARY_UTILITIES: ReadonlySet<string> = new Set([
-  'components/CommandPalette.tsx::gap-[1px]',
-  'components/CommandPalette.tsx::max-h-[420px]',
-  'components/CommandPalette.tsx::min-h-[30px]',
-  'components/CommandPalette.tsx::min-h-[32px]',
-  'components/CommandPalette.tsx::py-[5px]',
-  'components/CommandPalette.tsx::rounded-[10px]',
-  'components/CommandPalette.tsx::rounded-[3px]',
-  'components/CommandPalette.tsx::rounded-[5px]',
-  'components/CommandPalette.tsx::text-[10px]',
-  'components/CommandPalette.tsx::text-[11px]',
-  'components/CommandPalette.tsx::text-[12px]',
-  'components/CommandPalette.tsx::text-[9px]',
-  'components/CommandPalette.tsx::w-[min(520px,90%)]',
-  'components/CommandPalette.tsx::z-[1000]',
-  'components/Preferences/ScopeToggle.tsx::max-w-[280px]',
-  'components/Preferences/ScopeToggle.tsx::text-[10px]',
-  'components/Providers/ConnectionList.tsx::sm:grid-cols-[auto_1fr]',
-  'components/Providers/ConnectionModelsDialog.tsx::grid-cols-[minmax(0,1fr)_auto]',
-]);
+export const BASELINE_ARBITRARY_UTILITIES: ReadonlySet<string> = new Set([]);
 
 /**
- * Baseline top-level reserved DaisyUI selector redefinitions (file::selector).
- * Scoped overrides (e.g. `.composer .input`) are inventory-only until U8.
- * U2 removed custom `.btn*` rules (DaisyUI owns buttons in JSX) and moved menu
- * border kills into exceptions.css.
+ * Pre-migration reserved DaisyUI redefinitions (U1). U8 cleared this set:
+ * no top-level reserved DaisyUI selector redefinitions remain.
  */
-export const BASELINE_RESERVED_REDEFINITIONS: ReadonlySet<string> = new Set([
-  'styles/chat.css::.footer',
-  'styles/exceptions.css::.menu',
-  'styles/exceptions.css::.menu :where(li)',
-  'styles/exceptions.css::.menu :where(li) + :where(li)',
-  'styles/exceptions.css::.menu li',
-]);
+export const BASELINE_RESERVED_REDEFINITIONS: ReadonlySet<string> = new Set([]);
 
 // ─── Filesystem helpers ──────────────────────────────────────────────────────
 
@@ -556,7 +527,7 @@ describe('Renderer style contract', () => {
       expect(classes.some((c) => c.includes('flex'))).toBe(true);
     });
 
-    it('allows only approved or baseline arbitrary utilities', () => {
+    it('allows only approved arbitrary utilities (zero unapproved)', () => {
       const found = scanArbitraryUtilities();
       const unexpected: string[] = [];
       for (const key of found.keys()) {
@@ -566,18 +537,17 @@ describe('Renderer style contract', () => {
       }
       expect(
         unexpected,
-        `New arbitrary utilities beyond baseline/approved:\n${unexpected.join('\n')}`,
+        `Unapproved arbitrary utilities:\n${unexpected.join('\n')}`,
       ).toEqual([]);
     });
 
-    it('tracks baseline arbitrary utility count for migration progress', () => {
+    it('reports zero unapproved arbitrary utilities after U8', () => {
       const found = scanArbitraryUtilities();
-      const baselineStillPresent = [...BASELINE_ARBITRARY_UTILITIES].filter((k) => found.has(k));
-      // Soft progress signal: baseline may shrink as migration proceeds.
-      expect(baselineStillPresent.length).toBeLessThanOrEqual(BASELINE_ARBITRARY_UTILITIES.size);
-      expect(found.size).toBeLessThanOrEqual(
-        BASELINE_ARBITRARY_UTILITIES.size + APPROVED_ARBITRARY_UTILITIES.size,
+      const unapproved = [...found.keys()].filter(
+        (k) => !APPROVED_ARBITRARY_UTILITIES.has(k) && !BASELINE_ARBITRARY_UTILITIES.has(k),
       );
+      expect(unapproved).toEqual([]);
+      expect(found.size).toBeLessThanOrEqual(APPROVED_ARBITRARY_UTILITIES.size);
     });
   });
 
@@ -599,7 +569,7 @@ describe('Renderer style contract', () => {
       expect(selectors.some((s) => s.includes('orchid-panel'))).toBe(false);
     });
 
-    it('allows only baseline top-level reserved redefinitions during migration', () => {
+    it('reports zero top-level reserved DaisyUI redefinitions after U8', () => {
       const found = scanReservedRedefinitions();
       const unexpected: string[] = [];
       for (const key of found.keys()) {
@@ -608,8 +578,9 @@ describe('Renderer style contract', () => {
       }
       expect(
         unexpected,
-        `New reserved DaisyUI redefinitions beyond baseline:\n${unexpected.join('\n')}`,
+        `Reserved DaisyUI redefinitions:\n${unexpected.join('\n')}`,
       ).toEqual([]);
+      expect(found.size).toBe(0);
     });
   });
 

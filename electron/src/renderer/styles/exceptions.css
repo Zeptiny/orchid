@@ -1,28 +1,10 @@
 /**
  * Browser-specific and runtime exception styles.
  *
- * Keep this layer narrow: scrollbars, keyframes, streaming cursor, DaisyUI
- * menu border kills, and dynamic-layout hooks that utilities cannot express.
+ * Keep this layer narrow: scrollbars, keyframes, streaming cursor, and
+ * dynamic-layout hooks that utilities cannot express.
  * Every rule here should have a short reason.
  */
-
-/* ── DaisyUI menu border kill ─────────────────────────────────────────────
- * Some surfaces accidentally pick up DaisyUI menu list dividers. Strip them
- * without redefining menu layout beyond borders. Prefer not using .menu for
- * product lists; remove when remaining menu class usage is audited.
- */
-.menu,
-.menu li,
-.menu :where(li) {
-  border: none !important;
-  border-top: none !important;
-  border-bottom: none !important;
-  box-shadow: none !important;
-}
-.menu :where(li) + :where(li) {
-  margin-top: 0 !important;
-  border: none !important;
-}
 
 /* ── Global scrollbars ────────────────────────────────────────────────────
  * WebKit scrollbar pseudo-elements are not expressible as utilities.

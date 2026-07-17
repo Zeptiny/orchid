@@ -454,7 +454,7 @@ export function CommandPalette({
     >
       <div
         ref={panelRef}
-        className="command-palette orchid-command-palette flex max-h-[26rem] w-full max-w-xl flex-col overflow-hidden rounded-box border border-base-300 bg-base-200 shadow-2xl mx-4"
+        className="command-palette orchid-command-palette flex max-h-96 w-full max-w-xl flex-col overflow-hidden rounded-box border border-base-300 bg-base-200 shadow-2xl mx-4"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={handleKeyDown}
       >

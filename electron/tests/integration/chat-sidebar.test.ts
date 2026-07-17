@@ -794,67 +794,67 @@ describe('CSS Structure', () => {
   const fs = require('node:fs');
   const path = require('node:path');
 
-  const cssPath = path.resolve(__dirname, '../../src/renderer/styles/chat.css');
+  const stylesDir = path.resolve(__dirname, '../../src/renderer/styles');
+  const chatCssPath = path.join(stylesDir, 'chat.css');
+  const componentsCssPath = path.join(stylesDir, 'components.css');
+  const exceptionsCssPath = path.join(stylesDir, 'exceptions.css');
 
-  it('chat.css exists', () => {
-    expect(fs.existsSync(cssPath)).toBe(true);
+  function readStyles(): string {
+    return [
+      fs.readFileSync(chatCssPath, 'utf-8'),
+      fs.readFileSync(componentsCssPath, 'utf-8'),
+      fs.readFileSync(exceptionsCssPath, 'utf-8'),
+    ].join('\n');
+  }
+
+  it('canonical style layers exist', () => {
+    expect(fs.existsSync(path.join(stylesDir, 'index.css'))).toBe(true);
+    expect(fs.existsSync(componentsCssPath)).toBe(true);
+    expect(fs.existsSync(exceptionsCssPath)).toBe(true);
+    expect(fs.existsSync(chatCssPath)).toBe(true);
   });
 
-  it('chat.css contains layout classes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.app-layout');
-    expect(css).toContain('.chat-main');
-    expect(css).toContain('.chat-stream');
+  it('shell layout classes remain in style layers', () => {
+    const css = readStyles();
+    expect(css).toContain('.app-frame');
+    expect(css).toContain('.main-pane');
+    expect(css).toContain('.left-panel');
+    expect(css).toContain('.right-panel');
+    expect(css).toContain('.chat-scroll');
   });
 
-  it('chat.css contains message type classes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.message-user');
-    expect(css).toContain('.message-assistant');
-    expect(css).toContain('.message-thinking');
-    expect(css).toContain('.message-tool-call');
-    expect(css).toContain('.message-tool-result');
-    expect(css).toContain('.message-error');
+  it('flat message classes remain (not DaisyUI chat bubbles)', () => {
+    const css = readStyles();
+    expect(css).toContain('.msg-user');
+    expect(css).toContain('.msg-assistant');
+    expect(css).toContain('.msg-system');
+    expect(css).not.toMatch(/\.chat-bubble\b/);
   });
 
-  it('chat.css contains interaction state classes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.state-loading');
-    expect(css).toContain('.state-empty');
-    expect(css).toContain('.state-error');
-    expect(css).toContain('.state-partial');
+  it('session and panel classes remain', () => {
+    const css = readStyles();
+    expect(css).toContain('.session-list');
+    expect(css).toContain('.session-item');
+    expect(css).toContain('.panel-header');
+    expect(css).toContain('.panel-body');
   });
 
-  it('chat.css contains sidebar classes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.sidebar');
-    expect(css).toContain('.sidebar-section');
-    expect(css).toContain('.sidebar-section-header');
-  });
-
-  it('chat.css contains input area classes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.input-area');
-    expect(css).toContain('.input-textarea');
-  });
-
-  it('composer textarea leaves sizing to its resize effect', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
+  it('composer classes leave sizing to the resize effect', () => {
+    const css = readStyles();
+    expect(css).toContain('.composer-textarea');
     expect(css).not.toContain('field-sizing: content');
   });
 
-  it('chat.css contains footer classes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.footer');
-    expect(css).toContain('.footer-left');
-    expect(css).toContain('.footer-right');
+  it('chat footer classes remain', () => {
+    const css = readStyles();
+    expect(css).toContain('.chat-footer');
+    expect(css).toContain('.chat-footer-hint');
   });
 
-  it('chat.css uses CSS custom properties from themes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
+  it('style layers use theme custom properties', () => {
+    const css = readStyles();
     expect(css).toContain('var(--bg-primary)');
     expect(css).toContain('var(--text-primary)');
     expect(css).toContain('var(--accent-primary)');
-    expect(css).toContain('var(--sidebar-bg)');
   });
 });

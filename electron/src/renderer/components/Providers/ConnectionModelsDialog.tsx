@@ -322,12 +322,12 @@ export function ConnectionModelsEditor({
                       <li
                         key={model.id}
                         className={[
-                          'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2',
+                          'flex min-w-0 items-start justify-between gap-x-4 gap-y-2',
                           'rounded-md border-b border-base-300 p-3 !pl-6 transition-colors last:border-b-0',
                           selected ? 'bg-primary/10' : 'hover:bg-base-200/80',
                         ].join(' ')}
                       >
-                        <label className="min-w-0 cursor-pointer">
+                        <label className="min-w-0 flex-1 cursor-pointer">
                           <input
                             type="checkbox"
                             className="sr-only"
@@ -416,12 +416,12 @@ export function ConnectionModelsEditor({
                     <li
                       key={model.id}
                       className={[
-                        'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2',
+                        'flex min-w-0 items-start justify-between gap-x-4 gap-y-2',
                         'rounded-md border-b border-base-300 p-3 !pl-6 transition-colors last:border-b-0',
                         selectedModelIds.includes(model.id) ? 'bg-primary/10' : 'hover:bg-base-200/80',
                       ].join(' ')}
                     >
-                      <label className="min-w-0 cursor-pointer">
+                      <label className="min-w-0 flex-1 cursor-pointer">
                         <input
                           type="checkbox"
                           className="sr-only"

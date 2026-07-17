@@ -202,16 +202,18 @@ export function ConnectionList({
                   </StatusBadge>
                 </div>
 
-                <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[auto_1fr]">
-                  <dt className="font-medium text-base-content/70">Models</dt>
-                  <dd className="break-words">
-                    {modelNames.length > 0 ? modelNames.join(', ') : 'No model selected'}
-                  </dd>
+                <dl className="flex flex-col gap-2 text-sm">
+                  <div className="flex gap-4">
+                    <dt className="shrink-0 font-medium text-base-content/70">Models</dt>
+                    <dd className="min-w-0 break-words">
+                      {modelNames.length > 0 ? modelNames.join(', ') : 'No model selected'}
+                    </dd>
+                  </div>
                   {connection.endpoint && (
-                    <>
-                      <dt className="font-medium text-base-content/70">Endpoint</dt>
-                      <dd className="break-all">{connection.endpoint}</dd>
-                    </>
+                    <div className="flex gap-4">
+                      <dt className="shrink-0 font-medium text-base-content/70">Endpoint</dt>
+                      <dd className="min-w-0 break-all">{connection.endpoint}</dd>
+                    </div>
                   )}
                 </dl>
 

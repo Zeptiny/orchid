@@ -395,12 +395,8 @@ describe('Theme CSS Custom Properties', () => {
 
   it('active renderer rules do not hard-code a palette', () => {
     const stylesDir = path.resolve(__dirname, '../../src/renderer/styles');
-    const chatCss = fs.readFileSync(path.join(stylesDir, 'chat.css'), 'utf-8');
-    const marker = '/* ── Iteration 012 mock-aligned components';
-    const activeStart = chatCss.indexOf(marker);
-    expect(activeStart).toBeGreaterThanOrEqual(0);
     const activeCss = [
-      chatCss.slice(activeStart),
+      fs.readFileSync(path.join(stylesDir, 'chat.css'), 'utf-8'),
       fs.readFileSync(path.join(stylesDir, 'components.css'), 'utf-8'),
       fs.readFileSync(path.join(stylesDir, 'markdown.css'), 'utf-8'),
       fs.readFileSync(path.join(stylesDir, 'exceptions.css'), 'utf-8'),
@@ -422,6 +418,18 @@ describe('Theme CSS Custom Properties', () => {
     expect(indexCss).toMatch(/@import\s+["']\.\/exceptions\.css["']/);
     expect(indexCss).toMatch(/@import\s+["']\.\/chat\.css["']/);
     expect(indexCss).toContain('@plugin "daisyui"');
+  });
+
+  it('preserves existing shell topology entry points', () => {
+    const chatView = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/components/ChatView.tsx'),
+      'utf-8',
+    );
+    expect(chatView).toContain('app-frame');
+    expect(chatView).toContain('main-pane');
+    expect(chatView).toMatch(/LeftSidebar|left-panel/);
+    expect(chatView).toMatch(/Sidebar|right-panel/);
+    expect(chatView).not.toMatch(/Focused Workspace/i);
   });
 });
 
