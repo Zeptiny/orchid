@@ -61,7 +61,9 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
   const resolvedIconSize = iconSize ?? DEFAULT_ICON_SIZE[size];
   const sizeClass = SIZE_CLASS[size];
   const variantClass = VARIANT_CLASS[variant];
-  const shapeClass = isIconOnly ? 'btn-circle' : '';
+  // Prefer explicit square/circle from className; default icon-only to circle.
+  const hasShapeOverride = /\bbtn-(?:square|circle)\b/.test(className);
+  const shapeClass = isIconOnly && !hasShapeOverride ? 'btn-circle' : '';
 
   return (
     <button

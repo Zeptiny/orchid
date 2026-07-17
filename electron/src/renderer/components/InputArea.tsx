@@ -683,7 +683,7 @@ export function InputArea({
               icon="square"
               size="sm"
               variant={cancelVariant}
-              className="orchid-composer-action"
+              className="orchid-composer-action btn-square"
               onClick={() => void onCancel()}
               iconSize={14}
             />
@@ -693,7 +693,7 @@ export function InputArea({
               icon="arrowUp"
               size="sm"
               variant="primary"
-              className="orchid-composer-action"
+              className="orchid-composer-action btn-square"
               onClick={() => {
                 if (showMenu && slashResults[selectedIndex]) {
                   void handleSelectResult(slashResults[selectedIndex]);
