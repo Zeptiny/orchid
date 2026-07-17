@@ -578,9 +578,6 @@ const BASELINE_DAISYUI_HITS: ReadonlySet<string> = new Set([
 ]);
 
 const BASELINE_NON_TOKEN_COLORS: ReadonlySet<string> = new Set([
-  'styles/chat.css:L1113:#000',
-  'styles/chat.css:L1197:#000',
-  'styles/chat.css:L1207:#000',
   'styles/chat.css:L197:oklch(',
   'styles/chat.css:L198:oklch(',
   'styles/chat.css:L275:oklch(',
@@ -595,9 +592,12 @@ const BASELINE_NON_TOKEN_COLORS: ReadonlySet<string> = new Set([
   'styles/components.css:L38:#000',
   'styles/components.css:L726:#000',
   'styles/components.css:L734:#000',
+  'styles/components.css:L1496:#000',
+  'styles/components.css:L1580:#000',
+  'styles/components.css:L1590:#000',
 ]);
 
-const CHAT_CSS_BASELINE_LINES = 1407;
+const CHAT_CSS_BASELINE_LINES = 894;
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 

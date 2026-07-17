@@ -1275,4 +1275,515 @@
       min-width: 0;
     }
   }
+
+  /* ── Configuration / Settings form spacing ────────────────────────────────── */
+  /* Roomier than mock’s 8px fieldsets so titles, labels, and inputs breathe.   */
+
+  .config-main-header {
+    min-height: 56px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    border-bottom: 1px solid var(--border-default);
+    background: var(--bg-secondary);
+    flex: 0 0 auto;
+  }
+  .config-main-header-text {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .config-main-header-text h1 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.3;
+  }
+  .config-main-header-text p {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+  }
+  .config-main-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .config-main-header-actions .btn {
+    min-height: 2rem;
+    padding-inline: 0.875rem;
+    padding-block: 0.375rem;
+    gap: 0.375rem;
+  }
+
+  .config-tabs {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-default);
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    background: var(--bg-secondary);
+    flex: 0 0 auto;
+  }
+  .config-tab {
+    padding: 6px 12px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .config-tab:hover {
+    color: var(--text-primary);
+  }
+  .config-tab-active {
+    background: color-mix(in srgb, var(--accent-primary, var(--color-primary)) 14%, transparent);
+    color: var(--accent-primary, var(--color-primary));
+    border-color: color-mix(in srgb, var(--accent-primary, var(--color-primary)) 28%, transparent);
+  }
+
+  .config-body {
+    min-height: 0;
+    flex: 1 1 0;
+    overflow: auto;
+    padding: 16px 20px 24px;
+    background: var(--bg-primary);
+  }
+
+  .config-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-width: 1040px;
+    /* Stable top edge across tabs (no first-child margin collapse). */
+    padding-top: 0;
+    margin-top: 0;
+  }
+
+  /*
+   * Panel shell for every Preferences tab.
+   * Uses <section> (not <fieldset>/<legend>) so top spacing is identical
+   * whether the header is plain text or text + action buttons.
+   */
+  .config-fieldset {
+    margin: 0;
+    padding: 16px 16px 18px;
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--text-primary) 2%, transparent);
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  /* Scope filter row under section headers (Skills / Agents / Personalities). */
+  .config-scope-bar {
+    margin: 0 0 16px;
+    flex: 0 0 auto;
+  }
+
+  .config-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 18px;
+  }
+
+  @media (max-width: 720px) {
+    .config-form-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .config-form-grid-full {
+    grid-column: 1 / -1;
+  }
+
+  .config-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+  .config-field > label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    line-height: 1.35;
+  }
+
+  .config-field .input,
+  .config-field .select {
+    width: 100%;
+    min-height: 34px;
+    height: 34px;
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    background: var(--input-bg);
+    color: var(--text-primary);
+    padding: 6px 10px;
+    font: inherit;
+    font-size: 12px;
+    outline: none;
+  }
+  .config-field .textarea {
+    width: 100%;
+    min-height: 72px;
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    background: var(--input-bg);
+    color: var(--text-primary);
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.45;
+    resize: vertical;
+    outline: none;
+  }
+  .config-field .input:focus,
+  .config-field .select:focus,
+  .config-field .textarea:focus {
+    border-color: color-mix(in srgb, var(--accent-primary) 50%, var(--border-default));
+  }
+  .orchid-model-picker-trigger-copy {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    overflow: hidden;
+  }
+  .orchid-model-picker-trigger-copy .model-picker-trigger-label {
+    width: 100%;
+    flex: 0 1 auto;
+  }
+  .model-picker-trigger-sub-label {
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 400;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-picker-trigger-with-sub-label {
+    min-height: 40px;
+    height: 40px;
+  }
+
+  /* Agent tier picker (description list, model-picker family) */
+  .tier-picker-menu {
+    width: min(360px, calc(100vw - 32px));
+    max-height: min(320px, 60vh);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+    border: 1px solid var(--border-default, var(--color-base-300));
+    border-radius: 9px;
+    background: var(--bg-secondary, var(--color-base-200));
+    color: var(--text-primary, var(--color-base-content));
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color, #000) 55%, transparent);
+  }
+
+  .orchid-model-picker-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid color-mix(in srgb, var(--text-primary) 6%, transparent);
+  }
+  .model-picker-title {
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1.3;
+  }
+  .model-picker-current {
+    max-width: 45%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+    overflow: hidden;
+    color: var(--accent-primary);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-picker-current-name {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-picker-current-sub-label {
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-family: inherit;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .orchid-model-picker-search {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: auto;
+    min-height: 32px;
+    height: 32px;
+    margin: 10px 12px 8px;
+    padding: 0 9px;
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    background: var(--input-bg);
+    color: var(--text-primary);
+  }
+  .orchid-model-picker-search:focus-within {
+    border-color: color-mix(in srgb, var(--accent-primary) 50%, var(--border-default));
+  }
+  .orchid-model-picker-search input {
+    min-width: 0;
+    width: 100%;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+  }
+  .orchid-model-picker-search input::placeholder {
+    color: var(--text-secondary);
+  }
+  .searchable-picker-menu {
+    width: min(420px, calc(100vw - 32px));
+    max-height: min(360px, 62vh);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+    border: 1px solid var(--border-default, var(--color-base-300));
+    border-radius: 9px;
+    background: var(--bg-secondary, var(--color-base-200));
+    color: var(--text-primary, var(--color-base-content));
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color, #000) 55%, transparent);
+  }
+
+  /* DaisyUI dropdown-content can neutralize inherited surfaces — reassert chrome. */
+  .dropdown-content.searchable-picker-menu,
+  .dropdown-content.tier-picker-menu,
+  .dropdown-content.orchid-model-picker-menu {
+    border: 1px solid var(--border-default, var(--color-base-300));
+    background: var(--bg-secondary, var(--color-base-200));
+    color: var(--text-primary, var(--color-base-content));
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color, #000) 55%, transparent);
+  }
+  .searchable-picker-list {
+    list-style: none;
+    min-height: 0;
+    margin: 0;
+    padding: 6px;
+    overflow: auto;
+  }
+  .searchable-picker-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+  }
+  .searchable-picker-option:hover:not(:disabled),
+  .searchable-picker-option:focus-visible,
+  .searchable-picker-option.is-active,
+  .searchable-picker-option.is-selected {
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  }
+  .searchable-picker-option:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+  .searchable-picker-option-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .searchable-picker-option-name {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .searchable-picker-option-desc {
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-picker-table-wrap {
+    min-height: 0;
+    overflow: auto;
+    padding: 0 8px 8px;
+  }
+  .model-picker-table {
+    width: 100%;
+    min-width: 500px;
+    table-layout: fixed;
+    font-size: 13px;
+  }
+  .model-picker-table th {
+    padding: 7px 8px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .model-picker-table th:first-child,
+  .model-picker-table td:first-child {
+    width: 52%;
+    text-align: left;
+  }
+  .model-picker-table th:not(:first-child),
+  .model-picker-table td:not(:first-child) {
+    width: 16%;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .model-picker-table td {
+    padding: 9px 8px;
+    border-top: 1px solid color-mix(in srgb, var(--text-primary) 4.5%, transparent);
+    color: var(--text-muted);
+    font-size: 13px;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  .model-picker-row {
+    cursor: pointer;
+    outline: none;
+    transition: background 120ms ease;
+  }
+  .model-picker-row:hover,
+  .model-picker-row:focus-visible,
+  .model-picker-row.is-active {
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  }
+  .model-picker-row.is-selected {
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  }
+  .model-picker-model-name {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .config-model-picker {
+    width: 240px;
+    flex-shrink: 0;
+  }
+  .config-model-picker .orchid-model-picker-menu {
+    z-index: 200;
+    width: min(620px, calc(100vw - 292px));
+    max-width: calc(100vw - 292px);
+  }
+  .config-model-picker.model-picker-align-start .orchid-model-picker-menu {
+    right: auto;
+    left: 0;
+  }
+  .tier-model-picker {
+    width: min(320px, 100%);
+    flex-shrink: 0;
+  }
+
+  /* Onboarding model menus must paint above step chrome and not inherit clip. */
+  .onb-step .orchid-model-picker-menu,
+  .onb-step .tier-model-picker .orchid-model-picker-menu,
+  .onb-step .config-model-picker .orchid-model-picker-menu {
+    z-index: 4500;
+    width: min(620px, calc(100vw - 48px));
+    max-width: min(620px, calc(100vw - 48px));
+  }
+  .orchid-composer-model-picker .model-picker-trigger-with-sub-label {
+    min-height: 40px;
+    height: 40px;
+  }
+
+  @media (max-width: 720px) {
+    .config-model-picker {
+      width: 100%;
+    }
+  }
+
+  .config-card-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+  .config-card {
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--input-bg) 55%, transparent);
+    padding: 12px 14px;
+  }
+  .config-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.35;
+    margin: 0 0 3px;
+  }
+  .config-card-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+    margin: 0;
+  }
+  .config-card-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  /* Tags / scope badges on definition cards — readable size */
+  .config-card .badge {
+    min-height: 18px;
+    padding: 2px 7px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.25;
+  }
+  .config-note {
+    padding: 8px 2px 0;
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--accent-warning);
+    opacity: 0.9;
+  }
+
 }
