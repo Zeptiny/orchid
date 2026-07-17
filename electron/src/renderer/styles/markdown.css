@@ -281,3 +281,36 @@
   color: var(--text-primary);
 }
 
+/* ── Assistant flat-row density (from chat.css Phase 4 U20) ──────────────── */
+.orchid-msg-assistant .markdown-content p {
+  margin: 0 0 0.35em;
+}
+.orchid-msg-assistant .markdown-content p:last-child {
+  margin-bottom: 0;
+}
+.orchid-msg-assistant .markdown-content strong {
+  font-weight: 600;
+  color: inherit;
+}
+.orchid-msg-assistant .markdown-content code:not(.hljs):not([class*='language-']) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: inherit;
+  background: color-mix(in srgb, var(--accent-warning) 15%, transparent);
+  color: var(--accent-warning);
+  padding: 1px 3px;
+  border-radius: 3px;
+}
+.orchid-msg-assistant .markdown-content pre {
+  background: color-mix(in srgb, var(--bg-secondary) 84%, var(--overlay-color));
+  border: 1px solid var(--border-default);
+  border-radius: 5px;
+  padding: 8px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.orchid-msg-assistant .markdown-content pre code,
+.orchid-msg-assistant .markdown-content pre code.hljs {
+  background: none;
+  padding: 0;
+  color: var(--text-primary);
+}
