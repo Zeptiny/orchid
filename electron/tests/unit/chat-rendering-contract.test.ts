@@ -71,8 +71,13 @@ describe('chat rendering contract (U5)', () => {
 
     it('does not force-scroll on every streaming status tick', () => {
       const src = read('components/ChatStream.tsx');
-      // Must not reset isUserScrolledUp when entering streaming
-      expect(src).not.toMatch(/setIsUserScrolledUp\(false\)/);
+      // Reset scroll-away only on session change — not when entering streaming
+      expect(src).toMatch(
+        /setIsUserScrolledUp\(false\);\s*\n\s*\}, \[sessionId\]\)/,
+      );
+      expect(src).not.toMatch(
+        /status === 'streaming'[\s\S]{0,200}setIsUserScrolledUp\(false\)/,
+      );
       // New stream start still respects shouldAutoScroll
       expect(src).toMatch(/shouldAutoScroll\(isUserScrolledUp\)/);
     });

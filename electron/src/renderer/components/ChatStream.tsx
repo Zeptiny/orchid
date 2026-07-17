@@ -162,7 +162,18 @@ export function ChatStream({
     }
   }, [isUserScrolledUp]);
 
+  // Empty state returns early without containerRef — rebind when the scroll
+  // container mounts after the first message/stream content appears.
+  const hasScrollContainer =
+    messages.length > 0 ||
+    Boolean(streamingContent) ||
+    toolBlocks.length > 0 ||
+    streamSegments.length > 0 ||
+    status !== 'idle' ||
+    Boolean(error);
+
   useEffect(() => {
+    if (!hasScrollContainer) return;
     const container = containerRef.current;
     if (!container) return;
 
@@ -175,7 +186,7 @@ export function ChatStream({
 
     container.addEventListener('scroll', handleScroll, { passive: true });
     return () => container.removeEventListener('scroll', handleScroll);
-  }, []);
+  }, [hasScrollContainer]);
 
   useEffect(() => {
     scrollToBottom();
@@ -194,9 +205,10 @@ export function ChatStream({
     }
   }, [status, isUserScrolledUp]);
 
-  // Reset expanded stubs only when the session is replaced (not every new turn).
+  // Reset scroll-away + expanded stubs only when the session is replaced.
   useEffect(() => {
     setExpandedChainIndexes(new Set());
+    setIsUserScrolledUp(false);
   }, [sessionId]);
 
   // Committed history is independent of per-token stream text. Keep it stable

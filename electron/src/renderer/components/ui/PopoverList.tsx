@@ -71,6 +71,7 @@ export function PopoverList({
   filterOption = defaultFilter,
 }: PopoverListProps) {
   const pickerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const menuId = useId();
   const [open, setOpen] = useState(false);
@@ -87,6 +88,13 @@ export function PopoverList({
     return matches;
   }, [filterOption, options, query, selectedOption]);
 
+  const closeAndRestoreFocus = () => {
+    setOpen(false);
+    requestAnimationFrame(() => {
+      triggerRef.current?.focus();
+    });
+  };
+
   useEffect(() => {
     if (!open) return;
     searchRef.current?.focus();
@@ -96,7 +104,9 @@ export function PopoverList({
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => {
-      if (!pickerRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!pickerRef.current?.contains(event.target as Node)) {
+        closeAndRestoreFocus();
+      }
     };
     document.addEventListener('mousedown', onPointerDown);
     return () => document.removeEventListener('mousedown', onPointerDown);
@@ -112,13 +122,13 @@ export function PopoverList({
     if (option.disabled) return;
     onChange(option.value);
     setQuery('');
-    setOpen(false);
+    closeAndRestoreFocus();
   };
 
   const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Escape') {
       event.preventDefault();
-      setOpen(false);
+      closeAndRestoreFocus();
       return;
     }
     if (event.key === 'ArrowDown') {
@@ -153,6 +163,7 @@ export function PopoverList({
         .replace(/\s+/g, ' ')}
     >
       <button
+        ref={triggerRef}
         id={id}
         type="button"
         className="btn btn-ghost model-picker-trigger w-full"
