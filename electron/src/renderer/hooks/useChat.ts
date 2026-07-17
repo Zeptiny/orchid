@@ -894,8 +894,8 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     // consumePendingCancel releases inFlight when nothing is staged; do not
     // reset in a finally that races a concurrent cancel() that already began.
     try {
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
+      let runCancelPhase = true;
+      while (runCancelPhase) {
         try {
           const sessionId = activeSessionIdRef.current ?? streamSessionIdRef.current;
           const result = await window.orchid.chat.cancel(
@@ -954,9 +954,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           // Ignore cancel errors — still release / drain the queue below.
         }
 
-        if (!consumePendingCancel(cancelQueueRef.current)) {
-          break;
-        }
+        runCancelPhase = consumePendingCancel(cancelQueueRef.current);
       }
     } catch {
       // Unexpected throw outside the per-IPC try — never leave the mutex stuck.
