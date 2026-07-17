@@ -80,11 +80,13 @@
   flex: 1 1 auto;
   min-width: 0;
   width: 100%;
-  min-height: 30px;
-  height: 30px;
+  /* min-height must cover padding + one line (8+8 + 12*1.4 ≈ 33) or empty shows a scrollbar. */
+  min-height: 36px;
+  height: 36px;
   max-height: 160px;
   resize: none;
-  overflow-y: auto;
+  overflow-x: hidden;
+  overflow-y: hidden;
   box-sizing: border-box;
   border: 0 !important;
   border-radius: 0;

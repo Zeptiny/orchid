@@ -59,7 +59,7 @@ interface InputAreaProps {
 type SubPicker = '/theme' | '/personality' | '/model' | '/sessions' | null;
 
 /** Single-line composer height — keep in sync with `.orchid-composer-textarea` CSS. */
-const TEXTAREA_MIN_HEIGHT_PX = 30;
+const TEXTAREA_MIN_HEIGHT_PX = 36;
 const TEXTAREA_MAX_HEIGHT_PX = 160;
 
 export function InputArea({
@@ -316,9 +316,11 @@ export function InputArea({
     if (!el) return;
     // Empty fields often report scrollHeight taller than one visual line
     // (padding / placeholder metrics). Force the compact single-line height
-    // so startup matches the post-send size.
+    // so startup matches the post-send size. Keep overflow hidden until the
+    // content actually needs more than one line (avoids empty-state scrollbar).
     if (!el.value) {
       el.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
+      el.style.overflowY = 'hidden';
       return;
     }
     el.style.height = 'auto';
@@ -327,6 +329,7 @@ export function InputArea({
       TEXTAREA_MAX_HEIGHT_PX,
     );
     el.style.height = `${next}px`;
+    el.style.overflowY = next >= TEXTAREA_MAX_HEIGHT_PX ? 'auto' : 'hidden';
   }, []);
 
   useEffect(() => {
