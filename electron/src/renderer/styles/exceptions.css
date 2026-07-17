@@ -71,3 +71,20 @@
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ── Shell grid column tracks (ChatView) ──────────────────────────────────
+ * Left/right widths are state-derived (collapsed vs expanded). Center track
+ * stays minmax(460px, 1fr) to match current shell topology. Set on .app-frame
+ * via --orchid-shell-left / --orchid-shell-right from ChatView.
+ */
+.app-frame {
+  grid-template-columns:
+    var(--orchid-shell-left, 260px)
+    minmax(460px, 1fr)
+    var(--orchid-shell-right, 300px);
+}
+
+/* Config shell: left sessions rail + main settings (topology matches App). */
+.config-shell {
+  grid-template-columns: auto minmax(0, 1fr);
+}

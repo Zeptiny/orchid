@@ -19,6 +19,10 @@ import type { SubagentListState, SubagentDetail } from '../hooks/useSubagents';
 import type { TodoListState } from '../hooks/useTodos';
 import { formatShortcut } from '../keyboard';
 import { Icon } from './Icon';
+import { IconButton } from './ui/IconButton';
+import { SectionHeader } from './ui/SectionHeader';
+import { StateMessage } from './ui/StateMessage';
+import { StatusBadge } from './ui/StatusBadge';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -74,45 +78,50 @@ export function Sidebar({
 
   if (!isOpen) {
     return (
-      <aside className="right-panel right-panel-collapsed">
-        <button
-          className="btn btn-ghost btn-sm btn-circle"
+      <aside
+        className="right-panel right-panel-collapsed bg-base-200"
+        aria-label="Inspector"
+      >
+        <IconButton
+          label={`Expand inspector (${formatShortcut('inspector.toggle')})`}
+          icon="chevronLeft"
+          size="sm"
           onClick={onToggle}
-          title={`Expand inspector (${formatShortcut('inspector.toggle')})`}
-          type="button"
-        >
-          <Icon name="chevronLeft" size={14} />
-        </button>
+          aria-expanded={false}
+          aria-controls="right-sidebar-body"
+        />
       </aside>
     );
   }
 
   return (
-    <aside className="right-panel">
-      <div className="panel-header">
-        <div className="min-w-0">
-          <h1 className="title truncate">{title}</h1>
-        </div>
-        <button
-          className="btn btn-ghost btn-sm btn-circle"
-          onClick={onToggle}
-          title={`Collapse inspector (${formatShortcut('inspector.toggle')})`}
-          type="button"
-        >
-          <Icon name="chevronRight" size={14} />
-        </button>
-      </div>
+    <aside className="right-panel bg-base-200" aria-label="Inspector">
+      <SectionHeader
+        className="panel-header"
+        title={<h1 className="title truncate">{title}</h1>}
+        actions={
+          <IconButton
+            label={`Collapse inspector (${formatShortcut('inspector.toggle')})`}
+            icon="chevronRight"
+            size="sm"
+            onClick={onToggle}
+            aria-expanded
+            aria-controls="right-sidebar-body"
+          />
+        }
+      />
 
-      <div className="panel-body">
-        <CollapseBlock title="Todos">
+      <div id="right-sidebar-body" className="panel-body">
+        <CollapseBlock title="Todos" sectionId="inspector-todos">
           <TodosSection state={todoState} onRefresh={onRefreshTodos} />
         </CollapseBlock>
 
         <CollapseBlock
           title="Subagents"
+          sectionId="inspector-subagents"
           badge={
             subagentState.status === 'ready' && subagentState.subagents.length > 0 ? (
-              <span className="badge badge-xs badge-success">{subagentState.subagents.length}</span>
+              <StatusBadge tone="success" size="xs">{subagentState.subagents.length}</StatusBadge>
             ) : null
           }
         >
@@ -127,18 +136,20 @@ export function Sidebar({
 
         <CollapseBlock
           title="Context"
+          sectionId="inspector-context"
           defaultOpen
           badge={<ContextBadge usage={usage} maxContext={maxContext} />}
         >
           <ContextGrid messages={messages} usage={usage} maxContext={maxContext} />
         </CollapseBlock>
 
-        <CollapseBlock title="Usage">
+        <CollapseBlock title="Usage" sectionId="inspector-usage">
           <TokenUsageSection cumulativeUsage={cumulativeUsage} maxContext={maxContext} />
         </CollapseBlock>
 
         <CollapseBlock
           title="Workspace Index"
+          sectionId="inspector-index"
           badge={<IndexBadge ragStatus={ragStatus} astStatus={astStatus} />}
         >
           <IndexSection
@@ -150,12 +161,17 @@ export function Sidebar({
           />
         </CollapseBlock>
 
-        <CollapseBlock title="MCP Servers" defaultOpen badge={<MCPStatusBadges servers={mcpServers} />}>
+        <CollapseBlock
+          title="MCP Servers"
+          sectionId="inspector-mcp"
+          defaultOpen
+          badge={<MCPStatusBadges servers={mcpServers} />}
+        >
           <MCPSection servers={mcpServers} />
         </CollapseBlock>
       </div>
 
-      <div className="panel-status-footer" title={cwd || undefined}>
+      <div className="panel-status-footer text-base-content/60" title={cwd || undefined}>
         {cwd ? (
           <>
             <Icon name="folder" size={11} className="shrink-0 opacity-60" />
@@ -177,19 +193,30 @@ export function Sidebar({
 
 interface CollapseBlockProps {
   title: string;
+  sectionId: string;
   defaultOpen?: boolean;
   badge?: ReactNode;
   children: ReactNode;
 }
 
-function CollapseBlock({ title, defaultOpen = false, badge, children }: CollapseBlockProps) {
+function CollapseBlock({
+  title,
+  sectionId,
+  defaultOpen = false,
+  badge,
+  children,
+}: CollapseBlockProps) {
   const [open, setOpen] = useState(defaultOpen);
+  const contentId = `${sectionId}-content`;
   return (
     <div className="mock-collapse">
       <button
         className="mock-collapse-title flex w-full items-center justify-between gap-1.5"
         onClick={() => setOpen(!open)}
         type="button"
+        aria-expanded={open}
+        aria-controls={contentId}
+        id={`${sectionId}-trigger`}
       >
         <span className="inline-flex min-w-0 items-center gap-1.5">
           <span className="truncate">{title}</span>
@@ -201,7 +228,16 @@ function CollapseBlock({ title, defaultOpen = false, badge, children }: Collapse
           className="shrink-0 text-base-content/40"
         />
       </button>
-      {open && <div className="mock-collapse-content">{children}</div>}
+      {open && (
+        <div
+          id={contentId}
+          className="mock-collapse-content"
+          role="region"
+          aria-labelledby={`${sectionId}-trigger`}
+        >
+          {children}
+        </div>
+      )}
     </div>
   );
 }
@@ -218,22 +254,26 @@ interface SubagentsSectionProps {
 
 function SubagentsSection({ state, onRefresh, selectedId, onSelect, getDetail }: SubagentsSectionProps) {
   if (state.status === 'loading') {
-    return <span className="loading loading-spinner loading-sm" />;
+    return <StateMessage kind="loading" className="py-4" title="Loading subagents…" />;
   }
 
   if (state.status === 'error') {
     return (
-      <div className="inspector-empty">
-        <p className="text-error text-xs">{state.error}</p>
-        <button className="btn btn-ghost btn-xs" onClick={onRefresh} type="button">
-          Retry
-        </button>
-      </div>
+      <StateMessage
+        kind="error"
+        className="inspector-empty py-4"
+        title={state.error}
+        action={
+          <button className="btn btn-ghost btn-xs" onClick={onRefresh} type="button">
+            Retry
+          </button>
+        }
+      />
     );
   }
 
   if (state.status === 'empty') {
-    return <p className="inspector-empty">No active subagents</p>;
+    return <StateMessage kind="empty" className="inspector-empty py-4" title="No active subagents" />;
   }
 
   const agents = state.status === 'ready' ? state.subagents : [];
@@ -289,17 +329,17 @@ function fmtTokens(n: number): string {
 }
 
 function SubagentStateBadge({ state }: { state: string }) {
-  const config: Record<string, { cls: string; label: string }> = {
-    pending: { cls: 'badge-ghost', label: 'pending' },
-    running: { cls: 'badge-warning', label: 'running' },
-    completed: { cls: 'badge-success', label: 'done' },
-    failed: { cls: 'badge-error', label: 'failed' },
-    interrupted: { cls: 'badge-info', label: 'interrupted' },
+  const config: Record<string, { tone: 'neutral' | 'warning' | 'success' | 'error' | 'info'; label: string }> = {
+    pending: { tone: 'neutral', label: 'pending' },
+    running: { tone: 'warning', label: 'running' },
+    completed: { tone: 'success', label: 'done' },
+    failed: { tone: 'error', label: 'failed' },
+    interrupted: { tone: 'info', label: 'interrupted' },
   };
 
-  const { cls, label } = config[state] ?? { cls: 'badge-ghost', label: state };
+  const { tone, label } = config[state] ?? { tone: 'neutral' as const, label: state };
 
-  return <span className={`badge badge-xs ${cls}`}>{label}</span>;
+  return <StatusBadge tone={tone} size="xs">{label}</StatusBadge>;
 }
 
 // ── Todos Section ────────────────────────────────────────────────────────────
@@ -311,15 +351,15 @@ interface TodosSectionProps {
 
 function TodosSection({ state }: TodosSectionProps) {
   if (state.status === 'loading') {
-    return <span className="loading loading-spinner loading-sm" />;
+    return <StateMessage kind="loading" className="py-4" title="Loading todos…" />;
   }
 
   if (state.status === 'error') {
-    return <p className="inspector-empty text-error">{state.error}</p>;
+    return <StateMessage kind="error" className="inspector-empty py-4" title={state.error} />;
   }
 
   if (state.status === 'empty') {
-    return <p className="inspector-empty">No todos</p>;
+    return <StateMessage kind="empty" className="inspector-empty py-4" title="No todos" />;
   }
 
   const todos = state.status === 'ready' ? state.todos : [];
@@ -328,15 +368,23 @@ function TodosSection({ state }: TodosSectionProps) {
     <div className="inspector-stack">
       {todos.map((todo) => (
         <div key={todo.id} className="inspector-row">
-          <span
-            className={`badge badge-xs ${
+          <StatusBadge
+            tone={
               todo.status === TodoStatus.DONE
-                ? 'badge-success'
+                ? 'success'
                 : todo.status === TodoStatus.IN_PROGRESS
-                  ? 'badge-warning'
-                  : 'badge-ghost'
-            }`}
-          />
+                  ? 'warning'
+                  : 'neutral'
+            }
+            size="xs"
+            withDot
+          >
+            {todo.status === TodoStatus.DONE
+              ? 'done'
+              : todo.status === TodoStatus.IN_PROGRESS
+                ? 'active'
+                : 'todo'}
+          </StatusBadge>
           <span
             className={`inspector-row-label truncate ${
               todo.status === TodoStatus.DONE ? 'line-through opacity-50' : ''
@@ -657,12 +705,12 @@ function IndexBadge({
   const hasRag = Boolean(ragStatus && ragStatus.totalChunks > 0);
   const hasAst = Boolean(astStatus && astStatus.totalSymbols > 0);
   if (!hasRag && !hasAst) {
-    return <span className="badge badge-xs badge-ghost">empty</span>;
+    return <StatusBadge tone="neutral" size="xs" outline>empty</StatusBadge>;
   }
   if (hasRag && hasAst) {
-    return <span className="badge badge-xs badge-success">ready</span>;
+    return <StatusBadge tone="success" size="xs">ready</StatusBadge>;
   }
-  return <span className="badge badge-xs badge-warning">partial</span>;
+  return <StatusBadge tone="warning" size="xs">partial</StatusBadge>;
 }
 
 function formatRagStatus(status: RAGStoreStatus | null): string {
@@ -722,13 +770,13 @@ export function countMCPServerStatuses(servers: readonly MCPServerStatus[]): MCP
 
 const MCP_STATUS_BADGES: readonly {
   status: MCPServerStatusValue;
-  className: string;
+  tone: 'success' | 'warning' | 'error' | 'neutral';
   label: string;
 }[] = [
-  { status: 'connected', className: 'badge-success', label: 'connected' },
-  { status: 'starting', className: 'badge-warning', label: 'starting' },
-  { status: 'failed', className: 'badge-error', label: 'failed' },
-  { status: 'unavailable', className: 'badge-ghost', label: 'unavailable' },
+  { status: 'connected', tone: 'success', label: 'connected' },
+  { status: 'starting', tone: 'warning', label: 'starting' },
+  { status: 'failed', tone: 'error', label: 'failed' },
+  { status: 'unavailable', tone: 'neutral', label: 'unavailable' },
 ];
 
 function MCPStatusBadges({ servers }: MCPSectionProps) {
@@ -736,15 +784,17 @@ function MCPStatusBadges({ servers }: MCPSectionProps) {
 
   return (
     <span className="inline-flex shrink-0 items-center gap-1" aria-label="MCP server status counts">
-      {MCP_STATUS_BADGES.filter(({ status }) => counts[status] > 0).map(({ status, className, label }) => (
-        <span
+      {MCP_STATUS_BADGES.filter(({ status }) => counts[status] > 0).map(({ status, tone, label }) => (
+        <StatusBadge
           key={status}
-          className={`badge badge-xs ${className}`}
+          tone={tone}
+          size="xs"
+          outline={tone === 'neutral'}
           title={`${counts[status]} ${label} MCP ${counts[status] === 1 ? 'server' : 'servers'}`}
           aria-label={`${counts[status]} ${label} MCP ${counts[status] === 1 ? 'server' : 'servers'}`}
         >
           {counts[status]}
-        </span>
+        </StatusBadge>
       ))}
     </span>
   );
@@ -752,7 +802,9 @@ function MCPStatusBadges({ servers }: MCPSectionProps) {
 
 function MCPSection({ servers }: MCPSectionProps) {
   if (servers.length === 0) {
-    return <p className="inspector-empty">No MCP servers configured</p>;
+    return (
+      <StateMessage kind="empty" className="inspector-empty py-4" title="No MCP servers configured" />
+    );
   }
 
   return (
@@ -762,15 +814,17 @@ function MCPSection({ servers }: MCPSectionProps) {
           <div className="inspector-row">
             <span className="inspector-row-label truncate">{server.name}</span>
             {server.status === 'connected' ? (
-              <span className="badge badge-xs badge-success shrink-0">
+              <StatusBadge tone="success" size="xs" className="shrink-0">
                 {server.toolCount > 0 ? `${server.toolCount} tools` : 'connected'}
-              </span>
+              </StatusBadge>
             ) : server.status === 'starting' ? (
-              <span className="badge badge-xs badge-warning shrink-0">starting</span>
+              <StatusBadge tone="warning" size="xs" className="shrink-0">starting</StatusBadge>
             ) : server.status === 'failed' ? (
-              <span className="badge badge-xs badge-error shrink-0">failed</span>
+              <StatusBadge tone="error" size="xs" className="shrink-0">failed</StatusBadge>
             ) : (
-              <span className="badge badge-xs badge-ghost shrink-0">{server.status}</span>
+              <StatusBadge tone="neutral" size="xs" outline className="shrink-0">
+                {server.status}
+              </StatusBadge>
             )}
           </div>
           {server.error && (
@@ -794,21 +848,18 @@ interface ContextBadgeProps {
 function ContextBadge({ usage, maxContext }: ContextBadgeProps) {
   if (usage && maxContext && maxContext > 0) {
     const pct = Math.min(100, Math.round((contextUsedTokens(usage) / maxContext) * 100));
+    const tone = pct >= 85 ? 'error' : pct >= 60 ? 'warning' : pct > 0 ? 'info' : 'neutral';
     return (
-      <span
-        className={`badge badge-xs ${
-          pct >= 85 ? 'badge-error' : pct >= 60 ? 'badge-warning' : pct > 0 ? 'badge-info' : 'badge-ghost'
-        }`}
-      >
+      <StatusBadge tone={tone} size="xs" outline={tone === 'neutral'}>
         {pct}%
-      </span>
+      </StatusBadge>
     );
   }
   // Avoid showing a misleading 0% when we have tokens but no window metadata
   if (usage && usage.prompt_tokens > 0) {
-    return <span className="badge badge-xs badge-ghost">n/a</span>;
+    return <StatusBadge tone="neutral" size="xs" outline>n/a</StatusBadge>;
   }
-  return <span className="badge badge-xs badge-ghost">0%</span>;
+  return <StatusBadge tone="neutral" size="xs" outline>0%</StatusBadge>;
 }
 
 // ── Token Usage Section ─────────────────────────────────────────────────────

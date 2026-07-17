@@ -73,7 +73,11 @@ export function SessionTabBar({
   }, [focusedSessionId, showDraft, openSessionIds]);
 
   return (
-    <div className="session-tab-bar" aria-label="Open sessions">
+    <div
+      className="session-tab-bar border-b border-base-300 bg-base-200/55"
+      role="tablist"
+      aria-label="Open sessions"
+    >
       <div className="session-tab-bar-scroll" ref={scrollRef}>
         {openSessionIds.map((id) => {
           const session = sessionsById.get(id);
@@ -93,7 +97,10 @@ export function SessionTabBar({
           return (
             <div
               key={id}
-              className={`session-tab ${active ? 'session-tab-active' : ''}`}
+              className={`session-tab ${active ? 'session-tab-active bg-base-100 border-base-300' : ''}`}
+              role="tab"
+              aria-selected={active}
+              id={`session-tab-${id}`}
               data-tab-active={active ? 'true' : 'false'}
               onAuxClick={(e) => {
                 if (e.button === 1) {
@@ -105,7 +112,7 @@ export function SessionTabBar({
               <div
                 className="session-tab-select"
                 role="button"
-                tabIndex={-1}
+                tabIndex={active ? 0 : -1}
                 onClick={() => onSelect(id)}
                 title={
                   multiProject && project
@@ -151,7 +158,10 @@ export function SessionTabBar({
 
         {showDraft ? (
           <div
-            className="session-tab session-tab-active session-tab-draft"
+            className="session-tab session-tab-active session-tab-draft bg-base-100 border-base-300"
+            role="tab"
+            aria-selected
+            id="session-tab-draft"
             data-tab-active="true"
           >
             <button

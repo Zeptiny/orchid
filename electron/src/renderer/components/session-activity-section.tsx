@@ -5,6 +5,7 @@ import type {
 } from '../../shared/types/ipc-boundary';
 import { truncatePathDisplay } from '../utils/session-workspace';
 import { Icon } from './Icon';
+import { StatusBadge } from './ui/StatusBadge';
 
 interface SessionActivitySectionProps {
   activities: readonly SessionActivity[];
@@ -69,25 +70,25 @@ export function SessionActivitySection({
   if (activities.length === 0) return null;
 
   return (
-    <section className="session-activity" aria-label="Session activity">
+    <section className="session-activity border-b border-base-300" aria-label="Session activity">
       <div className="session-activity-heading">
         <span>Activity</span>
-        <span className="badge badge-xs badge-warning">{activities.length}</span>
+        <StatusBadge tone="warning" size="xs">{activities.length}</StatusBadge>
       </div>
-      <div className="session-activity-list">
+      <div className="session-activity-list" role="list">
         {activities.map((activity) => {
           const session = sessionsById.get(activity.sessionId);
           const projectPath = session?.cwd ?? activity.cwd;
           const elapsed = elapsedLabel(activity.startedAt, now);
           return (
-            <div key={activity.sessionId} className="session-activity-row">
+            <div key={activity.sessionId} className="session-activity-row" role="listitem">
               <button
                 className="session-activity-select"
                 type="button"
                 onClick={() => onSelect(activity.sessionId)}
                 title={projectPath ?? session?.name ?? 'Session activity'}
               >
-                <span className={`status status-xs ${statusClass[activity.state]}`} />
+                <span className={`status status-xs ${statusClass[activity.state]}`} aria-hidden />
                 <span className="session-activity-copy min-w-0">
                   <span className="session-activity-name truncate">
                     {session?.name ?? 'New session'}

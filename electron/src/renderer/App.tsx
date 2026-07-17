@@ -97,9 +97,11 @@ function App() {
   }, [setTheme]);
 
   return (
-    <div className="app-root" data-theme={theme}>
+    <div className="app-root h-screen min-h-0 overflow-hidden bg-base-100 text-base-content" data-theme={theme}>
       {/* Keep ChatView mounted under Config so selection/draft state is not
-          wiped and the first session is not auto-selected again on close. */}
+          wiped and the first session is not auto-selected again on close.
+          Shared useSession store (useSyncExternalStore) keeps chat + settings
+          on one active session / list / workspace snapshot. */}
       <div className={configOpen ? 'hidden' : 'contents'} aria-hidden={configOpen}>
         <ChatView />
       </div>

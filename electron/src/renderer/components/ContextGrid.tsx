@@ -240,7 +240,7 @@ export function ContextLegend({
         <div key={entry.label} className="inspector-row">
           <span className="inline-flex min-w-0 items-center gap-1.5">
             <span
-              className="inline-block h-2 w-2 shrink-0 rounded-[2px]"
+              className="inline-block h-2 w-2 shrink-0 rounded-sm"
               style={{ backgroundColor: entry.color }}
               aria-hidden
             />
@@ -270,7 +270,7 @@ export function ContextGrid({ usage, messages, maxContext }: ContextGridProps) {
         style={{ gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`, gap: '2px', margin: '4px 0 8px' }}
       >
         {blocks.map((color, i) => (
-          <div key={i} className="aspect-square rounded-[2px]" style={{ backgroundColor: color }} />
+          <div key={i} className="aspect-square rounded-sm" style={{ backgroundColor: color }} />
         ))}
       </div>
 

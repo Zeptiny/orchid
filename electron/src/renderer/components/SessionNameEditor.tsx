@@ -76,7 +76,7 @@ export function SessionNameEditor({
     return (
       <input
         ref={inputRef}
-        className={`session-name-editor-input ${className ?? ''}`}
+        className={`input input-xs session-name-editor-input ${className ?? ''}`}
         value={draft}
         aria-label="Rename session"
         onChange={(e) => setDraft(e.target.value)}

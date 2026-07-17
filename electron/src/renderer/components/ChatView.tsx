@@ -875,13 +875,16 @@ export function ChatView() {
       ? session.listState.sessions
       : [];
 
-  const leftCol = leftSidebarCollapsed ? '56px' : '260px';
-  const rightCol = sidebarOpen ? '300px' : '48px';
+  // Runtime shell tracks — CSS custom properties (exceptions.css .app-frame).
+  const shellStyle = {
+    ['--orchid-shell-left' as string]: leftSidebarCollapsed ? '56px' : '260px',
+    ['--orchid-shell-right' as string]: sidebarOpen ? '300px' : '48px',
+  };
 
   return (
     <div
       className="app-frame grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
-      style={{ gridTemplateColumns: `${leftCol} minmax(460px, 1fr) ${rightCol}` }}
+      style={shellStyle}
     >
       <LeftSidebar
         activeSessionId={session.activeSession?.id ?? null}
@@ -920,14 +923,20 @@ export function ChatView() {
       <main className="main-pane min-h-0 min-w-0 overflow-hidden">
         {toast && (
           <div
-            className={`command-toast command-toast-${toast.severity}`}
+            className={`command-toast command-toast-${toast.severity} alert alert-soft py-2 text-sm ${
+              toast.severity === 'error'
+                ? 'alert-error'
+                : toast.severity === 'warning'
+                  ? 'alert-warning'
+                  : 'alert-info'
+            }`}
             role="status"
             aria-live="polite"
           >
-            <span className="command-toast-message">{toast.message}</span>
+            <span className="command-toast-message min-w-0 flex-1">{toast.message}</span>
             <button
               type="button"
-              className="command-toast-dismiss"
+              className="btn btn-ghost btn-xs btn-circle"
               onClick={() => setToast(null)}
               aria-label="Dismiss"
             >
@@ -977,11 +986,11 @@ export function ChatView() {
             aria-labelledby="session-tab-confirm-title"
             aria-describedby="session-tab-confirm-desc"
           >
-            <div className="session-tab-confirm-card">
-              <p id="session-tab-confirm-title" className="session-tab-confirm-text">
+            <div className="session-tab-confirm-card border border-base-300 bg-base-100 shadow-lg">
+              <p id="session-tab-confirm-title" className="session-tab-confirm-text font-semibold">
                 Close running session tab?
               </p>
-              <p id="session-tab-confirm-desc" className="session-tab-confirm-text session-tab-confirm-desc">
+              <p id="session-tab-confirm-desc" className="session-tab-confirm-text session-tab-confirm-desc text-base-content/80">
                 This session is still running. Close the tab and keep the agent working in the background?
               </p>
               <div className="session-tab-confirm-actions">

@@ -745,6 +745,40 @@ describe('Component File Structure', () => {
     expect(fs.existsSync(path.join(hooksDir, 'useSession.ts'))).toBe(true);
   });
 
+  it('shell preserves three-panel topology and shared session store', () => {
+    const chatView = fs.readFileSync(path.join(componentsDir, 'ChatView.tsx'), 'utf-8');
+    const leftSidebar = fs.readFileSync(path.join(componentsDir, 'LeftSidebar.tsx'), 'utf-8');
+    const sidebar = fs.readFileSync(path.join(componentsDir, 'Sidebar.tsx'), 'utf-8');
+    const sessionTabBar = fs.readFileSync(path.join(componentsDir, 'SessionTabBar.tsx'), 'utf-8');
+    const useSession = fs.readFileSync(path.join(hooksDir, 'useSession.ts'), 'utf-8');
+    const exceptions = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/styles/exceptions.css'),
+      'utf-8',
+    );
+
+    // Existing shell: left sessions | center main | right inspector.
+    expect(chatView).toContain('app-frame');
+    expect(chatView).toContain('LeftSidebar');
+    expect(chatView).toContain('main-pane');
+    expect(chatView).toContain('Sidebar');
+    expect(chatView).toContain('--orchid-shell-left');
+    expect(chatView).toContain('--orchid-shell-right');
+    expect(exceptions).toContain('--orchid-shell-left');
+    expect(exceptions).toContain('minmax(460px, 1fr)');
+
+    // Collapsible sections expose expanded state.
+    expect(leftSidebar).toContain('aria-expanded');
+    expect(leftSidebar).toContain('aria-controls');
+    expect(sidebar).toContain('aria-expanded');
+    expect(sidebar).toContain('aria-controls');
+    expect(sessionTabBar).toContain('role="tablist"');
+    expect(sessionTabBar).toContain('role="tab"');
+
+    // Shared session ownership (no dual local stores).
+    expect(useSession).toContain('useSyncExternalStore');
+    expect(chatView).toMatch(/useSession\s*\(/);
+  });
+
   it('useSubagents hook exists', () => {
     expect(fs.existsSync(path.join(hooksDir, 'useSubagents.ts'))).toBe(true);
   });

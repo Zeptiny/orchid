@@ -19,13 +19,16 @@ export function SessionHeader({ session, workspace }: SessionHeaderProps) {
   const title = session?.name ?? 'New chat';
 
   return (
-    <header className="session-header" title={cwd ?? undefined}>
-      <div className="session-header-title truncate">
-        <span className="session-header-project">{projectName(cwd)}</span>
-        <span className="session-header-separator">/</span>
+    <header
+      className="session-header border-b border-base-300 bg-base-100"
+      title={cwd ?? undefined}
+    >
+      <div className="session-header-title truncate text-sm font-semibold">
+        <span className="session-header-project text-base-content/70">{projectName(cwd)}</span>
+        <span className="session-header-separator text-base-content/40">/</span>
         <span className="truncate">{title}</span>
       </div>
-      <div className="session-header-path mono truncate">
+      <div className="session-header-path mono truncate text-xs text-base-content/60">
         <Icon name="folder" size={11} />
         <span>{cwd ?? 'Choose a project folder to begin'}</span>
       </div>

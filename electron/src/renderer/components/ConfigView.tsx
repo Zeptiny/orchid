@@ -304,7 +304,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
   return (
     <div
       ref={rootRef}
-      className="grid h-screen min-h-0 grid-cols-[auto_minmax(460px,1fr)] overflow-hidden bg-base-100 text-base-content"
+      className="config-shell grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
     >
       <LeftSidebar
         activeSessionId={session.activeSession?.id ?? null}

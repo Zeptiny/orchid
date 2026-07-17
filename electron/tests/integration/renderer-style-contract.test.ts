@@ -201,8 +201,6 @@ export const BASELINE_ARBITRARY_UTILITIES: ReadonlySet<string> = new Set([
   'components/CommandPalette.tsx::text-[9px]',
   'components/CommandPalette.tsx::w-[min(520px,90%)]',
   'components/CommandPalette.tsx::z-[1000]',
-  'components/ConfigView.tsx::grid-cols-[auto_minmax(460px,1fr)]',
-  'components/ContextGrid.tsx::rounded-[2px]',
   'components/Preferences/ScopeToggle.tsx::max-w-[280px]',
   'components/Preferences/ScopeToggle.tsx::text-[10px]',
   'components/Providers/ConnectionList.tsx::sm:grid-cols-[auto_1fr]',
@@ -628,7 +626,7 @@ describe('Renderer style contract', () => {
           return (
             <div
               className="chat-layout"
-              style={{ gridTemplateColumns: \`\${leftCol} minmax(460px, 1fr) \${rightCol}\` }}
+              style={{ ['--orchid-shell-left']: leftCol, ['--orchid-shell-right']: rightCol }}
             />
           );
         }

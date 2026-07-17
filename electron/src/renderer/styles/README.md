@@ -63,7 +63,7 @@ Scoped overrides (e.g. `.composer .input`) are still inventory debt; prefer remo
 | Markdown / syntax highlighting | `styles/markdown.css` (target) | Nested element/token selectors; semantic theme variables |
 | Scrollbars | global exception layer | Browser-specific selectors; theme variables only |
 | Animations / streaming cursor | exception layer | Keyframes and pseudo-elements when utilities cannot express behavior |
-| Runtime layout dimensions | `ChatView.tsx` (and related shell) | CSS custom properties or inline values from state; preserve grid/panel topology |
+| Runtime layout dimensions | `ChatView.tsx` + `styles/exceptions.css` `.app-frame` | Set `--orchid-shell-left` / `--orchid-shell-right` from collapse state; center track stays `minmax(460px, 1fr)`; preserve grid/panel topology |
 | Runtime textarea height | `InputArea.tsx` | Keep resize behavior; do not encode generated pixel heights as static utilities |
 | Runtime swatches / progress | `ContextGrid.tsx`, `Footer.tsx`, `CommandPalette.tsx` | Dynamic colors/fractions as data; classes for surrounding geometry |
 | Focus / modal browser quirks | focused exception selectors | Only after smoke proves utilities/DaisyUI insufficient |
