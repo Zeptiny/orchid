@@ -107,7 +107,7 @@ Do not replace the runtime theme loader with compile-time-only DaisyUI theme blo
 | `components.css` | `@layer components` `orchid-*` composites with `@apply` + semantic/theme tokens (dual-named with legacy aliases where still needed) |
 | `markdown.css` | Markdown / GFM / highlight tokens |
 | `exceptions.css` | Scrollbars, keyframes, streaming cursor, shell grid tracks, composer height hooks |
-| `chat.css` | Residual compatibility bridge: command palette, onboarding/provider wizard, shell panels/session/config/shortcuts not fully dual-class only yet |
+| `chat.css` | Residual compatibility bridge (~2.2k lines): command palette chrome, onboarding/provider wizard shell, panels/session/config/shortcuts/pickers still consumed by JSX |
 | `README.md` | This contract |
 
 ### Import graph
@@ -126,9 +126,10 @@ Runtime themes are **not** part of this graph: `applyTheme()` swaps a single `#o
 
 ### Residual bridge (`chat.css`)
 
-- Dead pre-migration legacy blocks (old `.message-*`, `.app-layout`, `.sidebar-*`, `.footer` layout, unused onboarding substeps without consumers) were removed in U8.
+- Dead pre-migration legacy blocks (old `.message-*`, `.app-layout`, `.sidebar-*`, `.footer` layout) were removed in U8; a further residual prune removed unused `composer-model-*`, most `onb-*` step subtrees, `thought-activity-group`, dead palette/config/tier-picker subparts, and similar selectors with no JSX consumers.
 - Migrated dual-class rules already owned by `components.css` were removed from the bridge.
-- Remaining rules still have JSX consumers (shell panels, session chrome, config/onboarding, command palette chrome, pickers, shortcuts help).
+- Remaining rules still have JSX consumers (shell panels, session chrome, config/onboarding shell, command palette chrome, pickers, shortcuts help).
+- The unused `components/ui/index.ts` barrel was deleted; import UI primitives from their module paths.
 - **Do not add new rules** to `chat.css`. New composites → `components.css`; markdown → `markdown.css`; browser exceptions → `exceptions.css`.
 
 ### Known reserved redefinitions
