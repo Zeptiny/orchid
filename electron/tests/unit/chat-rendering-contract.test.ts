@@ -87,12 +87,19 @@ describe('chat rendering contract (U5)', () => {
     it('send failure cleanup removes optimistic bubble on throw', () => {
       const src = read('hooks/useChat.ts');
       expect(src).toMatch(/Drop the optimistic user bubble when send never started/);
-      // Both structured error and catch paths
-      const throwCleanup =
-        src.includes('catch (err)') &&
-        src.includes('last.id === userMessage.id') &&
-        src.includes('prev.slice(0, -1)');
-      expect(throwCleanup).toBe(true);
+      // Shared residual helper + drop helper on both structured error and catch paths
+      expect(src).toMatch(/residualStateAfterSendFailure/);
+      expect(src).toMatch(/dropOptimisticUserMessageIfLast/);
+      const sendStart = src.indexOf('const send = useCallback');
+      const sendEnd = src.indexOf('const cancel = useCallback', sendStart);
+      const sendSource = src.slice(sendStart, sendEnd);
+      expect(sendSource).toMatch(/result\.status === 'error'/);
+      expect(sendSource).toMatch(/catch \(err\)/);
+      // Both branches call the same residual + drop helpers
+      const residualHits = sendSource.match(/residualStateAfterSendFailure\(\)/g) ?? [];
+      const dropHits = sendSource.match(/dropOptimisticUserMessageIfLast/g) ?? [];
+      expect(residualHits.length).toBeGreaterThanOrEqual(2);
+      expect(dropHits.length).toBeGreaterThanOrEqual(2);
     });
 
     it('null live snapshot drains buffered events through sequence affinity', () => {
@@ -107,7 +114,8 @@ describe('chat rendering contract (U5)', () => {
         src.indexOf('// Only adopt send resolution'),
       );
       expect(errorBranch).toMatch(/applyStreamSegments\(\[\]\)/);
-      expect(errorBranch).toMatch(/setStreamingContent\(''\)/);
+      expect(errorBranch).toMatch(/residualStateAfterSendFailure/);
+      expect(errorBranch).toMatch(/setStreamingContent\(residual\.streamingContent\)/);
     });
 
     it('streaming cursor remains on assistant and thought paths', () => {

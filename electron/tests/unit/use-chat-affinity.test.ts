@@ -1,15 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import {
   acceptChatEvent,
+  beginCancelRequest,
   bindChatSession,
+  consumePendingCancel,
+  dropOptimisticUserMessageIfLast,
   drainBufferedHydrationEvents,
+  residualStateAfterSendFailure,
+  resetCancelQueue,
   seedAffinityFromLive,
   shouldBufferChatEvent,
+  type CancelQueueState,
   type ChatEventAffinity,
 } from '../../src/renderer/hooks/useChat';
 
 function affinity(selectedSessionId: string | null): ChatEventAffinity {
   return { selectedSessionId, streamSessionId: selectedSessionId, streamTurnId: null, lastSequence: -1 };
+}
+
+function emptyCancelQueue(): CancelQueueState {
+  return { inFlight: false, pending: false };
 }
 
 describe('useChat event affinity', () => {
@@ -132,29 +142,98 @@ describe('useChat event affinity', () => {
     expect(state.lastSequence).toBe(5);
   });
 
-  it('cancelInFlight serialization is a re-entry guard (contract)', async () => {
-    // Pure behavioral stand-in for cancelInFlightRef: overlapping cancel
-    // must not re-enter while a previous cancel await is in flight.
-    let cancelInFlight = false;
-    const cancelCalls: string[] = [];
+  it('cancel queue serializes IPC and stages a second Esc for the next phase', async () => {
+    const state = emptyCancelQueue();
+    const phases: string[] = [];
+    const phaseResults = ['confirming', 'confirming_subagents'];
 
-    async function cancel(label: string): Promise<void> {
-      if (cancelInFlight) {
-        cancelCalls.push(`skip:${label}`);
-        return;
-      }
-      cancelInFlight = true;
+    async function cancel(): Promise<void> {
+      if (beginCancelRequest(state) === 'queued') return;
       try {
-        cancelCalls.push(`run:${label}`);
-        await Promise.resolve();
-      } finally {
-        cancelInFlight = false;
+        while (true) {
+          const result = phaseResults[phases.length] ?? 'cancelled';
+          phases.push(result);
+          await Promise.resolve();
+          if (!consumePendingCancel(state)) break;
+        }
+      } catch {
+        resetCancelQueue(state);
       }
     }
 
-    const first = cancel('a');
-    const second = cancel('b');
+    const first = cancel();
+    // Second Esc arrives while first cancel IPC is still awaiting RTT.
+    const second = cancel();
     await Promise.all([first, second]);
-    expect(cancelCalls).toEqual(['run:a', 'skip:b']);
+
+    expect(phases).toEqual(['confirming', 'confirming_subagents']);
+    expect(state).toEqual({ inFlight: false, pending: false });
+  });
+
+  it('cancel queue coalesces multiple Esc presses into one staged follow-up', async () => {
+    const state = emptyCancelQueue();
+    let ipcCount = 0;
+
+    async function cancel(): Promise<void> {
+      if (beginCancelRequest(state) === 'queued') return;
+      try {
+        while (true) {
+          ipcCount += 1;
+          await Promise.resolve();
+          if (!consumePendingCancel(state)) break;
+        }
+      } catch {
+        resetCancelQueue(state);
+      }
+    }
+
+    const first = cancel();
+    void cancel(); // stage
+    void cancel(); // coalesce into same pending flag
+    void cancel(); // still one pending
+    await first;
+
+    // First run + one drained pending — not four concurrent IPCs.
+    expect(ipcCount).toBe(2);
+    expect(state).toEqual({ inFlight: false, pending: false });
+  });
+
+  it('beginCancelRequest refuses concurrent IPC without dropping a staged Esc', () => {
+    const state = emptyCancelQueue();
+    expect(beginCancelRequest(state)).toBe('run');
+    expect(state).toEqual({ inFlight: true, pending: false });
+    expect(beginCancelRequest(state)).toBe('queued');
+    expect(state).toEqual({ inFlight: true, pending: true });
+    expect(beginCancelRequest(state)).toBe('queued');
+    expect(state).toEqual({ inFlight: true, pending: true });
+  });
+
+  it('send failure residual state is identical for structured error and throw paths', () => {
+    const residual = residualStateAfterSendFailure();
+    expect(residual).toEqual({
+      isSending: false,
+      status: 'error',
+      streamStartTime: null,
+      elapsedSeconds: 0,
+      streamingContent: '',
+      streamingThinking: '',
+      accumulatedContent: '',
+      accumulatedThinking: '',
+    });
+    // Composer can send again once isSending is false and status is not streaming.
+    expect(residual.isSending).toBe(false);
+    expect(residual.status).not.toBe('streaming');
+  });
+
+  it('dropOptimisticUserMessageIfLast only removes the trailing optimistic bubble', () => {
+    const prior = { id: 'prior' };
+    const optimistic = { id: 'opt' };
+    expect(dropOptimisticUserMessageIfLast([prior, optimistic], 'opt')).toEqual([prior]);
+    expect(dropOptimisticUserMessageIfLast([prior, optimistic], 'missing')).toEqual([
+      prior,
+      optimistic,
+    ]);
+    expect(dropOptimisticUserMessageIfLast([prior], 'opt')).toEqual([prior]);
+    expect(dropOptimisticUserMessageIfLast([], 'opt')).toEqual([]);
   });
 });

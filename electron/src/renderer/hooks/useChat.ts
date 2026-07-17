@@ -213,6 +213,89 @@ export function drainBufferedHydrationEvents(
   return applied;
 }
 
+// ── Cancel queue (multi-phase Esc) ────────────────────────────────────────────
+
+/**
+ * Serialize chat.cancel IPC while still allowing a second Esc to stage the next
+ * interrupt phase. Concurrent cancel invokes are unsafe (phase races); a single
+ * pending flag coalesces rapid Esc into one follow-up after the in-flight RTT.
+ */
+export type CancelQueueState = {
+  inFlight: boolean;
+  pending: boolean;
+};
+
+/** Start a cancel IPC, or stage one if another cancel is already awaiting. */
+export function beginCancelRequest(state: CancelQueueState): 'run' | 'queued' {
+  if (state.inFlight) {
+    state.pending = true;
+    return 'queued';
+  }
+  state.inFlight = true;
+  state.pending = false;
+  return 'run';
+}
+
+/**
+ * After one cancel IPC settles: clear in-flight, or keep ownership and signal
+ * that a staged Esc should run the next phase immediately.
+ */
+export function consumePendingCancel(state: CancelQueueState): boolean {
+  if (!state.pending) {
+    state.inFlight = false;
+    return false;
+  }
+  state.pending = false;
+  return true;
+}
+
+export function resetCancelQueue(state: CancelQueueState): void {
+  state.inFlight = false;
+  state.pending = false;
+}
+
+// ── Send failure residual cleanup ────────────────────────────────────────────
+
+/**
+ * Residual stream fields after a pre-stream send failure (structured error or
+ * throw). Shared so every failure path leaves the composer ready to send again.
+ */
+export type ResidualStreamAfterSendFailure = {
+  isSending: false;
+  status: 'error';
+  streamStartTime: null;
+  elapsedSeconds: 0;
+  streamingContent: '';
+  streamingThinking: '';
+  accumulatedContent: '';
+  accumulatedThinking: '';
+};
+
+export function residualStateAfterSendFailure(): ResidualStreamAfterSendFailure {
+  return {
+    isSending: false,
+    status: 'error',
+    streamStartTime: null,
+    elapsedSeconds: 0,
+    streamingContent: '',
+    streamingThinking: '',
+    accumulatedContent: '',
+    accumulatedThinking: '',
+  };
+}
+
+/** Drop the optimistic user bubble when send never started on the main side. */
+export function dropOptimisticUserMessageIfLast<T extends { id: string }>(
+  messages: ReadonlyArray<T>,
+  optimisticId: string,
+): T[] {
+  const last = messages[messages.length - 1];
+  if (last && last.id === optimisticId) {
+    return messages.slice(0, -1);
+  }
+  return messages.slice();
+}
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useChat(activeSessionId: string | null = null): UseChatReturn {
@@ -265,8 +348,11 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const streamSegmentsRef = useRef<StreamSegment[]>([]);
   /** Sync guard against double-send before status re-render (P1-35). */
   const isSendingRef = useRef(false);
-  /** Serialize staged Esc/cancel so repeated Escape cannot overlap phases. */
-  const cancelInFlightRef = useRef(false);
+  /**
+   * Serialize staged Esc/cancel so overlapping IPC cannot race phases.
+   * A second Esc while in-flight is staged via `pending` and runs after RTT.
+   */
+  const cancelQueueRef = useRef<CancelQueueState>({ inFlight: false, pending: false });
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
   const streamSessionIdRef = useRef<string | null>(activeSessionId);
   const streamTurnIdRef = useRef<string | null>(null);
@@ -738,30 +824,25 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         });
         // Structured gate failures (e.g. unbound workspace) — no stream starts.
         if (result.status === 'error') {
-          isSendingRef.current = false;
+          const residual = residualStateAfterSendFailure();
+          isSendingRef.current = residual.isSending;
           setError(
             result.error ||
               (result.kind === 'unbound_workspace'
                 ? 'No project folder selected. Choose a folder before sending a message.'
                 : 'Failed to send message'),
           );
-          setStatus('error');
+          setStatus(residual.status);
           // Drop the optimistic user bubble when send never started.
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && last.id === userMessage.id) {
-              return prev.slice(0, -1);
-            }
-            return prev;
-          });
-          setStreamStartTime(null);
-          setElapsedSeconds(0);
-          setStreamingContent('');
-          setStreamingThinking('');
+          setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
+          setStreamStartTime(residual.streamStartTime);
+          setElapsedSeconds(residual.elapsedSeconds);
+          setStreamingContent(residual.streamingContent);
+          setStreamingThinking(residual.streamingThinking);
           applyToolBlocks([]);
           applyStreamSegments([]);
-          accumulatedContentRef.current = '';
-          accumulatedThinkingRef.current = '';
+          accumulatedContentRef.current = residual.accumulatedContent;
+          accumulatedThinkingRef.current = residual.accumulatedThinking;
           return;
         }
 
@@ -782,25 +863,20 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           }
         }
       } catch (err) {
-        isSendingRef.current = false;
-        setError(err instanceof Error ? err.message : String(err));
-        setStatus('error');
         // Drop the optimistic user bubble when send never started (throw path).
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last && last.id === userMessage.id) {
-            return prev.slice(0, -1);
-          }
-          return prev;
-        });
-        setStreamStartTime(null);
-        setElapsedSeconds(0);
-        setStreamingContent('');
-        setStreamingThinking('');
+        const residual = residualStateAfterSendFailure();
+        isSendingRef.current = residual.isSending;
+        setError(err instanceof Error ? err.message : String(err));
+        setStatus(residual.status);
+        setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
+        setStreamStartTime(residual.streamStartTime);
+        setElapsedSeconds(residual.elapsedSeconds);
+        setStreamingContent(residual.streamingContent);
+        setStreamingThinking(residual.streamingThinking);
         applyToolBlocks([]);
         applyStreamSegments([]);
-        accumulatedContentRef.current = '';
-        accumulatedThinkingRef.current = '';
+        accumulatedContentRef.current = residual.accumulatedContent;
+        accumulatedThinkingRef.current = residual.accumulatedThinking;
       }
     },
     [status, error, isSwitchingSession, applyToolBlocks, applyStreamSegments],
@@ -810,74 +886,81 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     if (!window.orchid?.chat) return;
     // Do not cancel the target session while still painting the previous one.
     if (isSwitchingSession) return;
-    // Overlapping Esc/cancel must not advance interrupt phases out of order.
-    if (cancelInFlightRef.current) return;
-    cancelInFlightRef.current = true;
+    // One cancel IPC at a time; a second Esc stages the next phase.
+    if (beginCancelRequest(cancelQueueRef.current) === 'queued') return;
+
+    // Loop so a staged second Esc runs immediately after the first RTT
+    // without requiring another keypress after the guard drops.
+    // consumePendingCancel releases inFlight when nothing is staged; do not
+    // reset in a finally that races a concurrent cancel() that already began.
     try {
-      const sessionId = activeSessionIdRef.current ?? streamSessionIdRef.current;
-      const result = await window.orchid.chat.cancel(
-        sessionId ? { sessionId } : undefined,
-      );
-      const status = result && (result as { status: string }).status;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        try {
+          const sessionId = activeSessionIdRef.current ?? streamSessionIdRef.current;
+          const result = await window.orchid.chat.cancel(
+            sessionId ? { sessionId } : undefined,
+          );
+          const status = result && (result as { status: string }).status;
 
-      // First Esc only shows confirmAgent hint
-      if (status === 'confirming') {
-        setInterruptState('confirmAgent');
-        return;
-      }
+          // First Esc only shows confirmAgent hint
+          if (status === 'confirming') {
+            setInterruptState('confirmAgent');
+          } else if (status === 'confirming_subagents') {
+            // Second Esc cancels the agent. Main process emits CHAT_DONE with
+            // interrupted=true (partial content, no suffix). Stay in subagent phase
+            // if applicable; mark in-flight tool blocks as failed.
+            // Don't set status='idle' here — let onDone handle finalization to
+            // avoid double-committing segments. interruptState is confirmSubagents
+            // here and from onState; onDone must not reset it to idle (P1-34).
+            setInterruptState('confirmSubagents');
+            setInterrupted(true);
+            applyToolBlocks((prev) =>
+              prev.map((block) =>
+                block.status === 'generating' || block.status === 'running'
+                  ? {
+                      ...block,
+                      status: 'failed' as const,
+                      error: 'Interrupted by user',
+                      finishedAt: new Date().toISOString(),
+                    }
+                  : block,
+              ),
+            );
+          } else if (status === 'cancelled') {
+            // Third Esc (or full cancel with no subagents)
+            setInterruptState('idle');
+            setInterrupted(true);
+            isSendingRef.current = false;
+            applyToolBlocks((prev) =>
+              prev.map((block) =>
+                block.status === 'generating' || block.status === 'running'
+                  ? {
+                      ...block,
+                      status: 'failed' as const,
+                      error: 'Interrupted by user',
+                      finishedAt: new Date().toISOString(),
+                    }
+                  : block,
+              ),
+            );
+            setStreamingContent('');
+            setStreamingThinking('');
+            accumulatedContentRef.current = '';
+            accumulatedThinkingRef.current = '';
+            setStatus('idle');
+          }
+        } catch {
+          // Ignore cancel errors — still release / drain the queue below.
+        }
 
-      // Second Esc cancels the agent. Main process emits CHAT_DONE with
-      // interrupted=true (partial content, no suffix). Stay in subagent phase
-      // if applicable; mark in-flight tool blocks as failed.
-      // Don't set status='idle' here — let onDone handle finalization to
-      // avoid double-committing segments. interruptState is confirmSubagents
-      // here and from onState; onDone must not reset it to idle (P1-34).
-      if (status === 'confirming_subagents') {
-        setInterruptState('confirmSubagents');
-        setInterrupted(true);
-        applyToolBlocks((prev) =>
-          prev.map((block) =>
-            block.status === 'generating' || block.status === 'running'
-              ? {
-                  ...block,
-                  status: 'failed' as const,
-                  error: 'Interrupted by user',
-                  finishedAt: new Date().toISOString(),
-                }
-              : block,
-          ),
-        );
-        return;
-      }
-
-      // Third Esc (or full cancel with no subagents)
-      if (status === 'cancelled') {
-        setInterruptState('idle');
-        setInterrupted(true);
-        isSendingRef.current = false;
-        applyToolBlocks((prev) =>
-          prev.map((block) =>
-            block.status === 'generating' || block.status === 'running'
-              ? {
-                  ...block,
-                  status: 'failed' as const,
-                  error: 'Interrupted by user',
-                  finishedAt: new Date().toISOString(),
-                }
-              : block,
-          ),
-        );
-        setStreamingContent('');
-        setStreamingThinking('');
-        accumulatedContentRef.current = '';
-        accumulatedThinkingRef.current = '';
-        setStatus('idle');
-        return;
+        if (!consumePendingCancel(cancelQueueRef.current)) {
+          break;
+        }
       }
     } catch {
-      // Ignore cancel errors — still release the in-flight guard below.
-    } finally {
-      cancelInFlightRef.current = false;
+      // Unexpected throw outside the per-IPC try — never leave the mutex stuck.
+      resetCancelQueue(cancelQueueRef.current);
     }
   }, [applyToolBlocks, isSwitchingSession]);
 
@@ -907,7 +990,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     setInterrupted(false);
     setInterruptState('idle');
     isSendingRef.current = false;
-    cancelInFlightRef.current = false;
+    resetCancelQueue(cancelQueueRef.current);
     setStatus('idle');
     // Rehydrate last-turn context usage from persisted messages; empty/new
     // sessions correctly get null → 0% context until the next stream.
@@ -939,7 +1022,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     // Do not clear messages/tools/usage here — keep painting the previous
     // session until hydrate/replaceMessages commits the next view in one shot.
     isSendingRef.current = false;
-    cancelInFlightRef.current = false;
+    resetCancelQueue(cancelQueueRef.current);
     setIsSwitchingSession(true);
   }, []);
 

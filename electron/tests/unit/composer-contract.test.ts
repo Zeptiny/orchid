@@ -35,21 +35,24 @@ describe('composer contract (U6)', () => {
       const sendEnd = src.indexOf('const cancel = useCallback', sendStart);
       const sendSource = src.slice(sendStart, sendEnd);
       expect(sendSource).toMatch(/result\.status === 'error'/);
-      expect(sendSource).toMatch(/isSendingRef\.current = false/);
+      // Shared residual helper sets isSending: false on both failure paths.
+      expect(sendSource).toMatch(/residualStateAfterSendFailure/);
+      expect(sendSource).toMatch(/isSendingRef\.current = residual\.isSending/);
       expect(sendSource).toMatch(/catch \(err\)/);
     });
   });
 
   describe('cancel serialization', () => {
-    it('useChat serializes cancel so repeated Escape cannot overlap phases', () => {
+    it('useChat serializes cancel and stages a second Esc while IPC is in flight', () => {
       const src = read('hooks/useChat.ts');
-      expect(src).toMatch(/cancelInFlightRef/);
+      expect(src).toMatch(/cancelQueueRef/);
+      expect(src).toMatch(/beginCancelRequest/);
+      expect(src).toMatch(/consumePendingCancel/);
       const cancelStart = src.indexOf('const cancel = useCallback');
       const cancelEnd = src.indexOf('const stop = useCallback', cancelStart);
       const cancelSource = src.slice(cancelStart, cancelEnd);
-      expect(cancelSource).toMatch(/if \(cancelInFlightRef\.current\) return/);
-      expect(cancelSource).toMatch(/cancelInFlightRef\.current = true/);
-      expect(cancelSource).toMatch(/finally \{[\s\S]*cancelInFlightRef\.current = false/);
+      expect(cancelSource).toMatch(/beginCancelRequest\(cancelQueueRef\.current\) === 'queued'/);
+      expect(cancelSource).toMatch(/consumePendingCancel\(cancelQueueRef\.current\)/);
     });
   });
 
