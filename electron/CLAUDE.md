@@ -332,8 +332,31 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 ### React
 - **Functional components** only (no class components)
 - **Hooks** for state management (no Redux/Zustand)
-- **DaisyUI** classes for styling (no inline styles, no CSS modules)
-- **Tailwind CSS 4** utility classes
+- **Tailwind CSS 4** utility classes for layout
+
+### Styling — UI primitive standardization
+
+The renderer uses a **primitives-as-API, DaisyUI-as-engine** model. Full contract in `src/renderer/styles/README.md`; enforced by `tests/integration/renderer-style-contract.test.ts`.
+
+**Primitive-first rule.** Feature JSX (anything outside `src/renderer/components/ui/`) must not name DaisyUI component roots (`btn`, `input`, `select`, `alert`, `badge`, `card`, `tabs`, `modal`, `loading`, `checkbox`, `dropdown`, etc.) directly in `className` strings. Use a primitive from `components/ui/` instead. If a matching primitive doesn't exist, create one. New files start at zero baseline — the drift scanner rejects any new DaisyUI root in a file not already in the baseline.
+
+**No class-string variables outside `ui/`.** className values in feature files must be inline string literals or template literals in the JSX — never hoisted to a module-scope `const`. If you want to DRY up a repeated className, extract a primitive or an `orchid-*` composite, not a local constant. The drift scanner only inspects `className=` attribute values; hoisted constants bypass it.
+
+**Extend the primitive, don't override via className.** If you need a new visual variant, add it to the primitive's variant type and `Record<Union, string>` class map. Don't write `variant="ghost" className="text-error hover:bg-error/10"` — that creates two sources of truth for one control's visual semantics. className on a primitive is for layout utilities only (`flex`, `gap-2`, `w-full`, `mt-3`).
+
+**chat.css is dead.** It is header-only (10 lines, no CSS rules). Any new CSS rule belongs in `components.css` `@layer components` (for product composites) or `markdown.css` (for markdown rendering). The growth guard fails on any increase.
+
+**components.css growth.** components.css is at ~1,789 lines. Prefer splitting by surface area (onboarding, config, session, chat) if it crosses ~2,000 lines. Avoid adding new rules when a primitive or Tailwind utility can express the same result.
+
+**Baseline trimming protocol.** Every PR that migrates call sites must trim the corresponding `BASELINE_DAISYUI_HITS` entries in the contract test. Stale entries mask real regressions. The total-token-count check (baseline 65) catches same-root growth within baselined files.
+
+**Non-token colors.** Do not introduce raw `oklch(...)`, `#hex`, `rgb(...)`, or `hsl(...)` in `styles/*.css` or feature `className` strings. Only `index.css` `:root` fallback tokens and `themes/*.css` may use raw color values. The remaining 6 `#000` `color-mix()` fallbacks in components.css should trend to zero.
+
+**CSS cascade awareness.** Rules in `@layer components` are weaker than unlayered rules of equal specificity. When moving CSS into `@layer components`, verify that DaisyUI's own component-layer rules don't win over the migrated rules. If they do, increase specificity (e.g., a parent selector) or scope out the DaisyUI rule.
+
+**Visual smoke per migration batch.** The contract tests are source-level grep — they verify class strings exist in files, not that rendered output looks right. After every batch of primitive migrations, run the app across all 5 themes and visually confirm at minimum: buttons, alerts, inputs, tabs, cards, badges.
+
+**New primitive checklist.** Every new `.tsx` file in `components/ui/` must: (1) export a typed component with `PascalCase` name, (2) use `Record<Union, string>` class maps for variants (not inline ternaries), (3) apply `.trim().replace(/\s+/g, ' ')` on className templates, (4) include a JSDoc docstring, (5) use `forwardRef` for interactive elements (button, input, select), (6) pass the "primitive purity" test (no domain imports). Add unit tests in `tests/unit/renderer-ui-primitives.test.ts` using the existing `renderToStaticMarkup` pattern.
 
 ### Naming
 - **Files**: `kebab-case.ts` / `kebab-case.tsx`
