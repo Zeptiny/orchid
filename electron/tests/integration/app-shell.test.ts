@@ -394,12 +394,34 @@ describe('Theme CSS Custom Properties', () => {
   });
 
   it('active renderer rules do not hard-code a palette', () => {
-    const css = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/styles/chat.css'), 'utf-8');
-    const activeCss = css.slice(css.indexOf('/* ── Iteration 012 mock-aligned components'));
+    const stylesDir = path.resolve(__dirname, '../../src/renderer/styles');
+    const chatCss = fs.readFileSync(path.join(stylesDir, 'chat.css'), 'utf-8');
+    const marker = '/* ── Iteration 012 mock-aligned components';
+    const activeStart = chatCss.indexOf(marker);
+    expect(activeStart).toBeGreaterThanOrEqual(0);
+    const activeCss = [
+      chatCss.slice(activeStart),
+      fs.readFileSync(path.join(stylesDir, 'components.css'), 'utf-8'),
+      fs.readFileSync(path.join(stylesDir, 'markdown.css'), 'utf-8'),
+      fs.readFileSync(path.join(stylesDir, 'exceptions.css'), 'utf-8'),
+    ].join('\n');
     expect(activeCss).not.toMatch(/#[0-9a-fA-F]{3,8}/);
     expect(activeCss).not.toMatch(/rgba?\(/);
     expect(activeCss).toContain('var(--bg-primary)');
     expect(activeCss).toContain('var(--accent-primary)');
+  });
+
+  it('loads styles through the canonical index.css entry', () => {
+    const mainTsx = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/main.tsx'), 'utf-8');
+    const appTsx = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/App.tsx'), 'utf-8');
+    const indexCss = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/styles/index.css'), 'utf-8');
+    expect(mainTsx).toContain("./styles/index.css");
+    expect(appTsx).not.toMatch(/import\s+['"]\.\/styles\/chat\.css['"]/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/components\.css["']/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/markdown\.css["']/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/exceptions\.css["']/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/chat\.css["']/);
+    expect(indexCss).toContain('@plugin "daisyui"');
   });
 });
 

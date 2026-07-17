@@ -211,25 +211,16 @@ export const BASELINE_ARBITRARY_UTILITIES: ReadonlySet<string> = new Set([
 
 /**
  * Baseline top-level reserved DaisyUI selector redefinitions (file::selector).
- * Scoped overrides (e.g. `.composer .input`) are inventory-only until U2/U8.
+ * Scoped overrides (e.g. `.composer .input`) are inventory-only until U8.
+ * U2 removed custom `.btn*` rules (DaisyUI owns buttons in JSX) and moved menu
+ * border kills into exceptions.css.
  */
 export const BASELINE_RESERVED_REDEFINITIONS: ReadonlySet<string> = new Set([
-  'styles/chat.css::.btn',
-  'styles/chat.css::.btn-danger',
-  'styles/chat.css::.btn-danger:hover:not(:disabled)',
-  'styles/chat.css::.btn-ghost',
-  'styles/chat.css::.btn-ghost:hover:not(:disabled)',
-  'styles/chat.css::.btn-primary',
-  'styles/chat.css::.btn-primary:hover:not(:disabled)',
-  'styles/chat.css::.btn-secondary',
-  'styles/chat.css::.btn-secondary:hover:not(:disabled)',
-  'styles/chat.css::.btn-sm',
-  'styles/chat.css::.btn:disabled',
   'styles/chat.css::.footer',
-  'styles/index.css::.menu',
-  'styles/index.css::.menu :where(li)',
-  'styles/index.css::.menu :where(li) + :where(li)',
-  'styles/index.css::.menu li',
+  'styles/exceptions.css::.menu',
+  'styles/exceptions.css::.menu :where(li)',
+  'styles/exceptions.css::.menu :where(li) + :where(li)',
+  'styles/exceptions.css::.menu li',
 ]);
 
 // ─── Filesystem helpers ──────────────────────────────────────────────────────

@@ -1,0 +1,103 @@
+/**
+ * Shared product composites (namespaced orchid-*).
+ *
+ * Prefer DaisyUI classes in JSX for recognizable controls. Use orchid-* only
+ * for repeated product geometry/state. Compose with @apply + semantic tokens
+ * when utilities express the contract; keep custom declarations for theme-var
+ * surfaces that utilities cannot yet express cleanly.
+ */
+
+@layer components {
+  /* ── Shared keycaps (shortcut chords) ─────────────────────────────────── */
+
+  .orchid-keycaps {
+    @apply inline-flex items-center shrink-0 select-none;
+    gap: 0;
+  }
+
+  .orchid-keycaps-unit {
+    @apply inline-flex items-center;
+    gap: 0;
+  }
+
+  .orchid-keycaps-sep {
+    @apply inline-flex items-center justify-center font-semibold leading-none;
+    width: 0.7em;
+    margin: 0 1px;
+    font-size: 0.72em;
+    color: color-mix(in srgb, currentColor 38%, transparent);
+    opacity: 0.85;
+  }
+
+  /* Theme-var key surface: border/gradient cannot be a single utility. */
+  .orchid-keycap {
+    @apply inline-flex items-center justify-center m-0 font-mono leading-none whitespace-nowrap;
+    min-width: 1.35em;
+    border: 1px solid color-mix(in srgb, var(--border-default) 92%, var(--accent-primary));
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--bg-surface-raised) 88%, var(--text-primary)) 0%,
+        color-mix(in srgb, var(--bg-secondary) 96%, var(--overlay-color)) 100%
+      );
+    color: color-mix(in srgb, var(--text-muted) 94%, var(--accent-primary));
+    font-weight: 550;
+    letter-spacing: 0.02em;
+  }
+
+  .orchid-keycap-xs .orchid-keycap {
+    min-height: 15px;
+    padding: 1px 4px;
+    font-size: 9px;
+    border-radius: 3px;
+  }
+
+  .orchid-keycap-sm .orchid-keycap {
+    min-height: 20px;
+    padding: 3px 7px;
+    font-size: 11px;
+    border-radius: 4px;
+  }
+
+  .orchid-keycap-md .orchid-keycap {
+    min-height: 24px;
+    padding: 4px 9px;
+    font-size: 12px;
+    border-radius: 5px;
+  }
+
+  /* Compact shortcut hint bars (palette footer, config footer) */
+  .orchid-shortcut-bar {
+    @apply flex flex-wrap items-center;
+    gap: 10px 14px;
+    min-height: 30px;
+    padding: 6px 12px;
+    border-top: 1px solid color-mix(in srgb, var(--border-default) 90%, transparent);
+    background: color-mix(in srgb, var(--bg-primary) 88%, var(--bg-secondary));
+    color: color-mix(in srgb, var(--text-secondary) 92%, transparent);
+    font-size: 10px;
+  }
+
+  .orchid-shortcut-bar-item {
+    @apply inline-flex items-center;
+    gap: 6px;
+  }
+
+  .orchid-shortcut-bar-item > span:last-child {
+    letter-spacing: 0.01em;
+  }
+
+  /* Config footer chrome (pairs with orchid-shortcut-bar) */
+  .config-footer-bar {
+    @apply shrink-0;
+  }
+
+  .config-footer-meta {
+    @apply ml-auto;
+    opacity: 0.55;
+    font-size: 9px;
+    letter-spacing: 0.02em;
+  }
+}

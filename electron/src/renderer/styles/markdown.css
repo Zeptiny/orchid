@@ -1,0 +1,237 @@
+/**
+ * Markdown / GFM / highlight.js token styles.
+ *
+ * Nested element/token selectors are required because React Markdown emits
+ * semantic HTML and highlight.js token classes. Uses theme variables only.
+ */
+
+/* ── Markdown Rendering (react-markdown + GFM + hljs) ────────────────────── */
+
+.markdown-content p {
+  margin: 0 0 var(--space-2);
+}
+
+.markdown-content p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content strong {
+  font-weight: 600;
+}
+
+.markdown-content em {
+  font-style: italic;
+}
+
+.markdown-content del {
+  text-decoration: line-through;
+  color: var(--text-secondary);
+}
+
+.markdown-content a {
+  color: var(--accent-primary);
+  text-decoration: none;
+}
+
+.markdown-content a:hover {
+  text-decoration: underline;
+}
+
+.markdown-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: inherit;
+  background: color-mix(in srgb, var(--accent-warning) 15%, transparent);
+  color: var(--accent-warning);
+  padding: 1px 3px;
+  border-radius: 3px;
+}
+
+.markdown-content code.code-token {
+  display: inline;
+}
+
+.markdown-content pre {
+  background: var(--bg-surface-overlay);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  overflow-x: auto;
+  margin: var(--space-2) 0;
+}
+
+.markdown-content .markdown-code-lang {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-bottom: var(--space-1);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
+.markdown-content pre code,
+.markdown-content pre code.hljs {
+  display: block;
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  line-height: 1.5;
+  color: var(--text-primary);
+  overflow-x: visible;
+  white-space: pre;
+}
+
+/* Theme-aware highlight.js / lowlight token colors */
+.markdown-content .hljs-comment,
+.markdown-content .hljs-quote {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.markdown-content .hljs-keyword,
+.markdown-content .hljs-selector-tag,
+.markdown-content .hljs-addition {
+  color: var(--accent-primary);
+}
+
+.markdown-content .hljs-number,
+.markdown-content .hljs-string,
+.markdown-content .hljs-meta .hljs-meta-string,
+.markdown-content .hljs-literal,
+.markdown-content .hljs-doctag,
+.markdown-content .hljs-regexp {
+  color: var(--accent-success);
+}
+
+.markdown-content .hljs-title,
+.markdown-content .hljs-section,
+.markdown-content .hljs-name,
+.markdown-content .hljs-selector-id,
+.markdown-content .hljs-selector-class {
+  color: var(--accent-info);
+}
+
+.markdown-content .hljs-attribute,
+.markdown-content .hljs-attr,
+.markdown-content .hljs-variable,
+.markdown-content .hljs-template-variable,
+.markdown-content .hljs-class .hljs-title,
+.markdown-content .hljs-type {
+  color: var(--accent-warning);
+}
+
+.markdown-content .hljs-symbol,
+.markdown-content .hljs-bullet,
+.markdown-content .hljs-link {
+  color: var(--accent-secondary);
+}
+
+.markdown-content .hljs-built_in,
+.markdown-content .hljs-builtin-name {
+  color: var(--accent-info);
+}
+
+.markdown-content .hljs-meta,
+.markdown-content .hljs-deletion {
+  color: var(--text-secondary);
+}
+
+.markdown-content .hljs-emphasis {
+  font-style: italic;
+}
+
+.markdown-content .hljs-strong {
+  font-weight: 600;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-6);
+}
+
+.markdown-content ul ul,
+.markdown-content ol ol,
+.markdown-content ul ol,
+.markdown-content ol ul {
+  margin: var(--space-1) 0;
+}
+
+.markdown-content li {
+  margin-bottom: var(--space-1);
+}
+
+.markdown-content li > p {
+  margin: 0;
+}
+
+/* GFM task lists */
+.markdown-content li:has(> input[type='checkbox']) {
+  list-style: none;
+  margin-left: calc(-1 * var(--space-4));
+}
+
+.markdown-content input[type='checkbox'] {
+  margin-right: var(--space-2);
+  vertical-align: middle;
+  accent-color: var(--accent-primary);
+}
+
+.markdown-content blockquote {
+  border-left: 3px solid var(--border-strong);
+  padding-left: var(--space-3);
+  color: var(--text-secondary);
+  margin: var(--space-2) 0;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+  margin: var(--space-3) 0 var(--space-2);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.markdown-content h1 { font-size: var(--font-size-lg); }
+.markdown-content h2 { font-size: var(--font-size-base); }
+.markdown-content h3 { font-size: var(--font-size-sm); }
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 { font-size: var(--font-size-sm); color: var(--text-secondary); }
+
+.markdown-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+  margin: var(--space-2) 0;
+}
+
+.markdown-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: var(--space-2) 0;
+  font-size: inherit;
+  display: block;
+  overflow-x: auto;
+}
+
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid var(--border-default);
+  padding: var(--space-2);
+  text-align: left;
+}
+
+.markdown-content th {
+  background: var(--bg-surface-raised);
+  font-weight: 600;
+}
+
+.markdown-content hr {
+  border: none;
+  border-top: 1px solid var(--border-default);
+  margin: var(--space-3) 0;
+}
+

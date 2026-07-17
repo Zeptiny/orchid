@@ -1,0 +1,73 @@
+/**
+ * Browser-specific and runtime exception styles.
+ *
+ * Keep this layer narrow: scrollbars, keyframes, streaming cursor, DaisyUI
+ * menu border kills, and dynamic-layout hooks that utilities cannot express.
+ * Every rule here should have a short reason.
+ */
+
+/* ── DaisyUI menu border kill ─────────────────────────────────────────────
+ * Some surfaces accidentally pick up DaisyUI menu list dividers. Strip them
+ * without redefining menu layout beyond borders. Prefer not using .menu for
+ * product lists; remove when remaining menu class usage is audited.
+ */
+.menu,
+.menu li,
+.menu :where(li) {
+  border: none !important;
+  border-top: none !important;
+  border-bottom: none !important;
+  box-shadow: none !important;
+}
+.menu :where(li) + :where(li) {
+  margin-top: 0 !important;
+  border: none !important;
+}
+
+/* ── Global scrollbars ────────────────────────────────────────────────────
+ * WebKit scrollbar pseudo-elements are not expressible as utilities.
+ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb, var(--color-base-300));
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--accent-primary-hover, var(--color-primary));
+}
+
+/* ── Streaming cursor ─────────────────────────────────────────────────────
+ * Live token caret animation; not a DaisyUI primitive.
+ */
+.streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--accent-primary);
+  margin-left: 2px;
+  animation: blink 1s step-end infinite;
+  vertical-align: text-bottom;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* Status/loading indicators still reference these keyframes from chat.css */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

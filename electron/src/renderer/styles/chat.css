@@ -1,8 +1,12 @@
 /**
- * Chat & Sidebar styles — uses CSS custom properties from themes.
+ * Compatibility bridge — temporary until U8.
  *
- * All colors, spacing, and typography reference theme variables.
- * This file is imported by the component modules.
+ * Holds unmigrated feature/legacy selectors while consumers and source tests
+ * still expect this file. Canonical stylesheet entry is index.css, which
+ * imports this bridge after components/markdown/exceptions layers.
+ *
+ * Do not add new rules here; add orchid-* composites to components.css,
+ * markdown to markdown.css, or browser exceptions to exceptions.css.
  */
 
 /* ── Layout ──────────────────────────────────────────────────────────────── */
@@ -229,252 +233,6 @@
   margin-right: var(--space-2);
 }
 
-/* ── Streaming Cursor ────────────────────────────────────────────────────── */
-
-.streaming-cursor {
-  display: inline-block;
-  width: 2px;
-  height: 1em;
-  background: var(--accent-primary);
-  margin-left: 2px;
-  animation: blink 1s step-end infinite;
-  vertical-align: text-bottom;
-}
-
-@keyframes blink {
-  50% { opacity: 0; }
-}
-
-/* ── Markdown Rendering (react-markdown + GFM + hljs) ────────────────────── */
-
-.markdown-content p {
-  margin: 0 0 var(--space-2);
-}
-
-.markdown-content p:last-child {
-  margin-bottom: 0;
-}
-
-.markdown-content strong {
-  font-weight: 600;
-}
-
-.markdown-content em {
-  font-style: italic;
-}
-
-.markdown-content del {
-  text-decoration: line-through;
-  color: var(--text-secondary);
-}
-
-.markdown-content a {
-  color: var(--accent-primary);
-  text-decoration: none;
-}
-
-.markdown-content a:hover {
-  text-decoration: underline;
-}
-
-.markdown-content code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: inherit;
-  background: color-mix(in srgb, var(--accent-warning) 15%, transparent);
-  color: var(--accent-warning);
-  padding: 1px 3px;
-  border-radius: 3px;
-}
-
-.markdown-content code.code-token {
-  display: inline;
-}
-
-.markdown-content pre {
-  background: var(--bg-surface-overlay);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  overflow-x: auto;
-  margin: var(--space-2) 0;
-}
-
-.markdown-content .markdown-code-lang {
-  font-size: 10px;
-  color: var(--text-tertiary);
-  margin-bottom: var(--space-1);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  user-select: none;
-}
-
-.markdown-content pre code,
-.markdown-content pre code.hljs {
-  display: block;
-  background: none;
-  padding: 0;
-  font-size: inherit;
-  line-height: 1.5;
-  color: var(--text-primary);
-  overflow-x: visible;
-  white-space: pre;
-}
-
-/* Theme-aware highlight.js / lowlight token colors */
-.markdown-content .hljs-comment,
-.markdown-content .hljs-quote {
-  color: var(--text-tertiary);
-  font-style: italic;
-}
-
-.markdown-content .hljs-keyword,
-.markdown-content .hljs-selector-tag,
-.markdown-content .hljs-addition {
-  color: var(--accent-primary);
-}
-
-.markdown-content .hljs-number,
-.markdown-content .hljs-string,
-.markdown-content .hljs-meta .hljs-meta-string,
-.markdown-content .hljs-literal,
-.markdown-content .hljs-doctag,
-.markdown-content .hljs-regexp {
-  color: var(--accent-success);
-}
-
-.markdown-content .hljs-title,
-.markdown-content .hljs-section,
-.markdown-content .hljs-name,
-.markdown-content .hljs-selector-id,
-.markdown-content .hljs-selector-class {
-  color: var(--accent-info);
-}
-
-.markdown-content .hljs-attribute,
-.markdown-content .hljs-attr,
-.markdown-content .hljs-variable,
-.markdown-content .hljs-template-variable,
-.markdown-content .hljs-class .hljs-title,
-.markdown-content .hljs-type {
-  color: var(--accent-warning);
-}
-
-.markdown-content .hljs-symbol,
-.markdown-content .hljs-bullet,
-.markdown-content .hljs-link {
-  color: var(--accent-secondary);
-}
-
-.markdown-content .hljs-built_in,
-.markdown-content .hljs-builtin-name {
-  color: var(--accent-info);
-}
-
-.markdown-content .hljs-meta,
-.markdown-content .hljs-deletion {
-  color: var(--text-secondary);
-}
-
-.markdown-content .hljs-emphasis {
-  font-style: italic;
-}
-
-.markdown-content .hljs-strong {
-  font-weight: 600;
-}
-
-.markdown-content ul,
-.markdown-content ol {
-  margin: var(--space-2) 0;
-  padding-left: var(--space-6);
-}
-
-.markdown-content ul ul,
-.markdown-content ol ol,
-.markdown-content ul ol,
-.markdown-content ol ul {
-  margin: var(--space-1) 0;
-}
-
-.markdown-content li {
-  margin-bottom: var(--space-1);
-}
-
-.markdown-content li > p {
-  margin: 0;
-}
-
-/* GFM task lists */
-.markdown-content li:has(> input[type='checkbox']) {
-  list-style: none;
-  margin-left: calc(-1 * var(--space-4));
-}
-
-.markdown-content input[type='checkbox'] {
-  margin-right: var(--space-2);
-  vertical-align: middle;
-  accent-color: var(--accent-primary);
-}
-
-.markdown-content blockquote {
-  border-left: 3px solid var(--border-strong);
-  padding-left: var(--space-3);
-  color: var(--text-secondary);
-  margin: var(--space-2) 0;
-}
-
-.markdown-content h1,
-.markdown-content h2,
-.markdown-content h3,
-.markdown-content h4,
-.markdown-content h5,
-.markdown-content h6 {
-  margin: var(--space-3) 0 var(--space-2);
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-.markdown-content h1 { font-size: var(--font-size-lg); }
-.markdown-content h2 { font-size: var(--font-size-base); }
-.markdown-content h3 { font-size: var(--font-size-sm); }
-.markdown-content h4,
-.markdown-content h5,
-.markdown-content h6 { font-size: var(--font-size-sm); color: var(--text-secondary); }
-
-.markdown-content img {
-  max-width: 100%;
-  height: auto;
-  border-radius: var(--radius-md);
-  margin: var(--space-2) 0;
-}
-
-.markdown-content table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: var(--space-2) 0;
-  font-size: inherit;
-  display: block;
-  overflow-x: auto;
-}
-
-.markdown-content th,
-.markdown-content td {
-  border: 1px solid var(--border-default);
-  padding: var(--space-2);
-  text-align: left;
-}
-
-.markdown-content th {
-  background: var(--bg-surface-raised);
-  font-weight: 600;
-}
-
-.markdown-content hr {
-  border: none;
-  border-top: 1px solid var(--border-default);
-  margin: var(--space-3) 0;
-}
-
 /* ── Input Area ──────────────────────────────────────────────────────────── */
 
 .input-area {
@@ -547,70 +305,6 @@
   height: 6px;
   border-radius: var(--radius-full);
   background: var(--accent-success);
-}
-
-/* ── Buttons ─────────────────────────────────────────────────────────────── */
-
-.btn {
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-md);
-  border: none;
-  font-family: var(--font-family);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  cursor: pointer;
-  transition: background var(--transition-fast), opacity var(--transition-fast);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-primary {
-  background: var(--btn-primary-bg);
-  color: var(--btn-primary-text);
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: var(--btn-primary-hover);
-}
-
-.btn-secondary {
-  background: var(--btn-secondary-bg);
-  color: var(--btn-secondary-text);
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: var(--btn-secondary-hover);
-}
-
-.btn-danger {
-  background: var(--btn-danger-bg);
-  color: var(--btn-danger-text);
-}
-
-.btn-danger:hover:not(:disabled) {
-  background: var(--btn-danger-hover);
-}
-
-.btn-ghost {
-  background: transparent;
-  color: var(--text-secondary);
-  padding: var(--space-1) var(--space-2);
-}
-
-.btn-ghost:hover:not(:disabled) {
-  background: var(--bg-surface-raised);
-  color: var(--text-primary);
-}
-
-.btn-sm {
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--font-size-xs);
 }
 
 /* ── Footer ──────────────────────────────────────────────────────────────── */
@@ -857,10 +551,6 @@
   background: var(--text-tertiary);
 }
 
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
 
 .subagent-item-name {
   flex: 1;
@@ -1034,9 +724,6 @@
   animation: spin 0.6s linear infinite;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
 
 .state-empty {
   display: flex;
@@ -4669,104 +4356,6 @@ button.inspector-row:hover {
   .app-frame {
     min-width: 0;
   }
-}
-
-/* ── Shared keycaps (shortcut chords) ─────────────────────────────────────── */
-
-.orchid-keycaps {
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-  flex-shrink: 0;
-  user-select: none;
-}
-.orchid-keycaps-unit {
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-}
-.orchid-keycaps-sep {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 0.7em;
-  margin: 0 1px;
-  font-size: 0.72em;
-  font-weight: 600;
-  line-height: 1;
-  color: color-mix(in srgb, currentColor 38%, transparent);
-  opacity: 0.85;
-}
-.orchid-keycap {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.35em;
-  margin: 0;
-  border: 1px solid color-mix(in srgb, var(--border-default) 92%, var(--accent-primary));
-  border-bottom-width: 2px;
-  border-radius: 4px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--bg-surface-raised) 88%, var(--text-primary)) 0%,
-      color-mix(in srgb, var(--bg-secondary) 96%, var(--overlay-color)) 100%
-    );
-  color: color-mix(in srgb, var(--text-muted) 94%, var(--accent-primary));
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-weight: 550;
-  letter-spacing: 0.02em;
-  line-height: 1;
-  white-space: nowrap;
-}
-.orchid-keycap-xs .orchid-keycap {
-  min-height: 15px;
-  padding: 1px 4px;
-  font-size: 9px;
-  border-radius: 3px;
-}
-.orchid-keycap-sm .orchid-keycap {
-  min-height: 20px;
-  padding: 3px 7px;
-  font-size: 11px;
-  border-radius: 4px;
-}
-.orchid-keycap-md .orchid-keycap {
-  min-height: 24px;
-  padding: 4px 9px;
-  font-size: 12px;
-  border-radius: 5px;
-}
-
-/* Compact shortcut hint bars (palette footer, config footer) */
-.orchid-shortcut-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 14px;
-  min-height: 30px;
-  padding: 6px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border-default) 90%, transparent);
-  background: color-mix(in srgb, var(--bg-primary) 88%, var(--bg-secondary));
-  color: color-mix(in srgb, var(--text-secondary) 92%, transparent);
-  font-size: 10px;
-}
-.orchid-shortcut-bar-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.orchid-shortcut-bar-item > span:last-child {
-  letter-spacing: 0.01em;
-}
-.config-footer-bar {
-  flex-shrink: 0;
-}
-.config-footer-meta {
-  margin-left: auto;
-  opacity: 0.55;
-  font-size: 9px;
-  letter-spacing: 0.02em;
 }
 
 /* ── Keyboard shortcuts help modal ────────────────────────────────────────── */

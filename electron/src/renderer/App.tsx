@@ -6,7 +6,6 @@ import { ChatView } from './components/ChatView';
 import { ConfigView } from './components/ConfigView';
 import { OnboardingScreen } from './components/Onboarding/OnboardingScreen';
 import { applyTheme, type ThemeName, THEME_NAMES } from './themes';
-import './styles/chat.css';
 
 type SettingsTab = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag' | 'skills' | 'agents' | 'personalities';
 

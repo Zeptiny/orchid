@@ -96,18 +96,46 @@ These five themes must remain selectable, loadable, and coherent via the existin
 
 Do not replace the runtime theme loader with compile-time-only DaisyUI theme blocks in this migration’s first pass.
 
-## Stylesheet layout (target)
+## Stylesheet layout
 
 | File | Role |
 | --- | --- |
-| `index.css` | Canonical entry: Tailwind, DaisyUI plugin, document/root rules |
-| `components.css` | `@layer components` `orchid-*` composites with `@apply` |
+| `index.css` | **Canonical entry** (imported from `main.tsx`): Tailwind, DaisyUI plugin, document/root rules, layer imports |
+| `components.css` | `@layer components` `orchid-*` composites with `@apply` + semantic/theme tokens |
 | `markdown.css` | Markdown / GFM / highlight tokens |
-| `exceptions.css` | Scrollbars, keyframes, dynamic hooks, browser quirks |
-| `chat.css` | Temporary compatibility aggregator until U8 |
+| `exceptions.css` | Scrollbars, keyframes, streaming cursor, DaisyUI menu border kill, browser quirks |
+| `chat.css` | Temporary compatibility bridge of unmigrated feature/legacy selectors until U8 |
 | `README.md` | This contract |
 
-Until layers are split (U2+), `index.css` + `chat.css` remain the live surface. Do not delete legacy selectors without updating consumer inventory and source-structure tests.
+### Import graph
+
+```text
+main.tsx
+  └── styles/index.css
+        ├── tailwindcss + daisyui plugin
+        ├── components.css
+        ├── markdown.css
+        ├── exceptions.css
+        └── chat.css          ← compatibility bridge only
+```
+
+Runtime themes are **not** part of this graph: `applyTheme()` swaps a single `#orchid-theme` stylesheet link (`themes/*.css`) and sets `document.documentElement.dataset.theme`. Do not migrate those files into compile-time `@plugin "daisyui/theme"` blocks in this migration.
+
+### Compatibility bridge (`chat.css`)
+
+- Still contains unmigrated feature CSS (shell, sidebars, composer, settings, onboarding, etc.).
+- Source-structure tests may still assert selectors live here; keep the bridge until consumers and tests move (U8).
+- **Do not add new rules** to `chat.css`. New composites → `components.css`; markdown → `markdown.css`; browser exceptions → `exceptions.css`.
+- Custom `.btn` / `.btn-*` redefinitions were removed in U2 so DaisyUI owns button primitives in JSX.
+
+### Known reserved redefinitions (shrink toward zero by U8)
+
+| Selector | Location | Why still present |
+| --- | --- | --- |
+| `.footer` | `chat.css` | Legacy footer layout block; live UI uses `chat-footer` / DaisyUI `footer` carefully — remove when legacy block is deleted |
+| `.menu` (+ li variants) | `exceptions.css` | Border-kill only; prefer not using DaisyUI `menu` for product lists |
+
+Do not delete legacy selectors without updating consumer inventory and source-structure tests.
 
 ## Arbitrary utilities
 
@@ -121,9 +149,10 @@ Prefer nearest predefined utilities (`text-xs`, `z-50`, `rounded-md`, `gap-px`, 
 
 ## Migration posture
 
-1. **U1**: contract test + this README + baseline inventory (no mass CSS rewrite required).
-2. **U2–U7**: migrate layers and features; baseline may only shrink or move entries to approved exceptions with justification.
-3. **U8**: zero arbitrary utilities outside approved exceptions; zero top-level reserved DaisyUI redefinitions; remove or reduce `chat.css` compatibility bridge; full theme smoke matrix.
+1. **U1**: contract test + this README + baseline inventory (done).
+2. **U2**: canonical CSS layers + remove competing `.btn*` redefs (done). Baseline reserved redefs may only shrink or move with justification.
+3. **U3–U7**: shared primitives + feature migration; arbitrary-utility baseline may only shrink or move entries to approved exceptions with justification.
+4. **U8**: zero arbitrary utilities outside approved exceptions; zero top-level reserved DaisyUI redefinitions; remove or reduce `chat.css` compatibility bridge; full theme smoke matrix.
 
 ## How to add UI safely
 
