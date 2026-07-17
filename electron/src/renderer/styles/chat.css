@@ -944,16 +944,26 @@
   white-space: nowrap;
 }
 
-/* New session CTA above search */
+/* New session CTA above search — text/icon only, no fill or border. */
 .session-new-btn {
   width: 100%;
   justify-content: flex-start !important;
   gap: 8px !important;
-  min-height: 36px !important;
-  margin-bottom: 8px;
-  border-radius: 0.5rem !important;
+  min-height: 32px !important;
+  margin-bottom: 6px;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0.375rem !important;
   font-size: 12px !important;
   font-weight: 600 !important;
+  color: var(--text-primary, var(--color-base-content)) !important;
+  padding-inline: 4px !important;
+}
+.session-new-btn:hover,
+.session-new-btn:focus-visible {
+  background: color-mix(in srgb, var(--text-primary, var(--color-base-content)) 6%, transparent) !important;
+  border: none !important;
 }
 
 /* Session search — padding aligned with composer textarea (12px left / 8px right). */

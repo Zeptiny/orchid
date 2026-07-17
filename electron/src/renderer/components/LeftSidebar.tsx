@@ -206,7 +206,7 @@ export function LeftSidebar({
 
         <button
           type="button"
-          className="btn btn-primary btn-sm session-new-btn"
+          className="btn btn-ghost btn-sm session-new-btn"
           onClick={onSessionCreate}
           title={`New session (${formatShortcut('session.new')})`}
         >
