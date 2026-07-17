@@ -163,8 +163,9 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
     <div className="flex flex-col gap-4">
       {title && <div className="config-card-title text-primary font-semibold">{title}</div>}
       <div className="config-form-grid">
-        <FormField label="Server ID" className="config-field">
+        <FormField label="Server ID" htmlFor="mcp-server-id" className="config-field">
           <input
+            id="mcp-server-id"
             type="text"
             value={form.id}
             onChange={(e) => setEditForm({ ...form, id: e.target.value })}
@@ -172,8 +173,9 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
             placeholder="my-mcp-server"
           />
         </FormField>
-        <FormField label="Command" className="config-field">
+        <FormField label="Command" htmlFor="mcp-server-command" className="config-field">
           <input
+            id="mcp-server-command"
             type="text"
             value={form.command}
             onChange={(e) => setEditForm({ ...form, command: e.target.value })}
@@ -181,8 +183,9 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
             placeholder="npx"
           />
         </FormField>
-        <FormField label="URL (for SSE servers)" className="config-field">
+        <FormField label="URL (for SSE servers)" htmlFor="mcp-server-url" className="config-field">
           <input
+            id="mcp-server-url"
             type="text"
             value={form.url}
             onChange={(e) => setEditForm({ ...form, url: e.target.value })}
@@ -190,8 +193,13 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
             placeholder="http://localhost:3000"
           />
         </FormField>
-        <FormField label="Arguments (space-separated)" className="config-field">
+        <FormField
+          label="Arguments (space-separated)"
+          htmlFor="mcp-server-args"
+          className="config-field"
+        >
           <input
+            id="mcp-server-args"
             type="text"
             value={form.argsText}
             onChange={(e) => setEditForm({ ...form, argsText: e.target.value })}
@@ -201,9 +209,11 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
         </FormField>
         <FormField
           label="Environment Variables (KEY=VALUE per line)"
+          htmlFor="mcp-server-env"
           className="config-field config-form-grid-full"
         >
           <textarea
+            id="mcp-server-env"
             value={form.envText}
             onChange={(e) => setEditForm({ ...form, envText: e.target.value })}
             className="textarea textarea-bordered w-full"

@@ -100,7 +100,7 @@ describe('Panel / SectionHeader / StatusBadge / StateMessage / FormField', () =>
     expect(error).toContain('Try again');
   });
 
-  it('FormField wires label, hint, and error without layout-only wrappers shifting semantics', () => {
+  it('FormField wires label, aria-describedby, and unique hint/error ids', () => {
     const withHint = markup(
       createElement(
         FormField,
@@ -109,8 +109,12 @@ describe('Panel / SectionHeader / StatusBadge / StateMessage / FormField', () =>
       ),
     );
     expect(withHint).toContain('for="name"');
+    expect(withHint).toContain('id="name"');
     expect(withHint).toContain('Display name');
     expect(withHint).toContain('*');
+    const hintDesc = withHint.match(/aria-describedby="([^"]+)"/)?.[1];
+    expect(hintDesc).toBeTruthy();
+    expect(withHint).toContain(`id="${hintDesc}"`);
 
     const withError = markup(
       createElement(
@@ -121,6 +125,34 @@ describe('Panel / SectionHeader / StatusBadge / StateMessage / FormField', () =>
     );
     expect(withError).toContain('role="alert"');
     expect(withError).toContain('Required');
+    expect(withError).toContain('aria-invalid="true"');
+    const errorDesc = withError.match(/aria-describedby="([^"]+)"/)?.[1];
+    expect(errorDesc).toBeTruthy();
+    expect(withError).toContain(`id="${errorDesc}"`);
+  });
+
+  it('FormField generates unique describedby ids across fields without htmlFor', () => {
+    const html = markup(
+      createElement(
+        'div',
+        null,
+        createElement(
+          FormField,
+          { label: 'A', hint: 'hint-a' },
+          createElement('input', { className: 'input' }),
+        ),
+        createElement(
+          FormField,
+          { label: 'B', hint: 'hint-b' },
+          createElement('input', { className: 'input' }),
+        ),
+      ),
+    );
+    const ids = [...html.matchAll(/aria-describedby="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
+    expect(html).toContain(`id="${ids[0]}"`);
+    expect(html).toContain(`id="${ids[1]}"`);
   });
 });
 
