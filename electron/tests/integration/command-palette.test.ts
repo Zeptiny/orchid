@@ -609,4 +609,26 @@ describe('Command Palette File Structure', () => {
     expect(chatView).toContain("orchid:navigate");
     expect(chatView).toContain('setInspectorFocusSection');
   });
+
+  it('Sidebar re-opens collapsed inspector section on same-section re-nav', () => {
+    const sidebar = fs.readFileSync(
+      path.join(componentsDir, 'Sidebar.tsx'),
+      'utf-8',
+    );
+    expect(sidebar).toContain('forceOpenEpoch');
+    expect(sidebar).toContain('forceOpenToken');
+    expect(sidebar).toMatch(/if \(forceOpenToken > 0\) setOpen\(true\)/);
+  });
+
+  it('CommandPalette ignores re-entrant selection while async select is in flight', () => {
+    const palette = fs.readFileSync(
+      path.join(componentsDir, 'CommandPalette.tsx'),
+      'utf-8',
+    );
+    expect(palette).toContain('selectingRef');
+    expect(palette).toMatch(/if \(selectingRef\.current\) return/);
+    expect(palette).toMatch(/selectingRef\.current = true/);
+    expect(palette).toMatch(/finally \{[\s\S]*selectingRef\.current = false/);
+    expect(palette).toMatch(/disabled=\{isSelecting\}/);
+  });
 });

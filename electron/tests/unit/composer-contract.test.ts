@@ -65,6 +65,35 @@ describe('composer contract (U6)', () => {
       expect(sidebar).toMatch(/focusSection/);
       expect(sidebar).toMatch(/NAV_SECTION_MAP|inspector-subagents/);
     });
+
+    it('re-opens inspector section on same-section palette re-nav after collapse', () => {
+      const sidebar = read('components/Sidebar.tsx');
+      expect(sidebar).toMatch(/forceOpenEpoch|setForceOpenEpoch/);
+      expect(sidebar).toMatch(/forceOpenToken/);
+      // Epoch bumps on every focusSection so identical section re-nav re-triggers open.
+      const focusEffect = sidebar.slice(
+        sidebar.indexOf('if (!focusSection) return'),
+        sidebar.indexOf('}, [focusSection, onFocusSectionConsumed]'),
+      );
+      expect(focusEffect).toMatch(/setForceOpenEpoch/);
+      const collapseOpen = sidebar.slice(
+        sidebar.indexOf('function CollapseBlock'),
+        sidebar.indexOf('// ── Subagents Section'),
+      );
+      expect(collapseOpen).toMatch(/if \(forceOpenToken > 0\) setOpen\(true\)/);
+      expect(collapseOpen).toMatch(/\[forceOpenToken\]/);
+    });
+
+    it('guards command palette handleSelect against overlapping async selections', () => {
+      const palette = read('components/CommandPalette.tsx');
+      expect(palette).toMatch(/selectingRef/);
+      const selectStart = palette.indexOf('const handleSelect = useCallback');
+      const selectEnd = palette.indexOf('const handleKeyDown = useCallback', selectStart);
+      const selectSource = palette.slice(selectStart, selectEnd);
+      expect(selectSource).toMatch(/if \(selectingRef\.current\) return/);
+      expect(selectSource).toMatch(/selectingRef\.current = true/);
+      expect(selectSource).toMatch(/finally \{[\s\S]*selectingRef\.current = false/);
+    });
   });
 
   describe('DaisyUI controls', () => {

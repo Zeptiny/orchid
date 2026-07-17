@@ -84,11 +84,14 @@ export function Sidebar({
 }: SidebarProps) {
   // Inspector toggle (Mod+B) is owned by ChatView via the central shortcut registry.
   const [forcedSection, setForcedSection] = useState<string | null>(null);
+  /** Bumps on every palette navigate so same-section re-nav re-opens after collapse. */
+  const [forceOpenEpoch, setForceOpenEpoch] = useState(0);
 
   useEffect(() => {
     if (!focusSection) return;
     const sectionId = NAV_SECTION_MAP[focusSection] ?? focusSection;
     setForcedSection(sectionId);
+    setForceOpenEpoch((epoch) => epoch + 1);
     onFocusSectionConsumed?.();
     requestAnimationFrame(() => {
       document
@@ -136,7 +139,7 @@ export function Sidebar({
         <CollapseBlock
           title="Todos"
           sectionId="inspector-todos"
-          forceOpen={forcedSection === 'inspector-todos' ? true : undefined}
+          forceOpenToken={forcedSection === 'inspector-todos' ? forceOpenEpoch : 0}
         >
           <TodosSection state={todoState} onRefresh={onRefreshTodos} />
         </CollapseBlock>
@@ -144,7 +147,7 @@ export function Sidebar({
         <CollapseBlock
           title="Subagents"
           sectionId="inspector-subagents"
-          forceOpen={forcedSection === 'inspector-subagents' ? true : undefined}
+          forceOpenToken={forcedSection === 'inspector-subagents' ? forceOpenEpoch : 0}
           badge={
             subagentState.status === 'ready' && subagentState.subagents.length > 0 ? (
               <StatusBadge tone="success" size="xs">{subagentState.subagents.length}</StatusBadge>
@@ -164,7 +167,7 @@ export function Sidebar({
           title="Context"
           sectionId="inspector-context"
           defaultOpen
-          forceOpen={forcedSection === 'inspector-context' ? true : undefined}
+          forceOpenToken={forcedSection === 'inspector-context' ? forceOpenEpoch : 0}
           badge={<ContextBadge usage={usage} maxContext={maxContext} />}
         >
           <ContextGrid messages={messages} usage={usage} maxContext={maxContext} />
@@ -173,7 +176,7 @@ export function Sidebar({
         <CollapseBlock
           title="Usage"
           sectionId="inspector-usage"
-          forceOpen={forcedSection === 'inspector-usage' ? true : undefined}
+          forceOpenToken={forcedSection === 'inspector-usage' ? forceOpenEpoch : 0}
         >
           <TokenUsageSection cumulativeUsage={cumulativeUsage} maxContext={maxContext} />
         </CollapseBlock>
@@ -181,7 +184,7 @@ export function Sidebar({
         <CollapseBlock
           title="Workspace Index"
           sectionId="inspector-index"
-          forceOpen={forcedSection === 'inspector-index' ? true : undefined}
+          forceOpenToken={forcedSection === 'inspector-index' ? forceOpenEpoch : 0}
           badge={<IndexBadge ragStatus={ragStatus} astStatus={astStatus} />}
         >
           <IndexSection
@@ -197,7 +200,7 @@ export function Sidebar({
           title="MCP Servers"
           sectionId="inspector-mcp"
           defaultOpen
-          forceOpen={forcedSection === 'inspector-mcp' ? true : undefined}
+          forceOpenToken={forcedSection === 'inspector-mcp' ? forceOpenEpoch : 0}
           badge={<MCPStatusBadges servers={mcpServers} />}
         >
           <MCPSection servers={mcpServers} />
@@ -230,8 +233,11 @@ interface CollapseBlockProps {
   defaultOpen?: boolean;
   badge?: ReactNode;
   children: ReactNode;
-  /** Controlled open state (e.g. palette navigation). */
-  forceOpen?: boolean;
+  /**
+   * Non-zero token from palette navigation; each new token re-opens even when
+   * the same section is targeted again after the user collapsed it.
+   */
+  forceOpenToken?: number;
   onOpenChange?: (open: boolean) => void;
 }
 
@@ -251,7 +257,7 @@ function CollapseBlock({
   defaultOpen = false,
   badge,
   children,
-  forceOpen,
+  forceOpenToken = 0,
   onOpenChange,
 }: CollapseBlockProps) {
   const [open, setOpen] = useState(defaultOpen);
@@ -259,8 +265,8 @@ function CollapseBlock({
 
   // One-shot open from palette navigation; user can still collapse afterward.
   useEffect(() => {
-    if (forceOpen === true) setOpen(true);
-  }, [forceOpen]);
+    if (forceOpenToken > 0) setOpen(true);
+  }, [forceOpenToken]);
 
   const toggle = () => {
     const next = !open;

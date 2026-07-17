@@ -9,18 +9,18 @@ import {
 } from 'react';
 import { Icon, type IconName } from '../Icon';
 
-export interface PopoverListOption {
-  readonly value: string;
+export interface PopoverListOption<T extends string = string> {
+  readonly value: T;
   readonly label: string;
   readonly description?: string;
   readonly disabled?: boolean;
 }
 
-export interface PopoverListProps {
+export interface PopoverListProps<T extends string = string> {
   readonly id?: string;
-  readonly value: string;
-  readonly options: readonly PopoverListOption[];
-  readonly onChange: (value: string) => void;
+  readonly value: T;
+  readonly options: readonly PopoverListOption<T>[];
+  readonly onChange: (value: T) => void;
   readonly label: string;
   readonly title?: string;
   readonly searchPlaceholder?: string;
@@ -34,11 +34,11 @@ export interface PopoverListProps {
   readonly align?: 'start' | 'end';
   /** When false, omit the current-selection chip in the menu heading. */
   readonly showCurrentInMenu?: boolean;
-  readonly renderTriggerLabel?: (selected: PopoverListOption | undefined, value: string) => ReactNode;
-  readonly filterOption?: (option: PopoverListOption, query: string) => boolean;
+  readonly renderTriggerLabel?: (selected: PopoverListOption<T> | undefined, value: T) => ReactNode;
+  readonly filterOption?: (option: PopoverListOption<T>, query: string) => boolean;
 }
 
-function defaultFilter(option: PopoverListOption, query: string): boolean {
+function defaultFilter<T extends string>(option: PopoverListOption<T>, query: string): boolean {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return true;
   return `${option.label} ${option.value} ${option.description ?? ''}`
@@ -50,7 +50,7 @@ function defaultFilter(option: PopoverListOption, query: string): boolean {
  * Shared searchable listbox popover for compact option pickers.
  * Does not own command-palette multi-category behavior.
  */
-export function PopoverList({
+export function PopoverList<T extends string = string>({
   id,
   value,
   options,
@@ -69,7 +69,7 @@ export function PopoverList({
   showCurrentInMenu = true,
   renderTriggerLabel,
   filterOption = defaultFilter,
-}: PopoverListProps) {
+}: PopoverListProps<T>) {
   const pickerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -118,7 +118,7 @@ export function PopoverList({
     }
   }, [activeIndex, filteredOptions.length]);
 
-  const selectOption = (option: PopoverListOption) => {
+  const selectOption = (option: PopoverListOption<T>) => {
     if (option.disabled) return;
     onChange(option.value);
     setQuery('');

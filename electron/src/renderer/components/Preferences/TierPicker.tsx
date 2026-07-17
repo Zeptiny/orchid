@@ -22,7 +22,7 @@ export const TIER_SHORT: Record<AgentTier, string> = {
   [AgentTier.CROWN]: 'Deep reasoning, review & design',
 };
 
-const TIER_OPTIONS: readonly PopoverListOption[] = TIER_ORDER.map((tier) => ({
+const TIER_OPTIONS: readonly PopoverListOption<AgentTier>[] = TIER_ORDER.map((tier) => ({
   value: tier,
   label: tier,
   description: TIER_SHORT[tier],
@@ -42,10 +42,10 @@ export function TierPicker({
   className = '',
 }: TierPickerProps) {
   return (
-    <PopoverList
+    <PopoverList<AgentTier>
       value={value}
       options={TIER_OPTIONS}
-      onChange={(next) => onChange(next as AgentTier)}
+      onChange={onChange}
       label="Select agent tier"
       title="Model tier"
       searchPlaceholder="Search tiers…"
@@ -66,7 +66,7 @@ export function TierPicker({
       filterOption={(option, query) => {
         const normalized = query.trim().toLowerCase();
         if (!normalized) return true;
-        const full = TIER_DESCRIPTIONS[option.value as AgentTier] ?? '';
+        const full = TIER_DESCRIPTIONS[option.value] ?? '';
         return `${option.label} ${option.description ?? ''} ${full}`
           .toLowerCase()
           .includes(normalized);

@@ -70,9 +70,11 @@ export function CommandPalette({
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [subPicker, setSubPicker] = useState<string | null>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const selectingRef = useRef(false);
 
   useFocusTrap({
     enabled: isOpen,
@@ -282,6 +284,8 @@ export function CommandPalette({
       setQuery('');
       setSelectedIndex(0);
       setSubPicker(null);
+      selectingRef.current = false;
+      setIsSelecting(false);
       requestAnimationFrame(() => {
         inputRef.current?.focus();
       });
@@ -304,83 +308,91 @@ export function CommandPalette({
 
   const handleSelect = useCallback(
     async (result: PaletteResult) => {
-      trackRecentCommand(result.commandName ?? result.label);
+      if (selectingRef.current) return;
+      selectingRef.current = true;
+      setIsSelecting(true);
+      try {
+        trackRecentCommand(result.commandName ?? result.label);
 
-      if (result.action === 'theme' && result.value) {
-        await context.onSetTheme(result.value);
-        context.onNotify(`Theme changed to ${result.label}`, 'info');
-        onClose();
-        return;
-      }
-
-      if (result.action === 'personality' && result.value) {
-        await context.onSetPersonality(result.value);
-        context.onNotify(`Personality changed to ${result.label}`, 'info');
-        onClose();
-        return;
-      }
-
-      if (result.action === 'model' && result.value) {
-        await context.onSetModel(result.value);
-        context.onNotify(
-          `Model changed to ${resolveModelNotifyLabel(result.value, modelDetails, modelLabels)}`,
-          'info',
-        );
-        onClose();
-        return;
-      }
-
-      if (result.action === 'session' && result.value) {
-        await context.onLoadSession(result.value);
-        context.onNotify(`Loaded session: ${result.label}`, 'info');
-        onClose();
-        return;
-      }
-
-      if (result.action === 'settings') {
-        context.onOpenSettings();
-        onClose();
-        return;
-      }
-
-      if (result.action === 'navigation') {
-        window.dispatchEvent(
-          new CustomEvent('orchid:navigate', { detail: { section: result.value } }),
-        );
-        onClose();
-        return;
-      }
-
-      if (result.commandName) {
-        const command = COMMANDS.find((c) => c.name === result.commandName);
-        if (command) {
-          if (command.name === '/theme') {
-            setSubPicker('/theme');
-            setQuery('');
-            setSelectedIndex(0);
-            return;
-          }
-          if (command.name === '/personality') {
-            setSubPicker('/personality');
-            setQuery('');
-            setSelectedIndex(0);
-            return;
-          }
-          if (command.name === '/model') {
-            setSubPicker('/model');
-            setQuery('');
-            setSelectedIndex(0);
-            return;
-          }
-          if (command.name === '/sessions') {
-            setSubPicker('/sessions');
-            setQuery('');
-            setSelectedIndex(0);
-            return;
-          }
-
-          await command.execute(context);
+        if (result.action === 'theme' && result.value) {
+          await context.onSetTheme(result.value);
+          context.onNotify(`Theme changed to ${result.label}`, 'info');
+          onClose();
+          return;
         }
+
+        if (result.action === 'personality' && result.value) {
+          await context.onSetPersonality(result.value);
+          context.onNotify(`Personality changed to ${result.label}`, 'info');
+          onClose();
+          return;
+        }
+
+        if (result.action === 'model' && result.value) {
+          await context.onSetModel(result.value);
+          context.onNotify(
+            `Model changed to ${resolveModelNotifyLabel(result.value, modelDetails, modelLabels)}`,
+            'info',
+          );
+          onClose();
+          return;
+        }
+
+        if (result.action === 'session' && result.value) {
+          await context.onLoadSession(result.value);
+          context.onNotify(`Loaded session: ${result.label}`, 'info');
+          onClose();
+          return;
+        }
+
+        if (result.action === 'settings') {
+          context.onOpenSettings();
+          onClose();
+          return;
+        }
+
+        if (result.action === 'navigation') {
+          window.dispatchEvent(
+            new CustomEvent('orchid:navigate', { detail: { section: result.value } }),
+          );
+          onClose();
+          return;
+        }
+
+        if (result.commandName) {
+          const command = COMMANDS.find((c) => c.name === result.commandName);
+          if (command) {
+            if (command.name === '/theme') {
+              setSubPicker('/theme');
+              setQuery('');
+              setSelectedIndex(0);
+              return;
+            }
+            if (command.name === '/personality') {
+              setSubPicker('/personality');
+              setQuery('');
+              setSelectedIndex(0);
+              return;
+            }
+            if (command.name === '/model') {
+              setSubPicker('/model');
+              setQuery('');
+              setSelectedIndex(0);
+              return;
+            }
+            if (command.name === '/sessions') {
+              setSubPicker('/sessions');
+              setQuery('');
+              setSelectedIndex(0);
+              return;
+            }
+
+            await command.execute(context);
+          }
+        }
+      } finally {
+        selectingRef.current = false;
+        setIsSelecting(false);
       }
     },
     [context, onClose, modelDetails, modelLabels],
@@ -401,8 +413,8 @@ export function CommandPalette({
 
         case 'Enter':
           e.preventDefault();
-          if (flatResults[selectedIndex]) {
-            handleSelect(flatResults[selectedIndex]);
+          if (flatResults[selectedIndex] && !selectingRef.current) {
+            void handleSelect(flatResults[selectedIndex]);
           }
           break;
 
@@ -489,7 +501,11 @@ export function CommandPalette({
           </label>
         </div>
 
-        <div className="command-palette-results orchid-command-palette-results min-h-0 flex-1 overflow-y-auto p-1" ref={listRef}>
+        <div
+          className="command-palette-results orchid-command-palette-results min-h-0 flex-1 overflow-y-auto p-1"
+          ref={listRef}
+          aria-busy={isSelecting || undefined}
+        >
           {flatResults.length === 0 && !subPicker && (
             <div className="py-8 text-center text-sm text-base-content/50">
               {query ? 'No results found' : 'Type to search...'}
@@ -517,7 +533,8 @@ export function CommandPalette({
                       className={`orchid-command-palette-item flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs ${
                         isSelected ? 'bg-primary/15' : 'hover:bg-base-content/5'
                       }`}
-                      onClick={() => handleSelect(item)}
+                      disabled={isSelecting}
+                      onClick={() => void handleSelect(item)}
                       onMouseEnter={() => setSelectedIndex(i)}
                       data-selected={isSelected}
                     >
@@ -563,7 +580,8 @@ export function CommandPalette({
                             isSelected ? 'bg-primary/15' : 'hover:bg-base-content/5'
                           }`}
                           data-selected={isSelected}
-                          onClick={() => handleSelect(item)}
+                          disabled={isSelecting}
+                          onClick={() => void handleSelect(item)}
                           onMouseEnter={() => setSelectedIndex(globalIndex)}
                         >
                           <Icon name={iconForResult(item)} size={14} className="shrink-0 text-base-content/55" />

@@ -1,4 +1,4 @@
-import { PopoverList, type PopoverListOption } from './ui/PopoverList';
+import { PopoverList } from './ui/PopoverList';
 
 export interface SearchableOption {
   readonly value: string;
@@ -37,7 +37,7 @@ export function SearchableOptionPicker({
     <PopoverList
       id={id}
       value={value}
-      options={options as readonly PopoverListOption[]}
+      options={options}
       onChange={onChange}
       label={label}
       title={title}
