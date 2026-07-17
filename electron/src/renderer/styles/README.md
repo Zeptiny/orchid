@@ -17,29 +17,52 @@ Existing shell topology (left session navigation, session tabs, main chat/compos
 
 ## Class selection order
 
-1. **DaisyUI component class** when the element has a matching semantic: `btn`, `input`, `select`, `textarea`, `alert`, `badge`, `status`, `loading`, `collapse`, `modal`, `tabs`, `steps`, `dropdown`, `table`, `fieldset`, `card`, `kbd`, `tooltip`, and related DaisyUI primitives.
-2. **Predefined Tailwind utilities** for layout and composition: `flex`, `grid`, `min-h-0`, `gap-2`, `p-3`, `text-sm`, `w-64`, responsive variants, etc.
-3. **`orchid-*` CSS composite** when the same utility/state set is shared by multiple features or encodes a product-specific surface contract. Define under `@layer components` with `@apply` and semantic tokens.
+1. **Typed React primitive** under `components/ui/` when the element matches a recognized control or surface — `Button`, `IconButton`, `TextInput`, `Select`, `Checkbox`, `Alert`, `Spinner`, `StatusBadge`, `Panel`, `Tabs`, `ConfigCard`, `DropdownMenu`, `DialogSurface`, etc. The primitive owns the DaisyUI classes internally; feature JSX never names DaisyUI roots directly.
+2. **`orchid-*` CSS composite** when the same utility/state set is shared by multiple features or encodes a product-specific surface contract. Define under `@layer components` with `@apply` and semantic tokens.
+3. **Predefined Tailwind utilities** for layout and composition: `flex`, `grid`, `min-h-0`, `gap-2`, `p-3`, `text-sm`, `w-64`, responsive variants, etc.
 4. **Custom declarations** only for a documented exception or a CSS feature that cannot be expressed above.
+
+DaisyUI acts as the **styling engine** — its classes are used internally by `components/ui/` primitives and may also appear in approved scoped overrides in `components.css`. Feature JSX (anything outside `components/ui/`) must not name DaisyUI component roots (`btn`, `input`, `select`, `alert`, `badge`, `card`, `tabs`, `modal`, etc.) directly in `className` strings.
 
 Do **not** use DaisyUI `chat` / `chat-bubble` for message bodies (flat chat presentation).
 
-## Ownership matrix (short)
+## Ownership matrix
 
-| Need | Owner |
+| Need | Owner | DaisyUI classes used? |
+| --- | --- | --- |
+| Recognizable control/state | Typed React primitive under `components/ui/` | Yes — internally only |
+| One-off static geometry | Tailwind utilities in JSX | No |
+| Repeated product geometry/state | `orchid-*` composite in `components.css` | `@apply` only (not in JSX) |
+| Repeated interaction semantics | Typed React primitive under `components/ui/` | Yes — internally only |
+| Runtime-only value | Inline style or CSS variable at the narrowest boundary | No |
+
+### Primitive ownership
+
+| DaisyUI root(s) | Owner primitive |
 | --- | --- |
-| Recognizable control/state | DaisyUI classes in JSX |
-| One-off static geometry | Tailwind utilities in JSX |
-| Repeated product geometry/state | `orchid-*` composite |
-| Repeated interaction semantics | Typed React primitive under `components/ui/` |
-| Runtime-only value | Inline style or CSS variable at the narrowest boundary |
+| `btn` / `btn-*` | `Button.tsx`, `IconButton.tsx` |
+| `input` / `input-*` | `TextInput.tsx` |
+| `select` / `select-*` | `Select.tsx` |
+| `checkbox` / `checkbox-*` | `Checkbox.tsx` |
+| `alert` / `alert-*` | `Alert.tsx` |
+| `badge` / `badge-*` / `status` | `StatusBadge.tsx` |
+| `loading` / `loading-*` | `Spinner.tsx` |
+| `tabs` / `tab` / `tab-*` | `Tabs.tsx` |
+| `card` / `card-*` + `config-card` | `ConfigCard.tsx` |
+| `dropdown` / `dropdown-*` | `DropdownMenu.tsx`, `PopoverList.tsx` |
+| `modal` / `modal-*` | `DialogSurface.tsx` |
+| Panel surfaces | `Panel.tsx`, `SectionHeader.tsx` |
+| Form rows | `FormField.tsx` |
 
 ## Required rules
 
+- **Feature JSX must not name DaisyUI component roots** (`btn`, `input`, `select`, `alert`, `badge`, `card`, `tabs`, `modal`, `loading`, `checkbox`, `dropdown`, etc.) directly in `className` strings. Use a primitive from `components/ui/` instead. DaisyUI classes are allowed only inside `components/ui/` primitives and in `components.css` `@apply` rules.
 - Prefer DaisyUI semantic colors (`base-100`, `primary`, `error`, …) over ad-hoc palette values in new markup.
 - Prefer standard spacing, text, and radius scales over arbitrary values (`text-[10px]`, `z-[1000]`, `rounded-[5px]`).
+- **Do not introduce raw non-token colors** (`oklch(...)`, `#hex`, `rgb(...)`, `hsl(...)`) in `styles/*.css` or feature `className` strings. Only `index.css` `:root` fallback tokens and `themes/*.css` may use raw color values.
 - Keep dynamic values (grid tracks, textarea height, swatches, progress) as data via CSS variables or inline styles — not static utility classes.
 - Namespace new composites with `orchid-`. Residual legacy selectors live only in `chat.css` while still consumed.
+- **`chat.css` is frozen**: do not add new rules or grow its line count. Migrated surfaces delete their blocks. Target: shrink to ≤ 400 lines.
 - Do not redefine reserved DaisyUI selectors in feature CSS (see below).
 - Do not add CSS Modules or a second styling library for this migration.
 
@@ -145,11 +168,15 @@ Static class strings (from `className` / `class` attributes and class-like strin
 
 ## How to add UI safely
 
-### Example 1 — DaisyUI component
+### Example 1 — Typed primitive (preferred)
 
 ```tsx
-<button type="button" className="btn btn-primary btn-sm">Save</button>
+import { Button } from '../ui/Button';
+
+<Button variant="primary" size="sm">Save</Button>
 ```
+
+DaisyUI classes live inside the primitive. Feature JSX never names `btn` directly.
 
 ### Example 2 — Tailwind utilities (one-off layout)
 
@@ -189,8 +216,9 @@ Document the path under **Approved dynamic style components** and keep static ge
 
 ### Checklist
 
-1. Prefer DaisyUI + predefined Tailwind in the feature JSX.
-2. If the same pattern appears twice (or encodes shared behavior), extract a small primitive or `orchid-*` composite.
-3. If you need a dynamic pixel/color/fraction, put it in an approved exception path as a CSS variable or inline style.
-4. Run `npm test -- tests/integration/renderer-style-contract.test.ts` from `electron/`.
-5. Never “fix” styling by redesigning shell layout.
+1. Prefer a typed primitive from `components/ui/` in feature JSX. If a matching primitive doesn't exist, create one.
+2. Use predefined Tailwind utilities for layout only. Never name DaisyUI roots directly in feature JSX.
+3. If the same pattern appears twice (or encodes shared behavior), extract an `orchid-*` composite or a new primitive.
+4. If you need a dynamic pixel/color/fraction, put it in an approved exception path as a CSS variable or inline style.
+5. Run `npm test -- tests/integration/renderer-style-contract.test.ts` from `electron/`.
+6. Never “fix” styling by redesigning shell layout.

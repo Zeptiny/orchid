@@ -457,6 +457,220 @@ export function scanReservedRedefinitions(stylesRoot = STYLES_ROOT): Map<string,
   return byKey;
 }
 
+// ─── DaisyUI class-name drift in feature JSX ─────────────────────────────────
+
+const DAISYUI_ROOT_SET = new Set<string>(RESERVED_DAISYUI_SELECTORS);
+
+function findDaisyUIRootsInClassString(classString: string): Set<string> {
+  const roots = new Set<string>();
+  for (const token of classString.split(/\s+/)) {
+    if (!token) continue;
+    if (token.startsWith('orchid-')) continue;
+    if (token.startsWith('hover:') || token.startsWith('focus:') || token.startsWith('active:') || token.startsWith('disabled:')) continue;
+    if (token.startsWith('sm:') || token.startsWith('md:') || token.startsWith('lg:') || token.startsWith('xl:')) {
+      const inner = token.slice(token.indexOf(':') + 1);
+      if (!inner) continue;
+      for (const root of DAISYUI_ROOT_SET) {
+        if (inner === root || inner.startsWith(`${root}-`)) {
+          roots.add(root);
+        }
+      }
+      continue;
+    }
+    for (const root of DAISYUI_ROOT_SET) {
+      if (token === root || token.startsWith(`${root}-`)) {
+        roots.add(root);
+      }
+    }
+  }
+  return roots;
+}
+
+export function scanDaisyUIDrift(rendererRoot = RENDERER_ROOT): string[] {
+  const findings: string[] = [];
+  const files = walkFiles(rendererRoot, (n) => /\.tsx?$/.test(n));
+  for (const file of files) {
+    const rel = relRenderer(file);
+    if (rel.startsWith('components/ui/')) continue;
+    if (rel.startsWith('themes/')) continue;
+    const source = fs.readFileSync(file, 'utf8');
+    const roots = new Set<string>();
+    for (const classString of extractStaticClassStrings(source)) {
+      for (const root of findDaisyUIRootsInClassString(classString)) {
+        roots.add(root);
+      }
+    }
+    for (const root of roots) {
+      findings.push(`${rel}::${root}`);
+    }
+  }
+  return findings.sort();
+}
+
+// ─── Non-token color scanner ─────────────────────────────────────────────────
+
+const COLOR_RE = /\b(?:oklch|rgba?|hsla?)\s*\(|#[0-9a-fA-F]{3,8}\b/g;
+
+export function scanNonTokenColors(stylesRoot = STYLES_ROOT): string[] {
+  const findings: string[] = [];
+  const files = walkFiles(stylesRoot, (n) => n.endsWith('.css'));
+  for (const file of files) {
+    const rel = relRenderer(file);
+    if (rel === 'styles/index.css') continue;
+    const css = stripCssComments(fs.readFileSync(file, 'utf8'));
+    let match: RegExpExecArray | null;
+    COLOR_RE.lastIndex = 0;
+    while ((match = COLOR_RE.exec(css))) {
+      const before = css.slice(0, match.index);
+      const line = before.split('\n').length;
+      findings.push(`${rel}:L${line}:${match[0]}`);
+    }
+  }
+  return findings.sort();
+}
+
+// ─── chat.css growth guard ───────────────────────────────────────────────────
+
+export function countChatCssLines(stylesRoot = STYLES_ROOT): number {
+  const chatPath = path.join(stylesRoot, 'chat.css');
+  if (!fs.existsSync(chatPath)) return 0;
+  return fs.readFileSync(chatPath, 'utf8').trimEnd().split('\n').length;
+}
+
+// ─── Baselines (migration-driven shrink targets) ─────────────────────────────
+
+const BASELINE_DAISYUI_HITS: ReadonlySet<string> = new Set([
+  'components/ChatStream.tsx::btn',
+  'components/ChatView.tsx::alert',
+  'components/ChatView.tsx::btn',
+  'components/CommandPalette.tsx::badge',
+  'components/CommandPalette.tsx::input',
+  'components/ConfigView.tsx::alert',
+  'components/ConfigView.tsx::btn',
+  'components/ConfigView.tsx::loading',
+  'components/ConfigView.tsx::modal',
+  'components/ConfigView.tsx::tab',
+  'components/ConfigView.tsx::tabs',
+  'components/ErrorBanner.tsx::alert',
+  'components/ErrorBanner.tsx::btn',
+  'components/Footer.tsx::btn',
+  'components/Footer.tsx::dropdown',
+  'components/Footer.tsx::footer',
+  'components/Footer.tsx::loading',
+  'components/InputArea.tsx::alert',
+  'components/InputArea.tsx::btn',
+  'components/LeftSidebar.tsx::btn',
+  'components/LeftSidebar.tsx::status',
+  'components/MessageWidget.tsx::alert',
+  'components/MessageWidget.tsx::loading',
+  'components/ModelPicker.tsx::btn',
+  'components/ModelPicker.tsx::dropdown',
+  'components/ModelPicker.tsx::input',
+  'components/ModelPicker.tsx::table',
+  'components/Onboarding/OnboardingScreen.tsx::alert',
+  'components/Onboarding/OnboardingScreen.tsx::btn',
+  'components/Onboarding/OnboardingScreen.tsx::checkbox',
+  'components/Onboarding/OnboardingScreen.tsx::select',
+  'components/Onboarding/OnboardingScreen.tsx::step',
+  'components/Onboarding/OnboardingScreen.tsx::steps',
+  'components/Preferences/AgentsTab.tsx::alert',
+  'components/Preferences/AgentsTab.tsx::btn',
+  'components/Preferences/AgentsTab.tsx::card',
+  'components/Preferences/AgentsTab.tsx::input',
+  'components/Preferences/AgentsTab.tsx::label',
+  'components/Preferences/AgentsTab.tsx::loading',
+  'components/Preferences/AgentsTab.tsx::select',
+  'components/Preferences/AgentsTab.tsx::textarea',
+  'components/Preferences/DefinitionActions.tsx::btn',
+  'components/Preferences/GeneralTab.tsx::checkbox',
+  'components/Preferences/GeneralTab.tsx::input',
+  'components/Preferences/GeneralTab.tsx::label',
+  'components/Preferences/GeneralTab.tsx::select',
+  'components/Preferences/GeneralTab.tsx::textarea',
+  'components/Preferences/MCPServersTab.tsx::btn',
+  'components/Preferences/MCPServersTab.tsx::card',
+  'components/Preferences/MCPServersTab.tsx::input',
+  'components/Preferences/MCPServersTab.tsx::textarea',
+  'components/Preferences/ModelAssignments.tsx::alert',
+  'components/Preferences/ModelAssignments.tsx::card',
+  'components/Preferences/MultiSelectList.tsx::btn',
+  'components/Preferences/MultiSelectList.tsx::checkbox',
+  'components/Preferences/MultiSelectList.tsx::input',
+  'components/Preferences/PersonalitiesTab.tsx::alert',
+  'components/Preferences/PersonalitiesTab.tsx::btn',
+  'components/Preferences/PersonalitiesTab.tsx::card',
+  'components/Preferences/PersonalitiesTab.tsx::input',
+  'components/Preferences/PersonalitiesTab.tsx::label',
+  'components/Preferences/PersonalitiesTab.tsx::loading',
+  'components/Preferences/PersonalitiesTab.tsx::select',
+  'components/Preferences/PersonalitiesTab.tsx::textarea',
+  'components/Preferences/ProvidersTab.tsx::alert',
+  'components/Preferences/ProvidersTab.tsx::btn',
+  'components/Preferences/RAGTab.tsx::input',
+  'components/Preferences/ScopeToggle.tsx::btn',
+  'components/Preferences/ScopeToggle.tsx::join',
+  'components/Preferences/SkillsTab.tsx::alert',
+  'components/Preferences/SkillsTab.tsx::btn',
+  'components/Preferences/SkillsTab.tsx::card',
+  'components/Preferences/SkillsTab.tsx::input',
+  'components/Preferences/SkillsTab.tsx::label',
+  'components/Preferences/SkillsTab.tsx::loading',
+  'components/Preferences/SkillsTab.tsx::select',
+  'components/Preferences/SkillsTab.tsx::textarea',
+  'components/Providers/ConnectionList.tsx::alert',
+  'components/Providers/ConnectionList.tsx::btn',
+  'components/Providers/ConnectionList.tsx::card',
+  'components/Providers/ConnectionModelsDialog.tsx::alert',
+  'components/Providers/ConnectionModelsDialog.tsx::badge',
+  'components/Providers/ConnectionModelsDialog.tsx::btn',
+  'components/Providers/ConnectionModelsDialog.tsx::input',
+  'components/Providers/ConnectionModelsDialog.tsx::label',
+  'components/Providers/ConnectionModelsDialog.tsx::list',
+  'components/Providers/ConnectionWizard.tsx::alert',
+  'components/Providers/ConnectionWizard.tsx::btn',
+  'components/Providers/ConnectionWizard.tsx::checkbox',
+  'components/Providers/ConnectionWizard.tsx::input',
+  'components/Providers/ConnectionWizard.tsx::label',
+  'components/Providers/ConnectionWizard.tsx::select',
+  'components/Providers/ProviderStatus.tsx::alert',
+  'components/Providers/ProviderStatus.tsx::btn',
+  'components/SessionNameEditor.tsx::input',
+  'components/SessionTabBar.tsx::btn',
+  'components/SessionTabBar.tsx::status',
+  'components/ShortcutsHelp.tsx::list',
+  'components/Sidebar.tsx::btn',
+  'components/Sidebar.tsx::loading',
+  'components/Sidebar.tsx::progress',
+  'components/ToolActivityGroup.tsx::badge',
+  'components/ToolActivityGroup.tsx::loading',
+  'components/ToolCallBlock.tsx::loading',
+  'components/ToolWidgets/LiveCommandInline.tsx::loading',
+  'components/session-activity-section.tsx::btn',
+  'components/session-activity-section.tsx::status',
+]);
+
+const BASELINE_NON_TOKEN_COLORS: ReadonlySet<string> = new Set([
+  'styles/chat.css:L1501:#000',
+  'styles/chat.css:L1585:#000',
+  'styles/chat.css:L1595:#000',
+  'styles/chat.css:L585:oklch(',
+  'styles/chat.css:L586:oklch(',
+  'styles/chat.css:L663:oklch(',
+  'styles/chat.css:L672:oklch(',
+  'styles/chat.css:L674:oklch(',
+  'styles/chat.css:L683:oklch(',
+  'styles/chat.css:L684:oklch(',
+  'styles/chat.css:L715:oklch(',
+  'styles/chat.css:L723:oklch(',
+  'styles/chat.css:L724:oklch(',
+  'styles/chat.css:L725:oklch(',
+  'styles/components.css:L38:#000',
+  'styles/components.css:L726:#000',
+  'styles/components.css:L734:#000',
+]);
+
+const CHAT_CSS_BASELINE_LINES = 2016;
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe('Renderer style contract', () => {
@@ -619,6 +833,49 @@ describe('Renderer style contract', () => {
       for (const name of REQUIRED_THEMES) {
         expect(readme).toContain(name);
       }
+    });
+  });
+
+  describe('DaisyUI class-name drift in feature JSX', () => {
+    it('does not introduce new DaisyUI roots outside components/ui/ without baseline', () => {
+      const found = scanDaisyUIDrift();
+      const unexpected = found.filter((f) => !BASELINE_DAISYUI_HITS.has(f));
+      expect(
+        unexpected,
+        `New DaisyUI roots in feature JSX (baseline: ${BASELINE_DAISYUI_HITS.size} hits):\n${unexpected.join('\n')}\n\nTo allowlist new drift, add entries to BASELINE_DAISYUI_HITS. To remove drift, migrate to primitives in components/ui/.`,
+      ).toEqual([]);
+    });
+
+    it('reports drift summary (informational)', () => {
+      const found = scanDaisyUIDrift();
+      const byRoot = new Map<string, number>();
+      for (const f of found) {
+        const root = f.split('::')[1]!;
+        byRoot.set(root, (byRoot.get(root) ?? 0) + 1);
+      }
+      const summary = [...byRoot.entries()].sort((a, b) => b[1] - a[1]).map(([r, c]) => `${r}: ${c}`);
+      expect(found.length, `DaisyUI hits outside ui/ (baseline ${BASELINE_DAISYUI_HITS.size}):\n${summary.join('\n')}`).toBeLessThanOrEqual(BASELINE_DAISYUI_HITS.size);
+    });
+  });
+
+  describe('chat.css growth guard', () => {
+    it('chat.css line count does not exceed baseline', () => {
+      const lines = countChatCssLines();
+      expect(
+        lines,
+        `chat.css grew to ${lines} lines (baseline ${CHAT_CSS_BASELINE_LINES}). Do not add new rules; migrate surfaces to components.css or primitives.`,
+      ).toBeLessThanOrEqual(CHAT_CSS_BASELINE_LINES);
+    });
+  });
+
+  describe('non-token colors in feature CSS', () => {
+    it('does not introduce new raw color literals without baseline', () => {
+      const found = scanNonTokenColors();
+      const unexpected = found.filter((f) => !BASELINE_NON_TOKEN_COLORS.has(f));
+      expect(
+        unexpected,
+        `New raw color literals in feature CSS (baseline: ${BASELINE_NON_TOKEN_COLORS.size} hits):\n${unexpected.join('\n')}\n\nTo allowlist, add to BASELINE_NON_TOKEN_COLORS. To remove, migrate to semantic tokens.`,
+      ).toEqual([]);
     });
   });
 });
