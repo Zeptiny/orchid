@@ -134,7 +134,7 @@ Do not replace the runtime theme loader with compile-time-only DaisyUI theme blo
 | `components.css` | `@layer components` `orchid-*` composites with `@apply` + semantic/theme tokens (single-name; no legacy dual aliases) |
 | `markdown.css` | Markdown / GFM / highlight tokens |
 | `exceptions.css` | Scrollbars, keyframes, streaming cursor, shell grid tracks, composer height hooks |
-| `chat.css` | Residual compatibility bridge: onboarding/provider wizard shell, panels/session/config/shortcuts/pickers still consumed by JSX |
+| `chat.css` | Header-only (no CSS rules); frozen — residual bridge comment only |
 | `README.md` | This contract |
 
 ### Import graph
@@ -155,7 +155,7 @@ Runtime themes are **not** part of this graph: `applyTheme()` swaps a single `#o
 
 - Dead pre-migration legacy blocks (old `.message-*`, `.app-layout`, `.sidebar-*`, `.footer` layout) were removed in U8; further residual prunes removed unused `composer-model-*`, most `onb-*` step subtrees, `thought-activity-group`, dead palette/config/tier-picker subparts, and dual-owned palette/chat-scroll rules with no remaining legacy class consumers.
 - Dual-class aliases (`legacy` + `orchid-*` on the same rule) were collapsed: JSX and CSS use `orchid-*` only for migrated surfaces; legacy dual selectors were dropped from `components.css` and retargeted/removed in the bridge.
-- Remaining rules still have JSX consumers (shell panels, session chrome, config/onboarding shell, model-picker table chrome, slash subparts, shortcuts help).
+- All previous rules were migrated; `chat.css` is now header-only (comment block only, no CSS rules).
 - The unused `components/ui/index.ts` barrel was deleted; import UI primitives from their module paths.
 - **Do not add new rules** to `chat.css`. New composites → `components.css`; markdown → `markdown.css`; browser exceptions → `exceptions.css`.
 

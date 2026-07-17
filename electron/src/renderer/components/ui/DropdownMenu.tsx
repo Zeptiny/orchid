@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { buildDropdownClassName } from './popover-listbox-logic';
+import { useEffect } from 'react';
+import { buildDropdownClassName, isOutsidePopoverRoot } from './popover-listbox-logic';
 import { usePopoverListbox, type PopoverAlign } from './usePopoverListbox';
 
 export type DropdownMenuPlacement = 'bottom-start' | 'bottom-end' | 'top-start' | 'top-end';
@@ -42,14 +43,33 @@ export function DropdownMenu({
 }: DropdownMenuProps) {
   const { pickerRef, triggerRef, menuId, open, toggleOpen } = usePopoverListbox();
 
+  const isControlled = controlledOpen !== undefined;
   const isOpen = controlledOpen ?? open;
 
   const handleToggle = () => {
     if (disabled) return;
-    const next = !isOpen;
-    toggleOpen();
-    onOpenChange?.(next);
+    if (isControlled) {
+      // In controlled mode, only notify the parent — don't mutate internal state.
+      onOpenChange?.(!isOpen);
+    } else {
+      const next = !isOpen;
+      toggleOpen();
+      onOpenChange?.(next);
+    }
   };
+
+  // In controlled mode the hook's own outside-click listener is gated on internal
+  // `open` (always false), so we handle outside clicks here.
+  useEffect(() => {
+    if (!isControlled || !isOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (isOutsidePopoverRoot(pickerRef.current, event.target as Node)) {
+        onOpenChange?.(false);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [isControlled, isOpen, onOpenChange, pickerRef]);
 
   const popoverPlacement = placement.startsWith('top') ? 'top' : 'bottom';
   const popoverAlign: PopoverAlign = align;

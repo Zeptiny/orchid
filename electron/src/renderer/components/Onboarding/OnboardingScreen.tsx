@@ -430,7 +430,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                 <Alert
                   tone="warning"
                   action={
-                    <Button variant="neutral" type="button" onClick={() => void providers.refresh()}>
+                    <Button variant="neutral" onClick={() => void providers.refresh()}>
                       Retry
                     </Button>
                   }
@@ -480,7 +480,6 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                   variant="ghost"
                   size="md"
                   onClick={() => void markCompleteAndClose('skip')}
-                  type="button"
                   disabled={saving}
                 >
                   Skip onboarding
@@ -489,7 +488,6 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                   variant="neutral"
                   size="md"
                   onClick={() => setWizardOpen(true)}
-                  type="button"
                   disabled={!providers.overview}
                   icon="plus"
                 >
@@ -499,7 +497,6 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                   variant="primary"
                   size="md"
                   onClick={() => { void goNext(); }}
-                  type="button"
                   disabled={readyConnections.length === 0}
                 >
                   Next: models
@@ -533,14 +530,13 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
               )}
 
               <div className="onb-step-actions">
-                <Button variant="ghost" size="md" onClick={goBack} type="button" disabled={saving}>
+                <Button variant="ghost" size="md" onClick={goBack} disabled={saving}>
                   Back
                 </Button>
                 <Button
                   variant="primary"
                   size="md"
                   onClick={() => { void goNext(); }}
-                  type="button"
                   disabled={saving || modelOptions.length === 0 || !defaultModel}
                 >
                   Next: appearance
@@ -598,10 +594,10 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
               )}
 
               <div className="onb-step-actions">
-                <Button variant="ghost" size="md" onClick={goBack} type="button" disabled={saving}>
+                <Button variant="ghost" size="md" onClick={goBack} disabled={saving}>
                   Back
                 </Button>
-                <Button variant="primary" size="md" onClick={() => { void goNext(); }} type="button" disabled={saving}>
+                <Button variant="primary" size="md" onClick={() => { void goNext(); }} disabled={saving}>
                   Next: project
                 </Button>
               </div>
@@ -635,20 +631,19 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
               )}
 
               <div className="onb-step-actions">
-                <Button variant="ghost" size="md" onClick={goBack} type="button" disabled={saving}>
+                <Button variant="ghost" size="md" onClick={goBack} disabled={saving}>
                   Back
                 </Button>
                 <Button
                   variant="neutral"
                   size="md"
                   onClick={() => void handlePickProject()}
-                  type="button"
                   disabled={saving}
                   icon="folder"
                 >
                   {projectPath ? 'Change folder' : 'Choose folder'}
                 </Button>
-                <Button variant="primary" size="md" onClick={() => { void goNext(); }} type="button" disabled={saving}>
+                <Button variant="primary" size="md" onClick={() => { void goNext(); }} disabled={saving}>
                   Next: RAG
                 </Button>
               </div>
@@ -690,10 +685,10 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
               )}
 
               <div className="onb-step-actions">
-                <Button variant="ghost" size="md" onClick={goBack} type="button" disabled={saving}>
+                <Button variant="ghost" size="md" onClick={goBack} disabled={saving}>
                   Back
                 </Button>
-                <Button variant="primary" size="md" onClick={() => { void goNext(); }} type="button" disabled={saving}>
+                <Button variant="primary" size="md" onClick={() => { void goNext(); }} disabled={saving}>
                   Next: MCP
                 </Button>
               </div>
@@ -748,14 +743,13 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
               )}
 
               <div className="onb-step-actions">
-                <Button variant="ghost" size="md" onClick={goBack} type="button" disabled={saving}>
+                <Button variant="ghost" size="md" onClick={goBack} disabled={saving}>
                   Back
                 </Button>
                 <Button
                   variant="primary"
                   size="md"
                   onClick={() => void markCompleteAndClose('finish')}
-                  type="button"
                   disabled={saving || !defaultModel}
                 >
                   {saving ? 'Finishing…' : 'Finish onboarding'}

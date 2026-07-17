@@ -292,7 +292,7 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
       >
         <span className="orchid-tool-block-title-left">
           {showLoader ? (
-            <Spinner size="xs" className="shrink-0" />
+            <Spinner size="xs" aria-hidden className="shrink-0" />
           ) : (
             <Icon name={iconName} size={12} className="shrink-0" />
           )}

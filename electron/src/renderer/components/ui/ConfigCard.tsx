@@ -35,10 +35,12 @@ function ConfigCardRoot({
       className={`config-card card ${VARIANT_CLASS[variant]} ${className}`.trim().replace(/\s+/g, ' ')}
       {...props}
     >
-      {title != null && (
+      {(title != null || actions != null) && (
         <div className="flex items-start justify-between gap-3 p-4 pb-0">
           <div className="min-w-0 flex-1">
-            <div className="config-card-title text-sm font-semibold tracking-tight text-base-content">{title}</div>
+            {title != null && (
+              <div className="config-card-title text-sm font-semibold tracking-tight text-base-content">{title}</div>
+            )}
             {description != null && (
               <div className="config-card-desc mt-1 text-sm text-base-content/70">{description}</div>
             )}

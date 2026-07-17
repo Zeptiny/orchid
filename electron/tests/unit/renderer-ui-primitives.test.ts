@@ -17,6 +17,12 @@ import { FormField } from '../../src/renderer/components/ui/FormField';
 import { DialogSurface } from '../../src/renderer/components/ui/DialogSurface';
 import { PopoverList } from '../../src/renderer/components/ui/PopoverList';
 import { ShortcutBar } from '../../src/renderer/components/ui/ShortcutBar';
+import { Button } from '../../src/renderer/components/ui/Button';
+import { Checkbox } from '../../src/renderer/components/ui/Checkbox';
+import { ConfigCard } from '../../src/renderer/components/ui/ConfigCard';
+import { Tabs } from '../../src/renderer/components/ui/Tabs';
+import { Alert } from '../../src/renderer/components/ui/Alert';
+import { Spinner } from '../../src/renderer/components/ui/Spinner';
 
 function markup(node: ReactElement): string {
   return renderToStaticMarkup(node);
@@ -228,6 +234,180 @@ describe('ShortcutBar', () => {
     expect(html).toContain('orchid-keycap');
     expect(html).toContain('navigate');
     expect(html).toContain('close');
+  });
+});
+
+describe('Button', () => {
+  it('produces variant class strings', () => {
+    // Default size is sm, so class is "btn btn-sm btn-primary" etc.
+    expect(markup(createElement(Button, { variant: 'primary' }, 'Go'))).toMatch(/btn btn-sm btn-primary/);
+    expect(markup(createElement(Button, { variant: 'ghost' }, 'Go'))).toMatch(/btn btn-sm btn-ghost/);
+    expect(markup(createElement(Button, { variant: 'error' }, 'Go'))).toMatch(/btn btn-sm btn-error/);
+    expect(markup(createElement(Button, { variant: 'warning' }, 'Go'))).toMatch(/btn btn-sm btn-warning/);
+    expect(markup(createElement(Button, { variant: 'link' }, 'Go'))).toMatch(/btn btn-sm btn-link/);
+    expect(markup(createElement(Button, { variant: 'neutral' }, 'Go'))).toMatch(/\bbtn\b/);
+    expect(markup(createElement(Button, { variant: 'neutral' }, 'Go'))).not.toContain('btn-neutral');
+  });
+
+  it('applies size classes', () => {
+    expect(markup(createElement(Button, { size: 'xs' }, 'Go'))).toContain('btn-xs');
+    expect(markup(createElement(Button, { size: 'sm' }, 'Go'))).toContain('btn-sm');
+    expect(markup(createElement(Button, { size: 'lg' }, 'Go'))).toContain('btn-lg');
+  });
+
+  it('loading state adds spinner and aria-busy', () => {
+    const html = markup(createElement(Button, { loading: true }, 'Submit'));
+    expect(html).toContain('loading loading-spinner');
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain('disabled');
+  });
+
+  it('disabled propagates to the button element', () => {
+    const html = markup(createElement(Button, { disabled: true }, 'Go'));
+    expect(html).toContain('disabled');
+  });
+});
+
+describe('Checkbox', () => {
+  it('applies tone classes', () => {
+    expect(markup(createElement(Checkbox, { tone: 'primary' }))).toContain('checkbox-primary');
+    expect(markup(createElement(Checkbox, { tone: 'error' }))).toContain('checkbox-error');
+    expect(markup(createElement(Checkbox, { tone: 'success' }))).toContain('checkbox-success');
+    expect(markup(createElement(Checkbox, { tone: 'accent' }))).toContain('checkbox-accent');
+  });
+
+  it('label wrapping produces a <label> with label-text', () => {
+    const html = markup(createElement(Checkbox, { label: 'Remember me' }));
+    expect(html).toContain('<label');
+    expect(html).toContain('label-text');
+    expect(html).toContain('Remember me');
+  });
+
+  it('without label renders bare input', () => {
+    const html = markup(createElement(Checkbox));
+    expect(html).not.toContain('<label');
+    expect(html).toContain('<input');
+    expect(html).toContain('type="checkbox"');
+  });
+});
+
+describe('ConfigCard', () => {
+  it('variant default produces base-100 bg', () => {
+    const html = markup(createElement(ConfigCard, { variant: 'default' }, 'Body'));
+    expect(html).toContain('config-card');
+    expect(html).toContain('bg-base-100');
+    expect(html).toContain('Body');
+  });
+
+  it('variant active produces primary border/border', () => {
+    const html = markup(createElement(ConfigCard, { variant: 'active' }, 'Body'));
+    expect(html).toContain('border-primary/30');
+    expect(html).toContain('bg-primary/5');
+  });
+
+  it('body stack variant uses card-body', () => {
+    const html = markup(createElement(ConfigCard.Body, { variant: 'stack' }, 'Content'));
+    expect(html).toContain('card-body');
+    expect(html).not.toContain('config-card-row');
+    expect(html).toContain('Content');
+  });
+
+  it('body row variant uses config-card-row', () => {
+    const html = markup(createElement(ConfigCard.Body, { variant: 'row' }, 'Content'));
+    expect(html).toContain('config-card-row');
+    expect(html).toContain('card-body');
+  });
+
+  it('actions without title still renders actions area', () => {
+    const html = markup(
+      createElement(ConfigCard, {
+        actions: createElement('button', null, 'Edit'),
+      }),
+    );
+    expect(html).toContain('config-card-actions');
+    expect(html).toContain('Edit');
+  });
+});
+
+describe('Tabs', () => {
+  it('aria-selected toggles based on value', () => {
+    const items = [
+      { id: 'a', label: 'Alpha' },
+      { id: 'b', label: 'Beta' },
+    ];
+    const html = markup(createElement(Tabs, { items, value: 'a', onValueChange: () => {} }));
+    // Active tab gets aria-selected="true" and tab-active class
+    expect(html).toMatch(/aria-selected="true"[^>]*>Alpha/);
+    expect(html).toMatch(/aria-selected="false"[^>]*>Beta/);
+    expect(html).toMatch(/tab-active/);
+  });
+
+  it('renders role=tablist container', () => {
+    const items = [{ id: 'x', label: 'X' }];
+    const html = markup(createElement(Tabs, { items, value: 'x', onValueChange: () => {} }));
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain('role="tab"');
+  });
+
+  it('applies variant class', () => {
+    const items = [{ id: 'x', label: 'X' }];
+    const html = markup(createElement(Tabs, { items, value: 'x', onValueChange: () => {}, variant: 'bordered' }));
+    expect(html).toContain('tabs-bordered');
+  });
+});
+
+describe('Alert', () => {
+  it('applies tone classes', () => {
+    expect(markup(createElement(Alert, { tone: 'info' }))).toContain('alert-info');
+    expect(markup(createElement(Alert, { tone: 'success' }))).toContain('alert-success');
+    expect(markup(createElement(Alert, { tone: 'warning' }))).toContain('alert-warning');
+    expect(markup(createElement(Alert, { tone: 'error' }))).toContain('alert-error');
+  });
+
+  it('defaults role to "alert"', () => {
+    const html = markup(createElement(Alert));
+    expect(html).toContain('role="alert"');
+  });
+
+  it('role can be overridden via prop', () => {
+    const html = markup(createElement(Alert, { role: 'status' }));
+    expect(html).toContain('role="status"');
+    expect(html).not.toContain('role="alert"');
+  });
+
+  it('renders title and children', () => {
+    const html = markup(createElement(Alert, { title: 'Heads up' }, 'Details here'));
+    expect(html).toContain('Heads up');
+    expect(html).toContain('Details here');
+  });
+});
+
+describe('Spinner', () => {
+  it('applies size classes', () => {
+    expect(markup(createElement(Spinner, { size: 'xs' }))).toContain('loading-xs');
+    expect(markup(createElement(Spinner, { size: 'sm' }))).toContain('loading-sm');
+    expect(markup(createElement(Spinner, { size: 'lg' }))).toContain('loading-lg');
+  });
+
+  it('applies variant classes', () => {
+    expect(markup(createElement(Spinner, { variant: 'dots' }))).toContain('loading-dots');
+    expect(markup(createElement(Spinner, { variant: 'ring' }))).toContain('loading-ring');
+    expect(markup(createElement(Spinner, { variant: 'ball' }))).toContain('loading-ball');
+    expect(markup(createElement(Spinner, { variant: 'bars' }))).toContain('loading-bars');
+    expect(markup(createElement(Spinner, { variant: 'infinity' }))).toContain('loading-infinity');
+    expect(markup(createElement(Spinner, { variant: 'spinner' }))).toContain('loading-spinner');
+  });
+
+  it('defaults to role=status with aria-label', () => {
+    const html = markup(createElement(Spinner));
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-label="Loading"');
+  });
+
+  it('aria-hidden suppresses role and aria-label', () => {
+    const html = markup(createElement(Spinner, { 'aria-hidden': true }));
+    expect(html).not.toContain('role=');
+    expect(html).not.toContain('aria-label=');
   });
 });
 

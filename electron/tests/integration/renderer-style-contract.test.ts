@@ -486,8 +486,9 @@ function findDaisyUIRootsInClassString(classString: string): Set<string> {
   return roots;
 }
 
-export function scanDaisyUIDrift(rendererRoot = RENDERER_ROOT): string[] {
+export function scanDaisyUIDrift(rendererRoot = RENDERER_ROOT): { findings: string[]; totalTokens: number } {
   const findings: string[] = [];
+  let totalTokens = 0;
   const files = walkFiles(rendererRoot, (n) => /\.tsx?$/.test(n));
   for (const file of files) {
     const rel = relRenderer(file);
@@ -498,21 +499,22 @@ export function scanDaisyUIDrift(rendererRoot = RENDERER_ROOT): string[] {
     for (const classString of extractStaticClassStrings(source)) {
       for (const root of findDaisyUIRootsInClassString(classString)) {
         roots.add(root);
+        totalTokens++;
       }
     }
     for (const root of roots) {
       findings.push(`${rel}::${root}`);
     }
   }
-  return findings.sort();
+  return { findings: findings.sort(), totalTokens };
 }
 
 // ─── Non-token color scanner ─────────────────────────────────────────────────
 
 const COLOR_RE = /\b(?:oklch|rgba?|hsla?)\s*\(|#[0-9a-fA-F]{3,8}\b/g;
 
-export function scanNonTokenColors(stylesRoot = STYLES_ROOT): string[] {
-  const findings: string[] = [];
+export function scanNonTokenColors(stylesRoot = STYLES_ROOT): { key: string; count: number }[] {
+  const counts = new Map<string, number>();
   const files = walkFiles(stylesRoot, (n) => n.endsWith('.css'));
   for (const file of files) {
     const rel = relRenderer(file);
@@ -521,12 +523,11 @@ export function scanNonTokenColors(stylesRoot = STYLES_ROOT): string[] {
     let match: RegExpExecArray | null;
     COLOR_RE.lastIndex = 0;
     while ((match = COLOR_RE.exec(css))) {
-      const before = css.slice(0, match.index);
-      const line = before.split('\n').length;
-      findings.push(`${rel}:L${line}:${match[0]}`);
+      const key = `${rel}:${match[0]}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
     }
   }
-  return findings.sort();
+  return [...counts.entries()].map(([key, count]) => ({ key, count })).sort((a, b) => a.key.localeCompare(b.key));
 }
 
 // ─── chat.css growth guard ───────────────────────────────────────────────────
@@ -577,13 +578,11 @@ const BASELINE_DAISYUI_HITS: ReadonlySet<string> = new Set([
   'components/session-activity-section.tsx::status',
 ]);
 
-const BASELINE_NON_TOKEN_COLORS: ReadonlySet<string> = new Set([
-  'styles/components.css:L38:#000',
-  'styles/components.css:L726:#000',
-  'styles/components.css:L734:#000',
-  'styles/components.css:L1496:#000',
-  'styles/components.css:L1580:#000',
-  'styles/components.css:L1590:#000',
+/** Total DaisyUI token occurrences captured at baseline time (count guard). */
+const BASELINE_DAISYUI_TOTAL_TOKENS = 65;
+
+const BASELINE_NON_TOKEN_COLORS: ReadonlyMap<string, number> = new Map([
+  ['styles/components.css:#000', 6],
 ]);
 
 const CHAT_CSS_BASELINE_LINES = 10;
@@ -755,8 +754,8 @@ describe('Renderer style contract', () => {
 
   describe('DaisyUI class-name drift in feature JSX', () => {
     it('does not introduce new DaisyUI roots outside components/ui/ without baseline', () => {
-      const found = scanDaisyUIDrift();
-      const unexpected = found.filter((f) => !BASELINE_DAISYUI_HITS.has(f));
+      const { findings } = scanDaisyUIDrift();
+      const unexpected = findings.filter((f) => !BASELINE_DAISYUI_HITS.has(f));
       expect(
         unexpected,
         `New DaisyUI roots in feature JSX (baseline: ${BASELINE_DAISYUI_HITS.size} hits):\n${unexpected.join('\n')}\n\nTo allowlist new drift, add entries to BASELINE_DAISYUI_HITS. To remove drift, migrate to primitives in components/ui/.`,
@@ -764,14 +763,22 @@ describe('Renderer style contract', () => {
     });
 
     it('reports drift summary (informational)', () => {
-      const found = scanDaisyUIDrift();
+      const { findings } = scanDaisyUIDrift();
       const byRoot = new Map<string, number>();
-      for (const f of found) {
+      for (const f of findings) {
         const root = f.split('::')[1]!;
         byRoot.set(root, (byRoot.get(root) ?? 0) + 1);
       }
       const summary = [...byRoot.entries()].sort((a, b) => b[1] - a[1]).map(([r, c]) => `${r}: ${c}`);
-      expect(found.length, `DaisyUI hits outside ui/ (baseline ${BASELINE_DAISYUI_HITS.size}):\n${summary.join('\n')}`).toBeLessThanOrEqual(BASELINE_DAISYUI_HITS.size);
+      expect(findings.length, `DaisyUI hits outside ui/ (baseline ${BASELINE_DAISYUI_HITS.size}):\n${summary.join('\n')}`).toBeLessThanOrEqual(BASELINE_DAISYUI_HITS.size);
+    });
+
+    it('total DaisyUI token occurrences do not exceed baseline', () => {
+      const { totalTokens } = scanDaisyUIDrift();
+      expect(
+        totalTokens,
+        `DaisyUI total token occurrences (${totalTokens}) exceeded baseline (${BASELINE_DAISYUI_TOTAL_TOKENS}). New file::root pairs or increased usage within baselined files.`,
+      ).toBeLessThanOrEqual(BASELINE_DAISYUI_TOTAL_TOKENS);
     });
   });
 
@@ -788,10 +795,18 @@ describe('Renderer style contract', () => {
   describe('non-token colors in feature CSS', () => {
     it('does not introduce new raw color literals without baseline', () => {
       const found = scanNonTokenColors();
-      const unexpected = found.filter((f) => !BASELINE_NON_TOKEN_COLORS.has(f));
+      const unexpected: string[] = [];
+      for (const { key, count } of found) {
+        const baseCount = BASELINE_NON_TOKEN_COLORS.get(key);
+        if (baseCount === undefined) {
+          unexpected.push(`${key} (new, ${count} occurrences)`);
+        } else if (count > baseCount) {
+          unexpected.push(`${key} (${count} > baseline ${baseCount})`);
+        }
+      }
       expect(
         unexpected,
-        `New raw color literals in feature CSS (baseline: ${BASELINE_NON_TOKEN_COLORS.size} hits):\n${unexpected.join('\n')}\n\nTo allowlist, add to BASELINE_NON_TOKEN_COLORS. To remove, migrate to semantic tokens.`,
+        `Raw color literal violations:\n${unexpected.join('\n')}\n\nTo allowlist, add/increase in BASELINE_NON_TOKEN_COLORS. To remove, migrate to semantic tokens.`,
       ).toEqual([]);
     });
   });

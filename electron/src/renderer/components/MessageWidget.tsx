@@ -139,7 +139,7 @@ function ThinkingMessage({
       >
         <span className="inline-flex items-center gap-1.5">
           {isStreaming ? (
-            <Spinner size="xs" />
+            <Spinner size="xs" aria-hidden />
           ) : (
             <Icon name="alertCircle" size={12} />
           )}

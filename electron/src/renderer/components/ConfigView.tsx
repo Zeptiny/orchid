@@ -209,6 +209,11 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
     };
   }, [loadDefinitions]);
 
+  const tabItems = useMemo(
+    () => TABS.map((tab) => ({ ...tab, ariaBusy: pendingTab === tab.id })),
+    [pendingTab],
+  );
+
   const currentConfig = useMemo(() => {
     if (!originalConfig) return null;
     return applyConfigDraft(originalConfig, draft);
@@ -401,7 +406,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
         ))}
 
         <Tabs
-          items={TABS}
+          items={tabItems}
           value={activeTab}
           onValueChange={(id) => { void requestTab(id as TabId); }}
           variant="boxed"
@@ -458,34 +463,31 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
           Save your configuration changes before returning to chat?
         </p>
         <div className="modal-action">
-          <button
+          <Button
             ref={unsavedSaveRef}
-            className="btn btn-primary"
-            type="button"
+            variant="primary"
             onClick={async () => {
               await handleSave();
               onClose();
             }}
           >
             Save
-          </button>
-          <button
-            className="btn btn-error"
-            type="button"
+          </Button>
+          <Button
+            variant="error"
             onClick={() => {
               setDraft({});
               onClose();
             }}
           >
             Discard
-          </button>
-          <button
-            className="btn btn-ghost"
-            type="button"
+          </Button>
+          <Button
+            variant="ghost"
             onClick={() => setShowUnsavedDialog(false)}
           >
             Cancel
-          </button>
+          </Button>
         </div>
       </DialogSurface>
 
@@ -505,24 +507,22 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
           MCP server changes require an application restart to take effect.
         </p>
         <div className="modal-action">
-          <button
+          <Button
             ref={restartPrimaryRef}
-            className="btn btn-primary"
-            type="button"
+            variant="primary"
             onClick={() => {
               setShowRestartDialog(false);
               onClose();
             }}
           >
             Return to chat
-          </button>
-          <button
-            className="btn btn-ghost"
-            type="button"
+          </Button>
+          <Button
+            variant="ghost"
             onClick={() => setShowRestartDialog(false)}
           >
             Later
-          </button>
+          </Button>
         </div>
       </DialogSurface>
     </div>

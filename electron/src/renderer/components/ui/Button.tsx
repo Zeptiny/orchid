@@ -54,7 +54,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     icon,
     iconRight,
     size = 'sm',
-    variant = 'ghost',
+    variant = 'neutral',
     shape = 'default',
     loading = false,
     iconOnly = false,

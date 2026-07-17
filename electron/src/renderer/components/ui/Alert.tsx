@@ -36,18 +36,19 @@ export function Alert({
   action,
   children,
   className = '',
+  role = 'alert',
   ...props
 }: AlertProps) {
   return (
     <div
-      role="alert"
+      role={role}
       className={`alert ${TONE_CLASS[tone]} ${VARIANT_CLASS[variant]} ${className}`.trim().replace(/\s+/g, ' ')}
       {...props}
     >
       {icon != null && <Icon name={icon} size={18} className="shrink-0" aria-hidden />}
       <div className="flex flex-col gap-0.5 min-w-0 flex-1">
         {title != null && <div className="font-medium text-sm">{title}</div>}
-        {children != null && <div className="text-sm opacity-90">{children}</div>}
+        {children}
       </div>
       {action != null && <div className="shrink-0">{action}</div>}
     </div>

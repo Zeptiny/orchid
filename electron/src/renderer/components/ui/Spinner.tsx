@@ -22,11 +22,12 @@ export function Spinner({
   className = '',
   ...props
 }: SpinnerProps) {
+  const isDecorative = props['aria-hidden'] === true || props['aria-hidden'] === 'true';
   return (
     <span
       className={`loading loading-${variant} ${SIZE_CLASS[size]} ${className}`.trim().replace(/\s+/g, ' ')}
-      role="status"
-      aria-label="Loading"
+      role={!isDecorative ? 'status' : undefined}
+      aria-label={!isDecorative ? 'Loading' : undefined}
       {...props}
     />
   );

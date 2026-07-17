@@ -5,6 +5,8 @@ export type TabsVariant = 'boxed' | 'bordered' | 'lift' | 'pill';
 export interface TabItem {
   id: string;
   label: ReactNode;
+  /** When true, sets aria-busy on this tab to indicate pending content. */
+  ariaBusy?: boolean;
 }
 
 export interface TabsProps extends Omit<HTMLAttributes<HTMLDivElement>, 'children'> {
@@ -43,6 +45,7 @@ export function Tabs({
           type="button"
           role="tab"
           aria-selected={item.id === value}
+          aria-busy={item.ariaBusy || undefined}
           className={`tab ${item.id === value ? 'tab-active' : ''}`.trim().replace(/\s+/g, ' ')}
           onClick={() => onValueChange(item.id)}
         >

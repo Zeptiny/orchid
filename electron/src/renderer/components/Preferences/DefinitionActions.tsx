@@ -47,6 +47,10 @@ export function DefinitionActions({
           label="Delete"
           icon="trash"
           size="xs"
+          /* Ghost + text-error: transparent button with error-colored icon on hover.
+             variant="error" would render a filled error button, which is too heavy
+             for a row action. IconButton has no "ghost-error" variant, so we pair
+             variant="ghost" (transparent) with text-error/hover overrides. */
           variant="ghost"
           iconSize={13}
           className="btn-square h-7 w-7 min-h-7 text-error hover:bg-error/10"

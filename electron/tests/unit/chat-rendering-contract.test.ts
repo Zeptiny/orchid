@@ -44,10 +44,13 @@ describe('chat rendering contract (U5)', () => {
       const error = read('components/ErrorBanner.tsx');
       expect(tool).toMatch(/StatusBadge|badge/);
       // Migrated to Spinner primitive — source uses <Spinner> instead of raw loading classes
-      expect(tool).toMatch(/import.*Spinner|Spinner/);
-      expect(thought).toMatch(/import.*Spinner|streaming-cursor/);
+      expect(tool).toMatch(/<Spinner\b/);
+      expect(thought).toMatch(/<Spinner\b|streaming-cursor/);
       // Migrated to Alert primitive — source uses <Alert> instead of raw alert classes
-      expect(error).toMatch(/import.*Alert|Alert|alert/);
+      expect(error).toMatch(/<Alert\b/);
+      // Guard against raw class regression
+      expect(tool).not.toMatch(/loading loading-spinner/);
+      expect(error).not.toMatch(/className=.*alert\b/);
     });
   });
 
