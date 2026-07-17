@@ -1,12 +1,21 @@
 /**
  * Composer / discovery contract — U6.
  *
- * Source-level contracts for send-lock recovery, cancel serialization,
- * command-palette navigation wiring, and DaisyUI control usage.
+ * Wiring + DaisyUI source contracts. Behavioral lock/navigate/popover
+ * coverage lives in composer-send-lock, navigate-shell, and popover-listbox tests.
  */
 import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import {
+  evaluateComposerSend,
+  shouldReleaseComposerSendLock,
+} from '../../src/renderer/utils/composer-send-lock';
+import {
+  nextForceOpenEpoch,
+  resolveOrchidNavigate,
+  shouldOpenCollapseFromToken,
+} from '../../src/renderer/utils/navigate-shell';
 
 const RENDERER = path.resolve(__dirname, '../../src/renderer');
 
@@ -16,17 +25,23 @@ function read(rel: string): string {
 
 describe('composer contract (U6)', () => {
   describe('send lock recovery', () => {
-    it('InputArea releases send lock on non-streaming status and catch path', () => {
+    it('InputArea wires pure lock release and send admission helpers', () => {
       const src = read('components/InputArea.tsx');
-      // Early gates return before isSendingRef is set
-      expect(src).toMatch(/if \(!workspaceBound && !trimmed\.startsWith\('\/'\)\)/);
-      expect(src).toMatch(/if \(!providerAvailable && !trimmed\.startsWith\('\/'\)\)/);
-      expect(src).toMatch(/if \(!modelSelected && !trimmed\.startsWith\('\/'\)\)/);
-      // Catch releases lock
+      expect(src).toMatch(/shouldReleaseComposerSendLock/);
+      expect(src).toMatch(/evaluateComposerSend/);
       expect(src).toMatch(/catch \{[\s\S]*isSendingRef\.current = false/);
-      // Status effect clears lock when not streaming
-      expect(src).toMatch(/status !== 'streaming'/);
-      expect(src).toMatch(/isSendingRef\.current = false/);
+      // Behavioral: error status releases lock so second send is admitted.
+      expect(shouldReleaseComposerSendLock('error', 'idle')).toBe(true);
+      expect(
+        evaluateComposerSend({
+          trimmed: 'retry',
+          isStreaming: false,
+          isSending: false,
+          workspaceBound: true,
+          providerAvailable: true,
+          modelSelected: true,
+        }).action,
+      ).toBe('send');
     });
 
     it('useChat releases send lock on structured error and throw paths', () => {
@@ -57,34 +72,35 @@ describe('composer contract (U6)', () => {
   });
 
   describe('command palette navigation', () => {
-    it('dispatches orchid:navigate and ChatView listens', () => {
+    it('dispatches orchid:navigate and ChatView listens via resolveOrchidNavigate', () => {
       const palette = read('components/CommandPalette.tsx');
       const chatView = read('components/ChatView.tsx');
       const sidebar = read('components/Sidebar.tsx');
       expect(palette).toMatch(/orchid:navigate/);
       expect(palette).toMatch(/action === 'navigation'/);
       expect(chatView).toMatch(/addEventListener\('orchid:navigate'/);
-      expect(chatView).toMatch(/setInspectorFocusSection|inspectorFocusSection/);
-      expect(sidebar).toMatch(/focusSection/);
-      expect(sidebar).toMatch(/NAV_SECTION_MAP|inspector-subagents/);
+      expect(chatView).toMatch(/resolveOrchidNavigate/);
+      expect(sidebar).toMatch(/resolveInspectorSectionId|nextForceOpenEpoch/);
+      expect(sidebar).toMatch(/forceOpenToken/);
+      // Behavioral end-to-end contract on pure helpers.
+      expect(resolveOrchidNavigate('subagents')).toEqual({
+        kind: 'inspector',
+        section: 'subagents',
+      });
+      expect(resolveOrchidNavigate('sessions')).toEqual({ kind: 'sessions' });
     });
 
     it('re-opens inspector section on same-section palette re-nav after collapse', () => {
       const sidebar = read('components/Sidebar.tsx');
       expect(sidebar).toMatch(/forceOpenEpoch|setForceOpenEpoch/);
       expect(sidebar).toMatch(/forceOpenToken/);
+      expect(sidebar).toMatch(/shouldOpenCollapseFromToken|nextForceOpenEpoch/);
       // Epoch bumps on every focusSection so identical section re-nav re-triggers open.
-      const focusEffect = sidebar.slice(
-        sidebar.indexOf('if (!focusSection) return'),
-        sidebar.indexOf('}, [focusSection, onFocusSectionConsumed]'),
-      );
-      expect(focusEffect).toMatch(/setForceOpenEpoch/);
-      const collapseOpen = sidebar.slice(
-        sidebar.indexOf('function CollapseBlock'),
-        sidebar.indexOf('// ── Subagents Section'),
-      );
-      expect(collapseOpen).toMatch(/if \(forceOpenToken > 0\) setOpen\(true\)/);
-      expect(collapseOpen).toMatch(/\[forceOpenToken\]/);
+      let epoch = 0;
+      epoch = nextForceOpenEpoch(epoch);
+      epoch = nextForceOpenEpoch(epoch);
+      expect(shouldOpenCollapseFromToken(epoch)).toBe(true);
+      expect(shouldOpenCollapseFromToken(0)).toBe(false);
     });
 
     it('guards command palette handleSelect against overlapping async selections', () => {
@@ -141,11 +157,15 @@ describe('composer contract (U6)', () => {
       const modelPicker = read('components/ModelPicker.tsx');
       const popoverList = read('components/ui/PopoverList.tsx');
       const hook = read('components/ui/usePopoverListbox.ts');
+      const logic = read('components/ui/popover-listbox-logic.ts');
       expect(modelPicker).toMatch(/usePopoverListbox/);
       expect(modelPicker).toMatch(/model-picker-table/);
       expect(popoverList).toMatch(/usePopoverListbox/);
+      expect(popoverList).toMatch(/filterPopoverOptions|canSelectPopoverOption/);
       expect(hook).toMatch(/closeAndRestoreFocus/);
-      expect(hook).toMatch(/onSearchKeyDown/);
+      expect(hook).toMatch(/applyPopoverListboxKey/);
+      expect(logic).toMatch(/applyPopoverListboxKey/);
+      expect(logic).toMatch(/isOutsidePopoverRoot/);
     });
   });
 });

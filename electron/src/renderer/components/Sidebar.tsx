@@ -18,6 +18,11 @@ import { TodoStatus } from '../../shared/types/todo';
 import type { SubagentListState, SubagentDetail } from '../hooks/useSubagents';
 import type { TodoListState } from '../hooks/useTodos';
 import { formatShortcut } from '../keyboard';
+import {
+  nextForceOpenEpoch,
+  resolveInspectorSectionId,
+  shouldOpenCollapseFromToken,
+} from '../utils/navigate-shell';
 import { Icon } from './Icon';
 import { IconButton } from './ui/IconButton';
 import { SectionHeader } from './ui/SectionHeader';
@@ -89,9 +94,9 @@ export function Sidebar({
 
   useEffect(() => {
     if (!focusSection) return;
-    const sectionId = NAV_SECTION_MAP[focusSection] ?? focusSection;
+    const sectionId = resolveInspectorSectionId(focusSection);
     setForcedSection(sectionId);
-    setForceOpenEpoch((epoch) => epoch + 1);
+    setForceOpenEpoch((epoch) => nextForceOpenEpoch(epoch));
     onFocusSectionConsumed?.();
     requestAnimationFrame(() => {
       document
@@ -241,16 +246,6 @@ interface CollapseBlockProps {
   onOpenChange?: (open: boolean) => void;
 }
 
-/** Map command-palette navigation values to inspector section ids. */
-const NAV_SECTION_MAP: Record<string, string> = {
-  subagents: 'inspector-subagents',
-  todos: 'inspector-todos',
-  'mcp-servers': 'inspector-mcp',
-  'index-status': 'inspector-index',
-  context: 'inspector-context',
-  usage: 'inspector-usage',
-};
-
 function CollapseBlock({
   title,
   sectionId,
@@ -265,7 +260,7 @@ function CollapseBlock({
 
   // One-shot open from palette navigation; user can still collapse afterward.
   useEffect(() => {
-    if (forceOpenToken > 0) setOpen(true);
+    if (shouldOpenCollapseFromToken(forceOpenToken)) setOpen(true);
   }, [forceOpenToken]);
 
   const toggle = () => {

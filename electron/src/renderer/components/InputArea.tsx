@@ -23,6 +23,10 @@ import {
   type PaletteResult,
 } from '../commands/registry';
 import { resolveModelNotifyLabel } from '../utils/provider-selection';
+import {
+  evaluateComposerSend,
+  shouldReleaseComposerSendLock,
+} from '../utils/composer-send-lock';
 import { ModelPicker } from './ModelPicker';
 import { SlashCommandMenu } from './SlashCommandMenu';
 import { IconButton } from './ui/IconButton';
@@ -345,7 +349,7 @@ export function InputArea({
   useEffect(() => {
     // Release send lock when not streaming: idle success path and error/gate
     // recovery (status 'error' never returned to idle without this).
-    if (status !== 'streaming' && interruptState !== 'confirmAgent') {
+    if (shouldReleaseComposerSendLock(status, interruptState)) {
       isSendingRef.current = false;
     }
     if (status === 'idle' && interruptState === 'idle') {
@@ -390,19 +394,24 @@ export function InputArea({
     const trimmed = input.trim();
     // status and isSendingRef both guard: status can lag one frame behind Enter.
     // Allow send during confirmSubagents so a follow-up can be queued after cancel UI.
-    if (!trimmed || isStreaming || isSendingRef.current) return;
-    // Allow slash commands even when unbound; block plain chat messages.
-    if (!workspaceBound && !trimmed.startsWith('/')) {
+    const gate = evaluateComposerSend({
+      trimmed,
+      isStreaming,
+      isSending: isSendingRef.current,
+      workspaceBound,
+      providerAvailable,
+      modelSelected,
+    });
+    if (gate.action === 'ignore') return;
+    if (gate.action === 'pick-project') {
       onPickProjectDir?.();
       return;
     }
-    if (!providerAvailable && !trimmed.startsWith('/')) {
+    if (gate.action === 'open-providers') {
       onOpenProviders?.();
       return;
     }
-    if (!modelSelected && !trimmed.startsWith('/')) {
-      return;
-    }
+    if (gate.action === 'need-model') return;
     isSendingRef.current = true;
     setInput('');
     setSubPicker(null);

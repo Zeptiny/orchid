@@ -617,7 +617,7 @@ describe('Command Palette File Structure', () => {
     );
     expect(sidebar).toContain('forceOpenEpoch');
     expect(sidebar).toContain('forceOpenToken');
-    expect(sidebar).toMatch(/if \(forceOpenToken > 0\) setOpen\(true\)/);
+    expect(sidebar).toMatch(/shouldOpenCollapseFromToken\(forceOpenToken\)/);
   });
 
   it('CommandPalette ignores re-entrant selection while async select is in flight', () => {

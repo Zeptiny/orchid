@@ -18,6 +18,7 @@ import {
   selectionMatchesOption,
 } from '../utils/provider-selection';
 import { isTextGenerationModel } from '../utils/models';
+import { resolveOrchidNavigate } from '../utils/navigate-shell';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import type { ModelSelection } from '../../shared/types/provider';
 import { flattenSessionMessages, type Session } from '../../shared/types/session';
@@ -147,16 +148,14 @@ export function ChatView() {
   useEffect(() => {
     const onNavigate = (event: Event) => {
       const detail = (event as CustomEvent<{ section?: string }>).detail;
-      const section = detail?.section?.trim();
-      if (!section) return;
-
-      if (section === 'sessions') {
+      const action = resolveOrchidNavigate(detail?.section);
+      if (action.kind === 'noop') return;
+      if (action.kind === 'sessions') {
         setLeftSidebarCollapsed(false);
         return;
       }
-
       setSidebarOpen(true);
-      setInspectorFocusSection(section);
+      setInspectorFocusSection(action.section);
     };
     window.addEventListener('orchid:navigate', onNavigate);
     return () => window.removeEventListener('orchid:navigate', onNavigate);

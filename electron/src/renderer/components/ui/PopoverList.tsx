@@ -1,6 +1,12 @@
 import { useMemo, type ReactNode } from 'react';
 import { Icon, type IconName } from '../Icon';
 import {
+  canSelectPopoverOption,
+  defaultPopoverFilter,
+  filterPopoverOptions,
+  popoverEmptyMessage,
+} from './popover-listbox-logic';
+import {
   useClampActiveIndex,
   usePopoverListbox,
   type PopoverAlign,
@@ -36,14 +42,6 @@ export interface PopoverListProps<T extends string = string> {
   readonly filterOption?: (option: PopoverListOption<T>, query: string) => boolean;
 }
 
-function defaultFilter<T extends string>(option: PopoverListOption<T>, query: string): boolean {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return true;
-  return `${option.label} ${option.value} ${option.description ?? ''}`
-    .toLowerCase()
-    .includes(normalized);
-}
-
 /**
  * Shared searchable listbox popover for compact option pickers.
  * Does not own command-palette multi-category behavior.
@@ -66,7 +64,7 @@ export function PopoverList<T extends string = string>({
   align = 'start',
   showCurrentInMenu = true,
   renderTriggerLabel,
-  filterOption = defaultFilter,
+  filterOption = defaultPopoverFilter,
 }: PopoverListProps<T>) {
   const {
     pickerRef,
@@ -87,22 +85,27 @@ export function PopoverList<T extends string = string>({
 
   const selectedOption = options.find((option) => option.value === value);
 
-  const filteredOptions = useMemo(() => {
-    const matches = options.filter((option) => filterOption(option, query));
-    if (selectedOption && !matches.some((option) => option.value === selectedOption.value)) {
-      return [selectedOption, ...matches];
-    }
-    return matches;
-  }, [filterOption, options, query, selectedOption]);
+  const filteredOptions = useMemo(
+    () => filterPopoverOptions(options, query, value, filterOption),
+    [filterOption, options, query, value],
+  );
 
   useClampActiveIndex(activeIndex, filteredOptions.length, setActiveIndex);
 
   const selectOption = (option: PopoverListOption<T>) => {
-    if (option.disabled) return;
+    if (!canSelectPopoverOption(option)) return;
     onChange(option.value);
     setQuery('');
     closeAndRestoreFocus();
   };
+
+  const emptyCopy = popoverEmptyMessage({
+    optionsLength: options.length,
+    filteredLength: filteredOptions.length,
+    query,
+    emptyMessage,
+    noMatchMessage,
+  });
 
   const triggerLabel =
     renderTriggerLabel?.(selectedOption, value) ??
@@ -208,10 +211,7 @@ export function PopoverList<T extends string = string>({
               );
             })}
           </ul>
-          {options.length === 0 && <div className="model-picker-empty">{emptyMessage}</div>}
-          {options.length > 0 && filteredOptions.length === 0 && (
-            <div className="model-picker-empty">{noMatchMessage(query)}</div>
-          )}
+          {emptyCopy && <div className="model-picker-empty">{emptyCopy}</div>}
         </div>
       )}
     </div>

@@ -6,6 +6,12 @@ import {
   type KeyboardEvent,
   type RefObject,
 } from 'react';
+import {
+  applyPopoverListboxKey,
+  buildDropdownClassName,
+  clampPopoverActiveIndex,
+  isOutsidePopoverRoot,
+} from './popover-listbox-logic';
 
 export type PopoverPlacement = 'top' | 'bottom';
 export type PopoverAlign = 'start' | 'end';
@@ -68,7 +74,7 @@ export function usePopoverListbox(): UsePopoverListboxResult {
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => {
-      if (!pickerRef.current?.contains(event.target as Node)) {
+      if (isOutsidePopoverRoot(pickerRef.current, event.target as Node)) {
         closeAndRestoreFocus();
       }
     };
@@ -81,24 +87,24 @@ export function usePopoverListbox(): UsePopoverListboxResult {
     itemCount: number,
     onSelectActive?: (index: number) => void,
   ) => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
+    const result = applyPopoverListboxKey(
+      event.key,
+      activeIndex,
+      itemCount,
+      Boolean(onSelectActive),
+    );
+    if (result.kind === 'none') return;
+    event.preventDefault();
+    if (result.kind === 'close') {
       closeAndRestoreFocus();
       return;
     }
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      setActiveIndex((prev) => Math.min(prev + 1, Math.max(0, itemCount - 1)));
+    if (result.kind === 'move') {
+      setActiveIndex(result.activeIndex);
       return;
     }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      setActiveIndex((prev) => Math.max(prev - 1, 0));
-      return;
-    }
-    if (event.key === 'Enter' && onSelectActive) {
-      event.preventDefault();
-      if (itemCount > 0) onSelectActive(activeIndex);
+    if (result.kind === 'select' && onSelectActive) {
+      onSelectActive(result.index);
     }
   };
 
@@ -113,12 +119,7 @@ export function usePopoverListbox(): UsePopoverListboxResult {
     align: PopoverAlign,
     placement: PopoverPlacement,
     className = '',
-  ) =>
-    `dropdown ${align === 'start' ? 'dropdown-start' : 'dropdown-end'} ${
-      placement === 'top' ? 'dropdown-top' : ''
-    } ${open ? 'dropdown-open' : ''} ${className}`
-      .trim()
-      .replace(/\s+/g, ' ');
+  ) => buildDropdownClassName(open, align, placement, className);
 
   return {
     pickerRef,
@@ -145,8 +146,7 @@ export function useClampActiveIndex(
   setActiveIndex: (index: number) => void,
 ): void {
   useEffect(() => {
-    if (activeIndex >= itemCount) {
-      setActiveIndex(Math.max(0, itemCount - 1));
-    }
+    const next = clampPopoverActiveIndex(activeIndex, itemCount);
+    if (next !== activeIndex) setActiveIndex(next);
   }, [activeIndex, itemCount, setActiveIndex]);
 }
