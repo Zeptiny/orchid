@@ -319,6 +319,17 @@ export function ChatView() {
     [session, chat, commitSessionView, draftTabVisible],
   );
 
+  // ConfigView left-rail pick: same hydrate path as sidebar (not store-only load).
+  useEffect(() => {
+    const onSelectSession = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+      if (!id) return;
+      void handleSessionSelect(id);
+    };
+    window.addEventListener('orchid:select-session', onSelectSession);
+    return () => window.removeEventListener('orchid:select-session', onSelectSession);
+  }, [handleSessionSelect]);
+
   const enterDraftMode = useCallback(async (opts?: { clearComposer?: boolean }) => {
     const gen = ++sessionSwitchGen.current;
     chat.beginSessionSwitch(null);

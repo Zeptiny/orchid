@@ -368,9 +368,11 @@ export function InputArea({
 
   // Multi-stage Esc — same path as the cancel button (agent → subagents).
   // Model dropup closes first; slash menu owns Esc while open.
+  // When Settings is open ChatView stays mounted but Escape belongs to ConfigView.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      if (document.documentElement.dataset.orchidSettingsOpen === '1') return;
 
       if (!canInterrupt) return;
       // Let slash-menu Esc handlers win when the menu is open on confirmSubagents

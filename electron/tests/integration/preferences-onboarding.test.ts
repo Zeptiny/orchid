@@ -270,10 +270,9 @@ describe('Preferences & Onboarding File Structure', () => {
     const css = fs.readFileSync(cssPath, 'utf-8');
     expect(css).toContain('.onb-overlay');
     expect(css).toContain('.onb-container');
-    expect(css).toContain('.onb-progress');
     expect(css).toContain('.onb-step');
-    expect(css).toContain('.onb-welcome');
-    expect(css).toContain('.onb-done');
+    expect(css).toContain('.onb-step-description');
+    expect(css).toContain('.onb-step-actions');
   });
 });
 
@@ -317,6 +316,18 @@ describe('Preferences Keyboard Shortcuts', () => {
     expect(def).toBeDefined();
     expect(def!.chord).toEqual({ key: 'Escape' });
     expect(eventMatchesChord(fakeKeyEvent({ key: 'Escape' }), def!.chord)).toBe(true);
+  });
+
+  it('settings overlay owns Escape while open (ChatView cancel gated)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const rendererRoot = path.resolve(__dirname, '../../src/renderer');
+    const appSrc = fs.readFileSync(path.join(rendererRoot, 'App.tsx'), 'utf8');
+    const inputArea = fs.readFileSync(path.join(rendererRoot, 'components/InputArea.tsx'), 'utf8');
+
+    expect(appSrc).toMatch(/dataset\.orchidSettingsOpen/);
+    expect(inputArea).toMatch(/dataset\.orchidSettingsOpen/);
+    expect(inputArea).toMatch(/if \(document\.documentElement\.dataset\.orchidSettingsOpen === '1'\) return/);
   });
 });
 

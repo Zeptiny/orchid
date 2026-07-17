@@ -276,6 +276,41 @@ describe('useSession shared cache', () => {
     expect(appSrc).toMatch(/configOpen \? 'hidden' : 'contents'/);
   });
 
+  it('Config session pick routes through ChatView hydrate (not store-only load)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const rendererRoot = path.resolve(__dirname, '../../src/renderer');
+    const chatView = fs.readFileSync(path.join(rendererRoot, 'components/ChatView.tsx'), 'utf8');
+    const configView = fs.readFileSync(path.join(rendererRoot, 'components/ConfigView.tsx'), 'utf8');
+
+    // Config must not activate via session.load alone — that rebinds the store
+    // without beginSessionSwitch / hydrateSnapshot affinity.
+    expect(configView).toMatch(/orchid:select-session/);
+    expect(configView).not.toMatch(/await session\.load\(id\)/);
+
+    // ChatView listens and runs the full sidebar select path.
+    expect(chatView).toMatch(/orchid:select-session/);
+    expect(chatView).toMatch(/handleSessionSelect/);
+    expect(chatView).toMatch(/beginSessionSwitch/);
+    expect(chatView).toMatch(/hydrateSnapshot/);
+    expect(chatView).toMatch(/addEventListener\('orchid:select-session'/);
+  });
+
+  it('Config orchid:select-session event carries session id for Chat hydrate', () => {
+    const target = new EventTarget();
+    const received: string[] = [];
+    const handler = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+      if (id) received.push(id);
+    };
+    target.addEventListener('orchid:select-session', handler);
+    target.dispatchEvent(
+      new CustomEvent('orchid:select-session', { detail: { id: 'session-from-config' } }),
+    );
+    target.removeEventListener('orchid:select-session', handler);
+    expect(received).toEqual(['session-from-config']);
+  });
+
   it('dual subscribers observe the same snapshot after load/rename/workspace updates', async () => {
     const sessionA = makeSession({ id: 'a', name: 'Alpha', cwd: '/proj/a' });
     const sessionB = makeSession({ id: 'b', name: 'Beta', cwd: '/proj/b' });

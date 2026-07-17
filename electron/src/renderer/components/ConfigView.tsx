@@ -279,11 +279,14 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
   });
 
   const handleSessionSelect = useCallback(
-    async (id: string) => {
-      await session.load(id);
+    (id: string) => {
+      // ChatView owns hydrate/affinity; rebind store alone leaves messages stale.
+      window.dispatchEvent(
+        new CustomEvent('orchid:select-session', { detail: { id } }),
+      );
       onClose();
     },
-    [onClose, session],
+    [onClose],
   );
 
   const handleSessionCreate = useCallback(async () => {

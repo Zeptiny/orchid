@@ -96,6 +96,18 @@ function App() {
     return () => window.removeEventListener('orchid:set-theme', handleSetTheme);
   }, [setTheme]);
 
+  // Let hidden ChatView (InputArea Esc cancel) know settings owns Escape.
+  useEffect(() => {
+    if (configOpen) {
+      document.documentElement.dataset.orchidSettingsOpen = '1';
+    } else {
+      delete document.documentElement.dataset.orchidSettingsOpen;
+    }
+    return () => {
+      delete document.documentElement.dataset.orchidSettingsOpen;
+    };
+  }, [configOpen]);
+
   return (
     <div className="app-root h-screen min-h-0 overflow-hidden bg-base-100 text-base-content" data-theme={theme}>
       {/* Keep ChatView mounted under Config so selection/draft state is not
