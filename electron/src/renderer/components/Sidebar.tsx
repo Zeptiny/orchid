@@ -24,7 +24,9 @@ import {
   shouldOpenCollapseFromToken,
 } from '../utils/navigate-shell';
 import { Icon } from './Icon';
+import { Button } from './ui/Button';
 import { IconButton } from './ui/IconButton';
+import { Spinner } from './ui/Spinner';
 import { StateMessage } from './ui/StateMessage';
 import { StatusBadge } from './ui/StatusBadge';
 
@@ -298,9 +300,9 @@ function SubagentsSection({ state, onRefresh, selectedId, onSelect, getDetail }:
         className="inspector-empty py-4"
         title={state.error}
         action={
-          <button className="btn btn-ghost btn-xs" onClick={onRefresh} type="button">
+          <Button variant="ghost" size="xs" onClick={onRefresh}>
             Retry
-          </button>
+          </Button>
         }
       />
     );
@@ -629,32 +631,32 @@ function IndexSection({
       <div className="inspector-row inspector-row-actions">
         <strong>Actions</strong>
         <span className="inline-flex gap-1">
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs"
+          <Button
+            variant="ghost"
+            size="xs"
             disabled={!onIndexRAG || indexingRag}
             onClick={() => void runIndex('rag')}
             title="Index project for RAG semantic search"
           >
             {indexingRag ? (
-              <span className="loading loading-spinner loading-xs" />
+              <Spinner size="xs" />
             ) : (
               'RAG'
             )}
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs"
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
             disabled={!onIndexAST || indexingAst}
             onClick={() => void runIndex('ast')}
             title="Re-scan project for AST symbols"
           >
             {indexingAst ? (
-              <span className="loading loading-spinner loading-xs" />
+              <Spinner size="xs" />
             ) : (
               'AST'
             )}
-          </button>
+          </Button>
         </span>
       </div>
       {ragError && <p className="inspector-empty text-error text-left">{ragError}</p>}

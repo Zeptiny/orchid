@@ -16,11 +16,13 @@ import { useSession } from '../hooks/useSession';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import { applyConfigDraft } from '../utils/config-draft';
 import { withMapDeletionTombstones } from '../utils/config-tombstones';
-import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
+import { Alert } from './ui/Alert';
+import { Button } from './ui/Button';
 import { DialogSurface } from './ui/DialogSurface';
 import { StateMessage } from './ui/StateMessage';
 import { StatusBadge } from './ui/StatusBadge';
+import { Tabs } from './ui/Tabs';
 
 type TabId =
   | 'general'
@@ -357,53 +359,55 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
                 Unsaved
               </StatusBadge>
             )}
-            <button
-              className="btn btn-primary btn-sm"
+            <Button
+              variant="primary"
+              size="sm"
               onClick={handleSave}
               disabled={!isDirty || saving}
-              type="button"
+              loading={saving}
             >
-              {saving && <span className="loading loading-spinner loading-xs" />}
               Save
-            </button>
-            <button className="btn btn-ghost btn-sm" onClick={requestClose} type="button">
+            </Button>
+            <Button variant="ghost" size="sm" onClick={requestClose}>
               Close
-            </button>
+            </Button>
           </div>
         </header>
 
         {error && (
-          <div className="alert alert-error rounded-none py-2.5 text-sm" role="alert">
-            <Icon name="alert" size={14} />
-            <span>{error}</span>
-            <button className="btn btn-ghost btn-xs" onClick={() => setError(null)} type="button">
-              Dismiss
-            </button>
-          </div>
+          <Alert
+            tone="error"
+            className="rounded-none py-2.5 text-sm"
+            icon="alert"
+            action={
+              <Button variant="ghost" size="xs" onClick={() => setError(null)}>
+                Dismiss
+              </Button>
+            }
+          >
+            {error}
+          </Alert>
         )}
 
         {diagnostics.map((diagnostic) => (
-          <div key={diagnostic.code} role="alert" className="alert alert-warning rounded-none py-2.5 text-sm">
-            <Icon name="alert" size={14} />
-            <span>{diagnostic.message}</span>
-          </div>
+          <Alert
+            key={diagnostic.code}
+            tone="warning"
+            className="rounded-none py-2.5 text-sm"
+            icon="alert"
+          >
+            {diagnostic.message}
+          </Alert>
         ))}
 
-        <div className="config-tabs tabs tabs-boxed bg-base-200" role="tablist" aria-label="Configuration sections">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              role="tab"
-              aria-selected={activeTab === tab.id}
-              className={`config-tab tab ${activeTab === tab.id ? 'config-tab-active tab-active' : ''}`}
-              onClick={() => { void requestTab(tab.id); }}
-              type="button"
-              aria-busy={pendingTab === tab.id || undefined}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          items={TABS}
+          value={activeTab}
+          onValueChange={(id) => { void requestTab(id as TabId); }}
+          variant="boxed"
+          className="config-tabs bg-base-200"
+          aria-label="Configuration sections"
+        />
 
         <div className="config-body">
           {loading ? (

@@ -23,6 +23,7 @@ import {
   truncatePathDisplay,
 } from '../utils/session-workspace';
 import { Icon } from './Icon';
+import { Button } from './ui/Button';
 import { IconButton } from './ui/IconButton';
 import { SectionHeader } from './ui/SectionHeader';
 import { StateMessage } from './ui/StateMessage';
@@ -147,15 +148,17 @@ export function LeftSidebar({
           />
         )}
         {activities.length > 0 && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm btn-circle left-panel-activity-count"
+          <Button
+            variant="ghost"
+            size="sm"
+            shape="circle"
+            className="left-panel-activity-count"
             onClick={onToggle}
             title={`${activities.length} session${activities.length === 1 ? '' : 's'} need attention or are running`}
             aria-label={`${activities.length} session${activities.length === 1 ? '' : 's'} need attention or are running`}
           >
             <span className="status status-xs status-warning" aria-hidden />
-          </button>
+          </Button>
         )}
         <div className="left-panel-collapsed-spacer" />
         <IconButton
@@ -204,15 +207,16 @@ export function LeftSidebar({
           projectPickerCreatesDraft={projectPickerCreatesDraft}
         />
 
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm session-new-btn"
+        <Button
+          variant="ghost"
+          size="sm"
+          className="session-new-btn"
           onClick={onSessionCreate}
           title={`New session (${formatShortcut('session.new')})`}
         >
           <Icon name="plus" size={14} />
           <span>New Session</span>
-        </button>
+        </Button>
 
         <div className="session-search">
           <Icon name="search" size={12} className="session-search-icon" />
@@ -249,14 +253,14 @@ export function LeftSidebar({
       </div>
 
       <div className="panel-footer">
-        <button
-          className="btn btn-ghost session-settings-btn w-full justify-start gap-2"
+        <Button
+          variant="ghost"
+          className="session-settings-btn w-full justify-start gap-2"
           onClick={onOpenSettings}
-          type="button"
         >
           <Icon name="settings" size={18} />
           <span>Settings</span>
-        </button>
+        </Button>
       </div>
     </aside>
   );
@@ -299,24 +303,26 @@ function WorkspaceChip({
       <Icon name="folder" size={12} className="workspace-chip-icon shrink-0 opacity-70" />
       <span className="workspace-chip-path mono truncate">{label}</span>
       {showNewChat && (
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs workspace-chip-change"
+        <Button
+          variant="ghost"
+          size="xs"
+          className="workspace-chip-change"
           onClick={onNewChatInProject}
           title="Start a new chat in this project"
         >
           New chat
-        </button>
+        </Button>
       )}
       {showPick && (
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs workspace-chip-change"
+        <Button
+          variant="ghost"
+          size="xs"
+          className="workspace-chip-change"
           onClick={onPickProjectDir}
           title={isUnbound ? 'Open folder' : 'Choose project folder'}
         >
           {isUnbound ? 'Open' : 'Choose'}
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -335,14 +341,14 @@ function UnboundEmptyState({
         title="Choose a project folder to start chatting."
         action={
           onPickProjectDir ? (
-            <button
-              type="button"
-              className="btn btn-primary btn-xs"
+            <Button
+              variant="primary"
+              size="xs"
               onClick={onPickProjectDir}
             >
               <Icon name="folder" size={12} />
               Open folder
-            </button>
+            </Button>
           ) : undefined
         }
       />
@@ -462,9 +468,9 @@ function ProjectSessionList({
         className="session-list-error py-4"
         title={state.error}
         action={
-          <button className="btn btn-error btn-xs" onClick={onRefresh} type="button">
+          <Button variant="error" size="xs" onClick={onRefresh}>
             Retry
-          </button>
+          </Button>
         }
       />
     );
@@ -479,10 +485,10 @@ function ProjectSessionList({
           title={isUnbound ? 'No sessions yet. Open a folder to begin.' : 'No sessions yet'}
           action={
             isUnbound && onPickProjectDir ? (
-              <button type="button" className="btn btn-primary btn-xs" onClick={onPickProjectDir}>
+              <Button variant="primary" size="xs" onClick={onPickProjectDir}>
                 <Icon name="folder" size={12} />
                 Open folder
-              </button>
+              </Button>
             ) : undefined
           }
         />
@@ -540,14 +546,15 @@ function ProjectSessionList({
             aria-label={project.label}
           >
             <div className="session-project-header">
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="xs"
                 id={
                   projectKey != null
                     ? `${listId}-project-${projectKey}`
                     : undefined
                 }
-                className={`btn btn-ghost btn-xs session-project-toggle ${
+                className={`session-project-toggle ${
                   isProjectSelected ? 'session-project-toggle-selected' : ''
                 }`}
                 onClick={() => {
@@ -605,17 +612,19 @@ function ProjectSessionList({
                     project
                   </StatusBadge>
                 )}
-              </button>
+              </Button>
               {project.path && onProjectSessionCreate && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs btn-square session-project-create"
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  shape="square"
+                  className="session-project-create"
                   onClick={() => onProjectSessionCreate(project.path!)}
                   title={`New chat in ${project.label}`}
                   aria-label={`New chat in ${project.label}`}
                 >
                   <Icon name="plus" size={13} />
-                </button>
+                </Button>
               )}
             </div>
             <div
@@ -647,9 +656,10 @@ function ProjectSessionList({
                 );
               })}
               {!project.isCollapsed && !isSearching && project.sessions.length > PROJECT_SESSION_PREVIEW_LIMIT && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs session-project-expand"
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="session-project-expand"
                   aria-expanded={project.isExpanded}
                   onClick={() => {
                     setExpandedProjects((previous) => {
@@ -667,7 +677,7 @@ function ProjectSessionList({
                   {project.isExpanded
                     ? `Show recent ${PROJECT_SESSION_PREVIEW_LIMIT}`
                     : `View ${hiddenCount} more`}
-                </button>
+                </Button>
               )}
             </div>
           </div>
@@ -771,8 +781,11 @@ function SessionRow({
           </StatusBadge>
         )}
       </div>
-      <button
-        className="btn btn-ghost btn-xs btn-square session-item-delete"
+      <Button
+        variant="ghost"
+        size="xs"
+        shape="square"
+        className="session-item-delete"
         tabIndex={-1}
         onClick={(event) => {
           event.stopPropagation();
@@ -780,10 +793,9 @@ function SessionRow({
         }}
         title="Delete session"
         aria-label="Delete session"
-        type="button"
       >
         <Icon name="trash" size={12} />
-      </button>
+      </Button>
     </div>
   );
 }

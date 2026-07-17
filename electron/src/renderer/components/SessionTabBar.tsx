@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { SessionActivity, SessionSummary } from '../../shared/types/ipc-boundary';
 import { Icon } from './Icon';
+import { Button } from './ui/Button';
 import { SessionNameEditor } from './SessionNameEditor';
 
 export interface SessionTabBarProps {
@@ -141,9 +142,11 @@ export function SessionTabBar({
                   <span className="session-tab-label truncate">{title}</span>
                 )}
               </div>
-              <button
-                type="button"
-                className="session-tab-close btn btn-ghost btn-xs btn-square"
+              <Button
+                variant="ghost"
+                size="xs"
+                shape="square"
+                className="session-tab-close"
                 aria-label={`Close ${title}`}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -151,7 +154,7 @@ export function SessionTabBar({
                 }}
               >
                 <Icon name="x" size={12} />
-              </button>
+              </Button>
             </div>
           );
         })}
@@ -176,9 +179,11 @@ export function SessionTabBar({
                   : draftLabel}
               </span>
             </button>
-            <button
-              type="button"
-              className="session-tab-close btn btn-ghost btn-xs btn-square"
+            <Button
+              variant="ghost"
+              size="xs"
+              shape="square"
+              className="session-tab-close"
               aria-label="Close draft"
               onClick={(e) => {
                 e.stopPropagation();
@@ -186,7 +191,7 @@ export function SessionTabBar({
               }}
             >
               <Icon name="x" size={12} />
-            </button>
+            </Button>
           </div>
         ) : null}
       </div>
