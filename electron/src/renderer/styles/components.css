@@ -164,7 +164,7 @@
   /* Flat chat stream surfaces (U5) — orchid-* only (legacy dual aliases removed). */
 
   .orchid-chat-scroll {
-    @apply flex min-h-0 flex-1 flex-col gap-2 overflow-auto;
+    @apply flex min-h-0 flex-1 flex-col gap-3 overflow-auto;
     /* Padding enforced in exceptions.css (unlayered) + JSX utilities. */
     scroll-behavior: smooth;
   }
@@ -211,11 +211,15 @@
 
   .orchid-msg-user {
     @apply self-end;
+    /* Extra air after assistant/tool turns. */
+    margin-top: 0.5rem;
   }
 
   .orchid-msg-assistant {
     @apply self-start bg-transparent text-base-content;
     max-width: min(92%, 820px);
+    /* Extra air after the previous user turn. */
+    margin-top: 0.5rem;
   }
 
   .orchid-msg-system {

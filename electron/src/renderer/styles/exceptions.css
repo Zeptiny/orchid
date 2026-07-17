@@ -153,10 +153,24 @@
     --msg-user-bg,
     color-mix(in srgb, var(--color-primary) 18%, var(--color-base-200))
   );
+  margin-top: 0.75rem !important;
 }
 
 .orchid-msg-assistant {
   padding: 4px 4px 8px !important;
+  margin-top: 0.75rem !important;
+}
+
+/* Clear turn separation when roles switch (or after tools/thoughts). */
+.orchid-msg-assistant + .orchid-msg-user,
+.orchid-thought + .orchid-msg-user,
+.orchid-tool-block + .orchid-msg-user,
+.orchid-tool-activity + .orchid-msg-user,
+.orchid-msg-user + .orchid-msg-assistant,
+.orchid-msg-user + .orchid-thought,
+.orchid-msg-user + .orchid-tool-block,
+.orchid-msg-user + .orchid-tool-activity {
+  margin-top: 1.25rem !important;
 }
 
 /* Thought / tool rows: horizontal padding so labels aren't flush to the edge. */
