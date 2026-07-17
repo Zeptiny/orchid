@@ -25,7 +25,6 @@ import {
 } from '../utils/navigate-shell';
 import { Icon } from './Icon';
 import { IconButton } from './ui/IconButton';
-import { SectionHeader } from './ui/SectionHeader';
 import { StateMessage } from './ui/StateMessage';
 import { StatusBadge } from './ui/StatusBadge';
 
@@ -119,10 +118,8 @@ export function Sidebar({
 
   return (
     <aside className="right-panel bg-base-200" aria-label="Inspector">
-      <SectionHeader
-        className="panel-header"
-        title={<span className="title">Inspector</span>}
-        actions={
+      <div id="right-sidebar-body" className="panel-body">
+        <div className="right-panel-toolbar">
           <IconButton
             label={`Collapse inspector (${formatShortcut('inspector.toggle')})`}
             icon="chevronRight"
@@ -131,10 +128,7 @@ export function Sidebar({
             aria-expanded
             aria-controls="right-sidebar-body"
           />
-        }
-      />
-
-      <div id="right-sidebar-body" className="panel-body">
+        </div>
         <CollapseBlock
           title="Todos"
           sectionId="inspector-todos"

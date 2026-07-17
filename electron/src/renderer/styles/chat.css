@@ -465,6 +465,16 @@
   border-left: 1px solid var(--border-default);
 }
 
+/* Compact collapse control — no title row; sits above the first section. */
+.right-panel-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  min-height: 28px;
+  margin: -2px 0 4px;
+  flex: 0 0 auto;
+}
+
 /* Mock .panel-header: min-height 46px, padding 7px 10px */
 .panel-header {
   min-height: 46px;
