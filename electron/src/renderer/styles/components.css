@@ -883,4 +883,148 @@
   .orchid-shortcuts-help-footer-dot {
     @apply opacity-35 select-none;
   }
+
+  /* ════════════════════════════════════════════════════════════════════════════
+     Onboarding Screen — Fullscreen overlay for first-run setup.
+     ════════════════════════════════════════════════════════════════════════════ */
+
+  /* ── Overlay ──────────────────────────────────────────────────────────────── */
+
+  .onb-overlay {
+    @apply fixed inset-0 flex items-start justify-center overflow-x-hidden overflow-y-auto;
+    z-index: 4000;
+    padding: var(--space-6) 0;
+    background: var(--bg-primary);
+  }
+
+  /* Provider connection wizard — app dialog surface above onboarding (4000). */
+  .provider-connection-wizard.modal {
+    z-index: 5000;
+    padding: 6vh 20px 28px;
+    background: color-mix(in srgb, var(--overlay-color) 55%, transparent);
+    backdrop-filter: blur(3px);
+  }
+
+  .provider-connection-wizard .modal-box {
+    @apply m-0 p-0 overflow-clip flex flex-col;
+    width: min(860px, 100%);
+    max-width: min(860px, 100%);
+    max-height: min(900px, 92vh);
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    background: var(--bg-surface-deep);
+    box-shadow: 0 24px 64px color-mix(in srgb, var(--overlay-color) 55%, transparent);
+    color: var(--text-primary);
+    scale: 1;
+    opacity: 1;
+    translate: 0 0;
+  }
+
+  .provider-connection-wizard .select,
+  .provider-connection-wizard .input {
+    padding-inline: 0.875rem;
+  }
+
+  .provider-connection-wizard .provider-wizard-header {
+    @apply flex items-start justify-between shrink-0;
+    gap: 12px;
+    padding: 18px 20px 16px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-default) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-secondary) 70%, transparent);
+  }
+
+  .provider-connection-wizard .provider-wizard-body {
+    @apply flex flex-col;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    gap: 1.25rem;
+    padding: 24px 20px 16px;
+  }
+
+  .provider-connection-wizard .provider-wizard-body .grid {
+    gap: 1.25rem;
+  }
+
+  .provider-connection-wizard .provider-wizard-actions {
+    @apply shrink-0 flex justify-end m-0;
+    gap: 8px;
+    padding: 14px 20px 18px;
+    border-top: 1px solid color-mix(in srgb, var(--border-default) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
+  }
+
+  .provider-connection-wizard .provider-wizard-body :focus-visible,
+  .provider-connection-wizard .provider-wizard-header :focus-visible,
+  .provider-connection-wizard .provider-wizard-actions :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent-primary) 80%, transparent);
+    outline-offset: 2px;
+  }
+
+  /* ── Container ────────────────────────────────────────────────────────────── */
+
+  .onb-container {
+    @apply flex flex-col overflow-visible;
+    width: min(720px, 92vw);
+    max-width: 92vw;
+    /* Scroll on the overlay, not here — overflow clips ModelPicker menus. */
+    max-height: none;
+    gap: var(--space-6);
+    margin-block: auto;
+    padding: var(--space-8);
+  }
+
+  /* ── Content ──────────────────────────────────────────────────────────────── */
+
+  .onb-step {
+    @apply flex flex-col text-center overflow-visible;
+    gap: var(--space-4);
+  }
+
+  /* Keep icons/copy off alert edges and badges from sitting flush. */
+  .onb-step .alert {
+    @apply items-center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .onb-step .alert > :where(svg, .icon, [data-icon]) {
+    @apply shrink-0;
+  }
+
+  .onb-step .alert > span {
+    @apply min-w-0;
+    padding-inline: 0.125rem;
+  }
+
+  .onb-step .badge {
+    @apply shrink-0;
+    margin-inline-start: 0.35rem;
+  }
+
+  .onb-step h1,
+  .onb-step h2 {
+    @apply m-0;
+    color: var(--text-primary);
+  }
+
+  .onb-step h1 {
+    font-size: var(--font-size-xl);
+  }
+
+  .onb-step h2 {
+    font-size: var(--font-size-lg);
+  }
+
+  .onb-step-description {
+    @apply m-0;
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+  }
+
+  .onb-step-actions {
+    @apply flex justify-center;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+  }
 }

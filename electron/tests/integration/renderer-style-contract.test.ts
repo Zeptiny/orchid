@@ -578,26 +578,26 @@ const BASELINE_DAISYUI_HITS: ReadonlySet<string> = new Set([
 ]);
 
 const BASELINE_NON_TOKEN_COLORS: ReadonlySet<string> = new Set([
-  'styles/chat.css:L1501:#000',
-  'styles/chat.css:L1585:#000',
-  'styles/chat.css:L1595:#000',
-  'styles/chat.css:L585:oklch(',
-  'styles/chat.css:L586:oklch(',
-  'styles/chat.css:L663:oklch(',
-  'styles/chat.css:L672:oklch(',
-  'styles/chat.css:L674:oklch(',
-  'styles/chat.css:L683:oklch(',
-  'styles/chat.css:L684:oklch(',
-  'styles/chat.css:L715:oklch(',
-  'styles/chat.css:L723:oklch(',
-  'styles/chat.css:L724:oklch(',
-  'styles/chat.css:L725:oklch(',
+  'styles/chat.css:L1334:#000',
+  'styles/chat.css:L1418:#000',
+  'styles/chat.css:L1428:#000',
+  'styles/chat.css:L418:oklch(',
+  'styles/chat.css:L419:oklch(',
+  'styles/chat.css:L496:oklch(',
+  'styles/chat.css:L505:oklch(',
+  'styles/chat.css:L507:oklch(',
+  'styles/chat.css:L516:oklch(',
+  'styles/chat.css:L517:oklch(',
+  'styles/chat.css:L548:oklch(',
+  'styles/chat.css:L556:oklch(',
+  'styles/chat.css:L557:oklch(',
+  'styles/chat.css:L558:oklch(',
   'styles/components.css:L38:#000',
   'styles/components.css:L726:#000',
   'styles/components.css:L734:#000',
 ]);
 
-const CHAT_CSS_BASELINE_LINES = 1847;
+const CHAT_CSS_BASELINE_LINES = 1680;
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
