@@ -28,6 +28,7 @@ import { Icon } from '../Icon';
 import { DialogSurface } from '../ui/DialogSurface';
 import { FormField } from '../ui/FormField';
 import { IconButton } from '../ui/IconButton';
+import { Panel } from '../ui/Panel';
 import { PopoverList, type PopoverListOption } from '../ui/PopoverList';
 import { SectionHeader } from '../ui/SectionHeader';
 import { StatusBadge } from '../ui/StatusBadge';
@@ -454,10 +455,10 @@ export function ConnectionWizard({
         ) : (
           <form className="flex min-h-0 flex-1 flex-col" onSubmit={submit}>
             <div className="provider-wizard-body">
-              <fieldset className="fieldset">
-                <legend className="fieldset-legend">
-                  {existingConnection ? 'Connection details' : 'Provider and connection'}
-                </legend>
+              <Panel as="section" className="config-fieldset flex flex-col gap-3">
+                <SectionHeader
+                  title={existingConnection ? 'Connection details' : 'Provider and connection'}
+                />
                 {existingConnection ? (
                   <div className="flex items-center justify-between gap-3 rounded-box bg-base-200 px-3 py-2">
                     <span className="text-sm text-base-content/70">Provider</span>
@@ -508,11 +509,11 @@ export function ConnectionWizard({
                     required
                   />
                 </FormField>
-              </fieldset>
+              </Panel>
 
               {!existingConnection && (
-                <fieldset className="fieldset">
-                  <legend className="fieldset-legend">Protocol</legend>
+                <Panel as="section" className="config-fieldset flex flex-col gap-3">
+                  <SectionHeader title="Protocol" />
                   <label className="label" htmlFor="provider-wizard-protocol">
                     Connection protocol
                   </label>
@@ -533,12 +534,12 @@ export function ConnectionWizard({
                     Protocol is fixed after creation. Configure every model for this connection
                     below before saving.
                   </p>
-                </fieldset>
+                </Panel>
               )}
 
               {supportsCustomEndpoint && (
-                <fieldset className="fieldset">
-                  <legend className="fieldset-legend">Custom endpoint</legend>
+                <Panel as="section" className="config-fieldset flex flex-col gap-3">
+                  <SectionHeader title="Custom endpoint" />
                   <label className="label" htmlFor="provider-wizard-endpoint">
                     Base URL
                   </label>
@@ -566,11 +567,11 @@ export function ConnectionWizard({
                     Use HTTPS whenever possible. Orchid validates the endpoint before binding any
                     credential.
                   </p>
-                </fieldset>
+                </Panel>
               )}
 
-              <fieldset className="fieldset">
-                <legend className="fieldset-legend">Authentication</legend>
+              <Panel as="section" className="config-fieldset flex flex-col gap-3">
+                <SectionHeader title="Authentication" />
                 <label className="label" htmlFor="provider-wizard-auth">
                   Method
                 </label>
@@ -657,7 +658,7 @@ export function ConnectionWizard({
                   </>
                 )}
 
-              </fieldset>
+              </Panel>
 
               {selectedDefinition && (
                 <ConnectionModelsEditor

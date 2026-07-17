@@ -202,7 +202,7 @@ describe('provider onboarding and disconnected UX', () => {
     expect(connections).not.toContain('credentialLabel(connection)');
     expect(connections).not.toContain('>Protocol</dt>');
     expect(connections).not.toContain('protocolLabel(connection.protocol)');
-    expect(wizard).toContain('<legend className="fieldset-legend">Authentication</legend>');
+    expect(wizard).toContain('title="Authentication"');
   });
 
   it('matches the provider wizard shell and edits explicit input/output capabilities', () => {

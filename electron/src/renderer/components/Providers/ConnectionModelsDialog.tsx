@@ -12,6 +12,8 @@ import {
   type ConnectionModelModality,
 } from '../../utils/models';
 import { Icon } from '../Icon';
+import { Panel } from '../ui/Panel';
+import { SectionHeader } from '../ui/SectionHeader';
 
 const NEW_CUSTOM_MODEL = '__new_custom_model__';
 
@@ -285,24 +287,26 @@ export function ConnectionModelsEditor({
 
   return (
     <>
-            <fieldset className="fieldset">
-              <legend className="fieldset-legend flex w-full flex-wrap items-center justify-between gap-3">
-                <span>Catalog models</span>
-                <span className="flex flex-wrap items-center justify-end gap-2">
-                  <span className="badge badge-sm badge-ghost whitespace-nowrap">
-                    {selectedModelIds.length} selected
-                  </span>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={toggleAllModels}
-                    disabled={disabled || editingCustomModelId !== null || selectableModelIds.length === 0}
-                    aria-pressed={allModelsSelected}
-                  >
-                    {allModelsSelected ? 'Deselect all models' : 'Select all models'}
-                  </button>
-                </span>
-              </legend>
+            <Panel as="section" className="config-fieldset flex flex-col gap-3">
+              <SectionHeader
+                title="Catalog models"
+                actions={
+                  <>
+                    <span className="badge badge-sm badge-ghost whitespace-nowrap">
+                      {selectedModelIds.length} selected
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={toggleAllModels}
+                      disabled={disabled || editingCustomModelId !== null || selectableModelIds.length === 0}
+                      aria-pressed={allModelsSelected}
+                    >
+                      {allModelsSelected ? 'Deselect all models' : 'Select all models'}
+                    </button>
+                  </>
+                }
+              />
               <p className="label">
                 Selected models become available to chat, tier assignment, or RAG according to
                 their declared capabilities.
@@ -382,23 +386,25 @@ export function ConnectionModelsEditor({
                   })}
                 </ul>
               )}
-            </fieldset>
+            </Panel>
 
-            <fieldset className="fieldset">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <legend className="fieldset-legend">Custom models</legend>
-                {definition.allowsCustomModels && editingCustomModelId === null && (
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={startAddingCustomModel}
-                    disabled={disabled}
-                  >
-                    <Icon name="plus" size={14} />
-                    Add custom model
-                  </button>
-                )}
-              </div>
+            <Panel as="section" className="config-fieldset flex flex-col gap-3">
+              <SectionHeader
+                title="Custom models"
+                actions={
+                  definition.allowsCustomModels && editingCustomModelId === null ? (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={startAddingCustomModel}
+                      disabled={disabled}
+                    >
+                      <Icon name="plus" size={14} />
+                      Add custom model
+                    </button>
+                  ) : undefined
+                }
+              />
               <p className="label">
                 Custom metadata is explicit connection configuration; Orchid does not infer it
                 from the model ID.
@@ -633,7 +639,7 @@ export function ConnectionModelsEditor({
                   </div>
                 </div>
               )}
-            </fieldset>
+            </Panel>
 
             {orphanModelIds.length > 0 && (
               <div role="alert" className="alert alert-warning">
