@@ -4,6 +4,8 @@ import type { ProviderModelOption } from '../../shared/types/ipc';
 import { withCurrentModelOption } from '../utils/models';
 import { providerModelOptionContextLabel } from '../utils/provider-selection';
 import { Icon } from './Icon';
+import { Button } from './ui/Button';
+import { TextInput } from './ui/TextInput';
 import {
   useClampActiveIndex,
   usePopoverListbox,
@@ -151,11 +153,11 @@ export function ModelPicker({
         `${className} model-picker-align-${align} orchid-model-picker`,
       )}
     >
-      <button
+      <Button
         ref={triggerRef}
         id={id}
-        type="button"
-        className={`btn btn-ghost orchid-model-picker-trigger orchid-model-picker-trigger${selectedTriggerSubLabel ? ' model-picker-trigger-with-sub-label' : ''}`}
+        variant="ghost"
+        className={`orchid-model-picker-trigger orchid-model-picker-trigger${selectedTriggerSubLabel ? ' model-picker-trigger-with-sub-label' : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={menuId}
@@ -178,7 +180,7 @@ export function ModelPicker({
           size={12}
           className={`shrink-0 opacity-60 transition-transform ${open ? 'rotate-180' : ''}`}
         />
-      </button>
+      </Button>
 
       {open && (
         <div
@@ -207,8 +209,10 @@ export function ModelPicker({
 
           <label className="input input-sm orchid-model-picker-search mx-2 my-2">
             <Icon name="search" size={14} className="shrink-0 opacity-50" />
-            <input
+            <TextInput
               ref={searchRef}
+              size="sm"
+              bordered={false}
               type="search"
               value={query}
               onChange={(event) => onSearchChange(event.target.value)}

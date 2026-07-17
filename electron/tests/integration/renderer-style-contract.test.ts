@@ -540,20 +540,17 @@ export function countChatCssLines(stylesRoot = STYLES_ROOT): number {
 // ─── Baselines (migration-driven shrink targets) ─────────────────────────────
 
 const BASELINE_DAISYUI_HITS: ReadonlySet<string> = new Set([
-  'components/ChatView.tsx::alert',
-  'components/ChatView.tsx::btn',
-  'components/CommandPalette.tsx::badge',
   'components/CommandPalette.tsx::input',
   'components/ConfigView.tsx::btn',
   'components/ConfigView.tsx::modal',
-  'components/Footer.tsx::btn',
+  
   'components/Footer.tsx::dropdown',
   'components/Footer.tsx::footer',
-  'components/Footer.tsx::loading',
+  
   'components/InputArea.tsx::alert',
   'components/InputArea.tsx::btn',
   'components/LeftSidebar.tsx::status',
-  'components/ModelPicker.tsx::btn',
+  
   'components/ModelPicker.tsx::dropdown',
   'components/ModelPicker.tsx::input',
   'components/ModelPicker.tsx::table',

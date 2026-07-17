@@ -25,6 +25,7 @@ import { Icon, type IconName } from './Icon';
 import { Keycaps } from './Keycaps';
 import { IconButton } from './ui/IconButton';
 import { ShortcutBar } from './ui/ShortcutBar';
+import { StatusBadge } from './ui/StatusBadge';
 
 export interface CommandPaletteProps {
   isOpen: boolean;
@@ -546,7 +547,7 @@ export function CommandPalette({
                       )}
                       <span>{item.label}</span>
                       {item.description?.toLowerCase().includes('current') && (
-                        <span className="badge badge-ghost badge-xs ml-auto">current</span>
+                        <StatusBadge tone="ghost" size="xs" className="ml-auto">current</StatusBadge>
                       )}
                     </button>
                   );

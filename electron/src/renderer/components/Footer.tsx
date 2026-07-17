@@ -17,6 +17,8 @@ import { contextUsedTokens } from '../../shared/usage';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
 import { ModelPicker } from './ModelPicker';
+import { Button } from './ui/Button';
+import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
 
 interface FooterProps {
@@ -123,7 +125,7 @@ export function Footer({
               </span>
             ) : (
               <span className="agent-status inline-flex items-center gap-1 text-success shrink-0">
-                <span className="loading loading-spinner loading-xs" aria-hidden />
+                <Spinner size="xs" aria-hidden />
                 Running
               </span>
             )}
@@ -189,9 +191,11 @@ export function Footer({
         className={`dropdown dropdown-top dropdown-end shrink-0 ${contextOpen ? 'dropdown-open' : ''}`}
         data-footer-context-dropup
       >
-        <button
-          type="button"
-          className="orchid-footer-context-btn btn btn-ghost btn-circle btn-xs"
+        <Button
+          variant="ghost"
+          shape="circle"
+          size="xs"
+          className="orchid-footer-context-btn"
           aria-haspopup="dialog"
           aria-expanded={contextOpen}
           aria-controls={contextMenuId}
@@ -213,7 +217,7 @@ export function Footer({
           >
             <span className="footer-context-value">{contextPercent}</span>
           </div>
-        </button>
+        </Button>
         {contextOpen && (
           <div
             id={contextMenuId}

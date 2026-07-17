@@ -33,6 +33,8 @@ import { CommandPalette } from './CommandPalette';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { SessionHeader } from './session-header';
 import { SessionTabBar } from './SessionTabBar';
+import { Alert, type AlertTone } from './ui/Alert';
+import { Button } from './ui/Button';
 
 type ToastSeverity = 'info' | 'warning' | 'error';
 interface Toast {
@@ -953,27 +955,20 @@ export function ChatView() {
 
       <main className="main-pane min-h-0 min-w-0 overflow-hidden">
         {toast && (
-          <div
-            className={`command-toast command-toast-${toast.severity} alert alert-soft py-2 text-sm ${
-              toast.severity === 'error'
-                ? 'alert-error'
-                : toast.severity === 'warning'
-                  ? 'alert-warning'
-                  : 'alert-info'
-            }`}
+          <Alert
+            tone={toast.severity as AlertTone}
+            variant="soft"
+            className={`command-toast command-toast-${toast.severity} py-2 text-sm`}
             role="status"
             aria-live="polite"
+            action={
+              <Button variant="ghost" size="xs" shape="circle" onClick={() => setToast(null)} aria-label="Dismiss">
+                ×
+              </Button>
+            }
           >
             <span className="command-toast-message min-w-0 flex-1">{toast.message}</span>
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs btn-circle"
-              onClick={() => setToast(null)}
-              aria-label="Dismiss"
-            >
-              ×
-            </button>
-          </div>
+          </Alert>
         )}
         <SessionTabBar
           openSessionIds={tabs.snapshot.openSessionIds}
@@ -1025,17 +1020,17 @@ export function ChatView() {
                 This session is still running. Close the tab and keep the agent working in the background?
               </p>
               <div className="session-tab-confirm-actions">
-                <button
+                <Button
                   ref={closeConfirmCancelRef}
-                  type="button"
-                  className="btn btn-ghost btn-sm"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setCloseConfirmId(null)}
                 >
                   Cancel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
                   onClick={() => {
                     const id = closeConfirmId;
                     setCloseConfirmId(null);
@@ -1043,7 +1038,7 @@ export function ChatView() {
                   }}
                 >
                   Close tab
-                </button>
+                </Button>
               </div>
             </div>
           </div>
