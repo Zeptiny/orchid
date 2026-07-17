@@ -1115,7 +1115,6 @@ export function ChatView() {
       <Sidebar
         isOpen={sidebarOpen}
         onToggle={toggleSidebar}
-        title={session.activeSession?.name ?? 'Orchid'}
         subagentState={subagents.state}
         onRefreshSubagents={subagents.refresh}
         selectedSubagentId={subagents.selectedId}
@@ -1133,7 +1132,6 @@ export function ChatView() {
         cumulativeUsage={chat.cumulativeUsage}
         maxContext={maxContext}
         messages={chat.messages}
-        cwd={session.workspace?.cwd ?? chat.cwd}
         focusSection={inspectorFocusSection}
         onFocusSectionConsumed={() => setInspectorFocusSection(null)}
       />

@@ -32,8 +32,6 @@ import { StatusBadge } from './ui/StatusBadge';
 interface SidebarProps {
   isOpen: boolean;
   onToggle: () => void;
-  /** Title shown in the panel header (session name when available). */
-  title?: string;
   subagentState: SubagentListState;
   onRefreshSubagents: () => void;
   selectedSubagentId: string | null;
@@ -52,8 +50,6 @@ interface SidebarProps {
   cumulativeUsage?: Usage | null;
   maxContext?: number | null;
   messages?: readonly Message[];
-  /** Working directory shown in the bottom status strip. */
-  cwd?: string;
   /**
    * Command-palette navigation target (section slug). When set, opens the
    * matching collapse and scrolls it into view, then parent should clear.
@@ -65,7 +61,6 @@ interface SidebarProps {
 export function Sidebar({
   isOpen,
   onToggle,
-  title = 'Orchid',
   subagentState,
   onRefreshSubagents,
   selectedSubagentId,
@@ -83,7 +78,6 @@ export function Sidebar({
   cumulativeUsage,
   maxContext,
   messages,
-  cwd,
   focusSection = null,
   onFocusSectionConsumed,
 }: SidebarProps) {
@@ -127,7 +121,7 @@ export function Sidebar({
     <aside className="right-panel bg-base-200" aria-label="Inspector">
       <SectionHeader
         className="panel-header"
-        title={<h1 className="title truncate">{title}</h1>}
+        title={<span className="title">Inspector</span>}
         actions={
           <IconButton
             label={`Collapse inspector (${formatShortcut('inspector.toggle')})`}
@@ -210,21 +204,6 @@ export function Sidebar({
         >
           <MCPSection servers={mcpServers} />
         </CollapseBlock>
-      </div>
-
-      <div className="panel-status-footer text-base-content/60" title={cwd || undefined}>
-        {cwd ? (
-          <>
-            <Icon name="folder" size={11} className="shrink-0 opacity-60" />
-            <span className="panel-status-cwd mono truncate">{cwd}</span>
-          </>
-        ) : (
-          <>
-            <span>orchid</span>
-            <span>-</span>
-            <span>general</span>
-          </>
-        )}
       </div>
     </aside>
   );
