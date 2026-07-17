@@ -15,5 +15,11 @@ export {
   shortcutsForHelp,
 } from './registry';
 export { useGlobalShortcuts, type ShortcutHandlerMap } from './useGlobalShortcuts';
-export { useFocusTrap, getFocusableElements } from './useFocusTrap';
+export {
+  useFocusTrap,
+  getFocusableElements,
+  getActiveFocusTrapCount,
+  cycleFocusOnTab,
+  dispatchActiveFocusTrap,
+} from './useFocusTrap';
 export { useRovingListIndex } from './useRovingListIndex';

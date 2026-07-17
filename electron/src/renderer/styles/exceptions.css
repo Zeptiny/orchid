@@ -66,9 +66,10 @@
     var(--orchid-shell-right, 300px);
 }
 
-/* Config shell: left sessions rail + main settings (topology matches App). */
+/* Config shell: left sessions rail + main settings (topology matches App).
+ * Main column keeps the same 460px floor as .app-frame center track. */
 .config-shell {
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(460px, 1fr);
 }
 
 /* ── Composer textarea auto-resize (U6) ─────────────────────────────────────
