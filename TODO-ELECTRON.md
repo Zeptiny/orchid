@@ -1,6 +1,7 @@
 ## TODO - Remover esta seção antes da entrega final
 ### Bugs
 - Scrolling up is impossible
+- Remove token usage from the tool output (wait_for_subagent) that is given to the subagent (Does not aggregate nothing useful)
 
 ### Problems
 - LLM can deviate from the architecture
@@ -10,8 +11,36 @@
   - Subagents should make it easier to fully follow the plan
 - The skills and agents are not updated for the current capabilities of the harness
 
+### Interface
+- Subagent names on the right sidebar does not use the subagent name
+  - The status also starts as "interrupted"
+- Context visualiation could move from a grid to horizontal stacked bar
+- Remove the | while streaming
+- Token count is not being formatted when usage is in the millions
+- Remove the tool name in favor of a user redable name
+  - Ex: delegate_to_subagent -> Delegated <task name> to subagent
+  - Ex: wait_for_subagebt -> Waiting for X subagents (When opening to view the output, show the subagent names in a list) - if only one subagent "Waiting for <subagent task name> subagent"
+  - This should happen to all tool
+- Allow to view the background commands and send input when necessary
+- Allow to view the running subagents output / while working
+- Verify if all tool have a generating and running state
+  - Edit / write appears to not have
+- On subagent view, show first the running agents, with the agents on completed/finished statuses to be on a dropdown
+- Chain footer should always be visible - even on the running / active chain
+- Execute command widget should show the command description on the title, with the command itself on the dropdown / content
+- Chat appears to not use the full availiable width / x axis space
+- Remove <selected> badge and <project> for selected sessions and procjets on the left sidebar - background / border is enough
+- Add categories to the context overview
+  - Tools -> Tool (Definition) and Tool use (Output)
+  - Assistant -> Response and Reasoning
+- Erros are not being returned / used correclty on the interface
+  - Also needs to check if subagent errors are properly propagating
+  - For example, API returned 429 but no message appeared on the interface
+
 ### TODOs geral
-- RAG/AST Post Write Callback
+- Tools should start the execution as son as the generation is complete, even if the model is still generating output for other commands
+- RAG/AST Post Write Callback + automatic updating if changes are detected (Can be changed via commands / manually / etc that post write callback does not detect)
+- wait_for_subagent sending duplicated information
 - Still work to do on 2026-07-15-electron-simplification-review.md
 - Verify if remote embeddings model works correctly
 - Subagents vieweing
