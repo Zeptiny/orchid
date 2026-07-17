@@ -1772,6 +1772,7 @@ button.inspector-row:hover {
 }
 .searchable-picker-option:hover:not(:disabled),
 .searchable-picker-option:focus-visible,
+.searchable-picker-option.is-active,
 .searchable-picker-option.is-selected {
   background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
 }
@@ -1844,7 +1845,8 @@ button.inspector-row:hover {
   transition: background 120ms ease;
 }
 .model-picker-row:hover,
-.model-picker-row:focus-visible {
+.model-picker-row:focus-visible,
+.model-picker-row.is-active {
   background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
 }
 .model-picker-row.is-selected {

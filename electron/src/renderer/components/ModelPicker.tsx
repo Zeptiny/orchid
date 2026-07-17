@@ -1,9 +1,15 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ModelMetadata } from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption } from '../../shared/types/ipc';
 import { withCurrentModelOption } from '../utils/models';
 import { providerModelOptionContextLabel } from '../utils/provider-selection';
 import { Icon } from './Icon';
+import {
+  useClampActiveIndex,
+  usePopoverListbox,
+  type PopoverAlign,
+  type PopoverPlacement,
+} from './ui/usePopoverListbox';
 
 interface ModelPickerProps {
   id?: string;
@@ -11,8 +17,8 @@ interface ModelPickerProps {
   options: readonly string[];
   onChange: (value: string) => void;
   label?: string;
-  placement?: 'top' | 'bottom';
-  align?: 'start' | 'end';
+  placement?: PopoverPlacement;
+  align?: PopoverAlign;
   className?: string;
   disabled?: boolean;
   emptyMessage?: string;
@@ -50,11 +56,23 @@ export function ModelPicker({
   optionDetails,
   additionalOptions = [],
 }: ModelPickerProps) {
-  const pickerRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const menuId = useId();
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
+  const {
+    pickerRef,
+    triggerRef,
+    searchRef,
+    menuId,
+    open,
+    query,
+    activeIndex,
+    setActiveIndex,
+    toggleOpen,
+    closeAndRestoreFocus,
+    setQuery,
+    onSearchChange,
+    onSearchKeyDown,
+    dropdownClassName,
+  } = usePopoverListbox();
+
   const [metadata, setMetadata] = useState<Record<string, ModelMetadata | null>>({});
   const additionalOptionsByValue = useMemo(
     () => new Map(additionalOptions.map((option) => [option.value, option])),
@@ -81,19 +99,7 @@ export function ModelPicker({
     });
   }, [additionalOptionsByValue, modelOptions, optionDetails, optionLabels, query]);
 
-  useEffect(() => {
-    if (!open) return;
-    searchRef.current?.focus();
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (!pickerRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [open]);
+  useClampActiveIndex(activeIndex, filteredModels.length, setActiveIndex);
 
   useEffect(() => {
     // Connection-scoped provider options carry their own catalog metadata.
@@ -124,7 +130,7 @@ export function ModelPicker({
     if (additionalOptionsByValue.get(model)?.disabled) return;
     onChange(model);
     setQuery('');
-    setOpen(false);
+    closeAndRestoreFocus();
   };
 
   const selectedAdditionalOption = additionalOptionsByValue.get(value);
@@ -139,9 +145,14 @@ export function ModelPicker({
   return (
     <div
       ref={pickerRef}
-      className={`dropdown ${align === 'start' ? 'dropdown-start' : 'dropdown-end'} ${placement === 'top' ? 'dropdown-top' : ''} ${open ? 'dropdown-open' : ''} ${className} model-picker-align-${align} orchid-model-picker`.trim()}
+      className={dropdownClassName(
+        align,
+        placement,
+        `${className} model-picker-align-${align} orchid-model-picker`,
+      )}
     >
       <button
+        ref={triggerRef}
         id={id}
         type="button"
         className={`btn btn-ghost model-picker-trigger orchid-model-picker-trigger${selectedTriggerSubLabel ? ' model-picker-trigger-with-sub-label' : ''}`}
@@ -151,7 +162,7 @@ export function ModelPicker({
         aria-label={label}
         title={selectedTriggerSubLabel ? `${selectedDisplayName} · ${selectedTriggerSubLabel}` : selectedDisplayName || label}
         disabled={disabled}
-        onClick={() => setOpen((previous) => !previous)}
+        onClick={toggleOpen}
       >
         <Icon name="cpu" size={13} className="shrink-0 opacity-70" />
         <span className="model-picker-trigger-copy orchid-model-picker-trigger-copy min-w-0 flex-1 flex flex-col items-start overflow-hidden">
@@ -200,15 +211,21 @@ export function ModelPicker({
               ref={searchRef}
               type="search"
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') {
-                  event.preventDefault();
-                  setOpen(false);
-                }
-              }}
+              onChange={(event) => onSearchChange(event.target.value)}
+              onKeyDown={(event) =>
+                onSearchKeyDown(event, filteredModels.length, (index) => {
+                  const model = filteredModels[index];
+                  if (model) selectModel(model);
+                })
+              }
               placeholder="Search models..."
               aria-label="Search models"
+              aria-controls={menuId}
+              aria-activedescendant={
+                filteredModels[activeIndex]
+                  ? `${menuId}-option-${filteredModels[activeIndex]}`
+                  : undefined
+              }
             />
           </label>
 
@@ -223,7 +240,7 @@ export function ModelPicker({
                 </tr>
               </thead>
               <tbody>
-                {filteredModels.map((model) => {
+                {filteredModels.map((model, index) => {
                   const modelMetadata = metadata[model];
                   const detail = optionDetails?.[model];
                   const additionalOption = additionalOptionsByValue.get(model);
@@ -248,15 +265,18 @@ export function ModelPicker({
                         ? detail.unavailableReason ?? 'Unavailable'
                         : providerModelOptionContextLabel(detail)
                       : null);
+                  const active = index === activeIndex;
                   return (
                     <tr
                       key={model}
+                      id={`${menuId}-option-${model}`}
                       role="option"
                       tabIndex={0}
                       aria-selected={selected}
-                      className={`${selected ? 'model-picker-row is-selected' : 'model-picker-row'}${unavailable ? ' opacity-60' : ''}`}
+                      className={`${selected ? 'model-picker-row is-selected' : 'model-picker-row'}${active ? ' is-active' : ''}${unavailable ? ' opacity-60' : ''}`}
                       aria-disabled={unavailable || undefined}
                       onClick={() => selectModel(model)}
+                      onMouseEnter={() => setActiveIndex(index)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault();

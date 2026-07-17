@@ -25,10 +25,10 @@ import type {
 } from '../../../shared/types/provider';
 import { isTextGenerationModel } from '../../utils/models';
 import { Icon } from '../Icon';
-import { SearchableOptionPicker, type SearchableOption } from '../SearchableOptionPicker';
 import { DialogSurface } from '../ui/DialogSurface';
 import { FormField } from '../ui/FormField';
 import { IconButton } from '../ui/IconButton';
+import { PopoverList, type PopoverListOption } from '../ui/PopoverList';
 import { SectionHeader } from '../ui/SectionHeader';
 import { StatusBadge } from '../ui/StatusBadge';
 import {
@@ -129,7 +129,7 @@ export function ConnectionWizard({
     () => definitions.find((definition) => definition.id === providerId) ?? null,
     [definitions, providerId],
   );
-  const providerPickerOptions = useMemo<readonly SearchableOption[]>(
+  const providerPickerOptions = useMemo<readonly PopoverListOption[]>(
     () => definitions.map((definition) => ({
       value: definition.id,
       label: definition.displayName,
@@ -470,7 +470,7 @@ export function ConnectionWizard({
                     <label className="label" htmlFor="provider-wizard-preset">
                       Provider preset
                     </label>
-                    <SearchableOptionPicker
+                    <PopoverList
                       id="provider-wizard-preset"
                       value={providerId}
                       options={providerPickerOptions}
@@ -480,6 +480,9 @@ export function ConnectionWizard({
                       searchPlaceholder="Search providers..."
                       emptyMessage="No provider presets available"
                       disabled={metadataLocked}
+                      triggerIcon="globe"
+                      align="start"
+                      placement="bottom"
                     />
                     {selectedDefinition?.unavailableReason && (
                       <p className="label text-warning">{selectedDefinition.unavailableReason}</p>

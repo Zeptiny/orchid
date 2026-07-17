@@ -1,13 +1,11 @@
-import {
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { Icon, type IconName } from '../Icon';
+import {
+  useClampActiveIndex,
+  usePopoverListbox,
+  type PopoverAlign,
+  type PopoverPlacement,
+} from './usePopoverListbox';
 
 export interface PopoverListOption<T extends string = string> {
   readonly value: T;
@@ -30,8 +28,8 @@ export interface PopoverListProps<T extends string = string> {
   readonly menuClassName?: string;
   readonly disabled?: boolean;
   readonly triggerIcon?: IconName;
-  readonly placement?: 'top' | 'bottom';
-  readonly align?: 'start' | 'end';
+  readonly placement?: PopoverPlacement;
+  readonly align?: PopoverAlign;
   /** When false, omit the current-selection chip in the menu heading. */
   readonly showCurrentInMenu?: boolean;
   readonly renderTriggerLabel?: (selected: PopoverListOption<T> | undefined, value: T) => ReactNode;
@@ -70,13 +68,22 @@ export function PopoverList<T extends string = string>({
   renderTriggerLabel,
   filterOption = defaultFilter,
 }: PopoverListProps<T>) {
-  const pickerRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const menuId = useId();
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const [activeIndex, setActiveIndex] = useState(0);
+  const {
+    pickerRef,
+    triggerRef,
+    searchRef,
+    menuId,
+    open,
+    query,
+    activeIndex,
+    setActiveIndex,
+    toggleOpen,
+    closeAndRestoreFocus,
+    setQuery,
+    onSearchChange,
+    onSearchKeyDown,
+    dropdownClassName,
+  } = usePopoverListbox();
 
   const selectedOption = options.find((option) => option.value === value);
 
@@ -88,35 +95,7 @@ export function PopoverList<T extends string = string>({
     return matches;
   }, [filterOption, options, query, selectedOption]);
 
-  const closeAndRestoreFocus = () => {
-    setOpen(false);
-    requestAnimationFrame(() => {
-      triggerRef.current?.focus();
-    });
-  };
-
-  useEffect(() => {
-    if (!open) return;
-    searchRef.current?.focus();
-    setActiveIndex(0);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (!pickerRef.current?.contains(event.target as Node)) {
-        closeAndRestoreFocus();
-      }
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [open]);
-
-  useEffect(() => {
-    if (activeIndex >= filteredOptions.length) {
-      setActiveIndex(Math.max(0, filteredOptions.length - 1));
-    }
-  }, [activeIndex, filteredOptions.length]);
+  useClampActiveIndex(activeIndex, filteredOptions.length, setActiveIndex);
 
   const selectOption = (option: PopoverListOption<T>) => {
     if (option.disabled) return;
@@ -125,55 +104,27 @@ export function PopoverList<T extends string = string>({
     closeAndRestoreFocus();
   };
 
-  const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      closeAndRestoreFocus();
-      return;
-    }
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      setActiveIndex((prev) => Math.min(prev + 1, Math.max(0, filteredOptions.length - 1)));
-      return;
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      setActiveIndex((prev) => Math.max(prev - 1, 0));
-      return;
-    }
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      const option = filteredOptions[activeIndex];
-      if (option) selectOption(option);
-    }
-  };
-
   const triggerLabel =
     renderTriggerLabel?.(selectedOption, value) ??
     ((selectedOption?.label ?? value) || label);
 
-  const alignClass = align === 'start' ? 'dropdown-start' : 'dropdown-end';
-  const placementClass = placement === 'top' ? 'dropdown-top' : '';
-
   return (
     <div
       ref={pickerRef}
-      className={`dropdown ${alignClass} ${placementClass} w-full ${open ? 'dropdown-open' : ''} ${className}`
-        .trim()
-        .replace(/\s+/g, ' ')}
+      className={dropdownClassName(align, placement, `w-full ${className}`)}
     >
       <button
         ref={triggerRef}
         id={id}
         type="button"
-        className="btn btn-ghost model-picker-trigger w-full"
+        className="btn btn-ghost orchid-model-picker-trigger w-full"
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={menuId}
         aria-label={label}
         title={(selectedOption?.label ?? value) || label}
         disabled={disabled}
-        onClick={() => setOpen((previous) => !previous)}
+        onClick={toggleOpen}
       >
         <Icon name={triggerIcon} size={13} className="shrink-0 opacity-70" />
         <span className="model-picker-trigger-label">{triggerLabel}</span>
@@ -192,7 +143,7 @@ export function PopoverList<T extends string = string>({
           className={`dropdown-content z-50 ${menuClassName}`.trim()}
         >
           {(title || showCurrentInMenu) && (
-            <div className="model-picker-heading">
+            <div className="orchid-model-picker-heading">
               {title && <div className="model-picker-title">{title}</div>}
               {showCurrentInMenu && (
                 <span className="model-picker-current">
@@ -202,17 +153,19 @@ export function PopoverList<T extends string = string>({
             </div>
           )}
 
-          <label className="input input-sm model-picker-search">
+          <label className="input input-sm orchid-model-picker-search">
             <Icon name="search" size={14} className="shrink-0 opacity-50" />
             <input
               ref={searchRef}
               type="search"
               value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setActiveIndex(0);
-              }}
-              onKeyDown={onSearchKeyDown}
+              onChange={(event) => onSearchChange(event.target.value)}
+              onKeyDown={(event) =>
+                onSearchKeyDown(event, filteredOptions.length, (index) => {
+                  const option = filteredOptions[index];
+                  if (option) selectOption(option);
+                })
+              }
               placeholder={searchPlaceholder}
               aria-label={searchPlaceholder}
               aria-controls={menuId}

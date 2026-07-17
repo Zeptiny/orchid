@@ -236,7 +236,9 @@ describe('primitive purity', () => {
     const fs = await import('node:fs/promises');
     const path = await import('node:path');
     const dir = path.resolve(__dirname, '../../src/renderer/components/ui');
-    const files = (await fs.readdir(dir)).filter((name) => name.endsWith('.tsx'));
+    const files = (await fs.readdir(dir)).filter(
+      (name) => name.endsWith('.tsx') || name.endsWith('.ts'),
+    );
     const forbidden = [
       /from ['"].*useChat['"]/,
       /from ['"].*useSession['"]/,

@@ -76,11 +76,11 @@ describe('provider onboarding and disconnected UX', () => {
 
   it('searches provider presets and uses the shared model editor during setup', () => {
     const wizard = source('components', 'Providers', 'ConnectionWizard.tsx');
-    const providerPicker = source('components', 'SearchableOptionPicker.tsx');
-    expect(wizard).toContain('SearchableOptionPicker');
+    const popoverList = source('components', 'ui', 'PopoverList.tsx');
+    expect(wizard).toContain('PopoverList');
     expect(wizard).toContain('<ConnectionModelsEditor');
     expect(wizard).toContain('searchPlaceholder="Search providers..."');
-    expect(providerPicker).toContain('searchPlaceholder');
+    expect(popoverList).toContain('searchPlaceholder');
     expect(wizard).not.toContain('<ModelPicker');
     expect(wizard).not.toContain('Initial model');
   });

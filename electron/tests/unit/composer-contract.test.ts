@@ -136,5 +136,16 @@ describe('composer contract (U6)', () => {
       expect(exceptions).toMatch(/composer-textarea|orchid-composer-textarea/);
       expect(exceptions).toMatch(/max-height:\s*160px/);
     });
+
+    it('ModelPicker shares PopoverList listbox geometry via usePopoverListbox', () => {
+      const modelPicker = read('components/ModelPicker.tsx');
+      const popoverList = read('components/ui/PopoverList.tsx');
+      const hook = read('components/ui/usePopoverListbox.ts');
+      expect(modelPicker).toMatch(/usePopoverListbox/);
+      expect(modelPicker).toMatch(/model-picker-table/);
+      expect(popoverList).toMatch(/usePopoverListbox/);
+      expect(hook).toMatch(/closeAndRestoreFocus/);
+      expect(hook).toMatch(/onSearchKeyDown/);
+    });
   });
 });
