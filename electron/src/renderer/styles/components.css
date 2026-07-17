@@ -585,7 +585,9 @@
   .orchid-chat-footer {
     @apply flex shrink-0 items-center justify-between gap-2.5 border-t border-base-content/10 bg-base-100 text-xs text-base-content/70;
     min-height: 34px;
-    padding: 6px 14px 6px 16px;
+    /* Horizontal inset so shortcuts/context sit off the pane edges. */
+    margin-inline: 10px;
+    padding: 6px 12px 8px;
   }
 
   .orchid-chat-footer-hint {
@@ -594,11 +596,26 @@
 
   .orchid-footer-context-btn {
     @apply inline-flex h-7 w-7 shrink-0 items-center justify-center;
+    border: 1px solid transparent;
+    color: color-mix(in srgb, var(--color-base-content) 55%, transparent);
+  }
+
+  .orchid-footer-context-btn:hover,
+  .orchid-footer-context-btn:focus-visible {
+    border-color: color-mix(in srgb, var(--color-base-content) 12%, transparent);
+    background: color-mix(in srgb, var(--color-base-content) 5%, transparent);
+    color: var(--color-base-content);
   }
 
   .orchid-footer-context-radial {
     @apply font-semibold leading-none;
     font-size: 7px !important;
+  }
+
+  /* Soften DaisyUI radial track (default can read as bright white at 0%). */
+  .orchid-footer-context-radial.radial-progress {
+    --fallback-b3: color-mix(in srgb, var(--color-base-content) 14%, transparent);
+    opacity: 0.92;
   }
 
   .footer-context-value {

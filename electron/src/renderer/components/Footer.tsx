@@ -49,7 +49,7 @@ export function Footer({
         ? 'text-warning'
         : contextPercent > 0
           ? 'text-info'
-          : 'text-base-content/40';
+          : 'text-base-content/25';
 
   useEffect(() => {
     if (!contextOpen) return;

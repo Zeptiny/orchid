@@ -615,8 +615,8 @@
 }
 
 .session-tab-active {
-  background: oklch(var(--b1));
-  border-color: oklch(var(--bc) / 0.12);
+  background: color-mix(in srgb, var(--accent-primary, var(--color-primary)) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent-primary, var(--color-primary)) 28%, transparent);
 }
 
 .session-tab-select {
@@ -898,12 +898,23 @@
   color: var(--text-muted) !important;
   text-transform: none;
   min-width: 0;
+  border: 1px solid transparent !important;
   border-radius: 5px !important;
 }
-/* Single highlight surface — match .session-item-active (no parent fill). */
-.session-project-toggle-selected {
+/* Selected project + selected session share one highlight surface. */
+.session-project-toggle-selected,
+.session-item-active {
   color: var(--text-primary) !important;
-  background: color-mix(in srgb, var(--accent-primary) 18%, transparent) !important;
+  background: color-mix(
+    in srgb,
+    var(--accent-primary, var(--color-primary)) 14%,
+    transparent
+  ) !important;
+  border-color: color-mix(
+    in srgb,
+    var(--accent-primary, var(--color-primary)) 28%,
+    transparent
+  ) !important;
 }
 .session-project-chevron {
   flex-shrink: 0;
@@ -1064,7 +1075,7 @@
   max-width: 100%;
   min-width: 0;
   min-height: 30px;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 5px;
   color: var(--text-primary);
   background: transparent;
@@ -1083,13 +1094,10 @@
 .session-item:hover {
   background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }
-.session-item-active {
-  background: color-mix(in srgb, var(--accent-primary) 18%, transparent) !important;
-}
 .session-item-keyboard {
-  outline: 1px solid color-mix(in srgb, var(--accent-primary) 70%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent-primary, var(--color-primary)) 55%, transparent);
   outline-offset: -1px;
-  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  background: color-mix(in srgb, var(--accent-primary, var(--color-primary)) 10%, transparent);
 }
 .session-list:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--accent-primary) 55%, transparent);
@@ -1300,9 +1308,9 @@ button.inspector-row:hover {
   color: var(--text-primary);
 }
 .config-tab-active {
-  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
-  color: var(--accent-primary);
-  border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
+  background: color-mix(in srgb, var(--accent-primary, var(--color-primary)) 14%, transparent);
+  color: var(--accent-primary, var(--color-primary));
+  border-color: color-mix(in srgb, var(--accent-primary, var(--color-primary)) 28%, transparent);
 }
 
 .config-body {
