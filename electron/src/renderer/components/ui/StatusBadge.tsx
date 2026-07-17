@@ -1,6 +1,6 @@
 import type { HTMLAttributes, ReactNode } from 'react';
 
-export type StatusBadgeTone = 'neutral' | 'info' | 'success' | 'warning' | 'error' | 'primary';
+export type StatusBadgeTone = 'neutral' | 'ghost' | 'info' | 'success' | 'warning' | 'error' | 'primary';
 export type StatusBadgeSize = 'xs' | 'sm' | 'md';
 
 export interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
@@ -14,6 +14,7 @@ export interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
 
 const TONE_CLASS: Record<StatusBadgeTone, string> = {
   neutral: '',
+  ghost: 'badge-ghost',
   info: 'badge-info',
   success: 'badge-success',
   warning: 'badge-warning',
@@ -29,6 +30,7 @@ const SIZE_CLASS: Record<StatusBadgeSize, string> = {
 
 const DOT_TONE_CLASS: Record<StatusBadgeTone, string> = {
   neutral: 'status-neutral',
+  ghost: 'status-neutral',
   info: 'status-info',
   success: 'status-success',
   warning: 'status-warning',

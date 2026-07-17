@@ -47,9 +47,9 @@ export function DefinitionActions({
           label="Delete"
           icon="trash"
           size="xs"
-          variant="error"
+          variant="ghost"
           iconSize={13}
-          className="btn-square h-7 w-7 min-h-7 btn-ghost text-error hover:bg-error/10"
+          className="btn-square h-7 w-7 min-h-7 text-error hover:bg-error/10"
           onClick={onDelete}
         />
       )}

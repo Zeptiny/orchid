@@ -7,6 +7,8 @@ import {
   providerModelOptionKey,
   selectionKey,
 } from '../../utils/provider-selection';
+import { Alert } from '../ui/Alert';
+import { ConfigCard } from '../ui/ConfigCard';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
 import { StateMessage } from '../ui/StateMessage';
@@ -85,9 +87,9 @@ export function ModelAssignments({
           description="This model is selected for new chats. Each tier can override it for agent work."
         />
         {!defaultAvailable && (
-          <div role="status" className="alert alert-warning text-sm">
-            <span>The current default is unavailable; choose a ready connection.</span>
-          </div>
+          <Alert tone="warning" className="text-sm">
+            The current default is unavailable; choose a ready connection.
+          </Alert>
         )}
         <ModelPicker
           value={defaultAvailable ? defaultKey : ''}
@@ -123,8 +125,8 @@ export function ModelAssignments({
             const currentKey = selectionKey(selected);
             const currentAvailable = !selected || byKey.has(currentKey);
             return (
-              <div key={tier.id} className="config-card card bg-base-100 border border-base-300">
-                <div className="config-card-row card-body p-4 flex-row items-center gap-4">
+              <ConfigCard key={tier.id}>
+                <ConfigCard.Body variant="row">
                   <div className="min-w-0 flex-1">
                     <div className="config-card-title font-semibold">{tier.label}</div>
                     <p className="config-card-desc text-sm text-base-content/70">{tier.description}</p>
@@ -152,8 +154,8 @@ export function ModelAssignments({
                       onTierModelsChange(next);
                     }}
                   />
-                </div>
-              </div>
+                </ConfigCard.Body>
+              </ConfigCard>
             );
           })}
         </div>

@@ -3,6 +3,7 @@
  * Uses fixed min-widths so the active state never shifts layout.
  */
 import type { DefinitionScope } from '../../../shared/types/definitions';
+import { Button } from '../ui/Button';
 import { StatusBadge } from '../ui/StatusBadge';
 
 export type ScopeFilter = 'all' | DefinitionScope;
@@ -38,14 +39,16 @@ export function ScopeToggle({
           const disabled = opt.id === 'project' && !projectAvailable;
           const active = value === opt.id;
           return (
-            <button
+            <Button
               key={opt.id}
               type="button"
+              size="xs"
+              variant={active ? 'primary' : 'ghost'}
               className={[
-                'btn btn-xs join-item h-7 min-h-7 border-0 shadow-none font-medium',
+                'join-item h-7 min-h-7 border-0 shadow-none font-medium',
                 active
-                  ? 'btn-primary'
-                  : 'btn-ghost bg-transparent text-base-content/70 hover:bg-base-300/60',
+                  ? ''
+                  : 'bg-transparent text-base-content/70 hover:bg-base-300/60',
               ].join(' ')}
               style={{ minWidth: opt.minWidth }}
               disabled={disabled}
@@ -58,7 +61,7 @@ export function ScopeToggle({
               }
             >
               {opt.label}
-            </button>
+            </Button>
           );
         })}
       </div>

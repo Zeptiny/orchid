@@ -5,8 +5,11 @@
  * currently selected values that are not in the catalog (orphan / custom globs).
  */
 import { useMemo, useState } from 'react';
+import { Button } from '../ui/Button';
+import { Checkbox } from '../ui/Checkbox';
 import { StateMessage } from '../ui/StateMessage';
 import { StatusBadge } from '../ui/StatusBadge';
+import { TextInput } from '../ui/TextInput';
 
 export interface MultiSelectListProps {
   /** Catalog of selectable values. */
@@ -96,20 +99,24 @@ export function MultiSelectList({
     <div className="flex min-w-0 flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1">
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
+            className="font-normal"
             type="button"
-            className="btn btn-ghost btn-xs font-normal"
             onClick={selectAllCatalog}
           >
             Select all
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            className="font-normal"
             type="button"
-            className="btn btn-ghost btn-xs font-normal"
             onClick={clearAll}
           >
             Clear
-          </button>
+          </Button>
         </div>
         <StatusBadge tone="neutral" size="sm" outline className="ml-auto whitespace-nowrap">
           {selected.length} selected
@@ -117,9 +124,11 @@ export function MultiSelectList({
       </div>
 
       {ordered.length > 8 && (
-        <input
+        <TextInput
           type="search"
-          className="input input-bordered input-sm w-full"
+          size="sm"
+          bordered
+          className="w-full"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder={searchPlaceholder}
@@ -145,9 +154,8 @@ export function MultiSelectList({
                       checked ? 'border-primary/20 bg-primary/10' : '',
                     ].join(' ')}
                   >
-                    <input
-                      type="checkbox"
-                      className="checkbox checkbox-sm"
+                    <Checkbox
+                      size="sm"
                       checked={checked}
                       onChange={() => toggle(opt)}
                     />

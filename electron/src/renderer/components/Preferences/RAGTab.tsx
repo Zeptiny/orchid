@@ -23,6 +23,7 @@ import {
 import { FormField } from '../ui/FormField';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
+import { TextInput } from '../ui/TextInput';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -140,12 +141,13 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
         <SectionHeader title="RAG Configuration" />
         <div className="config-form-grid">
           <FormField label="Chunk Size (tokens)" htmlFor="rag-chunk-size" className="config-field">
-            <input
+            <TextInput
               id="rag-chunk-size"
               type="number"
               value={rag.chunk_size}
               onChange={(e) => handleNumberChange('chunk_size', e.target.value, 100)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={100}
               max={10000}
             />
@@ -157,36 +159,39 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
             hint="Zero disables overlap between consecutive chunks."
             className="config-field"
           >
-            <input
+            <TextInput
               id="rag-chunk-overlap"
               type="number"
               value={rag.chunk_overlap}
               onChange={(e) => handleNumberChange('chunk_overlap', e.target.value, 0)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={0}
               max={2000}
             />
           </FormField>
 
           <FormField label="Top K Results" htmlFor="rag-top-k" className="config-field">
-            <input
+            <TextInput
               id="rag-top-k"
               type="number"
               value={rag.top_k}
               onChange={(e) => handleNumberChange('top_k', e.target.value)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={1}
               max={50}
             />
           </FormField>
 
           <FormField label="Max File Size (bytes)" htmlFor="rag-max-file-size" className="config-field">
-            <input
+            <TextInput
               id="rag-max-file-size"
               type="number"
               value={rag.max_file_size}
               onChange={(e) => handleNumberChange('max_file_size', e.target.value, 1024)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={1024}
               max={10_485_760}
             />
@@ -225,12 +230,13 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
         />
         <div className="config-form-grid">
           <FormField label="Embedding Threads" htmlFor="rag-embedding-threads" className="config-field">
-            <input
+            <TextInput
               id="rag-embedding-threads"
               type="number"
               value={rag.embedding_threads ?? 2}
               onChange={(e) => handleNumberChange('embedding_threads', e.target.value)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={1}
               max={64}
               title="ONNX Runtime CPU threads (intra-op). Default 2."
@@ -238,12 +244,13 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
           </FormField>
 
           <FormField label="Embedding Batch Size" htmlFor="rag-embedding-batch-size" className="config-field">
-            <input
+            <TextInput
               id="rag-embedding-batch-size"
               type="number"
               value={rag.embedding_batch_size ?? 16}
               onChange={(e) => handleNumberChange('embedding_batch_size', e.target.value)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={1}
               max={256}
               title="Texts per forward pass. Lower = less peak RAM/CPU."

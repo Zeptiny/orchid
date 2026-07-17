@@ -10,10 +10,15 @@ import type {
   DefinitionsListResult,
   ManagedSkill,
 } from '../../../shared/types/definitions';
+import { Alert } from '../ui/Alert';
+import { Button } from '../ui/Button';
+import { ConfigCard } from '../ui/ConfigCard';
 import { DefinitionActions } from './DefinitionActions';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
+import { Select } from '../ui/Select';
 import { StateMessage } from '../ui/StateMessage';
+import { TextInput } from '../ui/TextInput';
 import { MultiSelectList } from './MultiSelectList';
 import { ScopeBadge, ScopeToggle, type ScopeFilter } from './ScopeToggle';
 
@@ -167,9 +172,10 @@ export function SkillsTab({ data, onReload }: SkillsTabProps) {
       <div className="config-form-grid">
         <div className="config-field">
           <label>Name</label>
-          <input
+          <TextInput
             type="text"
-            className="input input-bordered w-full"
+            bordered
+            className="w-full"
             value={f.name}
             onChange={(e) => setForm({ ...f, name: e.target.value })}
             placeholder="my-skill"
@@ -180,8 +186,9 @@ export function SkillsTab({ data, onReload }: SkillsTabProps) {
         </div>
         <div className="config-field">
           <label>Scope</label>
-          <select
-            className="select select-bordered w-full"
+          <Select
+            bordered
+            className="w-full"
             value={f.scope}
             onChange={(e) =>
               setForm({ ...f, scope: e.target.value as DefinitionScope })
@@ -197,13 +204,14 @@ export function SkillsTab({ data, onReload }: SkillsTabProps) {
             <option value="project" disabled={!projectAvailable}>
               Project (.orchid/skills)
             </option>
-          </select>
+          </Select>
         </div>
         <div className="config-field config-form-grid-full">
           <label>Description</label>
-          <input
+          <TextInput
             type="text"
-            className="input input-bordered w-full"
+            bordered
+            className="w-full"
             value={f.description}
             onChange={(e) => setForm({ ...f, description: e.target.value })}
             placeholder="When to use this skill…"
@@ -230,18 +238,19 @@ export function SkillsTab({ data, onReload }: SkillsTabProps) {
         </div>
       </div>
       <div className="flex justify-end gap-2">
-        <button className="btn btn-ghost btn-sm" type="button" onClick={cancel}>
+        <Button variant="ghost" size="sm" type="button" onClick={cancel}>
           Cancel
-        </button>
-        <button
-          className="btn btn-primary btn-sm"
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
           type="button"
           onClick={() => void handleSave()}
-          disabled={saving || !f.name.trim() || !f.description.trim()}
+          loading={saving}
+          disabled={!f.name.trim() || !f.description.trim()}
         >
-          {saving && <span className="loading loading-spinner loading-xs" />}
           Save
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -253,13 +262,15 @@ export function SkillsTab({ data, onReload }: SkillsTabProps) {
           title="Skills"
           actions={
             !isAdding && !editingKey ? (
-              <button
-                className="btn btn-ghost btn-xs font-normal text-primary hover:bg-primary/10"
+              <Button
+                variant="ghost"
+                size="xs"
+                className="font-normal text-primary hover:bg-primary/10"
                 type="button"
                 onClick={startAdd}
               >
                 + Add Skill
-              </button>
+              </Button>
             ) : undefined
           }
         />
@@ -274,17 +285,18 @@ export function SkillsTab({ data, onReload }: SkillsTabProps) {
         </div>
 
         {error && (
-          <div className="alert alert-error py-2 text-sm mb-3">
-            <span>{error}</span>
-            <button className="btn btn-ghost btn-xs" type="button" onClick={() => setError(null)}>
+          <Alert tone="error" className="py-2 text-sm mb-3" action={
+            <Button variant="ghost" size="xs" type="button" onClick={() => setError(null)}>
               Dismiss
-            </button>
-          </div>
+            </Button>
+          }>
+            {error}
+          </Alert>
         )}
 
         <div className="config-card-list">
           {visible.map((s) => (
-            <div key={entryKey(s)} className="config-card card bg-base-100 border border-base-300">
+            <ConfigCard key={entryKey(s)}>
               {editingKey === entryKey(s) && form ? (
                 renderForm(form, '')
               ) : (
@@ -317,13 +329,13 @@ export function SkillsTab({ data, onReload }: SkillsTabProps) {
                   />
                 </div>
               )}
-            </div>
+            </ConfigCard>
           ))}
 
           {isAdding && form && (
-            <div className="config-card card border border-primary/30 bg-primary/5">
+            <ConfigCard variant="active">
               {renderForm(form, 'New Skill')}
-            </div>
+            </ConfigCard>
           )}
 
           {!isAdding && visible.length === 0 && (

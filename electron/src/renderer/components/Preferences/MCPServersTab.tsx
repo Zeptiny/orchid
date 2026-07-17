@@ -6,10 +6,13 @@
  */
 import { useState, useCallback } from 'react';
 import { DefinitionActions } from './DefinitionActions';
+import { Button } from '../ui/Button';
+import { ConfigCard } from '../ui/ConfigCard';
 import { FormField } from '../ui/FormField';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
 import { StateMessage } from '../ui/StateMessage';
+import { TextInput } from '../ui/TextInput';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -164,32 +167,35 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
       {title && <div className="config-card-title text-primary font-semibold">{title}</div>}
       <div className="config-form-grid">
         <FormField label="Server ID" htmlFor="mcp-server-id" className="config-field">
-          <input
+          <TextInput
             id="mcp-server-id"
             type="text"
             value={form.id}
             onChange={(e) => setEditForm({ ...form, id: e.target.value })}
-            className="input input-bordered w-full"
+            bordered
+            className="w-full"
             placeholder="my-mcp-server"
           />
         </FormField>
         <FormField label="Command" htmlFor="mcp-server-command" className="config-field">
-          <input
+          <TextInput
             id="mcp-server-command"
             type="text"
             value={form.command}
             onChange={(e) => setEditForm({ ...form, command: e.target.value })}
-            className="input input-bordered w-full"
+            bordered
+            className="w-full"
             placeholder="npx"
           />
         </FormField>
         <FormField label="URL (for SSE servers)" htmlFor="mcp-server-url" className="config-field">
-          <input
+          <TextInput
             id="mcp-server-url"
             type="text"
             value={form.url}
             onChange={(e) => setEditForm({ ...form, url: e.target.value })}
-            className="input input-bordered w-full"
+            bordered
+            className="w-full"
             placeholder="http://localhost:3000"
           />
         </FormField>
@@ -198,12 +204,13 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
           htmlFor="mcp-server-args"
           className="config-field"
         >
-          <input
+          <TextInput
             id="mcp-server-args"
             type="text"
             value={form.argsText}
             onChange={(e) => setEditForm({ ...form, argsText: e.target.value })}
-            className="input input-bordered w-full"
+            bordered
+            className="w-full"
             placeholder="-y @upstash/context7-mcp"
           />
         </FormField>
@@ -223,17 +230,18 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
         </FormField>
       </div>
       <div className="flex justify-end gap-2">
-        <button className="btn btn-ghost btn-sm" onClick={cancelEdit} type="button">
+        <Button variant="ghost" size="sm" onClick={cancelEdit} type="button">
           Cancel
-        </button>
-        <button
-          className="btn btn-primary btn-sm"
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
           onClick={saveEdit}
           disabled={!form.id}
           type="button"
         >
           {isAdding ? 'Add Server' : 'Save'}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -245,21 +253,23 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
           title="MCP Servers"
           actions={
             !isAdding ? (
-              <button
-                className="btn btn-ghost btn-xs font-normal text-primary hover:bg-primary/10"
+              <Button
+                variant="ghost"
+                size="xs"
+                className="font-normal text-primary hover:bg-primary/10"
                 onClick={startAdd}
                 type="button"
               >
                 + Add Server
-              </button>
+              </Button>
             ) : undefined
           }
         />
 
         <div className="config-card-list">
           {serverList.map((s) => (
-            <div key={s.id} className="config-card card bg-base-100 border border-base-300">
-              <div className="card-body p-4">
+            <ConfigCard key={s.id}>
+              <ConfigCard.Body>
                 {editingId === s.id && editForm ? (
                   renderEditor(editForm, null)
                 ) : (
@@ -281,14 +291,14 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
                     />
                   </div>
                 )}
-              </div>
-            </div>
+              </ConfigCard.Body>
+            </ConfigCard>
           ))}
 
           {isAdding && editForm && (
-            <div className="config-card card border border-primary/30 bg-primary/5">
-              <div className="card-body p-4">{renderEditor(editForm, 'New Server')}</div>
-            </div>
+            <ConfigCard variant="active">
+              <ConfigCard.Body>{renderEditor(editForm, 'New Server')}</ConfigCard.Body>
+            </ConfigCard>
           )}
 
           {!isAdding && serverList.length === 0 && (

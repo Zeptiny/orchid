@@ -11,9 +11,12 @@ import {
   parseConfigNumber,
   type NumericConfigKey,
 } from '../../utils/config-draft';
+import { Checkbox } from '../ui/Checkbox';
 import { FormField } from '../ui/FormField';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
+import { Select } from '../ui/Select';
+import { TextInput } from '../ui/TextInput';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -107,26 +110,28 @@ export function GeneralTab({
         <SectionHeader title="General" />
         <div className="config-form-grid">
           <FormField label="Theme" htmlFor="general-theme" className="config-field">
-            <select
+            <Select
               id="general-theme"
               value={theme}
               onChange={(e) => onChange({ theme: e.target.value })}
-              className="select select-bordered w-full"
+              bordered
+              className="w-full"
             >
               {THEME_NAMES.map((name) => (
                 <option key={name} value={name}>
                   {THEMES[name as ThemeName]}
                 </option>
               ))}
-            </select>
+            </Select>
           </FormField>
 
           <FormField label="Personality" htmlFor="general-personality" className="config-field">
-            <select
+            <Select
               id="general-personality"
               value={personality}
               onChange={(e) => onChange({ personality: e.target.value })}
-              className="select select-bordered w-full"
+              bordered
+              className="w-full"
             >
               {personalityOptions.length === 0 ? (
                 <option value={personality || 'default'}>{personality || 'default'}</option>
@@ -137,7 +142,7 @@ export function GeneralTab({
                   </option>
                 ))
               )}
-            </select>
+            </Select>
           </FormField>
 
           <FormField
@@ -162,56 +167,61 @@ export function GeneralTab({
         <SectionHeader title="Tool Limits" />
         <div className="config-form-grid">
           <FormField label="Command Timeout (s)" htmlFor="general-command-timeout" className="config-field">
-            <input
+            <TextInput
               id="general-command-timeout"
               type="number"
               value={commandTimeout}
               onChange={(e) => handleNumberChange('command_timeout', e.target.value)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={1}
               max={300}
             />
           </FormField>
           <FormField label="Read Line Limit" htmlFor="general-read-line-limit" className="config-field">
-            <input
+            <TextInput
               id="general-read-line-limit"
               type="number"
               value={readLineLimit}
               onChange={(e) => handleNumberChange('read_line_limit', e.target.value)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={1}
               max={10000}
             />
           </FormField>
           <FormField label="Grep Max Results" htmlFor="general-grep-max" className="config-field">
-            <input
+            <TextInput
               id="general-grep-max"
               type="number"
               value={grepMaxResults}
               onChange={(e) => handleNumberChange('grep_max_results', e.target.value)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={1}
               max={1000}
             />
           </FormField>
           <FormField label="Directory Tree Depth" htmlFor="general-tree-depth" className="config-field">
-            <input
+            <TextInput
               id="general-tree-depth"
               type="number"
               value={directoryTreeDepth}
               onChange={(e) => handleNumberChange('directory_tree_depth', e.target.value)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={1}
               max={10}
             />
           </FormField>
           <FormField label="AST Max File Size (bytes)" htmlFor="general-ast-max" className="config-field">
-            <input
+            <TextInput
               id="general-ast-max"
               type="number"
               value={astMaxFileSize}
               onChange={(e) => handleNumberChange('ast_max_file_size', e.target.value)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={1}
             />
           </FormField>
@@ -227,12 +237,13 @@ export function GeneralTab({
             hint="Overall budget for starting all MCP servers."
             className="config-field"
           >
-            <input
+            <TextInput
               id="general-mcp-startup-timeout"
               type="number"
               value={mcpStartupTimeout}
               onChange={(e) => handleNumberChange('mcp_startup_timeout', e.target.value)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={1}
             />
           </FormField>
@@ -242,12 +253,13 @@ export function GeneralTab({
             hint="Connect timeout applied to each MCP server."
             className="config-field"
           >
-            <input
+            <TextInput
               id="general-mcp-per-server-timeout"
               type="number"
               value={mcpPerServerTimeout}
               onChange={(e) => handleNumberChange('mcp_per_server_timeout', e.target.value)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={1}
             />
           </FormField>
@@ -259,10 +271,9 @@ export function GeneralTab({
         <div className="config-form-grid">
           <div className="config-field config-form-grid-full flex flex-col gap-1">
             <label className="label cursor-pointer justify-start gap-3 py-0" htmlFor="general-expand-tool-groups">
-              <input
+              <Checkbox
                 id="general-expand-tool-groups"
-                type="checkbox"
-                className="checkbox checkbox-sm"
+                size="sm"
                 checked={alwaysExpandToolGroups}
                 onChange={(e) =>
                   onChange({ always_expand_tool_groups: e.target.checked })
@@ -282,12 +293,13 @@ export function GeneralTab({
         <SectionHeader title="Streaming" />
         <div className="config-form-grid">
           <FormField label="Stream Idle Timeout (s)" htmlFor="general-stream-idle" className="config-field">
-            <input
+            <TextInput
               id="general-stream-idle"
               type="number"
               value={llmStreamIdleTimeout}
               onChange={(e) => handleNumberChange('llm_stream_idle_timeout', e.target.value, 10)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={10}
               max={600}
             />
@@ -298,12 +310,13 @@ export function GeneralTab({
             hint="Zero disables stream retries."
             className="config-field"
           >
-            <input
+            <TextInput
               id="general-stream-retries"
               type="number"
               value={llmStreamRetries}
               onChange={(e) => handleIntChange('llm_stream_retries', e.target.value, 0)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={0}
               max={10}
             />
@@ -314,24 +327,26 @@ export function GeneralTab({
             hint="Max tool-loop iterations per agent turn (default 100). Higher values allow longer multi-step plans; lower values stop runaway loops sooner."
             className="config-field"
           >
-            <input
+            <TextInput
               id="general-max-tool-steps"
               type="number"
               value={maxToolSteps}
               onChange={(e) => handleIntChange('max_tool_steps', e.target.value)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={1}
               max={1000}
               step={1}
             />
           </FormField>
           <FormField label="BG Command Idle Timeout (s)" htmlFor="general-bg-idle" className="config-field">
-            <input
+            <TextInput
               id="general-bg-idle"
               type="number"
               value={backgroundCommandIdleTimeout}
               onChange={(e) => handleNumberChange('background_command_idle_timeout', e.target.value, 30)}
-              className="input input-bordered w-full"
+              bordered
+              className="w-full"
               min={30}
               max={3600}
             />

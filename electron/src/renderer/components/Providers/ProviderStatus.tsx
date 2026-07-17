@@ -7,6 +7,8 @@ import type {
   ProviderStatusView,
 } from '../../../shared/types/ipc';
 import { Icon } from '../Icon';
+import { Alert } from '../ui/Alert';
+import { Button } from '../ui/Button';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
 import { StatusBadge } from '../ui/StatusBadge';
@@ -172,10 +174,7 @@ export function ProviderStatus({
       />
 
       {error && (
-        <div role="alert" aria-live="assertive" className="alert alert-warning">
-          <Icon name="alert" size={16} />
-          <span>{error}</span>
-        </div>
+        <Alert tone="warning" icon="alert" aria-live="assertive">{error}</Alert>
       )}
 
       <div className="flex flex-col gap-3">
@@ -185,10 +184,7 @@ export function ProviderStatus({
           </p>
         )}
         {status?.error && (
-          <div role="alert" className="alert alert-warning">
-            <Icon name="alert" size={16} />
-            <span>{status.error.message}</span>
-          </div>
+          <Alert tone="warning" icon="alert">{status.error.message}</Alert>
         )}
 
         {providerId === 'lilac' && <LilacStatusDetails status={status} />}
@@ -200,16 +196,15 @@ export function ProviderStatus({
         )}
 
         <div className="flex justify-end">
-          <button
-            type="button"
-            className="btn btn-sm"
+          <Button
+            size="sm"
             onClick={() => void refresh()}
             disabled={!onRefresh || refreshing || (providerId === 'neuralwatt' && connection.health !== 'ready')}
             aria-label={`Refresh ${definition?.displayName ?? providerId} status for ${connection.name}`}
           >
             <Icon name="refresh" size={14} className={refreshing ? 'animate-spin' : ''} />
             {refreshing ? 'Refreshing…' : 'Refresh status'}
-          </button>
+          </Button>
         </div>
       </div>
     </Panel>
@@ -223,10 +218,9 @@ function LilacStatusDetails({ status }: { readonly status: ProviderStatusView | 
 
   if (models.length === 0) {
     return (
-      <div role="status" className="alert alert-info">
-        <Icon name="activity" size={16} />
-        <span>Lilac performance and supply data are unavailable from the current observation.</span>
-      </div>
+      <Alert tone="info" role="status" icon="activity">
+        Lilac performance and supply data are unavailable from the current observation.
+      </Alert>
     );
   }
 
@@ -287,12 +281,9 @@ function NeuralwattStatusDetails({ status }: { readonly status: ProviderStatusVi
   const subscription = asRecord(data?.['subscription']);
   if (!data) {
     return (
-      <div role="status" className="alert alert-info">
-        <Icon name="activity" size={16} />
-        <span>
-          Neuralwatt quota and accounting data are unavailable from the current observation.
-        </span>
-      </div>
+      <Alert tone="info" role="status" icon="activity">
+        Neuralwatt quota and accounting data are unavailable from the current observation.
+      </Alert>
     );
   }
 

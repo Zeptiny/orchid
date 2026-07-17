@@ -14,11 +14,16 @@ import type {
   DefinitionsListResult,
   ManagedAgent,
 } from '../../../shared/types/definitions';
+import { Alert } from '../ui/Alert';
+import { Button } from '../ui/Button';
+import { ConfigCard } from '../ui/ConfigCard';
 import { DefinitionActions } from './DefinitionActions';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
+import { Select } from '../ui/Select';
 import { StateMessage } from '../ui/StateMessage';
 import { StatusBadge } from '../ui/StatusBadge';
+import { TextInput } from '../ui/TextInput';
 import { MultiSelectList } from './MultiSelectList';
 import { ScopeBadge, ScopeToggle, type ScopeFilter } from './ScopeToggle';
 import { TierPicker } from './TierPicker';
@@ -215,9 +220,10 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
       <div className="config-form-grid">
         <div className="config-field">
           <label>Name</label>
-          <input
+          <TextInput
             type="text"
-            className="input input-bordered w-full"
+            bordered
+            className="w-full"
             value={f.name}
             onChange={(e) => setForm({ ...f, name: e.target.value })}
             placeholder="my-agent"
@@ -231,8 +237,9 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
         </div>
         <div className="config-field">
           <label>Scope</label>
-          <select
-            className="select select-bordered w-full"
+          <Select
+            bordered
+            className="w-full"
             value={f.scope}
             onChange={(e) =>
               setForm({ ...f, scope: e.target.value as DefinitionScope })
@@ -248,13 +255,14 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
             <option value="project" disabled={!projectAvailable}>
               Project (.orchid/agents)
             </option>
-          </select>
+          </Select>
         </div>
         <div className="config-field">
           <label>Type</label>
-          <input
+          <TextInput
             type="text"
-            className="input input-bordered w-full opacity-80"
+            bordered
+            className="w-full opacity-80"
             value={f.type}
             disabled
             readOnly
@@ -279,9 +287,10 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
         </div>
         <div className="config-field config-form-grid-full">
           <label>Description</label>
-          <input
+          <TextInput
             type="text"
-            className="input input-bordered w-full"
+            bordered
+            className="w-full"
             value={f.description}
             onChange={(e) => setForm({ ...f, description: e.target.value })}
             placeholder="When to use this agent…"
@@ -324,23 +333,23 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
         </div>
       </div>
       <div className="flex justify-end gap-2">
-        <button className="btn btn-ghost btn-sm" type="button" onClick={cancel}>
+        <Button variant="ghost" size="sm" type="button" onClick={cancel}>
           Cancel
-        </button>
-        <button
-          className="btn btn-primary btn-sm"
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
           type="button"
           onClick={() => void handleSave()}
+          loading={saving}
           disabled={
-            saving ||
             !f.name.trim() ||
             !f.description.trim() ||
             f.allowedTools.length === 0
           }
         >
-          {saving && <span className="loading loading-spinner loading-xs" />}
           Save
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -352,13 +361,15 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
           title="Agents"
           actions={
             !isAdding && !editingKey ? (
-              <button
-                className="btn btn-ghost btn-xs font-normal text-primary hover:bg-primary/10"
+              <Button
+                variant="ghost"
+                size="xs"
+                className="font-normal text-primary hover:bg-primary/10"
                 type="button"
                 onClick={startAdd}
               >
                 + Add Agent
-              </button>
+              </Button>
             ) : undefined
           }
         />
@@ -373,19 +384,20 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
         </div>
 
         {error && (
-          <div className="alert alert-error py-2 text-sm mb-3">
-            <span>{error}</span>
-            <button className="btn btn-ghost btn-xs" type="button" onClick={() => setError(null)}>
+          <Alert tone="error" className="py-2 text-sm mb-3" action={
+            <Button variant="ghost" size="xs" type="button" onClick={() => setError(null)}>
               Dismiss
-            </button>
-          </div>
+            </Button>
+          }>
+            {error}
+          </Alert>
         )}
 
         <div className="config-card-list">
           {visible.map((a) => {
             const isInternal = a.type === AgentType.INTERNAL;
             return (
-              <div key={entryKey(a)} className="config-card card bg-base-100 border border-base-300">
+              <ConfigCard key={entryKey(a)}>
                 {editingKey === entryKey(a) && form ? (
                   renderForm(form, '')
                 ) : (
@@ -425,14 +437,14 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
                     />
                   </div>
                 )}
-              </div>
+              </ConfigCard>
             );
           })}
 
           {isAdding && form && (
-            <div className="config-card card border border-primary/30 bg-primary/5">
+            <ConfigCard variant="active">
               {renderForm(form, 'New Agent')}
-            </div>
+            </ConfigCard>
           )}
 
           {!isAdding && visible.length === 0 && (

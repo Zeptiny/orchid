@@ -9,10 +9,15 @@ import type {
   DefinitionsListResult,
   ManagedPersonality,
 } from '../../../shared/types/definitions';
+import { Alert } from '../ui/Alert';
+import { Button } from '../ui/Button';
+import { ConfigCard } from '../ui/ConfigCard';
 import { DefinitionActions } from './DefinitionActions';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
+import { Select } from '../ui/Select';
 import { StateMessage } from '../ui/StateMessage';
+import { TextInput } from '../ui/TextInput';
 import { ScopeBadge, ScopeToggle, type ScopeFilter } from './ScopeToggle';
 
 export interface PersonalitiesTabProps {
@@ -149,9 +154,10 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
       <div className="config-form-grid">
         <div className="config-field">
           <label>Name</label>
-          <input
+          <TextInput
             type="text"
-            className="input input-bordered w-full"
+            bordered
+            className="w-full"
             value={f.name}
             onChange={(e) => setForm({ ...f, name: e.target.value })}
             placeholder="my-tone"
@@ -162,8 +168,9 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
         </div>
         <div className="config-field">
           <label>Scope</label>
-          <select
-            className="select select-bordered w-full"
+          <Select
+            bordered
+            className="w-full"
             value={f.scope}
             onChange={(e) =>
               setForm({ ...f, scope: e.target.value as DefinitionScope })
@@ -179,7 +186,7 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
             <option value="project" disabled={!projectAvailable}>
               Project (.orchid/personalities)
             </option>
-          </select>
+          </Select>
         </div>
         <div className="config-field config-form-grid-full">
           <label>Personality prompt (markdown)</label>
@@ -192,18 +199,19 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
         </div>
       </div>
       <div className="flex justify-end gap-2">
-        <button className="btn btn-ghost btn-sm" type="button" onClick={cancel}>
+        <Button variant="ghost" size="sm" type="button" onClick={cancel}>
           Cancel
-        </button>
-        <button
-          className="btn btn-primary btn-sm"
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
           type="button"
           onClick={() => void handleSave()}
-          disabled={saving || !f.name.trim() || !f.content.trim()}
+          loading={saving}
+          disabled={!f.name.trim() || !f.content.trim()}
         >
-          {saving && <span className="loading loading-spinner loading-xs" />}
           Save
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -215,13 +223,15 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
           title="Personalities"
           actions={
             !isAdding && !editingKey ? (
-              <button
-                className="btn btn-ghost btn-xs font-normal text-primary hover:bg-primary/10"
+              <Button
+                variant="ghost"
+                size="xs"
+                className="font-normal text-primary hover:bg-primary/10"
                 type="button"
                 onClick={startAdd}
               >
                 + Add Personality
-              </button>
+              </Button>
             ) : undefined
           }
         />
@@ -236,17 +246,18 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
         </div>
 
         {error && (
-          <div className="alert alert-error py-2 text-sm mb-3">
-            <span>{error}</span>
-            <button className="btn btn-ghost btn-xs" type="button" onClick={() => setError(null)}>
+          <Alert tone="error" className="py-2 text-sm mb-3" action={
+            <Button variant="ghost" size="xs" type="button" onClick={() => setError(null)}>
               Dismiss
-            </button>
-          </div>
+            </Button>
+          }>
+            {error}
+          </Alert>
         )}
 
         <div className="config-card-list">
           {visible.map((p) => (
-            <div key={entryKey(p)} className="config-card card bg-base-100 border border-base-300">
+            <ConfigCard key={entryKey(p)}>
               {editingKey === entryKey(p) && form ? (
                 renderForm(form, '')
               ) : (
@@ -270,13 +281,13 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
                   />
                 </div>
               )}
-            </div>
+            </ConfigCard>
           ))}
 
           {isAdding && form && (
-            <div className="config-card card border border-primary/30 bg-primary/5">
+            <ConfigCard variant="active">
               {renderForm(form, 'New Personality')}
-            </div>
+            </ConfigCard>
           )}
 
           {!isAdding && visible.length === 0 && (

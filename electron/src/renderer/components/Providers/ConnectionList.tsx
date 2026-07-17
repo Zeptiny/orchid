@@ -11,6 +11,9 @@ import type {
 } from '../../../shared/types/ipc';
 import { providerStatusConnectionId } from '../../utils/provider-selection';
 import { Icon } from '../Icon';
+import { Alert } from '../ui/Alert';
+import { Button } from '../ui/Button';
+import { ConfigCard } from '../ui/ConfigCard';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
 import { StateMessage } from '../ui/StateMessage';
@@ -129,9 +132,9 @@ export function ConnectionList({
         </StateMessage>
         {onAddConnection && (
           <div className="flex justify-center">
-            <button type="button" className="btn btn-sm" onClick={onAddConnection}>
+            <Button size="sm" onClick={onAddConnection}>
               Add a connection
-            </button>
+            </Button>
           </div>
         )}
       </Panel>
@@ -149,25 +152,19 @@ export function ConnectionList({
         description="Each connection is a separate provider account or endpoint."
         actions={
           onAddConnection ? (
-            <button type="button" className="btn btn-sm" onClick={onAddConnection}>
+            <Button size="sm" onClick={onAddConnection}>
               <Icon name="plus" size={15} />
               Add connection
-            </button>
+            </Button>
           ) : undefined
         }
       />
 
       {message && (
-        <div role="status" aria-live="polite" className="alert alert-info">
-          <Icon name="alertCircle" size={16} />
-          <span>{message}</span>
-        </div>
+        <Alert tone="info" role="status" icon="alertCircle" aria-live="polite">{message}</Alert>
       )}
       {error && (
-        <div role="alert" aria-live="assertive" className="alert alert-error">
-          <Icon name="alertCircle" size={16} />
-          <span>{error}</span>
-        </div>
+        <Alert tone="error" icon="alertCircle" aria-live="assertive">{error}</Alert>
       )}
 
       <div className="grid gap-3 xl:grid-cols-2">
@@ -188,8 +185,8 @@ export function ConnectionList({
             connection.providerId,
           ) === connection.id;
           return (
-            <article key={connection.id} className="config-card card bg-base-100 border border-base-300">
-              <div className="card-body flex flex-col gap-4 p-4">
+            <ConfigCard key={connection.id}>
+              <ConfigCard.Body className="flex flex-col gap-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h3 className="config-card-title font-semibold">{connection.name}</h3>
@@ -218,30 +215,21 @@ export function ConnectionList({
                 </dl>
 
                 {connection.health === 'needs_attention' && (
-                  <div role="alert" className="alert alert-warning">
-                    <Icon name="alert" size={16} />
-                    <span>
-                      Reconnect or validate this connection before using it. Other connections are
-                      unaffected.
-                    </span>
-                  </div>
+                  <Alert tone="warning" icon="alert">
+                    Reconnect or validate this connection before using it. Other connections are
+                    unaffected.
+                  </Alert>
                 )}
                 {connection.health === 'disabled' && (
-                  <div role="status" className="alert alert-info">
-                    <Icon name="alertCircle" size={16} />
-                    <span>
-                      New turns are disabled. A turn that already started can finish safely.
-                    </span>
-                  </div>
+                  <Alert tone="info" role="status" icon="alertCircle">
+                    New turns are disabled. A turn that already started can finish safely.
+                  </Alert>
                 )}
                 {connection.activeTurnCount > 0 && (
-                  <div role="status" className="alert alert-info">
-                    <Icon name="alertCircle" size={16} />
-                    <span>
-                      {connection.activeTurnCount} active turn
-                      {connection.activeTurnCount === 1 ? ' is' : 's are'} using this connection.
-                    </span>
-                  </div>
+                  <Alert tone="info" role="status" icon="alertCircle">
+                    {connection.activeTurnCount} active turn
+                    {connection.activeTurnCount === 1 ? ' is' : 's are'} using this connection.
+                  </Alert>
                 )}
 
                 {showsProviderStatus && (
@@ -254,60 +242,60 @@ export function ConnectionList({
                 )}
 
                 {confirmDisconnectId === connection.id && (
-                  <div role="alert" className="alert alert-warning flex-wrap">
-                    <Icon name="alert" size={16} />
-                    <span>
-                      Disconnect removes Orchid’s stored credentials.
-                      {connection.activeTurnCount > 0
-                        ? ` It will cancel ${connection.activeTurnCount} active turn${connection.activeTurnCount === 1 ? '' : 's'} and finalize their accounting first.`
-                        : ''}{' '}
-                      You may also need to revoke access or a generated key with the provider.
-                    </span>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        onClick={() => setConfirmDisconnectId(null)}
-                        disabled={isBusy}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-error btn-sm"
-                        onClick={() =>
-                          void runAction(
-                            connection.id,
-                            'disconnect',
-                            onDisconnect
-                              ? () => onDisconnect({ connectionId: connection.id, confirm: true })
-                              : undefined,
-                          )
-                        }
-                        disabled={isBusy || !onDisconnect}
-                      >
-                        Disconnect
-                      </button>
-                    </div>
-                  </div>
+                  <Alert
+                    tone="warning"
+                    className="flex-wrap"
+                    icon="alert"
+                    action={
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => setConfirmDisconnectId(null)}
+                          disabled={isBusy}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          variant="error"
+                          size="sm"
+                          onClick={() =>
+                            void runAction(
+                              connection.id,
+                              'disconnect',
+                              onDisconnect
+                                ? () => onDisconnect({ connectionId: connection.id, confirm: true })
+                                : undefined,
+                            )
+                          }
+                          disabled={isBusy || !onDisconnect}
+                        >
+                          Disconnect
+                        </Button>
+                      </div>
+                    }
+                  >
+                    Disconnect removes Orchid's stored credentials.
+                    {connection.activeTurnCount > 0
+                      ? ` It will cancel ${connection.activeTurnCount} active turn${connection.activeTurnCount === 1 ? '' : 's'} and finalize their accounting first.`
+                      : ''}{' '}
+                    You may also need to revoke access or a generated key with the provider.
+                  </Alert>
                 )}
 
                 <div className="flex justify-end gap-2">
                   {onEditConnection && (
-                    <button
-                      type="button"
-                      className="btn btn-sm"
+                    <Button
+                      size="sm"
                       onClick={() => onEditConnection(connection)}
                       disabled={isBusy}
                     >
                       <Icon name="edit" size={14} />
                       Edit connection
-                    </button>
+                    </Button>
                   )}
                   {canValidate && (
-                    <button
-                      type="button"
-                      className="btn btn-sm"
+                    <Button
+                      size="sm"
                       onClick={() =>
                         void runAction(
                           connection.id,
@@ -320,12 +308,11 @@ export function ConnectionList({
                       disabled={isBusy || !onValidate}
                     >
                       {isBusy && busy?.action === 'validate' ? 'Validating…' : 'Validate'}
-                    </button>
+                    </Button>
                   )}
                   {connection.health === 'disabled' && (
-                    <button
-                      type="button"
-                      className="btn btn-sm"
+                    <Button
+                      size="sm"
                       onClick={() =>
                         void runAction(
                           connection.id,
@@ -336,12 +323,11 @@ export function ConnectionList({
                       disabled={isBusy || !onEnable}
                     >
                       {isBusy && busy?.action === 'enable' ? 'Enabling…' : 'Enable'}
-                    </button>
+                    </Button>
                   )}
                   {connection.health === 'ready' && (
-                    <button
-                      type="button"
-                      className="btn btn-sm"
+                    <Button
+                      size="sm"
                       onClick={() =>
                         void runAction(
                           connection.id,
@@ -352,22 +338,22 @@ export function ConnectionList({
                       disabled={isBusy || !onDisable}
                     >
                       {isBusy && busy?.action === 'disable' ? 'Disabling…' : 'Disable'}
-                    </button>
+                    </Button>
                   )}
                   {connection.health !== 'disconnected' &&
                     confirmDisconnectId !== connection.id && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={() => setConfirmDisconnectId(connection.id)}
                         disabled={isBusy || !onDisconnect}
                       >
                         Disconnect
-                      </button>
+                      </Button>
                     )}
                 </div>
-              </div>
-            </article>
+              </ConfigCard.Body>
+            </ConfigCard>
           );
         })}
       </div>
