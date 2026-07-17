@@ -120,6 +120,25 @@
   padding: 4px 4px 8px !important;
 }
 
+/* Thought / tool rows: horizontal padding so labels aren't flush to the edge. */
+.orchid-thought-title,
+.orchid-tool-activity-title,
+.orchid-tool-block-title {
+  padding-left: 14px !important;
+  padding-right: 14px !important;
+}
+
+.orchid-thought-content,
+.orchid-tool-block-content {
+  padding-left: 14px !important;
+  padding-right: 14px !important;
+}
+
+.orchid-tool-activity-body {
+  padding-left: 12px !important;
+  padding-right: 10px !important;
+}
+
 /* DaisyUI radial-progress size/value CSS vars set from Footer at runtime. */
 .orchid-footer-context-radial {
   --size: 1.4rem;
