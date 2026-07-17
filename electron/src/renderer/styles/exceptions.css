@@ -145,6 +145,23 @@
   --thickness: 2px;
 }
 
+/* Context dropup: keep list content off the panel edge. */
+.orchid-footer-context-panel {
+  padding: 0 !important;
+}
+
+.orchid-footer-context-panel .footer-context-panel-header {
+  padding: 12px 14px 10px !important;
+}
+
+.orchid-footer-context-panel .footer-context-panel-body {
+  padding: 10px 12px 12px !important;
+}
+
+.orchid-footer-context-panel .context-panel-row {
+  padding: 8px 10px !important;
+}
+
 /* Theme swatches in command palette are dynamic hex per theme id. */
 .orchid-theme-swatch {
   /* background set inline from THEME_SWATCHES */

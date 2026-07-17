@@ -343,7 +343,9 @@
 .context-panel-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
 }
 .context-panel-row {
   display: grid;
@@ -352,7 +354,7 @@
   column-gap: 10px;
   row-gap: 4px;
   align-items: center;
-  padding: 7px 8px;
+  padding: 8px 10px;
   border-radius: 7px;
   background: color-mix(in srgb, var(--text-primary) 2%, transparent);
   border: 1px solid color-mix(in srgb, var(--text-primary) 4%, transparent);

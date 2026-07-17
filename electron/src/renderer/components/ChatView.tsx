@@ -1105,6 +1105,10 @@ export function ChatView() {
           usage={chat.usage}
           maxContext={maxContext}
           messages={chat.messages}
+          model={providerPickerValue}
+          modelLabels={providerModelLabels}
+          modelDetails={providerModelDetails}
+          commandContext={commandContext}
         />
       </main>
 

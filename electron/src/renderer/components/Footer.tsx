@@ -2,17 +2,21 @@
  * Footer — chat footer at the bottom of the center pane.
  *
  * Left: keyboard shortcuts (idle) or agent / interrupt status (streaming).
- * Right: context radial (always visible) with dropup breakdown.
+ * Right: model picker + context radial with dropup breakdown.
  * Wording mirrors the multi-stage cancel button on the composer.
  */
-import { useEffect, useId, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useId, useState, type CSSProperties } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
+import type { CommandContext } from '../../shared/types/ipc-boundary';
+import type { ProviderModelOption } from '../../shared/types/ipc';
 import type { InterruptState } from '../hooks/useChat';
 import { FOOTER_SHORTCUT_IDS, getShortcut } from '../keyboard';
+import { resolveModelNotifyLabel } from '../utils/provider-selection';
 import { ContextLegend } from './ContextGrid';
 import { contextUsedTokens } from '../../shared/usage';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
+import { ModelPicker } from './ModelPicker';
 import { StatusBadge } from './ui/StatusBadge';
 
 interface FooterProps {
@@ -23,6 +27,10 @@ interface FooterProps {
   usage?: Usage | null;
   maxContext?: number | null;
   messages?: readonly Message[];
+  model?: string;
+  modelLabels?: Readonly<Record<string, string>>;
+  modelDetails?: Readonly<Record<string, ProviderModelOption>>;
+  commandContext?: CommandContext;
 }
 
 export function Footer({
@@ -32,6 +40,10 @@ export function Footer({
   usage,
   maxContext,
   messages = [],
+  model = '',
+  modelLabels,
+  modelDetails,
+  commandContext,
 }: FooterProps) {
   const confirming = interruptState && interruptState !== 'idle';
   const [contextOpen, setContextOpen] = useState(false);
@@ -78,6 +90,24 @@ export function Footer({
         : contextPercent > 0
           ? 'info'
           : 'neutral';
+
+  const availableModels = commandContext?.getAvailableModels() ?? [];
+
+  const handleSelectModel = useCallback(
+    async (next: string) => {
+      if (!commandContext || next === model) return;
+      try {
+        await commandContext.onSetModel(next);
+        commandContext.onNotify(
+          `Model changed to ${resolveModelNotifyLabel(next, modelDetails, modelLabels)}`,
+          'info',
+        );
+      } catch {
+        // Non-fatal — parent may already toast
+      }
+    },
+    [commandContext, model, modelDetails, modelLabels],
+  );
 
   return (
     <div className="orchid-chat-footer">
@@ -137,6 +167,23 @@ export function Footer({
           </>
         )}
       </div>
+
+      <div className="orchid-chat-footer-end shrink-0 flex items-center gap-1.5">
+        {commandContext && (
+          <ModelPicker
+            value={model}
+            options={availableModels}
+            optionLabels={modelLabels}
+            optionDetails={modelDetails}
+            onChange={(next) => void handleSelectModel(next)}
+            placement="top"
+            align="end"
+            label="Select model"
+            showSelectedContext={false}
+            disabled={isStreaming || interruptState === 'confirmAgent'}
+            className="orchid-footer-model-picker"
+          />
+        )}
 
       <div
         className={`dropdown dropdown-top dropdown-end shrink-0 ${contextOpen ? 'dropdown-open' : ''}`}
@@ -200,6 +247,7 @@ export function Footer({
             </div>
           </div>
         )}
+      </div>
       </div>
     </div>
   );

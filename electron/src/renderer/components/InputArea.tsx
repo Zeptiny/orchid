@@ -1,12 +1,12 @@
 /**
- * InputArea — composer with model selector and send/cancel.
+ * InputArea — composer with send/cancel.
  *
- * Layout (right-aligned controls, image-#1 style model chip):
- *   [ textarea … ] [ model ▾ ] [ ↑ / ■ ]
+ * Layout:
+ *   [ textarea … ] [ ↑ / ■ ]
  *
+ * Model selector lives in Footer (left of context radial).
  * Enter send · Shift+Enter newline · Ctrl/Cmd+S send · Esc multi-stage interrupt.
  * Slash commands: type `/` to open autocomplete above the input.
-   * Context radial lives in Footer (always right-aligned).
  */
 import { useRef, useCallback, useEffect, useState, useMemo } from 'react';
 import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
@@ -27,7 +27,6 @@ import {
   evaluateComposerSend,
   shouldReleaseComposerSendLock,
 } from '../utils/composer-send-lock';
-import { ModelPicker } from './ModelPicker';
 import { SlashCommandMenu } from './SlashCommandMenu';
 import { IconButton } from './ui/IconButton';
 
@@ -310,22 +309,6 @@ export function InputArea({
       }
     },
     [slashContext, clearAndClose, modelDetails, modelLabels],
-  );
-
-  const handleSelectModel = useCallback(
-    async (next: string) => {
-      if (!commandContext || next === model) return;
-      try {
-        await commandContext.onSetModel(next);
-        commandContext.onNotify(
-          `Model changed to ${resolveModelNotifyLabel(next, modelDetails, modelLabels)}`,
-          'info',
-        );
-      } catch {
-        // Non-fatal — parent may already toast
-      }
-    },
-    [commandContext, model, modelDetails, modelLabels],
   );
 
   const resizeTextarea = useCallback(() => {
@@ -664,19 +647,6 @@ export function InputArea({
         />
 
         <div className="orchid-composer-controls">
-          <ModelPicker
-            value={model}
-            options={availableModels}
-            optionLabels={modelLabels}
-            optionDetails={modelDetails}
-            onChange={(next) => void handleSelectModel(next)}
-            placement="top"
-            label="Select model"
-            showSelectedContext={false}
-            disabled={isStreaming || interruptState === 'confirmAgent'}
-            className="orchid-composer-model-picker"
-          />
-
           {showCancel ? (
             <IconButton
               label={cancelTitle}
