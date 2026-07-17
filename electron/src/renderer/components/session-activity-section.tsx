@@ -5,6 +5,7 @@ import type {
 } from '../../shared/types/ipc-boundary';
 import { truncatePathDisplay } from '../utils/session-workspace';
 import { Icon } from './Icon';
+import { IconButton } from './ui/IconButton';
 import { StatusBadge } from './ui/StatusBadge';
 
 interface SessionActivitySectionProps {
@@ -104,18 +105,18 @@ export function SessionActivitySection({
                 </span>
               </button>
               {activity.canCancel && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs btn-square session-activity-stop"
+                <IconButton
+                  label={`Stop ${session?.name ?? 'session'}`}
+                  icon="square"
+                  iconSize={11}
+                  variant="ghost"
+                  size="xs"
+                  className="btn-square session-activity-stop"
                   onClick={(event) => {
                     event.stopPropagation();
                     onStop(activity.sessionId);
                   }}
-                  title={`Stop ${session?.name ?? 'session'}`}
-                  aria-label={`Stop ${session?.name ?? 'session'}`}
-                >
-                  <Icon name="square" size={11} />
-                </button>
+                />
               )}
             </div>
           );

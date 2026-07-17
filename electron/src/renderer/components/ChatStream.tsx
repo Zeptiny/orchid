@@ -38,6 +38,7 @@ import {
   type ActivityChild,
 } from './ToolActivityGroup';
 import { Icon } from './Icon';
+import { Button } from './ui/Button';
 import orchidIcon from '../assets/orchid-icon.svg';
 
 /** Maximum fully-mounted chains; older ones collapse to stubs (Python parity). */
@@ -286,14 +287,15 @@ export function ChatStream({
                 or create sessions.
               </div>
               {onPickProjectDir && (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm mt-3"
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="mt-3"
                   onClick={onPickProjectDir}
                 >
                   <Icon name="folder" size={14} />
                   Open folder
-                </button>
+                </Button>
               )}
             </>
           ) : (

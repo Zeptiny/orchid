@@ -1,3 +1,6 @@
+import type { AlertTone } from './ui/Alert';
+import { Alert } from './ui/Alert';
+import { Button } from './ui/Button';
 import { Icon, type IconName } from './Icon';
 
 type ErrorKind = 'stream' | 'rate-limit' | 'auth' | 'generic' | 'tool';
@@ -6,7 +9,7 @@ interface ErrorVariant {
   kind: ErrorKind;
   title: string;
   icon: IconName;
-  alertClass: string;
+  tone: AlertTone;
 }
 
 interface ErrorBannerProps {
@@ -24,7 +27,7 @@ function classifyError(message: string): ErrorVariant {
       kind: 'rate-limit',
       title: 'Rate limited',
       icon: 'alert',
-      alertClass: 'alert-warning',
+      tone: 'warning',
     };
   }
   if (
@@ -38,7 +41,7 @@ function classifyError(message: string): ErrorVariant {
       kind: 'auth',
       title: 'Authentication failed',
       icon: 'lock',
-      alertClass: 'alert-error',
+      tone: 'error',
     };
   }
   if (
@@ -51,14 +54,14 @@ function classifyError(message: string): ErrorVariant {
       kind: 'stream',
       title: 'Stream failed',
       icon: 'alertCircle',
-      alertClass: 'alert-error',
+      tone: 'error',
     };
   }
   return {
     kind: 'generic',
     title: 'Agent error',
     icon: 'alertCircle',
-    alertClass: 'alert-error',
+    tone: 'error',
   };
 }
 
@@ -73,47 +76,47 @@ export function ErrorBanner({ message, onDismiss, onOpenSettings, onRetry }: Err
   const retrySeconds = variant.kind === 'rate-limit' ? extractRetrySeconds(message) : null;
 
   return (
-    <div
-      className={`orchid-error-banner alert ${variant.alertClass}`}
-      role="alert"
+    <Alert
+      tone={variant.tone}
+      icon={variant.icon}
+      className="orchid-error-banner"
     >
-      <Icon name={variant.icon} size={16} className="shrink-0" />
       <div className="orchid-error-body">
         <div className="orchid-error-title">{variant.title}</div>
         <div className="orchid-error-message">{message}</div>
         <div className="orchid-error-actions">
           {(variant.kind === 'stream' || variant.kind === 'rate-limit' || variant.kind === 'generic') &&
             onRetry && (
-              <button className="btn btn-primary btn-xs gap-1" onClick={onRetry} type="button">
+              <Button variant="primary" size="xs" className="gap-1" onClick={onRetry}>
                 <Icon name="refresh" size={12} />
                 {variant.kind === 'rate-limit' && retrySeconds
                   ? `Retry in ${retrySeconds}s`
                   : 'Retry'}
-              </button>
+              </Button>
             )}
           {variant.kind === 'rate-limit' && onOpenSettings && (
-            <button
-              className="btn btn-ghost btn-xs"
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={() => {
                 onOpenSettings();
                 onDismiss();
               }}
-              type="button"
             >
               Switch Model
-            </button>
+            </Button>
           )}
           {variant.kind === 'auth' && onOpenSettings && (
-            <button className="btn btn-primary btn-xs gap-1" onClick={onOpenSettings} type="button">
+            <Button variant="primary" size="xs" className="gap-1" onClick={onOpenSettings}>
               <Icon name="settings" size={12} />
               Open Settings
-            </button>
+            </Button>
           )}
-          <button className="btn btn-ghost btn-xs" onClick={onDismiss} type="button">
+          <Button variant="ghost" size="xs" onClick={onDismiss}>
             Dismiss
-          </button>
+          </Button>
         </div>
       </div>
-    </div>
+    </Alert>
   );
 }

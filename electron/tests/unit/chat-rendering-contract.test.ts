@@ -43,9 +43,11 @@ describe('chat rendering contract (U5)', () => {
       const thought = read('components/MessageWidget.tsx');
       const error = read('components/ErrorBanner.tsx');
       expect(tool).toMatch(/StatusBadge|badge/);
-      expect(tool).toMatch(/loading loading-spinner/);
-      expect(thought).toMatch(/loading loading-spinner|streaming-cursor/);
-      expect(error).toMatch(/alert/);
+      // Migrated to Spinner primitive — source uses <Spinner> instead of raw loading classes
+      expect(tool).toMatch(/import.*Spinner|Spinner/);
+      expect(thought).toMatch(/import.*Spinner|streaming-cursor/);
+      // Migrated to Alert primitive — source uses <Alert> instead of raw alert classes
+      expect(error).toMatch(/import.*Alert|Alert|alert/);
     });
   });
 

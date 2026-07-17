@@ -29,7 +29,10 @@ import {
   ModelAssignments,
 } from '../Preferences/ModelAssignments';
 import { ModelPicker } from '../ModelPicker';
-import { Icon } from '../Icon';
+import { Button } from '../ui/Button';
+import { Alert } from '../ui/Alert';
+import { Select } from '../ui/Select';
+import { Checkbox } from '../ui/Checkbox';
 import { FormField } from '../ui/FormField';
 import { StatusBadge } from '../ui/StatusBadge';
 import { THEMES, THEME_NAMES, type ThemeName } from '../../themes';
@@ -424,12 +427,16 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
               </div>
 
               {providers.error && !providers.overview && (
-                <div role="alert" className="alert alert-warning">
-                  <span>{providers.error}</span>
-                  <button type="button" className="btn btn-sm" onClick={() => void providers.refresh()}>
-                    Retry
-                  </button>
-                </div>
+                <Alert
+                  tone="warning"
+                  action={
+                    <Button variant="neutral" type="button" onClick={() => void providers.refresh()}>
+                      Retry
+                    </Button>
+                  }
+                >
+                  {providers.error}
+                </Alert>
               )}
 
               {connections.length > 0 ? (
@@ -457,45 +464,46 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                   ))}
                 </div>
               ) : (
-                <div role="status" className="alert alert-info">
-                  <Icon name="cpu" size={16} />
-                  <span>Add a provider to unlock model selection and chat.</span>
-                </div>
+                <Alert tone="info" icon="cpu" role="status">
+                  Add a provider to unlock model selection and chat.
+                </Alert>
               )}
 
               {saveError && (
-                <div role="alert" className="alert alert-error">
-                  <Icon name="alertCircle" size={16} />
-                  <span>{saveError}</span>
-                </div>
+                <Alert tone="error" icon="alertCircle">
+                  {saveError}
+                </Alert>
               )}
 
               <div className="onb-step-actions">
-                <button
-                  className="btn btn-ghost"
+                <Button
+                  variant="ghost"
+                  size="md"
                   onClick={() => void markCompleteAndClose('skip')}
                   type="button"
                   disabled={saving}
                 >
                   Skip onboarding
-                </button>
-                <button
-                  className="btn"
+                </Button>
+                <Button
+                  variant="neutral"
+                  size="md"
                   onClick={() => setWizardOpen(true)}
                   type="button"
                   disabled={!providers.overview}
+                  icon="plus"
                 >
-                  <Icon name="plus" size={15} />
                   {connections.length > 0 ? 'Add another provider' : 'Add a provider'}
-                </button>
-                <button
-                  className="btn btn-primary"
+                </Button>
+                <Button
+                  variant="primary"
+                  size="md"
                   onClick={() => { void goNext(); }}
                   type="button"
                   disabled={readyConnections.length === 0}
                 >
                   Next: models
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -519,24 +527,24 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
               />
 
               {(modelError || saveError) && (
-                <div role="alert" className="alert alert-error">
-                  <Icon name="alertCircle" size={16} />
-                  <span>{modelError ?? saveError}</span>
-                </div>
+                <Alert tone="error" icon="alertCircle">
+                  {modelError ?? saveError}
+                </Alert>
               )}
 
               <div className="onb-step-actions">
-                <button className="btn btn-ghost" onClick={goBack} type="button" disabled={saving}>
+                <Button variant="ghost" size="md" onClick={goBack} type="button" disabled={saving}>
                   Back
-                </button>
-                <button
-                  className="btn btn-primary"
+                </Button>
+                <Button
+                  variant="primary"
+                  size="md"
                   onClick={() => { void goNext(); }}
                   type="button"
                   disabled={saving || modelOptions.length === 0 || !defaultModel}
                 >
                   Next: appearance
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -553,11 +561,11 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
               <div className="config-form flex flex-col gap-4">
                 <div className="config-form-grid">
                   <FormField label="Theme" htmlFor="onb-theme" className="config-field">
-                    <select
+                    <Select
                       id="onb-theme"
                       value={theme}
                       onChange={(e) => handleThemeChange(e.target.value as ThemeName)}
-                      className="select select-bordered w-full"
+                      className="w-full"
                       disabled={saving}
                     >
                       {THEME_NAMES.map((name) => (
@@ -565,38 +573,37 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                           {THEMES[name]}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </FormField>
                   <FormField label="Personality" htmlFor="onb-personality" className="config-field">
-                    <select
+                    <Select
                       id="onb-personality"
                       value={personality}
                       onChange={(e) => setPersonality(e.target.value)}
-                      className="select select-bordered w-full"
+                      className="w-full"
                       disabled={saving}
                     >
                       {personalityOptions.map((name) => (
                         <option key={name} value={name}>{name}</option>
                       ))}
-                    </select>
+                    </Select>
                   </FormField>
                 </div>
               </div>
 
               {saveError && (
-                <div role="alert" className="alert alert-error">
-                  <Icon name="alertCircle" size={16} />
-                  <span>{saveError}</span>
-                </div>
+                <Alert tone="error" icon="alertCircle">
+                  {saveError}
+                </Alert>
               )}
 
               <div className="onb-step-actions">
-                <button className="btn btn-ghost" onClick={goBack} type="button" disabled={saving}>
+                <Button variant="ghost" size="md" onClick={goBack} type="button" disabled={saving}>
                   Back
-                </button>
-                <button className="btn btn-primary" onClick={() => { void goNext(); }} type="button" disabled={saving}>
+                </Button>
+                <Button variant="primary" size="md" onClick={() => { void goNext(); }} type="button" disabled={saving}>
                   Next: project
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -612,40 +619,38 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
               </div>
 
               {projectPath ? (
-                <div role="status" className="alert alert-success gap-3 px-4 py-3">
-                  <Icon name="folder" size={16} />
+                <Alert tone="success" icon="folder" className="gap-3 px-4 py-3" role="status">
                   <span className="min-w-0 truncate">{projectPath}</span>
-                </div>
+                </Alert>
               ) : (
-                <div role="status" className="alert alert-info gap-3 px-4 py-3">
-                  <Icon name="folder" size={16} />
+                <Alert tone="info" icon="folder" className="gap-3 px-4 py-3" role="status">
                   <span className="min-w-0">No project folder selected yet.</span>
-                </div>
+                </Alert>
               )}
 
               {saveError && (
-                <div role="alert" className="alert alert-error">
-                  <Icon name="alertCircle" size={16} />
-                  <span>{saveError}</span>
-                </div>
+                <Alert tone="error" icon="alertCircle">
+                  {saveError}
+                </Alert>
               )}
 
               <div className="onb-step-actions">
-                <button className="btn btn-ghost" onClick={goBack} type="button" disabled={saving}>
+                <Button variant="ghost" size="md" onClick={goBack} type="button" disabled={saving}>
                   Back
-                </button>
-                <button
-                  className="btn"
+                </Button>
+                <Button
+                  variant="neutral"
+                  size="md"
                   onClick={() => void handlePickProject()}
                   type="button"
                   disabled={saving}
+                  icon="folder"
                 >
-                  <Icon name="folder" size={15} />
                   {projectPath ? 'Change folder' : 'Choose folder'}
-                </button>
-                <button className="btn btn-primary" onClick={() => { void goNext(); }} type="button" disabled={saving}>
+                </Button>
+                <Button variant="primary" size="md" onClick={() => { void goNext(); }} type="button" disabled={saving}>
                   Next: RAG
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -679,19 +684,18 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
               </FormField>
 
               {saveError && (
-                <div role="alert" className="alert alert-error">
-                  <Icon name="alertCircle" size={16} />
-                  <span>{saveError}</span>
-                </div>
+                <Alert tone="error" icon="alertCircle">
+                  {saveError}
+                </Alert>
               )}
 
               <div className="onb-step-actions">
-                <button className="btn btn-ghost" onClick={goBack} type="button" disabled={saving}>
+                <Button variant="ghost" size="md" onClick={goBack} type="button" disabled={saving}>
                   Back
-                </button>
-                <button className="btn btn-primary" onClick={() => { void goNext(); }} type="button" disabled={saving}>
+                </Button>
+                <Button variant="primary" size="md" onClick={() => { void goNext(); }} type="button" disabled={saving}>
                   Next: MCP
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -715,9 +719,9 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                       className={`config-card cursor-pointer ${checked ? 'ring-2 ring-primary' : ''}`}
                     >
                       <div className="flex items-start gap-3">
-                        <input
-                          type="checkbox"
-                          className="checkbox checkbox-primary mt-1"
+                        <Checkbox
+                          tone="primary"
+                          className="mt-1"
                           checked={checked}
                           onChange={() => toggleMcp(server.id)}
                           disabled={saving}
@@ -738,24 +742,24 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
               </div>
 
               {saveError && (
-                <div role="alert" className="alert alert-error">
-                  <Icon name="alertCircle" size={16} />
-                  <span>{saveError}</span>
-                </div>
+                <Alert tone="error" icon="alertCircle">
+                  {saveError}
+                </Alert>
               )}
 
               <div className="onb-step-actions">
-                <button className="btn btn-ghost" onClick={goBack} type="button" disabled={saving}>
+                <Button variant="ghost" size="md" onClick={goBack} type="button" disabled={saving}>
                   Back
-                </button>
-                <button
-                  className="btn btn-primary"
+                </Button>
+                <Button
+                  variant="primary"
+                  size="md"
                   onClick={() => void markCompleteAndClose('finish')}
                   type="button"
                   disabled={saving || !defaultModel}
                 >
                   {saving ? 'Finishing…' : 'Finish onboarding'}
-                </button>
+                </Button>
               </div>
             </div>
           )}

@@ -17,6 +17,8 @@ import { MarkdownContent } from './MarkdownContent';
 import { LiveCommandInline } from './ToolWidgets/LiveCommandInline';
 import { Icon } from './Icon';
 import { ToolCallBlock } from './ToolCallBlock';
+import { Alert } from './ui/Alert';
+import { Spinner } from './ui/Spinner';
 
 interface MessageWidgetProps {
   message: Message;
@@ -137,7 +139,7 @@ function ThinkingMessage({
       >
         <span className="inline-flex items-center gap-1.5">
           {isStreaming ? (
-            <span className="loading loading-spinner loading-xs" aria-hidden />
+            <Spinner size="xs" />
           ) : (
             <Icon name="alertCircle" size={12} />
           )}
@@ -211,16 +213,16 @@ function ToolResultMessage({ message }: { message: Message }) {
 
 function ErrorMessage({ message }: { message: Message }) {
   return (
-    <div
-      className="orchid-error-banner alert alert-error"
-      role="alert"
+    <Alert
+      tone="error"
+      icon="alertCircle"
+      className="orchid-error-banner"
     >
-      <Icon name="alertCircle" size={16} className="shrink-0" />
       <div className="min-w-0 flex-1 orchid-error-body">
         <div className="orchid-error-title">Error</div>
         <div className="orchid-error-message">{message.content}</div>
       </div>
-    </div>
+    </Alert>
   );
 }
 

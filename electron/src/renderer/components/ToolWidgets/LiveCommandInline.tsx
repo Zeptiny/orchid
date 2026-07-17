@@ -14,6 +14,7 @@
  */
 import { useState, useCallback, useMemo, useId } from 'react';
 import { useLiveCommandOutput } from '../../hooks/useLiveCommandOutput';
+import { Spinner } from '../ui/Spinner';
 import { StatusBadge } from '../ui/StatusBadge';
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -82,7 +83,7 @@ export function LiveCommandInline({
         <span className="font-mono text-xs min-w-0 truncate">{title}</span>
         <span className="inline-flex shrink-0 items-center gap-1.5">
           {isRunning && (
-            <span className="loading loading-dots loading-xs" aria-hidden />
+            <Spinner size="xs" variant="dots" />
           )}
           {!isRunning && exitCode === 0 && (
             <StatusBadge tone="success" size="xs">ok</StatusBadge>

@@ -15,6 +15,7 @@ import { summarizeToolGroup } from '../utils/tool-grouping';
 import { Icon } from './Icon';
 import { MessageWidget } from './MessageWidget';
 import { ToolCallBlock } from './ToolCallBlock';
+import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
 
 export type ActivityChild =
@@ -100,14 +101,14 @@ export function ToolActivityGroup({
       >
         <span className="orchid-tool-activity-title-left">
           {showLoader ? (
-            <span className="loading loading-spinner loading-xs shrink-0" aria-hidden />
+            <Spinner size="xs" className="shrink-0" />
           ) : (
             <Icon name={iconName} size={12} className="shrink-0" />
           )}
           <span className="orchid-tool-activity-title-text">
             {summary.title || 'Activity'}
           </span>
-          <StatusBadge tone="neutral" size="xs" className="tool-activity-group-count badge-ghost">
+          <StatusBadge tone="ghost" size="xs" className="tool-activity-group-count">
             {badgeCount}
           </StatusBadge>
         </span>

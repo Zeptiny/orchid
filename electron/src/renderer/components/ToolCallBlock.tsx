@@ -1,6 +1,7 @@
 import { useId, useMemo, useState, type ReactNode } from 'react';
 import type { ToolBlock } from '../hooks/useChat';
 import { Icon, type IconName } from './Icon';
+import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
 
 interface ToolCallBlockProps {
@@ -291,7 +292,7 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
       >
         <span className="orchid-tool-block-title-left">
           {showLoader ? (
-            <span className="loading loading-spinner loading-xs shrink-0" aria-hidden />
+            <Spinner size="xs" className="shrink-0" />
           ) : (
             <Icon name={iconName} size={12} className="shrink-0" />
           )}
