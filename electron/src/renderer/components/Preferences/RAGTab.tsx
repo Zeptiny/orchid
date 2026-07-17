@@ -10,7 +10,10 @@ import { ModelPicker } from '../ModelPicker';
 import type { ProviderModelOption } from '../../../shared/types/ipc';
 import type { ModelSelection } from '../../../shared/types/provider';
 import { useProviders } from '../../hooks/useProviders';
-import { parseConfigNumber } from '../../utils/config-draft';
+import {
+  parseConfigNumber,
+  type NumericRAGConfigKey,
+} from '../../utils/config-draft';
 import { isEmbeddingModel } from '../../utils/models';
 import {
   providerModelOptionDisplayName,
@@ -82,10 +85,10 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
   );
 
   const handleNumberChange = useCallback(
-    (field: keyof RAGConfig, value: string, min = 1) => {
+    (field: NumericRAGConfigKey, value: string, min = 1) => {
       const num = parseConfigNumber(value, min, { integer: true });
       if (num !== null) {
-        updateField(field, num as RAGConfig[typeof field]);
+        updateField(field, num);
       }
     },
     [updateField],

@@ -6,7 +6,11 @@
 import { useCallback } from 'react';
 import type { ConfigPatch } from '../../../shared/types/ipc';
 import { THEMES, THEME_NAMES, type ThemeName } from '../../themes';
-import { parseConfigNumber } from '../../utils/config-draft';
+import {
+  configNumberPatch,
+  parseConfigNumber,
+  type NumericConfigKey,
+} from '../../utils/config-draft';
 import { FormField } from '../ui/FormField';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
@@ -66,10 +70,10 @@ export function GeneralTab({
       : [...personalities];
 
   const handleNumberChange = useCallback(
-    (field: keyof ConfigPatch, value: string, min = 1) => {
+    (field: NumericConfigKey, value: string, min = 1) => {
       const num = parseConfigNumber(value, min);
       if (num !== null) {
-        onChange({ [field]: num } as ConfigPatch);
+        onChange(configNumberPatch(field, num));
       }
     },
     [onChange],
@@ -77,10 +81,10 @@ export function GeneralTab({
 
   /** Integer config fields (schema `.int()`) — reject non-integers like 12.5. */
   const handleIntChange = useCallback(
-    (field: keyof ConfigPatch, value: string, min = 1) => {
+    (field: NumericConfigKey, value: string, min = 1) => {
       const num = parseConfigNumber(value, min, { integer: true });
       if (num !== null) {
-        onChange({ [field]: num } as ConfigPatch);
+        onChange(configNumberPatch(field, num));
       }
     },
     [onChange],

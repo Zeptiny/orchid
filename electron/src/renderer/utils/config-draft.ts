@@ -1,47 +1,58 @@
-import type { Config } from '../../shared/types/ipc-boundary';
+import type { Config, RAGConfig } from '../../shared/types/ipc-boundary';
 import type { ConfigPatch, ConfigPatchMap } from '../../shared/types/ipc';
 import type { ModelSelection } from '../../shared/types/provider';
 
+/** Nested ConfigPatch keys that need specialized merge (not scalar assign). */
+type NestedPatchKey = 'rag' | 'tier_models' | 'mcp_servers' | 'providers';
+
+/** Scalar / nullable top-level patch keys applied with simple defined-assign. */
+type ScalarPatchKey = Exclude<keyof ConfigPatch, NestedPatchKey>;
+
+/**
+ * Compile-time: Config and ConfigPatch must expose the same key set so draft
+ * merge cannot silently drop newly added config fields.
+ */
+type AssertSameKeys<A, B> = Exclude<keyof A, keyof B> | Exclude<keyof B, keyof A> extends never
+  ? true
+  : never;
+const _configPatchKeysAlign: AssertSameKeys<Config, ConfigPatch> = true;
+void _configPatchKeysAlign;
+
+/** ConfigPatch keys whose non-null values are numbers (preference form fields). */
+export type NumericConfigKey = {
+  [K in keyof ConfigPatch]-?: NonNullable<ConfigPatch[K]> extends number ? K : never;
+}[keyof ConfigPatch];
+
+/** RAG numeric fields for preference form handlers. */
+export type NumericRAGConfigKey = {
+  [K in keyof RAGConfig]-?: RAGConfig[K] extends number ? K : never;
+}[keyof RAGConfig];
+
+/**
+ * Build a single-field numeric ConfigPatch without `as ConfigPatch` at call sites.
+ * Computed-key Pick construction requires a localized assertion (TS limitation).
+ */
+export function configNumberPatch<K extends NumericConfigKey>(
+  field: K,
+  value: number,
+): Pick<ConfigPatch, K> {
+  return { [field]: value } as Pick<ConfigPatch, K>;
+}
+
 /**
  * Apply a ConfigPatch onto a loaded Config for the settings draft boundary.
- * Avoids a broad `as Config` cast: nested maps honor null tombstones, rag deep-merges.
+ * Scalars assign when defined (including 0 / false / null); nested maps honor
+ * null tombstones; rag deep-merges. Key coverage is tied to Config/ConfigPatch.
  */
 export function applyConfigDraft(base: Config, draft: ConfigPatch): Config {
   const next: Config = { ...base };
 
-  if (draft.default_model !== undefined) next.default_model = draft.default_model;
-  if (draft.ignored_dirs !== undefined) next.ignored_dirs = draft.ignored_dirs;
-  if (draft.command_timeout !== undefined) next.command_timeout = draft.command_timeout;
-  if (draft.read_line_limit !== undefined) next.read_line_limit = draft.read_line_limit;
-  if (draft.grep_max_results !== undefined) next.grep_max_results = draft.grep_max_results;
-  if (draft.directory_tree_depth !== undefined) {
-    next.directory_tree_depth = draft.directory_tree_depth;
-  }
-  if (draft.theme !== undefined) next.theme = draft.theme;
-  if (draft.personality !== undefined) next.personality = draft.personality;
-  if (draft.ast_max_file_size !== undefined) next.ast_max_file_size = draft.ast_max_file_size;
-  if (draft.mcp_startup_timeout !== undefined) {
-    next.mcp_startup_timeout = draft.mcp_startup_timeout;
-  }
-  if (draft.mcp_per_server_timeout !== undefined) {
-    next.mcp_per_server_timeout = draft.mcp_per_server_timeout;
-  }
-  if (draft.llm_stream_idle_timeout !== undefined) {
-    next.llm_stream_idle_timeout = draft.llm_stream_idle_timeout;
-  }
-  if (draft.llm_stream_retries !== undefined) next.llm_stream_retries = draft.llm_stream_retries;
-  if (draft.background_command_idle_timeout !== undefined) {
-    next.background_command_idle_timeout = draft.background_command_idle_timeout;
-  }
-  if (draft.max_tool_steps !== undefined) next.max_tool_steps = draft.max_tool_steps;
-  if (draft.default_project_dir !== undefined) {
-    next.default_project_dir = draft.default_project_dir;
-  }
-  if (draft.always_expand_tool_groups !== undefined) {
-    next.always_expand_tool_groups = draft.always_expand_tool_groups;
-  }
-  if (draft.has_completed_onboarding !== undefined) {
-    next.has_completed_onboarding = draft.has_completed_onboarding;
+  for (const key of Object.keys(draft) as Array<keyof ConfigPatch>) {
+    if (isNestedPatchKey(key)) continue;
+    const value = draft[key];
+    if (value !== undefined) {
+      assignScalar(next, key, value);
+    }
   }
 
   if (draft.rag !== undefined) {
@@ -68,6 +79,25 @@ export function applyConfigDraft(base: Config, draft: ConfigPatch): Config {
   }
 
   return next;
+}
+
+function isNestedPatchKey(key: keyof ConfigPatch): key is NestedPatchKey {
+  return (
+    key === 'rag' ||
+    key === 'tier_models' ||
+    key === 'mcp_servers' ||
+    key === 'providers'
+  );
+}
+
+function assignScalar<K extends ScalarPatchKey>(
+  config: Config,
+  key: K,
+  // Exclude only undefined (absent patch); null is a real value for nullable fields.
+  value: Exclude<ConfigPatch[K], undefined>,
+): void {
+  // Scalar ConfigPatch fields match Config once optionality is stripped.
+  config[key] = value as Config[K];
 }
 
 function applySelectionMap(
