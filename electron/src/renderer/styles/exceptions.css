@@ -80,7 +80,7 @@
   flex: 1 1 auto;
   min-width: 0;
   width: 100%;
-  /* min-height must cover padding + one line (8+8 + 12*1.4 ≈ 33) or empty shows a scrollbar. */
+  /* One line of text: 12px * 1.4 = 16.8 ≈ 17; vertical padding centers in 36px shell row. */
   min-height: 36px;
   height: 36px;
   max-height: 160px;
@@ -93,15 +93,32 @@
   background: transparent !important;
   box-shadow: none !important;
   font-size: 12px;
-  line-height: 1.4;
-  /* In-shell padding so text isn't flush to the field edge. */
-  padding: 8px 8px 8px 12px;
+  line-height: 36px;
+  /* Horizontal padding only — vertical centering via equal line-height/height. */
+  padding: 0 8px 0 12px;
   color: var(--text-primary, var(--color-base-content));
+  vertical-align: middle;
+}
+
+/* Multi-line: restore normal leading once content grows past one line. */
+.orchid-composer-textarea:not(:placeholder-shown) {
+  line-height: 1.4;
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 
 .orchid-composer-shell {
   box-sizing: border-box;
-  padding: 4px 4px 4px 4px !important;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 4px !important;
+}
+
+.orchid-composer-controls {
+  display: flex;
+  align-items: center;
+  align-self: center;
 }
 
 .orchid-composer-area {

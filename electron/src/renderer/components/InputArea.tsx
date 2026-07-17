@@ -314,15 +314,19 @@ export function InputArea({
   const resizeTextarea = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
-    // Empty fields often report scrollHeight taller than one visual line
-    // (padding / placeholder metrics). Force the compact single-line height
-    // so startup matches the post-send size. Keep overflow hidden until the
-    // content actually needs more than one line (avoids empty-state scrollbar).
+    // Empty: fixed single-line height with centered text (line-height = height).
+    // Multi-line: normal leading + vertical padding; overflow only at max height.
     if (!el.value) {
       el.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
+      el.style.lineHeight = `${TEXTAREA_MIN_HEIGHT_PX}px`;
+      el.style.paddingTop = '0';
+      el.style.paddingBottom = '0';
       el.style.overflowY = 'hidden';
       return;
     }
+    el.style.lineHeight = '1.4';
+    el.style.paddingTop = '8px';
+    el.style.paddingBottom = '8px';
     el.style.height = 'auto';
     const next = Math.min(
       Math.max(el.scrollHeight, TEXTAREA_MIN_HEIGHT_PX),

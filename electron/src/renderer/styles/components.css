@@ -551,11 +551,12 @@
 
   /* Single field shell: textarea + send button share one border/background. */
   .orchid-composer-shell {
-    @apply flex min-w-0 items-end gap-1.5;
+    @apply flex min-w-0 items-center gap-1.5;
     border: 1px solid var(--border-default, var(--color-base-300));
     border-radius: 0.5rem;
     background: var(--input-bg, var(--color-base-200));
     padding: 4px;
+    min-height: 44px;
     transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
 
@@ -571,11 +572,11 @@
   .orchid-composer .orchid-composer-textarea {
     @apply min-w-0 flex-1 border-0 bg-transparent shadow-none outline-none;
     resize: none;
+    align-self: center;
   }
 
   .orchid-composer-controls {
-    @apply flex shrink-0 items-end;
-    padding-bottom: 1px;
+    @apply flex shrink-0 items-center self-center;
   }
 
   .orchid-composer-action {
