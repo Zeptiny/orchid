@@ -23,9 +23,9 @@ import {
   type PaletteResult,
 } from '../commands/registry';
 import { resolveModelNotifyLabel } from '../utils/provider-selection';
-import { Icon } from './Icon';
 import { ModelPicker } from './ModelPicker';
 import { SlashCommandMenu } from './SlashCommandMenu';
+import { IconButton } from './ui/IconButton';
 
 interface InputAreaProps {
   status: ChatStatus;
@@ -343,8 +343,12 @@ export function InputArea({
   }, []);
 
   useEffect(() => {
-    if (status === 'idle' && interruptState === 'idle') {
+    // Release send lock when not streaming: idle success path and error/gate
+    // recovery (status 'error' never returned to idle without this).
+    if (status !== 'streaming' && interruptState !== 'confirmAgent') {
       isSendingRef.current = false;
+    }
+    if (status === 'idle' && interruptState === 'idle') {
       textareaRef.current?.focus();
     }
   }, [status, interruptState]);
@@ -403,6 +407,8 @@ export function InputArea({
     try {
       await onSend(trimmed);
     } catch {
+      // Failure path: release immediately so a subsequent send is possible.
+      // Gate failures that resolve without throwing are cleared via status effect.
       isSendingRef.current = false;
     }
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
@@ -543,51 +549,60 @@ export function InputArea({
         ? 'Cancel agent'
         : 'Interrupt';
 
-  const cancelClass =
-    interruptState === 'confirmSubagents'
-      ? 'btn btn-warning btn-sm btn-circle composer-action'
-      : 'btn btn-error btn-sm btn-circle composer-action';
+  const cancelVariant = interruptState === 'confirmSubagents' ? 'warning' : 'error';
 
   // During confirmSubagents the agent is done — keep input editable for follow-ups.
   const inputDisabled = isStreaming || interruptState === 'confirmAgent';
   const plainChatBlocked = !workspaceBound || !providerAvailable || !modelSelected;
 
   return (
-    <div className="composer-area">
+    <div className="composer-area orchid-composer-area">
       {!workspaceBound && (
-        <div className="composer-workspace-gate" role="status">
+        <div className="composer-workspace-gate orchid-composer-gate alert alert-warning" role="status">
           <span>Select a project folder before chatting.</span>
           {onPickProjectDir && (
-            <button
-              type="button"
-              className="btn btn-warning btn-xs"
+            <IconButton
+              label="Open folder"
+              icon="folder"
+              size="xs"
+              variant="warning"
               onClick={onPickProjectDir}
+              iconSize={12}
             >
-              <Icon name="folder" size={12} />
               Open folder
-            </button>
+            </IconButton>
           )}
         </div>
       )}
 
       {!providerAvailable && (
-        <div className="composer-workspace-gate" role="status" aria-live="polite">
+        <div
+          className="composer-workspace-gate orchid-composer-gate alert alert-info"
+          role="status"
+          aria-live="polite"
+        >
           <span>A provider connection is required before Orchid can send an LLM request.</span>
           {onOpenProviders && (
-            <button
-              type="button"
-              className="btn btn-primary btn-xs"
+            <IconButton
+              label="Set up provider"
+              icon="settings"
+              size="xs"
+              variant="primary"
               onClick={onOpenProviders}
+              iconSize={12}
             >
-              <Icon name="settings" size={12} />
               Set up provider
-            </button>
+            </IconButton>
           )}
         </div>
       )}
 
       {providerAvailable && !modelSelected && (
-        <div className="composer-workspace-gate" role="status" aria-live="polite">
+        <div
+          className="composer-workspace-gate orchid-composer-gate alert alert-warning"
+          role="status"
+          aria-live="polite"
+        >
           <span>Select a connection and model before sending a message.</span>
         </div>
       )}
@@ -604,13 +619,13 @@ export function InputArea({
       )}
 
       <div
-        className={`composer ${isStreaming || confirming ? 'streaming' : ''} ${
+        className={`composer orchid-composer ${isStreaming || confirming ? 'streaming' : ''} ${
           showCancel ? 'composer-cancel-mode' : ''
         }`}
       >
         <textarea
           ref={textareaRef}
-          className="composer-textarea"
+          className="textarea textarea-bordered composer-textarea orchid-composer-textarea"
           data-orchid-composer
           value={input}
           onChange={handleChange}
@@ -637,7 +652,7 @@ export function InputArea({
           aria-controls={showMenu ? 'slash-command-menu' : undefined}
         />
 
-        <div className="composer-controls">
+        <div className="composer-controls orchid-composer-controls">
           <ModelPicker
             value={model}
             options={availableModels}
@@ -648,23 +663,26 @@ export function InputArea({
             label="Select model"
             showSelectedContext={false}
             disabled={isStreaming || interruptState === 'confirmAgent'}
-            className="composer-model-picker"
+            className="composer-model-picker orchid-composer-model-picker"
           />
 
-          {/* Send (arrow up) or Cancel (square) — multi-stage cancel mirrors Esc */}
           {showCancel ? (
-            <button
-              className={cancelClass}
+            <IconButton
+              label={cancelTitle}
+              icon="square"
+              size="sm"
+              variant={cancelVariant}
+              className="composer-action orchid-composer-action"
               onClick={() => void onCancel()}
-              title={cancelTitle}
-              type="button"
-              aria-label={cancelTitle}
-            >
-              <Icon name="square" size={14} />
-            </button>
+              iconSize={14}
+            />
           ) : (
-            <button
-              className="btn btn-primary btn-sm btn-circle composer-action"
+            <IconButton
+              label={showMenu ? 'Run command' : 'Send'}
+              icon="arrowUp"
+              size="sm"
+              variant="primary"
+              className="composer-action orchid-composer-action"
               onClick={() => {
                 if (showMenu && slashResults[selectedIndex]) {
                   void handleSelectResult(slashResults[selectedIndex]);
@@ -673,13 +691,8 @@ export function InputArea({
                 void handleSend();
               }}
               disabled={!hasInput || (!showMenu && plainChatBlocked)}
-              title={showMenu ? 'Run command' : 'Send'}
-              type="button"
-              aria-label={showMenu ? 'Run command' : 'Send'}
-              aria-disabled={!hasInput || (!showMenu && plainChatBlocked) || undefined}
-            >
-              <Icon name="arrowUp" size={16} />
-            </button>
+              iconSize={16}
+            />
           )}
         </div>
       </div>

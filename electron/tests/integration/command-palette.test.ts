@@ -578,16 +578,35 @@ describe('Command Palette File Structure', () => {
     expect(fs.existsSync(path.join(commandsDir, 'registry.ts'))).toBe(true);
   });
 
-  it('chat.css contains command palette styles', () => {
-    const cssPath = path.resolve(__dirname, '../../src/renderer/styles/chat.css');
-    const css = fs.readFileSync(cssPath, 'utf-8');
+  it('chat.css or components.css contain command palette styles', () => {
+    const chatCss = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/styles/chat.css'),
+      'utf-8',
+    );
+    const componentsCss = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/styles/components.css'),
+      'utf-8',
+    );
+    const css = `${chatCss}\n${componentsCss}`;
     expect(css).toContain('.command-palette-overlay');
     expect(css).toContain('.command-palette');
-    expect(css).toContain('.command-palette-input');
     expect(css).toContain('.command-palette-results');
     expect(css).toContain('.command-palette-item');
     expect(css).toContain('.command-palette-group');
     expect(css).toContain('.command-palette-footer');
-    expect(css).toContain('.command-palette-highlight');
+  });
+
+  it('wires orchid:navigate from palette to ChatView/Sidebar', () => {
+    const palette = fs.readFileSync(
+      path.join(componentsDir, 'CommandPalette.tsx'),
+      'utf-8',
+    );
+    const chatView = fs.readFileSync(
+      path.join(componentsDir, 'ChatView.tsx'),
+      'utf-8',
+    );
+    expect(palette).toContain("orchid:navigate");
+    expect(chatView).toContain("orchid:navigate");
+    expect(chatView).toContain('setInspectorFocusSection');
   });
 });

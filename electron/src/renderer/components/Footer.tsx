@@ -13,6 +13,7 @@ import { ContextLegend } from './ContextGrid';
 import { contextUsedTokens } from '../../shared/usage';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
+import { StatusBadge } from './ui/StatusBadge';
 
 interface FooterProps {
   elapsedSeconds: number;
@@ -69,9 +70,18 @@ export function Footer({
     };
   }, [contextOpen]);
 
+  const badgeTone =
+    contextPercent >= 85
+      ? 'error'
+      : contextPercent >= 60
+        ? 'warning'
+        : contextPercent > 0
+          ? 'info'
+          : 'neutral';
+
   return (
-    <div className="chat-footer">
-      <div className="chat-footer-main min-w-0 flex-1 flex items-center gap-2 overflow-hidden">
+    <div className="chat-footer orchid-chat-footer">
+      <div className="chat-footer-main orchid-chat-footer-main min-w-0 flex-1 flex items-center gap-2 overflow-hidden">
         {isStreaming || confirming ? (
           <>
             {confirming ? (
@@ -83,14 +93,14 @@ export function Footer({
               </span>
             ) : (
               <span className="agent-status inline-flex items-center gap-1 text-success shrink-0">
-                <Icon name="loader" size={12} className="animate-spin" />
+                <span className="loading loading-spinner loading-xs" aria-hidden />
                 Running
               </span>
             )}
             <span className="opacity-40 shrink-0">-</span>
             <span className="shrink-0">elapsed {formatElapsed(elapsedSeconds)}</span>
             <span className="opacity-40 shrink-0">-</span>
-            <span className="chat-footer-hint">
+            <span className="chat-footer-hint orchid-chat-footer-hint">
               <Keycaps chord="Esc" size="xs" />
               <span className="chat-footer-hint-sep">or</span>
               <Icon name="square" size={10} className="opacity-80 shrink-0" />
@@ -115,7 +125,7 @@ export function Footer({
                       ·
                     </span>
                   )}
-                  <span className="chat-footer-hint">
+                  <span className="chat-footer-hint orchid-chat-footer-hint">
                     <Keycaps chord={def.chord} size="xs" />
                     <span className="chat-footer-hint-label">
                       {def.footerLabel ?? def.label}
@@ -128,14 +138,13 @@ export function Footer({
         )}
       </div>
 
-      {/* Context radial — always on the right; full ring = 100% used */}
       <div
         className={`dropdown dropdown-top dropdown-end shrink-0 ${contextOpen ? 'dropdown-open' : ''}`}
         data-footer-context-dropup
       >
         <button
           type="button"
-          className="footer-context-btn"
+          className="footer-context-btn orchid-footer-context-btn btn btn-ghost btn-circle btn-xs"
           aria-haspopup="dialog"
           aria-expanded={contextOpen}
           aria-controls={contextMenuId}
@@ -143,7 +152,7 @@ export function Footer({
           onClick={() => setContextOpen((o) => !o)}
         >
           <div
-            className={`radial-progress footer-context-radial ${radialTone}`}
+            className={`radial-progress footer-context-radial orchid-footer-context-radial ${radialTone}`}
             style={
               {
                 '--value': contextPercent,
@@ -163,7 +172,7 @@ export function Footer({
             id={contextMenuId}
             role="dialog"
             aria-label="Context breakdown"
-            className="dropdown-content footer-context-panel z-50 mb-1"
+            className="dropdown-content footer-context-panel orchid-footer-context-panel z-50 mb-1"
           >
             <div className="footer-context-panel-header">
               <div className="footer-context-panel-title">
@@ -171,19 +180,9 @@ export function Footer({
                 <span>Context</span>
               </div>
               <div className="footer-context-panel-meta mono">
-                <span
-                  className={`footer-context-panel-badge ${
-                    contextPercent >= 85
-                      ? 'is-error'
-                      : contextPercent >= 60
-                        ? 'is-warning'
-                        : contextPercent > 0
-                          ? 'is-info'
-                          : ''
-                  }`}
-                >
+                <StatusBadge tone={badgeTone} size="xs">
                   {contextPercent}% used
-                </span>
+                </StatusBadge>
                 {maxContext && maxContext > 0 ? (
                   <span className="footer-context-panel-window">
                     {formatTokens(maxContext)} window

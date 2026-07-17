@@ -51,6 +51,8 @@ export function ChatView() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  /** One-shot inspector section focus from command-palette navigation. */
+  const [inspectorFocusSection, setInspectorFocusSection] = useState<string | null>(null);
   const [closeConfirmId, setCloseConfirmId] = useState<string | null>(null);
   const closeConfirmRef = useRef<HTMLDivElement>(null);
   const closeConfirmCancelRef = useRef<HTMLButtonElement>(null);
@@ -139,6 +141,25 @@ export function ChatView() {
 
   const toggleLeftSidebar = useCallback(() => {
     setLeftSidebarCollapsed((prev) => !prev);
+  }, []);
+
+  // Wire dead command-palette `orchid:navigate` events to shell panels.
+  useEffect(() => {
+    const onNavigate = (event: Event) => {
+      const detail = (event as CustomEvent<{ section?: string }>).detail;
+      const section = detail?.section?.trim();
+      if (!section) return;
+
+      if (section === 'sessions') {
+        setLeftSidebarCollapsed(false);
+        return;
+      }
+
+      setSidebarOpen(true);
+      setInspectorFocusSection(section);
+    };
+    window.addEventListener('orchid:navigate', onNavigate);
+    return () => window.removeEventListener('orchid:navigate', onNavigate);
   }, []);
 
   const togglePalette = useCallback(() => {
@@ -1099,6 +1120,8 @@ export function ChatView() {
         maxContext={maxContext}
         messages={chat.messages}
         cwd={session.workspace?.cwd ?? chat.cwd}
+        focusSection={inspectorFocusSection}
+        onFocusSectionConsumed={() => setInspectorFocusSection(null)}
       />
 
       <CommandPalette

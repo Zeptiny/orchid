@@ -228,6 +228,8 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const streamSegmentsRef = useRef<StreamSegment[]>([]);
   /** Sync guard against double-send before status re-render (P1-35). */
   const isSendingRef = useRef(false);
+  /** Serialize staged Esc/cancel so repeated Escape cannot overlap phases. */
+  const cancelInFlightRef = useRef(false);
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
   const streamSessionIdRef = useRef<string | null>(activeSessionId);
   const streamTurnIdRef = useRef<string | null>(null);
@@ -773,6 +775,9 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     if (!window.orchid?.chat) return;
     // Do not cancel the target session while still painting the previous one.
     if (isSwitchingSession) return;
+    // Overlapping Esc/cancel must not advance interrupt phases out of order.
+    if (cancelInFlightRef.current) return;
+    cancelInFlightRef.current = true;
     try {
       const sessionId = activeSessionIdRef.current ?? streamSessionIdRef.current;
       const result = await window.orchid.chat.cancel(
@@ -835,7 +840,9 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         return;
       }
     } catch {
-      // Ignore cancel errors
+      // Ignore cancel errors — still release the in-flight guard below.
+    } finally {
+      cancelInFlightRef.current = false;
     }
   }, [applyToolBlocks, isSwitchingSession]);
 
@@ -865,6 +872,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     setInterrupted(false);
     setInterruptState('idle');
     isSendingRef.current = false;
+    cancelInFlightRef.current = false;
     setStatus('idle');
     // Rehydrate last-turn context usage from persisted messages; empty/new
     // sessions correctly get null → 0% context until the next stream.
@@ -896,6 +904,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     // Do not clear messages/tools/usage here — keep painting the previous
     // session until hydrate/replaceMessages commits the next view in one shot.
     isSendingRef.current = false;
+    cancelInFlightRef.current = false;
     setIsSwitchingSession(true);
   }, []);
 

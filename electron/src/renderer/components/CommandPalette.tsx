@@ -446,8 +446,7 @@ export function CommandPalette({
 
   return (
     <div
-      className="command-palette-overlay fixed inset-0 z-[1000] flex justify-center bg-black/55"
-      style={{ paddingTop: '80px' }}
+      className="command-palette-overlay orchid-command-palette-overlay fixed inset-0 z-50 flex justify-center bg-black/55 pt-20"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -455,12 +454,11 @@ export function CommandPalette({
     >
       <div
         ref={panelRef}
-        className="command-palette flex max-h-[420px] w-[min(520px,90%)] flex-col overflow-hidden rounded-[10px] border border-base-300 bg-base-200 shadow-2xl"
+        className="command-palette orchid-command-palette flex max-h-[26rem] w-full max-w-xl flex-col overflow-hidden rounded-box border border-base-300 bg-base-200 shadow-2xl mx-4"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
-        {/* Header / input */}
-        <div className="command-palette-search-row">
+        <div className="command-palette-search-row orchid-command-palette-search-row">
           {subPicker && (
             <IconButton
               label="Back"
@@ -474,11 +472,11 @@ export function CommandPalette({
               }}
             />
           )}
-          <label className="input input-sm command-palette-search-field">
+          <label className="input input-sm command-palette-search-field orchid-command-palette-search-field">
             <Icon name="search" size={14} className="shrink-0 text-base-content/45" />
             <input
               ref={inputRef}
-              className="command-palette-input"
+              className="command-palette-input grow"
               type="text"
               placeholder={subPicker ? subPickerTitle ?? 'Type a command or search...' : 'Type a command or search...'}
               value={query}
@@ -491,8 +489,7 @@ export function CommandPalette({
           </label>
         </div>
 
-        {/* Results or sub-picker */}
-        <div className="command-palette-results min-h-0 flex-1 overflow-y-auto p-1" ref={listRef}>
+        <div className="command-palette-results orchid-command-palette-results min-h-0 flex-1 overflow-y-auto p-1" ref={listRef}>
           {flatResults.length === 0 && !subPicker && (
             <div className="py-8 text-center text-sm text-base-content/50">
               {query ? 'No results found' : 'Type to search...'}
@@ -507,16 +504,17 @@ export function CommandPalette({
 
           {subPicker && flatResults.length > 0 ? (
             <div className="p-1">
-              <div className="mb-0.5 px-3 py-2 text-[9px] uppercase text-base-content/50">
+              <div className="mb-0.5 px-3 py-2 text-xs uppercase tracking-wide text-base-content/50">
                 {subPickerTitle ?? 'Select'}
               </div>
-              <div className="flex flex-col gap-[1px]">
+              <div className="flex flex-col gap-px">
                 {flatResults.map((item, i) => {
                   const isSelected = i === selectedIndex;
                   return (
                     <button
                       key={item.id}
-                      className={`flex min-h-[30px] w-full items-center gap-2 rounded-[5px] px-2 py-[5px] text-left text-[12px] ${
+                      type="button"
+                      className={`orchid-command-palette-item flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs ${
                         isSelected ? 'bg-primary/15' : 'hover:bg-base-content/5'
                       }`}
                       onClick={() => handleSelect(item)}
@@ -525,13 +523,13 @@ export function CommandPalette({
                     >
                       {subPicker === '/theme' && (
                         <span
-                          className="inline-block h-3.5 w-3.5 shrink-0 rounded-[3px] border border-base-300"
+                          className="orchid-theme-swatch inline-block h-3.5 w-3.5 shrink-0 rounded-sm border border-base-300"
                           style={{ background: THEME_SWATCHES[item.value ?? ''] ?? 'transparent' }}
                         />
                       )}
                       <span>{item.label}</span>
                       {item.description?.toLowerCase().includes('current') && (
-                        <span className="ml-auto text-[10px] text-base-content/50">current</span>
+                        <span className="badge badge-ghost badge-xs ml-auto">current</span>
                       )}
                     </button>
                   );
@@ -547,12 +545,12 @@ export function CommandPalette({
               }
 
               return (
-                <div key={group.category} className="command-palette-group mb-1">
-                  <div className="flex items-center gap-1.5 px-3 py-2 text-[9px] uppercase text-base-content/50">
+                <div key={group.category} className="command-palette-group orchid-command-palette-group mb-1">
+                  <div className="flex items-center gap-1.5 px-3 py-2 text-xs uppercase tracking-wide text-base-content/50">
                     <Icon name={CATEGORY_ICONS[group.category]} size={12} />
                     {group.label}
                   </div>
-                  <div className="flex flex-col gap-[1px]">
+                  <div className="flex flex-col gap-px">
                     {group.items.map((item) => {
                       const globalIndex = localIndex++;
                       const isSelected = globalIndex === selectedIndex;
@@ -560,7 +558,8 @@ export function CommandPalette({
                       return (
                         <button
                           key={item.id}
-                          className={`command-palette-item flex min-h-[32px] w-full items-center gap-2 rounded-[5px] px-3 py-2 text-left text-[12px] ${
+                          type="button"
+                          className={`command-palette-item orchid-command-palette-item flex min-h-8 w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs ${
                             isSelected ? 'bg-primary/15' : 'hover:bg-base-content/5'
                           }`}
                           data-selected={isSelected}
@@ -568,7 +567,7 @@ export function CommandPalette({
                           onMouseEnter={() => setSelectedIndex(globalIndex)}
                         >
                           <Icon name={iconForResult(item)} size={14} className="shrink-0 text-base-content/55" />
-                          <div className="flex-1 min-w-0">
+                          <div className="min-w-0 flex-1">
                             <div className="font-medium leading-tight">
                               {query ? (
                                 <HighlightedText query={query} text={item.label} />
@@ -577,7 +576,7 @@ export function CommandPalette({
                               )}
                             </div>
                             {item.description && (
-                              <div className="mt-0.5 truncate text-[11px] leading-tight text-base-content/50">
+                              <div className="mt-0.5 truncate text-xs leading-tight text-base-content/50">
                                 {item.description}
                               </div>
                             )}
@@ -596,7 +595,7 @@ export function CommandPalette({
         </div>
 
         <ShortcutBar
-          className="command-palette-footer"
+          className="command-palette-footer orchid-command-palette-footer"
           items={[
             { chord: ['↑', '↓'], label: 'navigate' },
             { chord: 'Enter', label: 'select' },
@@ -614,7 +613,7 @@ function HighlightedText({ query, text }: { query: string; text: string }) {
     <>
       {segments.map((seg, i) =>
         seg.highlighted ? (
-          <mark key={i} className="command-palette-highlight bg-primary/30">{seg.text}</mark>
+          <mark key={i} className="command-palette-highlight orchid-command-palette-highlight bg-primary/30 rounded-sm px-px">{seg.text}</mark>
         ) : (
           <span key={i}>{seg.text}</span>
         ),

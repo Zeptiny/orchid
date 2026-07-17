@@ -550,4 +550,160 @@
   .orchid-context-cell {
     @apply aspect-square rounded-sm;
   }
+
+  /* ── Composer / footer / discovery (U6) ─────────────────────────────────── */
+
+  .orchid-composer-area,
+  .composer-area {
+    @apply relative flex flex-col shrink-0 border-t border-base-300 bg-base-100;
+  }
+
+  .orchid-composer-gate,
+  .composer-workspace-gate {
+    @apply mx-3 mb-1.5 flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-xs;
+  }
+
+  .orchid-composer,
+  .composer {
+    @apply flex min-w-0 items-end gap-2 px-3.5 py-2;
+  }
+
+  .orchid-composer-controls,
+  .composer-controls {
+    @apply flex shrink-0 items-center gap-1.5 pb-px;
+  }
+
+  .orchid-composer-action,
+  .composer-action {
+    @apply shrink-0;
+    min-height: 34px !important;
+    min-width: 34px !important;
+    width: 34px;
+    height: 34px;
+    padding: 0 !important;
+  }
+
+  .orchid-composer-model-picker,
+  .composer-model-picker {
+    width: 180px;
+  }
+
+  .orchid-composer-model-picker .model-picker-trigger,
+  .composer-model-picker .model-picker-trigger {
+    @apply h-8 min-h-8 rounded-full border-transparent bg-transparent text-base-content/70;
+    padding: 5px 10px;
+  }
+
+  .orchid-composer-model-picker .model-picker-trigger:hover:not(:disabled),
+  .orchid-composer-model-picker .model-picker-trigger:focus-visible,
+  .composer-model-picker .model-picker-trigger:hover:not(:disabled),
+  .composer-model-picker .model-picker-trigger:focus-visible {
+    @apply text-base-content;
+    border-color: color-mix(in srgb, var(--color-primary) 25%, var(--color-base-300));
+    background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  }
+
+  .orchid-slash-menu,
+  .slash-menu {
+    @apply z-40 mx-2.5 flex max-h-64 flex-col overflow-hidden rounded-lg border border-base-300 bg-base-200 shadow-xl;
+  }
+
+  .orchid-slash-menu-header,
+  .slash-menu-header {
+    @apply flex shrink-0 items-center gap-1.5 border-b border-base-content/10 px-2.5 py-1.5 text-xs uppercase tracking-wide text-base-content/60;
+  }
+
+  .orchid-chat-footer,
+  .chat-footer {
+    @apply flex shrink-0 items-center justify-between gap-2.5 border-t border-base-content/10 bg-base-100 px-3 py-1 text-xs text-base-content/70;
+    min-height: 30px;
+  }
+
+  .orchid-chat-footer-hint,
+  .chat-footer-hint {
+    @apply inline-flex min-w-0 shrink-0 items-center gap-1.5;
+  }
+
+  .orchid-footer-context-btn,
+  .footer-context-btn {
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center;
+  }
+
+  .orchid-footer-context-radial,
+  .footer-context-radial {
+    @apply font-semibold leading-none;
+    font-size: 7px !important;
+  }
+
+  .footer-context-value {
+    @apply tabular-nums tracking-tight;
+    font-size: 7px;
+  }
+
+  .orchid-footer-context-panel,
+  .footer-context-panel {
+    @apply flex flex-col overflow-hidden rounded-lg border border-base-300 bg-base-200 text-base-content shadow-xl;
+    width: min(280px, 80vw);
+  }
+
+  .footer-context-panel-header {
+    @apply flex shrink-0 flex-col gap-1.5 border-b border-base-content/10 px-3 py-2.5;
+  }
+
+  .footer-context-panel-title {
+    @apply flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-base-content/60;
+  }
+
+  .footer-context-panel-meta {
+    @apply flex items-center justify-between gap-2 text-xs;
+  }
+
+  .footer-context-panel-window {
+    @apply text-xs text-base-content/60 opacity-90;
+  }
+
+  .footer-context-panel-body {
+    @apply p-2;
+  }
+
+  .orchid-command-palette-search-row,
+  .command-palette-search-row {
+    @apply flex min-h-14 shrink-0 items-center gap-2 border-b border-base-300 px-3.5 py-3;
+    background: color-mix(in srgb, var(--color-base-200) 62%, transparent);
+  }
+
+  .orchid-command-palette-search-field,
+  .command-palette-search-field {
+    @apply h-8 min-h-8 min-w-0 flex-1;
+  }
+
+  .orchid-model-picker-menu,
+  .model-picker-menu {
+    @apply flex flex-col overflow-hidden border border-base-300 bg-base-200 p-0 text-base-content shadow-xl;
+    width: min(620px, calc(100vw - 32px));
+    max-height: min(430px, 72vh);
+    border-radius: 9px;
+  }
+
+  .orchid-model-picker-trigger,
+  .model-picker-trigger {
+    @apply flex h-8 min-h-8 w-full min-w-0 items-center justify-start gap-1.5 border border-base-300 bg-base-100 px-2.5 text-left text-xs font-medium text-base-content;
+    border-radius: 5px;
+  }
+
+  .orchid-model-picker-trigger:hover:not(:disabled),
+  .orchid-model-picker-trigger:focus-visible,
+  .model-picker-trigger:hover:not(:disabled),
+  .model-picker-trigger:focus-visible {
+    border-color: color-mix(in srgb, var(--color-primary) 50%, var(--color-base-300));
+    background: color-mix(in srgb, var(--color-primary) 8%, var(--color-base-100));
+  }
+
+  .model-picker-trigger-label {
+    @apply min-w-0 flex-1 truncate leading-tight text-base-content;
+  }
+
+  .model-picker-empty {
+    @apply px-3 py-4 text-center text-xs text-base-content/60;
+  }
 }

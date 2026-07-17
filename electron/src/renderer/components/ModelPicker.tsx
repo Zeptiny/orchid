@@ -139,12 +139,12 @@ export function ModelPicker({
   return (
     <div
       ref={pickerRef}
-      className={`dropdown ${align === 'start' ? 'dropdown-start' : 'dropdown-end'} ${placement === 'top' ? 'dropdown-top' : ''} ${open ? 'dropdown-open' : ''} ${className} model-picker-align-${align}`.trim()}
+      className={`dropdown ${align === 'start' ? 'dropdown-start' : 'dropdown-end'} ${placement === 'top' ? 'dropdown-top' : ''} ${open ? 'dropdown-open' : ''} ${className} model-picker-align-${align} orchid-model-picker`.trim()}
     >
       <button
         id={id}
         type="button"
-        className={`btn btn-ghost model-picker-trigger${selectedTriggerSubLabel ? ' model-picker-trigger-with-sub-label' : ''}`}
+        className={`btn btn-ghost model-picker-trigger orchid-model-picker-trigger${selectedTriggerSubLabel ? ' model-picker-trigger-with-sub-label' : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={menuId}
@@ -154,10 +154,12 @@ export function ModelPicker({
         onClick={() => setOpen((previous) => !previous)}
       >
         <Icon name="cpu" size={13} className="shrink-0 opacity-70" />
-        <span className="model-picker-trigger-copy">
-          <span className="model-picker-trigger-label">{selectedDisplayName || displayModelId(value)}</span>
+        <span className="model-picker-trigger-copy orchid-model-picker-trigger-copy min-w-0 flex-1 flex flex-col items-start overflow-hidden">
+          <span className="model-picker-trigger-label truncate">{selectedDisplayName || displayModelId(value)}</span>
           {selectedTriggerSubLabel && (
-            <span className="model-picker-trigger-sub-label">{selectedTriggerSubLabel}</span>
+            <span className="model-picker-trigger-sub-label truncate text-xs font-normal text-base-content/60">
+              {selectedTriggerSubLabel}
+            </span>
           )}
         </span>
         <Icon
@@ -172,21 +174,27 @@ export function ModelPicker({
           id={menuId}
           role="listbox"
           aria-label={label}
-          className="dropdown-content model-picker-menu z-50"
+          className="dropdown-content model-picker-menu orchid-model-picker-menu z-50"
         >
-          <div className="model-picker-heading">
+          <div className="model-picker-heading orchid-model-picker-heading flex items-start justify-between gap-3.5 border-b border-base-content/10 px-3.5 py-3">
             <div>
-              <div className="model-picker-title">Models</div>
+              <div className="model-picker-title text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                Models
+              </div>
             </div>
-            <span className="model-picker-current">
-              <span className="model-picker-current-name">{selectedDisplayName || 'None selected'}</span>
+            <span className="model-picker-current flex min-w-0 flex-col items-end gap-0.5">
+              <span className="model-picker-current-name truncate text-xs font-medium">
+                {selectedDisplayName || 'None selected'}
+              </span>
               {selectedSubLabel && (
-                <span className="model-picker-current-sub-label">{selectedSubLabel}</span>
+                <span className="model-picker-current-sub-label truncate text-xs text-base-content/60">
+                  {selectedSubLabel}
+                </span>
               )}
             </span>
           </div>
 
-          <label className="input input-sm model-picker-search">
+          <label className="input input-sm model-picker-search orchid-model-picker-search mx-2 my-2">
             <Icon name="search" size={14} className="shrink-0 opacity-50" />
             <input
               ref={searchRef}

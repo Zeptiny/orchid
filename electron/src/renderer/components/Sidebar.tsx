@@ -49,6 +49,12 @@ interface SidebarProps {
   messages?: readonly Message[];
   /** Working directory shown in the bottom status strip. */
   cwd?: string;
+  /**
+   * Command-palette navigation target (section slug). When set, opens the
+   * matching collapse and scrolls it into view, then parent should clear.
+   */
+  focusSection?: string | null;
+  onFocusSectionConsumed?: () => void;
 }
 
 export function Sidebar({
@@ -73,8 +79,23 @@ export function Sidebar({
   maxContext,
   messages,
   cwd,
+  focusSection = null,
+  onFocusSectionConsumed,
 }: SidebarProps) {
   // Inspector toggle (Mod+B) is owned by ChatView via the central shortcut registry.
+  const [forcedSection, setForcedSection] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!focusSection) return;
+    const sectionId = NAV_SECTION_MAP[focusSection] ?? focusSection;
+    setForcedSection(sectionId);
+    onFocusSectionConsumed?.();
+    requestAnimationFrame(() => {
+      document
+        .getElementById(`${sectionId}-trigger`)
+        ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+  }, [focusSection, onFocusSectionConsumed]);
 
   if (!isOpen) {
     return (
@@ -112,13 +133,18 @@ export function Sidebar({
       />
 
       <div id="right-sidebar-body" className="panel-body">
-        <CollapseBlock title="Todos" sectionId="inspector-todos">
+        <CollapseBlock
+          title="Todos"
+          sectionId="inspector-todos"
+          forceOpen={forcedSection === 'inspector-todos' ? true : undefined}
+        >
           <TodosSection state={todoState} onRefresh={onRefreshTodos} />
         </CollapseBlock>
 
         <CollapseBlock
           title="Subagents"
           sectionId="inspector-subagents"
+          forceOpen={forcedSection === 'inspector-subagents' ? true : undefined}
           badge={
             subagentState.status === 'ready' && subagentState.subagents.length > 0 ? (
               <StatusBadge tone="success" size="xs">{subagentState.subagents.length}</StatusBadge>
@@ -138,18 +164,24 @@ export function Sidebar({
           title="Context"
           sectionId="inspector-context"
           defaultOpen
+          forceOpen={forcedSection === 'inspector-context' ? true : undefined}
           badge={<ContextBadge usage={usage} maxContext={maxContext} />}
         >
           <ContextGrid messages={messages} usage={usage} maxContext={maxContext} />
         </CollapseBlock>
 
-        <CollapseBlock title="Usage" sectionId="inspector-usage">
+        <CollapseBlock
+          title="Usage"
+          sectionId="inspector-usage"
+          forceOpen={forcedSection === 'inspector-usage' ? true : undefined}
+        >
           <TokenUsageSection cumulativeUsage={cumulativeUsage} maxContext={maxContext} />
         </CollapseBlock>
 
         <CollapseBlock
           title="Workspace Index"
           sectionId="inspector-index"
+          forceOpen={forcedSection === 'inspector-index' ? true : undefined}
           badge={<IndexBadge ragStatus={ragStatus} astStatus={astStatus} />}
         >
           <IndexSection
@@ -165,6 +197,7 @@ export function Sidebar({
           title="MCP Servers"
           sectionId="inspector-mcp"
           defaultOpen
+          forceOpen={forcedSection === 'inspector-mcp' ? true : undefined}
           badge={<MCPStatusBadges servers={mcpServers} />}
         >
           <MCPSection servers={mcpServers} />
@@ -197,7 +230,20 @@ interface CollapseBlockProps {
   defaultOpen?: boolean;
   badge?: ReactNode;
   children: ReactNode;
+  /** Controlled open state (e.g. palette navigation). */
+  forceOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
+
+/** Map command-palette navigation values to inspector section ids. */
+const NAV_SECTION_MAP: Record<string, string> = {
+  subagents: 'inspector-subagents',
+  todos: 'inspector-todos',
+  'mcp-servers': 'inspector-mcp',
+  'index-status': 'inspector-index',
+  context: 'inspector-context',
+  usage: 'inspector-usage',
+};
 
 function CollapseBlock({
   title,
@@ -205,14 +251,28 @@ function CollapseBlock({
   defaultOpen = false,
   badge,
   children,
+  forceOpen,
+  onOpenChange,
 }: CollapseBlockProps) {
   const [open, setOpen] = useState(defaultOpen);
   const contentId = `${sectionId}-content`;
+
+  // One-shot open from palette navigation; user can still collapse afterward.
+  useEffect(() => {
+    if (forceOpen === true) setOpen(true);
+  }, [forceOpen]);
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    onOpenChange?.(next);
+  };
+
   return (
-    <div className="mock-collapse">
+    <div className="mock-collapse" data-inspector-section={sectionId}>
       <button
         className="mock-collapse-title flex w-full items-center justify-between gap-1.5"
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
         type="button"
         aria-expanded={open}
         aria-controls={contentId}

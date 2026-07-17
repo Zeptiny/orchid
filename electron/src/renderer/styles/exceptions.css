@@ -88,3 +88,36 @@
 .config-shell {
   grid-template-columns: auto minmax(0, 1fr);
 }
+
+/* ── Composer textarea auto-resize (U6) ─────────────────────────────────────
+ * Runtime height is owned by InputArea (min/max + scrollHeight). Keep static
+ * chrome here so first paint matches post-send size without field-sizing.
+ */
+.composer-textarea,
+.orchid-composer-textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  min-height: 34px;
+  height: 34px;
+  max-height: 160px;
+  resize: none;
+  overflow-y: auto;
+  box-sizing: border-box;
+  border-radius: 16px;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 7px 14px;
+}
+
+/* DaisyUI radial-progress size/value CSS vars set from Footer at runtime. */
+.footer-context-radial,
+.orchid-footer-context-radial {
+  --size: 1.4rem;
+  --thickness: 2px;
+}
+
+/* Theme swatches in command palette are dynamic hex per theme id. */
+.orchid-theme-swatch {
+  /* background set inline from THEME_SWATCHES */
+}
