@@ -601,7 +601,9 @@ function ProjectSessionList({
                   <StatusBadge tone="success" size="xs">{counts.unread}</StatusBadge>
                 )}
                 {isProjectSelected && (
-                  <StatusBadge tone="neutral" size="xs" outline>project</StatusBadge>
+                  <StatusBadge tone="primary" size="xs" outline className="session-select-badge">
+                    project
+                  </StatusBadge>
                 )}
               </button>
               {project.path && onProjectSessionCreate && (
@@ -764,7 +766,9 @@ function SessionRow({
           )}
         </span>
         {isActive && (
-          <StatusBadge tone="neutral" size="xs" outline>selected</StatusBadge>
+          <StatusBadge tone="primary" size="xs" outline className="session-select-badge">
+            selected
+          </StatusBadge>
         )}
       </div>
       <button
