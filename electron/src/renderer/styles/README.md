@@ -54,6 +54,10 @@ Do **not** use DaisyUI `chat` / `chat-bubble` for message bodies (flat chat pres
 | Panel surfaces | `Panel.tsx`, `SectionHeader.tsx` |
 | Form rows | `FormField.tsx` |
 
+### Deferred roots (baseline-tracked)
+
+These DaisyUI roots still appear in feature JSX and are tracked by the drift scanner's baseline. They will be removed as follow-up primitives are built: `textarea` (deferred per composer-contract.test.ts), `label`, `list`, `join`, `step`/`steps`, `status` (on non-StatusBadge elements), `progress`/`radial-progress`, `table`, `modal`/`modal-action`, `footer`, `dropdown`, and `btn-square` on `IconButton` (used for shape detection).
+
 ## Required rules
 
 - **Feature JSX must not name DaisyUI component roots** (`btn`, `input`, `select`, `alert`, `badge`, `card`, `tabs`, `modal`, `loading`, `checkbox`, `dropdown`, etc.) directly in `className` strings. Use a primitive from `components/ui/` instead. DaisyUI classes are allowed only inside `components/ui/` primitives and in `components.css` `@apply` rules.
@@ -61,8 +65,8 @@ Do **not** use DaisyUI `chat` / `chat-bubble` for message bodies (flat chat pres
 - Prefer standard spacing, text, and radius scales over arbitrary values (`text-[10px]`, `z-[1000]`, `rounded-[5px]`).
 - **Do not introduce raw non-token colors** (`oklch(...)`, `#hex`, `rgb(...)`, `hsl(...)`) in `styles/*.css` or feature `className` strings. Only `index.css` `:root` fallback tokens and `themes/*.css` may use raw color values.
 - Keep dynamic values (grid tracks, textarea height, swatches, progress) as data via CSS variables or inline styles — not static utility classes.
-- Namespace new composites with `orchid-`. Residual legacy selectors live only in `chat.css` while still consumed.
-- **`chat.css` is frozen**: do not add new rules or grow its line count. Migrated surfaces delete their blocks. Target: shrink to ≤ 400 lines.
+- Namespace new composites with `orchid-`. Define them in `components.css` `@layer components` using `@apply` + semantic tokens.
+- **`chat.css` is frozen**: do not add new rules or grow its line count. All product CSS has been migrated to `components.css` and `markdown.css`; `chat.css` is now header-only. Any new selector belongs in `components.css` `@layer components`.
 - Do not redefine reserved DaisyUI selectors in feature CSS (see below).
 - Do not add CSS Modules or a second styling library for this migration.
 
@@ -88,7 +92,7 @@ Product-specific names that only *start* like a DaisyUI root but are not DaisyUI
 | Runtime textarea height | `InputArea.tsx` + `.orchid-composer-textarea` in exceptions | Keep resize behavior; do not encode generated pixel heights as static utilities |
 | Runtime swatches / progress | `ContextGrid.tsx`, `Footer.tsx`, `CommandPalette.tsx` | Dynamic colors/fractions as data; classes for surrounding geometry |
 | Focus / modal browser quirks | focused exception selectors | Only after smoke proves utilities/DaisyUI insufficient |
-| Residual product CSS | `styles/chat.css` | Unmigrated shell/onboarding/config/picker/session selectors still consumed by JSX; shrink further as surfaces move to orchid-* only |
+| Residual product CSS | `styles/chat.css` (header-only) | All shell/onboarding/config/picker/session selectors have been migrated to `components.css`; `chat.css` is empty and frozen |
 
 Every exception needs a short comment or a row in this table explaining why a predefined class cannot replace it.
 
