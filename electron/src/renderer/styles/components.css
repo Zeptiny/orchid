@@ -533,9 +533,11 @@
   /* ── Composer / footer / discovery (U6) ─────────────────────────────────── */
 
   .orchid-composer-area {
-    @apply relative flex flex-col shrink-0 border-t border-base-300 bg-base-100;
-    /* Keep composer controls off the pane edges (match footer inset). */
+    @apply relative flex flex-col shrink-0 bg-base-100;
+    /* No top border — continuous with chat; footer has no divider either. */
+    border-top: none;
     padding-inline: 16px;
+    padding-top: 8px;
   }
 
   .orchid-composer-gate {
@@ -543,28 +545,47 @@
   }
 
   .orchid-composer {
-    @apply flex min-w-0 items-end gap-2 py-2;
-    /* Horizontal padding lives on the area so gates/slash menu share the inset. */
+    @apply flex min-w-0 flex-col py-1;
     padding-inline: 0;
   }
 
-  /* Textarea owns the free horizontal space; controls stay compact. */
+  /* Single field shell: textarea + send button share one border/background. */
+  .orchid-composer-shell {
+    @apply flex min-w-0 items-end gap-1.5;
+    border: 1px solid var(--border-default, var(--color-base-300));
+    border-radius: 0.5rem;
+    background: var(--input-bg, var(--color-base-200));
+    padding: 4px 4px 4px 10px;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  }
+
+  .orchid-composer-shell:focus-within {
+    border-color: color-mix(in srgb, var(--color-primary) 55%, var(--color-base-300));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 25%, transparent);
+  }
+
+  .orchid-composer.streaming .orchid-composer-shell {
+    border-color: color-mix(in srgb, var(--color-base-content) 14%, var(--color-base-300));
+  }
+
   .orchid-composer .orchid-composer-textarea {
-    @apply min-w-0 flex-1;
+    @apply min-w-0 flex-1 border-0 bg-transparent shadow-none outline-none;
+    resize: none;
   }
 
   .orchid-composer-controls {
-    @apply flex shrink-0 items-center gap-1.5 pb-px;
+    @apply flex shrink-0 items-end;
+    padding-bottom: 1px;
   }
 
   .orchid-composer-action {
     @apply shrink-0 rounded-md;
-    min-height: 34px !important;
-    min-width: 34px !important;
-    width: 34px;
-    height: 34px;
+    min-height: 30px !important;
+    min-width: 30px !important;
+    width: 30px;
+    height: 30px;
     padding: 0 !important;
-    border-radius: 0.375rem !important; /* rounded-md, not circle */
+    border-radius: 0.375rem !important;
   }
 
   .orchid-composer-model-picker {
@@ -597,11 +618,12 @@
   }
 
   .orchid-chat-footer {
-    @apply flex shrink-0 items-center justify-between gap-2.5 border-t border-base-content/10 bg-base-100 text-xs text-base-content/70;
+    @apply flex shrink-0 items-center justify-between gap-2.5 bg-base-100 text-xs text-base-content/70;
     min-height: 34px;
-    /* Match composer-area inset so model/context controls clear the pane edge. */
+    /* No top border — continuous surface under the unified composer. */
+    border-top: none;
     margin-inline: 0;
-    padding: 6px 16px 10px;
+    padding: 4px 16px 10px;
   }
 
   .orchid-chat-footer-hint {

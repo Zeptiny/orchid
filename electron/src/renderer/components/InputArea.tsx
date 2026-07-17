@@ -1,8 +1,8 @@
 /**
- * InputArea — composer with send/cancel.
+ * InputArea — unified composer shell with send/cancel inside the field.
  *
  * Layout:
- *   [ textarea … ] [ ↑ / ■ ]
+ *   [ textarea ………………………………… [ ↑ / ■ ] ]
  *
  * Model selector lives in Footer (left of context radial).
  * Enter send · Shift+Enter newline · Ctrl/Cmd+S send · Esc multi-stage interrupt.
@@ -59,7 +59,7 @@ interface InputAreaProps {
 type SubPicker = '/theme' | '/personality' | '/model' | '/sessions' | null;
 
 /** Single-line composer height — keep in sync with `.orchid-composer-textarea` CSS. */
-const TEXTAREA_MIN_HEIGHT_PX = 34;
+const TEXTAREA_MIN_HEIGHT_PX = 30;
 const TEXTAREA_MAX_HEIGHT_PX = 160;
 
 export function InputArea({
@@ -615,66 +615,68 @@ export function InputArea({
       <div
         className={`orchid-composer ${isStreaming || confirming ? 'streaming' : ''} ${
           showCancel ? 'composer-cancel-mode' : ''
- }`}
+        }`}
       >
-        <textarea
-          ref={textareaRef}
-          className="textarea textarea-bordered orchid-composer-textarea"
-          data-orchid-composer
-          value={input}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            isStreaming || interruptState === 'confirmAgent'
-              ? 'Streaming… (Esc or ■ to interrupt)'
-              : interruptState === 'confirmSubagents'
-                ? 'Type a follow-up, or Esc / ■ to cancel subagents…'
-                : !workspaceBound
-                  ? 'Choose a project folder first… (or /cd)'
-                  : !providerAvailable
-                    ? 'Set up a provider before chatting…'
-                    : !modelSelected
-                      ? 'Select a connection and model first…'
-                  : commandContext
-                    ? 'Type a message or /command… (Enter to send)'
-                    : 'Type a message… (Enter to send, Shift+Enter for newline)'
-          }
-          disabled={inputDisabled}
-          rows={1}
-          aria-autocomplete={commandContext ? 'list' : undefined}
-          aria-expanded={showMenu || undefined}
-          aria-controls={showMenu ? 'slash-command-menu' : undefined}
-        />
+        <div className="orchid-composer-shell">
+          <textarea
+            ref={textareaRef}
+            className="orchid-composer-textarea"
+            data-orchid-composer
+            value={input}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            placeholder={
+              isStreaming || interruptState === 'confirmAgent'
+                ? 'Streaming… (Esc or ■ to interrupt)'
+                : interruptState === 'confirmSubagents'
+                  ? 'Type a follow-up, or Esc / ■ to cancel subagents…'
+                  : !workspaceBound
+                    ? 'Choose a project folder first… (or /cd)'
+                    : !providerAvailable
+                      ? 'Set up a provider before chatting…'
+                      : !modelSelected
+                        ? 'Select a connection and model first…'
+                        : commandContext
+                          ? 'Type a message or /command… (Enter to send)'
+                          : 'Type a message… (Enter to send, Shift+Enter for newline)'
+            }
+            disabled={inputDisabled}
+            rows={1}
+            aria-autocomplete={commandContext ? 'list' : undefined}
+            aria-expanded={showMenu || undefined}
+            aria-controls={showMenu ? 'slash-command-menu' : undefined}
+          />
 
-        <div className="orchid-composer-controls">
-          {showCancel ? (
-            <IconButton
-              label={cancelTitle}
-              icon="square"
-              size="sm"
-              variant={cancelVariant}
-              className="orchid-composer-action btn-square"
-              onClick={() => void onCancel()}
-              iconSize={14}
-            />
-          ) : (
-            <IconButton
-              label={showMenu ? 'Run command' : 'Send'}
-              icon="arrowUp"
-              size="sm"
-              variant="primary"
-              className="orchid-composer-action btn-square"
-              onClick={() => {
-                if (showMenu && slashResults[selectedIndex]) {
-                  void handleSelectResult(slashResults[selectedIndex]);
-                  return;
-                }
-                void handleSend();
-              }}
-              disabled={!hasInput || (!showMenu && plainChatBlocked)}
-              iconSize={16}
-            />
-          )}
+          <div className="orchid-composer-controls">
+            {showCancel ? (
+              <IconButton
+                label={cancelTitle}
+                icon="square"
+                size="sm"
+                variant={cancelVariant}
+                className="orchid-composer-action btn-square"
+                onClick={() => void onCancel()}
+                iconSize={14}
+              />
+            ) : (
+              <IconButton
+                label={showMenu ? 'Run command' : 'Send'}
+                icon="arrowUp"
+                size="sm"
+                variant="primary"
+                className="orchid-composer-action btn-square"
+                onClick={() => {
+                  if (showMenu && slashResults[selectedIndex]) {
+                    void handleSelectResult(slashResults[selectedIndex]);
+                    return;
+                  }
+                  void handleSend();
+                }}
+                disabled={!hasInput || (!showMenu && plainChatBlocked)}
+                iconSize={16}
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>
