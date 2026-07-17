@@ -588,12 +588,12 @@ describe('Command Palette File Structure', () => {
       'utf-8',
     );
     const css = `${chatCss}\n${componentsCss}`;
-    expect(css).toContain('.command-palette-overlay');
-    expect(css).toContain('.command-palette');
-    expect(css).toContain('.command-palette-results');
-    expect(css).toContain('.command-palette-item');
-    expect(css).toContain('.command-palette-group');
-    expect(css).toContain('.command-palette-footer');
+    expect(css).toContain('.orchid-command-palette-overlay');
+    expect(css).toContain('.orchid-command-palette');
+    expect(css).toContain('.orchid-command-palette-results');
+    expect(css).toContain('.orchid-command-palette-item');
+    expect(css).toContain('.orchid-command-palette-group');
+    expect(css).toContain('.orchid-command-palette-footer');
   });
 
   it('wires orchid:navigate from palette to ChatView/Sidebar', () => {

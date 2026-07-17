@@ -80,8 +80,8 @@ export function Footer({
           : 'neutral';
 
   return (
-    <div className="chat-footer orchid-chat-footer">
-      <div className="chat-footer-main orchid-chat-footer-main min-w-0 flex-1 flex items-center gap-2 overflow-hidden">
+    <div className="orchid-chat-footer">
+      <div className="orchid-chat-footer-main min-w-0 flex-1 flex items-center gap-2 overflow-hidden">
         {isStreaming || confirming ? (
           <>
             {confirming ? (
@@ -100,7 +100,7 @@ export function Footer({
             <span className="opacity-40 shrink-0">-</span>
             <span className="shrink-0">elapsed {formatElapsed(elapsedSeconds)}</span>
             <span className="opacity-40 shrink-0">-</span>
-            <span className="chat-footer-hint orchid-chat-footer-hint">
+            <span className="orchid-chat-footer-hint">
               <Keycaps chord="Esc" size="xs" />
               <span className="chat-footer-hint-sep">or</span>
               <Icon name="square" size={10} className="opacity-80 shrink-0" />
@@ -125,7 +125,7 @@ export function Footer({
                       ·
                     </span>
                   )}
-                  <span className="chat-footer-hint orchid-chat-footer-hint">
+                  <span className="orchid-chat-footer-hint">
                     <Keycaps chord={def.chord} size="xs" />
                     <span className="chat-footer-hint-label">
                       {def.footerLabel ?? def.label}
@@ -144,7 +144,7 @@ export function Footer({
       >
         <button
           type="button"
-          className="footer-context-btn orchid-footer-context-btn btn btn-ghost btn-circle btn-xs"
+          className="orchid-footer-context-btn btn btn-ghost btn-circle btn-xs"
           aria-haspopup="dialog"
           aria-expanded={contextOpen}
           aria-controls={contextMenuId}
@@ -152,7 +152,7 @@ export function Footer({
           onClick={() => setContextOpen((o) => !o)}
         >
           <div
-            className={`radial-progress footer-context-radial orchid-footer-context-radial ${radialTone}`}
+            className={`radial-progress orchid-footer-context-radial ${radialTone}`}
             style={
               {
                 '--value': contextPercent,
@@ -172,7 +172,7 @@ export function Footer({
             id={contextMenuId}
             role="dialog"
             aria-label="Context breakdown"
-            className="dropdown-content footer-context-panel orchid-footer-context-panel z-50 mb-1"
+            className="dropdown-content orchid-footer-context-panel z-50 mb-1"
           >
             <div className="footer-context-panel-header">
               <div className="footer-context-panel-title">

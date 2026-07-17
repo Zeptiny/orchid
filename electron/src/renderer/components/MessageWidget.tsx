@@ -71,7 +71,7 @@ export function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
 
 function UserMessage({ message }: { message: Message }) {
   return (
-    <div className="msg msg-user orchid-msg orchid-msg-user">{message.content}</div>
+    <div className="orchid-msg orchid-msg-user">{message.content}</div>
   );
 }
 
@@ -84,7 +84,7 @@ function AssistantMessage({
 }) {
   if (!message.content && !isStreaming) return null;
   return (
-    <div className="msg msg-assistant orchid-msg orchid-msg-assistant">
+    <div className="orchid-msg orchid-msg-assistant">
       {message.content ? <MarkdownContent content={message.content} /> : null}
       {isStreaming && (
         <span className="streaming-cursor" aria-hidden />
@@ -124,11 +124,11 @@ function ThinkingMessage({
 
   return (
     <div
-      className={`thought-block orchid-thought ${isStreaming ? 'thought-block-streaming' : ''}`}
+      className={`orchid-thought ${isStreaming ? 'thought-block-streaming' : ''}`}
     >
       <button
         type="button"
-        className="thought-block-title orchid-thought-title"
+        className="orchid-thought-title"
         onClick={toggle}
         aria-expanded={expanded}
         aria-controls={panelId}
@@ -144,7 +144,7 @@ function ThinkingMessage({
         <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
       </button>
       {expanded && (
-        <div id={panelId} className="thought-block-content orchid-thought-content">
+        <div id={panelId} className="orchid-thought-content">
           {content}
           {isStreaming && <span className="streaming-cursor" aria-hidden />}
         </div>
@@ -210,13 +210,13 @@ function ToolResultMessage({ message }: { message: Message }) {
 function ErrorMessage({ message }: { message: Message }) {
   return (
     <div
-      className="error-banner-inline orchid-error-banner alert alert-error"
+      className="orchid-error-banner alert alert-error"
       role="alert"
     >
       <Icon name="alertCircle" size={16} className="shrink-0" />
       <div className="min-w-0 flex-1 orchid-error-body">
-        <div className="error-banner-title orchid-error-title">Error</div>
-        <div className="error-banner-message orchid-error-message">{message.content}</div>
+        <div className="orchid-error-title">Error</div>
+        <div className="orchid-error-message">{message.content}</div>
       </div>
     </div>
   );
@@ -224,12 +224,12 @@ function ErrorMessage({ message }: { message: Message }) {
 
 function SystemMessage({ message }: { message: Message }) {
   return (
-    <div className="msg-system orchid-msg-system">{message.content}</div>
+    <div className="orchid-msg-system">{message.content}</div>
   );
 }
 
 function DefaultMessage({ message }: { message: Message }) {
   return (
-    <div className="msg msg-assistant orchid-msg orchid-msg-assistant">{message.content}</div>
+    <div className="orchid-msg orchid-msg-assistant">{message.content}</div>
   );
 }

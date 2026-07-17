@@ -62,10 +62,10 @@ Product-specific names that only *start* like a DaisyUI root but are not DaisyUI
 | Scrollbars | `styles/exceptions.css` | Browser-specific selectors; theme variables only |
 | Animations / streaming cursor | `styles/exceptions.css` | Keyframes and pseudo-elements when utilities cannot express behavior |
 | Runtime layout dimensions | `ChatView.tsx` + `styles/exceptions.css` `.app-frame` | Set `--orchid-shell-left` / `--orchid-shell-right` from collapse state; center track stays `minmax(460px, 1fr)`; preserve grid/panel topology |
-| Runtime textarea height | `InputArea.tsx` + `.composer-textarea` in exceptions | Keep resize behavior; do not encode generated pixel heights as static utilities |
+| Runtime textarea height | `InputArea.tsx` + `.orchid-composer-textarea` in exceptions | Keep resize behavior; do not encode generated pixel heights as static utilities |
 | Runtime swatches / progress | `ContextGrid.tsx`, `Footer.tsx`, `CommandPalette.tsx` | Dynamic colors/fractions as data; classes for surrounding geometry |
 | Focus / modal browser quirks | focused exception selectors | Only after smoke proves utilities/DaisyUI insufficient |
-| Residual product CSS | `styles/chat.css` | Unmigrated shell/onboarding/palette/config selectors still consumed by JSX; shrink further when dual-class consumers drop legacy names |
+| Residual product CSS | `styles/chat.css` | Unmigrated shell/onboarding/config/picker/session selectors still consumed by JSX; shrink further as surfaces move to orchid-* only |
 
 Every exception needs a short comment or a row in this table explaining why a predefined class cannot replace it.
 
@@ -104,10 +104,10 @@ Do not replace the runtime theme loader with compile-time-only DaisyUI theme blo
 | File | Role |
 | --- | --- |
 | `index.css` | **Canonical entry** (imported from `main.tsx`): Tailwind, DaisyUI plugin, document/root rules, layer imports |
-| `components.css` | `@layer components` `orchid-*` composites with `@apply` + semantic/theme tokens (dual-named with legacy aliases where still needed) |
+| `components.css` | `@layer components` `orchid-*` composites with `@apply` + semantic/theme tokens (single-name; no legacy dual aliases) |
 | `markdown.css` | Markdown / GFM / highlight tokens |
 | `exceptions.css` | Scrollbars, keyframes, streaming cursor, shell grid tracks, composer height hooks |
-| `chat.css` | Residual compatibility bridge (~2.2k lines): command palette chrome, onboarding/provider wizard shell, panels/session/config/shortcuts/pickers still consumed by JSX |
+| `chat.css` | Residual compatibility bridge: onboarding/provider wizard shell, panels/session/config/shortcuts/pickers still consumed by JSX |
 | `README.md` | This contract |
 
 ### Import graph
@@ -126,9 +126,9 @@ Runtime themes are **not** part of this graph: `applyTheme()` swaps a single `#o
 
 ### Residual bridge (`chat.css`)
 
-- Dead pre-migration legacy blocks (old `.message-*`, `.app-layout`, `.sidebar-*`, `.footer` layout) were removed in U8; a further residual prune removed unused `composer-model-*`, most `onb-*` step subtrees, `thought-activity-group`, dead palette/config/tier-picker subparts, and similar selectors with no JSX consumers.
-- Migrated dual-class rules already owned by `components.css` were removed from the bridge.
-- Remaining rules still have JSX consumers (shell panels, session chrome, config/onboarding shell, command palette chrome, pickers, shortcuts help).
+- Dead pre-migration legacy blocks (old `.message-*`, `.app-layout`, `.sidebar-*`, `.footer` layout) were removed in U8; further residual prunes removed unused `composer-model-*`, most `onb-*` step subtrees, `thought-activity-group`, dead palette/config/tier-picker subparts, and dual-owned palette/chat-scroll rules with no remaining legacy class consumers.
+- Dual-class aliases (`legacy` + `orchid-*` on the same rule) were collapsed: JSX and CSS use `orchid-*` only for migrated surfaces; legacy dual selectors were dropped from `components.css` and retargeted/removed in the bridge.
+- Remaining rules still have JSX consumers (shell panels, session chrome, config/onboarding shell, model-picker table chrome, slash subparts, shortcuts help).
 - The unused `components/ui/index.ts` barrel was deleted; import UI primitives from their module paths.
 - **Do not add new rules** to `chat.css`. New composites → `components.css`; markdown → `markdown.css`; browser exceptions → `exceptions.css`.
 
@@ -171,7 +171,7 @@ In `components.css`:
 }
 ```
 
-In JSX: `className="orchid-chat-footer chat-footer"` (dual name only while a legacy alias remains useful).
+In JSX: `className="orchid-chat-footer"` (single orchid name; do not reintroduce legacy dual aliases).
 
 ### Example 4 — Dynamic exception
 

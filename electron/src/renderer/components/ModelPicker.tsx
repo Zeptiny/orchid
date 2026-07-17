@@ -155,7 +155,7 @@ export function ModelPicker({
         ref={triggerRef}
         id={id}
         type="button"
-        className={`btn btn-ghost model-picker-trigger orchid-model-picker-trigger${selectedTriggerSubLabel ? ' model-picker-trigger-with-sub-label' : ''}`}
+        className={`btn btn-ghost orchid-model-picker-trigger orchid-model-picker-trigger${selectedTriggerSubLabel ? ' model-picker-trigger-with-sub-label' : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={menuId}
@@ -165,7 +165,7 @@ export function ModelPicker({
         onClick={toggleOpen}
       >
         <Icon name="cpu" size={13} className="shrink-0 opacity-70" />
-        <span className="model-picker-trigger-copy orchid-model-picker-trigger-copy min-w-0 flex-1 flex flex-col items-start overflow-hidden">
+        <span className="orchid-model-picker-trigger-copy min-w-0 flex-1 flex flex-col items-start overflow-hidden">
           <span className="model-picker-trigger-label truncate">{selectedDisplayName || displayModelId(value)}</span>
           {selectedTriggerSubLabel && (
             <span className="model-picker-trigger-sub-label truncate text-xs font-normal text-base-content/60">
@@ -185,9 +185,9 @@ export function ModelPicker({
           id={menuId}
           role="listbox"
           aria-label={label}
-          className="dropdown-content model-picker-menu orchid-model-picker-menu z-50"
+          className="dropdown-content orchid-model-picker-menu z-50"
         >
-          <div className="model-picker-heading orchid-model-picker-heading flex items-start justify-between gap-3.5 border-b border-base-content/10 px-3.5 py-3">
+          <div className="orchid-model-picker-heading flex items-start justify-between gap-3.5 border-b border-base-content/10 px-3.5 py-3">
             <div>
               <div className="model-picker-title text-xs font-semibold uppercase tracking-wide text-base-content/60">
                 Models
@@ -205,7 +205,7 @@ export function ModelPicker({
             </span>
           </div>
 
-          <label className="input input-sm model-picker-search orchid-model-picker-search mx-2 my-2">
+          <label className="input input-sm orchid-model-picker-search mx-2 my-2">
             <Icon name="search" size={14} className="shrink-0 opacity-50" />
             <input
               ref={searchRef}

@@ -820,14 +820,14 @@ describe('CSS Structure', () => {
     expect(css).toContain('.main-pane');
     expect(css).toContain('.left-panel');
     expect(css).toContain('.right-panel');
-    expect(css).toContain('.chat-scroll');
+    expect(css).toContain('.orchid-chat-scroll');
   });
 
   it('flat message classes remain (not DaisyUI chat bubbles)', () => {
     const css = readStyles();
-    expect(css).toContain('.msg-user');
-    expect(css).toContain('.msg-assistant');
-    expect(css).toContain('.msg-system');
+    expect(css).toContain('.orchid-msg-user');
+    expect(css).toContain('.orchid-msg-assistant');
+    expect(css).toContain('.orchid-msg-system');
     expect(css).not.toMatch(/\.chat-bubble\b/);
   });
 
@@ -841,14 +841,14 @@ describe('CSS Structure', () => {
 
   it('composer classes leave sizing to the resize effect', () => {
     const css = readStyles();
-    expect(css).toContain('.composer-textarea');
+    expect(css).toContain('.orchid-composer-textarea');
     expect(css).not.toContain('field-sizing: content');
   });
 
   it('chat footer classes remain', () => {
     const css = readStyles();
-    expect(css).toContain('.chat-footer');
-    expect(css).toContain('.chat-footer-hint');
+    expect(css).toContain('.orchid-chat-footer');
+    expect(css).toContain('.orchid-chat-footer-hint');
   });
 
   it('style layers use theme custom properties', () => {

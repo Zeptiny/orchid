@@ -76,7 +76,6 @@
  * Runtime height is owned by InputArea (min/max + scrollHeight). Keep static
  * chrome here so first paint matches post-send size without field-sizing.
  */
-.composer-textarea,
 .orchid-composer-textarea {
   flex: 1 1 auto;
   min-width: 0;
@@ -94,7 +93,6 @@
 }
 
 /* DaisyUI radial-progress size/value CSS vars set from Footer at runtime. */
-.footer-context-radial,
 .orchid-footer-context-radial {
   --size: 1.4rem;
   --thickness: 2px;

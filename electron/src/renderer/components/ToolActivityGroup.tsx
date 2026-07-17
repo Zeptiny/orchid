@@ -90,34 +90,34 @@ export function ToolActivityGroup({
   const badgeCount = tools.length > 0 ? tools.length : items.length;
 
   return (
-    <div className={`tool-activity-group orchid-tool-activity ${stateClass}`}>
+    <div className={`orchid-tool-activity ${stateClass}`}>
       <button
         type="button"
-        className="tool-activity-group-title orchid-tool-activity-title"
+        className="orchid-tool-activity-title"
         onClick={() => setExpanded((prev) => !prev)}
         aria-expanded={expanded}
         aria-controls={panelId}
       >
-        <span className="tool-activity-group-title-left orchid-tool-activity-title-left">
+        <span className="orchid-tool-activity-title-left">
           {showLoader ? (
             <span className="loading loading-spinner loading-xs shrink-0" aria-hidden />
           ) : (
             <Icon name={iconName} size={12} className="shrink-0" />
           )}
-          <span className="tool-activity-group-title-text orchid-tool-activity-title-text">
+          <span className="orchid-tool-activity-title-text">
             {summary.title || 'Activity'}
           </span>
           <StatusBadge tone="neutral" size="xs" className="tool-activity-group-count badge-ghost">
             {badgeCount}
           </StatusBadge>
         </span>
-        <span className="tool-activity-group-title-right orchid-tool-activity-title-right">
+        <span className="orchid-tool-activity-title-right">
           <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
         </span>
       </button>
 
       {expanded && (
-        <div id={panelId} className="tool-activity-group-body orchid-tool-activity-body">
+        <div id={panelId} className="orchid-tool-activity-body">
           <div
             className={
               overflow
@@ -139,7 +139,7 @@ export function ToolActivityGroup({
             })}
           </div>
           {hiddenCount > 0 && (
-            <div className="tool-activity-group-overflow orchid-tool-activity-overflow">
+            <div className="orchid-tool-activity-overflow">
               +{hiddenCount} more
             </div>
           )}

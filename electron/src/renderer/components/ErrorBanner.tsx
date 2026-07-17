@@ -74,14 +74,14 @@ export function ErrorBanner({ message, onDismiss, onOpenSettings, onRetry }: Err
 
   return (
     <div
-      className={`error-banner-inline orchid-error-banner alert ${variant.alertClass}`}
+      className={`orchid-error-banner alert ${variant.alertClass}`}
       role="alert"
     >
       <Icon name={variant.icon} size={16} className="shrink-0" />
-      <div className="error-banner-body orchid-error-body">
-        <div className="error-banner-title orchid-error-title">{variant.title}</div>
-        <div className="error-banner-message orchid-error-message">{message}</div>
-        <div className="error-banner-actions orchid-error-actions">
+      <div className="orchid-error-body">
+        <div className="orchid-error-title">{variant.title}</div>
+        <div className="orchid-error-message">{message}</div>
+        <div className="orchid-error-actions">
           {(variant.kind === 'stream' || variant.kind === 'rate-limit' || variant.kind === 'generic') &&
             onRetry && (
               <button className="btn btn-primary btn-xs gap-1" onClick={onRetry} type="button">

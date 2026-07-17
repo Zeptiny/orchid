@@ -458,7 +458,7 @@ export function CommandPalette({
 
   return (
     <div
-      className="command-palette-overlay orchid-command-palette-overlay fixed inset-0 z-50 flex justify-center bg-black/55 pt-20"
+      className="orchid-command-palette-overlay fixed inset-0 z-50 flex justify-center bg-black/55 pt-20"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -466,11 +466,11 @@ export function CommandPalette({
     >
       <div
         ref={panelRef}
-        className="command-palette orchid-command-palette flex max-h-96 w-full max-w-xl flex-col overflow-hidden rounded-box border border-base-300 bg-base-200 shadow-2xl mx-4"
+        className="orchid-command-palette flex max-h-96 w-full max-w-xl flex-col overflow-hidden rounded-box border border-base-300 bg-base-200 shadow-2xl mx-4"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
-        <div className="command-palette-search-row orchid-command-palette-search-row">
+        <div className="orchid-command-palette-search-row">
           {subPicker && (
             <IconButton
               label="Back"
@@ -484,11 +484,11 @@ export function CommandPalette({
               }}
             />
           )}
-          <label className="input input-sm command-palette-search-field orchid-command-palette-search-field">
+          <label className="input input-sm orchid-command-palette-search-field">
             <Icon name="search" size={14} className="shrink-0 text-base-content/45" />
             <input
               ref={inputRef}
-              className="command-palette-input grow"
+              className="orchid-command-palette-input grow"
               type="text"
               placeholder={subPicker ? subPickerTitle ?? 'Type a command or search...' : 'Type a command or search...'}
               value={query}
@@ -502,7 +502,7 @@ export function CommandPalette({
         </div>
 
         <div
-          className="command-palette-results orchid-command-palette-results min-h-0 flex-1 overflow-y-auto p-1"
+          className="orchid-command-palette-results min-h-0 flex-1 overflow-y-auto p-1"
           ref={listRef}
           aria-busy={isSelecting || undefined}
         >
@@ -532,7 +532,7 @@ export function CommandPalette({
                       type="button"
                       className={`orchid-command-palette-item flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs ${
                         isSelected ? 'bg-primary/15' : 'hover:bg-base-content/5'
-                      }`}
+ }`}
                       disabled={isSelecting}
                       onClick={() => void handleSelect(item)}
                       onMouseEnter={() => setSelectedIndex(i)}
@@ -562,7 +562,7 @@ export function CommandPalette({
               }
 
               return (
-                <div key={group.category} className="command-palette-group orchid-command-palette-group mb-1">
+                <div key={group.category} className="orchid-command-palette-group mb-1">
                   <div className="flex items-center gap-1.5 px-3 py-2 text-xs uppercase tracking-wide text-base-content/50">
                     <Icon name={CATEGORY_ICONS[group.category]} size={12} />
                     {group.label}
@@ -576,9 +576,9 @@ export function CommandPalette({
                         <button
                           key={item.id}
                           type="button"
-                          className={`command-palette-item orchid-command-palette-item flex min-h-8 w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs ${
+                          className={`orchid-command-palette-item flex min-h-8 w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs ${
                             isSelected ? 'bg-primary/15' : 'hover:bg-base-content/5'
-                          }`}
+ }`}
                           data-selected={isSelected}
                           disabled={isSelecting}
                           onClick={() => void handleSelect(item)}
@@ -613,7 +613,7 @@ export function CommandPalette({
         </div>
 
         <ShortcutBar
-          className="command-palette-footer orchid-command-palette-footer"
+          className="orchid-command-palette-footer"
           items={[
             { chord: ['↑', '↓'], label: 'navigate' },
             { chord: 'Enter', label: 'select' },
@@ -631,7 +631,7 @@ function HighlightedText({ query, text }: { query: string; text: string }) {
     <>
       {segments.map((seg, i) =>
         seg.highlighted ? (
-          <mark key={i} className="command-palette-highlight orchid-command-palette-highlight bg-primary/30 rounded-sm px-px">{seg.text}</mark>
+          <mark key={i} className="orchid-command-palette-highlight bg-primary/30 rounded-sm px-px">{seg.text}</mark>
         ) : (
           <span key={i}>{seg.text}</span>
         ),

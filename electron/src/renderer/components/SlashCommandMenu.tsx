@@ -1,7 +1,7 @@
 /**
  * SlashCommandMenu — autocomplete list shown above the chat composer when the
  * user types `/…`. Supports command filter + sub-pickers (theme / model / etc.).
- */
+   */
 import { useEffect, useRef } from 'react';
 import {
   highlightMatch,
@@ -47,12 +47,12 @@ export function SlashCommandMenu({
   return (
     <div
       id="slash-command-menu"
-      className="slash-menu orchid-slash-menu"
+      className="orchid-slash-menu"
       role="listbox"
       aria-label={title}
       ref={listRef}
     >
-      <div className="slash-menu-header orchid-slash-menu-header">
+      <div className="orchid-slash-menu-header">
         <Icon name="command" size={12} className="text-base-content/50" />
         <span>{title}</span>
         {!subPicker && (
@@ -68,11 +68,11 @@ export function SlashCommandMenu({
       </div>
 
       {results.length === 0 ? (
-        <div className="slash-menu-empty orchid-slash-menu-empty px-2.5 py-4 text-center text-xs text-base-content/60">
+        <div className="orchid-slash-menu-empty px-2.5 py-4 text-center text-xs text-base-content/60">
           {subPicker ? 'No options' : 'No matching commands'}
         </div>
       ) : (
-        <div className="slash-menu-list orchid-slash-menu-list flex min-h-0 flex-col gap-px overflow-y-auto p-1">
+        <div className="orchid-slash-menu-list flex min-h-0 flex-col gap-px overflow-y-auto p-1">
           {results.map((item, i) => {
             const isSelected = i === selectedIndex;
             return (
@@ -82,9 +82,9 @@ export function SlashCommandMenu({
                 role="option"
                 aria-selected={isSelected}
                 data-selected={isSelected}
-                className={`slash-menu-item orchid-slash-menu-item flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs ${
+                className={`orchid-slash-menu-item flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs ${
                   isSelected ? 'is-selected bg-primary/15' : 'hover:bg-primary/10'
-                }`}
+ }`}
                 onMouseDown={(e) => {
                   // Prevent textarea blur before click registers
                   e.preventDefault();
@@ -126,7 +126,7 @@ function HighlightedText({ query, text }: { query: string; text: string }) {
     <>
       {segments.map((seg, i) =>
         seg.highlighted ? (
-          <mark key={i} className="slash-menu-highlight orchid-slash-menu-highlight rounded-sm bg-primary/30 px-px">
+          <mark key={i} className="orchid-slash-menu-highlight rounded-sm bg-primary/30 px-px">
             {seg.text}
           </mark>
         ) : (

@@ -24,8 +24,8 @@ describe('chat rendering contract (U5)', () => {
   describe('flat chat presentation', () => {
     it('MessageWidget keeps flat msg classes and never uses DaisyUI chat shells', () => {
       const src = read('components/MessageWidget.tsx');
-      expect(src).toMatch(/msg-user/);
-      expect(src).toMatch(/msg-assistant/);
+      expect(src).toMatch(/orchid-msg-user/);
+      expect(src).toMatch(/orchid-msg-assistant/);
       // Class attributes must not include DaisyUI chat / chat-start shells
       expect(src).not.toMatch(/className=["'`][^"'`]*(?:chat-bubble|chat-start|chat-end)\b/);
       expect(src).not.toMatch(/className=["'`][^"'`]*\bchat\b/);

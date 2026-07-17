@@ -68,7 +68,8 @@
     border-radius: 5px;
   }
 
-  /* Compact shortcut hint bars (palette footer, config footer) */
+  /* Compact shortcut hint bars (palette footer,
+  config footer) */
   .orchid-shortcut-bar {
     @apply flex flex-wrap items-center;
     gap: 10px 14px;
@@ -103,6 +104,7 @@
 
   /* ── Shared panel / section / form / state composites ───────────────────── */
 
+  /* Intentional hook markers (layout lives in JSX Tailwind); keep for product surface IDs. */
   .orchid-panel {
     @apply min-w-0;
   }
@@ -111,18 +113,36 @@
     @apply min-w-0;
   }
 
-  .orchid-form-field {
-    @apply min-w-0;
-  }
-
+  .orchid-section-title,
+  .orchid-section-description,
+  .orchid-section-actions,
+  .orchid-form-field,
+  .orchid-form-field-control,
   .orchid-state-message {
     @apply min-w-0;
   }
 
-  /* ── Flat chat stream surfaces (U5) ───────────────────────────────────────
-   * Keep .msg / .msg-user / .msg-assistant class names for flat presentation
-   * contracts; geometry and tokens live on orchid-* composites.
-   */
+  /* Command palette shell hooks — geometry/chrome mostly Tailwind on the element. */
+  .orchid-command-palette-overlay,
+  .orchid-command-palette,
+  .orchid-command-palette-results,
+  .orchid-command-palette-group,
+  .orchid-command-palette-item,
+  .orchid-command-palette-highlight,
+  .orchid-command-palette-footer,
+  .orchid-model-picker {
+    @apply min-w-0;
+  }
+
+  .orchid-command-palette-input {
+    @apply min-w-0 flex-1 bg-transparent outline-none;
+  }
+
+  .orchid-chat-footer-main {
+    @apply flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden;
+  }
+
+  /* Flat chat stream surfaces (U5) — orchid-* only (legacy dual aliases removed). */
 
   .orchid-chat-scroll {
     @apply flex min-h-0 flex-1 flex-col gap-1.5 overflow-auto;
@@ -161,33 +181,28 @@
   }
 
   /* Flat message rows — not DaisyUI chat/chat-bubble */
-  .orchid-msg,
-  .msg {
+  .orchid-msg {
     @apply break-words text-sm leading-snug;
     max-width: min(85%, 740px);
     padding: 7px 10px;
     border-radius: 5px;
   }
 
-  .orchid-msg-user,
-  .msg-user {
+  .orchid-msg-user {
     @apply self-end text-base-content;
     background: var(--msg-user-bg, color-mix(in srgb, var(--color-primary) 18%, var(--color-base-200)));
   }
 
-  .orchid-msg-assistant,
-  .msg-assistant {
+  .orchid-msg-assistant {
     @apply self-start bg-transparent pl-0 text-base-content;
     max-width: min(85%, 740px);
   }
 
-  .orchid-msg-system,
-  .msg-system {
+  .orchid-msg-system {
     @apply self-center my-1 text-center text-xs text-base-content/60;
   }
 
-  .orchid-code-token,
-  .code-token {
+  .orchid-code-token {
     @apply inline font-mono font-medium;
     padding: 1px 3px;
     border-radius: 3px;
@@ -197,16 +212,14 @@
   }
 
   /* Thought disclosure */
-  .orchid-thought,
-  .thought-block {
+  .orchid-thought {
     @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
     border: 1px solid var(--border-default, color-mix(in srgb, var(--color-base-content) 12%, transparent));
     border-radius: 5px;
     background: color-mix(in srgb, var(--color-base-200) 84%, var(--color-base-300));
   }
 
-  .orchid-thought-title,
-  .thought-block-title {
+  .orchid-thought-title {
     @apply flex w-full items-center justify-between gap-1.5 border-none text-left font-semibold;
     min-height: 30px;
     padding: 6px 8px;
@@ -219,27 +232,23 @@
     font-family: inherit;
   }
 
-  .orchid-thought-title:hover,
-  .thought-block-title:hover {
+  .orchid-thought-title:hover {
     filter: brightness(1.08);
   }
 
-  .orchid-thought-content,
-  .thought-block-content {
+  .orchid-thought-content {
     @apply text-xs leading-snug text-base-content/70;
     padding: 6px 8px;
     border-left: 2px solid var(--msg-thinking-text, var(--color-info));
   }
 
   /* Tool activity group */
-  .orchid-tool-activity,
-  .tool-activity-group {
+  .orchid-tool-activity {
     @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
     border-radius: 5px;
   }
 
-  .orchid-tool-activity-title,
-  .tool-activity-group-title {
+  .orchid-tool-activity-title {
     @apply flex w-full items-center justify-between gap-1.5 border-none bg-transparent text-left text-base-content/70;
     min-height: 28px;
     padding: 5px 8px;
@@ -251,79 +260,65 @@
     line-height: 1.35;
   }
 
-  .orchid-tool-activity-title:hover,
-  .tool-activity-group-title:hover {
+  .orchid-tool-activity-title:hover {
     color: var(--color-secondary);
     background: color-mix(in srgb, var(--color-secondary) 5%, transparent);
   }
 
-  .orchid-tool-activity-title-left,
-  .tool-activity-group-title-left {
+  .orchid-tool-activity-title-left {
     @apply inline-flex min-w-0 flex-1 items-center gap-1;
   }
 
-  .orchid-tool-activity-title-text,
-  .tool-activity-group-title-text {
+  .orchid-tool-activity-title-text {
     @apply min-w-0 truncate font-medium;
   }
 
-  .orchid-tool-activity-title-right,
-  .tool-activity-group-title-right {
+  .orchid-tool-activity-title-right {
     @apply inline-flex shrink-0 items-center gap-1 opacity-75;
   }
 
-  .orchid-tool-activity.running > .orchid-tool-activity-title,
-  .tool-activity-group.running > .tool-activity-group-title {
+  .orchid-tool-activity.running > .orchid-tool-activity-title {
     color: var(--color-warning);
     border-left-color: var(--color-warning);
   }
 
-  .orchid-tool-activity.failed > .orchid-tool-activity-title,
-  .tool-activity-group.failed > .tool-activity-group-title {
+  .orchid-tool-activity.failed > .orchid-tool-activity-title {
     color: var(--color-error);
     border-left-color: var(--color-error);
   }
 
-  .orchid-tool-activity-body,
-  .tool-activity-group-body {
+  .orchid-tool-activity-body {
     padding: 2px 0 2px 6px;
   }
 
-  .orchid-tool-activity-children,
-  .tool-activity-group-children {
+  .orchid-tool-activity-children {
     @apply flex flex-col gap-0.5;
   }
 
-  .orchid-tool-activity-children-scroll,
-  .tool-activity-group-children-scroll {
+  .orchid-tool-activity-children-scroll {
     max-height: calc(12 * 34px);
     overflow-y: auto;
   }
 
   .orchid-tool-activity-children .orchid-tool-block,
-  .orchid-tool-activity-children .orchid-thought,
-  .tool-activity-group-children .tool-block,
-  .tool-activity-group-children .thought-block {
+  .orchid-tool-activity-children .orchid-thought {
     margin-bottom: 0;
   }
 
-  .orchid-tool-activity-overflow,
-  .tool-activity-group-overflow {
+  .orchid-tool-activity-overflow {
     @apply text-xs text-base-content/50;
     padding: 4px 8px 2px;
   }
 
   /* Tool call block */
-  .orchid-tool-block,
-  .tool-block {
+  .orchid-tool-block {
     @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
     border: 1px solid var(--border-default, color-mix(in srgb, var(--color-base-content) 12%, transparent));
     border-radius: 5px;
     background: color-mix(in srgb, var(--color-base-200) 84%, var(--color-base-300));
   }
 
-  .orchid-tool-block-title,
-  .tool-block-title {
+  .orchid-tool-block-title {
     @apply flex w-full items-center justify-between gap-1.5 border-none text-left font-semibold;
     min-height: 30px;
     padding: 6px 8px;
@@ -337,166 +332,133 @@
     line-height: 1.35;
   }
 
-  .orchid-tool-block-title:hover,
-  .tool-block-title:hover {
+  .orchid-tool-block-title:hover {
     filter: brightness(1.08);
   }
 
-  .orchid-tool-block-title-left,
-  .tool-block-title-left {
+  .orchid-tool-block-title-left {
     @apply inline-flex min-w-0 flex-1 items-center gap-1;
   }
 
-  .orchid-tool-block-title-text,
-  .tool-block-title-text {
+  .orchid-tool-block-title-text {
     @apply min-w-0 truncate font-normal;
   }
 
-  .orchid-tool-block-title-text .font-semibold,
-  .tool-block-title-text .font-semibold {
+  .orchid-tool-block-title-text .font-semibold {
     @apply font-semibold;
   }
 
-  .orchid-tool-block-title-right,
-  .tool-block-title-right {
+  .orchid-tool-block-title-right {
     @apply inline-flex shrink-0 items-center gap-1.5;
   }
 
-  .orchid-tool-block-content,
-  .tool-block-content {
+  .orchid-tool-block-content {
     @apply text-xs text-base-content/70;
     padding: 6px 8px 8px;
     border-left: 2px solid var(--color-secondary);
     cursor: pointer;
   }
 
-  .orchid-tool-block-content:hover,
-  .tool-block-content:hover {
+  .orchid-tool-block-content:hover {
     background: color-mix(in srgb, var(--color-base-content) 2%, transparent);
   }
 
-  .orchid-tool-block-content:focus-visible,
-  .tool-block-content:focus-visible {
+  .orchid-tool-block-content:focus-visible {
     outline: 1px solid color-mix(in srgb, var(--color-secondary) 50%, transparent);
     outline-offset: -1px;
   }
 
-  .orchid-tool-block.running > .orchid-tool-block-title,
-  .tool-block.running > .tool-block-title {
+  .orchid-tool-block.running > .orchid-tool-block-title {
     color: var(--color-warning);
     border-left-color: var(--color-warning);
     background: color-mix(in srgb, var(--color-warning) 6%, transparent);
   }
 
-  .orchid-tool-block.running > .orchid-tool-block-content,
-  .tool-block.running > .tool-block-content {
+  .orchid-tool-block.running > .orchid-tool-block-content {
     border-left-color: var(--color-warning);
   }
 
-  .orchid-tool-block.generating > .orchid-tool-block-title,
-  .tool-block.generating > .tool-block-title {
+  .orchid-tool-block.generating > .orchid-tool-block-title {
     color: var(--color-info);
     border-left-color: var(--color-info);
     background: color-mix(in srgb, var(--color-info) 6%, transparent);
   }
 
-  .orchid-tool-block.generating > .orchid-tool-block-content,
-  .tool-block.generating > .tool-block-content {
+  .orchid-tool-block.generating > .orchid-tool-block-content {
     border-left-color: var(--color-info);
   }
 
-  .orchid-tool-block.failed > .orchid-tool-block-title,
-  .tool-block.failed > .tool-block-title {
+  .orchid-tool-block.failed > .orchid-tool-block-title {
     color: var(--color-error);
     border-left-color: var(--color-error);
     background: color-mix(in srgb, var(--color-error) 6%, transparent);
   }
 
-  .orchid-tool-block.failed > .orchid-tool-block-content,
-  .tool-block.failed > .tool-block-content {
+  .orchid-tool-block.failed > .orchid-tool-block-content {
     border-left-color: var(--color-error);
   }
 
-  .orchid-tool-args-stream,
-  .tool-args-stream {
+  .orchid-tool-args-stream {
     @apply font-mono text-info;
     font-size: 11px;
   }
 
-  .orchid-tool-running-hint,
-  .tool-running-hint {
+  .orchid-tool-running-hint {
     @apply font-mono text-base-content/70;
     font-size: 11px;
   }
 
-  .orchid-tool-result-body,
-  .tool-result-body {
+  .orchid-tool-result-body {
     @apply m-0 font-mono break-words whitespace-pre-wrap text-base-content/70;
     font-size: 11px;
     line-height: 1.5;
   }
 
-  .orchid-tool-result-error,
-  .tool-result-error {
+  .orchid-tool-result-error {
     color: var(--color-error);
   }
 
   /* Stream error / inline message error */
-  .orchid-error-slot,
-  .error-banner-slot {
+  .orchid-error-slot {
     @apply self-center mb-1 w-full;
     max-width: min(90%, 600px);
   }
 
-  .orchid-error-banner,
-  .error-banner-inline {
+  .orchid-error-banner {
     @apply flex items-start gap-2.5 self-center text-xs;
     max-width: min(90%, 600px);
     padding: 10px 14px;
   }
 
-  .orchid-error-title,
-  .error-banner-title {
+  .orchid-error-title {
     @apply mb-0.5 font-bold;
   }
 
-  .orchid-error-message,
-  .error-banner-message {
+  .orchid-error-message {
     @apply break-words text-xs leading-snug opacity-90;
   }
 
-  .orchid-error-body,
-  .error-banner-body {
+  .orchid-error-body {
     @apply min-w-0 flex-1;
   }
 
-  .orchid-error-actions,
-  .error-banner-actions {
+  .orchid-error-actions {
     @apply mt-2 flex flex-wrap items-center gap-1.5;
   }
 
   /* Chain footer + collapsed stub */
-  .orchid-chain-footer,
-  .chain-footer {
+  .orchid-chain-footer {
     @apply flex w-full flex-wrap items-center gap-3 self-start text-base-content/60;
     padding: 4px 0 2px;
     margin-top: 4px;
     font-size: 10px;
     border-top: 1px solid color-mix(in srgb, var(--color-base-content) 6%, transparent);
   }
-
-  .orchid-chain-footer-interrupted,
-  .chain-footer-interrupted {
-    @apply inline-flex items-center gap-1 font-semibold text-warning;
-  }
-
-  .orchid-chain-footer-model,
-  .chain-footer-model {
+.orchid-chain-footer-model {
     @apply font-medium text-base-content/75;
   }
 
-  .orchid-collapsed-chain,
-  .collapsed-chain-stub {
+  .orchid-collapsed-chain {
     @apply flex w-full cursor-pointer items-center gap-1.5 text-left text-xs text-base-content/70;
     margin: 6px 0;
     padding: 6px 10px;
@@ -505,8 +467,7 @@
     background: color-mix(in srgb, var(--color-base-content) 3%, transparent);
   }
 
-  .orchid-collapsed-chain:hover,
-  .collapsed-chain-stub:hover {
+  .orchid-collapsed-chain:hover {
     @apply text-base-content;
     background: color-mix(in srgb, var(--color-base-content) 6%, transparent);
   }
@@ -553,28 +514,23 @@
 
   /* ── Composer / footer / discovery (U6) ─────────────────────────────────── */
 
-  .orchid-composer-area,
-  .composer-area {
+  .orchid-composer-area {
     @apply relative flex flex-col shrink-0 border-t border-base-300 bg-base-100;
   }
 
-  .orchid-composer-gate,
-  .composer-workspace-gate {
+  .orchid-composer-gate {
     @apply mx-3 mb-1.5 flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-xs;
   }
 
-  .orchid-composer,
-  .composer {
+  .orchid-composer {
     @apply flex min-w-0 items-end gap-2 px-3.5 py-2;
   }
 
-  .orchid-composer-controls,
-  .composer-controls {
+  .orchid-composer-controls {
     @apply flex shrink-0 items-center gap-1.5 pb-px;
   }
 
-  .orchid-composer-action,
-  .composer-action {
+  .orchid-composer-action {
     @apply shrink-0;
     min-height: 34px !important;
     min-width: 34px !important;
@@ -583,54 +539,44 @@
     padding: 0 !important;
   }
 
-  .orchid-composer-model-picker,
-  .composer-model-picker {
+  .orchid-composer-model-picker {
     width: 180px;
   }
 
-  .orchid-composer-model-picker .model-picker-trigger,
-  .composer-model-picker .model-picker-trigger {
+  .orchid-composer-model-picker .orchid-model-picker-trigger {
     @apply h-8 min-h-8 rounded-full border-transparent bg-transparent text-base-content/70;
     padding: 5px 10px;
   }
 
-  .orchid-composer-model-picker .model-picker-trigger:hover:not(:disabled),
-  .orchid-composer-model-picker .model-picker-trigger:focus-visible,
-  .composer-model-picker .model-picker-trigger:hover:not(:disabled),
-  .composer-model-picker .model-picker-trigger:focus-visible {
+  .orchid-composer-model-picker .orchid-model-picker-trigger:hover:not(:disabled),
+  .orchid-composer-model-picker .orchid-model-picker-trigger:focus-visible {
     @apply text-base-content;
     border-color: color-mix(in srgb, var(--color-primary) 25%, var(--color-base-300));
     background: color-mix(in srgb, var(--color-primary) 12%, transparent);
   }
 
-  .orchid-slash-menu,
-  .slash-menu {
+  .orchid-slash-menu {
     @apply z-40 mx-2.5 flex max-h-64 flex-col overflow-hidden rounded-lg border border-base-300 bg-base-200 shadow-xl;
   }
 
-  .orchid-slash-menu-header,
-  .slash-menu-header {
+  .orchid-slash-menu-header {
     @apply flex shrink-0 items-center gap-1.5 border-b border-base-content/10 px-2.5 py-1.5 text-xs uppercase tracking-wide text-base-content/60;
   }
 
-  .orchid-chat-footer,
-  .chat-footer {
+  .orchid-chat-footer {
     @apply flex shrink-0 items-center justify-between gap-2.5 border-t border-base-content/10 bg-base-100 px-3 py-1 text-xs text-base-content/70;
     min-height: 30px;
   }
 
-  .orchid-chat-footer-hint,
-  .chat-footer-hint {
+  .orchid-chat-footer-hint {
     @apply inline-flex min-w-0 shrink-0 items-center gap-1.5;
   }
 
-  .orchid-footer-context-btn,
-  .footer-context-btn {
+  .orchid-footer-context-btn {
     @apply inline-flex h-7 w-7 shrink-0 items-center justify-center;
   }
 
-  .orchid-footer-context-radial,
-  .footer-context-radial {
+  .orchid-footer-context-radial {
     @apply font-semibold leading-none;
     font-size: 7px !important;
   }
@@ -640,8 +586,7 @@
     font-size: 7px;
   }
 
-  .orchid-footer-context-panel,
-  .footer-context-panel {
+  .orchid-footer-context-panel {
     @apply flex flex-col overflow-hidden rounded-lg border border-base-300 bg-base-200 text-base-content shadow-xl;
     width: min(280px, 80vw);
   }
@@ -666,35 +611,29 @@
     @apply p-2;
   }
 
-  .orchid-command-palette-search-row,
-  .command-palette-search-row {
+  .orchid-command-palette-search-row {
     @apply flex min-h-14 shrink-0 items-center gap-2 border-b border-base-300 px-3.5 py-3;
     background: color-mix(in srgb, var(--color-base-200) 62%, transparent);
   }
 
-  .orchid-command-palette-search-field,
-  .command-palette-search-field {
+  .orchid-command-palette-search-field {
     @apply h-8 min-h-8 min-w-0 flex-1;
   }
 
-  .orchid-model-picker-menu,
-  .model-picker-menu {
+  .orchid-model-picker-menu {
     @apply flex flex-col overflow-hidden border border-base-300 bg-base-200 p-0 text-base-content shadow-xl;
     width: min(620px, calc(100vw - 32px));
     max-height: min(430px, 72vh);
     border-radius: 9px;
   }
 
-  .orchid-model-picker-trigger,
-  .model-picker-trigger {
+  .orchid-model-picker-trigger {
     @apply flex h-8 min-h-8 w-full min-w-0 items-center justify-start gap-1.5 border border-base-300 bg-base-100 px-2.5 text-left text-xs font-medium text-base-content;
     border-radius: 5px;
   }
 
   .orchid-model-picker-trigger:hover:not(:disabled),
-  .orchid-model-picker-trigger:focus-visible,
-  .model-picker-trigger:hover:not(:disabled),
-  .model-picker-trigger:focus-visible {
+  .orchid-model-picker-trigger:focus-visible {
     border-color: color-mix(in srgb, var(--color-primary) 50%, var(--color-base-300));
     background: color-mix(in srgb, var(--color-primary) 8%, var(--color-base-100));
   }

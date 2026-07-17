@@ -6,7 +6,7 @@
  *
  * Enter send · Shift+Enter newline · Ctrl/Cmd+S send · Esc multi-stage interrupt.
  * Slash commands: type `/` to open autocomplete above the input.
- * Context radial lives in Footer (always right-aligned).
+   * Context radial lives in Footer (always right-aligned).
  */
 import { useRef, useCallback, useEffect, useState, useMemo } from 'react';
 import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
@@ -55,7 +55,7 @@ interface InputAreaProps {
 
 type SubPicker = '/theme' | '/personality' | '/model' | '/sessions' | null;
 
-/** Single-line composer height — keep in sync with `.composer-textarea` CSS. */
+/** Single-line composer height — keep in sync with `.orchid-composer-textarea` CSS. */
 const TEXTAREA_MIN_HEIGHT_PX = 34;
 const TEXTAREA_MAX_HEIGHT_PX = 160;
 
@@ -558,9 +558,9 @@ export function InputArea({
   const plainChatBlocked = !workspaceBound || !providerAvailable || !modelSelected;
 
   return (
-    <div className="composer-area orchid-composer-area">
+    <div className="orchid-composer-area">
       {!workspaceBound && (
-        <div className="composer-workspace-gate orchid-composer-gate alert alert-warning" role="status">
+        <div className="orchid-composer-gate alert alert-warning" role="status">
           <span>Select a project folder before chatting.</span>
           {onPickProjectDir && (
             <IconButton
@@ -579,7 +579,7 @@ export function InputArea({
 
       {!providerAvailable && (
         <div
-          className="composer-workspace-gate orchid-composer-gate alert alert-info"
+          className="orchid-composer-gate alert alert-info"
           role="status"
           aria-live="polite"
         >
@@ -601,7 +601,7 @@ export function InputArea({
 
       {providerAvailable && !modelSelected && (
         <div
-          className="composer-workspace-gate orchid-composer-gate alert alert-warning"
+          className="orchid-composer-gate alert alert-warning"
           role="status"
           aria-live="polite"
         >
@@ -621,13 +621,13 @@ export function InputArea({
       )}
 
       <div
-        className={`composer orchid-composer ${isStreaming || confirming ? 'streaming' : ''} ${
+        className={`orchid-composer ${isStreaming || confirming ? 'streaming' : ''} ${
           showCancel ? 'composer-cancel-mode' : ''
-        }`}
+ }`}
       >
         <textarea
           ref={textareaRef}
-          className="textarea textarea-bordered composer-textarea orchid-composer-textarea"
+          className="textarea textarea-bordered orchid-composer-textarea"
           data-orchid-composer
           value={input}
           onChange={handleChange}
@@ -654,7 +654,7 @@ export function InputArea({
           aria-controls={showMenu ? 'slash-command-menu' : undefined}
         />
 
-        <div className="composer-controls orchid-composer-controls">
+        <div className="orchid-composer-controls">
           <ModelPicker
             value={model}
             options={availableModels}
@@ -665,7 +665,7 @@ export function InputArea({
             label="Select model"
             showSelectedContext={false}
             disabled={isStreaming || interruptState === 'confirmAgent'}
-            className="composer-model-picker orchid-composer-model-picker"
+            className="orchid-composer-model-picker"
           />
 
           {showCancel ? (
@@ -674,7 +674,7 @@ export function InputArea({
               icon="square"
               size="sm"
               variant={cancelVariant}
-              className="composer-action orchid-composer-action"
+              className="orchid-composer-action"
               onClick={() => void onCancel()}
               iconSize={14}
             />
@@ -684,7 +684,7 @@ export function InputArea({
               icon="arrowUp"
               size="sm"
               variant="primary"
-              className="composer-action orchid-composer-action"
+              className="orchid-composer-action"
               onClick={() => {
                 if (showMenu && slashResults[selectedIndex]) {
                   void handleSelectResult(slashResults[selectedIndex]);

@@ -29,7 +29,7 @@ export function ChainFooter({
   const showUsage = hasUsage(usage);
 
   return (
-    <div className="chain-footer orchid-chain-footer">
+    <div className="orchid-chain-footer">
       {interrupted && (
         <StatusBadge tone="warning" size="xs" className="gap-1">
           <Icon name="square" size={12} />
@@ -43,7 +43,7 @@ export function ChainFooter({
         </StatusBadge>
       )}
       {model ? (
-        <span className="chain-footer-model orchid-chain-footer-model">{model}</span>
+        <span className="orchid-chain-footer-model">{model}</span>
       ) : null}
       {showUsage && (
         <span>

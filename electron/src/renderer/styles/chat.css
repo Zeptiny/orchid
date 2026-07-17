@@ -5,152 +5,12 @@
  * markdown.css, and exceptions.css for new work. Do not add new rules here
  * unless a consumer still depends on a legacy selector during final cleanup.
  *
- * Still hosts: command palette chrome, onboarding/provider wizard shell,
- * panels/session/config/shortcuts/pickers, and mock-aligned surfaces not yet
- * fully expressed as orchid-* only. Dead legacy blocks (composer-model-*,
- * unused onb-* steps, thought-activity-group, old palette/config subparts)
- * have been pruned when no JSX consumers remained.
+ * Still hosts: onboarding/provider wizard shell, panels/session/config/shortcuts/
+ * pickers, and mock-aligned surfaces not yet fully expressed as orchid-* only.
+ * Dual-class aliases were collapsed onto orchid-*; dead bridge rules pruned.
  */
 
-/* ── Command Palette ─────────────────────────────────────────────────────── */
-
-.command-palette-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 15vh;
-  background: color-mix(in srgb, var(--overlay-color) 50%, transparent);
-  backdrop-filter: blur(4px);
-}
-
-.command-palette {
-  width: 560px;
-  max-width: 90vw;
-  max-height: 70vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-surface-raised);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-  overflow: hidden;
-}
-
-/* ── Header (search input) ───────────────────────────────────────────────── */
-
-.command-palette-search-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  min-height: 58px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border-default);
-  background: color-mix(in srgb, var(--bg-surface-overlay) 62%, transparent);
-}
-.command-palette-search-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  min-height: 34px;
-  height: 34px;
-  flex: 1;
-  padding: 0 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 7px;
-  background: var(--bg-surface-raised);
-}
-.command-palette-search-field:focus-within {
-  border-color: var(--accent-primary);
-}
-.command-palette-search-field .command-palette-input {
-  min-width: 0;
-  width: 100%;
-  padding: 0;
-}
-
-.command-palette-input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: var(--text-primary);
-  font-family: var(--font-family);
-  font-size: var(--font-size-base);
-  caret-color: var(--accent-primary);
-}
-
-.command-palette-input::placeholder {
-  color: var(--input-placeholder);
-}
-
-/* ── Results list ────────────────────────────────────────────────────────── */
-
-.command-palette-results {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-2) 0;
-}
-
-.command-palette-results::-webkit-scrollbar {
-  width: 4px;
-}
-
-.command-palette-results::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border-radius: var(--radius-full);
-}
-
-/* ── Group ───────────────────────────────────────────────────────────────── */
-
-.command-palette-group {
-  margin-bottom: var(--space-1);
-}
-
-/* ── Item ────────────────────────────────────────────────────────────────── */
-
-.command-palette-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
-  cursor: pointer;
-  transition: background var(--transition-fast);
-  user-select: none;
-}
-
-.command-palette-item:hover,
-.command-palette-item.selected {
-  background: var(--sidebar-item-hover);
-}
-
-.command-palette-item.selected {
-  background: var(--sidebar-item-active);
-}
-
-/* ── Highlighted match ───────────────────────────────────────────────────── */
-
-.command-palette-highlight {
-  background: var(--accent-primary);
-  color: var(--text-inverse);
-  border-radius: 2px;
-  padding: 0 1px;
-}
-
-/* ── Footer ──────────────────────────────────────────────────────────────── */
-
-.command-palette-footer {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-2) var(--space-4);
-  border-top: 1px solid var(--border-default);
-  background: var(--bg-surface-overlay);
-}
+/* Command palette chrome moved to components.css + Tailwind on orchid-* classes. */
 
 /* ════════════════════════════════════════════════════════════════════════════
    Onboarding Screen — Fullscreen overlay for first-run setup.
@@ -338,26 +198,10 @@
 /* ── Iteration 012 mock-aligned components ─────────────────────────────────── */
 /* Colors mirror screens/012-tool-states-interrupt-flow-feather-icons.html     */
 
-/* Chat stream — mock .chat-scroll */
-.chat-scroll {
-  min-height: 0;
-  flex: 1 1 0;
-  padding: 12px 16px;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  scroll-behavior: smooth;
-}
-
 .tool-activity-group-count {
   opacity: 0.7;
   font-weight: 500;
 }
-.tool-block-title-text .font-semibold {
-  font-weight: 600;
-}
-
 /* Compact mock-style collapse (inspector panels) */
 .mock-collapse {
   margin-bottom: 4px;
@@ -433,34 +277,6 @@
   font-size: 9px;
   opacity: 0.75;
 }
-.slash-menu-list {
-  overflow-y: auto;
-  padding: 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-height: 0;
-}
-.slash-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 30px;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--text-primary);
-  text-align: left;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.slash-menu-item:hover,
-.slash-menu-item.is-selected {
-  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
-}
 .slash-menu-item-icon {
   flex-shrink: 0;
   color: var(--text-secondary);
@@ -489,49 +305,12 @@
   white-space: nowrap;
   text-align: right;
 }
-.slash-menu-empty {
-  padding: 16px 10px;
-  text-align: center;
-  font-size: 12px;
+.orchid-composer.streaming .orchid-composer-textarea {
   color: var(--text-secondary);
 }
-.slash-menu-highlight {
-  background: color-mix(in srgb, var(--accent-primary) 35%, transparent);
-  color: inherit;
-  border-radius: 2px;
-  padding: 0 1px;
-}
-.composer.streaming .input,
-.composer.streaming input,
-.composer.streaming .composer-textarea {
-  color: var(--text-secondary);
-}
-.composer .input,
-.composer input {
-  width: 100%;
-  min-height: 34px;
-  height: 34px;
-  border: 1px solid var(--border-default);
-  border-radius: 5px;
-  background: var(--input-bg);
-  color: var(--text-primary);
-  padding: 6px 8px;
-  font: inherit;
-  font-size: 12px;
-  outline: none;
-}
-.composer .input::placeholder,
-.composer input::placeholder {
-  color: var(--text-secondary);
-}
-.composer .input:focus,
-.composer input:focus {
-  border-color: color-mix(in srgb, var(--accent-primary) 50%, var(--border-default));
-}
-
 /* Model dropup — larger, properly styled list */
 
-.chat-footer-main {
+.orchid-chat-footer-main {
   gap: 6px;
 }
 .chat-footer-hint-label {
@@ -549,7 +328,7 @@
   user-select: none;
 }
 /* Legacy daisy kbd inside footer (streaming status may still use raw kbd) */
-.chat-footer .kbd:not(.orchid-keycap) {
+.orchid-chat-footer .kbd:not(.orchid-keycap) {
   min-width: 16px;
   padding: 1px 3px;
   border: 1px solid var(--border-default);
@@ -1622,7 +1401,7 @@ button.inspector-row:hover {
 .config-field .textarea:focus {
   border-color: color-mix(in srgb, var(--accent-primary) 50%, var(--border-default));
 }
-.model-picker-trigger-copy {
+.orchid-model-picker-trigger-copy {
   display: flex;
   min-width: 0;
   flex: 1;
@@ -1631,7 +1410,7 @@ button.inspector-row:hover {
   gap: 1px;
   overflow: hidden;
 }
-.model-picker-trigger-copy .model-picker-trigger-label {
+.orchid-model-picker-trigger-copy .model-picker-trigger-label {
   width: 100%;
   flex: 0 1 auto;
 }
@@ -1665,7 +1444,7 @@ button.inspector-row:hover {
   box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color) 55%, transparent);
 }
 
-.model-picker-heading {
+.orchid-model-picker-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -1705,7 +1484,7 @@ button.inspector-row:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.model-picker-search {
+.orchid-model-picker-search {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -1719,10 +1498,10 @@ button.inspector-row:hover {
   background: var(--input-bg);
   color: var(--text-primary);
 }
-.model-picker-search:focus-within {
+.orchid-model-picker-search:focus-within {
   border-color: color-mix(in srgb, var(--accent-primary) 50%, var(--border-default));
 }
-.model-picker-search input {
+.orchid-model-picker-search input {
   min-width: 0;
   width: 100%;
   border: 0;
@@ -1732,7 +1511,7 @@ button.inspector-row:hover {
   font: inherit;
   font-size: 12px;
 }
-.model-picker-search input::placeholder {
+.orchid-model-picker-search input::placeholder {
   color: var(--text-secondary);
 }
 .searchable-picker-menu {
@@ -1865,12 +1644,12 @@ button.inspector-row:hover {
   width: 240px;
   flex-shrink: 0;
 }
-.config-model-picker .model-picker-menu {
+.config-model-picker .orchid-model-picker-menu {
   z-index: 200;
   width: min(620px, calc(100vw - 292px));
   max-width: calc(100vw - 292px);
 }
-.config-model-picker.model-picker-align-start .model-picker-menu {
+.config-model-picker.model-picker-align-start .orchid-model-picker-menu {
   right: auto;
   left: 0;
 }
@@ -1880,14 +1659,14 @@ button.inspector-row:hover {
 }
 
 /* Onboarding model menus must paint above step chrome and not inherit clip. */
-.onb-step .model-picker-menu,
-.onb-step .tier-model-picker .model-picker-menu,
-.onb-step .config-model-picker .model-picker-menu {
+.onb-step .orchid-model-picker-menu,
+.onb-step .tier-model-picker .orchid-model-picker-menu,
+.onb-step .config-model-picker .orchid-model-picker-menu {
   z-index: 4500;
   width: min(620px, calc(100vw - 48px));
   max-width: min(620px, calc(100vw - 48px));
 }
-.composer-model-picker .model-picker-trigger-with-sub-label {
+.orchid-composer-model-picker .model-picker-trigger-with-sub-label {
   min-height: 40px;
   height: 40px;
 }
@@ -1950,7 +1729,7 @@ button.inspector-row:hover {
 .session-project-toggle .badge,
 .inspector-row .badge,
 .mock-collapse .badge,
-.tool-block .badge {
+.orchid-tool-block .badge {
   min-height: 16px;
   padding: 1px 6px;
   font-size: 9px;
@@ -1958,17 +1737,17 @@ button.inspector-row:hover {
 }
 
 /* Markdown in assistant messages */
-.msg-assistant .markdown-content p {
+.orchid-msg-assistant .markdown-content p {
   margin: 0 0 0.35em;
 }
-.msg-assistant .markdown-content p:last-child {
+.orchid-msg-assistant .markdown-content p:last-child {
   margin-bottom: 0;
 }
-.msg-assistant .markdown-content strong {
+.orchid-msg-assistant .markdown-content strong {
   font-weight: 600;
   color: inherit;
 }
-.msg-assistant .markdown-content code:not(.hljs):not([class*='language-']) {
+.orchid-msg-assistant .markdown-content code:not(.hljs):not([class*='language-']) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: inherit;
   background: color-mix(in srgb, var(--accent-warning) 15%, transparent);
@@ -1976,7 +1755,7 @@ button.inspector-row:hover {
   padding: 1px 3px;
   border-radius: 3px;
 }
-.msg-assistant .markdown-content pre {
+.orchid-msg-assistant .markdown-content pre {
   background: color-mix(in srgb, var(--bg-secondary) 84%, var(--overlay-color));
   border: 1px solid var(--border-default);
   border-radius: 5px;
@@ -1984,8 +1763,8 @@ button.inspector-row:hover {
   overflow-x: auto;
   margin: 6px 0;
 }
-.msg-assistant .markdown-content pre code,
-.msg-assistant .markdown-content pre code.hljs {
+.orchid-msg-assistant .markdown-content pre code,
+.orchid-msg-assistant .markdown-content pre code.hljs {
   background: none;
   padding: 0;
   color: var(--text-primary);
@@ -2000,7 +1779,7 @@ button.inspector-row:hover {
 
 /* ── Keyboard shortcuts help modal ────────────────────────────────────────── */
 
-.shortcuts-help-overlay {
+.orchid-shortcuts-help-overlay {
   position: fixed;
   inset: 0;
   z-index: 1100;
@@ -2011,7 +1790,7 @@ button.inspector-row:hover {
   background: color-mix(in srgb, var(--overlay-color) 62%, transparent);
   backdrop-filter: blur(3px);
 }
-.shortcuts-help-dialog {
+.orchid-shortcuts-help-dialog {
   display: flex;
   flex-direction: column;
   width: min(520px, 100%);
@@ -2031,11 +1810,11 @@ button.inspector-row:hover {
     0 0 0 1px color-mix(in srgb, var(--text-primary) 3%, transparent) inset;
   color: var(--text-primary);
 }
-.shortcuts-help-dialog :focus-visible {
+.orchid-shortcuts-help-dialog :focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent-primary) 80%, transparent);
   outline-offset: 2px;
 }
-.shortcuts-help-header {
+.orchid-shortcuts-help-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -2085,7 +1864,7 @@ button.inspector-row:hover {
   margin-right: -4px;
   color: var(--text-secondary);
 }
-.shortcuts-help-body {
+.orchid-shortcuts-help-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -2096,21 +1875,21 @@ button.inspector-row:hover {
   scrollbar-width: thin;
   scrollbar-color: var(--border-default) transparent;
 }
-.shortcuts-help-body::-webkit-scrollbar {
+.orchid-shortcuts-help-body::-webkit-scrollbar {
   width: 6px;
 }
-.shortcuts-help-body::-webkit-scrollbar-thumb {
+.orchid-shortcuts-help-body::-webkit-scrollbar-thumb {
   background: var(--border-default);
   border-radius: 999px;
 }
-.shortcuts-help-section {
+.orchid-shortcuts-help-section {
   margin: 0;
   padding: 10px 10px 8px;
   border: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
   border-radius: 9px;
   background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
 }
-.shortcuts-help-section-title {
+.orchid-shortcuts-help-section-title {
   margin: 0 0 8px;
   padding: 0 4px 6px;
   border-bottom: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
@@ -2147,7 +1926,7 @@ button.inspector-row:hover {
   line-height: 1.35;
   color: color-mix(in srgb, var(--text-primary) 88%, transparent);
 }
-.shortcuts-help-footer {
+.orchid-shortcuts-help-footer {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2158,12 +1937,12 @@ button.inspector-row:hover {
   color: color-mix(in srgb, var(--text-secondary) 90%, transparent);
   font-size: 10px;
 }
-.shortcuts-help-footer-hint {
+.orchid-shortcuts-help-footer-hint {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
-.shortcuts-help-footer-dot {
+.orchid-shortcuts-help-footer-dot {
   opacity: 0.35;
   user-select: none;
 }

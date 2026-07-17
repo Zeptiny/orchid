@@ -104,7 +104,7 @@ function truncateToken(s: string): string {
 
 /**
  * Tools often return `{ display, content }` — prefer human display text.
- * Also handles plain text results like "Found 60 file(s) matching ...".
+   * Also handles plain text results like "Found 60 file(s) matching ...".
  */
 function parseToolPayload(raw: string | null): { display: string | null; body: string } {
   if (!raw) return { display: null, body: '' };
@@ -216,7 +216,7 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
     ) : null;
 
   const titleText = (() => {
-    const token = primaryValue ? <span className="code-token">{primaryValue}</span> : null;
+    const token = primaryValue ? <span className="orchid-code-token">{primaryValue}</span> : null;
 
     if (block.status === 'generating') {
       return <span className="font-semibold">{block.toolName}</span>;
@@ -281,23 +281,23 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
   })();
 
   return (
-    <div className={`tool-block orchid-tool-block ${stateClass}`}>
+    <div className={`orchid-tool-block ${stateClass}`}>
       <button
-        className="tool-block-title orchid-tool-block-title"
+        className="orchid-tool-block-title"
         onClick={toggle}
         type="button"
         aria-expanded={expanded}
         aria-controls={panelId}
       >
-        <span className="tool-block-title-left orchid-tool-block-title-left">
+        <span className="orchid-tool-block-title-left">
           {showLoader ? (
             <span className="loading loading-spinner loading-xs shrink-0" aria-hidden />
           ) : (
             <Icon name={iconName} size={12} className="shrink-0" />
           )}
-          <span className="tool-block-title-text orchid-tool-block-title-text">{titleText}</span>
+          <span className="orchid-tool-block-title-text">{titleText}</span>
         </span>
-        <span className="tool-block-title-right orchid-tool-block-title-right">
+        <span className="orchid-tool-block-title-right">
           {badge}
           <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
         </span>
@@ -306,7 +306,7 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
       {expanded && (
         <div
           id={panelId}
-          className="tool-block-content orchid-tool-block-content"
+          className="orchid-tool-block-content"
           onClick={collapse}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
@@ -319,29 +319,29 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
           title="Click to collapse"
         >
           {block.status === 'generating' && (
-            <div className="tool-args-stream orchid-tool-args-stream">
+            <div className="orchid-tool-args-stream">
               streaming args: {argsText || '{'}
             </div>
           )}
           {block.status === 'running' && (
-            <div className="tool-running-hint orchid-tool-running-hint">
+            <div className="orchid-tool-running-hint">
               {primaryValue
                 ? `${runningVerb(block.toolName).toLowerCase()} ${primaryValue}…`
                 : 'running…'}
             </div>
           )}
           {block.status === 'completed' && block.result && (
-            <pre className="tool-result-body orchid-tool-result-body">
+            <pre className="orchid-tool-result-body">
               {formatResultBody(block.result)}
             </pre>
           )}
           {block.status === 'failed' && (
-            <pre className="tool-result-body tool-result-error orchid-tool-result-body orchid-tool-result-error">
+            <pre className="orchid-tool-result-body orchid-tool-result-error">
               {parseToolPayload(block.error).body || block.error || 'Tool failed'}
             </pre>
           )}
           {block.status === 'completed' && !block.result && (
-            <div className="tool-running-hint orchid-tool-running-hint">done</div>
+            <div className="orchid-tool-running-hint">done</div>
           )}
         </div>
       )}
@@ -357,7 +357,7 @@ function renderSummaryWithToken(summary: string, primary: string | null): ReactN
   return (
     <>
       {summary.slice(0, idx)}
-      <span className="code-token">{primary}</span>
+      <span className="orchid-code-token">{primary}</span>
       {summary.slice(idx + primary.length)}
     </>
   );
