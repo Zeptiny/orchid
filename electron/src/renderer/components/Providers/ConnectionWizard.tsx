@@ -27,6 +27,9 @@ import { useFocusTrap } from '../../keyboard';
 import { isTextGenerationModel } from '../../utils/models';
 import { Icon } from '../Icon';
 import { SearchableOptionPicker, type SearchableOption } from '../SearchableOptionPicker';
+import { FormField } from '../ui/FormField';
+import { IconButton } from '../ui/IconButton';
+import { SectionHeader } from '../ui/SectionHeader';
 import {
   ConnectionModelsEditor,
   connectionCustomModelDrafts,
@@ -425,27 +428,29 @@ export function ConnectionWizard({
       }}
     >
       <div className="modal-box">
-        <header className="provider-wizard-header">
-          <div className="min-w-0">
+        <SectionHeader
+          className="provider-wizard-header"
+          title={
             <h2 id="provider-connection-wizard-title" className="text-base font-semibold tracking-tight">
               {existingConnection ? `Edit connection · ${existingConnection.name}` : 'Connect a provider'}
             </h2>
-            <p className="mt-1 text-sm text-base-content/70">
-              {existingConnection
-                ? 'Update connection details, authentication, and models in one place.'
-                : 'Connections are independent accounts or endpoints. Orchid never chooses one automatically.'}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm btn-circle"
-            aria-label={existingConnection ? 'Close connection editor' : 'Close provider connection setup'}
-            onClick={() => close()}
-            disabled={submitting}
-          >
-            <Icon name="x" size={16} />
-          </button>
-        </header>
+          }
+          description={
+            existingConnection
+              ? 'Update connection details, authentication, and models in one place.'
+              : 'Connections are independent accounts or endpoints. Orchid never chooses one automatically.'
+          }
+          actions={
+            <IconButton
+              label={existingConnection ? 'Close connection editor' : 'Close provider connection setup'}
+              icon="x"
+              size="sm"
+              iconSize={16}
+              onClick={() => close()}
+              disabled={submitting}
+            />
+          }
+        />
 
         {availableDefinitions.length === 0 ? (
           <div className="provider-wizard-body">
@@ -488,20 +493,24 @@ export function ConnectionWizard({
                   </>
                 )}
 
-                <label className="label mt-3" htmlFor="provider-wizard-name">
-                  Connection name
-                </label>
-                <input
-                  ref={nameInputRef}
-                  id="provider-wizard-name"
-                  className="input w-full"
-                  value={connectionName}
-                  onChange={(event) => setConnectionName(event.target.value)}
-                  placeholder="e.g. Work account"
-                  disabled={metadataLocked}
+                <FormField
+                  className="mt-3"
+                  label="Connection name"
+                  htmlFor="provider-wizard-name"
+                  hint="This name distinguishes accounts for the same provider."
                   required
-                />
-                <p className="label">This name distinguishes accounts for the same provider.</p>
+                >
+                  <input
+                    ref={nameInputRef}
+                    id="provider-wizard-name"
+                    className="input w-full"
+                    value={connectionName}
+                    onChange={(event) => setConnectionName(event.target.value)}
+                    placeholder="e.g. Work account"
+                    disabled={metadataLocked}
+                    required
+                  />
+                </FormField>
               </fieldset>
 
               {!existingConnection && (

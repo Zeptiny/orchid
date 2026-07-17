@@ -100,4 +100,22 @@
     font-size: 9px;
     letter-spacing: 0.02em;
   }
+
+  /* ── Shared panel / section / form / state composites ───────────────────── */
+
+  .orchid-panel {
+    @apply min-w-0;
+  }
+
+  .orchid-section-header {
+    @apply min-w-0;
+  }
+
+  .orchid-form-field {
+    @apply min-w-0;
+  }
+
+  .orchid-state-message {
+    @apply min-w-0;
+  }
 }

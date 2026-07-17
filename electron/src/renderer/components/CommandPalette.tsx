@@ -23,6 +23,8 @@ import type { ProviderModelOption } from '../../shared/types/ipc';
 import { resolveModelNotifyLabel } from '../utils/provider-selection';
 import { Icon, type IconName } from './Icon';
 import { Keycaps } from './Keycaps';
+import { IconButton } from './ui/IconButton';
+import { ShortcutBar } from './ui/ShortcutBar';
 
 export interface CommandPaletteProps {
   isOpen: boolean;
@@ -460,17 +462,17 @@ export function CommandPalette({
         {/* Header / input */}
         <div className="command-palette-search-row">
           {subPicker && (
-            <button
-              className="btn btn-ghost btn-sm btn-circle"
+            <IconButton
+              label="Back"
+              icon="arrowLeft"
+              size="sm"
+              iconSize={16}
               onClick={() => {
                 setSubPicker(null);
                 setQuery('');
                 setSelectedIndex(0);
               }}
-              title="Back"
-            >
-              <Icon name="arrowLeft" size={16} />
-            </button>
+            />
           )}
           <label className="input input-sm command-palette-search-field">
             <Icon name="search" size={14} className="shrink-0 text-base-content/45" />
@@ -593,22 +595,14 @@ export function CommandPalette({
           ) : null}
         </div>
 
-        {/* Footer */}
-        <div className="command-palette-footer orchid-shortcut-bar">
-          <span className="orchid-shortcut-bar-item">
-            <Keycaps chord="↑" size="xs" />
-            <Keycaps chord="↓" size="xs" />
-            <span>navigate</span>
-          </span>
-          <span className="orchid-shortcut-bar-item">
-            <Keycaps chord="Enter" size="xs" />
-            <span>select</span>
-          </span>
-          <span className="orchid-shortcut-bar-item">
-            <Keycaps chord="Esc" size="xs" />
-            <span>close</span>
-          </span>
-        </div>
+        <ShortcutBar
+          className="command-palette-footer"
+          items={[
+            { chord: ['↑', '↓'], label: 'navigate' },
+            { chord: 'Enter', label: 'select' },
+            { chord: 'Esc', label: 'close' },
+          ]}
+        />
       </div>
     </div>
   );
