@@ -28,6 +28,102 @@ describe('SubagentManager runtime', () => {
     manager = new SubagentManager();
   });
 
+  it('exposes live text and ordered changes before completion', async () => {
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'Hello ' };
+      yield { type: 'content', text: 'live' };
+      await paused;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const changes: number[] = [];
+    manager.setOnLiveChange((change) => changes.push(change.sequence));
+
+    const record = manager.spawn('live', 'watch', testAgent, { sessionId: 's-live' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(record.state).toBe(SubagentState.RUNNING);
+    expect(record.live.segments).toEqual([{ kind: 'text', id: expect.any(String), content: 'Hello live' }]);
+    expect(record.chain?.messages).toHaveLength(1);
+    expect(changes).toEqual([...changes].sort((a, b) => a - b));
+    expect(new Set(changes).size).toBe(changes.length);
+
+    release();
+    await record._runPromise;
+    expect(record.live.segments).toEqual([]);
+    expect(record.chain?.messages.filter((message) => message.content === 'Hello live')).toHaveLength(1);
+  });
+
+  it('keeps text, thinking, and tool snapshots in stable chronological order', async () => {
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'before' };
+      yield { type: 'thinking', text: 'reason' };
+      yield { type: 'tool_call_start', toolCallId: 'tool-1', toolName: 'grep' };
+      yield { type: 'tool_call_delta', toolCallId: 'tool-1', argsDelta: '{"q":' };
+      yield { type: 'tool_call', toolCallId: 'tool-1', toolName: 'grep', args: '{"q":1}' };
+      yield { type: 'tool_result', toolCallId: 'tool-1', content: 'match', isError: false };
+      yield { type: 'content', text: 'after' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const record = manager.spawn('ordered', 'inspect', testAgent);
+    await record._runPromise;
+
+    const types = record.chain?.messages.map((message) => message.type) ?? [];
+    expect(types).toEqual(['text', 'text', 'thinking', 'tool_call', 'tool_result', 'text']);
+    expect(record.chain?.messages.at(-1)?.content).toBe('after');
+    expect(record.live.toolCalls).toEqual([]);
+    expect(record.live.segments).toEqual([]);
+  });
+
+  it('checkpoint conversion materializes a live tail without mutating canonical messages', async () => {
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'partial' };
+      await paused;
+    });
+    const record = manager.spawn('checkpoint', 'partial', testAgent);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const before = record.chain?.messages.length;
+    const checkpoint = manager.toDomainRecords()[0];
+    expect(checkpoint.chain.messages.at(-1)?.content).toBe('partial');
+    expect(record.chain?.messages.length).toBe(before);
+
+    release();
+    manager.cancelOne(record.id);
+    await record._runPromise;
+  });
+
+  it('isolates live sequence identity and ownership for concurrent sessions', async () => {
+    const gates = new Map<string, () => void>();
+    manager.setRunner(async function* ({ sessionId }): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: sessionId };
+      await new Promise<void>((resolve) => gates.set(sessionId!, resolve));
+    });
+    const changes: Array<{ sessionId: string | null; sequence: number }> = [];
+    manager.setOnLiveChange(({ sessionId, sequence }) => changes.push({ sessionId, sequence }));
+    const a = manager.spawn('a', 'a', testAgent, { sessionId: 'session-a' });
+    const b = manager.spawn('b', 'b', testAgent, { sessionId: 'session-b' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(a.live.sessionId).toBe('session-a');
+    expect(b.live.sessionId).toBe('session-b');
+    expect(a.live.sequence).toBeGreaterThan(0);
+    expect(b.live.sequence).toBeGreaterThan(0);
+    expect(changes.filter((change) => change.sessionId === 'session-a').map((change) => change.sequence))
+      .toEqual(expect.arrayContaining([a.live.sequence]));
+    expect(changes.filter((change) => change.sessionId === 'session-b').map((change) => change.sequence))
+      .toEqual(expect.arrayContaining([b.live.sequence]));
+    manager.cancelOne(a.id);
+    manager.cancelOne(b.id);
+    gates.get('session-a')?.();
+    gates.get('session-b')?.();
+    await Promise.all([a._runPromise, b._runPromise]);
+  });
+
   it('starts a runner and records usage on the chain', async () => {
     manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
       yield { type: 'content', text: 'Hello ' };

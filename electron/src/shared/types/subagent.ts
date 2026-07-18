@@ -10,6 +10,7 @@
 
 import { z } from 'zod';
 import type { Chain } from './chain';
+import type { Usage } from './message';
 import { chainFromStorageDict, chainToStorageDict } from './chain';
 
 // ── Enums as const objects ──────────────────────────────────────────────────
@@ -23,6 +24,48 @@ export const SubagentStatus = {
 } as const;
 
 export type SubagentStatus = (typeof SubagentStatus)[keyof typeof SubagentStatus];
+
+/** Chronological, in-memory output emitted by one subagent run. */
+export type SubagentLiveSegment =
+  | { kind: 'text'; id: string; content: string }
+  | { kind: 'thinking'; id: string; content: string }
+  | { kind: 'tool'; id: string; toolCallId: string };
+
+/** Current state of a tool, including partially generated arguments. */
+export interface SubagentToolSnapshot {
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly status: 'generating' | 'running' | 'completed' | 'error';
+  readonly partialArgs: string;
+  readonly args: string;
+  readonly result: string | null;
+  readonly error: string | null;
+  readonly startedAt: string;
+  readonly finishedAt: string | null;
+}
+
+/** Runtime-only projection; never serialized into SubagentRecord storage. */
+export interface SubagentLiveProjection {
+  readonly sessionId: string | null;
+  readonly subagentId: string;
+  readonly runId: string;
+  readonly sequence: number;
+  readonly state: SubagentStatus;
+  readonly segments: readonly SubagentLiveSegment[];
+  readonly toolCalls: readonly SubagentToolSnapshot[];
+  readonly usage: Usage | null;
+  readonly result: string | null;
+  readonly error: string | null;
+}
+
+/** Ordered notification emitted whenever a live projection changes. */
+export interface SubagentLiveChange {
+  readonly sessionId: string | null;
+  readonly subagentId: string;
+  readonly runId: string;
+  readonly sequence: number;
+  readonly projection: SubagentLiveProjection;
+}
 
 // ── SubagentRecord ──────────────────────────────────────────────────────────
 
