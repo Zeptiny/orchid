@@ -9,6 +9,9 @@
   },
   "homepage": "https://github.com/Zeptiny/orchid",
   "main": "dist/main/index.js",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "predev": "npm run native:ensure:electron",
     "dev": "tsc -p tsconfig.node.json && npm run copy:defaults && npm run build:preload && concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
