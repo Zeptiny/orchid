@@ -11,7 +11,6 @@
 - The skills and agents are not updated for the current capabilities of the harness
 
 ### Interface
-- Allow to view the running subagents output / while working
 - Verify if all tool have a generating and running state
   - Edit / write appears to not have
 - Execute command widget should show the command description on the title, with the command itself on the dropdown / content
