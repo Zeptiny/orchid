@@ -109,6 +109,10 @@ function ThinkingMessage({
     setUserToggled(true);
     setExpanded((prev) => !prev);
   }, []);
+  const collapse = useCallback(() => {
+    setUserToggled(true);
+    setExpanded(false);
+  }, []);
   const content = message.content || (message.thinking ?? '');
   // Mock shows "Thought 936ms" — estimate from content length when no duration field
   const durationLabel = useMemo(() => {
@@ -145,7 +149,20 @@ function ThinkingMessage({
         <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
       </button>
       {expanded && (
-        <div id={panelId} className="orchid-thought-content">
+        <div
+          id={panelId}
+          className="orchid-thought-content"
+          onClick={collapse}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              collapse();
+            }
+          }}
+          role="button"
+          tabIndex={0}
+          title="Click to collapse"
+        >
           {content}
         </div>
       )}

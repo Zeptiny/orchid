@@ -260,6 +260,11 @@
     font-size: 1rem;
     padding: 8px 14px 10px;
     border-left: 2px solid var(--msg-thinking-text, var(--color-info));
+    cursor: pointer;
+  }
+
+  .orchid-thought-content:hover {
+    background: color-mix(in srgb, var(--color-base-content) 2%, transparent);
   }
 
   /* Tool activity group */

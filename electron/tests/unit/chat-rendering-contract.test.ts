@@ -53,6 +53,17 @@ describe('chat rendering contract (U5)', () => {
       expect(tool).not.toMatch(/loading loading-spinner/);
       expect(error).not.toMatch(/className=.*alert\b/);
     });
+
+    it('thinking content collapses when clicked', () => {
+      const src = read('components/MessageWidget.tsx');
+      const contentStart = src.indexOf('className="orchid-thought-content"');
+      const contentSource = src.slice(contentStart, contentStart + 500);
+
+      expect(contentStart).toBeGreaterThanOrEqual(0);
+      expect(contentSource).toContain('onClick={collapse}');
+      expect(contentSource).toContain('role="button"');
+      expect(contentSource).toContain('title="Click to collapse"');
+    });
   });
 
   describe('memoization boundary', () => {

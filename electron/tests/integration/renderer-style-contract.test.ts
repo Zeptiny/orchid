@@ -770,6 +770,13 @@ describe('Renderer style contract', () => {
           'font-size: 1rem;',
         );
       }
+
+      expect(findCssRuleBody(componentCss, '.orchid-thought-content')).toContain(
+        'cursor: pointer;',
+      );
+      expect(findCssRuleBody(componentCss, '.orchid-thought-content:hover')).toContain(
+        'background: color-mix(in srgb, var(--color-base-content) 2%, transparent);',
+      );
     });
   });
 
