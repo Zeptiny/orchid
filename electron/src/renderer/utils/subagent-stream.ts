@@ -235,10 +235,3 @@ export function replaceSubagentRecords(
     hydration: state.hydration === 'loading' ? 'loading' : records.length ? 'ready' : 'empty',
   });
 }
-
-export function mergeSubagentRecordAndLive(
-  record: SubagentRecord,
-  live: SubagentLiveProjection | null | undefined,
-): { record: SubagentRecord; live: SubagentLiveProjection | null } {
-  return live ? { record: recordWithProjection(record, live), live: isRunning(live.state) ? live : null } : { record, live: null };
-}

@@ -30,11 +30,6 @@ export interface SubagentDetail {
   readonly result: string | null; readonly error: string | null; readonly usage: Usage | null;
 }
 
-export interface SubagentTranscript {
-  readonly messages: readonly unknown[];
-  readonly liveTail: readonly SubagentLiveProjection['segments'][number][];
-}
-
 export interface UseSubagentsReturn {
   state: SubagentListState;
   subagents: readonly SubagentRecord[];
@@ -50,7 +45,6 @@ export interface UseSubagentsReturn {
   getDetail: (id: string) => SubagentDetail | null;
   live: ReadonlyMap<string, SubagentLiveProjection>;
   getLive: (id: string) => SubagentLiveProjection | null;
-  getTranscript: (id: string) => SubagentTranscript | null;
 }
 
 function formatElapsed(ms: number): string {
@@ -196,14 +190,8 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
     return record ? buildDetail(record, Date.now()) : null;
   }, [subagents, tick]);
   const getLive = useCallback((id: string) => current.live.get(id) ?? null, [current.live]);
-  const getTranscript = useCallback((id: string): SubagentTranscript | null => {
-    const record = subagents.find((item) => item.id === id);
-    if (!record) return null;
-    return { messages: record.chain.messages, liveTail: current.live.get(id)?.segments ?? [] };
-  }, [subagents, current.live]);
-
   return {
     state, subagents, groups, totalUsage, usageByParentChain, refresh, retry, isRetrying,
-    applyFromSession, selectedId, select, getDetail, live: current.live, getLive, getTranscript,
+    applyFromSession, selectedId, select, getDetail, live: current.live, getLive,
   };
 }

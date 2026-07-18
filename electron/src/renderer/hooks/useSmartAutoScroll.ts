@@ -54,7 +54,7 @@ export function useSmartAutoScroll({
     };
     container.addEventListener('scroll', handleScroll, { passive: true });
     return () => container.removeEventListener('scroll', handleScroll);
-  }, [contentKey, enabled, resetKey]);
+  }, [enabled]);
 
   const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
     messagesEndRef.current?.scrollIntoView({ behavior });

@@ -38,7 +38,7 @@ describe('SubagentView', () => {
         totalUsage: null, usageByParentChain: new Map(), refresh: async () => {}, retry: async () => {},
         isRetrying: false, applyFromSession: () => {}, selectedId: 'running', select: () => {},
         getDetail: () => ({ id: 'running', name: 'running', type: 'worker', tier: 'bloom', state: 'running', task: 'Task running', elapsed: '1s', isRunning: true, result: null, error: null, usage: null }),
-        live: new Map(), getLive: () => null, getTranscript: () => null,
+        live: new Map(), getLive: () => null,
       },
       onBackToChat: () => {},
       openRequest: { generation: 1, id: 'running' },

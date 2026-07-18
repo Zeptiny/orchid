@@ -8,7 +8,7 @@ import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { getSubagentManager } from '../tools';
 import { createSubagentStreamRunner } from './subagent-runner';
 import { createSubagentPersistenceScheduler, persistSubagentChains } from './persist-subagent-chains';
-import { flushSubagentEvents, queueSubagentEvent } from '../ipc/subagents';
+import { flushSubagentEvents, isEligibleSubagentRecipient, queueSubagentEvent } from '../ipc/subagents';
 import { SubagentState } from './manager';
 
 let wired = false;
@@ -29,7 +29,7 @@ export function wireSubagentRuntime(): void {
   const scheduler = createSubagentPersistenceScheduler((sessionId) => {
     try { persistSubagentChains(manager, sessionId); }
     catch (err) { console.debug('Failed to persist subagent chains (non-fatal):', err); }
-    broadcastSubagentsChanged();
+    broadcastSubagentsChanged(sessionId);
   });
 
   manager.setOnLiveChange((change) => {
@@ -71,10 +71,13 @@ export function flushSubagentPersistence(): void {
   else persistSubagentChains(manager);
 }
 
-function broadcastSubagentsChanged(): void {
-  for (const win of BrowserWindow.getAllWindows()) {
+export function broadcastSubagentsChanged(
+  sessionId: string,
+  windows: readonly BrowserWindow[] = BrowserWindow.getAllWindows(),
+): void {
+  for (const win of windows) {
     try {
-      if (!win.isDestroyed() && win.webContents && !win.webContents.isDestroyed()) {
+      if (!win.isDestroyed() && win.webContents && isEligibleSubagentRecipient(win.webContents, sessionId)) {
         win.webContents.send(IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED);
       }
     } catch {

@@ -19,7 +19,7 @@ export function createSubagentSnapshot(sessionId: string): SubagentSnapshot {
   const session = getSessionManager().getSession(sessionId);
   const runtime = manager.allRecords()
     .filter((record) => record.sessionId === sessionId)
-    .map(runtimeToDomain);
+    .map((record) => runtimeToDomain(record, { includeLiveTail: false }));
   const records = mergeSubagentRecords(session?.subagentChains ?? [], runtime);
   return {
     sessionId,

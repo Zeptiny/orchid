@@ -4,6 +4,7 @@ import { subagentSnapshotSchema, subagentEventSchema } from '../../src/shared/ty
 import { subagentSnapshotSchema as requestSchema } from '../../src/main/ipc/payload-schemas';
 import { createSubagentPersistenceScheduler } from '../../src/main/agents/persist-subagent-chains';
 import { createSubagentEventCoalescer, deliverSubagentChange, mergeSubagentRecords } from '../../src/main/ipc/subagents';
+import { broadcastSubagentsChanged } from '../../src/main/agents/wire-subagents';
 
 const uuid = '00000000-0000-4000-8000-000000000001';
 const session = '00000000-0000-4000-8000-000000000002';
@@ -67,6 +68,20 @@ describe('subagent IPC boundary', () => {
     deliverSubagentChange(change(1) as never, [makeWindow('1'), makeWindow('2'), makeWindow('3', true)]);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toEqual([IPC_CHANNELS.SUBAGENTS_EVENT, expect.objectContaining({ sessionId: session, sequence: 1 })]);
+  });
+
+  it('targets durable broadcasts only at windows owning the flushed session', () => {
+    const sent: unknown[] = [];
+    const makeWindow = (id: string, destroyed = false) => ({
+      isDestroyed: () => destroyed,
+      webContents: { id, isDestroyed: () => destroyed, send: (...args: unknown[]) => sent.push([id, ...args]) },
+    }) as never;
+    activeByWebContents.set('1', { id: session });
+    activeByWebContents.set('2', { id: 'other-session' });
+
+    broadcastSubagentsChanged(session, [makeWindow('1'), makeWindow('2'), makeWindow('3', true)]);
+
+    expect(sent).toEqual([['1', IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED]]);
   });
 
   it('coalesces continuous live chunks within 50ms', () => {

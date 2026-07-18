@@ -571,7 +571,7 @@ export class SubagentManager {
       sessionId === undefined
         ? this.allRecords()
         : this.allRecords().filter((r) => r.sessionId === sessionId);
-    return records.map(runtimeToDomain);
+    return records.map((record) => runtimeToDomain(record));
   }
 
   // ── Private: run loop ─────────────────────────────────────────────────────
@@ -931,8 +931,16 @@ export class SubagentManager {
 
 // ── Persistence helpers ─────────────────────────────────────────────────────
 
+export interface RuntimeToDomainOptions {
+  /** Include the uncommitted live tail in the returned durable chain. */
+  includeLiveTail?: boolean;
+}
+
 /** Map runtime record → domain SubagentRecord for session JSON. */
-export function runtimeToDomain(record: SubagentRecord): DomainSubagentRecord {
+export function runtimeToDomain(
+  record: SubagentRecord,
+  options: RuntimeToDomainOptions = {},
+): DomainSubagentRecord {
   const statusMap: Record<SubagentState, DomainSubagentRecord['status']> = {
     [SubagentState.PENDING]: SubagentStatus.PENDING,
     [SubagentState.RUNNING]: SubagentStatus.RUNNING,
@@ -944,7 +952,9 @@ export function runtimeToDomain(record: SubagentRecord): DomainSubagentRecord {
   const chain =
     record.chain ??
     makeEmptyChain(record.sessionId ?? '', record.selection, record.agent);
-  const checkpointChain = materializeLiveTail(record, chain);
+  const checkpointChain = options.includeLiveTail === false
+    ? chain
+    : materializeLiveTail(record, chain);
 
   return {
     id: record.id,
@@ -969,15 +979,15 @@ export function runtimeToDomain(record: SubagentRecord): DomainSubagentRecord {
 function materializeLiveTail(record: SubagentRecord, chain: Chain): Chain {
   const tail = record.live.segments.slice(record._liveCommittedSegmentCount);
   if (tail.length === 0) return chain;
-  let text = '';
-  let thinking = '';
-  for (const segment of tail) {
-    if (segment.kind === 'text') text += segment.content;
-    else if (segment.kind === 'thinking') thinking += segment.content;
-  }
   const messages = [...chain.messages];
-  if (thinking) messages.push(makeThinkingMessage(thinking));
-  if (text) messages.push(makeAssistantMessage(text, record.usage));
+  const lastTextIndex = tail.findLastIndex((segment) => segment.kind === 'text');
+  for (const [index, segment] of tail.entries()) {
+    if (segment.kind === 'thinking' && segment.content) {
+      messages.push(makeThinkingMessage(segment.content));
+    } else if (segment.kind === 'text' && segment.content) {
+      messages.push(makeAssistantMessage(segment.content, index === lastTextIndex ? record.usage : null));
+    }
+  }
   return { ...chain, messages };
 }
 

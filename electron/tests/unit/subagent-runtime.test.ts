@@ -89,8 +89,37 @@ describe('SubagentManager runtime', () => {
 
     const before = record.chain?.messages.length;
     const checkpoint = manager.toDomainRecords()[0];
+    const canonical = runtimeToDomain(record, { includeLiveTail: false });
     expect(checkpoint.chain.messages.at(-1)?.content).toBe('partial');
+    expect(canonical.chain.messages.filter((message) => message.role === 'assistant')).toHaveLength(0);
+    expect(record.live.segments.map((segment) => segment.content)).toEqual(['partial']);
     expect(record.chain?.messages.length).toBe(before);
+
+    release();
+    manager.cancelOne(record.id);
+    await record._runPromise;
+  });
+
+  it('materializes interleaved live segments chronologically with usage on text', async () => {
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'before' };
+      yield { type: 'thinking', text: 'reason' };
+      yield { type: 'content', text: 'after' };
+      yield { type: 'usage', usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5, cached_tokens: 0 } };
+      await paused;
+    });
+    const record = manager.spawn('ordered-tail', 'partial', testAgent);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const tail = runtimeToDomain(record).chain.messages.slice(1);
+    expect(tail.map((message) => [message.type, message.content])).toEqual([
+      ['text', 'before'], ['thinking', 'reason'], ['text', 'after'],
+    ]);
+    expect(tail.filter((message) => message.type === 'text').map((message) => message.usage)).toEqual([
+      null, record.usage,
+    ]);
 
     release();
     manager.cancelOne(record.id);

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { SubagentRecord } from '../../shared/types/subagent';
 import type { UseSubagentsReturn } from '../hooks/useSubagents';
+import { groupSubagents } from '../utils/subagent-stream';
 import { SubagentTranscript } from './SubagentTranscript';
 import { Button } from './ui/Button';
 import { IconButton } from './ui/IconButton';
@@ -18,10 +19,6 @@ interface SubagentViewProps {
 export interface SubagentOpenRequest {
   generation: number;
   id: string | null;
-}
-
-function newest(records: readonly SubagentRecord[]): SubagentRecord | null {
-  return [...records].sort((a, b) => Date.parse(b.start_time) - Date.parse(a.start_time))[0] ?? null;
 }
 
 export function resolveSubagentOpenRequest(
@@ -90,8 +87,7 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
   const appliedOpenGeneration = useRef<number | null>(null);
   const records = subagents.subagents;
   const selected = records.find((record) => record.id === subagents.selectedId) ?? null;
-  const running = useMemo(() => [...subagents.groups.running].sort((a, b) => Date.parse(b.start_time) - Date.parse(a.start_time)), [subagents.groups.running]);
-  const ended = useMemo(() => [...subagents.groups.ended].sort((a, b) => Date.parse(b.start_time) - Date.parse(a.start_time)), [subagents.groups.ended]);
+  const { running, ended } = subagents.groups;
 
   useEffect(() => {
     if (!subagents.selectedId) setNarrowDetail(false);
@@ -198,6 +194,6 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
 }
 
 export function chooseNewestSubagent(records: readonly SubagentRecord[]): string | null {
-  const active = records.filter((record) => record.status === 'running' || record.status === 'pending');
-  return (newest(active.length > 0 ? active : records))?.id ?? null;
+  const groups = groupSubagents(records);
+  return groups.running[0]?.id ?? groups.ended[0]?.id ?? null;
 }
