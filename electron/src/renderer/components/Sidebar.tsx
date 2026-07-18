@@ -39,6 +39,7 @@ interface SidebarProps {
   onRefreshSubagents: () => void;
   selectedSubagentId: string | null;
   onSelectSubagent: (id: string | null) => void;
+  onOpenSubagentView?: (id?: string) => void;
   getSubagentDetail: (id: string) => SubagentDetail | null;
   todoState: TodoListState;
   onRefreshTodos: () => void;
@@ -68,6 +69,7 @@ export function Sidebar({
   onRefreshSubagents,
   selectedSubagentId,
   onSelectSubagent,
+  onOpenSubagentView = () => {},
   getSubagentDetail,
   todoState,
   onRefreshTodos,
@@ -157,6 +159,7 @@ export function Sidebar({
             selectedId={selectedSubagentId}
             onSelect={onSelectSubagent}
             getDetail={getSubagentDetail}
+            onOpenView={onOpenSubagentView}
           />
         </CollapseBlock>
 
@@ -311,6 +314,7 @@ interface SubagentsSectionProps {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   getDetail: (id: string) => SubagentDetail | null;
+  onOpenView?: (id?: string) => void;
 }
 
 export function SubagentsSection({
@@ -319,6 +323,7 @@ export function SubagentsSection({
   selectedId,
   onSelect,
   getDetail,
+  onOpenView = () => {},
 }: SubagentsSectionProps) {
   if (state.status === 'loading') {
     return <StateMessage kind="loading" className="py-4" title="Loading subagents…" />;
@@ -340,7 +345,14 @@ export function SubagentsSection({
   }
 
   if (state.status === 'empty') {
-    return <StateMessage kind="empty" className="inspector-empty py-4" title="No active subagents" />;
+    return (
+      <StateMessage
+        kind="empty"
+        className="inspector-empty py-4"
+        title="No active subagents"
+        action={<Button size="xs" variant="ghost" onClick={() => onOpenView()}>View all</Button>}
+      />
+    );
   }
 
   const agents = state.status === 'ready' ? state.subagents : [];
@@ -348,6 +360,9 @@ export function SubagentsSection({
 
   return (
     <div className="inspector-stack">
+      <div className="flex justify-end">
+        <Button size="xs" variant="ghost" onClick={() => onOpenView()}>View all</Button>
+      </div>
       {running.map((agent) => (
         <SubagentRow
           key={agent.id}
@@ -355,6 +370,7 @@ export function SubagentsSection({
           selectedId={selectedId}
           onSelect={onSelect}
           getDetail={getDetail}
+          onOpenView={onOpenView}
         />
       ))}
       {other.length > 0 && (
@@ -384,6 +400,7 @@ export function SubagentsSection({
                 selectedId={selectedId}
                 onSelect={onSelect}
                 getDetail={getDetail}
+                onOpenView={onOpenView}
                 inMenu
               />
             ))}
@@ -399,6 +416,7 @@ interface SubagentRowProps {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   getDetail: (id: string) => SubagentDetail | null;
+  onOpenView: (id?: string) => void;
   inMenu?: boolean;
 }
 
@@ -407,6 +425,7 @@ function SubagentRow({
   selectedId,
   onSelect,
   getDetail,
+  onOpenView,
   inMenu = false,
 }: SubagentRowProps) {
   const detail = getDetail(agent.id);
@@ -427,6 +446,9 @@ function SubagentRow({
         <span className="inspector-row-label mono truncate">{name}</span>
         <SubagentStateBadge state={agentState} />
       </button>
+      <Button size="xs" variant="link" className="justify-start px-2" onClick={() => onOpenView(agent.id)}>
+        Open in Subagent View
+      </Button>
       {isSelected && (
         <div className="inspector-subagent-detail">
           {detail?.elapsed && (

@@ -122,6 +122,9 @@ describe('composer contract (U6)', () => {
       expect(src).toMatch(/IconButton/);
       expect(src).toMatch(/Enter to send/);
       expect(src).toMatch(/Shift\+Enter/);
+      expect(src).toMatch(/isViewActive/);
+      expect(src).toMatch(/if \(isViewActive\) return/);
+      expect(src).toMatch(/!isViewActive && status === 'idle'/);
     });
 
     it('footer uses the radial context indicator and stacked dropup bar', () => {

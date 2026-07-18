@@ -54,6 +54,8 @@ interface InputAreaProps {
   /** A typed `{ connectionId, modelId }` selection is required for a send. */
   modelSelected?: boolean;
   onOpenProviders?: () => void;
+  /** ChatView keeps this subtree mounted while the Subagent View owns focus. */
+  isViewActive?: boolean;
 }
 
 type SubPicker = '/theme' | '/personality' | '/model' | '/sessions' | null;
@@ -64,7 +66,7 @@ const TEXTAREA_MAX_HEIGHT_PX = 160;
 
 export function InputArea({
   status,
-  model,
+  model: _model,
   modelLabels,
   modelDetails,
   interruptState = 'idle',
@@ -80,6 +82,7 @@ export function InputArea({
   providerAvailable = true,
   modelSelected = true,
   onOpenProviders,
+  isViewActive = false,
 }: InputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   /** Blocks rapid double-Enter before parent status re-renders to streaming. */
@@ -342,10 +345,10 @@ export function InputArea({
     if (shouldReleaseComposerSendLock(status, interruptState)) {
       isSendingRef.current = false;
     }
-    if (status === 'idle' && interruptState === 'idle') {
+    if (!isViewActive && status === 'idle' && interruptState === 'idle') {
       textareaRef.current?.focus();
     }
-  }, [status, interruptState]);
+  }, [status, interruptState, isViewActive]);
 
   useEffect(() => {
     resizeTextarea();
@@ -366,6 +369,7 @@ export function InputArea({
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      if (isViewActive) return;
       if (document.documentElement.dataset.orchidSettingsOpen === '1') return;
 
       if (!canInterrupt) return;
@@ -378,7 +382,7 @@ export function InputArea({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canInterrupt, isSlashMode, onCancel]);
+  }, [canInterrupt, isSlashMode, isViewActive, onCancel]);
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim();

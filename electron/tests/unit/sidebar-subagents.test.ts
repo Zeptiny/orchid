@@ -75,6 +75,8 @@ describe('subagent sidebar grouping', () => {
     expect(html).toContain('aria-haspopup="menu"');
     expect(html).toContain('btn btn-ghost btn-xs');
     expect(html).toContain('orchid-subagent-dropdown-flow');
+    expect(html).toContain('View all');
+    expect(html).toContain('Open in Subagent View');
     expect(html).not.toContain('completed-agent');
   });
 

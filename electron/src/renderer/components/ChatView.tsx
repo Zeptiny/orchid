@@ -35,6 +35,7 @@ import { SessionHeader } from './session-header';
 import { SessionTabBar } from './SessionTabBar';
 import { Alert, type AlertTone } from './ui/Alert';
 import { Button } from './ui/Button';
+import { SubagentView, type SubagentOpenRequest } from './SubagentView';
 
 type ToastSeverity = 'info' | 'warning' | 'error';
 interface Toast {
@@ -75,7 +76,22 @@ export function ChatView() {
   const [alwaysExpandToolGroups, setAlwaysExpandToolGroups] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [contentMode, setContentMode] = useState<'chat' | 'subagents'>('chat');
+  const [subagentOpenRequest, setSubagentOpenRequest] = useState<SubagentOpenRequest>({ generation: 0, id: null });
+  const chatContentRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const element = chatContentRef.current;
+    if (!element) return;
+    if (contentMode === 'subagents') element.setAttribute('inert', '');
+    else element.removeAttribute('inert');
+  }, [contentMode]);
+
+  const openSubagentView = useCallback((id?: string) => {
+    setSubagentOpenRequest((previous) => ({ generation: previous.generation + 1, id: id ?? null }));
+    setContentMode('subagents');
+  }, []);
 
   // Guards against out-of-order session:load responses overwriting a newer pick.
   const sessionSwitchGen = useRef(0);
@@ -1043,6 +1059,11 @@ export function ChatView() {
             </div>
           </div>
         ) : null}
+        <div
+          ref={chatContentRef}
+          className={contentMode === 'subagents' ? 'orchid-chat-content-preserved orchid-chat-content-hidden' : 'orchid-chat-content-preserved'}
+          aria-hidden={contentMode === 'subagents' ? true : undefined}
+        >
         <ChatStream
           messages={chat.messages}
           streamingContent={chat.streamingContent}
@@ -1092,6 +1113,7 @@ export function ChatView() {
           onPickProjectDir={() => {
             void handlePickProjectDir();
           }}
+          isViewActive={contentMode === 'subagents'}
         />
         <Footer
           elapsedSeconds={chat.elapsedSeconds}
@@ -1105,6 +1127,10 @@ export function ChatView() {
           modelDetails={providerModelDetails}
           commandContext={commandContext}
         />
+        </div>
+        {contentMode === 'subagents' ? (
+          <SubagentView subagents={subagents} openRequest={subagentOpenRequest} onBackToChat={() => setContentMode('chat')} />
+        ) : null}
       </main>
 
       <Sidebar
@@ -1115,6 +1141,7 @@ export function ChatView() {
         selectedSubagentId={subagents.selectedId}
         onSelectSubagent={subagents.select}
         getSubagentDetail={subagents.getDetail}
+        onOpenSubagentView={openSubagentView}
         todoState={todos.state}
         onRefreshTodos={todos.refresh}
         mcpServers={mcpServers}
