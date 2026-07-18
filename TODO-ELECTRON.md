@@ -21,7 +21,6 @@
 - Verify if all tool have a generating and running state
   - Edit / write appears to not have
 - Execute command widget should show the command description on the title, with the command itself on the dropdown / content
-- Chat appears to not use the full availiable width / x axis space
 - Erros are not being returned / used correclty on the interface
   - Also needs to check if subagent errors are properly propagating
   - For example, API returned 429 but no message appeared on the interface

@@ -721,6 +721,12 @@ describe('Renderer style contract', () => {
         }
       }
 
+      const messageRule = findCssRuleBody(componentCss, '.orchid-msg');
+      const assistantRule = findCssRuleBody(componentCss, '.orchid-msg-assistant');
+      expect(messageRule).toContain('width: 100%;');
+      expect(messageRule).toContain('max-width: 100%;');
+      expect(assistantRule).toContain('max-width: 100%;');
+
       const sessionTabSource = fs.readFileSync(
         path.join(RENDERER_ROOT, 'components/SessionTabBar.tsx'),
         'utf8',
