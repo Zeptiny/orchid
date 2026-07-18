@@ -1,7 +1,6 @@
 ## TODO - Remover esta seção antes da entrega final
 ### Bugs
 - Scrolling up is impossible
-- Remove token usage from the tool output (wait_for_subagent) that is given to the subagent (Does not aggregate nothing useful)
 
 ### Problems
 - LLM can deviate from the architecture
