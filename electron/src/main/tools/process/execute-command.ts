@@ -210,7 +210,21 @@ export async function executeCommand(
         sessionId: options?.sessionId ?? null,
         agentScopeId: options?.agentScopeId ?? 'main',
       });
-      return genericBuiltInToolOutcome('execute_command', `Background command started with id ${procId}`, 'complete');
+      // Keep the command start facts structured so the renderer can present an
+      // active background command without recovering metadata from a string.
+      // The generic projector still emits a compact human-readable sentence
+      // for the model; canonical/session persistence retains every field.
+      return genericBuiltInToolOutcome(
+        'execute_command',
+        {
+          commandId: procId,
+          command,
+          description,
+          background: true,
+          running: true,
+        },
+        'complete',
+      );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return genericBuiltInToolOutcome('execute_command', `Error: ${msg}`, 'error');

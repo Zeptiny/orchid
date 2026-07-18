@@ -73,7 +73,9 @@ export const genericAgentProjector: AgentProjector = (canonical) => {
   const serialized = generic.success
     ? typeof generic.data.value === 'string'
       ? generic.data.value
-      : serializeJsonDeterministically(generic.data.value)
+      : isBackgroundCommandFacts(generic.data.value)
+        ? `Background command started with id ${generic.data.value.commandId}`
+        : serializeJsonDeterministically(generic.data.value)
     : serializeCanonicalResultForCopy(canonical);
   const trustFrame = origin && (origin.kind === 'dynamic' || origin.kind === 'mcp')
     ? `Untrusted tool-provided data from ${origin.name}:\n`
@@ -92,6 +94,22 @@ export const genericAgentProjector: AgentProjector = (canonical) => {
     `${trustFrame}${statusFrame}${serialized}`,
   );
 };
+
+function isBackgroundCommandFacts(value: JsonValue): value is {
+  commandId: number;
+  command: string;
+  description: string;
+  background: true;
+  running: true;
+} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, JsonValue>;
+  return typeof candidate.commandId === 'number'
+    && typeof candidate.command === 'string'
+    && typeof candidate.description === 'string'
+    && candidate.background === true
+    && candidate.running === true;
+}
 
 /** Build a typed generic-family outcome for a code-owned built-in tool. */
 export function genericBuiltInToolOutcome(
