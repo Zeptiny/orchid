@@ -8,11 +8,13 @@ import {
   drainBufferedHydrationEvents,
   residualStateAfterSendFailure,
   resetCancelQueue,
+  resolveHydratedUsage,
   seedAffinityFromLive,
   shouldBufferChatEvent,
   type CancelQueueState,
   type ChatEventAffinity,
 } from '../../src/renderer/hooks/useChat';
+import type { Message, Usage } from '../../src/shared/types/message';
 
 function affinity(selectedSessionId: string | null): ChatEventAffinity {
   return { selectedSessionId, streamSessionId: selectedSessionId, streamTurnId: null, lastSequence: -1 };
@@ -23,6 +25,37 @@ function emptyCancelQueue(): CancelQueueState {
 }
 
 describe('useChat event affinity', () => {
+  it('keeps persisted usage when an idle live snapshot has no usage', () => {
+    const persisted: Usage = {
+      prompt_tokens: 900,
+      completion_tokens: 100,
+      total_tokens: 1_000,
+      cached_tokens: 300,
+      context: {
+        input_tokens: 900,
+        output_tokens: 100,
+        used_tokens: 1_000,
+        system_tokens: 100,
+        tools_tokens: 200,
+        tool_use_tokens: 300,
+        user_tokens: 200,
+        assistant_tokens: 200,
+      },
+    };
+    const messages = [{ usage: persisted }] as Message[];
+    const emptyLiveUsage: Usage = {
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0,
+      cached_tokens: 0,
+    };
+    const liveUsage: Usage = { ...persisted, total_tokens: 1_100 };
+
+    expect(resolveHydratedUsage(messages, null)).toBe(persisted);
+    expect(resolveHydratedUsage(messages, emptyLiveUsage)).toBe(persisted);
+    expect(resolveHydratedUsage(messages, liveUsage)).toBe(liveUsage);
+  });
+
   it('rejects events from a non-selected session', () => {
     const state = affinity('session-b');
     expect(acceptChatEvent(state, { sessionId: 'session-a', turnId: 'turn-a', sequence: 1 }, false)).toBe(false);

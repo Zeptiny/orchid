@@ -1,24 +1,19 @@
 /**
- * ContextGrid — 8×3 colored block grid + category token rows.
+ * Context visualization — a horizontal stacked bar with category rows.
  *
- * Category colors are CSS variables so the grid updates immediately when the
- * active theme changes without requiring a React rerender.
- *
- * Color swatches sit in front of each category row (no separate legend footer).
- * Uses real usage / maxContext only — no placeholder mock token counts.
+ * The bar uses the latest provider context snapshot when available. During
+ * session hydration the model window may still be resolving, so the used
+ * categories remain visible and occupy the bar until the free-space segment
+ * can be calculated.
  */
 import { useMemo } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import { contextUsedTokens } from '../../shared/usage';
 
-const GRID_COLS = 8;
-const GRID_ROWS = 3;
-const GRID_TOTAL = GRID_COLS * GRID_ROWS;
-
 const COLOR_FREE = 'var(--context-free)';
 const COLOR_SYSTEM = 'var(--context-system)';
-const COLOR_TOOL = 'var(--context-tool)';
+const COLOR_TOOLS = 'var(--context-tool)';
 const COLOR_USER = 'var(--context-user)';
 const COLOR_ASSISTANT = 'var(--context-assistant)';
 
@@ -35,12 +30,12 @@ interface ContextGridProps {
   usage?: Usage | null;
   messages?: readonly Message[];
   maxContext?: number | null;
-  breakdown?: ContextBreakdown | null;
 }
 
 interface TokenBreakdown {
   system: number;
-  tool: number;
+  tools: number;
+  toolUse: number;
   user: number;
   assistant: number;
   free: number;
@@ -48,10 +43,26 @@ interface TokenBreakdown {
   maxContext: number;
 }
 
+interface LegendEntry {
+  color: string;
+  label: string;
+  tokens: number;
+  pct: number;
+}
+
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
+}
+
+/** Return null when the model window is not known yet. */
+export function contextPercent(
+  usage: Usage | null | undefined,
+  maxContext?: number | null,
+): number | null {
+  if (!maxContext || maxContext <= 0) return null;
+  return Math.min(100, Math.round((contextUsedTokens(usage) / maxContext) * 100));
 }
 
 function computeBreakdown(
@@ -65,7 +76,8 @@ function computeBreakdown(
     const context = usage.context;
     return {
       system: context.system_tokens,
-      tool: context.tools_tokens + context.tool_use_tokens,
+      tools: context.tools_tokens,
+      toolUse: context.tool_use_tokens,
       user: context.user_tokens,
       assistant: context.assistant_tokens,
       free: mc > 0 ? Math.max(0, mc - context.used_tokens) : 0,
@@ -75,10 +87,10 @@ function computeBreakdown(
   }
 
   if (!usage || usage.prompt_tokens <= 0) {
-    // Zero state — all free when we know the window, else zeros.
     return {
       system: 0,
-      tool: 0,
+      tools: 0,
+      toolUse: 0,
       user: 0,
       assistant: 0,
       free: mc,
@@ -90,32 +102,27 @@ function computeBreakdown(
   const promptTokens = usage.prompt_tokens;
   const completionTokens = usage.completion_tokens ?? 0;
 
-  let toolTokens = 0;
-  let userTokens = 0;
-
   const toolChars = messages
     .filter((m) => m.type === MessageType.TOOL_CALL || m.type === MessageType.TOOL_RESULT)
     .reduce((sum, m) => sum + m.content.length, 0);
   const userChars = messages
     .filter((m) => m.role === MessageRole.USER && !m.hidden)
     .reduce((sum, m) => sum + m.content.length, 0);
-  const asstChars = messages
+  const assistantChars = messages
     .filter((m) => m.role === MessageRole.ASSISTANT && !m.hidden)
     .reduce((sum, m) => sum + m.content.length, 0);
 
-  const totalChars = toolChars + userChars + asstChars;
-  if (totalChars > 0) {
-    toolTokens = Math.round((toolChars / totalChars) * promptTokens);
-    userTokens = Math.round((userChars / totalChars) * promptTokens);
-  }
-
-  const systemTokens = Math.max(0, promptTokens - toolTokens - userTokens);
+  const totalChars = toolChars + userChars + assistantChars;
+  const toolUseTokens = totalChars > 0 ? Math.round((toolChars / totalChars) * promptTokens) : 0;
+  const userTokens = totalChars > 0 ? Math.round((userChars / totalChars) * promptTokens) : 0;
   const assistantTokens = completionTokens;
+  const systemTokens = Math.max(0, promptTokens - toolUseTokens - userTokens);
   const freeTokens = mc > 0 ? Math.max(0, mc - promptTokens - assistantTokens) : 0;
 
   return {
     system: systemTokens,
-    tool: toolTokens,
+    tools: 0,
+    toolUse: toolUseTokens,
     user: userTokens,
     assistant: assistantTokens,
     free: freeTokens,
@@ -124,49 +131,16 @@ function computeBreakdown(
   };
 }
 
-function buildBlockList(b: TokenBreakdown): string[] {
-  const { free, system, tool, user, assistant } = b;
-  const total = free + system + tool + user + assistant;
-  if (total === 0 || (system === 0 && tool === 0 && user === 0 && assistant === 0)) {
-    return Array(GRID_TOTAL).fill(COLOR_FREE);
-  }
-
-  const perBlock = total / GRID_TOTAL;
-  const sBlocks = Math.round(system / perBlock);
-  const tBlocks = Math.round(tool / perBlock);
-  const uBlocks = Math.round(user / perBlock);
-  const aBlocks = Math.round(assistant / perBlock);
-  let fBlocks = GRID_TOTAL - sBlocks - tBlocks - uBlocks - aBlocks;
-
-  const totalBlocks = sBlocks + tBlocks + uBlocks + aBlocks + fBlocks;
-  if (totalBlocks !== GRID_TOTAL) {
-    fBlocks += GRID_TOTAL - totalBlocks;
-    if (fBlocks < 0) fBlocks = 0;
-  }
-
-  const blocks: string[] = [];
-  for (let i = 0; i < sBlocks; i++) blocks.push(COLOR_SYSTEM);
-  for (let i = 0; i < tBlocks; i++) blocks.push(COLOR_TOOL);
-  for (let i = 0; i < uBlocks; i++) blocks.push(COLOR_USER);
-  for (let i = 0; i < aBlocks; i++) blocks.push(COLOR_ASSISTANT);
-  for (let i = 0; i < fBlocks; i++) blocks.push(COLOR_FREE);
-  while (blocks.length < GRID_TOTAL) blocks.push(COLOR_FREE);
-  return blocks.slice(0, GRID_TOTAL);
-}
-
-interface LegendEntry {
-  color: string;
-  label: string;
-  tokens: number;
-  pct: number;
-}
-
 function buildLegend(b: TokenBreakdown): LegendEntry[] {
-  const mc = b.maxContext > 0 ? b.maxContext : Math.max(b.total, 1);
-  const pct = (v: number) => (b.maxContext > 0 || b.total > 0 ? Math.round((v / mc) * 100) : 0);
+  const tools = b.tools + b.toolUse;
+  const denominator = b.maxContext > 0
+    ? Math.max(b.maxContext, b.total - b.free)
+    : b.total;
+  const pct = (value: number) => denominator > 0 ? Math.round((value / denominator) * 100) : 0;
+
   return [
     { color: COLOR_SYSTEM, label: 'System', tokens: b.system, pct: pct(b.system) },
-    { color: COLOR_TOOL, label: 'Tools', tokens: b.tool, pct: pct(b.tool) },
+    { color: COLOR_TOOLS, label: 'Tools', tokens: tools, pct: pct(tools) },
     { color: COLOR_USER, label: 'User', tokens: b.user, pct: pct(b.user) },
     { color: COLOR_ASSISTANT, label: 'Assistant', tokens: b.assistant, pct: pct(b.assistant) },
     {
@@ -178,15 +152,64 @@ function buildLegend(b: TokenBreakdown): LegendEntry[] {
   ];
 }
 
+interface ContextStackedBarProps extends ContextGridProps {
+  compact?: boolean;
+}
+
+/** Render one contiguous bar; category rows deliberately do not duplicate it. */
+export function ContextStackedBar({
+  usage,
+  messages,
+  maxContext,
+  compact = false,
+}: ContextStackedBarProps) {
+  const breakdown = useMemo(
+    () => computeBreakdown(messages ?? [], usage ?? null, maxContext),
+    [messages, usage, maxContext],
+  );
+  const legend = useMemo(() => buildLegend(breakdown), [breakdown]);
+  const usedTokens = contextUsedTokens(usage);
+  const barTotal = breakdown.maxContext > 0
+    ? Math.max(breakdown.maxContext, usedTokens)
+    : usedTokens;
+  const percent = contextPercent(usage, maxContext);
+  const label = percent == null
+    ? usedTokens > 0
+      ? `${formatTokens(usedTokens)} context tokens used; context window loading`
+      : 'Context usage unavailable'
+    : `${percent}% of context window used`;
+
+  return (
+    <span
+      className={`context-stacked-bar${compact ? ' context-stacked-bar-compact' : ''}`}
+      role="img"
+      aria-label={label}
+      title={label}
+    >
+      {barTotal > 0 && legend.map((entry) => {
+        if (entry.tokens <= 0) return null;
+        return (
+          <span
+            key={entry.label}
+            className="context-stacked-bar-segment"
+            style={{
+              width: `${Math.min(100, Math.max(0, (entry.tokens / barTotal) * 100))}%`,
+              backgroundColor: entry.color,
+            }}
+            title={`${entry.label}: ${formatTokens(entry.tokens)} (${entry.pct}%)`}
+          />
+        );
+      })}
+    </span>
+  );
+}
+
 interface ContextLegendProps extends ContextGridProps {
-  /**
-   * `inspector` — compact sidebar rows.
-   * `panel` — styled dropup rows (footer context viewer).
-   */
+  /** `inspector` uses compact rows; `panel` uses the footer dropup styling. */
   variant?: 'inspector' | 'panel';
 }
 
-/** Category rows only — used by the context dropup (no table/grid). */
+/** Category rows only — the stacked bar is rendered once above these rows. */
 export function ContextLegend({
   usage,
   messages,
@@ -216,18 +239,6 @@ export function ContextLegend({
               <span className="context-panel-tokens">{formatTokens(entry.tokens)}</span>
               <span className="context-panel-pct">{entry.pct}%</span>
             </span>
-            <span
-              className="context-panel-bar"
-              aria-hidden
-            >
-              <span
-                className="context-panel-bar-fill"
-                style={{
-                  width: `${Math.min(100, Math.max(0, entry.pct))}%`,
-                  backgroundColor: entry.color,
-                }}
-              />
-            </span>
           </div>
         ))}
       </div>
@@ -255,29 +266,11 @@ export function ContextLegend({
   );
 }
 
+/** Sidebar context block: one stacked bar followed by its category values. */
 export function ContextGrid({ usage, messages, maxContext }: ContextGridProps) {
-  const breakdown = useMemo(
-    () => computeBreakdown(messages ?? [], usage ?? null, maxContext),
-    [messages, usage, maxContext],
-  );
-
-  const blocks = useMemo(() => buildBlockList(breakdown), [breakdown]);
-
   return (
     <div>
-      <div
-        className="orchid-context-grid"
-        style={{ gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)` }}
-      >
-        {blocks.map((color, i) => (
-          <div
-            key={i}
-            className="orchid-context-cell"
-            style={{ backgroundColor: color }}
-          />
-        ))}
-      </div>
-
+      <ContextStackedBar usage={usage} messages={messages} maxContext={maxContext} />
       <ContextLegend usage={usage} messages={messages} maxContext={maxContext} />
     </div>
   );
@@ -289,9 +282,7 @@ export function computeContextBreakdown(
   maxContext?: number | null,
 ): ContextBreakdown | null {
   const mb = computeBreakdown(messages, usage, maxContext);
-  const usedTokens = contextUsedTokens(usage);
-  const percentUsed =
-    mb.maxContext > 0 ? Math.min(100, Math.round((usedTokens / mb.maxContext) * 100)) : undefined;
+  const percentUsed = contextPercent(usage, maxContext) ?? undefined;
   if (usage?.context) {
     return {
       free: mb.free,
@@ -305,8 +296,8 @@ export function computeContextBreakdown(
   return {
     free: mb.free,
     system: mb.system,
-    tools: 0,
-    tool_use: mb.tool,
+    tools: mb.tools,
+    tool_use: mb.toolUse,
     messages: mb.user + mb.assistant,
     percentUsed,
   };

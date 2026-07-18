@@ -124,9 +124,10 @@ describe('composer contract (U6)', () => {
       expect(src).toMatch(/Shift\+Enter/);
     });
 
-    it('footer uses radial-progress and loading spinner', () => {
+    it('footer uses the radial context indicator and stacked dropup bar', () => {
       const src = read('components/Footer.tsx');
       expect(src).toMatch(/radial-progress/);
+      expect(src).toMatch(/ContextStackedBar/);
       expect(src).toMatch(/<Spinner\b/);
       expect(src).toMatch(/Keycaps/);
     });

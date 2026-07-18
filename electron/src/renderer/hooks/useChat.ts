@@ -30,7 +30,7 @@ import {
   type ContextBreakdown,
   computeContextBreakdown,
 } from '../components/ContextGrid';
-import { latestUsageFromMessages } from '../../shared/usage';
+import { hasUsage, latestUsageFromMessages } from '../../shared/usage';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -174,6 +174,16 @@ export function shouldBufferChatEvent(
   event: { sessionId: string },
 ): boolean {
   return hydratingSessionId != null && event.sessionId === hydratingSessionId;
+}
+
+/** Prefer a live turn snapshot, but keep persisted usage for idle sessions. */
+export function resolveHydratedUsage(
+  messages: readonly Message[],
+  liveUsage: Usage | null | undefined,
+): Usage | null {
+  return liveUsage && hasUsage(liveUsage)
+    ? liveUsage
+    : latestUsageFromMessages(messages);
 }
 
 /**
@@ -1105,8 +1115,9 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     accumulatedThinkingRef.current = live.thinking;
     setStreamingContent(live.response);
     setStreamingThinking(live.thinking);
-    setUsage(live.usage);
-    usageRef.current = live.usage;
+    const hydratedUsage = resolveHydratedUsage(snapshot.messages, live.usage);
+    setUsage(hydratedUsage);
+    usageRef.current = hydratedUsage;
     setError(live.error);
     setInterruptState(live.interruptState);
     setInterrupted(live.interrupted);

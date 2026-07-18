@@ -12,7 +12,7 @@ import type { ProviderModelOption } from '../../shared/types/ipc';
 import type { InterruptState } from '../hooks/useChat';
 import { FOOTER_SHORTCUT_IDS, getShortcut } from '../keyboard';
 import { resolveModelNotifyLabel } from '../utils/provider-selection';
-import { ContextLegend } from './ContextGrid';
+import { ContextLegend, ContextStackedBar, contextPercent as getContextPercent } from './ContextGrid';
 import { contextUsedTokens } from '../../shared/usage';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
@@ -51,19 +51,19 @@ export function Footer({
   const [contextOpen, setContextOpen] = useState(false);
   const contextMenuId = useId();
 
-  const contextPercent =
-    usage && maxContext && maxContext > 0
-      ? Math.min(100, Math.round((contextUsedTokens(usage) / maxContext) * 100))
-      : 0;
+  const usedContextTokens = contextUsedTokens(usage);
+  const contextPercent = getContextPercent(usage, maxContext);
 
-  const radialTone =
-    contextPercent >= 85
-      ? 'text-error'
-      : contextPercent >= 60
-        ? 'text-warning'
-        : contextPercent > 0
-          ? 'text-info'
-          : 'text-base-content/25';
+  const contextTone =
+    contextPercent == null
+      ? usedContextTokens > 0 ? 'text-info' : 'text-base-content/25'
+      : contextPercent >= 85
+        ? 'text-error'
+        : contextPercent >= 60
+          ? 'text-warning'
+          : contextPercent > 0
+            ? 'text-info'
+            : 'text-base-content/25';
 
   useEffect(() => {
     if (!contextOpen) return;
@@ -85,11 +85,11 @@ export function Footer({
   }, [contextOpen]);
 
   const badgeTone =
-    contextPercent >= 85
+    contextPercent != null && contextPercent >= 85
       ? 'error'
-      : contextPercent >= 60
+      : contextPercent != null && contextPercent >= 60
         ? 'warning'
-        : contextPercent > 0
+        : contextPercent != null && contextPercent > 0
           ? 'info'
           : 'neutral';
 
@@ -199,23 +199,33 @@ export function Footer({
           aria-haspopup="dialog"
           aria-expanded={contextOpen}
           aria-controls={contextMenuId}
-          title={`${contextPercent}% context`}
+          title={contextPercent == null
+            ? usedContextTokens > 0
+              ? `${formatTokens(usedContextTokens)} context tokens used`
+              : 'Context usage unavailable'
+            : `${contextPercent}% context`}
           onClick={() => setContextOpen((o) => !o)}
         >
           <div
-            className={`radial-progress orchid-footer-context-radial ${radialTone}`}
+            className={`radial-progress orchid-footer-context-radial ${contextTone}`}
             style={
               {
-                '--value': contextPercent,
+                '--value': contextPercent ?? 0,
                 '--size': '1.4rem',
                 '--thickness': '2px',
               } as CSSProperties
             }
-            aria-valuenow={contextPercent}
+            aria-valuenow={contextPercent ?? 0}
             role="progressbar"
-            aria-label={`${contextPercent}% context used`}
+            aria-label={contextPercent == null
+              ? usedContextTokens > 0
+                ? `${formatTokens(usedContextTokens)} context tokens used; context window loading`
+                : 'Context usage unavailable'
+              : `${contextPercent}% context used`}
           >
-            <span className="footer-context-value">{contextPercent}</span>
+            <span className="footer-context-value">
+              {contextPercent == null ? '—' : contextPercent}
+            </span>
           </div>
         </Button>
         {contextOpen && (
@@ -232,7 +242,11 @@ export function Footer({
               </div>
               <div className="footer-context-panel-meta mono">
                 <StatusBadge tone={badgeTone} size="xs">
-                  {contextPercent}% used
+                  {contextPercent == null
+                    ? usedContextTokens > 0
+                      ? `${formatTokens(usedContextTokens)} used`
+                      : 'window loading'
+                    : `${contextPercent}% used`}
                 </StatusBadge>
                 {maxContext && maxContext > 0 ? (
                   <span className="footer-context-panel-window">
@@ -242,6 +256,11 @@ export function Footer({
               </div>
             </div>
             <div className="footer-context-panel-body">
+              <ContextStackedBar
+                usage={usage}
+                messages={messages}
+                maxContext={maxContext}
+              />
               <ContextLegend
                 usage={usage}
                 messages={messages}

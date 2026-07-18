@@ -14,7 +14,6 @@
 ### Interface
 - Subagent names on the right sidebar does not use the subagent name
   - The status also starts as "interrupted"
-- Context visualiation could move from a grid to horizontal stacked bar
 - Remove the | while streaming
 - Token count is not being formatted when usage is in the millions
 - Remove the tool name in favor of a user redable name

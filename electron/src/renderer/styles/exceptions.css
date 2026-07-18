@@ -192,12 +192,6 @@
   padding-right: 10px !important;
 }
 
-/* DaisyUI radial-progress size/value CSS vars set from Footer at runtime. */
-.orchid-footer-context-radial {
-  --size: 1.4rem;
-  --thickness: 2px;
-}
-
 /* Composer + footer share the same horizontal inset from the pane edge. */
 .orchid-composer-area {
   padding-inline: 16px !important;
@@ -218,6 +212,12 @@
 
 .orchid-footer-context-panel .footer-context-panel-body {
   padding: 10px 12px 12px !important;
+}
+
+/* DaisyUI radial-progress size/value CSS vars set from Footer at runtime. */
+.orchid-footer-context-radial {
+  --size: 1.4rem;
+  --thickness: 2px;
 }
 
 .orchid-footer-context-panel .context-panel-row {

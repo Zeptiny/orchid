@@ -11,7 +11,7 @@ import type {
   RAGIndexProgress,
   ASTIndexProgress,
 } from '../../shared/types/ipc-boundary';
-import { ContextGrid } from './ContextGrid';
+import { ContextGrid, contextPercent as getContextPercent } from './ContextGrid';
 import { contextUsedTokens } from '../../shared/usage';
 import type { Message, Usage } from '../../shared/types/message';
 import { TodoStatus } from '../../shared/types/todo';
@@ -882,8 +882,8 @@ interface ContextBadgeProps {
 }
 
 function ContextBadge({ usage, maxContext }: ContextBadgeProps) {
-  if (usage && maxContext && maxContext > 0) {
-    const pct = Math.min(100, Math.round((contextUsedTokens(usage) / maxContext) * 100));
+  const pct = getContextPercent(usage, maxContext);
+  if (pct != null) {
     const tone = pct >= 85 ? 'error' : pct >= 60 ? 'warning' : pct > 0 ? 'info' : 'neutral';
     return (
       <StatusBadge tone={tone} size="xs" outline={tone === 'neutral'}>
@@ -891,9 +891,18 @@ function ContextBadge({ usage, maxContext }: ContextBadgeProps) {
       </StatusBadge>
     );
   }
-  // Avoid showing a misleading 0% when we have tokens but no window metadata
-  if (usage && usage.prompt_tokens > 0) {
-    return <StatusBadge tone="neutral" size="xs" outline>n/a</StatusBadge>;
+  const used = contextUsedTokens(usage);
+  if (used > 0) {
+    return (
+      <StatusBadge
+        tone="neutral"
+        size="xs"
+        outline
+        title="Context window is still loading"
+      >
+        {formatCompactCount(used)}
+      </StatusBadge>
+    );
   }
   return <StatusBadge tone="neutral" size="xs" outline>0%</StatusBadge>;
 }
