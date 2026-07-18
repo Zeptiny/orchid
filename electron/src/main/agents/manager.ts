@@ -806,7 +806,9 @@ export function runtimeToDomain(record: SubagentRecord): DomainSubagentRecord {
 
   return {
     id: record.id,
-    agent_name: record.agent.name || record.label,
+    // `label` is the descriptive name supplied to delegate_to_subagent;
+    // `agent.name` is only the registry role (for example, "explorer").
+    agent_name: record.label || record.agent.name,
     agent_type: record.agent.type || 'subagent',
     agent_tier: record.agent.tier || 'bloom',
     task: record.task,

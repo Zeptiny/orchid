@@ -207,6 +207,15 @@ describe('SubagentManager runtime', () => {
     expect(domain.chain?.sessionId).toBe(parentSessionId);
   });
 
+  it('persists the assigned display name instead of the agent type', () => {
+    const record = manager.spawn('review auth flow', 'Review authentication', testAgent);
+
+    const domain = runtimeToDomain(record);
+
+    expect(domain.agent_name).toBe('review auth flow');
+    expect(domain.agent_type).toBe('subagent');
+  });
+
   it('without runner stays pending until markCompleted', () => {
     const record = manager.spawn('manual', 'task', testAgent);
     expect(record.state).toBe(SubagentState.PENDING);

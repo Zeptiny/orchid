@@ -1787,6 +1787,11 @@ describe('SessionManager.syncSubagentChains', () => {
     expect(loaded!.subagentChains[1].id).toBe('sub-2');
     // On restore, PENDING/RUNNING migrate to INTERRUPTED (matching Python)
     expect(loaded!.subagentChains[1].status).toBe(SubagentStatus.INTERRUPTED);
+
+    // A live in-memory session must remain visible as running to renderer
+    // refreshes; only a true disk restore applies crash recovery migration.
+    const live = manager.load(session.id);
+    expect(live!.subagentChains[1].status).toBe(SubagentStatus.RUNNING);
   });
 
   it('replaces prior subagentChains entirely (not merge)', () => {

@@ -12,8 +12,6 @@
 - The skills and agents are not updated for the current capabilities of the harness
 
 ### Interface
-- Subagent names on the right sidebar does not use the subagent name
-  - The status also starts as "interrupted"
 - Remove the tool name in favor of a user redable name
   - Ex: delegate_to_subagent -> Delegated <task name> to subagent
   - Ex: wait_for_subagebt -> Waiting for X subagents (When opening to view the output, show the subagent names in a list) - if only one subagent "Waiting for <subagent task name> subagent"
