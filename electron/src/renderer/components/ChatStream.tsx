@@ -336,13 +336,13 @@ export function ChatStream({
       )}
 
       {historyItems.map((item) =>
-        renderStreamItem(item, alwaysExpandToolGroups, expandChain),
+        renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
       )}
       {liveGroupedItems.map((item) =>
-        renderStreamItem(item, alwaysExpandToolGroups, expandChain),
+        renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
       )}
       {history.activeFooter &&
-        renderStreamItem(history.activeFooter, alwaysExpandToolGroups, expandChain)}
+        renderStreamItem(history.activeFooter, alwaysExpandToolGroups, expandChain, subagents)}
 
       <div ref={messagesEndRef} />
     </div>
@@ -353,15 +353,17 @@ function renderStreamItem(
   item: StreamItem,
   alwaysExpandToolGroups: boolean,
   onExpandChain: (chainIndex: number) => void,
+  subagents: readonly SubagentRecord[],
 ): ReactNode {
   if (item.kind === 'tool') {
-    return <ToolCallBlock key={item.key} block={item.block} />;
+    return <ToolCallBlock key={item.key} block={item.block} subagents={subagents} />;
   }
   if (item.kind === 'tool-group') {
     return (
       <ToolActivityGroup
         key={item.key}
         items={item.children}
+        subagents={subagents}
         alwaysExpand={alwaysExpandToolGroups}
       />
     );

@@ -1,11 +1,18 @@
 import { useId, useMemo, useState, type ReactNode } from 'react';
 import type { ToolBlock } from '../hooks/useChat';
+import {
+  buildToolTitle,
+  toolTitleText,
+  type SubagentTitleRecord,
+  type ToolTitle,
+} from '../utils/tool-title';
 import { Icon, type IconName } from './Icon';
 import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
 
-interface ToolCallBlockProps {
+export interface ToolCallBlockProps {
   block: ToolBlock;
+  subagents?: readonly SubagentTitleRecord[];
 }
 
 /** Prefer these arg keys for compact titles (mock-style code tokens). */
@@ -180,7 +187,7 @@ function formatResultBody(result: string | null): string {
   return truncateResult(body);
 }
 
-export function ToolCallBlock({ block }: ToolCallBlockProps) {
+export function ToolCallBlock({ block, subagents = [] }: ToolCallBlockProps) {
   // Outputs always start collapsed; user expands on demand.
   // Title or expanded content both toggle (content click collapses).
   const [expanded, setExpanded] = useState(false);
@@ -201,6 +208,28 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
         : null,
     [block.status, block.result, block.error, block.toolName, primaryValue],
   );
+  const title = useMemo(
+    () =>
+      buildToolTitle({
+        toolName: block.toolName,
+        status: block.status,
+        args: block.args,
+        partialArgs: block.partialArgs,
+        summary,
+        result: block.result,
+        subagents,
+      }),
+    [
+      block.toolName,
+      block.status,
+      block.args,
+      block.partialArgs,
+      block.result,
+      summary,
+      subagents,
+    ],
+  );
+  const titleText = toolTitleText(title);
 
   const showLoader = block.status === 'generating' || block.status === 'running';
   const stateClass = block.status === 'completed' ? '' : block.status;
@@ -215,71 +244,6 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
     ) : block.status === 'failed' ? (
       <StatusBadge tone="error" size="xs">failed</StatusBadge>
     ) : null;
-
-  const titleText = (() => {
-    const token = primaryValue ? <span className="orchid-code-token">{primaryValue}</span> : null;
-
-    if (block.status === 'generating') {
-      return <span className="font-semibold">{block.toolName}</span>;
-    }
-    if (block.status === 'running') {
-      return (
-        <span>
-          <span className="font-semibold">{block.toolName}</span>
-          {' - '}
-          {runningVerb(block.toolName)}
-          {token && <> {token}</>}
-        </span>
-      );
-    }
-    if (block.status === 'failed') {
-      return (
-        <span>
-          <span className="font-semibold">{block.toolName}</span>
-          {token && (
-            <>
-              {' - '}
-              {token}
-            </>
-          )}
-        </span>
-      );
-    }
-    // completed — mock: "glob - Found 60 matches for tests/test_*.py"
-    if (summary) {
-      // If summary already has the pattern, don't append another token
-      const summaryHasToken = primaryValue && summary.includes(primaryValue);
-      // If summary is already a full human sentence with the path, show as-is
-      if (summaryHasToken || !token) {
-        return (
-          <span>
-            <span className="font-semibold">{block.toolName}</span>
-            {' - '}
-            {renderSummaryWithToken(summary, primaryValue)}
-          </span>
-        );
-      }
-      return (
-        <span>
-          <span className="font-semibold">{block.toolName}</span>
-          {' - '}
-          {summary}
-          {' for '}
-          {token}
-        </span>
-      );
-    }
-    if (token) {
-      return (
-        <span>
-          <span className="font-semibold">{block.toolName}</span>
-          {' - '}
-          {token}
-        </span>
-      );
-    }
-    return <span className="font-semibold">{block.toolName}</span>;
-  })();
 
   return (
     <div className={`orchid-tool-block ${stateClass}`}>
@@ -296,7 +260,7 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
           ) : (
             <Icon name={iconName} size={12} className="shrink-0" />
           )}
-          <span className="orchid-tool-block-title-text">{titleText}</span>
+          <span className="orchid-tool-block-title-text">{renderToolTitle(title)}</span>
         </span>
         <span className="orchid-tool-block-title-right">
           {badge}
@@ -325,11 +289,7 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
             </div>
           )}
           {block.status === 'running' && (
-            <div className="orchid-tool-running-hint">
-              {primaryValue
-                ? `${runningVerb(block.toolName).toLowerCase()} ${primaryValue}…`
-                : 'running…'}
-            </div>
+            <div className="orchid-tool-running-hint">{titleText}…</div>
           )}
           {block.status === 'completed' && block.result && (
             <pre className="orchid-tool-result-body">
@@ -350,28 +310,16 @@ export function ToolCallBlock({ block }: ToolCallBlockProps) {
   );
 }
 
-/** Highlight the primary arg as a code-token inside a human summary when present. */
-function renderSummaryWithToken(summary: string, primary: string | null): ReactNode {
-  if (!primary || !summary.includes(primary)) return summary;
-  const idx = summary.indexOf(primary);
-  if (idx < 0) return summary;
-  return (
-    <>
-      {summary.slice(0, idx)}
-      <span className="orchid-code-token">{primary}</span>
-      {summary.slice(idx + primary.length)}
-    </>
-  );
-}
-
-function runningVerb(tool: string): string {
-  const lower = tool.toLowerCase();
-  if (lower.includes('grep') || lower.includes('search')) return 'Searching for';
-  if (lower.includes('glob')) return 'Matching';
-  if (lower.includes('read')) return 'Reading';
-  if (lower.includes('list')) return 'Listing';
-  if (lower.includes('exec') || lower.includes('command') || lower.includes('bash')) return 'Running';
-  return 'Running';
+function renderToolTitle(title: ToolTitle): ReactNode {
+  return title.segments.map((segment, index) => {
+    if (segment.kind === 'strong') {
+      return <span key={index} className="font-semibold">{segment.value}</span>;
+    }
+    if (segment.kind === 'code') {
+      return <span key={index} className="orchid-code-token">{segment.value}</span>;
+    }
+    return <span key={index}>{segment.value}</span>;
+  });
 }
 
 function truncateResult(result: string): string {

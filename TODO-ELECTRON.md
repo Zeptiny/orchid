@@ -11,11 +11,6 @@
 - The skills and agents are not updated for the current capabilities of the harness
 
 ### Interface
-- Remove the tool name in favor of a user redable name
-  - Ex: delegate_to_subagent -> Delegated <task name> to subagent
-  - Ex: wait_for_subagebt -> Waiting for X subagents (When opening to view the output, show the subagent names in a list) - if only one subagent "Waiting for <subagent task name> subagent"
-  - This should happen to all tool
-- Allow to view the background commands and send input when necessary
 - Allow to view the running subagents output / while working
 - Verify if all tool have a generating and running state
   - Edit / write appears to not have

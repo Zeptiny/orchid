@@ -12,6 +12,7 @@ import { useEffect, useId, useMemo, useState } from 'react';
 import type { Message } from '../../shared/types/message';
 import type { ToolBlock } from '../hooks/useChat';
 import { summarizeToolGroup } from '../utils/tool-grouping';
+import type { SubagentTitleRecord } from '../utils/tool-title';
 import { Icon } from './Icon';
 import { MessageWidget } from './MessageWidget';
 import { ToolCallBlock } from './ToolCallBlock';
@@ -25,6 +26,8 @@ export type ActivityChild =
 export interface ToolActivityGroupProps {
   /** Ordered entries (thoughts + tools) as they appeared in the stream. */
   items: readonly ActivityChild[];
+  /** Active-session subagents used to turn wait/interrupt IDs into names. */
+  subagents?: readonly SubagentTitleRecord[];
   /** When true, groups start expanded. */
   alwaysExpand?: boolean;
 }
@@ -33,6 +36,7 @@ const MAX_VISIBLE_CHILDREN = 12;
 
 export function ToolActivityGroup({
   items,
+  subagents = [],
   alwaysExpand = false,
 }: ToolActivityGroupProps) {
   const panelId = useId();
@@ -128,7 +132,13 @@ export function ToolActivityGroup({
           >
             {visible.map((child, i) => {
               if (child.kind === 'tool') {
-                return <ToolCallBlock key={child.block.id} block={child.block} />;
+                return (
+                  <ToolCallBlock
+                    key={child.block.id}
+                    block={child.block}
+                    subagents={subagents}
+                  />
+                );
               }
               return (
                 <MessageWidget
