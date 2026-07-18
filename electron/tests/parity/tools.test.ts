@@ -50,20 +50,6 @@ import {
   astIndexDefinition,
   astIndexHandler,
 } from '../../src/main/tools/ast/index-tool';
-import {
-  sessionListDefinition,
-  sessionListHandler,
-  sessionCreateDefinition,
-  sessionCreateHandler,
-  sessionLoadDefinition,
-  sessionLoadHandler,
-  sessionRenameDefinition,
-  sessionRenameHandler,
-  sessionDeleteDefinition,
-  sessionDeleteHandler,
-  sessionChangeModelDefinition,
-  sessionChangeModelHandler,
-} from '../../src/main/tools/session';
 
 // ── Dynamic tool builders ───────────────────────────────────────────────────
 
@@ -80,7 +66,7 @@ import { buildWaitTool } from '../../src/main/tools/subagent/wait';
 import { buildInterruptTool } from '../../src/main/tools/subagent/interrupt';
 import { registerBuiltinTools, toolRegistry } from '../../src/main/tools';
 
-// ── Expected tool names (35 total) ─────────────────────────────────────────
+// ── Expected tool names (29 total) ─────────────────────────────────────────
 
 const EXPECTED_TOOL_NAMES = [
   // Filesystem (5)
@@ -122,13 +108,6 @@ const EXPECTED_TOOL_NAMES = [
   'replace_symbol',
   'rename_symbol',
   'ast_index',
-  // Session (6)
-  'session_list',
-  'session_create',
-  'session_load',
-  'session_rename',
-  'session_delete',
-  'session_change_model',
 ];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -296,49 +275,6 @@ describe('Static Tool Definitions', () => {
     });
   });
 
-  describe('session tools (6)', () => {
-    it('session_list has valid definition, schema, and handler', () => {
-      expectValidDefinition(sessionListDefinition, 'session_list');
-      expectValidJsonSchema(sessionListDefinition.inputSchema, 'session_list');
-      expectValidHandler(sessionListHandler);
-      expect(sessionListDefinition.category).toBe('session');
-    });
-
-    it('session_create has valid definition, schema, and handler', () => {
-      expectValidDefinition(sessionCreateDefinition, 'session_create');
-      expectValidJsonSchema(sessionCreateDefinition.inputSchema, 'session_create');
-      expectValidHandler(sessionCreateHandler);
-      expect(sessionCreateDefinition.category).toBe('session');
-    });
-
-    it('session_load has valid definition, schema, and handler', () => {
-      expectValidDefinition(sessionLoadDefinition, 'session_load');
-      expectValidJsonSchema(sessionLoadDefinition.inputSchema, 'session_load');
-      expectValidHandler(sessionLoadHandler);
-      expect(sessionLoadDefinition.category).toBe('session');
-    });
-
-    it('session_rename has valid definition, schema, and handler', () => {
-      expectValidDefinition(sessionRenameDefinition, 'session_rename');
-      expectValidJsonSchema(sessionRenameDefinition.inputSchema, 'session_rename');
-      expectValidHandler(sessionRenameHandler);
-      expect(sessionRenameDefinition.category).toBe('session');
-    });
-
-    it('session_delete has valid definition, schema, and handler', () => {
-      expectValidDefinition(sessionDeleteDefinition, 'session_delete');
-      expectValidJsonSchema(sessionDeleteDefinition.inputSchema, 'session_delete');
-      expectValidHandler(sessionDeleteHandler);
-      expect(sessionDeleteDefinition.category).toBe('session');
-    });
-
-    it('session_change_model has valid definition, schema, and handler', () => {
-      expectValidDefinition(sessionChangeModelDefinition, 'session_change_model');
-      expectValidJsonSchema(sessionChangeModelDefinition.inputSchema, 'session_change_model');
-      expectValidHandler(sessionChangeModelHandler);
-      expect(sessionChangeModelDefinition.category).toBe('session');
-    });
-  });
 });
 
 // ── Dynamic Tool Builder Tests ──────────────────────────────────────────────
@@ -446,14 +382,14 @@ describe('Dynamic Tool Builders', () => {
 // ── Completeness Check ─────────────────────────────────────────────────────
 
 describe('Tool Completeness', () => {
-  it('all 35 expected tool names are defined in this test file', () => {
+  it('all 29 expected tool names are defined in this test file', () => {
     // This test ensures we haven't accidentally removed a tool from our list.
     // If a new tool is added to the codebase, this list must be updated.
-    expect(EXPECTED_TOOL_NAMES).toHaveLength(35);
+    expect(EXPECTED_TOOL_NAMES).toHaveLength(29);
   });
 
   it('static tool count matches expected', () => {
-    // 5 filesystem + 1 search + 2 rag + 4 process + 6 ast + 6 session = 24 static tools
+    // 5 filesystem + 1 search + 2 rag + 4 process + 6 ast = 18 static tools
     const staticDefinitions = [
       readDefinition,
       editDefinition,
@@ -473,17 +409,11 @@ describe('Tool Completeness', () => {
       replaceSymbolDefinition,
       renameSymbolDefinition,
       astIndexDefinition,
-      sessionListDefinition,
-      sessionCreateDefinition,
-      sessionLoadDefinition,
-      sessionRenameDefinition,
-      sessionDeleteDefinition,
-      sessionChangeModelDefinition,
     ];
-    expect(staticDefinitions).toHaveLength(24);
+    expect(staticDefinitions).toHaveLength(18);
     // All names should be unique
     const names = staticDefinitions.map((d) => d.name);
-    expect(new Set(names).size).toBe(24);
+    expect(new Set(names).size).toBe(18);
   });
 
   it('all tool names are unique across static and dynamic tools', () => {
@@ -506,12 +436,6 @@ describe('Tool Completeness', () => {
       replaceSymbolDefinition.name,
       renameSymbolDefinition.name,
       astIndexDefinition.name,
-      sessionListDefinition.name,
-      sessionCreateDefinition.name,
-      sessionLoadDefinition.name,
-      sessionRenameDefinition.name,
-      sessionDeleteDefinition.name,
-      sessionChangeModelDefinition.name,
       // Dynamic tool names (from builder output)
       buildCreateTool({} as any).definition.name,
       buildUpdateTool({} as any).definition.name,
@@ -525,8 +449,8 @@ describe('Tool Completeness', () => {
       buildWaitTool({} as any).definition.name,
       buildInterruptTool({} as any).definition.name,
     ];
-    expect(allNames).toHaveLength(35);
-    expect(new Set(allNames).size).toBe(35);
+    expect(allNames).toHaveLength(29);
+    expect(new Set(allNames).size).toBe(29);
   });
 
   it('registerBuiltinTools populates the singleton registry with all tools', () => {

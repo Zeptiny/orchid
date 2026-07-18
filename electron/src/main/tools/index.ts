@@ -43,7 +43,6 @@ import { buildListMcpResourcesTool } from './mcp/list-resources';
 import { buildDelegateTool } from './subagent/delegate';
 import { buildWaitTool } from './subagent/wait';
 import { buildInterruptTool } from './subagent/interrupt';
-import { registerSessionTools } from './session';
 import { SubagentManager } from '../agents/manager';
 import { getTierModelSelection } from '../config/loader';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
@@ -265,7 +264,6 @@ function registerBuiltinToolsInto(
   );
   registry.register(listMcpResources.definition, listMcpResources.handler);
 
-  registerSessionTools(registry);
 }
 
 /** Build a dedicated, immutable-definition registry for one project runtime. */
