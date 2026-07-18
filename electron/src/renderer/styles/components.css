@@ -255,7 +255,8 @@
   }
 
   .orchid-thought-content {
-    @apply text-xs leading-snug text-base-content/70;
+    @apply leading-snug text-base-content/70;
+    font-size: 1rem;
     padding: 8px 14px 10px;
     border-left: 2px solid var(--msg-thinking-text, var(--color-info));
   }
@@ -371,7 +372,8 @@
   }
 
   .orchid-tool-block-content {
-    @apply text-xs text-base-content/70;
+    @apply text-base-content/70;
+    font-size: 1rem;
     padding: 8px 14px 10px;
     border-left: 2px solid var(--color-secondary);
     cursor: pointer;
@@ -418,17 +420,17 @@
 
   .orchid-tool-args-stream {
     @apply font-mono text-info;
-    font-size: 11px;
+    font-size: 1rem;
   }
 
   .orchid-tool-running-hint {
     @apply font-mono text-base-content/70;
-    font-size: 11px;
+    font-size: 1rem;
   }
 
   .orchid-tool-result-body {
     @apply m-0 font-mono break-words whitespace-pre-wrap text-base-content/70;
-    font-size: 11px;
+    font-size: 1rem;
     line-height: 1.5;
   }
 
@@ -510,13 +512,15 @@
   }
 
   .orchid-live-command-pre {
-    @apply m-0 overflow-x-auto whitespace-pre-wrap p-3 font-mono text-xs bg-base-300;
+    @apply m-0 overflow-x-auto whitespace-pre-wrap p-3 font-mono bg-base-300;
+    font-size: 1rem;
     max-height: 300px;
     overflow-y: auto;
   }
 
   .orchid-live-command-exit {
-    @apply border-t border-base-content/10 px-3 py-1 text-xs opacity-60;
+    @apply border-t border-base-content/10 px-3 py-1 opacity-60;
+    font-size: 1rem;
   }
 
   /* Context bar geometry (dynamic segment colors stay inline exceptions). */

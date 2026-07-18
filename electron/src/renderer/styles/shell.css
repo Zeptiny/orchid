@@ -563,6 +563,7 @@
   .session-project-label {
     flex: 1 1 auto;
     min-width: 0;
+    font-size: 12px;
     text-align: left;
     overflow: hidden;
     text-overflow: ellipsis;

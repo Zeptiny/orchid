@@ -666,6 +666,10 @@ describe('Renderer style contract', () => {
         path.join(STYLES_ROOT, 'shell.css'),
         'utf8',
       );
+      const componentCss = fs.readFileSync(
+        path.join(STYLES_ROOT, 'components.css'),
+        'utf8',
+      );
       const indexCss = fs.readFileSync(path.join(STYLES_ROOT, 'index.css'), 'utf8');
       expect(indexCss.indexOf('@import "tailwindcss"')).toBeLessThan(
         indexCss.indexOf('@import "./components.css"'),
@@ -698,6 +702,7 @@ describe('Renderer style contract', () => {
         ['.session-search-input', ['height: 36px;', 'border: 1px solid']],
         ['.session-item-main', ['flex: 1 1 auto;']],
         ['.session-item', ['min-height: 30px;', 'padding: 5px 7px;']],
+        ['.session-project-label', ['font-size: 12px;']],
         ['.session-item-delete', ['position: absolute;', 'opacity: 0;']],
         ['.session-settings-btn', ['width: 100%;', 'min-height: 36px !important;', 'padding: 8px 10px !important;']],
         ['.inspector-stack', ['display: flex;', 'gap: 4px;']],
@@ -745,6 +750,20 @@ describe('Renderer style contract', () => {
       expect(leftSidebarSource).toMatch(
         /size="md"\s+className="session-settings-btn"/,
       );
+
+      for (const selector of [
+        '.orchid-thought-content',
+        '.orchid-tool-block-content',
+        '.orchid-tool-args-stream',
+        '.orchid-tool-running-hint',
+        '.orchid-tool-result-body',
+        '.orchid-live-command-pre',
+        '.orchid-live-command-exit',
+      ]) {
+        expect(findCssRuleBody(componentCss, selector), `${selector} is missing`).toContain(
+          'font-size: 1rem;',
+        );
+      }
     });
   });
 
