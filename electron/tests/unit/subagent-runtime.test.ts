@@ -403,13 +403,13 @@ describe('SubagentManager runtime', () => {
     expect(domain.chain?.sessionId).toBe(parentSessionId);
   });
 
-  it('persists the assigned display name instead of the agent type', () => {
+  it('persists the assigned display name and registry role', () => {
     const record = manager.spawn('review auth flow', 'Review authentication', testAgent);
 
     const domain = runtimeToDomain(record);
 
     expect(domain.agent_name).toBe('review auth flow');
-    expect(domain.agent_type).toBe('subagent');
+    expect(domain.agent_type).toBe('explorer');
   });
 
   it('without runner stays pending until markCompleted', () => {

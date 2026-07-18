@@ -140,7 +140,7 @@ export function ChatStream({
       `${messages.length}:${streamingContent}:${JSON.stringify(toolBlocks)}:${JSON.stringify(streamSegments)}`,
     [messages.length, streamingContent, toolBlocks, streamSegments],
   );
-  const { containerRef, messagesEndRef, isUserScrolledUp } = useSmartAutoScroll({
+  const { containerRef, isUserScrolledUp, jumpToLatest } = useSmartAutoScroll({
     resetKey: sessionId,
     contentKey: scrollContentKey,
   });
@@ -166,10 +166,10 @@ export function ChatStream({
     prevStatusRef.current = status;
     if (status === 'streaming' && prev !== 'streaming') {
       if (shouldAutoScroll(isUserScrolledUp)) {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        jumpToLatest();
       }
     }
-  }, [status, isUserScrolledUp]);
+  }, [status, isUserScrolledUp, jumpToLatest]);
 
   // Reset scroll-away + expanded stubs only when the session is replaced.
   useEffect(() => {
@@ -276,28 +276,39 @@ export function ChatStream({
   }
 
   return (
-    <div className="orchid-chat-scroll px-6 py-5" ref={containerRef}>
-      {error && (
-        <div className="orchid-error-slot">
-          <ErrorBanner
-            message={error}
-            onDismiss={onClearError}
-            onOpenSettings={onOpenSettings}
-            onRetry={onRetry}
-          />
-        </div>
-      )}
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="orchid-chat-scroll px-6 py-5" ref={containerRef}>
+        {error && (
+          <div className="orchid-error-slot">
+            <ErrorBanner
+              message={error}
+              onDismiss={onClearError}
+              onOpenSettings={onOpenSettings}
+              onRetry={onRetry}
+            />
+          </div>
+        )}
 
-      {historyItems.map((item) =>
-        renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
-      )}
-      {liveGroupedItems.map((item) =>
-        renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
-      )}
-      {history.activeFooter &&
-        renderStreamItem(history.activeFooter, alwaysExpandToolGroups, expandChain, subagents)}
-
-      <div ref={messagesEndRef} />
+        {historyItems.map((item) =>
+          renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
+        )}
+        {liveGroupedItems.map((item) =>
+          renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
+        )}
+        {history.activeFooter &&
+          renderStreamItem(history.activeFooter, alwaysExpandToolGroups, expandChain, subagents)}
+      </div>
+      {isUserScrolledUp ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="pointer-events-auto absolute bottom-4 right-6 z-10"
+          onClick={jumpToLatest}
+        >
+          Jump to latest
+        </Button>
+      ) : null}
     </div>
   );
 }

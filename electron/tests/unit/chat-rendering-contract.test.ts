@@ -13,6 +13,7 @@ import {
   shouldRenderChainFooter,
   shouldAutoScroll,
 } from '../../src/renderer/components/ChatStream';
+import { scrollContainerToLatest } from '../../src/renderer/hooks/useSmartAutoScroll';
 
 const RENDERER = path.resolve(__dirname, '../../src/renderer');
 const COMPONENTS = path.join(RENDERER, 'components');
@@ -104,6 +105,25 @@ describe('chat rendering contract (U5)', () => {
       expect(scrollHook).toMatch(/const \[container, setContainer\]/);
       expect(scrollHook).toMatch(/const containerRef = useCallback/);
       expect(scrollHook).toMatch(/\[container, enabled\]/);
+    });
+
+    it('scrolls only the transcript container, never an outer document ancestor', () => {
+      const calls: ScrollToOptions[] = [];
+      scrollContainerToLatest({
+        scrollHeight: 12_345,
+        scrollTo: (options: ScrollToOptions) => calls.push(options),
+      }, 'auto');
+      expect(calls).toEqual([{ top: 12_345, behavior: 'auto' }]);
+      expect(read('hooks/useSmartAutoScroll.ts')).not.toContain('scrollIntoView');
+      expect(read('components/ChatStream.tsx')).not.toContain('scrollIntoView');
+    });
+
+    it('offers Jump to latest when the main chat is scrolled away from the bottom', () => {
+      const src = read('components/ChatStream.tsx');
+
+      expect(src).toContain('isUserScrolledUp ? (');
+      expect(src).toContain('onClick={jumpToLatest}');
+      expect(src).toContain('Jump to latest');
     });
   });
 

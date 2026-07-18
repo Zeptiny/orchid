@@ -129,7 +129,8 @@ describe('SubagentTranscript pure rendering contract (U4)', () => {
     const scrollRef = transcriptSource.indexOf('ref={scroll.containerRef}');
     const button = transcriptSource.indexOf('onClick={scroll.jumpToLatest}');
     const scrollClose = transcriptSource.lastIndexOf('</div>', button);
-    expect(transcriptSource).toMatch(/<div className="relative flex min-h-0 flex-1 flex-col">/);
+    expect(transcriptSource).toMatch(/<div className="relative flex min-h-0 min-w-0 w-full max-w-full flex-1 flex-col overflow-hidden">/);
+    expect(transcriptSource).toMatch(/orchid-chat-scroll min-h-0 min-w-0 w-full max-w-full flex-1/);
     expect(scrollRef).toBeGreaterThan(0);
     expect(scrollClose).toBeGreaterThan(scrollRef);
     expect(button).toBeGreaterThan(scrollClose);

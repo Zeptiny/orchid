@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type RefCallback, type RefObject } from 'react';
+import { useCallback, useEffect, useState, type RefCallback } from 'react';
 
 export const AUTO_SCROLL_THRESHOLD_PX = 100;
 
@@ -15,6 +15,19 @@ export function shouldAutoScroll(isUserScrolledUp: boolean): boolean {
   return !isUserScrolledUp;
 }
 
+export interface ScrollContainerTarget {
+  readonly scrollHeight: number;
+  scrollTo(options: ScrollToOptions): void;
+}
+
+/** Scroll the owned transcript viewport without moving document ancestors. */
+export function scrollContainerToLatest(
+  container: ScrollContainerTarget | null,
+  behavior: ScrollBehavior = 'smooth',
+): void {
+  container?.scrollTo({ top: container.scrollHeight, behavior });
+}
+
 export interface SmartAutoScrollOptions {
   /** Changing this identity clears suspension and anchors the new transcript. */
   resetKey?: string | null;
@@ -25,7 +38,6 @@ export interface SmartAutoScrollOptions {
 
 export interface SmartAutoScrollResult {
   containerRef: RefCallback<HTMLDivElement>;
-  messagesEndRef: RefObject<HTMLDivElement | null>;
   isUserScrolledUp: boolean;
   jumpToLatest: () => void;
 }
@@ -39,7 +51,6 @@ export function useSmartAutoScroll({
   const containerRef = useCallback<RefCallback<HTMLDivElement>>((node) => {
     setContainer((previous) => previous === node ? previous : node);
   }, []);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
 
   useEffect(() => {
@@ -59,8 +70,8 @@ export function useSmartAutoScroll({
   }, [container, enabled]);
 
   const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
-    messagesEndRef.current?.scrollIntoView({ behavior });
-  }, []);
+    scrollContainerToLatest(container, behavior);
+  }, [container]);
 
   useEffect(() => {
     setIsUserScrolledUp(false);
@@ -76,5 +87,5 @@ export function useSmartAutoScroll({
     scrollToLatest();
   }, [scrollToLatest]);
 
-  return { containerRef, messagesEndRef, isUserScrolledUp, jumpToLatest };
+  return { containerRef, isUserScrolledUp, jumpToLatest };
 }

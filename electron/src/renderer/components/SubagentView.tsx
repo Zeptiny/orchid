@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SubagentRecord } from '../../shared/types/subagent';
 import type { UseSubagentsReturn } from '../hooks/useSubagents';
-import { groupSubagents } from '../utils/subagent-stream';
+import { formatUsageSummary } from '../utils/format-usage';
 import { SubagentTranscript } from './SubagentTranscript';
 import { Button } from './ui/Button';
+import { Disclosure } from './ui/Disclosure';
 import { IconButton } from './ui/IconButton';
 import { Panel } from './ui/Panel';
 import { SectionHeader } from './ui/SectionHeader';
@@ -23,10 +24,9 @@ export interface SubagentOpenRequest {
 
 export function resolveSubagentOpenRequest(
   request: SubagentOpenRequest,
-  records: readonly SubagentRecord[],
 ): { selectedId: string | null; narrowDetail: boolean } {
   return {
-    selectedId: request.id ?? chooseNewestSubagent(records),
+    selectedId: request.id,
     narrowDetail: request.id !== null,
   };
 }
@@ -35,10 +35,7 @@ export function keepSubagentRowSelected(currentId: string | null, rowId: string)
   return currentId === rowId ? currentId : rowId;
 }
 
-function usageLabel(record: SubagentRecord, detail: ReturnType<UseSubagentsReturn['getDetail']>): string {
-  if (!detail?.usage) return `${detail?.tier ?? record.agent_tier} · no usage yet`;
-  return `${detail.tier} · ${detail.usage.prompt_tokens + detail.usage.completion_tokens} tokens`;
-}
+export const formatSubagentUsage = formatUsageSummary;
 
 function statusTone(status: SubagentRecord['status']): 'neutral' | 'warning' | 'success' | 'error' | 'info' {
   if (status === 'running') return 'warning';
@@ -73,20 +70,24 @@ function SubagentRow({
     >
       <span className="min-w-0 flex-1 text-left">
         <span className="block truncate font-medium">{record.agent_name || 'Subagent'}</span>
-        <span className="block truncate text-xs text-base-content/65">{record.task || 'No task label'}</span>
+        <span className="block truncate text-xs text-base-content/65">
+          Elapsed {detail?.elapsed ?? '—'} · {formatSubagentUsage(detail?.usage ?? null)}{detail?.type ? ` · ${detail.type}` : ''}
+        </span>
       </span>
       <StatusBadge tone={statusTone(record.status)} size="xs">{statusLabel(record.status)}</StatusBadge>
-      <span className="sr-only">{detail?.elapsed ?? 'elapsed unavailable'}</span>
     </button>
   );
 }
 
 export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentViewProps) {
-  const initialOpen = resolveSubagentOpenRequest(openRequest, subagents.subagents);
+  const initialOpen = resolveSubagentOpenRequest(openRequest);
   const [narrowDetail, setNarrowDetail] = useState(initialOpen.narrowDetail);
   const appliedOpenGeneration = useRef<number | null>(null);
   const records = subagents.subagents;
-  const selected = records.find((record) => record.id === subagents.selectedId) ?? null;
+  const hasPendingOpenRequest = appliedOpenGeneration.current !== openRequest.generation;
+  const effectiveSelectedId = hasPendingOpenRequest ? openRequest.id : subagents.selectedId;
+  const selected = records.find((record) => record.id === effectiveSelectedId) ?? null;
+  const missingSelected = effectiveSelectedId !== null && selected === null;
   const { running, ended } = subagents.groups;
 
   useEffect(() => {
@@ -96,16 +97,16 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
   useEffect(() => {
     if (appliedOpenGeneration.current === openRequest.generation) return;
     appliedOpenGeneration.current = openRequest.generation;
-    const next = resolveSubagentOpenRequest(openRequest, subagents.subagents);
+    const next = resolveSubagentOpenRequest(openRequest);
     setNarrowDetail(next.narrowDetail);
-    if (next.selectedId && next.selectedId !== subagents.selectedId) {
+    if (next.selectedId !== subagents.selectedId) {
       subagents.select(next.selectedId);
     }
-  }, [openRequest.generation, openRequest.id, subagents.subagents, subagents.select, subagents.selectedId]);
+  }, [openRequest.generation, openRequest.id, subagents.select, subagents.selectedId]);
 
   const select = (id: string) => {
-    const nextId = keepSubagentRowSelected(subagents.selectedId, id);
-    if (nextId !== subagents.selectedId) subagents.select(nextId);
+    const nextId = keepSubagentRowSelected(effectiveSelectedId, id);
+    if (nextId !== effectiveSelectedId) subagents.select(nextId);
     setNarrowDetail(true);
   };
 
@@ -120,7 +121,7 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
             <SubagentRow
               key={record.id}
               record={record}
-              selected={record.id === subagents.selectedId}
+              selected={record.id === effectiveSelectedId}
               detail={subagents.getDetail(record.id)}
               onSelect={() => select(record.id)}
             />
@@ -133,9 +134,6 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
   const retryDisabled = subagents.isRetrying || subagents.state.status === 'loading';
   const list = (
     <Panel className="orchid-subagent-view-list" padded={false} aria-label="Subagent sessions">
-      <div className="orchid-subagent-view-list-header">
-        <SectionHeader title="Subagents" description="Active-session output" />
-      </div>
       {subagents.state.status === 'error' ? (
         <StateMessage kind="error" title={subagents.state.error} action={<Button size="sm" variant="ghost" onClick={() => void subagents.retry()} disabled={retryDisabled} loading={subagents.isRetrying}>Retry</Button>} />
       ) : subagents.state.status === 'loading' ? (
@@ -156,18 +154,33 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
         {selected ? (
           <SectionHeader
             title={selected.agent_name || 'Subagent'}
-            description={selected.task || 'No task label'}
             actions={<StatusBadge tone={statusTone(selected.status)}>{statusLabel(selected.status)}</StatusBadge>}
           />
         ) : null}
       </div>
-      {!selected ? (
+      {missingSelected ? (
+        <StateMessage kind="warning" title="Selected subagent is no longer available" action={<Button size="sm" variant="ghost" onClick={() => { subagents.select(null); setNarrowDetail(false); }}>Back to list</Button>} />
+      ) : !selected ? (
         <StateMessage kind="info" title="Select a subagent">Choose a row to inspect its live output.</StateMessage>
       ) : detail ? (
         <>
           <div className="orchid-subagent-view-metadata" aria-label="Subagent metadata">
-            <span>Elapsed {detail.elapsed}</span><span>{usageLabel(selected, detail)}</span><span>{detail.type}</span>
+            <span>Elapsed {detail.elapsed}</span>
+            {detail.type ? <span>{detail.type}</span> : null}
+            <span>{detail.tier}</span>
+            <span>{formatSubagentUsage(detail.usage)}</span>
           </div>
+          {selected.task ? (
+            <Disclosure
+              summary="Prompt"
+              variant="section"
+              className="shrink-0"
+            >
+              <div className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-sm text-base-content/80">
+                {selected.task}
+              </div>
+            </Disclosure>
+          ) : null}
           <div className="orchid-subagent-view-transcript">
             <SubagentTranscript record={selected} live={subagents.getLive(selected.id)} selectedId={selected.id} />
           </div>
@@ -182,18 +195,14 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
     <section className="orchid-subagent-view" aria-labelledby="subagent-view-title">
       <SectionHeader
         title={<span id="subagent-view-title">Subagent View</span>}
-        description="Inspect live and completed output for this session."
         actions={<Button size="sm" variant="ghost" icon="chevronLeft" onClick={onBackToChat}>Back to chat</Button>}
       />
-      <div className="orchid-subagent-view-container">
+      <div className={`orchid-subagent-view-container ${selected || missingSelected ? '' : 'orchid-subagent-view-container-single'}`.trim()}>
         <div className={narrowDetail ? 'orchid-subagent-view-narrow-hidden' : ''}>{list}</div>
-        <div className={!narrowDetail ? 'orchid-subagent-view-narrow-hidden' : ''}>{detailRegion}</div>
+        {selected || missingSelected ? (
+          <div className={!narrowDetail ? 'orchid-subagent-view-narrow-hidden' : ''}>{detailRegion}</div>
+        ) : null}
       </div>
     </section>
   );
-}
-
-export function chooseNewestSubagent(records: readonly SubagentRecord[]): string | null {
-  const groups = groupSubagents(records);
-  return groups.running[0]?.id ?? groups.ended[0]?.id ?? null;
 }

@@ -24,6 +24,7 @@ import {
   resolveInspectorSectionId,
   shouldOpenCollapseFromToken,
 } from '../utils/navigate-shell';
+import { formatUsageSummary } from '../utils/format-usage';
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
 import { DropdownMenu } from './ui/DropdownMenu';
@@ -90,6 +91,9 @@ export function Sidebar({
   const [forcedSection, setForcedSection] = useState<string | null>(null);
   /** Bumps on every palette navigate so same-section re-nav re-opens after collapse. */
   const [forceOpenEpoch, setForceOpenEpoch] = useState(0);
+  const runningSubagentCount = subagentState.status === 'ready'
+    ? countRunningSubagents(subagentState.subagents)
+    : 0;
 
   useEffect(() => {
     if (!focusSection) return;
@@ -147,9 +151,20 @@ export function Sidebar({
           title="Subagents"
           sectionId="inspector-subagents"
           forceOpenToken={forcedSection === 'inspector-subagents' ? forceOpenEpoch : 0}
+          leadingAction={
+            <IconButton
+              label="Open Subagent View"
+              tooltip="Open Subagent View"
+              icon="maximize"
+              size="xs"
+              variant="ghost"
+              className="shrink-0"
+              onClick={() => onOpenSubagentView()}
+            />
+          }
           badge={
-            subagentState.status === 'ready' && subagentState.subagents.length > 0 ? (
-              <StatusBadge tone="success" size="xs">{subagentState.subagents.length}</StatusBadge>
+            runningSubagentCount > 0 ? (
+              <StatusBadge tone="success" size="xs">{runningSubagentCount}</StatusBadge>
             ) : null
           }
         >
@@ -216,6 +231,7 @@ interface CollapseBlockProps {
   title: string;
   sectionId: string;
   defaultOpen?: boolean;
+  leadingAction?: ReactNode;
   badge?: ReactNode;
   children: ReactNode;
   /**
@@ -230,6 +246,7 @@ function CollapseBlock({
   title,
   sectionId,
   defaultOpen = false,
+  leadingAction,
   badge,
   children,
   forceOpenToken = 0,
@@ -251,24 +268,27 @@ function CollapseBlock({
 
   return (
     <div className="mock-collapse" data-inspector-section={sectionId}>
-      <button
-        className="mock-collapse-title flex w-full items-center justify-between gap-1.5"
-        onClick={toggle}
-        type="button"
-        aria-expanded={open}
-        aria-controls={contentId}
-        id={`${sectionId}-trigger`}
-      >
-        <span className="inline-flex min-w-0 items-center gap-1.5">
-          <span className="truncate">{title}</span>
-          {badge}
-        </span>
-        <Icon
-          name={open ? 'chevronDown' : 'chevronRight'}
-          size={12}
-          className="shrink-0 text-base-content/40"
-        />
-      </button>
+      <div className="flex min-w-0 items-center">
+        {leadingAction ? <div className="shrink-0 pl-1">{leadingAction}</div> : null}
+        <button
+          className="mock-collapse-title flex min-w-0 flex-1 items-center justify-between gap-1.5"
+          onClick={toggle}
+          type="button"
+          aria-expanded={open}
+          aria-controls={contentId}
+          id={`${sectionId}-trigger`}
+        >
+          <span className="inline-flex min-w-0 items-center gap-1.5">
+            <span className="truncate">{title}</span>
+            {badge}
+          </span>
+          <Icon
+            name={open ? 'chevronDown' : 'chevronRight'}
+            size={12}
+            className="shrink-0 text-base-content/40"
+          />
+        </button>
+      </div>
       {open && (
         <div
           id={contentId}
@@ -306,6 +326,10 @@ export function partitionSubagentsByStatus(
   }
 
   return { running, other };
+}
+
+export function countRunningSubagents(agents: readonly SubagentRecord[]): number {
+  return partitionSubagentsByStatus(agents).running.length;
 }
 
 interface SubagentsSectionProps {
@@ -350,7 +374,6 @@ export function SubagentsSection({
         kind="empty"
         className="inspector-empty py-4"
         title="No active subagents"
-        action={<Button size="xs" variant="ghost" onClick={() => onOpenView()}>View all</Button>}
       />
     );
   }
@@ -360,9 +383,6 @@ export function SubagentsSection({
 
   return (
     <div className="inspector-stack">
-      <div className="flex justify-end">
-        <Button size="xs" variant="ghost" onClick={() => onOpenView()}>View all</Button>
-      </div>
       {running.map((agent) => (
         <SubagentRow
           key={agent.id}
@@ -437,44 +457,43 @@ function SubagentRow({
 
   return (
     <div className="inspector-stack gap-0">
-      <button
-        type="button"
-        role={inMenu ? 'menuitem' : undefined}
-        className={`inspector-row ${isSelected ? 'inspector-row-active' : ''}`}
-        onClick={() => onSelect(isSelected ? null : agent.id)}
-      >
-        <span className="inspector-row-label mono truncate">{name}</span>
-        <SubagentStateBadge state={agentState} />
-      </button>
-      <Button size="xs" variant="link" className="justify-start px-2" onClick={() => onOpenView(agent.id)}>
-        Open in Subagent View
-      </Button>
+      <div className={`inspector-row rounded py-1 pr-0.5 ${isSelected ? 'inspector-row-active' : ''}`}>
+        <IconButton
+          label={`Open ${name} in Subagent View`}
+          tooltip="Open in Subagent View"
+          icon="maximize"
+          size="xs"
+          variant="ghost"
+          className="shrink-0"
+          role={inMenu ? 'menuitem' : undefined}
+          onClick={() => onOpenView(agent.id)}
+        />
+        <button
+          type="button"
+          role={inMenu ? 'menuitem' : undefined}
+          className="flex min-w-0 flex-1 items-center justify-between gap-1 bg-transparent text-left"
+          onClick={() => onSelect(isSelected ? null : agent.id)}
+        >
+          <span className="inspector-row-label mono truncate">{name}</span>
+          <SubagentStateBadge state={agentState} />
+        </button>
+      </div>
       {isSelected && (
         <div className="inspector-subagent-detail">
           {detail?.elapsed && (
-            <div className="subtle">elapsed {detail.elapsed}</div>
+            <div className="subtle">
+              elapsed {detail.elapsed}{detail.type ? ` · ${detail.type}` : ''} · {detail.tier}
+            </div>
           )}
           {usage && (
             <div className="subtle mono">
-              in {fmtTokens(usage.prompt_tokens)} · out {fmtTokens(usage.completion_tokens)}
-              {usage.cached_tokens > 0
-                ? ` · cached ${fmtTokens(usage.cached_tokens)}`
-                : ''}
+              {formatUsageSummary(usage)}
             </div>
-          )}
-          {detail?.task && (
-            <div className="inspector-subagent-task">{detail.task}</div>
           )}
         </div>
       )}
     </div>
   );
-}
-
-function fmtTokens(n: number): string {
-  if (!n) return '0';
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
 }
 
 function SubagentStateBadge({ state }: { state: string }) {

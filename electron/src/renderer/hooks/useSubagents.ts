@@ -55,12 +55,30 @@ function formatElapsed(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+function formatAgentRole(value: string): string {
+  return value
+    .trim()
+    .replace(/[-_]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function displayAgentType(record: SubagentRecord): string {
+  const persistedType = record.agent_type.trim();
+  const chainRole = record.chain.agentName?.trim() ?? '';
+  const role = persistedType && persistedType !== 'subagent'
+    ? persistedType
+    : chainRole && chainRole !== 'general'
+      ? chainRole
+      : '';
+  return formatAgentRole(role);
+}
+
 function buildDetail(record: SubagentRecord, now: number): SubagentDetail {
   const start = Date.parse(record.start_time);
   const end = record.end_time ? Date.parse(record.end_time) : now;
   const running = record.status === 'running' || record.status === 'pending';
   return {
-    id: record.id, name: record.agent_name || 'Subagent', type: record.agent_type || 'subagent',
+    id: record.id, name: record.agent_name || 'Subagent', type: displayAgentType(record),
     tier: record.agent_tier || 'bloom', state: record.status, task: record.task || '',
     elapsed: formatElapsed(Math.max(0, end - start)), isRunning: running,
     result: record.result, error: record.error, usage: sumSubagentUsage(record),

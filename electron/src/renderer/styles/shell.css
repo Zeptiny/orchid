@@ -918,15 +918,6 @@
     gap: 2px;
   }
 
-  .inspector-subagent-task {
-    font-size: 11px;
-    color: var(--text-secondary);
-    overflow: hidden;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-  }
-
   /* Align icon-only header controls to the compact shell geometry. */
   .panel-header .btn-circle,
   .left-panel-collapsed .btn-circle,

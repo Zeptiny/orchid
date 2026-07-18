@@ -191,8 +191,8 @@ export function SubagentTranscript({ record, live = null, selectedId = null }: S
   const scroll = useSmartAutoScroll({ resetKey: selectedId ?? record.id, contentKey });
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      <div className="orchid-chat-scroll min-h-0 flex-1 px-6 py-5" ref={scroll.containerRef}>
+    <div className="relative flex min-h-0 min-w-0 w-full max-w-full flex-1 flex-col overflow-hidden">
+      <div className="orchid-chat-scroll min-h-0 min-w-0 w-full max-w-full flex-1 px-6 py-5" ref={scroll.containerRef}>
         {items.map((item) => {
           if (item.kind === 'tool') return <ToolCallBlock key={item.key} block={item.block} />;
           if (item.kind === 'tool-group') return <ToolActivityGroup key={item.key} items={item.children} />;
@@ -203,7 +203,6 @@ export function SubagentTranscript({ record, live = null, selectedId = null }: S
             {record.error ?? (record.status === 'failed' ? 'Subagent failed' : 'Subagent interrupted')}
           </div>
         ) : null}
-        <div ref={scroll.messagesEndRef} />
       </div>
       {scroll.isUserScrolledUp ? (
         <Button

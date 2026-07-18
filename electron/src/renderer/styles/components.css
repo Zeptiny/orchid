@@ -32,6 +32,7 @@
 
   .orchid-subagent-view-container {
     display: grid;
+    grid-template-rows: minmax(0, 1fr);
     min-height: 0;
     flex: 1 1 auto;
     gap: 12px;
@@ -41,18 +42,20 @@
   .orchid-subagent-view-container > div,
   .orchid-subagent-view-list,
   .orchid-subagent-view-detail {
+    min-width: 0;
     min-height: 0;
+    overflow: hidden;
   }
 
   .orchid-subagent-view-list,
   .orchid-subagent-view-detail {
     display: flex;
+    width: 100%;
     min-width: 0;
     flex-direction: column;
     overflow: hidden;
   }
 
-  .orchid-subagent-view-list-header,
   .orchid-subagent-view-detail-header {
     flex: 0 0 auto;
     padding: 12px;
@@ -116,13 +119,16 @@
   }
 
   .orchid-subagent-view-transcript {
+    display: flex;
+    min-width: 0;
     min-height: 0;
     flex: 1 1 auto;
+    overflow: hidden;
   }
 
   @container (min-width: 720px) {
     .orchid-subagent-view-container {
-      grid-template-columns: minmax(220px, 0.38fr) minmax(0, 0.62fr);
+      grid-template-columns: minmax(220px, 0.28fr) minmax(0, 0.72fr);
     }
 
     .orchid-subagent-view-container > div {
@@ -142,6 +148,10 @@
     .orchid-subagent-view-narrow-back {
       display: inline-flex;
     }
+  }
+
+  .orchid-subagent-view-container-single {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   /* ── Shared keycaps (shortcut chords) ─────────────────────────────────── */
@@ -1196,7 +1206,7 @@
     background: color-mix(in srgb, var(--bg-secondary) 84%, var(--overlay-color));
     overflow: hidden;
   }
-  .mock-collapse > .mock-collapse-title {
+  .mock-collapse .mock-collapse-title {
     min-height: 30px;
     padding: 6px 8px;
     display: flex;
@@ -1213,7 +1223,7 @@
     color: inherit;
     font-family: inherit;
   }
-  .mock-collapse > .mock-collapse-title:hover {
+  .mock-collapse .mock-collapse-title:hover {
     filter: brightness(1.06);
   }
   .mock-collapse > .mock-collapse-content {

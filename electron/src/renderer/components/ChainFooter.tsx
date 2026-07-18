@@ -1,5 +1,6 @@
 import type { Usage } from '../../shared/types/message';
 import { hasUsage } from '../../shared/usage';
+import { formatTokenCount, formatUsageSummary } from '../utils/format-usage';
 import { Icon } from './Icon';
 import { StatusBadge } from './ui/StatusBadge';
 
@@ -22,9 +23,6 @@ export function ChainFooter({
   interrupted,
   failed,
 }: ChainFooterProps) {
-  const agentIn = formatChainTokens(usage?.prompt_tokens);
-  const agentCached = formatChainTokens(usage?.cached_tokens);
-  const agentOut = formatChainTokens(usage?.completion_tokens);
   const showSub = hasUsage(subUsage);
   const showUsage = hasUsage(usage);
 
@@ -47,14 +45,12 @@ export function ChainFooter({
       ) : null}
       {showUsage && (
         <span>
-          agent: in {agentIn} cached {agentCached} out {agentOut}
+          agent: {formatUsageSummary(usage)}
         </span>
       )}
       {showSub && subUsage && (
         <span>
-          sub: in {formatChainTokens(subUsage.prompt_tokens)} cached{' '}
-          {formatChainTokens(subUsage.cached_tokens)} out{' '}
-          {formatChainTokens(subUsage.completion_tokens)}
+          sub: {formatUsageSummary(subUsage)}
         </span>
       )}
       {elapsedSeconds != null && elapsedSeconds > 0 && <span>{fmtElapsed(elapsedSeconds)}</span>}
@@ -63,10 +59,7 @@ export function ChainFooter({
 }
 
 export function formatChainTokens(n: number | undefined): string {
-  if (!n) return '0';
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
+  return formatTokenCount(n);
 }
 
 function fmtElapsed(seconds: number): string {

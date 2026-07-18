@@ -23,6 +23,7 @@ import { ConfigCard } from '../../src/renderer/components/ui/ConfigCard';
 import { Tabs } from '../../src/renderer/components/ui/Tabs';
 import { Alert } from '../../src/renderer/components/ui/Alert';
 import { Spinner } from '../../src/renderer/components/ui/Spinner';
+import { Disclosure } from '../../src/renderer/components/ui/Disclosure';
 
 function markup(node: ReactElement): string {
   return renderToStaticMarkup(node);
@@ -55,6 +56,20 @@ describe('IconButton', () => {
     expect(html).toContain('disabled');
     expect(html).toContain('aria-busy="true"');
     expect(html).toContain('loading-spinner');
+  });
+});
+
+describe('Disclosure', () => {
+  it('renders a native closed disclosure with collapse styling', () => {
+    const html = markup(
+      createElement(Disclosure, { summary: 'Prompt', variant: 'section' }, 'Long prompt'),
+    );
+    expect(html).toContain('<details');
+    expect(html).toContain('<summary');
+    expect(html).toContain('collapse collapse-arrow');
+    expect(html).toContain('rounded-none border-y border-base-300');
+    expect(html).toContain('Long prompt');
+    expect(html).not.toMatch(/<details[^>]*\sopen(?:=|\s|>)/);
   });
 });
 
