@@ -148,7 +148,21 @@ const fileContentAgentProjector: AgentProjector = (canonical) => {
 };
 
 const directoryEntriesAgentProjector: AgentProjector = (canonical) => {
-  directoryEntriesDataSchema.parse(canonical.data);
+  const parsed = directoryEntriesDataSchema.parse(canonical.data);
+  if (parsed.entries.length > 100) {
+    const bounded = { ...parsed, entries: parsed.entries.slice(0, 100) };
+    return {
+      content: serializeJsonDeterministically(bounded),
+      completeness: 'partial',
+      retrieval: canonical.status === 'partial'
+        ? canonical.retrieval
+        : {
+            kind: 'rerun',
+            toolName: 'read_directory',
+            input: { directory_path: parsed.root, depth: parsed.depthLimit },
+          },
+    };
+  }
   return projectionWithCanonicalCompleteness(
     canonical,
     serializeCanonicalResultForCopy(canonical),
@@ -156,7 +170,21 @@ const directoryEntriesAgentProjector: AgentProjector = (canonical) => {
 };
 
 const searchResultsAgentProjector: AgentProjector = (canonical) => {
-  searchResultsDataSchema.parse(canonical.data);
+  const parsed = searchResultsDataSchema.parse(canonical.data);
+  if (parsed.matches.length > 100) {
+    const bounded = { ...parsed, matches: parsed.matches.slice(0, 100) };
+    return {
+      content: serializeJsonDeterministically(bounded),
+      completeness: 'partial',
+      retrieval: canonical.status === 'partial'
+        ? canonical.retrieval
+        : {
+            kind: 'rerun',
+            toolName: parsed.kind,
+            input: { directory_path: parsed.root, pattern: parsed.pattern },
+          },
+    };
+  }
   return projectionWithCanonicalCompleteness(
     canonical,
     serializeCanonicalResultForCopy(canonical),

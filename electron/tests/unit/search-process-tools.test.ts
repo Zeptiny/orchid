@@ -275,8 +275,10 @@ describe('grep tool', () => {
       },
     );
 
-    expect(result.content).toContain('truncated to 1');
-    expect(result.content).not.toContain('generated/ignored.ts');
+    expect(result.status).toBe('partial');
+    expect(result.data.matches).toHaveLength(1);
+    expect(result.data.matches[0]?.path).not.toBe('generated/ignored.ts');
+    expect(result.data.limitReached).toBe(true);
   });
 });
 
@@ -376,8 +378,10 @@ describe('grep handler session cwd', () => {
       },
       { cwd: tmpDir },
     );
-    expect(result.isError).toBeFalsy();
-    expect(result.content).toContain('findme');
+    expect(result.status).toBe('complete');
+    expect(result.data.matches).toEqual([
+      expect.objectContaining({ path: 'hit.ts', line: 1, column: 17, text: 'export function findme() {}' }),
+    ]);
   });
 });
 

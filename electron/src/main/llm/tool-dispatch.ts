@@ -398,19 +398,19 @@ function ensureProjectionRecovery(
   toolCall: ToolCall,
   options: ToolDispatchOptions,
 ): ToolExecutionResult {
-  if (
-    execution.canonical.status === 'partial' ||
-    execution.agentProjection.completeness !== 'partial' ||
-    execution.agentProjection.retrieval.kind !== 'cache'
-  ) {
+  if (execution.agentProjection.completeness !== 'partial') {
     return execution;
   }
 
   if (!options.sessionId) {
-    return {
-      canonical: execution.canonical,
-      agentProjection: genericAgentProjector(execution.canonical),
-    };
+    return execution;
+  }
+
+  if (
+    execution.canonical.status === 'partial' &&
+    execution.agentProjection.retrieval.kind !== 'cache'
+  ) {
+    return execution;
   }
 
   try {

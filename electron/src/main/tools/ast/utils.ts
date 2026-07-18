@@ -5,6 +5,10 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import {
+  buildStructuredFileChange,
+  serializeStructuredDiff,
+} from '../filesystem/structured-diff';
 
 // ---------------------------------------------------------------------------
 // XML helpers
@@ -38,94 +42,18 @@ export function countDiffChanges(diffText: string): { added: number; removed: nu
 }
 
 export function generateDiff(oldContent: string, newContent: string, filePath: string): string {
-  const oldLines = oldContent.split('\n');
-  const newLines = newContent.split('\n');
-  const result: string[] = [];
-  result.push(`--- old/${filePath}`);
-  result.push(`+++ new/${filePath}`);
-
-  // LCS-based diff
-  const lcs = computeLCS(oldLines, newLines);
-  let oi = 0;
-  let ni = 0;
-  let li = 0;
-  const hunkLines: string[] = [];
-  let hunkOldStart = 0;
-  let hunkNewStart = 0;
-  let hunkOldCount = 0;
-  let hunkNewCount = 0;
-
-  function flushHunk(): void {
-    if (hunkLines.length === 0) return;
-    result.push(
-      `@@ -${hunkOldStart + 1},${hunkOldCount} +${hunkNewStart + 1},${hunkNewCount} @@`,
-    );
-    result.push(...hunkLines);
-    hunkLines.length = 0;
-  }
-
-  while (oi < oldLines.length || ni < newLines.length) {
-    if (
-      li < lcs.length &&
-      oi < oldLines.length &&
-      ni < newLines.length &&
-      oldLines[oi] === lcs[li] &&
-      newLines[ni] === lcs[li]
-    ) {
-      if (hunkLines.length > 0) flushHunk();
-      oi++;
-      ni++;
-      li++;
-    } else {
-      if (hunkLines.length === 0) {
-        hunkOldStart = oi;
-        hunkNewStart = ni;
-        hunkOldCount = 0;
-        hunkNewCount = 0;
-      }
-      if (oi < oldLines.length && (li >= lcs.length || oldLines[oi] !== lcs[li])) {
-        hunkLines.push(`-${oldLines[oi]}`);
-        hunkOldCount++;
-        oi++;
-      }
-      if (ni < newLines.length && (li >= lcs.length || newLines[ni] !== lcs[li])) {
-        hunkLines.push(`+${newLines[ni]}`);
-        hunkNewCount++;
-        ni++;
-      }
-    }
-  }
-
-  flushHunk();
-  return result.map((l) => l.replace(/\r?\n$/, '')).join('\n');
-}
-
-function computeLCS(a: string[], b: string[]): string[] {
-  const m = a.length;
-  const n = b.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
-    }
-  }
-
-  const result: string[] = [];
-  let i = m;
-  let j = n;
-  while (i > 0 && j > 0) {
-    if (a[i - 1] === b[j - 1]) {
-      result.unshift(a[i - 1]);
-      i--;
-      j--;
-    } else if (dp[i - 1][j] > dp[i][j - 1]) {
-      i--;
-    } else {
-      j--;
-    }
-  }
-  return result;
+  const data = buildStructuredFileChange({
+    path: filePath,
+    operation: 'update',
+    oldContent,
+    newContent,
+  });
+  // Preserve the historical old/new labels for AST tools while deriving all
+  // hunk content and coordinates through the structured direct-diff path.
+  return serializeStructuredDiff(data, {
+    oldPath: `old/${filePath}`,
+    newPath: `new/${filePath}`,
+  });
 }
 
 // ---------------------------------------------------------------------------
