@@ -31,6 +31,8 @@ export interface ToolTitleSegment {
 
 export interface ToolTitle {
   segments: ToolTitleSegment[];
+  /** Optional unabridged text for the expanded running detail. */
+  expandedRunningSegments?: ToolTitleSegment[];
 }
 
 interface ParsedArgs {
@@ -154,13 +156,22 @@ function humanizeToolName(toolName: string): string {
   return parts.length > 1 ? `MCP ${last}` : last;
 }
 
-function formatList(values: readonly string[], fallback: string): string {
+function formatList(values: readonly string[], fallback: string, limit = 3): string {
   const unique = Array.from(new Set(values.filter(Boolean)));
   if (unique.length === 0) return fallback;
-  const displayed = unique.slice(0, 3).map(quoted);
-  if (unique.length === 1) return displayed[0];
-  if (unique.length === 2) return `${displayed[0]} and ${displayed[1]}`;
-  return `${displayed.slice(0, 2).join(', ')}, and ${unique.length - 2} more`;
+  if (unique.length <= limit) return joinList(unique.map(quoted));
+  const visibleCount = Math.max(1, limit - 1);
+  return `${unique.slice(0, visibleCount).map(quoted).join(', ')}, and ${unique.length - visibleCount} more`;
+}
+
+function joinList(values: readonly string[]): string {
+  if (values.length === 1) return values[0];
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(', ')}, and ${values[values.length - 1]}`;
+}
+
+function withExpandedRunning(title: ToolTitle, expanded: ToolTitle): ToolTitle {
+  return { ...title, expandedRunningSegments: expanded.segments };
 }
 
 function subagentLabels(
@@ -290,7 +301,17 @@ export function buildToolTitle(input: ToolTitleInput): ToolTitle {
     const subject = formatList(names, ids.length > 0 ? `${ids.length} subagent${ids.length === 1 ? '' : 's'}` : 'subagents');
     if (tool === 'wait_for_subagent') {
       if (input.status === 'generating') return labeled('Preparing to wait for', subject);
-      if (input.status === 'running') return labeled('Waiting for', subject);
+      if (input.status === 'running') {
+        const expandedSubject = formatList(
+          names,
+          ids.length > 0 ? `${ids.length} subagent${ids.length === 1 ? '' : 's'}` : 'subagents',
+          Number.POSITIVE_INFINITY,
+        );
+        return withExpandedRunning(
+          labeled('Waiting for', subject),
+          labeled('Waiting for', expandedSubject),
+        );
+      }
       if (input.status === 'failed') {
         return summary?.toLowerCase().includes('timed out')
           ? labeled('Wait timed out while waiting for', subject)
@@ -412,4 +433,10 @@ export function buildToolTitle(input: ToolTitleInput): ToolTitle {
 
 export function toolTitleText(title: ToolTitle): string {
   return title.segments.map((segment) => segment.value).join('');
+}
+
+export function toolTitleRunningText(title: ToolTitle): string {
+  return title.expandedRunningSegments
+    ? title.expandedRunningSegments.map((segment) => segment.value).join('')
+    : toolTitleText(title);
 }

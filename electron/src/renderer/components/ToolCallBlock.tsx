@@ -2,7 +2,7 @@ import { useId, useMemo, useState, type ReactNode } from 'react';
 import type { ToolBlock } from '../hooks/useChat';
 import {
   buildToolTitle,
-  toolTitleText,
+  toolTitleRunningText,
   type SubagentTitleRecord,
   type ToolTitle,
 } from '../utils/tool-title';
@@ -229,7 +229,7 @@ export function ToolCallBlock({ block, subagents = [] }: ToolCallBlockProps) {
       subagents,
     ],
   );
-  const titleText = toolTitleText(title);
+  const runningDetailText = toolTitleRunningText(title);
 
   const showLoader = block.status === 'generating' || block.status === 'running';
   const stateClass = block.status === 'completed' ? '' : block.status;
@@ -289,7 +289,7 @@ export function ToolCallBlock({ block, subagents = [] }: ToolCallBlockProps) {
             </div>
           )}
           {block.status === 'running' && (
-            <div className="orchid-tool-running-hint">{titleText}…</div>
+            <div className="orchid-tool-running-hint">{runningDetailText}…</div>
           )}
           {block.status === 'completed' && block.result && (
             <pre className="orchid-tool-result-body">

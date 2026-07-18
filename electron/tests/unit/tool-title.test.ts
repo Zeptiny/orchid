@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildToolTitle,
+  toolTitleRunningText,
   toolTitleText,
   type SubagentTitleRecord,
 } from '../../src/renderer/utils/tool-title';
@@ -64,6 +65,27 @@ describe('tool widget titles', () => {
         subagents,
       }),
     ).toBe('Received results from “review auth flow” and “run integration tests”');
+  });
+
+  it('keeps every awaited subagent in the expanded running detail', () => {
+    const subagents: SubagentTitleRecord[] = [
+      { id: 'subagent-1', agent_name: 'review auth flow', agent_type: 'reviewer' },
+      { id: 'subagent-2', agent_name: 'run integration tests', agent_type: 'tester' },
+      { id: 'subagent-3', agent_name: 'check API contract', agent_type: 'reviewer' },
+      { id: 'subagent-4', agent_name: 'inspect performance', agent_type: 'reviewer' },
+    ];
+    const title = buildToolTitle({
+      toolName: 'wait_for_subagent',
+      status: 'running',
+      args: JSON.stringify({ subagent_ids: subagents.map((agent) => agent.id) }),
+      partialArgs: '',
+      subagents,
+    });
+
+    expect(toolTitleText(title)).toBe('Waiting for “review auth flow”, “run integration tests”, and 2 more');
+    expect(toolTitleRunningText(title)).toBe(
+      'Waiting for “review auth flow”, “run integration tests”, “check API contract”, and “inspect performance”',
+    );
   });
 
   it('uses human-readable generating titles for delegation and file tools', () => {
