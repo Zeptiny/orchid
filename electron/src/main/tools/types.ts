@@ -13,6 +13,19 @@ import { getConfig } from '../config/loader';
 import type { Config } from '../config/schema';
 import type { ProjectRuntime } from '../project/runtime';
 import type { ModelSelection } from '../../shared/types/provider';
+import type {
+  AgentProjector,
+  JsonValue,
+  ToolHandlerOutcome,
+  ToolResultFamily,
+} from '../../shared/types/tool-result';
+
+export type {
+  AgentProjection,
+  CanonicalToolResult,
+  ToolExecutionResult,
+  ToolHandlerOutcome,
+} from '../../shared/types/tool-result';
 
 /**
  * Defines a tool's metadata and schema.
@@ -29,8 +42,14 @@ export interface ToolDefinition {
   /** Zod schema for tool input — single source of truth */
   inputSchema: z.ZodType;
 
-  /** Optional zod schema for tool output */
-  outputSchema?: z.ZodType;
+  /** Canonical result family. Optional only during the coordinated migration. */
+  resultFamily?: ToolResultFamily;
+
+  /** Schema for canonical `data`. Optional only during the coordinated migration. */
+  outputDataSchema?: z.ZodTypeAny;
+
+  /** Tool-level agent projector override (wins over its family default). */
+  agentProjector?: AgentProjector;
 
   /** Action label shown in UI (e.g., "Reading file", "Editing file") */
   actionLabel?: string;
@@ -42,7 +61,11 @@ export interface ToolDefinition {
   noTimeout?: boolean;
 }
 
-export interface StructuredToolResultLike {
+/**
+ * Transitional pre-canonical handler shape. U4 removes this after every
+ * built-in handler returns ToolHandlerOutcome.
+ */
+export interface LegacyToolHandlerResult {
   display?: string;
   content: string;
   isError?: boolean;
@@ -111,7 +134,12 @@ export function resolveToolPath(cwd: string, userPath: string): string {
 export type ToolHandler = (
   input: unknown,
   ctx: ToolExecutionContext,
-) => Promise<string | StructuredToolResultLike>;
+) => Promise<
+  | ToolHandlerOutcome<JsonValue>
+  | string
+  | LegacyToolHandlerResult
+  | object
+>;
 
 /** A registered tool combining definition and handler */
 export interface RegisteredTool {
