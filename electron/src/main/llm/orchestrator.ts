@@ -44,13 +44,9 @@ import type { ProjectRuntime } from '../project/runtime';
 import { toApiMessages } from './history';
 import {
   executeToolCall,
-  runWithToolTimeout,
-  ToolTimeoutError,
   type ToolDispatchOptions,
 } from './tool-dispatch';
 import {
-  finalizeToolExecutionResult,
-  genericAgentProjector,
   normalizeToolHandlerResult,
   parseToolExecutionResult,
 } from '../tools/result';
@@ -63,9 +59,7 @@ import { buildSkillTool } from '../tools/skill/skill';
 import { getSkillsRegistry } from '../tools';
 import {
   createCanonicalToolResult,
-  genericToolResultDataSchema,
   toolExecutionResultSchema,
-  wrapDynamicToolOutput,
   type ToolExecutionResult,
 } from '../../shared/types/tool-result';
 
@@ -964,7 +958,7 @@ export function buildToolMap(
   // Add MCP tools if available
   if (mcpManager) {
     const mcpTools = mcpManager.getTools();
-    for (const { definition } of mcpTools) {
+    for (const { definition, handler } of mcpTools) {
       const isAllowed = allowedTools.some((pattern) => {
         if (pattern === '*') return true;
         if (pattern.includes('*')) {
@@ -983,83 +977,36 @@ export function buildToolMap(
           `Provider tool name collision for MCP tool "${internalName}": "${providerName}"`,
         );
       }
+      const dynamicRegistry = new ToolRegistryClass();
+      dynamicRegistry.register(definition, handler);
+      const outputSchema = dynamicRegistry.getToolExecutionResultSchema(internalName);
+      if (!outputSchema) {
+        throw new TypeError(`No execution schema registered for MCP tool '${internalName}'`);
+      }
 
       toolMap[providerName] = {
         description: definition.description,
         inputSchema: definition.inputSchema,
-        outputSchema: toolExecutionResultSchema,
+        outputSchema,
         execute: async (
           args: unknown,
           executionOptions: { toolCallId: string; abortSignal?: AbortSignal } = {
             toolCallId: crypto.randomUUID(),
           },
         ) => {
-          // Mirror executeToolCall: abort on outer timeout so MCP SDK cancels
-          // the in-flight request instead of abandoning it after the race.
-          const timeoutAbort = new AbortController();
-          const parentAbort = withSdkAbortSignal(
-            dispatchOptions,
-            executionOptions.abortSignal,
-          ).abortSignal;
-          const combinedAbort =
-            parentAbort !== undefined
-              ? AbortSignal.any([parentAbort, timeoutAbort.signal])
-              : timeoutAbort.signal;
-          try {
-            const result = await runWithToolTimeout(
-              () =>
-                mcpManager.callTool(internalName, args, {
-                  signal: combinedAbort,
-                }),
-              internalName,
-              {
-                timeoutSeconds: dispatchOptions.timeoutSeconds,
-                abortController: timeoutAbort,
-              },
-            );
-            const normalized = normalizeToolHandlerResult(result);
-            const isError = normalized.isError || (
-              typeof result === 'string' && result.startsWith('Error:')
-            );
-            const canonical = isError
-              ? createCanonicalToolResult('generic', {
-                  status: 'error',
-                  data: {
-                    value: normalized.content,
-                    origin: { kind: 'mcp', name: internalName },
-                  },
-                  error: {
-                    code: 'mcp_tool_error',
-                    message: normalized.content,
-                  },
-                })
-              : wrapDynamicToolOutput(internalName, result, 'mcp');
-            return finalizeToolExecutionResult({
-              canonical,
-              toolName: internalName,
-              toolCallId: executionOptions.toolCallId,
-              outputDataSchema: genericToolResultDataSchema,
-              expectedFamily: 'generic',
-              projector: genericAgentProjector,
-            });
-          } catch (err) {
-            if (err instanceof ToolTimeoutError) {
-              return genericSdkExecution(internalName, err.message, {
-                status: 'error',
-                errorCode: 'timeout',
-                originKind: 'mcp',
-              });
-            }
-            const message = err instanceof Error ? err.message : String(err);
-            return genericSdkExecution(internalName, message, {
-              status: parentAbort?.aborted ? 'cancelled' : 'error',
-              errorCode: 'mcp_tool_error',
-              originKind: 'mcp',
-            });
-          }
+          const toolCall: ToolCall = {
+            id: executionOptions.toolCallId,
+            type: 'function',
+            function: { name: internalName, arguments: JSON.stringify(args) },
+          };
+          return executeToolCall(
+            toolCall,
+            dynamicRegistry,
+            withSdkAbortSignal(dispatchOptions, executionOptions.abortSignal),
+          );
         },
         toModelOutput: ({ output }: { output: unknown }) => {
-          const execution = toolExecutionResultSchema.parse(output) as ToolExecutionResult;
+          const execution = outputSchema.parse(output) as ToolExecutionResult;
           return {
             type: execution.canonical.status === 'error' ? 'error-text' : 'text',
             value: execution.agentProjection.content,

@@ -8,6 +8,8 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome } from '../result';
 import type { SubagentManager } from '../../agents/manager';
 import { SubagentState } from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
@@ -28,6 +30,7 @@ export function buildInterruptTool(
   manager: SubagentManager,
 ): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
+    ...genericToolResultMetadata,
     name: 'interrupt_subagents',
     description:
       'Interrupt one or more running subagents. ' +
@@ -50,11 +53,7 @@ export function buildInterruptTool(
     // Empty list → cancel all running in this session only (never process-wide).
     if (!subagent_ids || subagent_ids.length === 0) {
       if (!ctx.sessionId) {
-        return {
-          display: 'No running subagents to interrupt',
-          content:
-            'No session context available; cannot interrupt subagents without a session id.',
-        };
+        return genericBuiltInToolOutcome('interrupt_subagents', 'No session context available; cannot interrupt subagents without a session id.', 'empty');
       }
       // cancelOne (via cancelRunning) already resolves waiters for cancelled
       // records. Do not flush process-wide waiters — that would unblock
@@ -62,16 +61,10 @@ export function buildInterruptTool(
       const cancelled = manager.cancelRunning(ctx.sessionId);
 
       if (cancelled.length === 0) {
-        return {
-          display: 'No running subagents to interrupt',
-          content: 'No running subagents found to interrupt.',
-        };
+        return genericBuiltInToolOutcome('interrupt_subagents', 'No running subagents found to interrupt.', 'empty');
       }
 
-      return {
-        display: `Interrupted ${cancelled.length} subagent(s)`,
-        content: `Interrupted subagents: ${cancelled.join(', ')}`,
-      };
+      return genericBuiltInToolOutcome('interrupt_subagents', `Interrupted subagents: ${cancelled.join(', ')}`, 'complete');
     }
 
     // Cancel specific subagents by ID
@@ -108,12 +101,11 @@ export function buildInterruptTool(
       ? parts.join('. ') + '.'
       : 'No subagents matched.';
 
-    return {
-      display: cancelled.length > 0
-        ? `Interrupted ${cancelled.length} subagent(s)`
-        : 'No subagents interrupted',
+    return genericBuiltInToolOutcome(
+      'interrupt_subagents',
       content,
-    };
+      cancelled.length > 0 ? 'complete' : 'empty',
+    );
   };
 
   return { definition, handler };

@@ -5,6 +5,8 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome } from '../result';
 import { getToolConfig } from '../types';
 import { Embedder } from '../../rag/embedder';
 import { RAGStore } from '../../rag/store';
@@ -36,6 +38,7 @@ const ragSearchSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const ragSearchDefinition: ToolDefinition = {
+  ...genericToolResultMetadata,
   name: 'rag_search',
   description:
     'Search the codebase using semantic search (RAG). Returns code chunks most relevant to the query. ' +
@@ -66,7 +69,7 @@ export const ragSearchHandler: ToolHandler = async (
 
   if (status.totalChunks === 0) {
     // Operational precondition, not an execution failure — agent can index first.
-    return { display: 'No RAG index', content: 'No RAG index found. Run `rag_index` with action "index" first.' };
+    return genericBuiltInToolOutcome('rag_search', 'No RAG index found. Run `rag_index` with action "index" first.', 'complete');
   }
 
   // Generate query embedding (same thread/batch caps as indexing)
@@ -79,10 +82,11 @@ export const ragSearchHandler: ToolHandler = async (
   try {
     queryEmbedding = await embedder.embedSingle(query);
   } catch (err) {
-    return {
-      content: `Embedding failed: ${err instanceof Error ? err.message : String(err)}`,
-      isError: true,
-    };
+    return genericBuiltInToolOutcome(
+      'rag_search',
+      `Embedding failed: ${err instanceof Error ? err.message : String(err)}`,
+      'error',
+    );
   }
 
   // Search
@@ -93,7 +97,7 @@ export const ragSearchHandler: ToolHandler = async (
   );
 
   if (results.length === 0) {
-    return { display: 'No results', content: 'No relevant results found.' };
+    return genericBuiltInToolOutcome('rag_search', 'No relevant results found.', 'complete');
   }
 
   // Format results
@@ -109,5 +113,5 @@ export const ragSearchHandler: ToolHandler = async (
     );
   }
 
-  return lines.join('\n');
+  return genericBuiltInToolOutcome('rag_search', lines.join('\n'));
 };

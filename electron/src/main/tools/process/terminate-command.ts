@@ -10,6 +10,8 @@ import { z } from 'zod';
 import { normalizeAgentScopeId } from '../../../shared/types/agent-scope';
 import { getBackgroundStore } from './background-store';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 
 // ---------------------------------------------------------------------------
 // Zod schema
@@ -29,35 +31,21 @@ export async function executeTerminateCommand(
   id: number,
   sessionId?: string | null,
   agentScopeId?: string | null,
-): Promise<{ display: string; content: string; isError?: boolean }> {
+): Promise<GenericBuiltInToolOutcome> {
   const store = getBackgroundStore();
   // Visibility: session + agent scope (peer agents cannot terminate each other).
   const entry = store.getVisible(id, sessionId ?? null, normalizeAgentScopeId(agentScopeId));
   if (!entry) {
-    return {
-      display: `Background command ${id} not found`,
-      content: `Error: No background command with id ${id}.`,
-      isError: true,
-    };
+    return genericBuiltInToolOutcome('terminate_command', `Error: No background command with id ${id}.`, 'error');
   }
 
   if (entry.exitCode !== null) {
-    return {
-      display: `Command ${id} already exited (code ${entry.exitCode})`,
-      content: `Command ${id} already exited with code ${entry.exitCode}.`,
-    };
+    return genericBuiltInToolOutcome('terminate_command', `Command ${id} already exited with code ${entry.exitCode}.`, 'complete');
   }
 
   store.terminate(id);
 
-  const preview = entry.command.length > 60
-    ? entry.command.substring(0, 59) + '...'
-    : entry.command;
-
-  return {
-    display: `Terminated command ${id}: $ ${preview}`,
-    content: `Terminated command ${id}: ${entry.command}`,
-  };
+  return genericBuiltInToolOutcome('terminate_command', `Terminated command ${id}: ${entry.command}`, 'complete');
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +53,7 @@ export async function executeTerminateCommand(
 // ---------------------------------------------------------------------------
 
 export const terminateCommandToolDefinition: ToolDefinition = {
+  ...genericToolResultMetadata,
   name: 'terminate_command',
   description:
     'Terminate a running background command. Sends SIGTERM followed by ' +

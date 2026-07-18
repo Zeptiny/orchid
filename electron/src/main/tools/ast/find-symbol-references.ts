@@ -8,6 +8,8 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome } from '../result';
 import { resolveToolPath } from '../types';
 import { ensureIndexed } from '../../ast/indexer';
 import { ASTStore } from '../../ast/store';
@@ -32,6 +34,7 @@ export type FindSymbolReferencesInput = z.infer<typeof findSymbolReferencesSchem
 // ---------------------------------------------------------------------------
 
 export const findSymbolReferencesDefinition: ToolDefinition = {
+  ...genericToolResultMetadata,
   name: 'find_symbol_references',
   description:
     'Find all definitions and references of a symbol by name across the project. ' +
@@ -51,11 +54,7 @@ export const findSymbolReferencesHandler: ToolHandler = async (input: unknown, c
 
   try {
     if (!symbol_name || !symbol_name.trim()) {
-      return {
-        display: 'Empty symbol name',
-        content: '<ast_error tool="find_symbol_references">Symbol name is required.</ast_error>',
-      isError: true
-    };
+      return genericBuiltInToolOutcome('find_symbol_references', '<ast_error tool="find_symbol_references">Symbol name is required.</ast_error>', 'error');
     }
 
     const projectPath = ctx.cwd;
@@ -76,10 +75,7 @@ export const findSymbolReferencesHandler: ToolHandler = async (input: unknown, c
       : symbols;
 
     if (filtered.length === 0) {
-      return {
-        display: `No references for '${symbol_name}'`,
-        content: `<symbol_references name="${xmlAttr(symbol_name)}" count="0" />`,
-      };
+      return genericBuiltInToolOutcome('find_symbol_references', `<symbol_references name="${xmlAttr(symbol_name)}" count="0" />`, 'complete');
     }
 
     const parts: string[] = [];
@@ -96,25 +92,15 @@ export const findSymbolReferencesHandler: ToolHandler = async (input: unknown, c
       );
     }
 
-    const defs = filtered.filter((s) => s.type === 'definition').length;
-    const refs = filtered.filter((s) => s.type === 'reference').length;
-
     const resultXml =
       `<symbol_references name="${xmlAttr(symbol_name)}" ` +
       `type_filter="both" count="${filtered.length}">\n` +
       parts.join('\n') +
       '\n</symbol_references>';
 
-    return {
-      display: `Found ${defs} definition(s), ${refs} reference(s) for '${symbol_name}'`,
-      content: resultXml,
-    };
+    return genericBuiltInToolOutcome('find_symbol_references', resultXml, 'complete');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return {
-      display: `Error finding '${symbol_name}'`,
-      content: `<ast_error tool="find_symbol_references">${msg}</ast_error>`,
-      isError: true
-    };
+    return genericBuiltInToolOutcome('find_symbol_references', `<ast_error tool="find_symbol_references">${msg}</ast_error>`, 'error');
   }
 };

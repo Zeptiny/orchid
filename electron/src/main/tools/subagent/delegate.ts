@@ -11,6 +11,8 @@ import { z } from 'zod';
 import type { Agent } from '../../../shared/types/agent';
 import { AgentType, AgentTier, TIER_DESCRIPTIONS } from '../../../shared/types/agent';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import type { SubagentManager } from '../../agents/manager';
 import { getTierModelSelection } from '../../config/loader';
 import { getSessionManager } from '../../ipc/session';
@@ -18,14 +20,7 @@ import { getSessionManager } from '../../ipc/session';
 /**
  * Result returned by all subagent tool handlers.
  */
-export interface SubagentToolResult {
-  /** Brief summary for UI display */
-  display: string;
-  /** Full content (may include XML-like structured data) */
-  content: string;
-  /** Explicit failure flag for UI/status (never inferred from content). */
-  isError?: boolean;
-}
+export type SubagentToolResult = GenericBuiltInToolOutcome;
 
 /**
  * Build the delegate_to_subagent tool.
@@ -52,6 +47,7 @@ export function buildDelegateTool(
     .join('\n');
 
   const definition: ToolDefinition = {
+    ...genericToolResultMetadata,
     name: 'delegate_to_subagent',
     description:
       'Delegate a task to a specialized subagent with an isolated context. ' +
@@ -97,11 +93,7 @@ export function buildDelegateTool(
     const agent = agents.get(type);
     if (!agent) {
       const available = Array.from(agents.keys()).join(', ');
-      return {
-        display: `Unknown agent type: ${type}`,
-        content: `Error: agent type '${type}' does not exist. Available agents: ${available}`,
-      isError: true,
-      };
+      return genericBuiltInToolOutcome('delegate_to_subagent', `Error: agent type '${type}' does not exist. Available agents: ${available}`, 'error');
     }
 
     // Resolve tier — use override if provided, otherwise agent's default
@@ -110,11 +102,7 @@ export function buildDelegateTool(
       const validTiers = new Set<string>(Object.values(AgentTier));
       if (!validTiers.has(tier)) {
         const valid = Object.values(AgentTier).join(', ');
-        return {
-          display: `Invalid tier: ${tier}`,
-          content: `Error: tier '${tier}' is not valid. Available tiers: ${valid}`,
-      isError: true,
-        };
+        return genericBuiltInToolOutcome('delegate_to_subagent', `Error: tier '${tier}' is not valid. Available tiers: ${valid}`, 'error');
       }
       resolvedTier = tier as AgentTier;
     } else {
@@ -123,11 +111,7 @@ export function buildDelegateTool(
 
     // Resolve model from tier via config
     if (!ctx?.projectRuntime || !ctx.sessionId) {
-      return {
-        display: 'Subagent delegation requires a session runtime',
-        content: 'Error: delegate_to_subagent requires a frozen project runtime and session id.',
-        isError: true,
-      };
+      return genericBuiltInToolOutcome('delegate_to_subagent', 'Error: delegate_to_subagent requires a frozen project runtime and session id.', 'error');
     }
     const selection = ctx.selection
       ?? getTierModelSelection(ctx.projectRuntime.config, resolvedTier);
@@ -156,13 +140,9 @@ export function buildDelegateTool(
       projectRuntime: ctx.projectRuntime,
     });
 
-    return {
-      display: `Subagent '${name}' spawned (id: ${record.id}, tier: ${resolvedTier})`,
-      content:
-        `<subagent id="${record.id}" name="${name}" type="${type}" status="${record.state}" tier="${resolvedTier}">\n` +
+    return genericBuiltInToolOutcome('delegate_to_subagent', `<subagent id="${record.id}" name="${name}" type="${type}" status="${record.state}" tier="${resolvedTier}">\n` +
         `<task>\n${task}\n</task>\n` +
-        `</subagent>`,
-    };
+        `</subagent>`, 'complete');
   };
 
   return { definition, handler };

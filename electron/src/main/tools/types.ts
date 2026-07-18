@@ -19,6 +19,13 @@ import type {
   ToolHandlerOutcome,
   ToolResultFamily,
 } from '../../shared/types/tool-result';
+import { genericToolResultDataSchema } from '../../shared/types/tool-result';
+
+/** Shared explicit result contract for built-ins using the generic family. */
+export const genericToolResultMetadata = {
+  resultFamily: 'generic',
+  outputDataSchema: genericToolResultDataSchema,
+} as const satisfies Pick<ToolDefinition, 'resultFamily' | 'outputDataSchema'>;
 
 export type {
   AgentProjection,

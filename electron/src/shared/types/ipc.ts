@@ -12,6 +12,7 @@ import type { Message, Usage } from './message';
 import type {
   CanonicalToolResult,
   TerminalToolResultStatus,
+  ToolExecutionResult,
 } from './tool-result';
 import type { SubagentLiveProjection, SubagentRecord } from './subagent';
 import type {
@@ -632,10 +633,7 @@ export interface ToolExecuteMessage {
   args: unknown;
 }
 
-export interface ToolExecuteResult {
-  content: string;
-  isError: boolean;
-}
+export type ToolExecuteResult = ToolExecutionResult;
 
 // ── RAG API ──────────────────────────────────────────────────────────────────
 

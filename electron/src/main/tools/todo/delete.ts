@@ -5,6 +5,8 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome } from '../result';
 import type { TodoToolResult, NotifyTodoChanged, TodoStoreSource } from './create';
 import { resolveTodoStore } from './create';
 import {
@@ -23,6 +25,7 @@ export function buildDeleteTool(
   notifyChanged?: NotifyTodoChanged,
 ): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
+    ...genericToolResultMetadata,
     name: 'todo_delete',
     description:
       'Delete a task owned by the current agent. Cannot delete peer agents\' tasks.',
@@ -39,37 +42,22 @@ export function buildDeleteTool(
     const todoStore = resolveTodoStore(store, ctx);
     const existing = todoStore.get(id);
     if (!existing) {
-      return {
-        display: 'Task not found',
-        content: `Error: No task found with ID '${id}'.`,
-        isError: true,
-      };
+      return genericBuiltInToolOutcome('todo_delete', `Error: No task found with ID '${id}'.`, 'error');
     }
     if (!todoBelongsToScope(existing, scope)) {
-      return {
-        display: 'Delete failed',
-        content: `Error: Task '${id}' is not owned by agent scope '${scope}'.`,
-        isError: true,
-      };
+      return genericBuiltInToolOutcome('todo_delete', `Error: Task '${id}' is not owned by agent scope '${scope}'.`, 'error');
     }
 
     const task = todoStore.delete(id);
     if (!task) {
-      return {
-        display: 'Task not found',
-        content: `Error: No task found with ID '${id}'.`,
-        isError: true,
-      };
+      return genericBuiltInToolOutcome('todo_delete', `Error: No task found with ID '${id}'.`, 'error');
     }
 
     if (notifyChanged) {
       await notifyChanged(ctx);
     }
 
-    return {
-      display: `Deleted task: ${task.title}`,
-      content: `Task '${task.id}' (${task.title}) deleted successfully.`,
-    };
+    return genericBuiltInToolOutcome('todo_delete', `Task '${task.id}' (${task.title}) deleted successfully.`, 'complete');
   };
 
   return { definition, handler };

@@ -9,6 +9,8 @@
 import * as fs from 'node:fs';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome } from '../result';
 import { resolveToolPath } from '../types';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from '../../ast/parser';
 import { xmlAttr, extractCallNames } from './utils';
@@ -28,6 +30,7 @@ export type GetFileSkeletonInput = z.infer<typeof getFileSkeletonSchema>;
 // ---------------------------------------------------------------------------
 
 export const getFileSkeletonDefinition: ToolDefinition = {
+  ...genericToolResultMetadata,
   name: 'get_file_skeleton',
   description:
     'Get a structural outline of a source file showing only definition lines ' +
@@ -49,13 +52,8 @@ export const getFileSkeletonHandler: ToolHandler = async (input: unknown, ctx) =
 
   try {
     if (!fs.existsSync(file_path)) {
-      return {
-        display: `File not found: ${file_path}`,
-        content:
-          `<ast_error tool="get_file_skeleton" file="${xmlAttr(file_path)}">` +
-          `File not found: ${file_path}</ast_error>`,
-      isError: true
-    };
+      return genericBuiltInToolOutcome('get_file_skeleton', `<ast_error tool="get_file_skeleton" file="${xmlAttr(file_path)}">` +
+          `File not found: ${file_path}</ast_error>`, 'error');
     }
 
     const langName = langForExtension(file_path);
@@ -83,12 +81,8 @@ export const getFileSkeletonHandler: ToolHandler = async (input: unknown, ctx) =
       }
 
       if (definitions.length === 0) {
-        return {
-          display: `No definitions in ${file_path}`,
-          content:
-            `<file_skeleton file="${xmlAttr(file_path)}" definitions="0">\n` +
-            'No definitions found.\n</file_skeleton>',
-        };
+        return genericBuiltInToolOutcome('get_file_skeleton', `<file_skeleton file="${xmlAttr(file_path)}" definitions="0">\n` +
+            'No definitions found.\n</file_skeleton>', 'complete');
       }
 
       // Sort by line number
@@ -131,31 +125,18 @@ export const getFileSkeletonHandler: ToolHandler = async (input: unknown, ctx) =
 
       lines.push('</file_skeleton>');
 
-      return {
-        display: `Skeleton of ${file_path}: ${definitionsWithParents.length} definitions`,
-        content: lines.join('\n'),
-      };
+      return genericBuiltInToolOutcome('get_file_skeleton', lines.join('\n'), 'complete');
     } finally {
       tree.delete();
     }
   } catch (err) {
     if (err instanceof Error && err.message.includes('Unsupported file extension')) {
-      return {
-        display: `Unsupported file type: ${file_path}`,
-        content:
-          `<ast_error tool="get_file_skeleton" file="${xmlAttr(file_path)}">` +
-          `${err.message}</ast_error>`,
-      isError: true
-    };
+      return genericBuiltInToolOutcome('get_file_skeleton', `<ast_error tool="get_file_skeleton" file="${xmlAttr(file_path)}">` +
+          `${err.message}</ast_error>`, 'error');
     }
     const msg = err instanceof Error ? err.message : String(err);
-    return {
-      display: `Error: ${file_path}`,
-      content:
-        `<ast_error tool="get_file_skeleton" file="${xmlAttr(file_path)}">` +
-        `${msg}</ast_error>`,
-      isError: true
-    };
+    return genericBuiltInToolOutcome('get_file_skeleton', `<ast_error tool="get_file_skeleton" file="${xmlAttr(file_path)}">` +
+        `${msg}</ast_error>`, 'error');
   }
 };
 

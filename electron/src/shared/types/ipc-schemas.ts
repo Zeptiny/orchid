@@ -8,6 +8,7 @@ import { contextSnapshotSchema } from './message';
 import {
   canonicalToolResultSchema,
   terminalToolResultStatusSchema,
+  toolExecutionResultSchema,
 } from './tool-result';
 
 // ── Shared fragments ─────────────────────────────────────────────────────────
@@ -224,10 +225,7 @@ export const chatSendResultSchema = z.discriminatedUnion('status', [
   }),
 ]);
 
-export const toolExecuteResultSchema = z.object({
-  content: z.string(),
-  isError: z.boolean(),
-});
+export const toolExecuteResultSchema = toolExecutionResultSchema;
 
 export const bgCommandSnapshotResultSchema = z.object({
   tail: z.string(),

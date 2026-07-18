@@ -7,10 +7,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { ToolRegistry } from '../../src/main/tools/registry';
+import { createBuiltinToolRegistry } from '../../src/main/tools';
 import { finalizeToolExecutionResult } from '../../src/main/tools/result';
 import type { ToolDefinition, ToolHandler } from '../../src/main/tools/types';
 import {
   createCanonicalToolResult,
+  genericToolResultDataSchema,
   type AgentProjector,
 } from '../../src/shared/types/tool-result';
 
@@ -491,5 +493,40 @@ describe('ToolRegistry', () => {
       expect(execution.agentProjection.content).toBe('family integration');
       expect(execution.canonical.data).toEqual({ value: 'exact' });
     });
+  });
+});
+
+describe('U4 generic built-in result metadata', () => {
+  const genericBuiltins = new Set([
+    'ast_index', 'get_file_skeleton', 'get_function',
+    'find_symbol_references', 'rename_symbol', 'replace_symbol',
+    'list_mcp_resources', 'read_mcp_resource',
+    'execute_command', 'read_output', 'send_input', 'terminate_command',
+    'rag_index', 'rag_search', 'skill',
+    'delegate_to_subagent', 'interrupt_subagents', 'wait_for_subagent',
+    'todo_create', 'todo_delete', 'todo_list', 'todo_update', 'web_fetch',
+  ]);
+
+  it('declares a JSON-safe generic contract for every non-filesystem built-in', () => {
+    const registry = createBuiltinToolRegistry();
+    const scoped = registry.listAll().filter(({ definition }) =>
+      genericBuiltins.has(definition.name),
+    );
+
+    expect(scoped.map(({ definition }) => definition.name).sort()).toEqual(
+      [...genericBuiltins].sort(),
+    );
+    for (const { definition } of scoped) {
+      expect(definition.resultFamily, definition.name).toBe('generic');
+      expect(definition.outputDataSchema, definition.name).toBeDefined();
+      expect(
+        definition.outputDataSchema!.safeParse({
+          value: null,
+          origin: { kind: 'built-in', name: definition.name },
+        }).success,
+        definition.name,
+      ).toBe(true);
+      expect(definition.outputDataSchema).toBe(genericToolResultDataSchema);
+    }
   });
 });

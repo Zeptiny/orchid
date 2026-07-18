@@ -35,6 +35,10 @@ import type { ToolDefinition, ToolHandler, RegisteredTool } from '../tools/types
 import type { MCPServerConfig, MCPServerStatus, MCPServerStatusValue } from './schema';
 import { isValidServerName } from './schema';
 import { createTransport } from './transport';
+import {
+  createDynamicToolOutcome,
+  genericToolResultDataSchema,
+} from '../../shared/types/tool-result';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -221,7 +225,8 @@ export class MCPManager {
    * @param name - Fully-qualified tool name (e.g. "mcp::context7::read-docs").
    * @param args - Tool arguments (validated by the MCP server's input schema).
    * @param options - Optional abort signal from tool-dispatch / parent cancel.
-   * @returns Tool result content (text concatenated, non-text blocks noted).
+   * @returns The exact MCP result object. Canonical adapters validate JSON
+   * safety and keep content blocks inert.
    */
   async callTool(
     name: string,
@@ -274,32 +279,7 @@ export class MCPManager {
       return `Error: MCP tool '${toolName}' failed: ${message}`;
     }
 
-    // Concatenate text content, note non-text blocks (matching Python behavior)
-    const textParts: string[] = [];
-    const placeholders: string[] = [];
-
-    if ('content' in result && Array.isArray(result.content)) {
-      for (const block of result.content) {
-        if (block.type === 'text') {
-          textParts.push(block.text);
-        } else if (block.type === 'image') {
-          placeholders.push(`[image: ${(block as { mimeType?: string }).mimeType ?? 'application/octet-stream'}]`);
-        } else if (block.type === 'resource') {
-          const resource = (block as { resource?: { uri?: string } }).resource;
-          placeholders.push(`[embedded resource: ${resource?.uri}]`);
-        } else {
-          placeholders.push(`[${(block as { type: string }).type} block]`);
-        }
-      }
-    }
-
-    if (placeholders.length > 0) {
-      console.warn(
-        `MCP tool '${toolName}' returned ${placeholders.length} non-text block(s) that were converted to placeholders`,
-      );
-    }
-
-    return [...textParts, ...placeholders].join('\n');
+    return result;
   }
 
   /**
@@ -532,6 +512,8 @@ export class MCPManager {
           name: registryName,
           description: tool.description ?? '',
           inputSchema: this._jsonSchemaToZod(tool.inputSchema),
+          resultFamily: 'generic',
+          outputDataSchema: genericToolResultDataSchema,
           category: 'mcp',
         };
 
@@ -540,9 +522,21 @@ export class MCPManager {
             signal: ctx?.abortSignal,
           });
           if (typeof raw === 'string' && raw.startsWith('Error:')) {
-            return { content: raw, isError: true };
+            return createDynamicToolOutcome(registryName, raw, 'mcp', {
+              status: ctx.abortSignal?.aborted || /cancelled/i.test(raw)
+                ? 'cancelled'
+                : 'error',
+              errorCode: 'mcp_tool_error',
+              errorMessage: raw,
+            });
           }
-          return raw as string | { display?: string; content: string; isError?: boolean };
+          const serverReportedError = raw != null && typeof raw === 'object'
+            && (raw as { isError?: unknown }).isError === true;
+          return createDynamicToolOutcome(registryName, raw, 'mcp', {
+            status: serverReportedError ? 'error' : 'complete',
+            errorCode: 'mcp_tool_error',
+            errorMessage: serverReportedError ? 'MCP tool reported an error.' : undefined,
+          });
         };
 
         this._tools.set(registryName, { definition, handler });

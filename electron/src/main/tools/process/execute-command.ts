@@ -17,6 +17,8 @@ import { getConfig } from '../../config/loader';
 import type { Config } from '../../config/schema';
 import { getBackgroundStore, ENV_SUPPRESSION } from './background-store';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { getToolConfig, resolveToolPath } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -179,7 +181,7 @@ export async function executeCommand(
     config?: Pick<Config, 'command_timeout'>;
     abortSignal?: AbortSignal;
   },
-): Promise<{ display: string; content: string; isError?: boolean }> {
+): Promise<GenericBuiltInToolOutcome> {
   if (description === undefined) description = command;
   // Caller (handler) should pass an absolute cwd; '.' remains for direct unit tests.
   if (workingDirectory === undefined) workingDirectory = '.';
@@ -189,20 +191,12 @@ export async function executeCommand(
 
   // interactive requires background
   if (interactive && !background) {
-    return {
-      display: 'interactive=true requires background=true',
-      content: `Error: interactive=true is only supported with background=true`,
-      isError: true,
-    };
+    return genericBuiltInToolOutcome('execute_command', `Error: interactive=true is only supported with background=true`, 'error');
   }
 
   // shell=false is incompatible with background
   if (!shell && background) {
-    return {
-      display: 'shell=false is incompatible with background=true',
-      content: `Error: shell=false is not supported with background=true`,
-      isError: true,
-    };
+    return genericBuiltInToolOutcome('execute_command', `Error: shell=false is not supported with background=true`, 'error');
   }
 
   // -- background path -----------------------------------------------------
@@ -216,17 +210,10 @@ export async function executeCommand(
         sessionId: options?.sessionId ?? null,
         agentScopeId: options?.agentScopeId ?? 'main',
       });
-      return {
-        display: `$ ${command} (id: ${procId}, background)`,
-        content: `Background command started with id ${procId}`,
-      };
+      return genericBuiltInToolOutcome('execute_command', `Background command started with id ${procId}`, 'complete');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      return {
-        display: 'Failed to start background command',
-        content: `Error: ${msg}`,
-      isError: true
-    };
+      return genericBuiltInToolOutcome('execute_command', `Error: ${msg}`, 'error');
     }
   }
 
@@ -297,21 +284,17 @@ export async function executeCommand(
         }
         await waitForExit(proc);
         if (err instanceof Error && err.message === 'timeout') {
-          return {
-            display: `$ ${description} - Timed out after ${timeout} seconds`,
-            content: `Error: ${description} timed out after ${timeout} seconds.`,
-            isError: true,
-          };
+          return genericBuiltInToolOutcome('execute_command', `Error: ${description} timed out after ${timeout} seconds.`, 'error');
         }
         if (
           (err instanceof Error && err.message === 'aborted') ||
           abortSignal?.aborted
         ) {
-          return {
-            display: `$ ${description} - Timed out`,
-            content: `Error: ${description} timed out.`,
-            isError: true,
-          };
+          return genericBuiltInToolOutcome(
+            'execute_command',
+            `${description} was cancelled.`,
+            'cancelled',
+          );
         }
         throw err;
       }
@@ -335,22 +318,13 @@ export async function executeCommand(
       if (truncated) parts.push('(output truncated)');
 
       const exitCode = proc.exitCode ?? 0;
-      return {
-        display: `$ ${description} (exit code: ${exitCode})`,
-        content: parts.join('\n\n') || '(no output)',
-        // Non-zero exit is a real command failure (backend-owned status).
-        isError: exitCode !== 0,
-      };
+      return genericBuiltInToolOutcome('execute_command', parts.join('\n\n') || '(no output)', exitCode !== 0 ? 'error' : 'complete');
     } finally {
       abortSignal?.removeEventListener('abort', onAbort);
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return {
-      display: `$ ${description} - Execution error`,
-      content: `Error: ${msg}`,
-      isError: true
-    };
+    return genericBuiltInToolOutcome('execute_command', `Error: ${msg}`, 'error');
   }
 }
 
@@ -370,6 +344,7 @@ function waitForExit(proc: ChildProcess): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export const executeCommandToolDefinition: ToolDefinition = {
+  ...genericToolResultMetadata,
   name: 'execute_command',
   description:
     'Execute a shell command and return its output. Use for running tests, git commands, ' +

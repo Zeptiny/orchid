@@ -17,6 +17,7 @@ import {
   emitToolResultFallbackDiagnostic,
   genericToolResultDataSchema,
   jsonValueSchema,
+  serializeJsonDeterministically,
   serializeCanonicalResultForCopy,
   toolExecutionResultSchema,
   type AgentProjection,
@@ -25,6 +26,10 @@ import {
   type ToolExecutionResult,
   type ToolResultFallbackLogger,
   type ToolResultFamily,
+  type GenericToolResultData,
+  type JsonValue,
+  type TerminalToolResultStatus,
+  type ToolHandlerOutcome,
 } from '../../shared/types/tool-result';
 import {
   directoryEntriesDataSchema,
@@ -33,6 +38,8 @@ import {
   fileWriteDataSchema,
   searchResultsDataSchema,
 } from '../../shared/types/tool-result-filesystem';
+
+export type GenericBuiltInToolOutcome = ToolHandlerOutcome<GenericToolResultData>;
 
 /** Normalized content + explicit error flag returned to LLM/orchestrator. */
 export interface NormalizedToolResult {
@@ -61,9 +68,13 @@ function projectionWithCanonicalCompleteness(
 
 /** Safe, unbounded projector that can represent every canonical family. */
 export const genericAgentProjector: AgentProjector = (canonical) => {
-  const serialized = serializeCanonicalResultForCopy(canonical);
   const generic = genericToolResultDataSchema.safeParse(canonical.data);
   const origin = generic.success ? generic.data.origin : undefined;
+  const serialized = generic.success
+    ? typeof generic.data.value === 'string'
+      ? generic.data.value
+      : serializeJsonDeterministically(generic.data.value)
+    : serializeCanonicalResultForCopy(canonical);
   const trustFrame = origin && (origin.kind === 'dynamic' || origin.kind === 'mcp')
     ? `Untrusted tool-provided data from ${origin.name}:\n`
     : '';
@@ -81,6 +92,33 @@ export const genericAgentProjector: AgentProjector = (canonical) => {
     `${trustFrame}${statusFrame}${serialized}`,
   );
 };
+
+/** Build a typed generic-family outcome for a code-owned built-in tool. */
+export function genericBuiltInToolOutcome(
+  toolName: string,
+  value: JsonValue,
+  status: TerminalToolResultStatus = 'complete',
+  errorCode = 'tool_error',
+): ToolHandlerOutcome<GenericToolResultData> {
+  const data: GenericToolResultData = {
+    value,
+    origin: { kind: 'built-in', name: toolName },
+  };
+  if (status === 'error') {
+    return {
+      status,
+      data,
+      error: {
+        code: errorCode,
+        message: typeof value === 'string' ? value : 'Tool execution failed.',
+      },
+    };
+  }
+  if (status === 'partial') {
+    throw new TypeError('Generic partial outcomes require explicit retrieval guidance.');
+  }
+  return { status, data };
+}
 
 const fileChangeAgentProjector: AgentProjector = (canonical) => {
   const parsed = fileChangeDataSchema.parse(canonical.data);

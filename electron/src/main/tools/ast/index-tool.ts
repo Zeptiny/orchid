@@ -5,6 +5,8 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { indexProject } from '../../ast/indexer';
 import { ASTStore } from '../../ast/store';
 
@@ -29,6 +31,7 @@ const astIndexSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const astIndexDefinition: ToolDefinition = {
+  ...genericToolResultMetadata,
   name: 'ast_index',
   description:
     'Manage the AST (Abstract Syntax Tree) symbol index. ' +
@@ -47,7 +50,7 @@ export const astIndexDefinition: ToolDefinition = {
 export const astIndexHandler: ToolHandler = async (
   input: unknown,
   ctx,
-): Promise<string> => {
+): Promise<GenericBuiltInToolOutcome> => {
   const { action, force } = input as {
     action: 'status' | 'index' | 'clear';
     force?: boolean;
@@ -66,7 +69,7 @@ export const astIndexHandler: ToolHandler = async (
           `  Last indexed: ${status.lastIndexed ?? 'never'}`,
           `  Last index duration: ${status.lastIndexDuration != null ? status.lastIndexDuration.toFixed(1) + 's' : 'N/A'}`,
         ];
-        return lines.join('\n');
+        return genericBuiltInToolOutcome('ast_index', lines.join('\n'));
       } finally {
         store.dispose();
       }
@@ -95,7 +98,7 @@ export const astIndexHandler: ToolHandler = async (
           lines.push(`    ... and ${result.errors.length - 5} more`);
         }
       }
-      return lines.join('\n');
+      return genericBuiltInToolOutcome('ast_index', lines.join('\n'));
     }
 
     case 'clear': {
@@ -105,10 +108,14 @@ export const astIndexHandler: ToolHandler = async (
       } finally {
         store.dispose();
       }
-      return 'AST index cleared.';
+      return genericBuiltInToolOutcome('ast_index', 'AST index cleared.');
     }
 
     default:
-      return `Unknown action: ${action}. Use "status", "index", or "clear".`;
+      return genericBuiltInToolOutcome(
+        'ast_index',
+        `Unknown action: ${action}. Use "status", "index", or "clear".`,
+        'error',
+      );
   }
 };

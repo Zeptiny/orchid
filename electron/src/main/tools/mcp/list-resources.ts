@@ -3,16 +3,14 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import type { MCPManager, MCPResourceInfo } from '../../mcp/manager';
 
 /**
  * Result returned by the list_mcp_resources tool handler.
  */
-export interface ListMcpResourcesResult {
-  display: string;
-  content: string;
-  isError?: boolean;
-}
+export type ListMcpResourcesResult = GenericBuiltInToolOutcome;
 
 /**
  * Build the list_mcp_resources tool.
@@ -23,6 +21,7 @@ export function buildListMcpResourcesTool(
   manager: MCPManager,
 ): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
+    ...genericToolResultMetadata,
     name: 'list_mcp_resources',
     description:
       'List resources exposed by connected MCP servers. ' +
@@ -42,18 +41,11 @@ export function buildListMcpResourcesTool(
       resources = manager.listResources();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return {
-        display: 'MCP list error',
-        content: `Error listing MCP resources: ${message}`,
-        isError: true,
-      };
+      return genericBuiltInToolOutcome('list_mcp_resources', `Error listing MCP resources: ${message}`, 'error');
     }
 
     if (resources.length === 0) {
-      return {
-        display: 'No MCP resources',
-        content: 'No MCP resources available. Connect MCP servers that expose resources.',
-      };
+      return genericBuiltInToolOutcome('list_mcp_resources', 'No MCP resources available. Connect MCP servers that expose resources.', 'empty');
     }
 
     const lines = resources.map((r) => {
@@ -63,10 +55,7 @@ export function buildListMcpResourcesTool(
       return parts.join(' | ');
     });
 
-    return {
-      display: `${resources.length} MCP resource(s)`,
-      content: lines.join('\n'),
-    };
+    return genericBuiltInToolOutcome('list_mcp_resources', lines.join('\n'), 'complete');
   };
 
   return { definition, handler };

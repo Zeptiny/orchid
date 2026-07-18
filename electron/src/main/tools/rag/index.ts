@@ -5,6 +5,8 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { indexProject, getStatus, clearIndex } from '../../rag/indexer';
 
 // ---------------------------------------------------------------------------
@@ -22,6 +24,7 @@ const ragIndexSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const ragIndexDefinition: ToolDefinition = {
+  ...genericToolResultMetadata,
   name: 'rag_index',
   description:
     'Manage the RAG (Retrieval Augmented Generation) index. ' +
@@ -38,7 +41,7 @@ export const ragIndexDefinition: ToolDefinition = {
 export const ragIndexHandler: ToolHandler = async (
   input: unknown,
   ctx,
-): Promise<string> => {
+): Promise<GenericBuiltInToolOutcome> => {
   const { action } = input as { action: 'status' | 'index' | 'clear' };
   const projectPath = ctx.cwd;
 
@@ -52,7 +55,7 @@ export const ragIndexHandler: ToolHandler = async (
         `  Last indexed: ${status.lastIndexed ?? 'never'}`,
         `  Last index duration: ${status.lastIndexDuration != null ? status.lastIndexDuration.toFixed(1) + 's' : 'N/A'}`,
       ];
-      return lines.join('\n');
+      return genericBuiltInToolOutcome('rag_index', lines.join('\n'));
     }
 
     case 'index': {
@@ -83,15 +86,19 @@ export const ragIndexHandler: ToolHandler = async (
           lines.push(`    ... and ${result.errors.length - 5} more`);
         }
       }
-      return lines.join('\n');
+      return genericBuiltInToolOutcome('rag_index', lines.join('\n'));
     }
 
     case 'clear': {
       clearIndex(projectPath);
-      return 'RAG index cleared.';
+      return genericBuiltInToolOutcome('rag_index', 'RAG index cleared.');
     }
 
     default:
-      return `Unknown action: ${action}. Use "status", "index", or "clear".`;
+      return genericBuiltInToolOutcome(
+        'rag_index',
+        `Unknown action: ${action}. Use "status", "index", or "clear".`,
+        'error',
+      );
   }
 };

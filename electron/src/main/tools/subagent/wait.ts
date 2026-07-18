@@ -9,6 +9,8 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome } from '../result';
 import {
   DEFAULT_WAIT_TIMEOUT_MS,
   SubagentWaitTimeoutError,
@@ -37,6 +39,7 @@ export function buildWaitTool(
   manager: SubagentManager,
 ): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
+    ...genericToolResultMetadata,
     name: 'wait_for_subagent',
     description:
       'Wait for one or more subagents to complete and get their results. ' +
@@ -57,11 +60,7 @@ export function buildWaitTool(
 
     // Validate non-empty
     if (!subagent_ids || subagent_ids.length === 0) {
-      return {
-        display: 'No subagent IDs provided',
-        content: 'Error: subagent_ids must be a non-empty list of IDs.',
-        isError: true,
-      };
+      return genericBuiltInToolOutcome('wait_for_subagent', 'Error: subagent_ids must be a non-empty list of IDs.', 'error');
     }
 
     // Explicit IDs are untrusted model input. Keep the same ownership boundary
@@ -87,21 +86,12 @@ export function buildWaitTool(
           err.statusSnapshot.length > 0
             ? `\n<status>\n${err.statusSnapshot.join('\n')}\n</status>`
             : '';
-        return {
-          display: `Wait timed out after ${Math.round(err.timeoutMs / 1000)}s`,
-          content: `${err.message}${statusBlock}`,
-          isError: true,
-        };
+        return genericBuiltInToolOutcome('wait_for_subagent', `${err.message}${statusBlock}`, 'error');
       }
       if (err instanceof DOMException && err.name === 'AbortError') {
-        return {
-          display: 'Wait aborted',
-          content:
-            'Wait aborted because the parent turn was cancelled. ' +
+        return genericBuiltInToolOutcome('wait_for_subagent', 'Wait aborted because the parent turn was cancelled. ' +
             'Subagents were not cancelled or interrupted by this wait; ' +
-            'call interrupt_subagents to stop them if needed.',
-          isError: true,
-        };
+            'call interrupt_subagents to stop them if needed.', 'cancelled');
       }
       throw err;
     }
@@ -115,10 +105,7 @@ export function buildWaitTool(
 
     // No records found at all
     if (records.size === 0) {
-      return {
-        display: 'No subagents found',
-        content: `No subagents found for IDs: ${subagent_ids.join(', ')}`,
-      };
+      return genericBuiltInToolOutcome('wait_for_subagent', `No subagents found for IDs: ${subagent_ids.join(', ')}`, 'empty');
     }
 
     // Build result parts for each found subagent
@@ -161,10 +148,7 @@ export function buildWaitTool(
 
     const content = `<subagents>\n${parts.join('\n')}\n</subagents>${missingBlock}`;
 
-    return {
-      display: `Waited for ${records.size} subagent(s)`,
-      content,
-    };
+    return genericBuiltInToolOutcome('wait_for_subagent', content, 'complete');
   };
 
   return { definition, handler };

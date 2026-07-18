@@ -429,24 +429,50 @@ export function emitToolResultFallbackDiagnostic(
 }
 
 /** Deliberate generic adapter for dynamic and MCP results. */
-export function wrapDynamicToolOutput(
+export function createDynamicToolOutcome(
   toolName: string,
   output: unknown,
   originKind: 'dynamic' | 'mcp' = 'dynamic',
-): CanonicalToolResult<GenericToolResultData> {
+  options: {
+    status?: 'complete' | 'error' | 'cancelled';
+    errorCode?: string;
+    errorMessage?: string;
+  } = {},
+): ToolHandlerOutcome<GenericToolResultData> {
   const origin = { kind: originKind, name: toolName } as const;
   if (!isJsonSafe(output)) {
-    return createCanonicalToolResult('generic', {
+    return {
       status: 'error',
       data: { value: null, origin },
       error: {
         code: 'invalid_json_output',
         message: 'Dynamic tool output is not JSON-safe and was not accepted.',
       },
-    });
+    };
   }
-  return createCanonicalToolResult('generic', {
-    status: 'complete',
-    data: { value: output, origin },
-  });
+  const status = options.status ?? 'complete';
+  const data = { value: output, origin };
+  if (status === 'error') {
+    return {
+      status,
+      data,
+      error: {
+        code: options.errorCode ?? 'dynamic_tool_error',
+        message: options.errorMessage ?? 'Dynamic tool reported an error.',
+      },
+    };
+  }
+  return { status, data };
+}
+
+/** Deliberate canonical adapter for callers that already own finalization. */
+export function wrapDynamicToolOutput(
+  toolName: string,
+  output: unknown,
+  originKind: 'dynamic' | 'mcp' = 'dynamic',
+): CanonicalToolResult<GenericToolResultData> {
+  return createCanonicalToolResult(
+    'generic',
+    createDynamicToolOutcome(toolName, output, originKind),
+  );
 }

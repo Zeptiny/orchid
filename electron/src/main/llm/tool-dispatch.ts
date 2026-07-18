@@ -311,7 +311,7 @@ function exactProjection(content: string): AgentProjection {
   return { content, completeness: 'complete' };
 }
 
-function genericTerminalExecution(
+export function genericTerminalExecution(
   toolCallId: string,
   toolName: string,
   status: 'error' | 'cancelled',
