@@ -9,6 +9,7 @@
 
 import type { Session } from './session';
 import type { Message, Usage } from './message';
+import type { SubagentLiveProjection, SubagentRecord } from './subagent';
 import type {
   CustomConnectionModel,
   ModelSelection,
@@ -152,6 +153,21 @@ export interface ChatSessionSnapshot {
   sessionId: string;
   messages: Message[];
   live: ChatSnapshot | null;
+}
+
+export interface SubagentSnapshotRequest { sessionId: string; }
+export interface SubagentSnapshot {
+  sessionId: string;
+  records: SubagentRecord[];
+  live: SubagentLiveProjection[];
+}
+export interface SubagentEvent {
+  sessionId: string;
+  subagentId: string;
+  runId: string;
+  sequence: number;
+  type: 'projection';
+  projection: SubagentLiveProjection;
 }
 
 interface ChatEventIdentity {
@@ -732,6 +748,11 @@ export interface OrchidAPI {
     onActivityChanged: (callback: (event: SessionActivityChangedEvent) => void) => () => void;
   };
 
+  subagents: {
+    snapshot: (request: SubagentSnapshotRequest) => Promise<SubagentSnapshot>;
+    onEvent: (callback: (event: SubagentEvent) => void) => () => void;
+  };
+
   tool: {
     execute: (message: ToolExecuteMessage) => Promise<ToolExecuteResult>;
   };
@@ -814,6 +835,9 @@ export const IPC_CHANNELS = {
   CHAT_TOOL_CALL_START: 'chat:tool_call_start',
   CHAT_TOOL_CALL_DELTA: 'chat:tool_call_delta',
   CHAT_TOOL_CALL_UPDATE: 'chat:tool_call_update',
+
+  SUBAGENTS_SNAPSHOT: 'subagents:snapshot',
+  SUBAGENTS_EVENT: 'subagents:event',
 
   // Config
   CONFIG_GET: 'config:get',
@@ -924,6 +948,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.CHAT_CANCEL,
   IPC_CHANNELS.CHAT_STOP,
   IPC_CHANNELS.CHAT_SNAPSHOT,
+  IPC_CHANNELS.SUBAGENTS_SNAPSHOT,
   IPC_CHANNELS.CONFIG_GET,
   IPC_CHANNELS.CONFIG_DIAGNOSTICS,
   IPC_CHANNELS.CONFIG_SAVE,
@@ -989,6 +1014,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.CHAT_TOOL_CALL_START,
   IPC_CHANNELS.CHAT_TOOL_CALL_DELTA,
   IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
+  IPC_CHANNELS.SUBAGENTS_EVENT,
   IPC_CHANNELS.SESSION_RENAMED,
   IPC_CHANNELS.SESSION_CREATED,
   IPC_CHANNELS.SESSION_UPDATED,

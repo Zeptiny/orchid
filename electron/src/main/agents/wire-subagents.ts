@@ -7,7 +7,9 @@ import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { getSubagentManager } from '../tools';
 import { createSubagentStreamRunner } from './subagent-runner';
-import { persistSubagentChains } from './persist-subagent-chains';
+import { createSubagentPersistenceScheduler, persistSubagentChains } from './persist-subagent-chains';
+import { flushSubagentEvents, queueSubagentEvent } from '../ipc/subagents';
+import { SubagentState } from './manager';
 
 let wired = false;
 
@@ -24,30 +26,49 @@ export function wireSubagentRuntime(): void {
 
   const manager = getSubagentManager();
   manager.setRunner(createSubagentStreamRunner());
-
-  // Throttle disk writes / IPC spam while tokens stream in
-  let persistTimer: ReturnType<typeof setTimeout> | null = null;
-  let pendingNotify = false;
-
-  const flush = () => {
-    persistTimer = null;
-    try {
-      persistSubagentChains(manager);
-    } catch (err) {
-      console.debug('Failed to persist subagent chains (non-fatal):', err);
-    }
-    if (pendingNotify) {
-      pendingNotify = false;
-      broadcastSubagentsChanged();
-    }
-  };
-
-  manager.setOnChange(() => {
-    pendingNotify = true;
-    // Immediate persist on terminal-ish cadence: short debounce for mid-run
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(flush, 250);
+  const scheduler = createSubagentPersistenceScheduler((sessionId) => {
+    try { persistSubagentChains(manager, sessionId); }
+    catch (err) { console.debug('Failed to persist subagent chains (non-fatal):', err); }
+    broadcastSubagentsChanged();
   });
+
+  manager.setOnLiveChange((change) => {
+    if (change.sessionId) scheduler.markDirty(change.sessionId);
+    queueSubagentEvent(change);
+    if (change.sessionId &&
+        (change.projection.state === SubagentState.COMPLETED ||
+         change.projection.state === SubagentState.FAILED ||
+         change.projection.state === SubagentState.INTERRUPTED)) {
+      flushSubagentEvents();
+      scheduler.flush(change.sessionId);
+    } else {
+      // Coalesced delivery handles ordinary live changes.
+    }
+  });
+
+  manager.setOnChange((records) => {
+    for (const sessionId of new Set(records
+      .filter((record) => record.state !== SubagentState.COMPLETED &&
+        record.state !== SubagentState.FAILED && record.state !== SubagentState.INTERRUPTED)
+      .map((record) => record.sessionId).filter(Boolean) as string[])) {
+      scheduler.markDirty(sessionId);
+    }
+  });
+
+  (manager as SubagentManagerWithShutdown).flushSubagentPersistence = () => scheduler.flushAll();
+}
+
+type SubagentManagerWithShutdown = ReturnType<typeof getSubagentManager> & {
+  flushSubagentPersistence?: () => void;
+};
+
+/** Explicit orderly-shutdown hook; terminal writes are synchronous by design. */
+export function flushSubagentPersistence(): void {
+  flushSubagentEvents();
+  const manager = getSubagentManager();
+  const flush = (manager as SubagentManagerWithShutdown).flushSubagentPersistence;
+  if (flush) flush();
+  else persistSubagentChains(manager);
 }
 
 function broadcastSubagentsChanged(): void {

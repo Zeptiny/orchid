@@ -65,6 +65,9 @@ import type {
   ASTIndexMessage,
   ASTIndexProgress,
   BgCommandSnapshotRequest,
+  SubagentSnapshotRequest,
+  SubagentSnapshot,
+  SubagentEvent,
   UpdaterState,
   UpdaterProgressEvent,
   UpdaterErrorEvent,
@@ -96,6 +99,8 @@ import {
   configSaveResultSchema,
   workspaceInfoSchema,
   chatSessionSnapshotSchema,
+  subagentSnapshotSchema,
+  subagentEventSchema,
 } from '../shared/types/ipc-schemas';
 
 // ── Security helpers ─────────────────────────────────────────────────────────
@@ -121,6 +126,7 @@ function assertAllowedEvent(channel: string): void {
 const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.CHAT_SEND]: chatSendResultSchema,
   [IPC_CHANNELS.CHAT_SNAPSHOT]: chatSessionSnapshotSchema,
+  [IPC_CHANNELS.SUBAGENTS_SNAPSHOT]: subagentSnapshotSchema,
   [IPC_CHANNELS.TOOL_EXECUTE]: toolExecuteResultSchema,
   [IPC_CHANNELS.BG_CMD_SNAPSHOT]: bgCommandSnapshotResultSchema,
   [IPC_CHANNELS.CONFIG_SAVE]: configSaveResultSchema,
@@ -349,6 +355,13 @@ const orchidAPI: OrchidAPI = {
 
     onActivityChanged: (callback: (event: SessionActivityChangedEvent) => void) =>
       onParsed(IPC_CHANNELS.SESSION_ACTIVITY_CHANGED, sessionActivityChangedEventSchema, callback),
+  },
+
+  subagents: {
+    snapshot: (request: SubagentSnapshotRequest) =>
+      invoke<SubagentSnapshot>(IPC_CHANNELS.SUBAGENTS_SNAPSHOT, request),
+    onEvent: (callback: (event: SubagentEvent) => void) =>
+      onParsed(IPC_CHANNELS.SUBAGENTS_EVENT, subagentEventSchema, callback),
   },
 
   tool: {

@@ -42,6 +42,8 @@ describe('IPC Channel Names', () => {
     expect(IPC_CHANNELS.CHAT_CHUNK).toBe('chat:chunk');
     expect(IPC_CHANNELS.CHAT_STATE).toBe('chat:state');
     expect(IPC_CHANNELS.CHAT_DONE).toBe('chat:done');
+    expect(IPC_CHANNELS.SUBAGENTS_SNAPSHOT).toBe('subagents:snapshot');
+    expect(IPC_CHANNELS.SUBAGENTS_EVENT).toBe('subagents:event');
     expect(IPC_CHANNELS.CHAT_ERROR).toBe('chat:error');
   });
 
@@ -87,6 +89,7 @@ describe('IPC Security', () => {
     // All invoke channels should be in the allowed list
     const invokeChannels = [
       IPC_CHANNELS.CHAT_SEND,
+      IPC_CHANNELS.SUBAGENTS_SNAPSHOT,
       IPC_CHANNELS.CHAT_CANCEL,
       IPC_CHANNELS.CONFIG_GET,
       IPC_CHANNELS.CONFIG_SAVE,
@@ -121,6 +124,7 @@ describe('IPC Security', () => {
       IPC_CHANNELS.CHAT_TOOL_CALL_START,
       IPC_CHANNELS.CHAT_TOOL_CALL_DELTA,
       IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
+      IPC_CHANNELS.SUBAGENTS_EVENT,
     ];
 
     for (const channel of eventChannels) {
@@ -464,7 +468,7 @@ describe('IPC Handler Module Structure', () => {
   });
 
   it('each IPC handler file has register and unregister exports', () => {
-    const handlerFiles = ['chat', 'config', 'session', 'tool', 'mcp', 'rag', 'ast'];
+    const handlerFiles = ['chat', 'config', 'session', 'tool', 'mcp', 'rag', 'ast', 'subagents'];
     const ipcDir = path.resolve(__dirname, '../../src/main/ipc');
 
     // Map file names to expected export name casing
@@ -476,6 +480,7 @@ describe('IPC Handler Module Structure', () => {
       mcp: 'MCP',
       rag: 'RAG',
       ast: 'AST',
+      subagents: 'Subagent',
     };
 
     for (const name of handlerFiles) {

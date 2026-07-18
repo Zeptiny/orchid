@@ -236,3 +236,38 @@ export const chatSessionSnapshotSchema = z
       .nullable(),
   })
   .nullable();
+
+const subagentLiveSegmentSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('text'), id: z.string(), content: z.string() }),
+  z.object({ kind: z.literal('thinking'), id: z.string(), content: z.string() }),
+  z.object({ kind: z.literal('tool'), id: z.string(), toolCallId: z.string() }),
+]);
+const subagentToolSchema = z.object({
+  toolCallId: z.string(), toolName: z.string(),
+  status: z.enum(['generating', 'running', 'completed', 'error']),
+  partialArgs: z.string(), args: z.string(), result: z.string().nullable(),
+  error: z.string().nullable(), startedAt: z.string(), finishedAt: z.string().nullable(),
+});
+export const subagentLiveProjectionSchema = z.object({
+  sessionId: z.string().nullable(), subagentId: z.string(), runId: z.string(),
+  sequence: z.number().int().nonnegative(),
+  state: z.enum(['pending', 'running', 'completed', 'failed', 'interrupted']),
+  segments: z.array(subagentLiveSegmentSchema), toolCalls: z.array(subagentToolSchema),
+  usage: usageSchema.nullable(), result: z.string().nullable(), error: z.string().nullable(),
+});
+export const subagentRecordSchema = z.object({
+  id: z.string(), agent_name: z.string(), agent_type: z.string(), agent_tier: z.string(),
+  task: z.string(), status: z.enum(['pending', 'running', 'completed', 'failed', 'interrupted']),
+  chain_id: z.string(), start_time: z.string(), end_time: z.string().nullable(),
+  result: z.string().nullable(), error: z.string().nullable(), parentChainIndex: z.number().int().nullable(),
+  chain: z.unknown(),
+});
+export const subagentSnapshotSchema = z.object({
+  sessionId: z.string().uuid(), records: z.array(subagentRecordSchema),
+  live: z.array(subagentLiveProjectionSchema),
+});
+export const subagentEventSchema = z.object({
+  sessionId: z.string().uuid(), subagentId: z.string(), runId: z.string(),
+  sequence: z.number().int().positive(), type: z.literal('projection'),
+  projection: subagentLiveProjectionSchema,
+});
