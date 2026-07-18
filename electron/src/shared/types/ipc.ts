@@ -168,6 +168,8 @@ export interface SubagentEvent {
   sequence: number;
   type: 'projection';
   projection: SubagentLiveProjection;
+  /** Canonical seed for empty hydrated views and terminal handoff. */
+  record?: SubagentRecord;
 }
 
 interface ChatEventIdentity {

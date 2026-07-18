@@ -45,6 +45,10 @@ export function deliverSubagentChange(
     sequence: change.sequence,
     type: 'projection',
     projection: change.projection,
+    record: (() => {
+      const record = getSubagentManager().getRecord(change.subagentId);
+      return record ? runtimeToDomain(record, { includeLiveTail: false }) : undefined;
+    })(),
   };
   for (const win of windows) {
     try {

@@ -137,6 +137,29 @@ describe('subagent IPC boundary', () => {
     expect(writes).toEqual([session, session]);
   });
 
+  it('retains dirty state and retries a failed write with bounded backoff', () => {
+    const writes: string[] = [];
+    let attempts = 0;
+    const scheduler = createSubagentPersistenceScheduler((id) => {
+      writes.push(id);
+      attempts += 1;
+      if (attempts < 3) throw new Error('temporary persistence failure');
+    });
+    scheduler.markDirty(session);
+    vi.advanceTimersByTime(2000);
+    expect(writes).toEqual([session]);
+    expect(scheduler.hasPending(session)).toBe(true);
+    vi.advanceTimersByTime(99);
+    expect(writes).toEqual([session]);
+    vi.advanceTimersByTime(1);
+    expect(writes).toEqual([session, session]);
+    vi.advanceTimersByTime(199);
+    expect(writes).toEqual([session, session]);
+    vi.advanceTimersByTime(1);
+    expect(writes).toEqual([session, session, session]);
+    expect(scheduler.hasPending(session)).toBe(false);
+  });
+
   it('flushes pending event and persistence work for orderly shutdown', () => {
     const delivered: unknown[] = [];
     const writes: string[] = [];

@@ -38,7 +38,9 @@ describe('SubagentManager runtime', () => {
       yield { type: 'finish', finishReason: 'stop' };
     });
     const changes: number[] = [];
-    manager.setOnLiveChange((change) => changes.push(change.sequence));
+    manager.setOnLiveChange((change) => {
+      changes.push(change.sequence);
+    });
 
     const record = manager.spawn('live', 'watch', testAgent, { sessionId: 's-live' });
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -67,14 +69,55 @@ describe('SubagentManager runtime', () => {
       yield { type: 'finish', finishReason: 'stop' };
     });
 
+    let lastLiveIds: string[] = [];
+    manager.setOnLiveChange((change) => {
+      if (change.projection.state === SubagentState.RUNNING) {
+        lastLiveIds = change.projection.segments
+          .filter((segment) => segment.kind !== 'tool')
+          .map((segment) => segment.id);
+      }
+    });
     const record = manager.spawn('ordered', 'inspect', testAgent);
     await record._runPromise;
 
     const types = record.chain?.messages.map((message) => message.type) ?? [];
     expect(types).toEqual(['text', 'text', 'thinking', 'tool_call', 'tool_result', 'text']);
+    const transcript = record.chain?.messages.slice(1) ?? [];
+    expect(transcript.map((message) => message.content)).toEqual(['before', 'reason', '', 'match', 'after']);
+    expect(transcript.filter((message) => message.type === 'text' || message.type === 'thinking')
+      .map((message) => message.id)).toEqual(lastLiveIds);
     expect(record.chain?.messages.at(-1)?.content).toBe('after');
     expect(record.live.toolCalls).toEqual([]);
     expect(record.live.segments).toEqual([]);
+  });
+
+  it('materializes text-thinking-text tails in emission order with segment IDs', async () => {
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'first' };
+      yield { type: 'thinking', text: 'middle' };
+      yield { type: 'content', text: 'last' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const record = manager.spawn('tail-order', 'inspect', testAgent);
+    await record._runPromise;
+    const messages = record.chain?.messages.slice(1) ?? [];
+    expect(messages.map((message) => message.content)).toEqual(['first', 'middle', 'last']);
+    expect(messages.map((message) => message.type)).toEqual(['text', 'thinking', 'text']);
+    expect(new Set(messages.map((message) => message.id)).size).toBe(3);
+  });
+
+  it('commits a thinking-text prefix before a tool boundary', async () => {
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'thinking', text: 'reason first' };
+      yield { type: 'content', text: 'answer next' };
+      yield { type: 'tool_call', toolCallId: 'tool-prefix', toolName: 'grep', args: '{}' };
+      yield { type: 'tool_result', toolCallId: 'tool-prefix', content: 'done', isError: false };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const record = manager.spawn('prefix-order', 'inspect', testAgent);
+    await record._runPromise;
+    expect((record.chain?.messages ?? []).slice(1).map((message) => message.type))
+      .toEqual(['thinking', 'text', 'tool_call', 'tool_result']);
   });
 
   it('checkpoint conversion materializes a live tail without mutating canonical messages', async () => {
@@ -279,6 +322,34 @@ describe('SubagentManager runtime', () => {
     expect(record.state).toBe(SubagentState.INTERRUPTED);
 
     await record._runPromise;
+  });
+
+  it('commits the partial tail before the terminal interruption projection', async () => {
+    manager.setRunner(async function* ({ abortSignal }): AsyncGenerator<StreamEvent> {
+      yield { type: 'thinking', text: 'reason' };
+      yield { type: 'content', text: 'partial' };
+      await new Promise<void>((resolve) => {
+        const timer = setInterval(() => {
+          if (abortSignal.aborted) { clearInterval(timer); resolve(); }
+        }, 5);
+      });
+    });
+    const changes: Array<{ state: string; messages: string[] }> = [];
+    manager.setOnLiveChange(({ projection }) => {
+      const current = manager.getRecord(projection.subagentId);
+      changes.push({
+        state: projection.state,
+        messages: (current?.chain?.messages ?? []).map((message) => message.content),
+      });
+    });
+    const record = manager.spawn('interrupt-tail', 'partial', testAgent, { sessionId: 's-interrupt' });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    expect(manager.cancelOne(record.id)).toBe(true);
+    await record._runPromise;
+
+    expect(changes.at(-1)).toEqual({ state: SubagentState.INTERRUPTED, messages: ['partial', 'reason', 'partial'] });
+    expect(record.chain?.messages.map((message) => message.content)).toEqual(['partial', 'reason', 'partial']);
+    expect(changes.filter((change) => change.state === SubagentState.INTERRUPTED)).toHaveLength(1);
   });
 
   it('interrupt flushes in-flight partial assistant text into chain/result', async () => {

@@ -98,6 +98,13 @@ describe('chat rendering contract (U5)', () => {
       // New stream start still respects shouldAutoScroll
       expect(src).toMatch(/shouldAutoScroll\(isUserScrolledUp\)/);
     });
+
+    it('binds the scroll listener to a late-mounted container', () => {
+      const scrollHook = read('hooks/useSmartAutoScroll.ts');
+      expect(scrollHook).toMatch(/const \[container, setContainer\]/);
+      expect(scrollHook).toMatch(/const containerRef = useCallback/);
+      expect(scrollHook).toMatch(/\[container, enabled\]/);
+    });
   });
 
   describe('stream defect fixes', () => {

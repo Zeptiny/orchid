@@ -22,6 +22,7 @@ export function createSubagentPersistenceScheduler(
   const scheduled = new Map<string, ReturnType<typeof setTimeout>>();
   const dirty = new Set<string>();
   const writing = new Set<string>();
+  const failures = new Map<string, number>();
 
   const flush = (sessionId: string): void => {
     const timer = scheduled.get(sessionId);
@@ -35,9 +36,19 @@ export function createSubagentPersistenceScheduler(
     dirty.delete(sessionId);
     try {
       write(sessionId);
+      failures.delete(sessionId);
+    } catch (error) {
+      dirty.add(sessionId);
+      const attempt = (failures.get(sessionId) ?? 0) + 1;
+      failures.set(sessionId, attempt);
+      console.debug('Subagent persistence retry scheduled:', error);
     } finally {
       writing.delete(sessionId);
-      if (dirty.has(sessionId)) schedule(sessionId, 0);
+      if (dirty.has(sessionId)) {
+        const attempt = failures.get(sessionId) ?? 0;
+        const delay = attempt > 0 ? Math.min(2000, 100 * 2 ** (attempt - 1)) : 0;
+        schedule(sessionId, delay);
+      }
     }
   };
 
@@ -97,6 +108,7 @@ export function persistSubagentChains(manager: SubagentManager, onlySessionId?: 
         `Failed to persist subagent chains for session ${sessionId} (non-fatal):`,
         err,
       );
+      throw err;
     }
   }
 
@@ -109,6 +121,7 @@ export function persistSubagentChains(manager: SubagentManager, onlySessionId?: 
       sessionManager.syncSubagentChains([...merged.values()]);
     } catch (err) {
       console.debug('Failed to persist unscoped subagent chains (non-fatal):', err);
+      throw err;
     }
   }
 }

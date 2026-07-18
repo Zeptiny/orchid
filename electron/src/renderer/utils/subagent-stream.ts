@@ -17,7 +17,6 @@ export interface SubagentStreamState {
   readonly buffered: readonly SubagentEvent[];
   readonly error: string | null;
   readonly generation: number;
-  readonly liveTail: (id: string) => readonly SubagentLiveProjection['segments'][number][];
 }
 
 const isRunning = (status: SubagentStatus): boolean =>
@@ -28,15 +27,8 @@ function compareNewest(a: SubagentRecord, b: SubagentRecord): number {
   return time || b.id.localeCompare(a.id);
 }
 
-function withTail(state: Omit<SubagentStreamState, 'liveTail'>): SubagentStreamState {
-  return {
-    ...state,
-    liveTail: (id: string) => state.live.get(id)?.segments ?? [],
-  };
-}
-
 export function createSubagentStreamState(): SubagentStreamState {
-  return withTail({
+  return {
     sessionId: null,
     hydration: 'empty',
     records: [],
@@ -46,7 +38,7 @@ export function createSubagentStreamState(): SubagentStreamState {
     buffered: [],
     error: null,
     generation: 0,
-  });
+  };
 }
 
 /** Rebind before IPC hydration starts; this synchronously removes old-session data. */
@@ -55,7 +47,7 @@ export function bindSubagentSession(
   sessionId: string | null,
 ): SubagentStreamState {
   if (state.sessionId === sessionId && state.hydration === 'loading') return state;
-  return withTail({
+  return {
     sessionId,
     hydration: sessionId ? 'loading' : 'empty',
     records: [],
@@ -65,7 +57,7 @@ export function bindSubagentSession(
     buffered: [],
     error: null,
     generation: state.generation + 1,
-  });
+  };
 }
 
 /**
@@ -78,20 +70,13 @@ export function beginSubagentSnapshotRefresh(
   sessionId: string,
 ): SubagentStreamState {
   if (state.sessionId !== sessionId) return bindSubagentSession(state, sessionId);
-  return withTail({
+  return {
     ...state,
     hydration: 'loading',
     buffered: [...state.buffered],
     error: null,
     generation: state.generation + 1,
-  });
-}
-
-export function shouldBufferSubagentEvent(
-  state: Pick<SubagentStreamState, 'sessionId' | 'hydration'>,
-  event: Pick<SubagentEvent, 'sessionId'>,
-): boolean {
-  return state.hydration === 'loading' && !!state.sessionId && state.sessionId === event.sessionId;
+  };
 }
 
 /** Guard a response from a previous hydration/retry attempt. */
@@ -155,18 +140,25 @@ function applyEvent(state: SubagentStreamState, event: SubagentEvent): SubagentS
   }
   const knownRun = state.runs.get(event.subagentId);
   const lastSequence = state.highWater.get(event.subagentId);
-  if (!knownRun || knownRun !== event.runId || lastSequence === undefined || event.sequence <= lastSequence) {
-    return state;
-  }
+  if ((!knownRun || lastSequence === undefined) && !event.record) return state;
+  if (knownRun && (knownRun !== event.runId || event.sequence <= (lastSequence ?? -1))) return state;
+  if (!knownRun && event.record?.id !== event.subagentId) return state;
 
+  const seededRuns = new Map(state.runs);
+  seededRuns.set(event.subagentId, event.runId);
+  const seededRecords = knownRun || !event.record
+    ? state.records
+    : [...state.records, event.record];
   const highWater = new Map(state.highWater).set(event.subagentId, event.sequence);
   const live = new Map(state.live);
-  const records = state.records.map((record) =>
-    record.id === event.subagentId ? recordWithProjection(record, event.projection) : record,
+  const records = seededRecords.map((record) =>
+    record.id === event.subagentId
+      ? recordWithProjection(event.record ?? record, event.projection)
+      : record,
   );
   if (isRunning(event.projection.state)) live.set(event.subagentId, event.projection);
   else live.delete(event.subagentId);
-  return withTail({ ...state, records, live, highWater });
+  return { ...state, records, live, highWater, runs: seededRuns };
 }
 
 /** Accept one event, or retain it for replay after snapshot seeding. */
@@ -178,7 +170,7 @@ export function acceptSubagentEvent(
   if (state.hydration === 'loading') {
     return state.buffered.some((item) => item.subagentId === event.subagentId && item.runId === event.runId && item.sequence === event.sequence)
       ? state
-      : withTail({ ...state, buffered: [...state.buffered, event] });
+      : { ...state, buffered: [...state.buffered, event] };
   }
   return applyEvent(state, event);
 }
@@ -193,7 +185,7 @@ function seedSnapshotNow(state: SubagentStreamState, snapshot: SubagentSnapshot)
     highWater.set(projection.subagentId, projection.sequence);
     if (isRunning(projection.state)) live.set(projection.subagentId, projection);
   }
-  return withTail({
+  return {
     ...state,
     hydration: snapshot.records.length ? 'ready' : 'empty',
     records: [...snapshot.records].sort(compareNewest),
@@ -202,7 +194,7 @@ function seedSnapshotNow(state: SubagentStreamState, snapshot: SubagentSnapshot)
     runs,
     buffered: [],
     error: null,
-  });
+  };
 }
 
 /** Seed high-water marks, then replay only newer buffered events for this session. */
@@ -218,7 +210,7 @@ export function seedSubagentSnapshot(
 }
 
 export function failSubagentSnapshot(state: SubagentStreamState, error: string): SubagentStreamState {
-  return withTail({ ...state, hydration: 'error', error, buffered: [] });
+  return { ...state, hydration: 'error', error, buffered: [] };
 }
 
 /** Apply session-loaded durable records without disturbing a live projection. */
@@ -229,9 +221,9 @@ export function replaceSubagentRecords(
   // ChatView may hand us the session-load result while the richer snapshot is
   // still in flight. Keep loading affinity intact so the response can seed
   // high-water marks and replay buffered events over these durable records.
-  return withTail({
+  return {
     ...state,
     records: [...records].sort(compareNewest),
     hydration: state.hydration === 'loading' ? 'loading' : records.length ? 'ready' : 'empty',
-  });
+  };
 }

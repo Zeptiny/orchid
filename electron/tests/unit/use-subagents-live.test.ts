@@ -68,6 +68,40 @@ describe('subagent live snapshot/event reducer', () => {
     expect(state.records[0].status).toBe('completed');
   });
 
+  it('seeds an unknown run from event metadata after an empty hydration', () => {
+    let state = seedSubagentSnapshot(
+      bindSubagentSession(createSubagentStreamState(), sessionA),
+      snapshot(sessionA, []),
+    );
+    const seeded = record('new-run', 'running');
+    const liveEvent = {
+      ...event(sessionA, 'new-run', 'run-new', 1),
+      record: seeded,
+    };
+    state = acceptSubagentEvent(state, liveEvent);
+    expect(state.records.map((item) => item.id)).toEqual(['new-run']);
+    expect(state.records[0].status).toBe('running');
+    expect(state.live.get('new-run')?.segments[0].id).toBe('new-run-text');
+    expect(state.highWater.get('new-run')).toBe(1);
+  });
+
+  it('uses the terminal event record to preserve durable transcript continuity', () => {
+    let state = seedSubagentSnapshot(
+      bindSubagentSession(createSubagentStreamState(), sessionA),
+      snapshot(sessionA, []),
+    );
+    const terminalRecord = {
+      ...record('terminal', 'completed'),
+      chain: { messages: [{ id: 'durable', content: 'finished' }] } as SubagentRecord['chain'],
+    };
+    state = acceptSubagentEvent(state, {
+      ...event(sessionA, 'terminal', 'run-terminal', 2, 'completed'),
+      record: terminalRecord,
+    });
+    expect(state.records[0].chain.messages[0]).toMatchObject({ id: 'durable', content: 'finished' });
+    expect(state.live.has('terminal')).toBe(false);
+  });
+
   it('rejects duplicate, out-of-order, wrong-run, and wrong-subagent events', () => {
     let state = seedSubagentSnapshot(bindSubagentSession(createSubagentStreamState(), sessionA), snapshot(sessionA, [record('one', 'running')], [projection('one', 'run-1', 3)]));
     const original = state;
@@ -96,11 +130,11 @@ describe('subagent live snapshot/event reducer', () => {
     expect(state.records).toHaveLength(0);
   });
 
-  it('keeps selection through terminal handoff and does not retain a live tail', () => {
+  it('keeps selection through terminal handoff without retaining live state', () => {
     let state = seedSubagentSnapshot(bindSubagentSession(createSubagentStreamState(), sessionA), snapshot(sessionA, [record('one', 'running')], [projection('one', 'run-1', 1)]));
     state = acceptSubagentEvent(state, event(sessionA, 'one', 'run-1', 2, 'completed'));
     expect(resolveSubagentSelection(state.records, { sessionId: sessionA, existingId: 'one', existingSessionId: sessionA })).toBe('one');
-    expect(state.liveTail('one')).toEqual([]);
+    expect(state.live.has('one')).toBe(false);
   });
 
   it('clears prior-session rows and represents explicit loading/error states', () => {

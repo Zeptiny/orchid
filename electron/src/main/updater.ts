@@ -35,6 +35,7 @@ let isSigned = false;
 
 /** Cached reference to the main window for sending IPC events. */
 let mainWindowRef: BrowserWindow | null = null;
+let flushBeforeInstall: (() => void) | null = null;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -149,9 +150,10 @@ function attachEventHandlers(): void {
  * @param options.window — The main BrowserWindow for sending IPC events.
  * @param options.signed — Whether the build is code-signed.
  */
-export function initUpdater(options: { window: BrowserWindow; signed?: boolean }): void {
+export function initUpdater(options: { window: BrowserWindow; signed?: boolean; flushBeforeInstall?: () => void }): void {
   mainWindowRef = options.window;
   isSigned = options.signed ?? false;
+  flushBeforeInstall = options.flushBeforeInstall ?? null;
 
   configureUpdater();
   attachEventHandlers();
@@ -209,6 +211,13 @@ export async function downloadUpdate(): Promise<void> {
  * This will restart the app with the new version.
  */
 export function quitAndInstall(): void {
+  // Persist live subagent tails while the normal before-quit guard still
+  // exists; the updater removes that guard immediately afterward.
+  try {
+    flushBeforeInstall?.();
+  } catch (err) {
+    console.warn('Failed to flush subagents before update install:', err);
+  }
   // before-quit is stripped below — kill bg process groups so they are not orphaned
   try {
     getBackgroundStore().terminateAll();
@@ -234,6 +243,7 @@ export function getUpdaterState(): UpdaterState {
 export function destroyUpdater(): void {
   autoUpdater.removeAllListeners();
   mainWindowRef = null;
+  flushBeforeInstall = null;
   state.status = 'idle';
   state.version = null;
   state.releaseNotes = null;
@@ -250,4 +260,5 @@ export function _resetState(): void {
   state.error = null;
   isSigned = false;
   mainWindowRef = null;
+  flushBeforeInstall = null;
 }

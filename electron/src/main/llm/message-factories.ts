@@ -39,9 +39,10 @@ export function makeUserMessage(content: string): Message {
 export function makeAssistantMessage(
   content: string,
   usage: Usage | null = null,
+  id: string = newId(),
 ): Message {
   return {
-    id: newId(),
+    id,
     role: MessageRole.ASSISTANT,
     content,
     type: MessageType.TEXT,
@@ -57,9 +58,9 @@ export function makeAssistantMessage(
 }
 
 /** Create an ASSISTANT thinking/reasoning message. */
-export function makeThinkingMessage(content: string): Message {
+export function makeThinkingMessage(content: string, id: string = newId()): Message {
   return {
-    id: newId(),
+    id,
     role: MessageRole.ASSISTANT,
     content,
     type: MessageType.THINKING,
@@ -79,9 +80,10 @@ export function makeToolCallMessage(
   toolCallId: string,
   toolName: string,
   args: string,
+  id: string = newId(),
 ): Message {
   return {
-    id: newId(),
+    id,
     role: MessageRole.ASSISTANT,
     content: '',
     type: MessageType.TOOL_CALL,
@@ -113,9 +115,10 @@ export function makeToolResultMessage(
   toolName: string | null,
   content: string,
   isError: boolean,
+  id: string = newId(),
 ): Message {
   return {
-    id: newId(),
+    id,
     role: MessageRole.TOOL,
     content,
     type: MessageType.TOOL_RESULT,

@@ -44,13 +44,15 @@ function messageToToolBlock(message: Message, result: Message | null): ToolBlock
   return {
     id: message.tool_call_id ?? call?.id ?? message.id,
     toolName: call?.function?.name ?? message.name ?? 'tool',
-    status: failed ? 'failed' : result ? 'completed' : 'running',
+    // Match ChatStream's canonical persisted-message conversion: a call with
+    // no paired result is a settled historical tool, not a live operation.
+    status: failed ? 'failed' : 'completed',
     partialArgs: '',
     args: call?.function?.arguments ?? message.content,
     result: failed ? null : result?.content ?? null,
     error: failed ? result?.content ?? 'Tool failed' : null,
     startedAt: message.timestamp,
-    finishedAt: result?.timestamp ?? null,
+    finishedAt: result?.timestamp ?? message.timestamp,
   };
 }
 

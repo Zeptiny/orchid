@@ -12,6 +12,7 @@ import { flushSubagentEvents, isEligibleSubagentRecipient, queueSubagentEvent } 
 import { SubagentState } from './manager';
 
 let wired = false;
+let persistenceScheduler: ReturnType<typeof createSubagentPersistenceScheduler> | null = null;
 
 // Re-export for callers that previously imported from this module.
 export { persistSubagentChains } from './persist-subagent-chains';
@@ -26,21 +27,20 @@ export function wireSubagentRuntime(): void {
 
   const manager = getSubagentManager();
   manager.setRunner(createSubagentStreamRunner());
-  const scheduler = createSubagentPersistenceScheduler((sessionId) => {
-    try { persistSubagentChains(manager, sessionId); }
-    catch (err) { console.debug('Failed to persist subagent chains (non-fatal):', err); }
+  persistenceScheduler = createSubagentPersistenceScheduler((sessionId) => {
+    persistSubagentChains(manager, sessionId);
     broadcastSubagentsChanged(sessionId);
   });
 
   manager.setOnLiveChange((change) => {
-    if (change.sessionId) scheduler.markDirty(change.sessionId);
+    if (change.sessionId) persistenceScheduler?.markDirty(change.sessionId);
     queueSubagentEvent(change);
     if (change.sessionId &&
         (change.projection.state === SubagentState.COMPLETED ||
          change.projection.state === SubagentState.FAILED ||
          change.projection.state === SubagentState.INTERRUPTED)) {
       flushSubagentEvents();
-      scheduler.flush(change.sessionId);
+      persistenceScheduler?.flush(change.sessionId);
     } else {
       // Coalesced delivery handles ordinary live changes.
     }
@@ -51,23 +51,16 @@ export function wireSubagentRuntime(): void {
       .filter((record) => record.state !== SubagentState.COMPLETED &&
         record.state !== SubagentState.FAILED && record.state !== SubagentState.INTERRUPTED)
       .map((record) => record.sessionId).filter(Boolean) as string[])) {
-      scheduler.markDirty(sessionId);
+      persistenceScheduler?.markDirty(sessionId);
     }
   });
-
-  (manager as SubagentManagerWithShutdown).flushSubagentPersistence = () => scheduler.flushAll();
 }
-
-type SubagentManagerWithShutdown = ReturnType<typeof getSubagentManager> & {
-  flushSubagentPersistence?: () => void;
-};
 
 /** Explicit orderly-shutdown hook; terminal writes are synchronous by design. */
 export function flushSubagentPersistence(): void {
   flushSubagentEvents();
   const manager = getSubagentManager();
-  const flush = (manager as SubagentManagerWithShutdown).flushSubagentPersistence;
-  if (flush) flush();
+  if (persistenceScheduler) persistenceScheduler.flushAll();
   else persistSubagentChains(manager);
 }
 

@@ -270,4 +270,5 @@ export const subagentEventSchema = z.object({
   sessionId: z.string().uuid(), subagentId: z.string(), runId: z.string(),
   sequence: z.number().int().positive(), type: z.literal('projection'),
   projection: subagentLiveProjectionSchema,
+  record: subagentRecordSchema.optional(),
 });

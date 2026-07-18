@@ -30,7 +30,6 @@ import {
   SubagentStatus,
   type SubagentLiveChange,
   type SubagentLiveProjection,
-  type SubagentLiveSegment,
   type SubagentToolSnapshot,
 } from '../../shared/types/subagent';
 import {
@@ -153,6 +152,7 @@ export interface SubagentRecord {
   /** Runtime-only live projection; durable history remains in `chain`. */
   live: SubagentLiveProjection;
   _liveCommittedSegmentCount: number;
+  _liveTerminalEmitted: boolean;
 }
 
 // ── SubagentResult ──────────────────────────────────────────────────────────
@@ -247,6 +247,7 @@ export class SubagentManager {
       _runPromise: null,
       live: makeLiveProjection(id, options.sessionId ?? null, 'pending'),
       _liveCommittedSegmentCount: 0,
+      _liveTerminalEmitted: false,
     };
 
     this._subagents.set(id, record);
@@ -451,8 +452,13 @@ export class SubagentManager {
     record.error = record.error ?? 'Interrupted by user';
     record.endTime = record.endTime ?? Date.now();
     record.abortController?.abort();
-    this._finalizeChain(record, ChainStatus.INTERRUPTED);
-    this._finishLive(record, SubagentState.INTERRUPTED);
+    // The runner owns the async interruption boundary. It must materialize its
+    // partial live tail before the terminal projection is emitted; otherwise
+    // the terminal event can make the renderer flush an incomplete record.
+    if (!record._runPromise) {
+      this._finalizeChain(record, ChainStatus.INTERRUPTED);
+      this._finishLive(record, SubagentState.INTERRUPTED);
+    }
     this._resolveWaiters(record);
     this._notify();
     return true;
@@ -593,7 +599,6 @@ export class SubagentManager {
     let responseText = '';
     let resultText = '';
     let accumulatedUsage: Usage | null = null;
-    let thinkingText = '';
     // Track open tool calls for result pairing in the chain
     const toolNames = new Map<string, string>();
 
@@ -632,21 +637,11 @@ export class SubagentManager {
             break;
           }
           case 'thinking': {
-            thinkingText += event.text;
             this._appendLiveText(record, 'thinking', event.text);
             break;
           }
           case 'tool_call':
           case 'tool_call_start': {
-            // Flush any assistant text that arrived before this tool
-            if (responseText.trim()) {
-              messages.push(makeAssistantMessage(responseText, null));
-              responseText = '';
-            }
-            if (thinkingText.trim()) {
-              messages.push(makeThinkingMessage(thinkingText));
-              thinkingText = '';
-            }
             const toolCallId =
               'toolCallId' in event ? event.toolCallId : randomUUID();
             const toolName =
@@ -657,12 +652,19 @@ export class SubagentManager {
             this._ensureLiveTool(record, toolCallId, toolName);
             // Only record tool_call once we have args (tool_call event)
             if (event.type === 'tool_call') {
+              const toolSegment = record.live.segments.find(
+                (segment) => segment.kind === 'tool' && segment.toolCallId === toolCallId,
+              );
+              const toolIndex = toolSegment
+                ? record.live.segments.indexOf(toolSegment)
+                : record.live.segments.length;
+              this._commitLiveSegments(record, messages, toolIndex);
               this._updateLiveTool(record, toolCallId, {
                 status: 'running',
                 args,
                 partialArgs: args,
               });
-              messages.push(makeToolCallMessage(toolCallId, toolName, args));
+              messages.push(makeToolCallMessage(toolCallId, toolName, args, toolSegment?.id));
               this._markLiveCommitted(record);
               this._setChainMessages(record, messages);
               this._notify();
@@ -687,8 +689,11 @@ export class SubagentManager {
                 m.type === MessageType.TOOL_CALL &&
                 m.tool_call_id === event.toolCallId,
             )) {
+              const toolSegment = record.live.segments.find(
+                (segment) => segment.kind === 'tool' && segment.toolCallId === event.toolCallId,
+              );
               messages.push(
-                makeToolCallMessage(event.toolCallId, toolName, '{}'),
+                makeToolCallMessage(event.toolCallId, toolName, '{}', toolSegment?.id),
               );
             }
             messages.push(
@@ -697,6 +702,7 @@ export class SubagentManager {
                 toolName,
                 event.content,
                 event.isError,
+                `${event.toolCallId}:result`,
               ),
             );
             this._updateLiveTool(record, event.toolCallId, {
@@ -727,26 +733,13 @@ export class SubagentManager {
           responseText,
           resultText,
           accumulatedUsage,
-          thinkingText,
         );
         return;
       }
 
-      // Final assistant text with usage on the last bubble
-      if (responseText.trim() || thinkingText.trim() || accumulatedUsage) {
-        if (thinkingText.trim()) {
-          messages.push(makeThinkingMessage(thinkingText));
-          thinkingText = '';
-        }
-        messages.push(
-          makeAssistantMessage(
-            responseText,
-            accumulatedUsage && hasUsage(accumulatedUsage)
-              ? accumulatedUsage
-              : null,
-          ),
-        );
-      }
+      // Commit the remaining live prefix in exactly the order emitted. Segment
+      // IDs become message IDs so a durable handoff cannot duplicate bubbles.
+      this._commitLiveSegments(record, messages, record.live.segments.length, accumulatedUsage);
 
       record.result = resultText || record.result;
       record.usage = accumulatedUsage;
@@ -761,20 +754,21 @@ export class SubagentManager {
           responseText,
           resultText,
           accumulatedUsage,
-          thinkingText,
         );
         return;
       }
-      // Keep partial content
-      if (responseText.trim() || thinkingText.trim()) {
-        if (thinkingText.trim()) messages.push(makeThinkingMessage(thinkingText));
-        if (responseText.trim()) messages.push(makeAssistantMessage(responseText, accumulatedUsage));
-        this._setChainMessages(record, messages);
-      }
+      // Keep partial content in the same chronological, ID-stable form as a
+      // normal completion. The live projection may already contain both text
+      // and thinking, so do not append the accumulator a second time.
+      this._commitLiveSegments(record, messages, record.live.segments.length, accumulatedUsage);
+      this._setChainMessages(record, messages);
       const message = err instanceof Error ? err.message : String(err);
       record.usage = accumulatedUsage;
       this.markFailed(record.id, message);
     } finally {
+      if (record.state === SubagentState.INTERRUPTED) {
+        this._finishLive(record, SubagentState.INTERRUPTED);
+      }
       record.abortController = null;
     }
   }
@@ -785,32 +779,46 @@ export class SubagentManager {
     responseText: string,
     resultText: string,
     accumulatedUsage: Usage | null,
-    thinkingText: string,
   ): void {
-    const thinking = record.live.segments
-      .slice(record._liveCommittedSegmentCount)
-      .filter((segment): segment is Extract<SubagentLiveSegment, { kind: 'thinking' }> => segment.kind === 'thinking')
-      .map((segment) => segment.content)
-      .join('');
-    const partialThinking = thinking || thinkingText;
-    if (partialThinking) messages.push(makeThinkingMessage(partialThinking));
-    if (responseText.trim()) {
-      messages.push(makeAssistantMessage(responseText, accumulatedUsage));
-    }
+    this._commitLiveSegments(record, messages, record.live.segments.length, accumulatedUsage);
     if (resultText) {
       record.result = resultText;
     }
     if (accumulatedUsage) {
       record.usage = accumulatedUsage;
     }
-    if (responseText.trim() || partialThinking || resultText) {
-      this._setChainMessages(record, messages);
-      this._markLiveCommitted(record);
-      if (record.state === SubagentState.INTERRUPTED) {
-        this._finalizeChain(record, ChainStatus.INTERRUPTED);
+    this._setChainMessages(record, messages);
+    this._markLiveCommitted(record);
+    if (record.state === SubagentState.INTERRUPTED) this._finalizeChain(record, ChainStatus.INTERRUPTED);
+    this._notify();
+  }
+
+  /** Commit only the live segment prefix before `endIndex`, preserving order. */
+  private _commitLiveSegments(
+    record: SubagentRecord,
+    messages: Message[],
+    endIndex: number,
+    usage: Usage | null = null,
+  ): void {
+    const segments = record.live.segments;
+    const lastTextIndex = segments
+      .slice(record._liveCommittedSegmentCount, endIndex)
+      .map((segment, index) => ({ segment, index: record._liveCommittedSegmentCount + index }))
+      .filter(({ segment }) => segment.kind === 'text')
+      .at(-1)?.index;
+    for (let index = record._liveCommittedSegmentCount; index < endIndex; index += 1) {
+      const segment = segments[index];
+      if (segment.kind === 'text' && segment.content.trim()) {
+        messages.push(makeAssistantMessage(
+          segment.content,
+          usage && index === lastTextIndex ? usage : null,
+          segment.id,
+        ));
+      } else if (segment.kind === 'thinking' && segment.content.trim()) {
+        messages.push(makeThinkingMessage(segment.content, segment.id));
       }
-      this._notify();
     }
+    record._liveCommittedSegmentCount = Math.max(record._liveCommittedSegmentCount, endIndex);
   }
 
   private _setChainMessages(record: SubagentRecord, messages: Message[]): void {
@@ -913,6 +921,8 @@ export class SubagentManager {
   }
 
   private _finishLive(record: SubagentRecord, state: SubagentState): void {
+    if (record._liveTerminalEmitted) return;
+    record._liveTerminalEmitted = true;
     this._updateLive(record, {
       state, result: record.result, error: record.error, usage: record.usage,
       segments: [], toolCalls: [],
@@ -983,9 +993,9 @@ function materializeLiveTail(record: SubagentRecord, chain: Chain): Chain {
   const lastTextIndex = tail.findLastIndex((segment) => segment.kind === 'text');
   for (const [index, segment] of tail.entries()) {
     if (segment.kind === 'thinking' && segment.content) {
-      messages.push(makeThinkingMessage(segment.content));
+      messages.push(makeThinkingMessage(segment.content, segment.id));
     } else if (segment.kind === 'text' && segment.content) {
-      messages.push(makeAssistantMessage(segment.content, index === lastTextIndex ? record.usage : null));
+      messages.push(makeAssistantMessage(segment.content, index === lastTextIndex ? record.usage : null, segment.id));
     }
   }
   return { ...chain, messages };

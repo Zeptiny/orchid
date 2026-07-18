@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefCallback, type RefObject } from 'react';
 
 export const AUTO_SCROLL_THRESHOLD_PX = 100;
 
@@ -24,7 +24,7 @@ export interface SmartAutoScrollOptions {
 }
 
 export interface SmartAutoScrollResult {
-  containerRef: RefObject<HTMLDivElement | null>;
+  containerRef: RefCallback<HTMLDivElement>;
   messagesEndRef: RefObject<HTMLDivElement | null>;
   isUserScrolledUp: boolean;
   jumpToLatest: () => void;
@@ -35,13 +35,15 @@ export function useSmartAutoScroll({
   contentKey,
   enabled = true,
 }: SmartAutoScrollOptions = {}): SmartAutoScrollResult {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
+  const containerRef = useCallback<RefCallback<HTMLDivElement>>((node) => {
+    setContainer((previous) => previous === node ? previous : node);
+  }, []);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
 
   useEffect(() => {
     if (!enabled) return;
-    const container = containerRef.current;
     if (!container) return;
     const handleScroll = () => {
       setIsUserScrolledUp(
@@ -54,7 +56,7 @@ export function useSmartAutoScroll({
     };
     container.addEventListener('scroll', handleScroll, { passive: true });
     return () => container.removeEventListener('scroll', handleScroll);
-  }, [enabled]);
+  }, [container, enabled]);
 
   const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
     messagesEndRef.current?.scrollIntoView({ behavior });

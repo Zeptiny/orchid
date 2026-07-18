@@ -82,6 +82,15 @@ describe('SubagentTranscript pure rendering contract (U4)', () => {
     expect(items[0].kind === 'tool' && items[0].block.error).toBe('failed');
   });
 
+  it('treats a persisted tool call without a result as completed like ChatStream', () => {
+    const items = buildSubagentTranscriptItems(record([
+      message({ id: 'call', type: MessageType.TOOL_CALL, content: '', tool_call_id: 'tool-1',
+        tool_calls: [{ id: 'tool-1', type: 'function', function: { name: 'exec', arguments: '{}' } }] }),
+    ]), null);
+    expect(items[0].kind === 'tool' && items[0].block.status).toBe('completed');
+    expect(items[0].kind === 'tool' && items[0].block.finishedAt).toBe('2026-07-18T00:00:00.000Z');
+  });
+
   it('drops a live segment already committed by terminal handoff', () => {
     const items = buildSubagentTranscriptItems(
       record([message({ id: 'same', content: 'committed' })]),

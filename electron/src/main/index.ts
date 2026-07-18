@@ -280,6 +280,7 @@ app.whenReady().then(async () => {
       initUpdater({
         window: mainWindow,
         signed: detectReleaseSigned(),
+        flushBeforeInstall: flushSubagentPersistence,
       });
 
       // Check for updates on startup (non-blocking)
@@ -372,6 +373,8 @@ app.on('before-quit', async (event) => {
     resetProviderAccountingStore();
 
     // 7. Now actually quit
+    // Final safety flush after teardown, immediately before process exit.
+    flushSubagentPersistence();
     clearTimeout(forceExitTimer);
     app.exit(0);
   } catch (err) {
