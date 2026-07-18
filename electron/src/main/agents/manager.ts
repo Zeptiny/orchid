@@ -701,14 +701,14 @@ export class SubagentManager {
                 event.toolCallId,
                 toolName,
                 event.content,
-                event.isError,
+                event.execution.canonical,
                 `${event.toolCallId}:result`,
               ),
             );
             this._updateLiveTool(record, event.toolCallId, {
-              status: event.isError ? 'error' : 'completed',
-              result: event.content,
-              error: event.isError ? event.content : null,
+              status: event.execution.canonical.status,
+              content: event.content,
+              toolResult: event.execution.canonical,
               finishedAt: new Date().toISOString(),
             });
             this._markLiveCommitted(record);
@@ -883,7 +883,7 @@ export class SubagentManager {
     if (record.live.toolCalls.some((tool) => tool.toolCallId === toolCallId)) return;
     const tool: SubagentToolSnapshot = {
       toolCallId, toolName, status: 'generating', partialArgs: '', args: '',
-      result: null, error: null, startedAt: new Date().toISOString(), finishedAt: null,
+      content: null, toolResult: null, startedAt: new Date().toISOString(), finishedAt: null,
     };
     this._updateLive(record, {
       toolCalls: [...record.live.toolCalls, tool],

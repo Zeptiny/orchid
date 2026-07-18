@@ -182,6 +182,7 @@ function ToolCallMessage({ message }: { message: Message }) {
       args,
       result: null,
       error: null,
+      toolResult: null,
       startedAt: message.timestamp,
       finishedAt: message.timestamp,
     };
@@ -206,6 +207,7 @@ function ToolResultMessage({ message }: { message: Message }) {
       args: '',
       result: isError ? null : message.content,
       error: isError ? message.content : null,
+      toolResult: message.tool_result,
       startedAt: message.timestamp,
       finishedAt: message.timestamp,
     };

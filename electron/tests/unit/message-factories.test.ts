@@ -14,6 +14,26 @@ import {
 } from '../../src/main/llm/message-factories';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
 import type { Usage } from '../../src/shared/types/message';
+import {
+  createCanonicalToolResult,
+  type CanonicalToolResult,
+} from '../../src/shared/types/tool-result';
+
+function canonicalResult(
+  status: 'complete' | 'error' | 'cancelled',
+  content: string,
+): CanonicalToolResult {
+  return status === 'error'
+    ? createCanonicalToolResult('generic', {
+        status,
+        data: { value: content },
+        error: { code: 'test_error', message: content },
+      })
+    : createCanonicalToolResult('generic', {
+        status,
+        data: { value: content },
+      });
+}
 
 const sampleUsage: Usage = {
   prompt_tokens: 10,
@@ -107,7 +127,8 @@ describe('makeToolCallMessage', () => {
 
 describe('makeToolResultMessage', () => {
   it('builds a successful TOOL_RESULT with is_error false and unchanged content', () => {
-    const msg = makeToolResultMessage('tc-1', 'read_file', 'file contents', false);
+    const canonical = canonicalResult('complete', 'file contents');
+    const msg = makeToolResultMessage('tc-1', 'read_file', 'file contents', canonical);
     expect(msg.role).toBe(MessageRole.TOOL);
     expect(msg.type).toBe(MessageType.TOOL_RESULT);
     expect(msg.content).toBe('file contents');
@@ -115,10 +136,16 @@ describe('makeToolResultMessage', () => {
     expect(msg.name).toBe('read_file');
     expect(msg.tool_calls).toBeNull();
     expect(msg.is_error).toBe(false);
+    expect(msg.tool_result).toEqual(canonical);
   });
 
   it('stores is_error true without rewriting content', () => {
-    const msg = makeToolResultMessage('tc-1', 'read_file', 'not found', true);
+    const msg = makeToolResultMessage(
+      'tc-1',
+      'read_file',
+      'not found',
+      canonicalResult('error', 'not found'),
+    );
     expect(msg.content).toBe('not found');
     expect(msg.is_error).toBe(true);
   });
@@ -128,7 +155,7 @@ describe('makeToolResultMessage', () => {
       'tc-1',
       'read_file',
       'Error: already formatted',
-      true,
+      canonicalResult('error', 'Error: already formatted'),
     );
     expect(already.content).toBe('Error: already formatted');
     expect(already.is_error).toBe(true);
@@ -137,21 +164,53 @@ describe('makeToolResultMessage', () => {
       'tc-1',
       'echo',
       'Error: is just text here',
-      false,
+      canonicalResult('complete', 'Error: is just text here'),
     );
     expect(successLookingLikeError.content).toBe('Error: is just text here');
     expect(successLookingLikeError.is_error).toBe(false);
   });
 
   it('allows empty error content with is_error true', () => {
-    const msg = makeToolResultMessage('tc-1', 'read_file', '', true);
+    const msg = makeToolResultMessage(
+      'tc-1',
+      'read_file',
+      '',
+      canonicalResult('error', ''),
+    );
     expect(msg.content).toBe('');
     expect(msg.is_error).toBe(true);
   });
 
   it('allows null tool name (legacy tool-dispatch style)', () => {
-    const msg = makeToolResultMessage('tc-1', null, 'ok', false);
+    const msg = makeToolResultMessage(
+      'tc-1',
+      null,
+      'ok',
+      canonicalResult('complete', 'ok'),
+    );
     expect(msg.name).toBeNull();
     expect(msg.is_error).toBe(false);
+  });
+
+  it('keeps cancelled distinct from failed without inspecting projection text', () => {
+    const cancelled = canonicalResult('cancelled', 'same terminal text');
+    const failed = canonicalResult('error', 'same terminal text');
+    const cancelledMessage = makeToolResultMessage(
+      'tc-cancelled',
+      'read_file',
+      'same terminal text',
+      cancelled,
+    );
+    const failedMessage = makeToolResultMessage(
+      'tc-failed',
+      'read_file',
+      'same terminal text',
+      failed,
+    );
+
+    expect(cancelledMessage.tool_result?.status).toBe('cancelled');
+    expect(cancelledMessage.is_error).toBe(false);
+    expect(failedMessage.tool_result?.status).toBe('error');
+    expect(failedMessage.is_error).toBe(true);
   });
 });

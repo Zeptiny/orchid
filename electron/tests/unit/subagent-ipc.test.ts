@@ -5,6 +5,7 @@ import { subagentSnapshotSchema as requestSchema } from '../../src/main/ipc/payl
 import { createSubagentPersistenceScheduler } from '../../src/main/agents/persist-subagent-chains';
 import { createSubagentEventCoalescer, deliverSubagentChange, mergeSubagentRecords } from '../../src/main/ipc/subagents';
 import { broadcastSubagentsChanged } from '../../src/main/agents/wire-subagents';
+import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 const uuid = '00000000-0000-4000-8000-000000000001';
 const session = '00000000-0000-4000-8000-000000000002';
@@ -45,6 +46,36 @@ describe('subagent IPC boundary', () => {
   it('keeps the new invoke/event channels allowlisted exactly once', () => {
     expect(ALLOWED_INVOKE_CHANNELS.filter((channel) => channel === IPC_CHANNELS.SUBAGENTS_SNAPSHOT)).toHaveLength(1);
     expect(ALLOWED_EVENT_CHANNELS.filter((channel) => channel === IPC_CHANNELS.SUBAGENTS_EVENT)).toHaveLength(1);
+  });
+
+  it('accepts canonical terminal tool snapshots and rejects terminal string-only snapshots', () => {
+    const canonical = createCanonicalToolResult('generic', {
+      status: 'cancelled',
+      data: { value: 'cancelled by parent' },
+    });
+    const canonicalChange = change(3);
+    canonicalChange.projection.toolCalls = [{
+      toolCallId: 'tool-cancelled',
+      toolName: 'read',
+      status: 'cancelled',
+      partialArgs: '{}',
+      args: '{}',
+      content: 'cancelled by parent',
+      toolResult: canonical,
+      startedAt: new Date(0).toISOString(),
+      finishedAt: new Date(1).toISOString(),
+    }];
+    const event = {
+      ...canonicalChange,
+      type: 'projection',
+    };
+    expect(subagentEventSchema.safeParse(event).success).toBe(true);
+
+    const stringOnly = structuredClone(event) as Record<string, unknown>;
+    const projection = stringOnly.projection as { toolCalls: Array<Record<string, unknown>> };
+    delete projection.toolCalls[0].toolResult;
+    projection.toolCalls[0].result = 'cancelled by parent';
+    expect(subagentEventSchema.safeParse(stringOnly).success).toBe(false);
   });
 
   it('merges stored and runtime records with runtime precedence', () => {
@@ -125,8 +156,7 @@ describe('subagent IPC boundary', () => {
 
   it('retains dirty follow-up work when a write re-enters', () => {
     const writes: string[] = [];
-    let scheduler!: ReturnType<typeof createSubagentPersistenceScheduler>;
-    scheduler = createSubagentPersistenceScheduler((id) => {
+    const scheduler = createSubagentPersistenceScheduler((id) => {
       writes.push(id);
       if (writes.length === 1) scheduler.markDirty(id);
     });

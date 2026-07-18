@@ -1,6 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 import type { Agent } from '../../src/shared/types/agent';
+import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
+
+function successfulToolResult(toolCallId: string, content: string): Record<string, unknown> {
+  const canonical = createCanonicalToolResult('generic', {
+    status: 'complete',
+    data: { value: content },
+  });
+  return {
+    type: 'tool_result',
+    toolCallId,
+    content,
+    isError: false,
+    execution: {
+      canonical,
+      agentProjection: { content, completeness: 'complete' },
+    },
+  };
+}
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -933,12 +951,7 @@ describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
         toolName: 'read_file',
         args: '{"file_path":"README.md"}',
       },
-      {
-        type: 'tool_result',
-        toolCallId: 'tc-1',
-        content: 'file contents',
-        isError: false,
-      },
+      successfulToolResult('tc-1', 'file contents'),
       { type: 'finish', finishReason: 'stop' },
     ]);
     const send = vi.fn();
@@ -966,12 +979,13 @@ describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
     ]);
     expect(updates.map(([, payload]) => (payload as { status: string }).status)).toEqual([
       'running',
-      'completed',
+      'complete',
     ]);
     expect(updates.at(-1)?.[1]).toMatchObject({
       toolCallId: 'tc-1',
-      status: 'completed',
-      result: 'file contents',
+      status: 'complete',
+      content: 'file contents',
+      toolResult: expect.objectContaining({ status: 'complete' }),
     });
   });
 
@@ -1148,12 +1162,7 @@ describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
         toolName: 'glob',
         args: '{"pattern":"*.ts"}',
       },
-      {
-        type: 'tool_result',
-        toolCallId: 'call_glob_1',
-        content: 'src/main.ts\nsrc/preload.ts',
-        isError: false,
-      },
+      successfulToolResult('call_glob_1', 'src/main.ts\nsrc/preload.ts'),
       { type: 'content', text: 'Found 2 files.' },
       { type: 'finish', finishReason: 'stop' },
     ]);
@@ -1180,7 +1189,7 @@ describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
     ]);
     expect(updates.map(([, p]) => (p as { status: string }).status)).toEqual([
       'running',
-      'completed',
+      'complete',
     ]);
     expect(updates[0][1]).toMatchObject({
       toolCallId: 'call_glob_1',
@@ -1189,8 +1198,9 @@ describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
     });
     expect(updates[1][1]).toMatchObject({
       toolCallId: 'call_glob_1',
-      status: 'completed',
-      result: 'src/main.ts\nsrc/preload.ts',
+      status: 'complete',
+      content: 'src/main.ts\nsrc/preload.ts',
+      toolResult: expect.objectContaining({ status: 'complete' }),
     });
   });
 
@@ -1648,12 +1658,7 @@ describe('chat session snapshot hydration', () => {
         toolName: 'read',
         args: '{"path":"README.md"}',
       };
-      yield {
-        type: 'tool_result',
-        toolCallId: 'call-read-1',
-        content: 'Orchid',
-        isError: false,
-      };
+      yield successfulToolResult('call-read-1', 'Orchid');
       yield { type: 'content', text: 'Live partial response' };
       await streamGate;
       yield { type: 'finish', finishReason: 'stop' };
@@ -1676,8 +1681,9 @@ describe('chat session snapshot hydration', () => {
         response: 'Live partial response',
         toolCalls: [expect.objectContaining({
           toolCallId: 'call-read-1',
-          status: 'completed',
-          result: 'Orchid',
+          status: 'complete',
+          content: 'Orchid',
+          toolResult: expect.objectContaining({ status: 'complete' }),
         })],
         streamSegments: expect.arrayContaining([
           expect.objectContaining({ kind: 'tool', toolCallId: 'call-read-1' }),
@@ -1698,7 +1704,12 @@ describe('chat session snapshot hydration', () => {
       messages: [
         expect.objectContaining({ content: 'Keep going' }),
         expect.objectContaining({ type: 'tool_call', tool_call_id: 'call-read-1' }),
-        expect.objectContaining({ type: 'tool_result', tool_call_id: 'call-read-1' }),
+        expect.objectContaining({
+          type: 'tool_result',
+          tool_call_id: 'call-read-1',
+          content: 'Orchid',
+          tool_result: expect.objectContaining({ status: 'complete' }),
+        }),
         expect.objectContaining({ content: 'Live partial response' }),
       ],
       live: null,

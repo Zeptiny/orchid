@@ -8,11 +8,13 @@ import {
 import { MessageRole, MessageType, type Message } from '../../src/shared/types/message';
 import type { Chain } from '../../src/shared/types/chain';
 import type { SubagentLiveProjection, SubagentRecord } from '../../src/shared/types/subagent';
+import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 const message = (overrides: Partial<Message>): Message => ({
   id: 'message', role: MessageRole.ASSISTANT, content: 'text', type: MessageType.TEXT,
   tool_calls: null, tool_call_id: null, name: null, thinking: null,
   timestamp: '2026-07-18T00:00:00.000Z', usage: null, hidden: false, is_error: false,
+  tool_result: null,
   ...overrides,
 });
 
@@ -55,6 +57,30 @@ describe('SubagentTranscript pure rendering contract (U4)', () => {
     expect(items.map((item) => item.kind)).toEqual(['message', 'tool', 'message']);
     expect(items.map((item) => item.kind === 'message' ? item.message.content : item.block.toolName))
       .toEqual(['before', 'read', 'after']);
+  });
+
+  it('retains canonical facts when reconstructing a live subagent tool block', () => {
+    const canonical = createCanonicalToolResult('generic', {
+      status: 'cancelled',
+      data: { value: 'cancelled projection' },
+    });
+    const projection = live([{ kind: 'tool', id: 'segment-tool', toolCallId: 'tool-1' }]);
+    projection.toolCalls = [{
+      toolCallId: 'tool-1',
+      toolName: 'read',
+      status: 'cancelled',
+      partialArgs: '{}',
+      args: '{}',
+      content: 'cancelled projection',
+      toolResult: canonical,
+      startedAt: '2026-07-18T00:00:00.000Z',
+      finishedAt: '2026-07-18T00:00:01.000Z',
+    }];
+
+    const items = buildSubagentTranscriptItems(record([]), projection);
+    expect(items).toHaveLength(1);
+    expect(items[0].kind === 'tool' && items[0].block.toolResult).toEqual(canonical);
+    expect(items[0].kind === 'tool' && items[0].block.result).toBe('cancelled projection');
   });
 
   it('filters hidden/system messages and preserves thinking as a collapsible message', () => {

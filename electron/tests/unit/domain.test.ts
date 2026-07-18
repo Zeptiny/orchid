@@ -38,6 +38,7 @@ import {
   todoStoreFromStorageDict,
 } from '../../src/shared/types/todo';
 import type { ToolCall } from '../../src/shared/types/tool';
+import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -63,6 +64,8 @@ function makeMessage(overrides: Partial<Message> & { role: MessageRole }): Messa
     timestamp: overrides.timestamp ?? new Date().toISOString(),
     usage: overrides.usage ?? null,
     hidden: overrides.hidden ?? false,
+    is_error: overrides.is_error ?? false,
+    tool_result: overrides.tool_result ?? null,
   };
 }
 
@@ -94,6 +97,63 @@ function makeChain(overrides: Partial<Chain> = {}): Chain {
 // ── Test 1: Session → Chain → Messages round-trip ───────────────────────────
 
 describe('Domain Models: Session round-trip', () => {
+  it('retains canonical tool facts byte-equivalently in storage but excludes them from API history', () => {
+    const canonical = createCanonicalToolResult('generic', {
+      status: 'complete',
+      data: {
+        value: {
+          canonicalOnly: 'CANONICAL_ONLY_SENTINEL',
+          nested: ['first', { last: true }],
+        },
+      },
+    });
+    const message = makeMessage({
+      id: 'canonical-result',
+      role: MessageRole.TOOL,
+      type: MessageType.TOOL_RESULT,
+      content: 'exact agent projection',
+      tool_call_id: 'tool-call-1',
+      tool_result: canonical,
+    });
+
+    const stored = messageToStorageDict(message);
+    expect(stored.tool_result).toEqual(canonical);
+    expect(JSON.stringify(stored.tool_result)).toBe(JSON.stringify(canonical));
+
+    const restored = messageFromStorageDict(stored);
+    expect(restored.content).toBe('exact agent projection');
+    expect(JSON.stringify(restored.tool_result)).toBe(JSON.stringify(canonical));
+    expect(messageToApiFormat(restored)).toEqual({
+      role: MessageRole.TOOL,
+      content: 'exact agent projection',
+      tool_call_id: 'tool-call-1',
+    });
+    expect(JSON.stringify(messageToApiFormat(restored))).not.toContain(
+      'CANONICAL_ONLY_SENTINEL',
+    );
+  });
+
+  it('restores unsupported legacy or invalid canonical tool results as null without reinterpretation', () => {
+    const legacy = messageFromStorageDict({
+      role: 'tool',
+      type: 'tool_result',
+      content: 'legacy result string',
+      tool_call_id: 'legacy-call',
+      is_error: true,
+    });
+    const invalid = messageFromStorageDict({
+      role: 'tool',
+      type: 'tool_result',
+      content: 'invalid canonical',
+      tool_call_id: 'invalid-call',
+      tool_result: { family: 'generic', status: 'complete' },
+    });
+
+    expect(legacy.tool_result).toBeNull();
+    expect(legacy.content).toBe('legacy result string');
+    expect(invalid.tool_result).toBeNull();
+  });
+
   it('serialize → deserialize produces identical Session', () => {
     const toolCall = makeToolCall('tc-1', 'read', '{"file_path":"test.ts"}');
     const now = new Date().toISOString();

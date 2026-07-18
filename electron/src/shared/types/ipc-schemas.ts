@@ -5,6 +5,10 @@
  */
 import { z } from 'zod';
 import { contextSnapshotSchema } from './message';
+import {
+  canonicalToolResultSchema,
+  terminalToolResultStatusSchema,
+} from './tool-result';
 
 // ── Shared fragments ─────────────────────────────────────────────────────────
 
@@ -73,14 +77,34 @@ export const chatToolCallDeltaEventSchema = chatEventIdentitySchema.extend({
   argsDelta: z.string(),
 });
 
-export const chatToolCallUpdateEventSchema = chatEventIdentitySchema.extend({
+const chatToolCallUpdateBaseSchema = chatEventIdentitySchema.extend({
   type: z.literal('tool_call_update'),
   toolCallId: z.string().min(1),
   toolName: z.string().optional(),
-  status: z.enum(['running', 'completed', 'failed']),
   args: z.string().optional(),
-  result: z.string().optional(),
-  error: z.string().optional(),
+});
+export const chatToolCallUpdateEventSchema = z.discriminatedUnion('status', [
+  chatToolCallUpdateBaseSchema.extend({
+    status: z.literal('running'),
+    content: z.never().optional(),
+    toolResult: z.never().optional(),
+  }),
+  chatToolCallUpdateBaseSchema.extend({
+    status: terminalToolResultStatusSchema,
+    content: z.string(),
+    toolResult: canonicalToolResultSchema,
+  }),
+]).superRefine((value, ctx) => {
+  if (
+    value.status !== 'running' &&
+    value.status !== value.toolResult.status
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['toolResult', 'status'],
+      message: 'Tool update status must match canonical result status',
+    });
+  }
 });
 
 // ── Session / workspace events ───────────────────────────────────────────────
@@ -244,9 +268,21 @@ const subagentLiveSegmentSchema = z.discriminatedUnion('kind', [
 ]);
 const subagentToolSchema = z.object({
   toolCallId: z.string(), toolName: z.string(),
-  status: z.enum(['generating', 'running', 'completed', 'error']),
-  partialArgs: z.string(), args: z.string(), result: z.string().nullable(),
-  error: z.string().nullable(), startedAt: z.string(), finishedAt: z.string().nullable(),
+  status: z.union([z.enum(['generating', 'running']), terminalToolResultStatusSchema]),
+  partialArgs: z.string(), args: z.string(), content: z.string().nullable(),
+  toolResult: canonicalToolResultSchema.nullable(),
+  startedAt: z.string(), finishedAt: z.string().nullable(),
+}).superRefine((value, ctx) => {
+  const isLifecycle = value.status === 'generating' || value.status === 'running';
+  if (isLifecycle && value.toolResult !== null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['toolResult'], message: 'Running tools cannot have terminal facts' });
+  }
+  if (!isLifecycle && (value.toolResult === null || value.content === null)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['toolResult'], message: 'Terminal tools require canonical facts and exact content' });
+  }
+  if (!isLifecycle && value.toolResult?.status !== value.status) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['status'], message: 'Snapshot status must match canonical result status' });
+  }
 });
 export const subagentLiveProjectionSchema = z.object({
   sessionId: z.string().nullable(), subagentId: z.string(), runId: z.string(),

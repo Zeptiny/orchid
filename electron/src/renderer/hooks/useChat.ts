@@ -23,6 +23,7 @@ import type {
   ChatToolCallDeltaEvent,
   ChatToolCallStartEvent,
   ChatToolCallUpdateEvent,
+  ChatToolCallSnapshot,
   ChatSnapshot,
   ChatSessionSnapshot,
 } from '../../shared/types/ipc';
@@ -31,6 +32,7 @@ import {
   computeContextBreakdown,
 } from '../components/ContextGrid';
 import { hasUsage, latestUsageFromMessages } from '../../shared/usage';
+import type { CanonicalToolResult } from '../../shared/types/tool-result';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -48,8 +50,30 @@ export interface ToolBlock {
   args: string;
   result: string | null;
   error: string | null;
+  /** Retained canonical facts; presentation migration is handled in U6. */
+  toolResult: CanonicalToolResult | null;
   startedAt: string;
   finishedAt: string | null;
+}
+
+/** Preserve canonical facts while adapting a main-process live snapshot. */
+export function chatToolSnapshotToBlock(tool: ChatToolCallSnapshot): ToolBlock {
+  return {
+    id: tool.toolCallId,
+    toolName: tool.toolName,
+    status: tool.status === 'generating' || tool.status === 'running'
+      ? tool.status
+      : tool.status === 'error'
+        ? 'failed'
+        : 'completed',
+    partialArgs: tool.partialArgs,
+    args: tool.args,
+    result: tool.status === 'error' ? null : tool.content,
+    error: tool.status === 'error' ? tool.content : null,
+    toolResult: tool.toolResult,
+    startedAt: tool.startedAt,
+    finishedAt: tool.finishedAt,
+  };
 }
 
 /**
@@ -685,6 +709,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         args: '',
         result: null,
         error: null,
+        toolResult: null,
         startedAt: new Date().toISOString(),
         finishedAt: null,
       }));
@@ -721,19 +746,18 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       applyToolBlocks((prev) => upsertToolBlock(prev, {
         id: event.toolCallId,
         toolName: event.toolName ?? 'unknown',
-        status: event.status === 'failed'
-          ? 'failed'
-          : event.status === 'completed'
-            ? 'completed'
-            : 'running',
+        status: event.status === 'running'
+          ? 'running'
+          : event.status === 'error'
+            ? 'failed'
+            : 'completed',
         partialArgs: '',
         args: event.args ?? '',
-        result: event.result ?? null,
-        error: event.error ?? null,
+        result: event.status === 'error' ? null : event.content ?? null,
+        error: event.status === 'error' ? event.content ?? null : null,
+        toolResult: event.toolResult ?? null,
         startedAt: new Date().toISOString(),
-        finishedAt: event.status === 'completed' || event.status === 'failed'
-          ? new Date().toISOString()
-          : null,
+        finishedAt: event.status === 'running' ? null : new Date().toISOString(),
       }, true));
       // Ensure tools that skip start events still appear in order.
       applyStreamSegments((prev) => {
@@ -790,6 +814,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         timestamp: new Date().toISOString(),
         usage: null,
         hidden: false,
+        tool_result: null,
     is_error: false,
   };
 
@@ -1098,17 +1123,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     streamSessionIdRef.current = live.sessionId;
     streamTurnIdRef.current = live.turnId;
     lastSequenceRef.current = live.sequence;
-    const liveTools: ToolBlock[] = live.toolCalls.map((tool) => ({
-      id: tool.toolCallId,
-      toolName: tool.toolName,
-      status: tool.status,
-      partialArgs: tool.partialArgs,
-      args: tool.args,
-      result: tool.result,
-      error: tool.error,
-      startedAt: tool.startedAt,
-      finishedAt: tool.finishedAt,
-    }));
+    const liveTools: ToolBlock[] = live.toolCalls.map(chatToolSnapshotToBlock);
     applyToolBlocks(liveTools);
     applyStreamSegments(live.streamSegments.map((segment) => ({ ...segment })));
     accumulatedContentRef.current = live.response;
@@ -1218,6 +1233,7 @@ function commitSegmentsToMessages(opts: {
           timestamp: new Date().toISOString(),
           usage: index === lastTextIndex ? usage : null,
           hidden: false,
+          tool_result: null,
     is_error: false,
   });
         return;
@@ -1235,6 +1251,7 @@ function commitSegmentsToMessages(opts: {
           timestamp: new Date().toISOString(),
           usage: null,
           hidden: false,
+          tool_result: null,
     is_error: false,
   });
       }
@@ -1266,6 +1283,7 @@ function commitSegmentsToMessages(opts: {
       timestamp: new Date().toISOString(),
       usage,
       hidden: false,
+      tool_result: null,
     is_error: false,
   });
   }
@@ -1295,13 +1313,12 @@ function toolBlockToMessages(block: ToolBlock): Message[] {
     timestamp: block.startedAt,
     usage: null,
     hidden: false,
+    tool_result: null,
     is_error: false,
   };
 
-  const resultContent =
-    block.status === 'failed'
-      ? block.error ?? 'Tool failed'
-      : block.result ?? '';
+  if (!block.toolResult) return [call];
+  const resultContent = block.error ?? block.result ?? '';
 
   const result: Message = {
     id: crypto.randomUUID(),
@@ -1315,7 +1332,8 @@ function toolBlockToMessages(block: ToolBlock): Message[] {
     timestamp: block.finishedAt ?? block.startedAt,
     usage: null,
     hidden: false,
-    is_error: block.status === 'failed',
+    tool_result: block.toolResult,
+    is_error: block.toolResult.status === 'error',
   };
 
   return [call, result];
@@ -1336,6 +1354,7 @@ function upsertToolBlock(blocks: ToolBlock[], next: ToolBlock, merge = false): T
           args: next.args || block.args || block.partialArgs,
           result: next.result ?? block.result,
           error: next.error ?? block.error,
+          toolResult: next.toolResult ?? block.toolResult,
           finishedAt: next.finishedAt ?? block.finishedAt,
         }
       : { ...block, ...next };

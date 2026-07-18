@@ -25,14 +25,20 @@ export function isVisibleSubagentMessage(message: Message): boolean {
 }
 
 function snapshotToToolBlock(snapshot: SubagentToolSnapshot): ToolBlock {
+  const failed = snapshot.toolResult?.status === 'error';
   return {
     id: snapshot.toolCallId,
     toolName: snapshot.toolName,
-    status: snapshot.status === 'error' ? 'failed' : snapshot.status,
+    status: snapshot.status === 'generating' || snapshot.status === 'running'
+      ? snapshot.status
+      : failed
+        ? 'failed'
+        : 'completed',
     partialArgs: snapshot.partialArgs,
     args: snapshot.args,
-    result: snapshot.status === 'error' ? null : snapshot.result,
-    error: snapshot.error,
+    result: failed ? null : snapshot.content,
+    error: failed ? snapshot.content : null,
+    toolResult: snapshot.toolResult,
     startedAt: snapshot.startedAt,
     finishedAt: snapshot.finishedAt,
   };
@@ -51,6 +57,7 @@ function messageToToolBlock(message: Message, result: Message | null): ToolBlock
     args: call?.function?.arguments ?? message.content,
     result: failed ? null : result?.content ?? null,
     error: failed ? result?.content ?? 'Tool failed' : null,
+    toolResult: result?.tool_result ?? null,
     startedAt: message.timestamp,
     finishedAt: result?.timestamp ?? message.timestamp,
   };
@@ -65,6 +72,7 @@ function resultToToolBlock(message: Message): ToolBlock {
     partialArgs: '', args: '',
     result: failed ? null : message.content,
     error: failed ? message.content : null,
+    toolResult: message.tool_result,
     startedAt: message.timestamp, finishedAt: message.timestamp,
   };
 }
@@ -73,7 +81,8 @@ function textMessage(id: string, content: string, type: MessageType, isStreaming
   return {
     id, role: type === MessageType.THINKING ? MessageRole.ASSISTANT : MessageRole.ASSISTANT,
     content, type, tool_calls: null, tool_call_id: null, name: null, thinking: null,
-    timestamp: new Date().toISOString(), usage: null, hidden: false, is_error: false,
+    timestamp: new Date().toISOString(), usage: null, hidden: false,
+    tool_result: null, is_error: false,
     ...(isStreaming ? {} : {}),
   };
 }

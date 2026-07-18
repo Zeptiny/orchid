@@ -10,6 +10,27 @@ import {
 import type { Agent } from '../../src/shared/types/agent';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { sumSubagentUsage } from '../../src/shared/usage';
+import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
+
+function successfulToolResult(
+  toolCallId: string,
+  content: string,
+): Extract<StreamEvent, { type: 'tool_result' }> {
+  const canonical = createCanonicalToolResult('generic', {
+    status: 'complete',
+    data: { value: content },
+  });
+  return {
+    type: 'tool_result',
+    toolCallId,
+    content,
+    isError: false,
+    execution: {
+      canonical,
+      agentProjection: { content, completeness: 'complete' },
+    },
+  };
+}
 
 const testAgent: Agent = {
   name: 'explorer',
@@ -64,7 +85,7 @@ describe('SubagentManager runtime', () => {
       yield { type: 'tool_call_start', toolCallId: 'tool-1', toolName: 'grep' };
       yield { type: 'tool_call_delta', toolCallId: 'tool-1', argsDelta: '{"q":' };
       yield { type: 'tool_call', toolCallId: 'tool-1', toolName: 'grep', args: '{"q":1}' };
-      yield { type: 'tool_result', toolCallId: 'tool-1', content: 'match', isError: false };
+      yield successfulToolResult('tool-1', 'match');
       yield { type: 'content', text: 'after' };
       yield { type: 'finish', finishReason: 'stop' };
     });
@@ -111,7 +132,7 @@ describe('SubagentManager runtime', () => {
       yield { type: 'thinking', text: 'reason first' };
       yield { type: 'content', text: 'answer next' };
       yield { type: 'tool_call', toolCallId: 'tool-prefix', toolName: 'grep', args: '{}' };
-      yield { type: 'tool_result', toolCallId: 'tool-prefix', content: 'done', isError: false };
+      yield successfulToolResult('tool-prefix', 'done');
       yield { type: 'finish', finishReason: 'stop' };
     });
     const record = manager.spawn('prefix-order', 'inspect', testAgent);
@@ -252,12 +273,7 @@ describe('SubagentManager runtime', () => {
         toolName: 'grep',
         args: '{"pattern":"foo"}',
       };
-      yield {
-        type: 'tool_result',
-        toolCallId: 'tc1',
-        content: 'match',
-        isError: false,
-      };
+      yield successfulToolResult('tc1', 'match');
       yield { type: 'content', text: 'Found it.' };
       yield {
         type: 'usage',

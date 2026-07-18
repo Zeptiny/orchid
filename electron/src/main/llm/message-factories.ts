@@ -2,12 +2,13 @@
  * Shared Message factory helpers for main-process conversation history.
  *
  * Single source of truth for constructing Message objects so chat IPC,
- * subagent manager, and tool-dispatch stay aligned. Tool failure is an
- * explicit `is_error` flag — never inferred from content text.
+ * subagent manager, and tool-dispatch stay aligned. Canonical status is the
+ * terminal authority; `is_error` remains a derived compatibility field.
  */
 
 import type { Message, Usage } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
+import type { CanonicalToolResult } from '../../shared/types/tool-result';
 
 function newId(): string {
   return crypto.randomUUID();
@@ -31,6 +32,7 @@ export function makeUserMessage(content: string): Message {
     timestamp: nowIso(),
     usage: null,
     hidden: false,
+    tool_result: null,
     is_error: false,
   };
 }
@@ -53,6 +55,7 @@ export function makeAssistantMessage(
     timestamp: nowIso(),
     usage,
     hidden: false,
+    tool_result: null,
     is_error: false,
   };
 }
@@ -71,6 +74,7 @@ export function makeThinkingMessage(content: string, id: string = newId()): Mess
     timestamp: nowIso(),
     usage: null,
     hidden: false,
+    tool_result: null,
     is_error: false,
   };
 }
@@ -100,6 +104,7 @@ export function makeToolCallMessage(
     timestamp: nowIso(),
     usage: null,
     hidden: false,
+    tool_result: null,
     is_error: false,
   };
 }
@@ -107,14 +112,14 @@ export function makeToolCallMessage(
 /**
  * Create a TOOL_RESULT message.
  *
- * `isError` is stored as `is_error` on the Message and persisted to session
- * JSON. Content is stored as-is (no automatic Error: prefix).
+ * Content is the exact finalized agent projection. Canonical status derives
+ * the compatibility `is_error` flag; no content inspection is performed.
  */
 export function makeToolResultMessage(
   toolCallId: string,
   toolName: string | null,
   content: string,
-  isError: boolean,
+  toolResult: CanonicalToolResult,
   id: string = newId(),
 ): Message {
   return {
@@ -129,6 +134,7 @@ export function makeToolResultMessage(
     timestamp: nowIso(),
     usage: null,
     hidden: false,
-    is_error: isError,
+    tool_result: toolResult,
+    is_error: toolResult.status === 'error',
   };
 }

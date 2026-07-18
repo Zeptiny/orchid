@@ -30,6 +30,7 @@ import {
   isValidSessionId,
 } from '../../src/main/session/storage';
 import { SessionManager } from '../../src/main/session/manager';
+import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 // ---------------------------------------------------------------------------
 // Temp dir helpers
@@ -108,6 +109,8 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     timestamp: overrides.timestamp ?? new Date().toISOString(),
     usage: overrides.usage ?? null,
     hidden: overrides.hidden ?? false,
+    tool_result: overrides.tool_result ?? null,
+    is_error: overrides.is_error,
   };
 }
 
@@ -379,6 +382,56 @@ describe('session selection persistence migration', () => {
 // ===========================================================================
 
 describe('saveSession → loadSession round-trip', () => {
+  it('preserves canonical tool facts and the exact agent projection through session JSON', () => {
+    const sessionId = 'a1010101-1010-4010-8010-101010101010';
+    const canonical = createCanonicalToolResult('generic', {
+      status: 'complete',
+      data: {
+        value: {
+          canonicalOnly: 'SESSION_CANONICAL_SENTINEL',
+          ordered: ['first', 'last'],
+        },
+      },
+    });
+    const callMessage = makeMessage({
+      role: 'assistant',
+      type: 'tool_call',
+      content: '',
+      tool_calls: [
+        {
+          id: 'session-tool-call',
+          type: 'function',
+          function: { name: 'session_probe', arguments: '{}' },
+        },
+      ],
+    });
+    const resultMessage = makeMessage({
+      role: 'tool',
+      type: 'tool_result',
+      content: 'exact persisted agent projection',
+      tool_call_id: 'session-tool-call',
+      tool_result: canonical,
+      is_error: false,
+    });
+    const session = makeSession({
+      id: sessionId,
+      chains: [makeChain(sessionId, { messages: [callMessage, resultMessage] })],
+    });
+
+    saveSession(session, storageOpts);
+    const raw = JSON.parse(
+      fs.readFileSync(path.join(storageOpts.sessionsDir!, `${sessionId}.json`), 'utf-8'),
+    ) as { chains: Array<{ messages: Array<{ tool_result?: unknown }> }> };
+    expect(JSON.stringify(raw.chains[0].messages[1].tool_result)).toBe(
+      JSON.stringify(canonical),
+    );
+
+    const loaded = loadSession(sessionId, storageOpts)!;
+    const restored = loaded.chains[0].messages[1];
+    expect(restored.content).toBe('exact persisted agent projection');
+    expect(JSON.stringify(restored.tool_result)).toBe(JSON.stringify(canonical));
+  });
+
   it('save then load produces identical session', () => {
     const session = makeSession({
       id: 'a1111111-1111-4111-8111-111111111111',
@@ -425,6 +478,7 @@ describe('saveSession → loadSession round-trip', () => {
               timestamp: now,
               usage: null,
               hidden: false,
+              tool_result: null,
               is_error: false,
             },
             {
@@ -444,6 +498,7 @@ describe('saveSession → loadSession round-trip', () => {
                 cached_tokens: 0,
               },
               hidden: false,
+              tool_result: null,
               is_error: false,
             },
           ],
@@ -1112,7 +1167,7 @@ describe('SessionManager', () => {
   it('rename() is no-op for non-active session', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session1 = manager.create(DEFAULT_SELECTION);
-    const session2 = manager.create(ANTHROPIC_SELECTION);
+    manager.create(ANTHROPIC_SELECTION);
 
     // Try to rename session1 (not active)
     manager.rename(session1.id, 'Should Not Change');
@@ -1211,7 +1266,7 @@ describe('SessionManager auto-naming', () => {
 
   it('autoNameActive() skips if no generateTitle callback', async () => {
     const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create(DEFAULT_SELECTION);
+    manager.create(DEFAULT_SELECTION);
 
     const result = await manager.autoNameActive();
     expect(result!.name.startsWith('Session ')).toBe(true);
@@ -1292,7 +1347,7 @@ describe('SessionManager switching', () => {
   it('switchTo does not cancel running subagents (by design)', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session1 = manager.create(DEFAULT_SELECTION);
-    const session2 = manager.create(ANTHROPIC_SELECTION);
+    manager.create(ANTHROPIC_SELECTION);
 
     // session1 is no longer active after creating session2
     // Switch back to session1

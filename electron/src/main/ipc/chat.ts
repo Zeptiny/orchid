@@ -269,8 +269,8 @@ function ensureToolSnapshot(
     status: 'generating',
     partialArgs: '',
     args: '',
-    result: null,
-    error: null,
+    content: null,
+    toolResult: null,
     startedAt: new Date().toISOString(),
     finishedAt: null,
   };
@@ -1491,12 +1491,9 @@ export function registerChatIPC(): void {
           toolName: update.toolName ?? 'unknown',
           status: update.status,
           args: update.args ?? '',
-          result: update.result ?? null,
-          error: update.error ?? null,
-          finishedAt:
-            update.status === 'completed' || update.status === 'failed'
-              ? new Date().toISOString()
-              : null,
+          content: update.content ?? null,
+          toolResult: update.toolResult ?? null,
+          finishedAt: update.status === 'running' ? null : new Date().toISOString(),
         });
         sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, {
           type: 'tool_call_update',
@@ -1504,8 +1501,8 @@ export function registerChatIPC(): void {
           toolName: update.toolName,
             status: update.status,
             args: update.args,
-            result: update.result,
-            error: update.error,
+            content: update.content,
+            toolResult: update.toolResult,
         });
 
         // Record tool call/result messages once per lifecycle event.
@@ -1530,7 +1527,7 @@ export function registerChatIPC(): void {
           }
         }
 
-        if (update.status === 'completed' || update.status === 'failed') {
+        if (update.status !== 'running') {
           // Ensure tool-call message exists (fallback path without streaming start)
           const hasCall = activeAgent.turnMessages.some(
             (m) =>
@@ -1559,10 +1556,8 @@ export function registerChatIPC(): void {
               makeToolResultMessage(
                 update.toolCallId,
                 update.toolName ?? 'unknown',
-                update.status === 'failed'
-                  ? (update.error ?? 'Tool failed')
-                  : (update.result ?? ''),
-                update.status === 'failed',
+                update.content ?? '',
+                update.toolResult!,
               ),
             );
           }
