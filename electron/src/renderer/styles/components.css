@@ -1075,6 +1075,22 @@
     font-size: 12px;
   }
 
+  /* Keep the nested subagent menu in the parent collapse's layout. */
+  .orchid-subagent-dropdown-flow {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .orchid-subagent-dropdown-flow > .dropdown-content {
+    position: static;
+    inset: auto;
+    translate: none;
+    transform: none;
+    scale: 1;
+    opacity: 1;
+    margin-top: 4px;
+  }
+
   /* Command toast (slash / palette feedback) */
   .command-toast {
     position: absolute;

@@ -20,7 +20,6 @@
 - Allow to view the running subagents output / while working
 - Verify if all tool have a generating and running state
   - Edit / write appears to not have
-- On subagent view, show first the running agents, with the agents on completed/finished statuses to be on a dropdown
 - Execute command widget should show the command description on the title, with the command itself on the dropdown / content
 - Chat appears to not use the full availiable width / x axis space
 - Remove <selected> badge and <project> for selected sessions and procjets on the left sidebar - background / border is enough

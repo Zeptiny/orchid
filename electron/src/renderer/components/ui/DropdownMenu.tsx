@@ -14,6 +14,8 @@ export interface DropdownMenuProps {
   readonly placement?: DropdownMenuPlacement;
   readonly align?: DropdownMenuAlign;
   readonly className?: string;
+  /** Classes applied to the trigger button. */
+  readonly triggerClassName?: string;
   readonly menuClassName?: string;
   readonly disabled?: boolean;
   /** Controlled open state; defaults to uncontrolled. */
@@ -36,6 +38,7 @@ export function DropdownMenu({
   placement = 'bottom-start',
   align = 'start',
   className = '',
+  triggerClassName = '',
   menuClassName = '',
   disabled = false,
   open: controlledOpen,
@@ -82,6 +85,7 @@ export function DropdownMenu({
       <button
         ref={triggerRef}
         type="button"
+        className={triggerClassName}
         aria-haspopup="menu"
         aria-expanded={isOpen}
         aria-controls={isOpen ? menuId : undefined}

@@ -15,6 +15,7 @@ import { ContextGrid, contextPercent as getContextPercent } from './ContextGrid'
 import { contextUsedTokens } from '../../shared/usage';
 import type { Message, Usage } from '../../shared/types/message';
 import { TodoStatus } from '../../shared/types/todo';
+import type { SubagentRecord } from '../../shared/types/subagent';
 import type { SubagentListState, SubagentDetail } from '../hooks/useSubagents';
 import type { TodoListState } from '../hooks/useTodos';
 import { formatShortcut } from '../keyboard';
@@ -25,6 +26,7 @@ import {
 } from '../utils/navigate-shell';
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
+import { DropdownMenu } from './ui/DropdownMenu';
 import { IconButton } from './ui/IconButton';
 import { Spinner } from './ui/Spinner';
 import { StateMessage } from './ui/StateMessage';
@@ -280,6 +282,29 @@ function CollapseBlock({
 
 // ── Subagents Section ────────────────────────────────────────────────────────
 
+export interface SubagentStatusGroups {
+  running: readonly SubagentRecord[];
+  other: readonly SubagentRecord[];
+}
+
+/** Keep active work visible while putting terminal subagents behind a menu. */
+export function partitionSubagentsByStatus(
+  agents: readonly SubagentRecord[],
+): SubagentStatusGroups {
+  const running: SubagentRecord[] = [];
+  const other: SubagentRecord[] = [];
+
+  for (const agent of agents) {
+    if (agent.status === 'running' || agent.status === 'pending') {
+      running.push(agent);
+    } else {
+      other.push(agent);
+    }
+  }
+
+  return { running, other };
+}
+
 interface SubagentsSectionProps {
   state: SubagentListState;
   onRefresh: () => void;
@@ -288,7 +313,13 @@ interface SubagentsSectionProps {
   getDetail: (id: string) => SubagentDetail | null;
 }
 
-function SubagentsSection({ state, onRefresh, selectedId, onSelect, getDetail }: SubagentsSectionProps) {
+export function SubagentsSection({
+  state,
+  onRefresh,
+  selectedId,
+  onSelect,
+  getDetail,
+}: SubagentsSectionProps) {
   if (state.status === 'loading') {
     return <StateMessage kind="loading" className="py-4" title="Loading subagents…" />;
   }
@@ -313,47 +344,107 @@ function SubagentsSection({ state, onRefresh, selectedId, onSelect, getDetail }:
   }
 
   const agents = state.status === 'ready' ? state.subagents : [];
+  const { running, other } = partitionSubagentsByStatus(agents);
 
   return (
     <div className="inspector-stack">
-      {agents.map((agent) => {
-        const detail = getDetail(agent.id);
-        // Mock-style compact row: mono name + status badge
-        const name = detail?.name || agent.agent_name || 'Subagent';
-        const agentState = detail?.state || agent.status;
-        const isSelected = selectedId === agent.id;
-        const usage = detail?.usage;
-        return (
-          <div key={agent.id} className="inspector-stack gap-0">
-            <button
-              type="button"
-              className={`inspector-row ${isSelected ? 'inspector-row-active' : ''}`}
-              onClick={() => onSelect(isSelected ? null : agent.id)}
-            >
-              <span className="inspector-row-label mono truncate">{name}</span>
-              <SubagentStateBadge state={agentState} />
-            </button>
-            {isSelected && (
-              <div className="inspector-subagent-detail">
-                {detail?.elapsed && (
-                  <div className="subtle">elapsed {detail.elapsed}</div>
-                )}
-                {usage && (
-                  <div className="subtle mono">
-                    in {fmtTokens(usage.prompt_tokens)} · out {fmtTokens(usage.completion_tokens)}
-                    {usage.cached_tokens > 0
-                      ? ` · cached ${fmtTokens(usage.cached_tokens)}`
-                      : ''}
-                  </div>
-                )}
-                {detail?.task && (
-                  <div className="inspector-subagent-task">{detail.task}</div>
-                )}
-              </div>
-            )}
+      {running.map((agent) => (
+        <SubagentRow
+          key={agent.id}
+          agent={agent}
+          selectedId={selectedId}
+          onSelect={onSelect}
+          getDetail={getDetail}
+        />
+      ))}
+      {other.length > 0 && (
+        <DropdownMenu
+          label={`Show ${other.length} other ${other.length === 1 ? 'agent' : 'agents'}`}
+          placement="bottom-start"
+          className="w-full orchid-subagent-dropdown-flow"
+          triggerClassName="btn btn-ghost btn-xs h-7 min-h-7 w-full justify-between px-1.5 font-normal text-left"
+          menuClassName="w-full max-h-64 overflow-y-auto rounded-box border border-base-300 bg-base-200 p-1 shadow-lg"
+          trigger={
+            <span className="inline-flex w-full items-center justify-between gap-2">
+              <span className="inline-flex min-w-0 items-center gap-1.5">
+                <Icon name="chevronDown" size={12} className="shrink-0 opacity-60" />
+                <span className="truncate">Other agents</span>
+              </span>
+              <StatusBadge tone="neutral" size="xs" outline>
+                {other.length}
+              </StatusBadge>
+            </span>
+          }
+        >
+          <div className="inspector-stack gap-0" role="presentation">
+            {other.map((agent) => (
+              <SubagentRow
+                key={agent.id}
+                agent={agent}
+                selectedId={selectedId}
+                onSelect={onSelect}
+                getDetail={getDetail}
+                inMenu
+              />
+            ))}
           </div>
-        );
-      })}
+        </DropdownMenu>
+      )}
+    </div>
+  );
+}
+
+interface SubagentRowProps {
+  agent: SubagentRecord;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  getDetail: (id: string) => SubagentDetail | null;
+  inMenu?: boolean;
+}
+
+function SubagentRow({
+  agent,
+  selectedId,
+  onSelect,
+  getDetail,
+  inMenu = false,
+}: SubagentRowProps) {
+  const detail = getDetail(agent.id);
+  // Mock-style compact row: mono name + status badge
+  const name = detail?.name || agent.agent_name || 'Subagent';
+  const agentState = detail?.state || agent.status;
+  const isSelected = selectedId === agent.id;
+  const usage = detail?.usage;
+
+  return (
+    <div className="inspector-stack gap-0">
+      <button
+        type="button"
+        role={inMenu ? 'menuitem' : undefined}
+        className={`inspector-row ${isSelected ? 'inspector-row-active' : ''}`}
+        onClick={() => onSelect(isSelected ? null : agent.id)}
+      >
+        <span className="inspector-row-label mono truncate">{name}</span>
+        <SubagentStateBadge state={agentState} />
+      </button>
+      {isSelected && (
+        <div className="inspector-subagent-detail">
+          {detail?.elapsed && (
+            <div className="subtle">elapsed {detail.elapsed}</div>
+          )}
+          {usage && (
+            <div className="subtle mono">
+              in {fmtTokens(usage.prompt_tokens)} · out {fmtTokens(usage.completion_tokens)}
+              {usage.cached_tokens > 0
+                ? ` · cached ${fmtTokens(usage.cached_tokens)}`
+                : ''}
+            </div>
+          )}
+          {detail?.task && (
+            <div className="inspector-subagent-task">{detail.task}</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
