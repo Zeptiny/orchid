@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import {
   AUTO_SCROLL_THRESHOLD_PX,
   isUserScrolledAwayFromBottom,
+  shouldRenderChainFooter,
   shouldAutoScroll,
 } from '../../src/renderer/components/ChatStream';
 
@@ -123,12 +124,34 @@ describe('chat rendering contract (U5)', () => {
       expect(errorBranch).toMatch(/setStreamingContent\(residual\.streamingContent\)/);
     });
 
-    it('streaming cursor remains on assistant and thought paths', () => {
+    it('does not render a vertical streaming cursor', () => {
       const src = read('components/MessageWidget.tsx');
-      expect(src).toMatch(/streaming-cursor/);
       const exceptions = read('styles/exceptions.css');
-      expect(exceptions).toMatch(/\.streaming-cursor/);
-      expect(exceptions).toMatch(/@keyframes blink/);
+      expect(src).not.toMatch(/streaming-cursor/);
+      expect(exceptions).not.toMatch(/\.streaming-cursor/);
+    });
+
+    it('keeps the chain footer visible while a chain is active', () => {
+      expect(
+        shouldRenderChainFooter({
+          isActive: true,
+          isTerminal: false,
+          hasBody: false,
+          hasUser: true,
+        }),
+      ).toBe(true);
+      expect(
+        shouldRenderChainFooter({
+          isActive: false,
+          isTerminal: false,
+          hasBody: false,
+          hasUser: false,
+        }),
+      ).toBe(false);
+
+      const src = read('components/ChatStream.tsx');
+      expect(src).not.toMatch(/if \(isActive && liveStreaming\) \{\s*continue;/);
+      expect(src).not.toMatch(/if \(isLastTurn && liveStreaming\) return;/);
     });
   });
 

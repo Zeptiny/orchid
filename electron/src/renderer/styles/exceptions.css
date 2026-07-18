@@ -27,24 +27,7 @@
   background-color: var(--accent-primary-hover, var(--color-primary));
 }
 
-/* ── Streaming cursor ─────────────────────────────────────────────────────
- * Live token caret animation; not a DaisyUI primitive.
- */
-.streaming-cursor {
-  display: inline-block;
-  width: 2px;
-  height: 1em;
-  background: var(--accent-primary);
-  margin-left: 2px;
-  animation: blink 1s step-end infinite;
-  vertical-align: text-bottom;
-}
-
-@keyframes blink {
-  50% { opacity: 0; }
-}
-
-/* Status/loading indicators still reference these keyframes from chat.css */
+/* Status/loading indicators use the shared DaisyUI spinner primitive. */
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }

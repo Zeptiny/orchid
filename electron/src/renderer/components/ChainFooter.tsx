@@ -22,9 +22,9 @@ export function ChainFooter({
   interrupted,
   failed,
 }: ChainFooterProps) {
-  const agentIn = fmt(usage?.prompt_tokens);
-  const agentCached = fmt(usage?.cached_tokens);
-  const agentOut = fmt(usage?.completion_tokens);
+  const agentIn = formatChainTokens(usage?.prompt_tokens);
+  const agentCached = formatChainTokens(usage?.cached_tokens);
+  const agentOut = formatChainTokens(usage?.completion_tokens);
   const showSub = hasUsage(subUsage);
   const showUsage = hasUsage(usage);
 
@@ -52,8 +52,9 @@ export function ChainFooter({
       )}
       {showSub && subUsage && (
         <span>
-          sub: in {fmt(subUsage.prompt_tokens)} cached {fmt(subUsage.cached_tokens)} out{' '}
-          {fmt(subUsage.completion_tokens)}
+          sub: in {formatChainTokens(subUsage.prompt_tokens)} cached{' '}
+          {formatChainTokens(subUsage.cached_tokens)} out{' '}
+          {formatChainTokens(subUsage.completion_tokens)}
         </span>
       )}
       {elapsedSeconds != null && elapsedSeconds > 0 && <span>{fmtElapsed(elapsedSeconds)}</span>}
@@ -61,8 +62,9 @@ export function ChainFooter({
   );
 }
 
-function fmt(n: number | undefined): string {
+export function formatChainTokens(n: number | undefined): string {
   if (!n) return '0';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
 }

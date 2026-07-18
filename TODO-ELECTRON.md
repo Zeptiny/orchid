@@ -14,8 +14,6 @@
 ### Interface
 - Subagent names on the right sidebar does not use the subagent name
   - The status also starts as "interrupted"
-- Remove the | while streaming
-- Token count is not being formatted when usage is in the millions
 - Remove the tool name in favor of a user redable name
   - Ex: delegate_to_subagent -> Delegated <task name> to subagent
   - Ex: wait_for_subagebt -> Waiting for X subagents (When opening to view the output, show the subagent names in a list) - if only one subagent "Waiting for <subagent task name> subagent"
@@ -25,7 +23,6 @@
 - Verify if all tool have a generating and running state
   - Edit / write appears to not have
 - On subagent view, show first the running agents, with the agents on completed/finished statuses to be on a dropdown
-- Chain footer should always be visible - even on the running / active chain
 - Execute command widget should show the command description on the title, with the command itself on the dropdown / content
 - Chat appears to not use the full availiable width / x axis space
 - Remove <selected> badge and <project> for selected sessions and procjets on the left sidebar - background / border is enough

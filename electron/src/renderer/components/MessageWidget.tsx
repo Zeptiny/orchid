@@ -90,9 +90,6 @@ function AssistantMessage({
   return (
     <div className="orchid-msg orchid-msg-assistant px-1 py-1">
       {message.content ? <MarkdownContent content={message.content} /> : null}
-      {isStreaming && (
-        <span className="streaming-cursor" aria-hidden />
-      )}
     </div>
   );
 }
@@ -150,7 +147,6 @@ function ThinkingMessage({
       {expanded && (
         <div id={panelId} className="orchid-thought-content">
           {content}
-          {isStreaming && <span className="streaming-cursor" aria-hidden />}
         </div>
       )}
     </div>

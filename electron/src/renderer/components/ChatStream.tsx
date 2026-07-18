@@ -99,6 +99,8 @@ type StreamItem =
       chainIndex: number;
     };
 
+type FooterStreamItem = Extract<StreamItem, { kind: 'footer' }>;
+
 export const AUTO_SCROLL_THRESHOLD_PX = 100;
 
 /**
@@ -117,6 +119,15 @@ export function isUserScrolledAwayFromBottom(
 /** Pure helper: auto-scroll only when the user has not scrolled away. */
 export function shouldAutoScroll(isUserScrolledUp: boolean): boolean {
   return !isUserScrolledUp;
+}
+
+export function shouldRenderChainFooter(input: {
+  isActive: boolean;
+  isTerminal: boolean;
+  hasBody: boolean;
+  hasUser: boolean;
+}): boolean {
+  return input.isActive || input.isTerminal || input.hasBody || input.hasUser;
 }
 
 
@@ -330,6 +341,8 @@ export function ChatStream({
       {liveGroupedItems.map((item) =>
         renderStreamItem(item, alwaysExpandToolGroups, expandChain),
       )}
+      {history.activeFooter &&
+        renderStreamItem(history.activeFooter, alwaysExpandToolGroups, expandChain)}
 
       <div ref={messagesEndRef} />
     </div>
@@ -446,6 +459,8 @@ interface HistoryBuildResult {
   items: StreamItem[];
   /** Tool ids already rendered in committed history (live tail skips these). */
   emittedToolIds: ReadonlySet<string>;
+  /** Active-chain footer is rendered after the live tail. */
+  activeFooter: FooterStreamItem | null;
 }
 
 /**
@@ -476,8 +491,8 @@ function buildHistoryStreamItems(opts: {
 }
 
 /**
- * Multi-chain layout: walk each session chain, collapse old ones, one footer
- * per finished chain with model + cumulative usage + sub attribution.
+ * Multi-chain layout: walk each session chain, collapse old ones, and render
+ * one footer per chain with model + cumulative usage + sub attribution.
  */
 function buildMultiChainHistoryStreamItems(opts: {
   toolBlocks: ToolBlock[];
@@ -511,6 +526,7 @@ function buildMultiChainHistoryStreamItems(opts: {
   const items: StreamItem[] = [];
   const emittedToolIds = new Set<string>();
   const liveById = new Map(toolBlocks.map((b) => [b.id, b]));
+  let activeFooter: FooterStreamItem | null = null;
 
   // Each chain body comes from chain.messages (authoritative storage). Live
   // tools/text for the active turn still render via buildLiveTailItems.
@@ -549,11 +565,6 @@ function buildMultiChainHistoryStreamItems(opts: {
     });
     items.push(...chainItems.items);
 
-    // Footer for finished chains; omit while the active chain is still streaming.
-    if (isActive && liveStreaming) {
-      continue;
-    }
-
     const chainUsage = sumChainUsage(chain);
     const turnUsage =
       isLastChain && (status === 'idle' || status === 'error' || interrupted)
@@ -583,10 +594,9 @@ function buildMultiChainHistoryStreamItems(opts: {
     const hasUser = chain.messages.some(
       (m) => m.role === MessageRole.USER && m.type === MessageType.TEXT,
     );
-    // Terminal chains always get a footer (Interrupted/Failed badges) even if
-    // the turn was user-only (cancel/error before any model output).
-    if (terminal || hasBody || hasUser) {
-      items.push({
+    // Every visible chain gets a footer, including the running/active chain.
+    if (shouldRenderChainFooter({ isActive, isTerminal: terminal, hasBody, hasUser })) {
+      const footer: FooterStreamItem = {
         kind: 'footer',
         key: `footer-chain-${chain.id || chainIndex}`,
         usage: turnUsage,
@@ -597,7 +607,12 @@ function buildMultiChainHistoryStreamItems(opts: {
           chain.status === ChainStatus.INTERRUPTED ||
           (isLastChain && interrupted),
         failed: chain.status === ChainStatus.FAILED,
-      });
+      };
+      if (isActive) {
+        activeFooter = footer;
+      } else {
+        items.push(footer);
+      }
     }
   }
 
@@ -615,7 +630,7 @@ function buildMultiChainHistoryStreamItems(opts: {
     }
   }
 
-  return { items, emittedToolIds };
+  return { items, emittedToolIds, activeFooter };
 }
 
 /** Walk a message slice into stream items (multi-chain + shared helpers). */
@@ -773,6 +788,7 @@ function buildLegacyPerUserTurnHistory(opts: {
   const consumedResults = new Set<string>();
   const emittedToolIds = new Set<string>();
   const liveStreaming = status === 'streaming';
+  let activeFooter: FooterStreamItem | null = null;
 
   // Track per-turn metadata for footers (still one footer per user turn).
   let turnIndex = -1;
@@ -842,9 +858,14 @@ function buildLegacyPerUserTurnHistory(opts: {
   };
 
   const flushFooter = (isLastTurn: boolean, isLastTurnOfParentChain: boolean) => {
-    if (!turnHasBody) return;
-    // While the active turn is still streaming, omit its footer.
-    if (isLastTurn && liveStreaming) return;
+    const isActive = isLastTurn && liveStreaming;
+    const isTerminal = isLastTurn && (status === 'error' || interrupted);
+    if (!shouldRenderChainFooter({
+      isActive,
+      isTerminal,
+      hasBody: turnHasBody,
+      hasUser: isLastTurn && turnUserId != null,
+    })) return;
 
     const turnUsage =
       isLastTurn && (status === 'idle' || status === 'error' || interrupted)
@@ -856,14 +877,19 @@ function buildLegacyPerUserTurnHistory(opts: {
       subUsageShownForChain.add(turnChainIndex);
     }
 
-    items.push({
+    const footer: FooterStreamItem = {
       kind: 'footer',
       key: `footer-${turnUserId || turnIndex}`,
       usage: turnUsage,
       subUsage,
       elapsedSeconds: isLastTurn ? elapsedSeconds : undefined,
       interrupted: isLastTurn ? interrupted : false,
-    });
+    };
+    if (isActive) {
+      activeFooter = footer;
+    } else {
+      items.push(footer);
+    }
   };
 
   const startTurn = (user: Message | null) => {
@@ -1008,11 +1034,11 @@ function buildLegacyPerUserTurnHistory(opts: {
     }
   }
 
-  // Footer for the final turn (if complete / not streaming).
+  // Footer for the final turn, including the active turn while streaming.
   if (turnIndex >= 0) {
-    // turnHasBody may be true only for user; require assistant/tools for footer
+    // A user-only active turn still gets a footer while it is running.
     const bodyBeyondUser = items.length > turnItemCountAtStart + (turnUserId ? 1 : 0);
-    if (bodyBeyondUser || turnHasBody) {
+    if (bodyBeyondUser || turnHasBody || turnUserId != null) {
       // Recompute: footer if we had tools or assistant content
       const hasRenderableBody = items
         .slice(turnItemCountAtStart)
@@ -1022,14 +1048,19 @@ function buildLegacyPerUserTurnHistory(opts: {
             it.kind === 'tool-group' ||
             (it.kind === 'message' && it.message.role !== MessageRole.USER),
         );
-      if (hasRenderableBody) {
-        turnHasBody = true;
+      if (shouldRenderChainFooter({
+        isActive: liveStreaming,
+        isTerminal: status === 'error' || interrupted,
+        hasBody: hasRenderableBody,
+        hasUser: turnUserId != null,
+      })) {
+        turnHasBody ||= hasRenderableBody;
         flushFooter(true, true);
       }
     }
   }
 
-  return { items, emittedToolIds };
+  return { items, emittedToolIds, activeFooter };
 }
 
 /**
