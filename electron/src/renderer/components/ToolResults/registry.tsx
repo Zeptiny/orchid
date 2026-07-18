@@ -1,6 +1,9 @@
 import type { ComponentType } from 'react';
 import type { CanonicalToolResult, ToolResultFamily } from '../../../shared/types/tool-result';
 import { GenericToolResult } from './GenericToolResult';
+import { FileChangeToolResult } from './FileChangeToolResult';
+import { FileWriteToolResult } from './FileWriteToolResult';
+import { FileContentToolResult } from './FileContentToolResult';
 import { LiveCommandInline } from '../ToolWidgets/LiveCommandInline';
 
 export interface ToolResultRendererProps {
@@ -21,6 +24,10 @@ const FAMILY_KEYS = new Set<ToolResultFamily>([
 for (const family of ['file-change', 'file-write', 'file-content', 'directory-entries', 'search-results', 'generic'] as const) {
   familyRenderers.set(family, GenericToolResult);
 }
+
+familyRenderers.set('file-change', FileChangeToolResult);
+familyRenderers.set('file-write', FileWriteToolResult);
+familyRenderers.set('file-content', FileContentToolResult);
 
 const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, isLive }) => {
   const value = canonical.data && typeof canonical.data === 'object' && !Array.isArray(canonical.data)
@@ -43,6 +50,9 @@ const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, isLive }) => {
 };
 
 toolRenderers.set('execute_command', ExecuteCommandRenderer);
+toolRenderers.set('edit', FileChangeToolResult);
+toolRenderers.set('write', FileWriteToolResult);
+toolRenderers.set('read', FileContentToolResult);
 const builtInToolRenderers = new Map(toolRenderers);
 
 export function registerToolResultRenderer(
