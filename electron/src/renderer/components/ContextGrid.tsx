@@ -56,7 +56,6 @@ interface LegendEntry {
 }
 
 interface LegendSection {
-  heading?: LegendEntry;
   entries: LegendEntry[];
 }
 
@@ -203,13 +202,10 @@ function buildLegendSections(b: TokenBreakdown): LegendSection[] {
     tokens,
     pct: pct(tokens),
   });
-  const tools = b.tools + b.toolUse;
-  const assistant = b.assistantResponse + b.assistantReasoning;
 
   return [
     { entries: [entry('system', COLOR_SYSTEM, 'System', b.system)] },
     {
-      heading: entry('tools', COLOR_TOOLS, 'Tools', tools),
       entries: [
         entry('tool-definition', COLOR_TOOLS, 'Tool (Definition)', b.tools),
         entry('tool-use', COLOR_TOOL_USE, 'Tool use (Output)', b.toolUse),
@@ -217,7 +213,6 @@ function buildLegendSections(b: TokenBreakdown): LegendSection[] {
     },
     { entries: [entry('user', COLOR_USER, 'User', b.user)] },
     {
-      heading: entry('assistant', COLOR_ASSISTANT, 'Assistant', assistant),
       entries: [
         entry('response', COLOR_ASSISTANT, 'Response', b.assistantResponse),
         entry('reasoning', COLOR_ASSISTANT_REASONING, 'Reasoning', b.assistantReasoning),
@@ -353,24 +348,12 @@ export function ContextLegend({
   const sections = useMemo(() => buildLegendSections(breakdown), [breakdown]);
 
   const rootClass = variant === 'panel' ? 'context-panel-list' : 'inspector-stack';
-  const childClass = variant === 'panel'
-    ? 'context-panel-list pl-3'
-    : 'inspector-stack pl-3';
+  const entries = sections.flatMap((section) => section.entries);
   return (
     <div className={rootClass}>
-      {sections.map((section) => {
-        const rows = section.entries.map((entry) => (
-          <ContextLegendRow key={entry.key} entry={entry} variant={variant} />
-        ));
-
-        if (!section.heading) return rows;
-        return (
-          <div key={section.heading.key}>
-            <ContextLegendRow entry={section.heading} variant={variant} />
-            <div className={childClass}>{rows}</div>
-          </div>
-        );
-      })}
+      {entries.map((entry) => (
+        <ContextLegendRow key={entry.key} entry={entry} variant={variant} />
+      ))}
     </div>
   );
 }

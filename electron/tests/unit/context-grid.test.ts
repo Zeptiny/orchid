@@ -110,7 +110,7 @@ describe('context grid breakdown', () => {
     });
   });
 
-  it('labels nested tool and assistant categories in the overview', () => {
+  it('labels tool and assistant categories without parent rows', () => {
     const html = renderToStaticMarkup(
       createElement(ContextLegend, {
         usage: {
@@ -134,11 +134,12 @@ describe('context grid breakdown', () => {
       }),
     );
 
-    expect(html).toContain('Tools');
     expect(html).toContain('Tool (Definition)');
     expect(html).toContain('Tool use (Output)');
-    expect(html).toContain('Assistant');
     expect(html).toContain('Response');
     expect(html).toContain('Reasoning');
+    expect(html).not.toContain('>Tools<');
+    expect(html).not.toContain('>Assistant<');
+    expect(html).not.toContain('context-panel-list pl-3');
   });
 });
