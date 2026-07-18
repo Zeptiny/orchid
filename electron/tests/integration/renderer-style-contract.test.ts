@@ -740,6 +740,8 @@ describe('Renderer style contract', () => {
         'utf8',
       );
       expect(leftSidebarSource).toContain('className="session-project-sessions"');
+      expect(leftSidebarSource).not.toContain('session-select-badge');
+      expect(leftSidebarSource).not.toMatch(/>\s*(?:selected|project)\s*</);
       expect(leftSidebarSource).toMatch(
         /size="md"\s+className="session-settings-btn"/,
       );

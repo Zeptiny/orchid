@@ -552,25 +552,6 @@
     ) !important;
   }
 
-  .session-select-badge.badge {
-    border-color: color-mix(
-      in srgb,
-      var(--accent-primary, var(--color-primary)) 35%,
-      transparent
-    ) !important;
-    background: color-mix(
-      in srgb,
-      var(--accent-primary, var(--color-primary)) 12%,
-      transparent
-    ) !important;
-    color: color-mix(
-      in srgb,
-      var(--text-primary, var(--color-base-content)) 78%,
-      var(--accent-primary, var(--color-primary))
-    ) !important;
-    opacity: 0.92;
-  }
-
   .session-project-chevron {
     flex-shrink: 0;
     opacity: 0.7;
@@ -956,4 +937,3 @@
   }
 
 }
-

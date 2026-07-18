@@ -608,11 +608,6 @@ function ProjectSessionList({
                 {counts.unread > 0 && (
                   <StatusBadge tone="success" size="xs">{counts.unread}</StatusBadge>
                 )}
-                {isProjectSelected && (
-                  <StatusBadge tone="primary" size="xs" outline className="session-select-badge">
-                    project
-                  </StatusBadge>
-                )}
               </Button>
               {project.path && onProjectSessionCreate && (
                 <Button
@@ -777,11 +772,6 @@ function SessionRow({
             <span className="session-item-path mono truncate">{pathHint}</span>
           )}
         </span>
-        {isActive && (
-          <StatusBadge tone="primary" size="xs" outline className="session-select-badge">
-            selected
-          </StatusBadge>
-        )}
       </div>
       <Button
         variant="ghost"
