@@ -73,7 +73,11 @@ function displayAgentType(record: SubagentRecord): string {
   return formatAgentRole(role);
 }
 
-function buildDetail(record: SubagentRecord, now: number): SubagentDetail {
+export function buildSubagentDetail(
+  record: SubagentRecord,
+  now: number,
+  live: SubagentLiveProjection | null = null,
+): SubagentDetail {
   const start = Date.parse(record.start_time);
   const end = record.end_time ? Date.parse(record.end_time) : now;
   const running = record.status === 'running' || record.status === 'pending';
@@ -81,7 +85,8 @@ function buildDetail(record: SubagentRecord, now: number): SubagentDetail {
     id: record.id, name: record.agent_name || 'Subagent', type: displayAgentType(record),
     tier: record.agent_tier || 'bloom', state: record.status, task: record.task || '',
     elapsed: formatElapsed(Math.max(0, end - start)), isRunning: running,
-    result: record.result, error: record.error, usage: sumSubagentUsage(record),
+    result: record.result, error: record.error,
+    usage: live?.usage ?? sumSubagentUsage(record),
   };
 }
 
@@ -205,8 +210,10 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   const getDetail = useCallback((id: string) => {
     void tick;
     const record = subagents.find((item) => item.id === id);
-    return record ? buildDetail(record, Date.now()) : null;
-  }, [subagents, tick]);
+    return record
+      ? buildSubagentDetail(record, Date.now(), current.live.get(id) ?? null)
+      : null;
+  }, [current.live, subagents, tick]);
   const getLive = useCallback((id: string) => current.live.get(id) ?? null, [current.live]);
   return {
     state, subagents, groups, totalUsage, usageByParentChain, refresh, retry, isRetrying,
