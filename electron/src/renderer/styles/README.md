@@ -18,11 +18,11 @@ Existing shell topology (left session navigation, session tabs, main chat/compos
 ## Class selection order
 
 1. **Typed React primitive** under `components/ui/` when the element matches a recognized control or surface — `Button`, `IconButton`, `TextInput`, `Select`, `Checkbox`, `Alert`, `Spinner`, `StatusBadge`, `Panel`, `Tabs`, `ConfigCard`, `DropdownMenu`, `DialogSurface`, etc. The primitive owns the DaisyUI classes internally; feature JSX never names DaisyUI roots directly.
-2. **`orchid-*` CSS composite** when the same utility/state set is shared by multiple features or encodes a product-specific surface contract. Define under `@layer components` with `@apply` and semantic tokens.
+2. **`orchid-*` CSS composite** when the same utility/state set is shared by multiple features or encodes a product-specific surface contract. Define under `@layer orchid` with `@apply` and semantic tokens.
 3. **Predefined Tailwind utilities** for layout and composition: `flex`, `grid`, `min-h-0`, `gap-2`, `p-3`, `text-sm`, `w-64`, responsive variants, etc.
 4. **Custom declarations** only for a documented exception or a CSS feature that cannot be expressed above.
 
-DaisyUI acts as the **styling engine** — its classes are used internally by `components/ui/` primitives and may also appear in approved scoped overrides in `components.css`. Feature JSX (anything outside `components/ui/`) must not name DaisyUI component roots (`btn`, `input`, `select`, `alert`, `badge`, `card`, `tabs`, `modal`, etc.) directly in `className` strings.
+DaisyUI acts as the **styling engine** — its classes are used internally by `components/ui/` primitives and may also appear in approved scoped overrides in `components.css` or `shell.css`. Feature JSX (anything outside `components/ui/`) must not name DaisyUI component roots (`btn`, `input`, `select`, `alert`, `badge`, `card`, `tabs`, `modal`, etc.) directly in `className` strings.
 
 Do **not** use DaisyUI `chat` / `chat-bubble` for message bodies (flat chat presentation).
 
@@ -32,7 +32,7 @@ Do **not** use DaisyUI `chat` / `chat-bubble` for message bodies (flat chat pres
 | --- | --- | --- |
 | Recognizable control/state | Typed React primitive under `components/ui/` | Yes — internally only |
 | One-off static geometry | Tailwind utilities in JSX | No |
-| Repeated product geometry/state | `orchid-*` composite in `components.css` | `@apply` only (not in JSX) |
+| Repeated product geometry/state | `orchid-*` composite in `components.css`; shell/session geometry in `shell.css` | `@apply` only (not in JSX) |
 | Repeated interaction semantics | Typed React primitive under `components/ui/` | Yes — internally only |
 | Runtime-only value | Inline style or CSS variable at the narrowest boundary | No |
 
@@ -60,13 +60,14 @@ These DaisyUI roots still appear in feature JSX and are tracked by the drift sca
 
 ## Required rules
 
-- **Feature JSX must not name DaisyUI component roots** (`btn`, `input`, `select`, `alert`, `badge`, `card`, `tabs`, `modal`, `loading`, `checkbox`, `dropdown`, etc.) directly in `className` strings. Use a primitive from `components/ui/` instead. DaisyUI classes are allowed only inside `components/ui/` primitives and in `components.css` `@apply` rules.
+- **Feature JSX must not name DaisyUI component roots** (`btn`, `input`, `select`, `alert`, `badge`, `card`, `tabs`, `modal`, `loading`, `checkbox`, `dropdown`, etc.) directly in `className` strings. Use a primitive from `components/ui/` instead. DaisyUI classes are allowed only inside `components/ui/` primitives and approved style-layer rules.
 - Prefer DaisyUI semantic colors (`base-100`, `primary`, `error`, …) over ad-hoc palette values in new markup.
 - Prefer standard spacing, text, and radius scales over arbitrary values (`text-[10px]`, `z-[1000]`, `rounded-[5px]`).
 - **Do not introduce raw non-token colors** (`oklch(...)`, `#hex`, `rgb(...)`, `hsl(...)`) in `styles/*.css` or feature `className` strings. Only `index.css` `:root` fallback tokens and `themes/*.css` may use raw color values.
 - Keep dynamic values (grid tracks, textarea height, swatches, progress) as data via CSS variables or inline styles — not static utility classes.
-- Namespace new composites with `orchid-`. Define them in `components.css` `@layer components` using `@apply` + semantic tokens.
-- **`chat.css` is frozen**: do not add new rules or grow its line count. All product CSS has been migrated to `components.css` and `markdown.css`; `chat.css` is now header-only. Any new selector belongs in `components.css` `@layer components`.
+- Namespace new composites with `orchid-`. Define them in `components.css` `@layer orchid` using `@apply` + semantic tokens.
+- Keep `@layer orchid` after Tailwind and DaisyUI's layers. Product geometry historically lived in unlayered `chat.css`; the dedicated final layer preserves that precedence over utilities and component defaults without returning to an unlayered compatibility sheet.
+- **`chat.css` is frozen**: do not add new rules or grow its line count. Product CSS has been migrated to `components.css`, `shell.css`, and `markdown.css`; `chat.css` is now header-only. Any new selector belongs in the appropriate `@layer orchid` surface file.
 - Do not redefine reserved DaisyUI selectors in feature CSS (see below).
 - Do not add CSS Modules or a second styling library for this migration.
 
@@ -92,7 +93,7 @@ Product-specific names that only *start* like a DaisyUI root but are not DaisyUI
 | Runtime textarea height | `InputArea.tsx` + `.orchid-composer-textarea` in exceptions | Keep resize behavior; do not encode generated pixel heights as static utilities |
 | Runtime swatches / progress | `ContextGrid.tsx`, `Footer.tsx`, `CommandPalette.tsx` | Dynamic colors/fractions as data; classes for surrounding geometry |
 | Focus / modal browser quirks | focused exception selectors | Only after smoke proves utilities/DaisyUI insufficient |
-| Residual product CSS | `styles/chat.css` (header-only) | All shell/onboarding/config/picker/session selectors have been migrated to `components.css`; `chat.css` is empty and frozen |
+| Residual product CSS | `styles/chat.css` (header-only) | Shell/session selectors live in `shell.css`; onboarding/config/picker composites live in `components.css`; `chat.css` is empty and frozen |
 
 Every exception needs a short comment or a row in this table explaining why a predefined class cannot replace it.
 
@@ -131,7 +132,8 @@ Do not replace the runtime theme loader with compile-time-only DaisyUI theme blo
 | File | Role |
 | --- | --- |
 | `index.css` | **Canonical entry** (imported from `main.tsx`): Tailwind, DaisyUI plugin, document/root rules, layer imports |
-| `components.css` | `@layer components` `orchid-*` composites with `@apply` + semantic/theme tokens (single-name; no legacy dual aliases) |
+| `components.css` | Shared `@layer orchid` product composites with `@apply` + semantic/theme tokens (single-name; no legacy dual aliases) |
+| `shell.css` | Final-layer three-panel shell, session navigation, and inspector geometry preserved from the reference interface |
 | `markdown.css` | Markdown / GFM / highlight tokens |
 | `exceptions.css` | Scrollbars, keyframes, streaming cursor, shell grid tracks, composer height hooks |
 | `chat.css` | Header-only (no CSS rules); frozen — residual bridge comment only |
@@ -144,6 +146,7 @@ main.tsx
   └── styles/index.css
         ├── tailwindcss + daisyui plugin
         ├── components.css
+        ├── shell.css
         ├── markdown.css
         ├── exceptions.css
         └── chat.css          ← residual bridge only
@@ -157,7 +160,7 @@ Runtime themes are **not** part of this graph: `applyTheme()` swaps a single `#o
 - Dual-class aliases (`legacy` + `orchid-*` on the same rule) were collapsed: JSX and CSS use `orchid-*` only for migrated surfaces; legacy dual selectors were dropped from `components.css` and retargeted/removed in the bridge.
 - All previous rules were migrated; `chat.css` is now header-only (comment block only, no CSS rules).
 - The unused `components/ui/index.ts` barrel was deleted; import UI primitives from their module paths.
-- **Do not add new rules** to `chat.css`. New composites → `components.css`; markdown → `markdown.css`; browser exceptions → `exceptions.css`.
+- **Do not add new rules** to `chat.css`. Shared composites → `components.css`; shell/session geometry → `shell.css`; markdown → `markdown.css`; browser exceptions → `exceptions.css`.
 
 ### Known reserved redefinitions
 
@@ -195,7 +198,7 @@ DaisyUI classes live inside the primitive. Feature JSX never names `btn` directl
 In `components.css`:
 
 ```css
-@layer components {
+@layer orchid {
   .orchid-chat-footer {
     @apply flex shrink-0 items-center justify-between gap-2.5 border-t border-base-content/10 px-3 py-1 text-xs;
   }

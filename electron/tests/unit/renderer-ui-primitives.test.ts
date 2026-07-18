@@ -239,12 +239,13 @@ describe('ShortcutBar', () => {
 
 describe('Button', () => {
   it('produces variant class strings', () => {
-    // Default size is sm, so class is "btn btn-sm btn-primary" etc.
-    expect(markup(createElement(Button, { variant: 'primary' }, 'Go'))).toMatch(/btn btn-sm btn-primary/);
-    expect(markup(createElement(Button, { variant: 'ghost' }, 'Go'))).toMatch(/btn btn-sm btn-ghost/);
-    expect(markup(createElement(Button, { variant: 'error' }, 'Go'))).toMatch(/btn btn-sm btn-error/);
-    expect(markup(createElement(Button, { variant: 'warning' }, 'Go'))).toMatch(/btn btn-sm btn-warning/);
-    expect(markup(createElement(Button, { variant: 'link' }, 'Go'))).toMatch(/btn btn-sm btn-link/);
+    // A plain daisyUI button has the default (md) size and no size modifier.
+    expect(markup(createElement(Button, { variant: 'primary' }, 'Go'))).toMatch(/btn btn-primary/);
+    expect(markup(createElement(Button, { variant: 'ghost' }, 'Go'))).toMatch(/btn btn-ghost/);
+    expect(markup(createElement(Button, { variant: 'error' }, 'Go'))).toMatch(/btn btn-error/);
+    expect(markup(createElement(Button, { variant: 'warning' }, 'Go'))).toMatch(/btn btn-warning/);
+    expect(markup(createElement(Button, { variant: 'link' }, 'Go'))).toMatch(/btn btn-link/);
+    expect(markup(createElement(Button, { variant: 'primary' }, 'Go'))).not.toContain('btn-sm');
     expect(markup(createElement(Button, { variant: 'neutral' }, 'Go'))).toMatch(/\bbtn\b/);
     expect(markup(createElement(Button, { variant: 'neutral' }, 'Go'))).not.toContain('btn-neutral');
   });
@@ -354,6 +355,20 @@ describe('Tabs', () => {
     const html = markup(createElement(Tabs, { items, value: 'x', onValueChange: () => {}, variant: 'bordered' }));
     expect(html).toContain('tabs-bordered');
   });
+
+  it('preserves product item classes around the shared tab behavior', () => {
+    const html = markup(
+      createElement(Tabs, {
+        items: [{ id: 'general', label: 'General' }],
+        value: 'general',
+        onValueChange: () => {},
+        itemClassName: 'config-tab',
+        activeItemClassName: 'config-tab-active',
+      }),
+    );
+    expect(html).toMatch(/<button[^>]*class="[^"]*\bconfig-tab\b[^"]*"/);
+    expect(html).toMatch(/<button[^>]*class="[^"]*\bconfig-tab-active\b[^"]*"/);
+  });
 });
 
 describe('Alert', () => {
@@ -373,6 +388,11 @@ describe('Alert', () => {
     const html = markup(createElement(Alert, { role: 'status' }));
     expect(html).toContain('role="status"');
     expect(html).not.toContain('role="alert"');
+  });
+
+  it('keeps compact reference icon sizing with an explicit override', () => {
+    expect(markup(createElement(Alert, { icon: 'alert' }))).toMatch(/<svg[^>]*width="16"[^>]*height="16"/);
+    expect(markup(createElement(Alert, { icon: 'alert', iconSize: 14 }))).toMatch(/<svg[^>]*width="14"[^>]*height="14"/);
   });
 
   it('renders title and children', () => {

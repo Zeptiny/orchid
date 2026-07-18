@@ -430,7 +430,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                 <Alert
                   tone="warning"
                   action={
-                    <Button variant="neutral" onClick={() => void providers.refresh()}>
+                    <Button variant="neutral" size="sm" onClick={() => void providers.refresh()}>
                       Retry
                     </Button>
                   }
@@ -490,6 +490,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                   onClick={() => setWizardOpen(true)}
                   disabled={!providers.overview}
                   icon="plus"
+                  iconSize={15}
                 >
                   {connections.length > 0 ? 'Add another provider' : 'Add a provider'}
                 </Button>
@@ -640,6 +641,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                   onClick={() => void handlePickProject()}
                   disabled={saving}
                   icon="folder"
+                  iconSize={15}
                 >
                   {projectPath ? 'Change folder' : 'Choose folder'}
                 </Button>

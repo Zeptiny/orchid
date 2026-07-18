@@ -384,6 +384,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
             tone="error"
             className="rounded-none py-2.5 text-sm"
             icon="alert"
+            iconSize={14}
             action={
               <Button variant="ghost" size="xs" onClick={() => setError(null)}>
                 Dismiss
@@ -400,6 +401,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
             tone="warning"
             className="rounded-none py-2.5 text-sm"
             icon="alert"
+            iconSize={14}
           >
             {diagnostic.message}
           </Alert>
@@ -411,6 +413,8 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
           onValueChange={(id) => { void requestTab(id as TabId); }}
           variant="boxed"
           className="config-tabs bg-base-200"
+          itemClassName="config-tab"
+          activeItemClassName="config-tab-active"
           aria-label="Configuration sections"
         />
 

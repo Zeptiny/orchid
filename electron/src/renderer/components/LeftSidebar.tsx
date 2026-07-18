@@ -255,7 +255,8 @@ export function LeftSidebar({
       <div className="panel-footer">
         <Button
           variant="ghost"
-          className="session-settings-btn w-full justify-start gap-2"
+          size="md"
+          className="session-settings-btn"
           onClick={onOpenSettings}
         >
           <Icon name="settings" size={18} />
@@ -629,6 +630,7 @@ function ProjectSessionList({
             </div>
             <div
               id={`${listId}-sessions-${project.key}`}
+              className="session-project-sessions"
               role="group"
               hidden={project.isCollapsed}
             >

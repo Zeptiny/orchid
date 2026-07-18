@@ -15,6 +15,8 @@ export interface TabsProps extends Omit<HTMLAttributes<HTMLDivElement>, 'childre
   onValueChange: (id: string) => void;
   variant?: TabsVariant;
   className?: string;
+  itemClassName?: string;
+  activeItemClassName?: string;
 }
 
 const VARIANT_CLASS: Record<TabsVariant, string> = {
@@ -31,6 +33,8 @@ export function Tabs({
   onValueChange,
   variant = 'boxed',
   className = '',
+  itemClassName = '',
+  activeItemClassName = '',
   ...props
 }: TabsProps) {
   return (
@@ -46,7 +50,7 @@ export function Tabs({
           role="tab"
           aria-selected={item.id === value}
           aria-busy={item.ariaBusy || undefined}
-          className={`tab ${item.id === value ? 'tab-active' : ''}`.trim().replace(/\s+/g, ' ')}
+          className={`tab ${itemClassName} ${item.id === value ? `tab-active ${activeItemClassName}` : ''}`.trim().replace(/\s+/g, ' ')}
           onClick={() => onValueChange(item.id)}
         >
           {item.label}

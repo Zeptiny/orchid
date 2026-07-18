@@ -8,6 +8,7 @@ export interface AlertProps extends Omit<HTMLAttributes<HTMLDivElement>, 'title'
   tone?: AlertTone;
   variant?: AlertVariant;
   icon?: IconName;
+  iconSize?: number;
   title?: ReactNode;
   action?: ReactNode;
   children?: ReactNode;
@@ -32,6 +33,7 @@ export function Alert({
   tone = 'info',
   variant = 'default',
   icon,
+  iconSize = 16,
   title,
   action,
   children,
@@ -45,7 +47,7 @@ export function Alert({
       className={`alert ${TONE_CLASS[tone]} ${VARIANT_CLASS[variant]} ${className}`.trim().replace(/\s+/g, ' ')}
       {...props}
     >
-      {icon != null && <Icon name={icon} size={18} className="shrink-0" aria-hidden />}
+      {icon != null && <Icon name={icon} size={iconSize} className="shrink-0" aria-hidden />}
       <div className="flex flex-col gap-0.5 min-w-0 flex-1">
         {title != null && <div className="font-medium text-sm">{title}</div>}
         {children}

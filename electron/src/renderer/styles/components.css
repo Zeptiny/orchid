@@ -7,7 +7,7 @@
  * surfaces that utilities cannot yet express cleanly.
  */
 
-@layer components {
+@layer orchid {
   /* ── Shared keycaps (shortcut chords) ─────────────────────────────────── */
 
   .orchid-keycaps {

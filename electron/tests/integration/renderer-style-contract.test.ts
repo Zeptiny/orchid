@@ -400,6 +400,35 @@ function stripCssComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, ' '));
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Return one rule's declarations, including rules nested in an at-layer. */
+function findCssRuleBody(css: string, selector: string): string | null {
+  const cleaned = stripCssComments(css);
+  const selectorRe = new RegExp(
+    `(?:^|[{},])\\s*${escapeRegExp(selector)}(?=\\s*(?:,|\\{))`,
+    'm',
+  );
+  const match = selectorRe.exec(cleaned);
+  if (!match) return null;
+
+  const openBrace = cleaned.indexOf('{', match.index + match[0].length);
+  if (openBrace < 0) return null;
+
+  let depth = 0;
+  for (let index = openBrace; index < cleaned.length; index += 1) {
+    const char = cleaned[index];
+    if (char === '{') depth += 1;
+    if (char !== '}') continue;
+    depth -= 1;
+    if (depth === 0) return cleaned.slice(openBrace + 1, index);
+  }
+
+  return null;
+}
+
 function isReservedClassName(className: string): boolean {
   for (const root of RESERVED_DAISYUI_SELECTORS) {
     if (className === root) return true;
@@ -630,6 +659,90 @@ describe('Renderer style contract', () => {
       ]) {
         expect(fs.existsSync(path.join(RENDERER_ROOT, rel)), rel).toBe(true);
       }
+    });
+
+    it('keeps the three-panel shell contracts in the canonical stylesheet', () => {
+      const shellCss = fs.readFileSync(
+        path.join(STYLES_ROOT, 'shell.css'),
+        'utf8',
+      );
+      const indexCss = fs.readFileSync(path.join(STYLES_ROOT, 'index.css'), 'utf8');
+      expect(indexCss.indexOf('@import "tailwindcss"')).toBeLessThan(
+        indexCss.indexOf('@import "./components.css"'),
+      );
+      expect(indexCss.indexOf('@import "./components.css"')).toBeLessThan(
+        indexCss.indexOf('@import "./shell.css"'),
+      );
+      expect(shellCss).toMatch(/@layer\s+orchid\s*\{/);
+      const rendererHtml = fs.readFileSync(
+        path.join(RENDERER_ROOT, 'index.html'),
+        'utf8',
+      );
+      expect(rendererHtml).not.toMatch(/<style>[\s\S]*?\*\s*\{[\s\S]*?padding\s*:\s*0/);
+      const contracts: Array<[string, string[]]> = [
+        ['.main-pane', ['display: flex;', 'flex-direction: column;']],
+        ['.panel-header', ['min-height: 46px;', 'padding: 7px 10px;', 'align-items: center;', 'gap: 8px;']],
+        ['.panel-body', ['padding: 8px;', 'box-sizing: border-box;', 'flex: 1 1 0;']],
+        ['.panel-footer', ['padding: 6px 8px;', 'flex: 0 0 auto;']],
+        ['.right-panel-toolbar', ['min-height: 28px;', 'margin: -2px 0 4px;']],
+        ['.session-tab-bar', ['min-height: 36px;', 'flex-shrink: 0;']],
+        ['.session-tab-bar-scroll', ['gap: 2px;', 'padding: 4px 6px;']],
+        ['.session-tab', ['min-width: 96px;', 'border-radius: 0.5rem;', 'box-sizing: border-box;']],
+        ['.session-tab-active', ['background: color-mix(', 'border-color: color-mix(']],
+        ['.session-tab-select', ['padding: 0.3rem 0.25rem 0.3rem 0.5rem;']],
+        ['.session-header', ['padding: 7px 14px 6px;', 'box-sizing: border-box;']],
+        ['.session-project-sessions > .session-row', ['margin-left: 10px;', 'padding-left: var(--tree-gutter);']],
+        ['.session-project-sessions > .session-row::before', ['border-left: 1px solid var(--tree-line);']],
+        ['.workspace-chip', ['min-height: 28px;', 'border-radius: 5px;']],
+        ['.session-new-btn', ['width: 100%;']],
+        ['.session-search-input', ['height: 36px;', 'border: 1px solid']],
+        ['.session-item-main', ['flex: 1 1 auto;']],
+        ['.session-item', ['min-height: 30px;', 'padding: 5px 7px;']],
+        ['.session-item-delete', ['position: absolute;', 'opacity: 0;']],
+        ['.session-settings-btn', ['width: 100%;', 'min-height: 36px !important;', 'padding: 8px 10px !important;']],
+        ['.inspector-stack', ['display: flex;', 'gap: 4px;']],
+        ['.inspector-row', ['justify-content: space-between;', 'font-size: 12px;']],
+        ['.panel-header .btn-circle', ['width: 28px;', 'height: 28px;', 'min-height: 28px;']],
+      ];
+
+      for (const [selector, declarations] of contracts) {
+        const ruleBody = findCssRuleBody(shellCss, selector);
+        expect(ruleBody, `${selector} is missing`).not.toBeNull();
+        for (const declaration of declarations) {
+          expect(
+            ruleBody,
+            `${selector} is missing ${declaration}`,
+          ).toContain(declaration);
+        }
+      }
+
+      const sessionTabSource = fs.readFileSync(
+        path.join(RENDERER_ROOT, 'components/SessionTabBar.tsx'),
+        'utf8',
+      );
+      expect(sessionTabSource).not.toMatch(
+        /session-tab-active[^"'\n]*(?:bg-base-100|border-base-300)/,
+      );
+      expect(findCssRuleBody(shellCss, '.session-tab-select')).not.toContain(
+        'min-height:',
+      );
+
+      const sessionHeaderSource = fs.readFileSync(
+        path.join(RENDERER_ROOT, 'components/session-header.tsx'),
+        'utf8',
+      );
+      expect(sessionHeaderSource).not.toMatch(
+        /session-header-(?:title|path)[^"']*(?:text-sm|text-xs|font-semibold)/,
+      );
+
+      const leftSidebarSource = fs.readFileSync(
+        path.join(RENDERER_ROOT, 'components/LeftSidebar.tsx'),
+        'utf8',
+      );
+      expect(leftSidebarSource).toContain('className="session-project-sessions"');
+      expect(leftSidebarSource).toMatch(
+        /size="md"\s+className="session-settings-btn"/,
+      );
     });
   });
 

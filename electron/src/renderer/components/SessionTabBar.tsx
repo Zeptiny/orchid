@@ -98,7 +98,7 @@ export function SessionTabBar({
           return (
             <div
               key={id}
-              className={`session-tab ${active ? 'session-tab-active bg-base-100 border-base-300' : ''}`}
+              className={`session-tab ${active ? 'session-tab-active' : ''}`}
               role="tab"
               aria-selected={active}
               id={`session-tab-${id}`}
@@ -161,7 +161,7 @@ export function SessionTabBar({
 
         {showDraft ? (
           <div
-            className="session-tab session-tab-active session-tab-draft bg-base-100 border-base-300"
+            className="session-tab session-tab-active session-tab-draft"
             role="tab"
             aria-selected
             id="session-tab-draft"

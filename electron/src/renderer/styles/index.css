@@ -16,6 +16,7 @@
 @plugin "daisyui";
 
 @import "./components.css";
+@import "./shell.css";
 @import "./markdown.css";
 @import "./exceptions.css";
 @import "./chat.css";
