@@ -342,6 +342,34 @@ describe('wait_for_subagent', () => {
     expect(result.content).toContain('Review the auth module');
   });
 
+  it('formats elapsed time and omits token usage from the output', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const { handler } = buildWaitTool(manager);
+      const record = manager.spawn('test', 'task', codeReviewerAgent);
+      record.usage = {
+        prompt_tokens: 100,
+        completion_tokens: 25,
+        total_tokens: 125,
+        cached_tokens: 10,
+      };
+      vi.setSystemTime(125_000);
+      manager.markCompleted(record.id, 'done');
+
+      const result = (await handler({
+        subagent_ids: [record.id],
+      })) as SubagentToolResult;
+
+      expect(result.content).toContain('elapsed="2m 5s"');
+      expect(result.content).not.toContain('prompt_tokens=');
+      expect(result.content).not.toContain('completion_tokens=');
+      expect(result.content).not.toContain('cached_tokens=');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('should include error for failed subagents', async () => {
     const { handler } = buildWaitTool(manager);
     const record = manager.spawn('test', 'task', codeReviewerAgent);

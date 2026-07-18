@@ -17,6 +17,17 @@ import {
 import type { SubagentToolResult } from './delegate';
 import { persistSubagentChains } from '../../agents/persist-subagent-chains';
 
+function formatElapsed(ms: number): string {
+  const seconds = Math.floor(Math.max(0, ms) / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}h ${remainingMinutes}m`;
+}
+
 /**
  * Build the wait_for_subagent tool.
  *
@@ -113,22 +124,16 @@ export function buildWaitTool(
     // Build result parts for each found subagent
     const parts: string[] = [];
     for (const [sid, record] of records) {
-      const elapsed = record.endTime
+      const elapsed = record.endTime !== null
         ? record.endTime - record.startTime
         : record.startTime
           ? Date.now() - record.startTime
           : null;
 
-      const usage = record.usage;
-      const usageAttr = usage
-        ? ` prompt_tokens="${usage.prompt_tokens}" completion_tokens="${usage.completion_tokens}" cached_tokens="${usage.cached_tokens}"`
-        : '';
-
       const attrs =
         `id="${sid}" name="${record.label}" type="${record.agent.type}" ` +
         `status="${record.state}"` +
-        (elapsed !== null ? ` elapsed="${elapsed}"` : '') +
-        usageAttr;
+        (elapsed !== null ? ` elapsed="${formatElapsed(elapsed)}"` : '');
 
       const taskBlock = record.task
         ? `<task>\n${record.task}\n</task>`
