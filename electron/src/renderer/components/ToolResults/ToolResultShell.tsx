@@ -1,0 +1,179 @@
+import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import type { CanonicalToolResult, TerminalToolResultStatus } from '../../../shared/types/tool-result';
+import { serializeCanonicalResultForCopy } from '../../../shared/types/tool-result';
+import type { ToolBlock } from '../../hooks/useChat';
+import { Icon, type IconName } from '../Icon';
+import { Spinner } from '../ui/Spinner';
+import { StatusBadge } from '../ui/StatusBadge';
+import { GenericToolResult } from './GenericToolResult';
+import { resolveToolResultRenderer } from './registry';
+
+export interface ToolResultShellProps {
+  block: ToolBlock;
+  title?: ReactNode;
+  iconName?: IconName;
+  subagents?: readonly unknown[];
+  loadingIndicator?: ReactNode;
+  statusBadge?: ReactNode;
+}
+
+const expansionChoices = new Map<string, boolean>();
+
+export function terminalStatusForBlock(block: ToolBlock): TerminalToolResultStatus | null {
+  if (block.status === 'generating' || block.status === 'running') return null;
+  if (block.toolResult) return block.toolResult.status;
+  if (block.status === 'failed' || block.status === 'error') return 'error';
+  if (block.status === 'partial') return 'partial';
+  if (block.status === 'empty') return 'empty';
+  if (block.status === 'cancelled') return 'cancelled';
+  return 'complete';
+}
+
+export function toolStatusLabel(status: ToolBlock['status'], canonical?: CanonicalToolResult | null): string {
+  if (status === 'generating') return 'generating';
+  if (status === 'running') return 'running';
+  const terminal = canonical?.status ?? (
+    status === 'failed' || status === 'error' ? 'error' :
+      status === 'partial' ? 'partial' :
+        status === 'empty' ? 'empty' :
+          status === 'cancelled' ? 'cancelled' : 'complete'
+  );
+  if (terminal === 'partial') return 'partial';
+  if (terminal === 'empty') return 'empty';
+  if (terminal === 'error') return 'error';
+  if (terminal === 'cancelled') return 'cancelled';
+  return 'complete';
+}
+
+function legacyBody(block: ToolBlock): string {
+  return block.error ?? block.result ?? '';
+}
+
+function completeCopy(block: ToolBlock, canonical: CanonicalToolResult | null): string {
+  if (canonical) return serializeCanonicalResultForCopy(canonical);
+  return legacyBody(block);
+}
+
+function ResultBody({ block, canonical }: { block: ToolBlock; canonical: CanonicalToolResult | null }) {
+  if (!canonical) {
+    return (
+      <pre className="orchid-tool-result-body select-text">
+        {legacyBody(block) || (block.status === 'completed' ? 'No output.' : 'Tool failed')}
+      </pre>
+    );
+  }
+
+  try {
+    const Renderer = resolveToolResultRenderer(block.toolName, canonical.family);
+    return <Renderer canonical={canonical} toolName={block.toolName} isLive={block.status === 'running'} />;
+  } catch {
+    return <GenericToolResult canonical={canonical} />;
+  }
+}
+
+function lifecycleBadge(block: ToolBlock, canonical: CanonicalToolResult | null, custom?: ReactNode) {
+  if (custom) return custom;
+  const status = toolStatusLabel(block.status, canonical);
+  if (status === 'generating') return <StatusBadge tone="info" size="xs">generating</StatusBadge>;
+  if (status === 'running') return <StatusBadge tone="warning" size="xs">running</StatusBadge>;
+  if (status === 'error') return <StatusBadge tone="error" size="xs">error</StatusBadge>;
+  if (status === 'partial') return <StatusBadge tone="warning" size="xs">partial</StatusBadge>;
+  if (status === 'cancelled') return <StatusBadge tone="ghost" size="xs">cancelled</StatusBadge>;
+  if (status === 'empty') return <StatusBadge tone="ghost" size="xs">empty</StatusBadge>;
+  return <StatusBadge tone="success" size="xs">complete</StatusBadge>;
+}
+
+/** Shared disclosure/lifecycle/copy boundary for every tool result surface. */
+export function ToolResultShell({
+  block,
+  title,
+  iconName = 'terminal',
+  loadingIndicator,
+  statusBadge,
+}: ToolResultShellProps) {
+  const panelId = useId();
+  const announcementId = useId();
+  const canonical = block.toolResult;
+  const status = toolStatusLabel(block.status, canonical);
+  const choiceKey = block.id || `${block.toolName}:${block.startedAt}`;
+  const [expanded, setExpanded] = useState(() => expansionChoices.get(choiceKey) ?? true);
+  const [announcement, setAnnouncement] = useState('');
+  const active = block.status === 'generating' || block.status === 'running';
+
+  useEffect(() => {
+    if (!expansionChoices.has(choiceKey)) setExpanded(true);
+  }, [choiceKey, status]);
+
+  useEffect(() => {
+    setAnnouncement(`${status} tool result`);
+  }, [status]);
+
+  const displayTitle = title ?? block.toolName;
+  const body = useMemo(() => {
+    if (block.status === 'generating') return <div className="orchid-tool-args-stream">streaming args: {block.partialArgs || '{'}</div>;
+    if (block.status === 'running') {
+      const value = canonical?.data && typeof canonical.data === 'object' && !Array.isArray(canonical.data)
+        ? (canonical.data as { value?: unknown }).value
+        : null;
+      const facts = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+      const hasStructuredCommand = block.toolName === 'execute_command' && facts && (typeof facts.commandId === 'number' || typeof facts.command_id === 'number');
+      return hasStructuredCommand
+        ? <ResultBody block={block} canonical={canonical} />
+        : <div className="orchid-tool-running-hint">Running…</div>;
+    }
+    return <ResultBody block={block} canonical={canonical} />;
+  }, [block, canonical]);
+
+  const toggle = () => {
+    const next = !expanded;
+    expansionChoices.set(choiceKey, next);
+    setExpanded(next);
+  };
+
+  const copy = async () => {
+    try {
+      if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+        throw new Error('Clipboard API unavailable');
+      }
+      await navigator.clipboard.writeText(completeCopy(block, canonical));
+      setAnnouncement('Complete result copied to clipboard.');
+    } catch {
+      setAnnouncement('Unable to copy result.');
+    }
+  };
+
+  return (
+    <div className={`orchid-tool-block ${status === 'complete' ? '' : status}`} data-tool-result-status={status}>
+      <button
+        type="button"
+        className="orchid-tool-block-title min-w-0"
+        onClick={toggle}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+      >
+        <span className="orchid-tool-block-title-left min-w-0">
+          {active ? (loadingIndicator ?? <Spinner size="xs" aria-hidden className="shrink-0" />) : <Icon name={iconName} size={12} className="shrink-0" />}
+          <span className="orchid-tool-block-title-text min-w-0 truncate">{displayTitle}</span>
+        </span>
+        <span className="orchid-tool-block-title-right shrink-0">
+          {lifecycleBadge(block, canonical, statusBadge)}
+          <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
+        </span>
+      </button>
+      {expanded && (
+        <div id={panelId} className="orchid-tool-block-content min-w-0" aria-describedby={announcementId}>
+          <div className="orchid-tool-result-toolbar flex flex-wrap items-center justify-end gap-1">
+            <span className="sr-only">{status} tool result</span>
+            {!active && <button type="button" className="btn btn-ghost btn-xs" onClick={copy}>Copy complete result</button>}
+          </div>
+          {body}
+          <span id={announcementId} className="sr-only" role="status" aria-live="polite">{announcement}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function resetToolResultExpansionState(): void {
+  expansionChoices.clear();
+}

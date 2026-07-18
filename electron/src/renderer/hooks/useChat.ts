@@ -40,7 +40,16 @@ export type ChatStatus = 'idle' | 'streaming' | 'error';
 
 export type InterruptState = 'idle' | 'confirmAgent' | 'confirmSubagents';
 
-export type ToolBlockStatus = 'generating' | 'running' | 'completed' | 'failed';
+export type ToolBlockStatus =
+  | 'generating'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'complete'
+  | 'partial'
+  | 'empty'
+  | 'error'
+  | 'cancelled';
 
 export interface ToolBlock {
   id: string;
@@ -61,11 +70,7 @@ export function chatToolSnapshotToBlock(tool: ChatToolCallSnapshot): ToolBlock {
   return {
     id: tool.toolCallId,
     toolName: tool.toolName,
-    status: tool.status === 'generating' || tool.status === 'running'
-      ? tool.status
-      : tool.status === 'error'
-        ? 'failed'
-        : 'completed',
+    status: tool.status,
     partialArgs: tool.partialArgs,
     args: tool.args,
     result: tool.status === 'error' ? null : tool.content,
@@ -733,7 +738,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         return {
           ...block,
           partialArgs: block.partialArgs + event.argsDelta,
-          status: block.status === 'completed' || block.status === 'failed'
+          status: block.status !== 'generating' && block.status !== 'running'
             ? block.status
             : 'generating',
         };
@@ -748,9 +753,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         toolName: event.toolName ?? 'unknown',
         status: event.status === 'running'
           ? 'running'
-          : event.status === 'error'
-            ? 'failed'
-            : 'completed',
+          : event.status,
         partialArgs: '',
         args: event.args ?? '',
         result: event.status === 'error' ? null : event.content ?? null,

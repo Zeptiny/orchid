@@ -590,6 +590,28 @@
     color: var(--color-error);
   }
 
+  .orchid-tool-result-toolbar {
+    min-height: 1.75rem;
+  }
+
+  .orchid-tool-block,
+  .orchid-tool-block-title,
+  .orchid-tool-block-content {
+    min-width: 0;
+  }
+
+  .orchid-tool-block-content {
+    overflow-wrap: anywhere;
+  }
+
+  .orchid-tool-block-content pre {
+    max-width: 100%;
+  }
+
+  .orchid-tool-block-content.error > * {
+    color: var(--color-error);
+  }
+
   /* Stream error / inline message error */
   .orchid-error-slot {
     @apply self-center mb-1 w-full;
