@@ -1,23 +1,22 @@
-/**
- * useSubagents — subscribes to subagent state updates.
- *
- * Provides:
- * - Subagent list from active session
- * - Aggregated token usage for chain footers
- * - Loading/error states (interaction states)
- * - Per-subagent detail with live elapsed time tracking
- * - Expand/collapse selection state
- */
+/** Session-affine subagent snapshot/live state for the inspector and view. */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Usage } from '../../shared/types/message';
-import type { SubagentRecord } from '../../shared/types/subagent';
+import type { SubagentEvent } from '../../shared/types/ipc';
+import type { SubagentLiveProjection, SubagentRecord } from '../../shared/types/subagent';
+import { sumSubagentUsage, sumSubagentsUsage, subUsageByParentChain } from '../../shared/usage';
 import {
-  sumSubagentUsage,
-  sumSubagentsUsage,
-  subUsageByParentChain,
-} from '../../shared/usage';
-
-// ── Types ────────────────────────────────────────────────────────────────────
+  acceptSubagentEvent,
+  beginSubagentSnapshotRefresh,
+  bindSubagentSession,
+  createSubagentStreamState,
+  failSubagentSnapshot,
+  groupSubagents,
+  isSubagentSnapshotAffine,
+  replaceSubagentRecords,
+  resolveSubagentSelection,
+  seedSubagentSnapshot,
+  type SubagentStreamState,
+} from '../utils/subagent-stream';
 
 export type SubagentListState =
   | { status: 'loading' }
@@ -25,228 +24,186 @@ export type SubagentListState =
   | { status: 'ready'; subagents: readonly SubagentRecord[] }
   | { status: 'error'; error: string };
 
-/** Enriched per-subagent detail for sidebar display. */
 export interface SubagentDetail {
-  readonly id: string;
-  readonly name: string;
-  readonly type: string;
-  readonly tier: string;
-  readonly state: string;
-  readonly task: string;
-  /** Formatted elapsed time string (e.g. "12s", "2m 15s"). */
-  readonly elapsed: string;
-  /** Whether the subagent is still running (elapsed time ticking). */
-  readonly isRunning: boolean;
-  /** Result text on success, null if not completed. */
-  readonly result: string | null;
-  /** Error text on failure, null if not failed. */
-  readonly error: string | null;
-  /** Token usage summed from this subagent's chain messages. */
-  readonly usage: Usage | null;
+  readonly id: string; readonly name: string; readonly type: string; readonly tier: string;
+  readonly state: string; readonly task: string; readonly elapsed: string; readonly isRunning: boolean;
+  readonly result: string | null; readonly error: string | null; readonly usage: Usage | null;
+}
+
+export interface SubagentTranscript {
+  readonly messages: readonly unknown[];
+  readonly liveTail: readonly SubagentLiveProjection['segments'][number][];
 }
 
 export interface UseSubagentsReturn {
-  /** Subagent list state with interaction states. */
   state: SubagentListState;
-  /** Flat list of loaded subagents (empty when none). */
   subagents: readonly SubagentRecord[];
-  /** Sum of all subagent token usage in the active session (null if none). */
+  groups: { running: readonly SubagentRecord[]; ended: readonly SubagentRecord[] };
   totalUsage: Usage | null;
-  /**
-   * Usage keyed by parent session chain index (`parent_chain_index`).
-   * Key -1 holds subagents with no parent index.
-   */
   usageByParentChain: ReadonlyMap<number, Usage>;
-  /** Refresh subagent list from active session. */
   refresh: () => Promise<void>;
-  /**
-   * Apply subagent chains already loaded with the session (avoids a second
-   * session.load peek and spinner flash on session switch).
-   */
+  retry: () => Promise<void>;
+  isRetrying: boolean;
   applyFromSession: (subagents: readonly SubagentRecord[]) => void;
-  /** Currently expanded subagent ID (null = none expanded). */
   selectedId: string | null;
-  /** Select/deselect a subagent for detail view. */
   select: (id: string | null) => void;
-  /** Get enriched detail for a specific subagent. */
   getDetail: (id: string) => SubagentDetail | null;
+  live: ReadonlyMap<string, SubagentLiveProjection>;
+  getLive: (id: string) => SubagentLiveProjection | null;
+  getTranscript: (id: string) => SubagentTranscript | null;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Format milliseconds into a human-readable elapsed string. */
 function formatElapsed(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
-  const remaining = seconds % 60;
-  if (minutes < 60) return `${minutes}m ${remaining}s`;
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return `${hours}h ${remainingMinutes}m`;
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-/** Build a SubagentDetail from a SubagentRecord and current time. */
 function buildDetail(record: SubagentRecord, now: number): SubagentDetail {
-  const startTime = new Date(record.start_time).getTime();
-  const endTime = record.end_time ? new Date(record.end_time).getTime() : null;
-  const isRunning = record.status === 'running' || record.status === 'pending';
-  const elapsedMs = endTime ? endTime - startTime : now - startTime;
-
+  const start = Date.parse(record.start_time);
+  const end = record.end_time ? Date.parse(record.end_time) : now;
+  const running = record.status === 'running' || record.status === 'pending';
   return {
-    id: record.id,
-    name: record.agent_name || 'Subagent',
-    type: record.agent_type || 'subagent',
-    tier: record.agent_tier || 'bloom',
-    state: record.status,
-    task: record.task || '',
-    elapsed: formatElapsed(Math.max(0, elapsedMs)),
-    isRunning,
-    result: record.result,
-    error: record.error,
-    usage: sumSubagentUsage(record),
+    id: record.id, name: record.agent_name || 'Subagent', type: record.agent_type || 'subagent',
+    tier: record.agent_tier || 'bloom', state: record.status, task: record.task || '',
+    elapsed: formatElapsed(Math.max(0, end - start)), isRunning: running,
+    result: record.result, error: record.error, usage: sumSubagentUsage(record),
   };
 }
 
-// ── Hook ─────────────────────────────────────────────────────────────────────
-
-function listStateFrom(subagents: readonly SubagentRecord[]): SubagentListState {
-  return subagents.length === 0
-    ? { status: 'empty' }
-    : { status: 'ready', subagents };
+function listState(stream: SubagentStreamState): SubagentListState {
+  if (stream.hydration === 'error') return { status: 'error', error: stream.error ?? 'Unable to load subagents' };
+  if (stream.hydration === 'loading' && stream.records.length === 0) return { status: 'loading' };
+  return stream.records.length ? { status: 'ready', subagents: stream.records } : { status: 'empty' };
 }
 
 export function useSubagents(activeSessionId: string | null): UseSubagentsReturn {
-  const [state, setState] = useState<SubagentListState>({ status: 'loading' });
+  const streamRef = useRef<SubagentStreamState>(createSubagentStreamState());
+  const [stream, setStream] = useState(streamRef.current);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [requestedId, setRequestedId] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
-  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const sessionIdRef = useRef(activeSessionId);
-  sessionIdRef.current = activeSessionId;
+  const [isRetrying, setIsRetrying] = useState(false);
+  const requestRef = useRef(0);
+  const requestedRef = useRef<string | null>(null);
+  const selectedSessionRef = useRef<string | null>(null);
+  const activeRef = useRef(activeSessionId);
+  activeRef.current = activeSessionId;
+  requestedRef.current = requestedId;
+  selectedSessionRef.current = selectedSessionId;
 
-  const applyFromSession = useCallback((subagents: readonly SubagentRecord[]) => {
-    setSelectedId(null);
-    setState(listStateFrom(subagents));
+  // Render-time binding closes the session-switch race before effects run.
+  if (streamRef.current.sessionId !== activeSessionId) {
+    streamRef.current = bindSubagentSession(streamRef.current, activeSessionId);
+  }
+  const current = streamRef.current.sessionId === activeSessionId ? streamRef.current : stream;
+
+  const commit = useCallback((next: SubagentStreamState) => {
+    streamRef.current = next;
+    setStream(next);
   }, []);
+
+  const hydrate = useCallback(async (sessionId: string, retry = false): Promise<void> => {
+    const request = ++requestRef.current;
+    const refreshed = beginSubagentSnapshotRefresh(streamRef.current, sessionId);
+    commit(refreshed);
+    const generation = refreshed.generation;
+    if (!window.orchid?.subagents?.snapshot) {
+      if (activeRef.current === sessionId && streamRef.current.generation === generation) commit(failSubagentSnapshot(streamRef.current, 'Subagent snapshot is unavailable'));
+      return;
+    }
+    if (retry) setIsRetrying(true);
+    try {
+      const snapshot = await window.orchid.subagents.snapshot({ sessionId });
+      if (request !== requestRef.current || activeRef.current !== sessionId || !isSubagentSnapshotAffine(streamRef.current, snapshot, generation)) return;
+      const next = seedSubagentSnapshot(streamRef.current, snapshot);
+      commit(next);
+      setSelectedId((previous) => resolveSubagentSelection(next.records, {
+        sessionId, requestedId: requestedRef.current ?? previous, existingId: previous, existingSessionId: selectedSessionRef.current,
+      }));
+      setSelectedSessionId(sessionId);
+    } catch (error) {
+      if (request === requestRef.current && activeRef.current === sessionId && streamRef.current.generation === generation) {
+        commit(failSubagentSnapshot(streamRef.current, error instanceof Error ? error.message : String(error)));
+      }
+    } finally {
+      if (request === requestRef.current) setIsRetrying(false);
+    }
+  }, [commit]);
+
+  useEffect(() => {
+    setSelectedId(null);
+    setSelectedSessionId(activeSessionId);
+    setRequestedId(null);
+    if (activeSessionId) void hydrate(activeSessionId);
+  }, [activeSessionId, hydrate]);
+
+  useEffect(() => {
+    const unsubscribe = window.orchid?.subagents?.onEvent?.((event: SubagentEvent) => {
+      const next = acceptSubagentEvent(streamRef.current, event);
+      if (next !== streamRef.current) commit(next);
+    });
+    return unsubscribe;
+  }, [commit]);
+
+  useEffect(() => {
+    const unsubscribe = window.orchid?.session?.onSubagentsChanged?.(() => {
+      if (activeRef.current) void hydrate(activeRef.current);
+    });
+    return unsubscribe;
+  }, [hydrate]);
+
+  useEffect(() => {
+    if (!current.records.some((record) => record.status === 'running' || record.status === 'pending')) return undefined;
+    const timer = setInterval(() => setTick((value) => value + 1), 1000);
+    return () => clearInterval(timer);
+  }, [current.records]);
 
   const refresh = useCallback(async () => {
-    if (!activeSessionId || !window.orchid?.session?.load) {
-      setState({ status: 'empty' });
-      setSelectedId(null);
+    if (!activeRef.current) {
+      commit(bindSubagentSession(streamRef.current, null));
       return;
     }
+    await hydrate(activeRef.current);
+  }, [commit, hydrate]);
 
-    const requestId = activeSessionId;
-    try {
-      // Peek only — do not switch active session or reseed chat history.
-      const session = await window.orchid.session.load({
-        id: activeSessionId,
-        activate: false,
-      });
-      // Stale response after a newer session switch — drop.
-      if (sessionIdRef.current !== requestId) return;
-      if (!session) {
-        setState({ status: 'empty' });
-        setSelectedId(null);
-        return;
-      }
+  const retry = useCallback(async () => {
+    if (!activeRef.current) return;
+    await hydrate(activeRef.current, true);
+  }, [commit, hydrate]);
 
-      setState(listStateFrom(session.subagentChains));
-    } catch (err) {
-      if (sessionIdRef.current !== requestId) return;
-      const error = err instanceof Error ? err.message : String(err);
-      setState({ status: 'error', error });
-    }
-  }, [activeSessionId]);
-
-  // On session change: clear selection and revalidate without blanking ready
-  // data first (stale-while-revalidate — avoids spinner flash).
-  useEffect(() => {
-    setSelectedId(null);
-    if (!activeSessionId) {
-      setState({ status: 'empty' });
-      return;
-    }
-    void refresh();
-  }, [activeSessionId, refresh]);
-
-  // Live updates when main process persists subagent_chains (spawn/wait/complete).
-  useEffect(() => {
-    if (!window.orchid?.session?.onSubagentsChanged) {
-      return undefined;
-    }
-    return window.orchid.session.onSubagentsChanged(() => {
-      void refresh();
-    });
-  }, [refresh]);
-
-  // Live elapsed time ticker: update every second while any subagent is running
-  useEffect(() => {
-    if (state.status !== 'ready') {
-      if (tickRef.current) {
-        clearInterval(tickRef.current);
-        tickRef.current = null;
-      }
-      return;
-    }
-
-    const hasRunning = state.subagents.some(
-      (s) => s.status === 'running' || s.status === 'pending',
-    );
-
-    if (hasRunning && !tickRef.current) {
-      tickRef.current = setInterval(() => setTick((t) => t + 1), 1000);
-    } else if (!hasRunning && tickRef.current) {
-      clearInterval(tickRef.current);
-      tickRef.current = null;
-    }
-
-    return () => {
-      if (tickRef.current) {
-        clearInterval(tickRef.current);
-        tickRef.current = null;
-      }
-    };
-  }, [state]);
+  const applyFromSession = useCallback((records: readonly SubagentRecord[]) => {
+    commit(replaceSubagentRecords(streamRef.current, records));
+  }, [commit]);
 
   const select = useCallback((id: string | null) => {
-    setSelectedId((prev) => (prev === id ? null : id));
+    setRequestedId(id);
+    setSelectedId((previous) => previous === id ? null : id);
+    setSelectedSessionId(activeRef.current);
   }, []);
 
-  const subagents: readonly SubagentRecord[] =
-    state.status === 'ready' ? state.subagents : [];
-
-  const totalUsage = useMemo(
-    () => sumSubagentsUsage(subagents),
-    [subagents],
-  );
-
-  const usageByParentChain = useMemo(
-    () => subUsageByParentChain(subagents),
-    [subagents],
-  );
-
-  const getDetail = useCallback(
-    (id: string): SubagentDetail | null => {
-      if (state.status !== 'ready') return null;
-      const record = state.subagents.find((s) => s.id === id);
-      if (!record) return null;
-      // tick is used as a dependency to force recalculation every second
-      void tick;
-      return buildDetail(record, Date.now());
-    },
-    [state, tick],
-  );
+  const subagents = current.records;
+  const state = listState(current);
+  const groups = useMemo(() => groupSubagents(subagents), [subagents]);
+  const totalUsage = useMemo(() => sumSubagentsUsage(subagents), [subagents]);
+  const usageByParentChain = useMemo(() => subUsageByParentChain(subagents), [subagents]);
+  const getDetail = useCallback((id: string) => {
+    void tick;
+    const record = subagents.find((item) => item.id === id);
+    return record ? buildDetail(record, Date.now()) : null;
+  }, [subagents, tick]);
+  const getLive = useCallback((id: string) => current.live.get(id) ?? null, [current.live]);
+  const getTranscript = useCallback((id: string): SubagentTranscript | null => {
+    const record = subagents.find((item) => item.id === id);
+    if (!record) return null;
+    return { messages: record.chain.messages, liveTail: current.live.get(id)?.segments ?? [] };
+  }, [subagents, current.live]);
 
   return {
-    state,
-    subagents,
-    totalUsage,
-    usageByParentChain,
-    refresh,
-    applyFromSession,
-    selectedId,
-    select,
-    getDetail,
+    state, subagents, groups, totalUsage, usageByParentChain, refresh, retry, isRetrying,
+    applyFromSession, selectedId, select, getDetail, live: current.live, getLive, getTranscript,
   };
 }
