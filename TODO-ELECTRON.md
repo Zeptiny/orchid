@@ -20,6 +20,7 @@
   - For example, API returned 429 but no message appeared on the interface
 
 ### TODOs geral
+- Change session storage to SQLite
 - Tools should start the execution as son as the generation is complete, even if the model is still generating output for other commands
 - RAG/AST Post Write Callback + automatic updating if changes are detected (Can be changed via commands / manually / etc that post write callback does not detect)
 - wait_for_subagent sending duplicated information
