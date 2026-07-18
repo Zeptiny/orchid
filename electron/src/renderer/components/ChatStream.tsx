@@ -40,6 +40,10 @@ import {
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
 import orchidIcon from '../assets/orchid-icon.svg';
+import { useSmartAutoScroll } from '../hooks/useSmartAutoScroll';
+import { shouldAutoScroll } from '../hooks/useSmartAutoScroll';
+
+export { AUTO_SCROLL_THRESHOLD_PX, isUserScrolledAwayFromBottom, shouldAutoScroll } from '../hooks/useSmartAutoScroll';
 
 /** Maximum fully-mounted chains; older ones collapse to stubs (Python parity). */
 export const CHAIN_COLLAPSE_THRESHOLD = 20;
@@ -101,26 +105,6 @@ type StreamItem =
 
 type FooterStreamItem = Extract<StreamItem, { kind: 'footer' }>;
 
-export const AUTO_SCROLL_THRESHOLD_PX = 100;
-
-/**
- * Pure helper: whether the scroll container is far enough from the bottom
- * that auto-scroll should stay off. Used by ChatStream and architecture tests.
- */
-export function isUserScrolledAwayFromBottom(
-  scrollTop: number,
-  scrollHeight: number,
-  clientHeight: number,
-  thresholdPx: number = AUTO_SCROLL_THRESHOLD_PX,
-): boolean {
-  return scrollHeight - scrollTop - clientHeight > thresholdPx;
-}
-
-/** Pure helper: auto-scroll only when the user has not scrolled away. */
-export function shouldAutoScroll(isUserScrolledUp: boolean): boolean {
-  return !isUserScrolledUp;
-}
-
 export function shouldRenderChainFooter(input: {
   isActive: boolean;
   isTerminal: boolean;
@@ -151,9 +135,15 @@ export function ChatStream({
   interrupted,
   alwaysExpandToolGroups = false,
 }: ChatStreamProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
+  const scrollContentKey = useMemo(
+    () =>
+      `${messages.length}:${streamingContent}:${JSON.stringify(toolBlocks)}:${JSON.stringify(streamSegments)}`,
+    [messages.length, streamingContent, toolBlocks, streamSegments],
+  );
+  const { containerRef, messagesEndRef, isUserScrolledUp } = useSmartAutoScroll({
+    resetKey: sessionId,
+    contentKey: scrollContentKey,
+  });
   /** Chain indexes the user expanded from a collapsed stub. */
   const [expandedChainIndexes, setExpandedChainIndexes] = useState<Set<number>>(
     () => new Set(),
@@ -167,42 +157,6 @@ export function ChatStream({
       return next;
     });
   }, []);
-
-  const scrollToBottom = useCallback(() => {
-    if (shouldAutoScroll(isUserScrolledUp)) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [isUserScrolledUp]);
-
-  // Empty state returns early without containerRef — rebind when the scroll
-  // container mounts after the first message/stream content appears.
-  const hasScrollContainer =
-    messages.length > 0 ||
-    Boolean(streamingContent) ||
-    toolBlocks.length > 0 ||
-    streamSegments.length > 0 ||
-    status !== 'idle' ||
-    Boolean(error);
-
-  useEffect(() => {
-    if (!hasScrollContainer) return;
-    const container = containerRef.current;
-    if (!container) return;
-
-    const handleScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = container;
-      setIsUserScrolledUp(
-        isUserScrolledAwayFromBottom(scrollTop, scrollHeight, clientHeight),
-      );
-    };
-
-    container.addEventListener('scroll', handleScroll, { passive: true });
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, [hasScrollContainer]);
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages.length, streamingContent, toolBlocks, streamSegments, scrollToBottom]);
 
   // When a new stream starts, pin to bottom only if the user was already near
   // the bottom. Do not force-scroll readers who scrolled away mid-history.
@@ -220,7 +174,6 @@ export function ChatStream({
   // Reset scroll-away + expanded stubs only when the session is replaced.
   useEffect(() => {
     setExpandedChainIndexes(new Set());
-    setIsUserScrolledUp(false);
   }, [sessionId]);
 
   // Committed history is independent of per-token stream text. Keep it stable
