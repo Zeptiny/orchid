@@ -18,6 +18,7 @@ import {
   genericToolResultDataSchema,
   jsonValueSchema,
   serializeCanonicalResultForCopy,
+  toolExecutionResultSchema,
   type AgentProjection,
   type AgentProjector,
   type CanonicalToolResult,
@@ -37,6 +38,11 @@ import {
 export interface NormalizedToolResult {
   content: string;
   isError: boolean;
+}
+
+/** Parse the raw object retained by AI SDK after a canonical tool execution. */
+export function parseToolExecutionResult(raw: unknown): ToolExecutionResult {
+  return toolExecutionResultSchema.parse(raw) as ToolExecutionResult;
 }
 
 function projectionWithCanonicalCompleteness(

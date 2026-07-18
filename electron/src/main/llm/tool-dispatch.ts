@@ -15,18 +15,29 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { Message } from '../../shared/types/message';
 import type { ToolCall } from '../../shared/types/tool';
 import type { ToolRegistry } from '../tools/registry';
 import {
   TOOL_OUTPUT_INLINE_THRESHOLD,
   TOOLS_WITHOUT_OUTPUT_OFFLOAD,
 } from './middleware/provider-quirks';
-import { makeToolResultMessage } from './message-factories';
-import { normalizeToolHandlerResult } from '../tools/result';
+import {
+  finalizeToolExecutionResult,
+  genericAgentProjector,
+  normalizeToolHandlerResult,
+} from '../tools/result';
 import type { ToolExecutionContext } from '../tools/types';
 import type { ProjectRuntime } from '../project/runtime';
 import { DEFAULT_WAIT_TIMEOUT_MS } from '../agents/manager';
+import {
+  createCanonicalToolResult,
+  toolExecutionResultSchema,
+  type AgentProjection,
+  type JsonValue,
+  type ToolExecutionResult,
+  type ToolHandlerOutcome,
+} from '../../shared/types/tool-result';
+import { materializeCanonicalResultRetrieval } from '../tools/result-retrieval';
 
 // ---------------------------------------------------------------------------
 // Constants — match Python client.py:44, 48-56
@@ -89,40 +100,53 @@ export interface ToolDispatchOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * Execute a single tool call and return a TOOL_RESULT message.
+ * Execute a single tool call and return canonical facts plus the exact agent
+ * projection that the provider will receive.
  *
  * @param toolCall - The tool call to execute
  * @param registry - The tool registry to look up the handler
  * @param options - Optional timeout, session ID, and frozen turn cwd
- * @returns A TOOL_RESULT message with the tool's output
+ * @returns A validated raw execution result for AI SDK streaming
  */
 export async function executeToolCall(
   toolCall: ToolCall,
   registry: ToolRegistry,
   options: ToolDispatchOptions = {},
-): Promise<Message> {
+): Promise<ToolExecutionResult> {
   const name = toolCall.function.name;
   const timeoutSeconds = options.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_S;
+
+  if (options.abortSignal?.aborted) {
+    return genericTerminalExecution(
+      toolCall.id,
+      name,
+      'cancelled',
+      `Tool '${name}' was cancelled.`,
+      'parent_cancelled',
+    );
+  }
 
   // Parse arguments
   let args: unknown;
   try {
     args = JSON.parse(toolCall.function.arguments);
   } catch {
-    return makeToolResultMessage(
+    return genericTerminalExecution(
       toolCall.id,
       name,
+      'error',
       `Could not parse arguments for tool '${name}': invalid JSON.`,
-      true,
+      'invalid_arguments_json',
     );
   }
 
   if (typeof args !== 'object' || args === null || Array.isArray(args)) {
-    return makeToolResultMessage(
+    return genericTerminalExecution(
       toolCall.id,
       name,
+      'error',
       `Arguments for tool '${name}' must be a JSON object, got ${typeof args}.`,
-      true,
+      'invalid_arguments_type',
     );
   }
 
@@ -130,26 +154,34 @@ export async function executeToolCall(
   const registered = registry.get(name);
   if (!registered) {
     const available = registry.listAll().map((t) => t.definition.name);
-    return makeToolResultMessage(
+    return genericTerminalExecution(
       toolCall.id,
       name,
+      'error',
       `Tool '${name}' does not exist. Available tools: ${available.join(', ')}`,
-      true,
+      'unknown_tool',
     );
   }
 
   // Validate arguments against the tool's Zod schema (agent path)
   const validation = registry.validate(name, args);
   if (!validation.ok) {
-    return makeToolResultMessage(toolCall.id, name, validation.error, true);
+    return genericTerminalExecution(
+      toolCall.id,
+      name,
+      'error',
+      validation.error,
+      'invalid_arguments',
+    );
   }
 
   if (!options.cwd || options.cwd.trim() === '') {
-    return makeToolResultMessage(
+    return genericTerminalExecution(
       toolCall.id,
       name,
+      'error',
       `Tool '${name}' cannot run: no workspace cwd in tool execution context.`,
-      true,
+      'missing_workspace',
     );
   }
 
@@ -194,23 +226,256 @@ export async function executeToolCall(
     );
   } catch (err) {
     if (err instanceof ToolTimeoutError) {
-      return makeToolResultMessage(toolCall.id, name, err.message, true);
+      return genericTerminalExecution(
+        toolCall.id,
+        name,
+        'error',
+        err.message,
+        'timeout',
+      );
     }
-    console.error(`Tool '${name}' raised an exception:`, err);
-    return makeToolResultMessage(
+    if (parentAbort?.aborted) {
+      return genericTerminalExecution(
+        toolCall.id,
+        name,
+        'cancelled',
+        `Tool '${name}' was cancelled.`,
+        'parent_cancelled',
+      );
+    }
+    console.error('[tool-dispatch] Tool handler failed', {
+      toolCallId: toolCall.id,
+      toolName: name,
+      exceptionClass: err instanceof Error ? err.constructor.name : 'Unknown',
+    });
+    return genericTerminalExecution(
       toolCall.id,
       name,
+      'error',
       `Tool '${name}' failed with an internal error.`,
-      true,
+      'handler_exception',
     );
   }
 
-  const { content, isError } = normalizeToolHandlerResult(result);
+  if (parentAbort?.aborted) {
+    return genericTerminalExecution(
+      toolCall.id,
+      name,
+      'cancelled',
+      `Tool '${name}' was cancelled.`,
+      'parent_cancelled',
+    );
+  }
 
-  // Maybe offload large output (preserves isError)
-  const trimmed = maybeOffloadToolOutput(name, content, toolCall.id, options.sessionId);
+  let execution: ToolExecutionResult;
+  try {
+    execution = finalizeHandlerResult(result, toolCall, registry);
+    execution = ensureProjectionRecovery(execution, toolCall, options);
+    execution = maybeOffloadAgentProjection(execution, toolCall, options);
+    const executionSchema = registry.getToolExecutionResultSchema(name);
+    if (!executionSchema) {
+      throw new TypeError(`No execution schema registered for tool '${name}'`);
+    }
+    return executionSchema.parse(execution) as ToolExecutionResult;
+  } catch (error) {
+    console.warn('[tool-dispatch] Tool result finalization failed', {
+      toolCallId: toolCall.id,
+      toolName: name,
+      family: registered.definition.resultFamily ?? 'generic',
+      stage: 'schema',
+      exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
+    });
+    return genericTerminalExecution(
+      toolCall.id,
+      name,
+      'error',
+      `Tool '${name}' returned an invalid result.`,
+      'invalid_tool_result',
+    );
+  }
+}
 
-  return makeToolResultMessage(toolCall.id, name, trimmed, isError);
+function isToolHandlerOutcome(value: unknown): value is ToolHandlerOutcome<JsonValue> {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    ['complete', 'partial', 'empty', 'error', 'cancelled'].includes(
+      String(candidate.status),
+    ) && Object.hasOwn(candidate, 'data')
+  );
+}
+
+function exactProjection(content: string): AgentProjection {
+  return { content, completeness: 'complete' };
+}
+
+function genericTerminalExecution(
+  toolCallId: string,
+  toolName: string,
+  status: 'error' | 'cancelled',
+  message: string,
+  code: string,
+): ToolExecutionResult {
+  const canonical = status === 'error'
+    ? createCanonicalToolResult('generic', {
+        status,
+        data: {
+          value: message,
+          origin: { kind: 'built-in', name: toolName },
+        },
+        error: { code, message },
+      })
+    : createCanonicalToolResult('generic', {
+        status,
+        data: {
+          value: message,
+          origin: { kind: 'built-in', name: toolName },
+        },
+      });
+  const execution = finalizeToolExecutionResult({
+    canonical,
+    toolName,
+    toolCallId,
+    expectedFamily: 'generic',
+    projector: () => exactProjection(message),
+  });
+  return toolExecutionResultSchema.parse(execution) as ToolExecutionResult;
+}
+
+function finalizeHandlerResult(
+  result: unknown,
+  toolCall: ToolCall,
+  registry: ToolRegistry,
+): ToolExecutionResult {
+  const registered = registry.get(toolCall.function.name);
+  if (!registered) {
+    throw new TypeError(`Tool '${toolCall.function.name}' is no longer registered`);
+  }
+
+  if (!isToolHandlerOutcome(result)) {
+    const legacy = normalizeToolHandlerResult(result);
+    if (legacy.isError) {
+      return genericTerminalExecution(
+        toolCall.id,
+        toolCall.function.name,
+        'error',
+        legacy.content,
+        'tool_error',
+      );
+    }
+    const canonical = createCanonicalToolResult('generic', {
+      status: legacy.content.length === 0 ? 'empty' : 'complete',
+      data: {
+        value: legacy.content,
+        origin: { kind: 'built-in', name: toolCall.function.name },
+      },
+    });
+    return finalizeToolExecutionResult({
+      canonical,
+      toolName: toolCall.function.name,
+      toolCallId: toolCall.id,
+      expectedFamily: 'generic',
+      projector: registry.resolveAgentProjector(toolCall.function.name).projector,
+    });
+  }
+
+  const family = registered.definition.resultFamily ?? 'generic';
+  const canonical = createCanonicalToolResult(family, result);
+  return finalizeToolExecutionResult({
+    canonical,
+    toolName: toolCall.function.name,
+    toolCallId: toolCall.id,
+    outputDataSchema: registered.definition.outputDataSchema,
+    expectedFamily: registered.definition.resultFamily,
+    projector: registry.resolveAgentProjector(toolCall.function.name).projector,
+  });
+}
+
+function ensureProjectionRecovery(
+  execution: ToolExecutionResult,
+  toolCall: ToolCall,
+  options: ToolDispatchOptions,
+): ToolExecutionResult {
+  if (
+    execution.canonical.status === 'partial' ||
+    execution.agentProjection.completeness !== 'partial' ||
+    execution.agentProjection.retrieval.kind !== 'cache'
+  ) {
+    return execution;
+  }
+
+  if (!options.sessionId) {
+    return {
+      canonical: execution.canonical,
+      agentProjection: genericAgentProjector(execution.canonical),
+    };
+  }
+
+  try {
+    const retrieval = materializeCanonicalResultRetrieval({
+      sessionId: options.sessionId,
+      toolCallId: toolCall.id,
+      canonical: execution.canonical,
+    });
+    return {
+      canonical: execution.canonical,
+      agentProjection: {
+        content: [
+          execution.agentProjection.content,
+          '',
+          `Complete result: ${retrieval.path}`,
+          ...retrieval.instructions,
+        ].join('\n'),
+        completeness: 'partial',
+        retrieval,
+      },
+    };
+  } catch (error) {
+    console.warn('[tool-dispatch] Recovery cache materialization failed', {
+      toolCallId: toolCall.id,
+      toolName: toolCall.function.name,
+      family: execution.canonical.family,
+      stage: 'projection',
+      exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
+    });
+    return {
+      canonical: execution.canonical,
+      agentProjection: genericAgentProjector(execution.canonical),
+    };
+  }
+}
+
+function maybeOffloadAgentProjection(
+  execution: ToolExecutionResult,
+  toolCall: ToolCall,
+  options: ToolDispatchOptions,
+): ToolExecutionResult {
+  if (!options.sessionId) return execution;
+  const offload = maybeOffloadToolOutputDetailed(
+    toolCall.function.name,
+    execution.agentProjection.content,
+    toolCall.id,
+    options.sessionId,
+  );
+  if (!offload.cachePath) return execution;
+
+  return {
+    canonical: execution.canonical,
+    agentProjection: {
+      content: offload.content,
+      completeness: 'partial',
+      retrieval: {
+        kind: 'cache',
+        path: offload.cachePath,
+        instructions: [
+          `Use read with file_path=${JSON.stringify(offload.cachePath)} to inspect the complete agent projection.`,
+          `Use grep against ${JSON.stringify(offload.cachePath)} to search the complete agent projection.`,
+        ],
+      },
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -235,23 +500,42 @@ export function maybeOffloadToolOutput(
   toolCallId: string,
   sessionId?: string,
 ): string {
+  return maybeOffloadToolOutputDetailed(
+    toolName,
+    content,
+    toolCallId,
+    sessionId,
+  ).content;
+}
+
+interface ToolOutputOffloadResult {
+  content: string;
+  cachePath?: string;
+}
+
+function maybeOffloadToolOutputDetailed(
+  toolName: string,
+  content: string,
+  toolCallId: string,
+  sessionId?: string,
+): ToolOutputOffloadResult {
   if (
     content.length <= TOOL_OUTPUT_INLINE_THRESHOLD ||
     TOOLS_WITHOUT_OUTPUT_OFFLOAD.has(toolName)
   ) {
-    return content;
+    return { content };
   }
 
   if (!sessionId) {
     // No session — hard-truncate
     const truncated = content.slice(0, TOOL_OUTPUT_INLINE_THRESHOLD);
-    return (
+    return { content: (
       `<${toolName}_result length=${content.length}>\n` +
       `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters ` +
       `and was truncated because no active session is available for cache ` +
       `storage. Use the tool again with narrower scope (offset/limit) to ` +
       `inspect the full result.</warning>\n${truncated}\n</${toolName}_result>`
-    );
+    ) };
   }
 
   const cacheDir = getToolOutputCacheDir(sessionId);
@@ -271,25 +555,28 @@ export function maybeOffloadToolOutput(
     } catch {
       // ignore chmod errors
     }
+    if (fs.readFileSync(filePath, 'utf-8') !== content) {
+      throw new Error('Tool output cache verification failed');
+    }
 
     const escapedPath = escapeHtmlAttr(filePath);
-    return (
+    return { content: (
       `<${toolName}_result length=${content.length} file="${escapedPath}">\n` +
       `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters and ` +
       `was written to ${escapedPath}. Use read (with offset/limit) or grep to inspect ` +
       `it.</warning>\n</${toolName}_result>`
-    );
+    ), cachePath: filePath };
   } catch (err) {
     // Cache write failed — truncate inline
     console.warn(`Failed to offload tool output for ${toolName}:`, err);
     const truncated = content.slice(0, TOOL_OUTPUT_INLINE_THRESHOLD);
-    return (
+    return { content: (
       `<${toolName}_result length=${content.length}>\n` +
       `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters ` +
       `and cache write failed (${err instanceof Error ? err.message : err}). Truncated below; re-run the tool with ` +
       `narrower scope to inspect the full result.</warning>\n` +
       `${truncated}\n</${toolName}_result>`
-    );
+    ) };
   }
 }
 
