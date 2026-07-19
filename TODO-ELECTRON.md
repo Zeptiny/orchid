@@ -27,6 +27,7 @@
   - MCP: `read_mcp_resource`, `list_mcp_resources`, and dynamically registered MCP tools
 
 ### TODOs geral
+- apply_patch tool
 - Change session storage to SQLite
 - Tools should start the execution as son as the generation is complete, even if the model is still generating output for other commands
 - RAG/AST Post Write Callback + automatic updating if changes are detected (Can be changed via commands / manually / etc that post write callback does not detect)
