@@ -76,14 +76,16 @@ describe('todo tools agent isolation', () => {
     await create.handler({ title: 'SubA task' }, ctx('sub-a'));
     await create.handler({ title: 'SubB task' }, ctx('sub-b'));
 
-    const listA = (await list.handler({}, ctx('sub-a'))) as { content: string };
-    expect(listA.content).toContain('SubA task');
-    expect(listA.content).not.toContain('Main task');
-    expect(listA.content).not.toContain('SubB task');
+    const listA = await list.handler({}, ctx('sub-a'));
+    expect(listA.status).toBe('complete');
+    expect(String(listA.data.value)).toContain('SubA task');
+    expect(String(listA.data.value)).not.toContain('Main task');
+    expect(String(listA.data.value)).not.toContain('SubB task');
 
-    const listMain = (await list.handler({}, ctx('main'))) as { content: string };
-    expect(listMain.content).toContain('Main task');
-    expect(listMain.content).not.toContain('SubA task');
+    const listMain = await list.handler({}, ctx('main'));
+    expect(listMain.status).toBe('complete');
+    expect(String(listMain.data.value)).toContain('Main task');
+    expect(String(listMain.data.value)).not.toContain('SubA task');
 
     const subATodos = store.list().filter((t) => t.subagent_id === 'sub-a');
     const subBTodos = store.list().filter((t) => t.subagent_id === 'sub-b');
@@ -93,22 +95,22 @@ describe('todo tools agent isolation', () => {
     const badUpdate = (await update.handler(
       { id: mainTodos[0]!.id, title: 'hacked' },
       ctx('sub-a'),
-    )) as { isError?: boolean; content: string };
-    expect(badUpdate.isError).toBe(true);
-    expect(badUpdate.content).toMatch(/not owned/i);
+    ));
+    expect(badUpdate.status).toBe('error');
+    expect(String(badUpdate.data.value)).toMatch(/not owned/i);
 
     const badDel = (await del.handler(
       { id: subBTodos[0]!.id },
       ctx('sub-a'),
-    )) as { isError?: boolean };
-    expect(badDel.isError).toBe(true);
+    ));
+    expect(badDel.status).toBe('error');
 
     // SubA can update own
     const ok = (await update.handler(
       { id: subATodos[0]!.id, status: 'IN_PROGRESS' },
       ctx('sub-a'),
-    )) as { isError?: boolean };
-    expect(ok.isError).not.toBe(true);
+    ));
+    expect(ok.status).toBe('complete');
   });
 
   it('subagent cannot forge another owner on create', async () => {

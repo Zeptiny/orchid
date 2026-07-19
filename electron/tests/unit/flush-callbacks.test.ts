@@ -14,6 +14,10 @@ import { SubagentManager, SubagentState } from '../../src/main/agents/manager';
 import { buildInterruptTool } from '../../src/main/tools/subagent/interrupt';
 import type { SubagentToolResult } from '../../src/main/tools/subagent/delegate';
 
+function resultText(result: SubagentToolResult): string {
+  return String(result.data.value);
+}
+
 // ── Test fixtures ────────────────────────────────────────────────────────────
 
 const codeReviewerAgent: Agent = {
@@ -143,7 +147,7 @@ describe('interrupt_subagents waiter isolation', () => {
     )) as SubagentToolResult;
 
     expect(record.state).toBe(SubagentState.INTERRUPTED);
-    expect(result.display).toContain('Interrupted 1 subagent(s)');
+    expect(resultText(result)).toContain('Interrupted:');
 
     const waitResult = await waitPromise;
     expect(waitResult.has(record.id)).toBe(true);
@@ -169,7 +173,7 @@ describe('interrupt_subagents waiter isolation', () => {
       sessionCtx,
     )) as SubagentToolResult;
 
-    expect(result.display).toContain('Interrupted 2 subagent(s)');
+    expect(resultText(result)).toContain('Interrupted subagents:');
     expect(a.state).toBe(SubagentState.INTERRUPTED);
     expect(b.state).toBe(SubagentState.INTERRUPTED);
 
@@ -202,7 +206,7 @@ describe('interrupt_subagents waiter isolation', () => {
       { cwd: '/tmp/project', sessionId: 'sess-b' },
     )) as SubagentToolResult;
 
-    expect(result.display).toContain('Interrupted 1');
+    expect(resultText(result)).toContain('Interrupted:');
     expect(b.state).toBe(SubagentState.INTERRUPTED);
     expect(a.state).toBe(SubagentState.RUNNING);
     expect(a._resolveWait).not.toBeNull();
@@ -227,7 +231,7 @@ describe('interrupt_subagents waiter isolation', () => {
     )) as SubagentToolResult;
 
     expect(record.state).toBe(SubagentState.INTERRUPTED);
-    expect(result.display).toContain('Interrupted 1 subagent(s)');
+    expect(resultText(result)).toContain('Interrupted:');
   });
 
   it('should handle mix of found, not found, and already done', async () => {
@@ -252,12 +256,12 @@ describe('interrupt_subagents waiter isolation', () => {
       sessionCtx,
     )) as SubagentToolResult;
 
-    expect(result.content).toContain('Interrupted');
-    expect(result.content).toContain(running.id);
-    expect(result.content).toContain('Already finished');
-    expect(result.content).toContain(completed.id);
-    expect(result.content).toContain('Not found');
-    expect(result.content).toContain('missing-id');
+    expect(resultText(result)).toContain('Interrupted');
+    expect(resultText(result)).toContain(running.id);
+    expect(resultText(result)).toContain('Already finished');
+    expect(resultText(result)).toContain(completed.id);
+    expect(resultText(result)).toContain('Not found');
+    expect(resultText(result)).toContain('missing-id');
 
     await waitPromise;
     expect(running._resolveWait).toBeNull();

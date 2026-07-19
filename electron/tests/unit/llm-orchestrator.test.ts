@@ -1264,7 +1264,6 @@ type MockStepFinish = {
     toolCallId: string;
     output?: unknown;
     result?: unknown;
-    isError?: boolean;
     error?: unknown;
   }>;
   content?: Array<Record<string, unknown>>;
@@ -1426,13 +1425,13 @@ describe('streamChat', () => {
         type: 'tool_result',
         toolCallId: 'tc-1',
         content: 'file contents',
-        isError: false,
+        execution: canonicalStreamOutput('file contents'),
       }),
       { type: 'content', text: 'Done' },
     ]);
   });
 
-  it('maps tool-output-error and structured isError tool-output-available as errors', async () => {
+  it('maps tool-output-error and canonical error tool-output-available as errors', async () => {
     setupStreamText({
       fullStreamParts: [
         {
@@ -1464,24 +1463,29 @@ describe('streamChat', () => {
     const results = events.filter((e) => e.type === 'tool_result');
 
     expect(results).toEqual([
-      expect.objectContaining({ type: 'tool_result', toolCallId: 'tc-err', content: 'Tool boom', isError: true }),
+      expect.objectContaining({
+        type: 'tool_result',
+        toolCallId: 'tc-err',
+        content: 'Tool boom',
+        execution: expect.objectContaining({ canonical: expect.objectContaining({ status: 'error' }) }),
+      }),
       expect.objectContaining({
         type: 'tool_result',
         toolCallId: 'tc-soft',
         content: 'Tool execution failed',
-        isError: true,
+        execution: canonicalStreamOutput('Tool execution failed', 'error'),
       }),
       expect.objectContaining({
         type: 'tool_result',
         toolCallId: 'tc-timeout',
         content: "Tool 'slow' timed out after 30 seconds",
-        isError: true,
+        execution: canonicalStreamOutput("Tool 'slow' timed out after 30 seconds", 'error'),
       }),
       expect.objectContaining({
         type: 'tool_result',
         toolCallId: 'tc-false-positive',
         content: 'Error: is just text in a successful tool result',
-        isError: false,
+        execution: canonicalStreamOutput('Error: is just text in a successful tool result'),
       }),
     ]);
   });
@@ -1563,7 +1567,7 @@ describe('streamChat', () => {
         type: 'tool_result',
         toolCallId: 'legacy-1',
         content: JSON.stringify({ matches: 2 }),
-        isError: false,
+        execution: canonicalStreamOutput(JSON.stringify({ matches: 2 })),
       }),
     ]);
   });
@@ -1594,7 +1598,7 @@ describe('streamChat', () => {
         type: 'tool_result',
         toolCallId: 'tc-bad',
         content: 'Invalid tool input',
-        isError: true,
+        execution: expect.objectContaining({ canonical: expect.objectContaining({ status: 'error' }) }),
       }),
     ]);
   });
@@ -1639,7 +1643,6 @@ describe('streamChat', () => {
       type: 'tool_result',
       toolCallId: 'tc-sdk-error',
       content: sdkError,
-      isError: true,
       execution: {
         canonical: {
           family: 'generic',
@@ -1807,7 +1810,7 @@ describe('streamChat', () => {
           type: 'tool_result',
           toolCallId: 'tc-step',
           content: 'hi',
-          isError: false,
+          execution: canonicalStreamOutput('hi'),
         }),
         { type: 'content', text: 'after tools' },
       ]),
@@ -1941,7 +1944,7 @@ describe('streamChat', () => {
             yield {
               type: 'tool-output-available',
               toolCallId: 'tc-1',
-              output: { content: 'done', isError: false },
+              output: canonicalStreamOutput('done'),
             };
           },
         },
@@ -1989,7 +1992,7 @@ describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
       { toolCallId: 'tc-1', toolName: 'read', args: '{"path":"a.ts"}' },
     ];
     const pendingToolResults = [
-      { toolCallId: 'tc-1', content: 'file contents', isError: false },
+      { toolCallId: 'tc-1', content: 'file contents', execution: canonicalStreamOutput('file contents') },
     ];
     // Simulate fullStream already yielding tool_call + tool_result for tc-1
     const seenToolCallIds = new Set(['tc-1']);
@@ -2013,8 +2016,8 @@ describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
       { toolCallId: 'tc-2', toolName: 'grep', args: '{"pattern":"x"}' },
     ];
     const pendingToolResults = [
-      { toolCallId: 'tc-1', content: 'ok', isError: false },
-      { toolCallId: 'tc-2', content: 'Error: boom', isError: true },
+      { toolCallId: 'tc-1', content: 'ok', execution: canonicalStreamOutput('ok') },
+      { toolCallId: 'tc-2', content: 'Error: boom', execution: canonicalStreamOutput('Error: boom', 'error') },
     ];
     const seenToolCallIds = new Set<string>();
     const seenToolResultIds = new Set<string>();
@@ -2029,8 +2032,8 @@ describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
     expect(events).toEqual([
       { type: 'tool_call', toolCallId: 'tc-1', toolName: 'read', args: '{"path":"a.ts"}' },
       { type: 'tool_call', toolCallId: 'tc-2', toolName: 'grep', args: '{"pattern":"x"}' },
-      { type: 'tool_result', toolCallId: 'tc-1', content: 'ok', isError: false },
-      { type: 'tool_result', toolCallId: 'tc-2', content: 'Error: boom', isError: true },
+      { type: 'tool_result', toolCallId: 'tc-1', content: 'ok', execution: canonicalStreamOutput('ok') },
+      { type: 'tool_result', toolCallId: 'tc-2', content: 'Error: boom', execution: canonicalStreamOutput('Error: boom', 'error') },
     ]);
     expect(seenToolCallIds.has('tc-1')).toBe(true);
     expect(seenToolCallIds.has('tc-2')).toBe(true);
@@ -2044,8 +2047,8 @@ describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
       { toolCallId: 'tc-pending-only', toolName: 'write', args: '{}' },
     ];
     const pendingToolResults = [
-      { toolCallId: 'tc-stream', content: 'from-stream-dup', isError: false },
-      { toolCallId: 'tc-pending-only', content: 'from-pending', isError: false },
+      { toolCallId: 'tc-stream', content: 'from-stream-dup', execution: canonicalStreamOutput('from-stream-dup') },
+      { toolCallId: 'tc-pending-only', content: 'from-pending', execution: canonicalStreamOutput('from-pending') },
     ];
     // fullStream already emitted tc-stream call+result
     const seenToolCallIds = new Set(['tc-stream']);
@@ -2069,7 +2072,7 @@ describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
         type: 'tool_result',
         toolCallId: 'tc-pending-only',
         content: 'from-pending',
-        isError: false,
+        execution: canonicalStreamOutput('from-pending'),
       },
     ]);
     // Duplicate drain must be a no-op
@@ -2086,7 +2089,7 @@ describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
     const pendingToolCalls = [
       { toolCallId: 'tc-1', toolName: 'read', args: '{}' },
     ];
-    const pendingToolResults: Array<{ toolCallId: string; content: string; isError: boolean }> = [];
+    const pendingToolResults: Array<{ toolCallId: string; content: string; execution: ToolExecutionResult }> = [];
     const seenToolCallIds = new Set<string>();
     const seenToolResultIds = new Set<string>();
 

@@ -41,20 +41,14 @@ describe('buildToolMap skill allowlist', () => {
     expect(tools.skill).toBeDefined();
 
     // Disallowed skill is rejected at invoke time
-    const result = (await tools.skill.execute!({ name: 'work' }, {} as never)) as {
-      content: string;
-      isError?: boolean;
-    };
-    expect(result.isError).toBe(true);
-    expect(result.content).toMatch(/not available/i);
+    const result = await tools.skill.execute!({ name: 'work' }, {} as never);
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toMatch(/not available/i);
 
     // Allowed skill loads
-    const ok = (await tools.skill.execute!({ name: 'commit' }, {} as never)) as {
-      content: string;
-      isError?: boolean;
-    };
-    expect(ok.isError).not.toBe(true);
-    expect(ok.content.toLowerCase()).toContain('commit');
+    const ok = await tools.skill.execute!({ name: 'commit' }, {} as never);
+    expect(ok.canonical.status).toBe('complete');
+    expect(ok.agentProjection.content.toLowerCase()).toContain('commit');
   });
 
   it('allows all skills when allowedSkills is *', async () => {
@@ -74,10 +68,10 @@ describe('buildToolMap skill allowlist', () => {
       { skills, allowedSkills: ['*'] },
     );
 
-    const ok = (await tools.skill.execute!(
+    const ok = await tools.skill.execute!(
       { name: 'work' },
       {} as never,
-    )) as { isError?: boolean };
-    expect(ok.isError).not.toBe(true);
+    );
+    expect(ok.canonical.status).toBe('complete');
   });
 });

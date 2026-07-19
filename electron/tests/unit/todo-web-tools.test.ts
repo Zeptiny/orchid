@@ -89,7 +89,7 @@ describe('Todo Tools', () => {
       const { handler } = buildCreateTool(store, notifyChanged);
       const result = (await callTool(handler, {
         title: 'Test task',
-      })) as { display: string; content: string };
+      })) as ToolExecutionResult;
 
       expect(result.canonical.status).toBe('complete');
       expect(result.agentProjection.content).toContain('Task created successfully');
@@ -116,7 +116,7 @@ describe('Todo Tools', () => {
       const result = (await callTool(handler, {
         title: 'Subagent task',
         subagent_id: 'sub-123',
-      })) as { content: string };
+      })) as ToolExecutionResult;
 
       const idMatch = result.agentProjection.content.match(/ID: ([a-f0-9]{8})/);
       const id = idMatch![1];
@@ -131,7 +131,7 @@ describe('Todo Tools', () => {
       for (let i = 0; i < 10; i++) {
         const result = (await callTool(handler, {
           title: `Task ${i}`,
-        })) as { content: string };
+        })) as ToolExecutionResult;
         const idMatch = result.agentProjection.content.match(/ID: ([a-f0-9]{8})/);
         expect(idMatch).not.toBeNull();
         ids.add(idMatch![1]);
@@ -149,14 +149,14 @@ describe('Todo Tools', () => {
       const createHandler = buildCreateTool(store).handler;
       const createResult = (await callTool(createHandler, {
         title: 'Original',
-      })) as { content: string };
+      })) as ToolExecutionResult;
       const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
 
       const updateHandler = buildUpdateTool(store, notifyChanged).handler;
       const result = (await callTool(updateHandler, {
         id,
         title: 'Updated',
-      })) as { display: string; content: string };
+      })) as ToolExecutionResult;
 
       expect(result.canonical.status).toBe('complete');
       expect(result.agentProjection.content).toContain('Title: Updated');
@@ -168,14 +168,14 @@ describe('Todo Tools', () => {
       const createHandler = buildCreateTool(store).handler;
       const createResult = (await callTool(createHandler, {
         title: 'Test',
-      })) as { content: string };
+      })) as ToolExecutionResult;
       const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
 
       const updateHandler = buildUpdateTool(store).handler;
       const result = (await callTool(updateHandler, {
         id,
         status: 'in_progress',
-      })) as { content: string };
+      })) as ToolExecutionResult;
 
       expect(result.agentProjection.content).toContain('Status: IN_PROGRESS');
       expect(store.get(id)!.status).toBe(TodoStatus.IN_PROGRESS);
@@ -185,7 +185,7 @@ describe('Todo Tools', () => {
       const createHandler = buildCreateTool(store).handler;
       const createResult = (await callTool(createHandler, {
         title: 'Test',
-      })) as { content: string };
+      })) as ToolExecutionResult;
       const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
 
       const updateHandler = buildUpdateTool(store).handler;
@@ -197,7 +197,7 @@ describe('Todo Tools', () => {
       const result = (await callTool(updateHandler, {
         id,
         status: 'done',
-      })) as { content: string };
+      })) as ToolExecutionResult;
 
       expect(result.agentProjection.content).toContain('Status: DONE');
       expect(store.get(id)!.status).toBe(TodoStatus.DONE);
@@ -207,7 +207,7 @@ describe('Todo Tools', () => {
       const createHandler = buildCreateTool(store).handler;
       const createResult = (await callTool(createHandler, {
         title: 'Test',
-      })) as { content: string };
+      })) as ToolExecutionResult;
       const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
 
       const updateHandler = buildUpdateTool(store).handler;
@@ -220,7 +220,7 @@ describe('Todo Tools', () => {
       const result = (await callTool(updateHandler, {
         id,
         status: 'in_progress',
-      })) as { display: string; content: string };
+      })) as ToolExecutionResult;
 
       expect(result.canonical.status).toBe('error');
       expect(result.agentProjection.content).toContain('terminal status');
@@ -231,14 +231,14 @@ describe('Todo Tools', () => {
       const createHandler = buildCreateTool(store).handler;
       const createResult = (await callTool(createHandler, {
         title: 'Test',
-      })) as { content: string };
+      })) as ToolExecutionResult;
       const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
 
       const updateHandler = buildUpdateTool(store).handler;
       const result = (await callTool(updateHandler, {
         id,
         status: 'done',
-      })) as { display: string; content: string };
+      })) as ToolExecutionResult;
 
       expect(result.canonical.status).toBe('error');
       expect(result.agentProjection.content).toContain('Cannot transition');
@@ -248,14 +248,14 @@ describe('Todo Tools', () => {
       const createHandler = buildCreateTool(store).handler;
       const createResult = (await callTool(createHandler, {
         title: 'Test',
-      })) as { content: string };
+      })) as ToolExecutionResult;
       const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
 
       const updateHandler = buildUpdateTool(store).handler;
       const result = (await callTool(updateHandler, {
         id,
         status: 'bogus',
-      })) as { display: string; content: string };
+      })) as ToolExecutionResult;
 
       expect(result.canonical.status).toBe('error');
       expect(result.agentProjection.content).toContain('Invalid status');
@@ -266,7 +266,7 @@ describe('Todo Tools', () => {
       const result = (await callTool(updateHandler, {
         id: 'nonexistent',
         title: 'Test',
-      })) as { display: string; content: string };
+      })) as ToolExecutionResult;
 
       expect(result.canonical.status).toBe('error');
       expect(result.agentProjection.content).toContain('No task found');
@@ -320,7 +320,7 @@ describe('Todo Tools', () => {
       // Filter by IN_PROGRESS
       const progressResult = (await callTool(listHandler, {
         status: 'in_progress',
-      })) as { display: string; content: string };
+      })) as ToolExecutionResult;
       expect(progressResult.canonical.status).toBe('complete');
       expect(progressResult.agentProjection.content).toContain('Progress task');
     });
@@ -376,7 +376,7 @@ describe('Todo Tools', () => {
       const createHandler = buildCreateTool(store).handler;
       const createResult = (await callTool(createHandler, {
         title: 'To delete',
-      })) as { content: string };
+      })) as ToolExecutionResult;
       const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
 
       const deleteHandler = buildDeleteTool(store, notifyChanged).handler;
@@ -410,7 +410,7 @@ describe('Todo Tools', () => {
       // Create
       const createResult = (await callTool(buildCreateTool(store, notifyChanged).handler, {
         title: 'Lifecycle task',
-      })) as { content: string };
+      })) as ToolExecutionResult;
       const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
       expect(store.get(id)!.status).toBe(TodoStatus.OPEN);
 
@@ -428,7 +428,7 @@ describe('Todo Tools', () => {
       // List (should show DONE task)
       const listResult = (await callTool(buildListTool(store).handler, {
         status: 'done',
-      })) as { display: string; content: string };
+      })) as ToolExecutionResult;
       expect(listResult.canonical.status).toBe('complete');
       expect(listResult.agentProjection.content).toContain('Lifecycle task');
 
@@ -480,7 +480,7 @@ describe('Web Fetch Tools', () => {
       const result = (await callTool(handler, {
         url: '',
         query: 'test',
-      })) as { display: string; content: string };
+      })) as ToolExecutionResult;
 
       expect(result.canonical.status).toBe('error');
       expect(result.agentProjection.content).toContain('cannot be empty');
@@ -491,7 +491,7 @@ describe('Web Fetch Tools', () => {
       const result = (await callTool(handler, {
         url: 'ftp://example.com',
         query: 'test',
-      })) as { display: string; content: string };
+      })) as ToolExecutionResult;
 
       expect(result.canonical.status).toBe('error');
       expect(result.agentProjection.content).toContain('http or https');
@@ -527,7 +527,7 @@ describe('Web Fetch Tools', () => {
           mockFetch.mockClear();
           const result = (await callTool(handler, {
             url,
-          })) as { display: string; content: string; isError?: boolean };
+          })) as ToolExecutionResult;
 
           expect(result.canonical.status).toBe('complete');
           expect(result.canonical.status).toBe('complete');
@@ -558,7 +558,7 @@ describe('Web Fetch Tools', () => {
         const { handler } = buildWebFetchTool();
         const result = (await callTool(handler, {
           url: 'https://example.com',
-        })) as { display: string; content: string };
+        })) as ToolExecutionResult;
 
         expect(result.canonical.status).toBe('complete');
         expect(result.agentProjection.content).toContain('<web_fetch_raw');
@@ -585,7 +585,7 @@ describe('Web Fetch Tools', () => {
         const result = (await callTool(handler, {
           url: 'https://example.com',
           query: '   ',
-        })) as { display: string; content: string };
+        })) as ToolExecutionResult;
 
         expect(result.canonical.status).toBe('complete');
         expect(result.agentProjection.content).toContain('<web_fetch_raw');
@@ -611,7 +611,7 @@ describe('Web Fetch Tools', () => {
         const result = (await callTool(handler, {
           url: 'https://example.com',
           mode: 'invalid',
-        })) as { display: string; content: string };
+        })) as ToolExecutionResult;
 
         expect(result.agentProjection.content).toContain('<web_fetch_raw');
       } finally {
@@ -639,7 +639,7 @@ describe('Web Fetch Tools', () => {
         const result = (await callTool(handler, {
           url: 'https://example.com',
           query: 'What is this page about?',
-        })) as { display: string; content: string };
+        })) as ToolExecutionResult;
 
         expect(result.canonical.status).toBe('error');
         expect(result.agentProjection.content).toContain('summarize callback');
@@ -668,7 +668,7 @@ describe('Web Fetch Tools', () => {
         const result = (await callTool(handler, {
           url: 'https://example.com',
           query: 'What is this page about?',
-        })) as { display: string; content: string };
+        })) as ToolExecutionResult;
 
         expect(result.canonical.status).toBe('complete');
         expect(result.agentProjection.content).toContain('This is a test page');
@@ -706,7 +706,7 @@ describe('Web Fetch Tools', () => {
         const { handler } = buildWebFetchTool();
         const result = (await callTool(handler, {
           url: 'https://example.com',
-        })) as { display: string; content: string };
+        })) as ToolExecutionResult;
 
         expect(result.canonical.status).toBe('complete');
         expect(result.agentProjection.content).toContain('<web_fetch_raw');
@@ -740,7 +740,7 @@ describe('Web Fetch Tools', () => {
             url: 'https://example.com/large',
           },
           { cwd: process.cwd(), sessionId: 'test-session' },
-        )) as { display: string; content: string };
+        )) as ToolExecutionResult;
 
         expect(result.canonical.status).toBe('complete');
         expect(result.agentProjection.content).toContain('<web_fetch_raw');
@@ -772,7 +772,7 @@ describe('Web Fetch Tools', () => {
         const { handler } = buildWebFetchTool(); // No sessionId
         const result = (await callTool(handler, {
           url: 'https://example.com/large',
-        })) as { display: string; content: string };
+        })) as ToolExecutionResult;
 
         expect(result.canonical.status).toBe('error');
         expect(result.agentProjection.content).toContain('require an active session');
@@ -801,7 +801,7 @@ describe('Web Fetch Tools', () => {
         const result = (await callTool(handler, {
           url: 'https://example.com',
           query: 'test',
-        })) as { display: string; content: string };
+        })) as ToolExecutionResult;
 
         // The handler correctly detects abort as timeout
         expect(result.canonical.status).toBe('error');
@@ -841,7 +841,7 @@ describe('Web Fetch Tools', () => {
         // Abort after the fetch has attached its listener
         await Promise.resolve();
         ac.abort();
-        const result = (await pending) as { display: string; content: string; isError?: boolean };
+        const result = (await pending) as ToolExecutionResult;
 
         expect(sawSignal).toBeDefined();
         expect(result.canonical.status).toBe('cancelled');
@@ -866,7 +866,7 @@ describe('Web Fetch Tools', () => {
         const result = (await callTool(handler, {
           url: 'https://example.com',
           query: 'test',
-        })) as { display: string; content: string };
+        })) as ToolExecutionResult;
 
         expect(result.canonical.status).toBe('error');
         expect(result.agentProjection.content).toContain('404');
@@ -895,7 +895,7 @@ describe('Web Fetch Tools', () => {
         const { handler } = buildWebFetchTool();
         const result = (await callTool(handler, {
           url: 'https://example.com',
-        })) as { content: string };
+        })) as ToolExecutionResult;
 
         // Title should be normalized (whitespace collapsed)
         expect(result.agentProjection.content).toContain('My Page');
@@ -929,7 +929,7 @@ describe('Web Fetch Tools', () => {
         const { handler } = buildWebFetchTool();
         const result = (await callTool(handler, {
           url: 'https://example.com',
-        })) as { content: string };
+        })) as ToolExecutionResult;
 
         // Should contain markdown-formatted content
         expect(result.agentProjection.content).toContain('# Hello');
@@ -956,7 +956,7 @@ describe('Web Fetch Tools', () => {
         const { handler } = buildWebFetchTool();
         const result = (await callTool(handler, {
           url: 'https://example.com/?q=a&b="c"',
-        })) as { content: string };
+        })) as ToolExecutionResult;
 
         expect(result.agentProjection.content).toContain('url="https://example.com/?q=a&amp;b=&quot;c&quot;"');
         expect(result.agentProjection.content).toContain('title="A &amp; B &quot;quoted&quot; &lt;tag&gt;"');

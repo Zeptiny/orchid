@@ -87,7 +87,7 @@ export interface Message {
   readonly timestamp: string;
   readonly usage: Usage | null;
   readonly hidden: boolean;
-  /** Canonical terminal facts for TOOL_RESULT messages; null on legacy records. */
+  /** Canonical terminal facts for TOOL_RESULT messages; null for other messages. */
   readonly tool_result: CanonicalToolResult | null;
   /**
    * Explicit tool failure flag (TOOL_RESULT). Set by the backend when the tool
@@ -118,7 +118,7 @@ export interface MessageStorageDict {
   hidden?: boolean;
   /** Explicit tool failure; only meaningful for tool_result messages. */
   is_error?: boolean;
-  /** Canonical terminal facts; absent historical records restore as null. */
+  /** Canonical terminal facts for TOOL_RESULT records. */
   tool_result?: unknown;
   // Forward-compat: extra keys tolerated on restore
   [key: string]: unknown;
@@ -208,10 +208,6 @@ export function messageToStorageDict(msg: Message): MessageStorageDict {
   }
   if (msg.tool_result) {
     d.tool_result = msg.tool_result;
-  } else if (msg.is_error) {
-    // Preserve unsupported legacy records without treating this flag as a
-    // second authority for messages that carry canonical terminal facts.
-    d.is_error = true;
   }
   return d;
 }
@@ -284,6 +280,6 @@ export function messageFromStorageDict(data: unknown): Message {
     usage,
     hidden: raw.hidden === true,
     tool_result: toolResult,
-    is_error: toolResult ? toolResult.status === 'error' : raw.is_error === true,
+    is_error: toolResult?.status === 'error',
   };
 }

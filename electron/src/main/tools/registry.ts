@@ -10,7 +10,6 @@ import { type ZodError } from 'zod';
 import type { ToolDefinition, ToolHandler, RegisteredTool } from './types';
 import {
   createToolExecutionResultSchema,
-  jsonValueSchema,
   type AgentProjector,
   type ToolResultFamily,
 } from '../../shared/types/tool-result';
@@ -57,7 +56,7 @@ export class ToolRegistry {
     this.familyAgentProjectors.set(family, projector);
   }
 
-  /** Replace the final safe fallback projector (primarily for composition/tests). */
+  /** Replace the generic-family projector (primarily for composition/tests). */
   setGenericAgentProjector(projector: AgentProjector): void {
     this.genericAgentProjector = projector;
   }
@@ -80,15 +79,14 @@ export class ToolRegistry {
   }
 
   /**
-   * Generate the AI SDK raw execution-result schema from canonical data
-   * metadata. Definitions without U1 metadata use JSON-safe generic data only
-   * during the coordinated migration.
+   * Generate the AI SDK raw execution-result schema from the tool's canonical
+   * data metadata.
    */
   getToolExecutionResultSchema(toolName: string) {
     const definition = this.tools.get(toolName)?.definition;
     if (!definition) return undefined;
     return createToolExecutionResultSchema(
-      definition.outputDataSchema ?? jsonValueSchema,
+      definition.outputDataSchema,
       definition.resultFamily,
     );
   }
@@ -151,7 +149,7 @@ export class ToolRegistry {
         ...(definition.actionLabel && { actionLabel: definition.actionLabel }),
         ...(definition.category && { category: definition.category }),
         ...(definition.noTimeout !== undefined && { noTimeout: definition.noTimeout }),
-        ...(definition.resultFamily && { resultFamily: definition.resultFamily }),
+        resultFamily: definition.resultFamily,
       };
     }
     return schemas;

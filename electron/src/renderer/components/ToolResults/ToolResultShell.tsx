@@ -46,23 +46,11 @@ export function toolStatusLabel(status: ToolBlock['status'], canonical?: Canonic
   return 'complete';
 }
 
-function legacyBody(block: ToolBlock): string {
-  return block.error ?? block.result ?? '';
+function completeCopy(canonical: CanonicalToolResult): string {
+  return serializeCanonicalResultForCopy(canonical);
 }
 
-function completeCopy(block: ToolBlock, canonical: CanonicalToolResult | null): string {
-  if (canonical) return serializeCanonicalResultForCopy(canonical);
-  return legacyBody(block);
-}
-
-function ResultBody({ block, canonical }: { block: ToolBlock; canonical: CanonicalToolResult | null }) {
-  if (!canonical) {
-    return (
-      <pre className="orchid-tool-result-body orchid-tool-result-selectable">
-        {legacyBody(block) || (block.status === 'completed' ? 'No output.' : 'Tool failed')}
-      </pre>
-    );
-  }
+function ResultBody({ block, canonical }: { block: ToolBlock; canonical: CanonicalToolResult }) {
 
   try {
     const Renderer = resolveToolResultRenderer(block.toolName, canonical.family);
@@ -117,11 +105,11 @@ export function ToolResultShell({
         : null;
       const facts = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
       const hasStructuredCommand = block.toolName === 'execute_command' && facts && (typeof facts.commandId === 'number' || typeof facts.command_id === 'number');
-      return hasStructuredCommand
+      return hasStructuredCommand && canonical
         ? <ResultBody block={block} canonical={canonical} />
         : <div className="orchid-tool-running-hint">Running…</div>;
     }
-    return <ResultBody block={block} canonical={canonical} />;
+    return canonical ? <ResultBody block={block} canonical={canonical} /> : null;
   }, [block, canonical]);
 
   const toggle = () => {
@@ -135,7 +123,8 @@ export function ToolResultShell({
       if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
         throw new Error('Clipboard API unavailable');
       }
-      await navigator.clipboard.writeText(completeCopy(block, canonical));
+      if (!canonical) return;
+      await navigator.clipboard.writeText(completeCopy(canonical));
       setAnnouncement('Complete result copied to clipboard.');
     } catch {
       setAnnouncement('Unable to copy result.');
@@ -164,7 +153,7 @@ export function ToolResultShell({
         <div id={panelId} className="orchid-tool-block-content min-w-0" aria-describedby={announcementId}>
           <div className="orchid-tool-result-toolbar flex flex-wrap items-center justify-end gap-1">
             <span className="sr-only">{status} tool result</span>
-            {!active && <Button size="xs" variant="ghost" onClick={copy}>Copy complete result</Button>}
+            {!active && canonical && <Button size="xs" variant="ghost" onClick={copy}>Copy complete result</Button>}
           </div>
           {body}
           <span id={announcementId} className="sr-only" role="status" aria-live="polite">{announcement}</span>

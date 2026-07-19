@@ -3,7 +3,7 @@
  *
  * Single source of truth for constructing Message objects so chat IPC,
  * subagent manager, and tool-dispatch stay aligned. Canonical status is the
- * terminal authority; `is_error` remains a derived compatibility field.
+ * terminal authority; `is_error` is a derived transport field.
  */
 
 import type { Message, Usage } from '../../shared/types/message';
@@ -113,21 +113,15 @@ export function makeToolCallMessage(
  * Create a TOOL_RESULT message.
  *
  * Content is the exact finalized agent projection. Canonical status derives
- * the compatibility `is_error` flag; no content inspection is performed.
+ * the explicit `is_error` transport flag; no content inspection is performed.
  */
 export function makeToolResultMessage(
   toolCallId: string,
   toolName: string | null,
   content: string,
-  toolResultOrError: CanonicalToolResult | boolean,
+  toolResult: CanonicalToolResult,
   id: string = newId(),
 ): Message {
-  // Keep the legacy boolean call shape readable for older callers and stored
-  // fixtures while canonical callers retain the structured terminal facts.
-  const toolResult = typeof toolResultOrError === 'boolean' ? null : toolResultOrError;
-  const isError = typeof toolResultOrError === 'boolean'
-    ? toolResultOrError
-    : toolResultOrError.status === 'error';
   return {
     id,
     role: MessageRole.TOOL,
@@ -141,6 +135,6 @@ export function makeToolResultMessage(
     usage: null,
     hidden: false,
     tool_result: toolResult,
-    is_error: isError,
+    is_error: toolResult.status === 'error',
   };
 }

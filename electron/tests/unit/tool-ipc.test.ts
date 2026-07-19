@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 import { RENDERER_ALLOWED_TOOLS } from '../../src/main/ipc/payload-schemas';
 import type { ToolExecutionResult } from '../../src/shared/types/tool-result';
+import { genericToolResultDataSchema } from '../../src/shared/types/tool-result';
 import { executeToolCall } from '../../src/main/llm/tool-dispatch';
 import type { ToolRegistry } from '../../src/main/tools/registry';
 
@@ -23,7 +24,14 @@ const mocks = vi.hoisted(() => {
   }));
   const get = vi.fn((name: string) => {
     if (name === 'missing-tool') return undefined;
-    return { handler, definition: { name } };
+    return {
+      handler,
+      definition: {
+        name,
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+      },
+    };
   });
 
   return {
@@ -90,7 +98,14 @@ beforeEach(async () => {
   mocks.get.mockClear();
   mocks.get.mockImplementation((name: string) => {
     if (name === 'missing-tool') return undefined;
-    return { handler: mocks.handler, definition: { name } };
+    return {
+      handler: mocks.handler,
+      definition: {
+        name,
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+      },
+    };
   });
   mocks.resolveBoundProjectPath.mockReset();
   mocks.resolveBoundProjectPath.mockReturnValue(PROJECT_DIR);
