@@ -50,7 +50,10 @@ describe('SubagentTranscript pure rendering contract (U4)', () => {
           content: '', tool_call_id: 'tool-1', name: 'read',
           tool_calls: [{ id: 'tool-1', type: 'function', function: { name: 'read', arguments: '{}' } }] }),
         message({ id: 'result', role: MessageRole.TOOL, type: MessageType.TOOL_RESULT,
-          content: 'done', tool_call_id: 'tool-1', name: 'read' }),
+          content: 'done', tool_call_id: 'tool-1', name: 'read',
+          tool_result: createCanonicalToolResult('generic', {
+            status: 'complete', data: { value: 'done' },
+          }) }),
       ]),
       live([{ kind: 'text', id: 'live-1', content: 'after' }]),
     );
@@ -80,7 +83,7 @@ describe('SubagentTranscript pure rendering contract (U4)', () => {
     const items = buildSubagentTranscriptItems(record([]), projection);
     expect(items).toHaveLength(1);
     expect(items[0].kind === 'tool' && items[0].block.toolResult).toEqual(canonical);
-    expect(items[0].kind === 'tool' && items[0].block.result).toBe('cancelled projection');
+    expect(items[0].kind === 'tool' && items[0].block.agentProjection).toBe('cancelled projection');
   });
 
   it('filters hidden/system messages and preserves thinking as a collapsible message', () => {
@@ -96,16 +99,21 @@ describe('SubagentTranscript pure rendering contract (U4)', () => {
     expect(items[0].kind === 'message' && items[0].message.type).toBe(MessageType.THINKING);
   });
 
-  it('uses explicit is_error semantics for durable tool results', () => {
+  it('uses canonical status semantics for durable tool results', () => {
+    const canonical = createCanonicalToolResult('generic', {
+      status: 'error',
+      data: { value: 'failed' },
+      error: { code: 'tool_failed', message: 'failed' },
+    });
     const items = buildSubagentTranscriptItems(record([
       message({ id: 'call', type: MessageType.TOOL_CALL, content: '', tool_call_id: 'tool-1',
         tool_calls: [{ id: 'tool-1', type: 'function', function: { name: 'exec', arguments: '{}' } }] }),
       message({ id: 'result', role: MessageRole.TOOL, type: MessageType.TOOL_RESULT,
-        content: 'failed', tool_call_id: 'tool-1', name: 'exec', is_error: true }),
+        content: 'failed', tool_call_id: 'tool-1', name: 'exec', tool_result: canonical }),
     ]), null);
     expect(items).toHaveLength(1);
     expect(items[0].kind === 'tool' && items[0].block.status).toBe('failed');
-    expect(items[0].kind === 'tool' && items[0].block.error).toBe('failed');
+    expect(items[0].kind === 'tool' && items[0].block.agentProjection).toBe('failed');
   });
 
   it('treats a persisted tool call without a result as completed like ChatStream', () => {

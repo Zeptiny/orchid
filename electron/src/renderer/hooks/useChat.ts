@@ -57,9 +57,9 @@ export interface ToolBlock {
   status: ToolBlockStatus;
   partialArgs: string;
   args: string;
-  result: string | null;
-  error: string | null;
-  /** Retained canonical facts; presentation migration is handled in U6. */
+  /** Exact finalized agent projection for terminal tool calls. */
+  agentProjection: string | null;
+  /** Canonical terminal facts; null while generating/running. */
   toolResult: CanonicalToolResult | null;
   startedAt: string;
   finishedAt: string | null;
@@ -73,8 +73,7 @@ export function chatToolSnapshotToBlock(tool: ChatToolCallSnapshot): ToolBlock {
     status: tool.status,
     partialArgs: tool.partialArgs,
     args: tool.args,
-    result: tool.status === 'error' ? null : tool.content,
-    error: tool.status === 'error' ? tool.content : null,
+    agentProjection: tool.content,
     toolResult: tool.toolResult,
     startedAt: tool.startedAt,
     finishedAt: tool.finishedAt,
@@ -712,8 +711,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         status: 'generating',
         partialArgs: '',
         args: '',
-        result: null,
-        error: null,
+        agentProjection: null,
         toolResult: null,
         startedAt: new Date().toISOString(),
         finishedAt: null,
@@ -756,8 +754,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           : event.status,
         partialArgs: '',
         args: event.args ?? '',
-        result: event.status === 'error' ? null : event.content ?? null,
-        error: event.status === 'error' ? event.content ?? null : null,
+        agentProjection: event.content ?? null,
         toolResult: event.toolResult ?? null,
         startedAt: new Date().toISOString(),
         finishedAt: event.status === 'running' ? null : new Date().toISOString(),
@@ -1321,12 +1318,10 @@ function toolBlockToMessages(block: ToolBlock): Message[] {
   };
 
   if (!block.toolResult) return [call];
-  const resultContent = block.error ?? block.result ?? '';
-
   const result: Message = {
     id: crypto.randomUUID(),
     role: MessageRole.TOOL,
-    content: resultContent,
+    content: block.agentProjection ?? '',
     type: MessageType.TOOL_RESULT,
     tool_calls: null,
     tool_call_id: callId,
@@ -1355,8 +1350,7 @@ function upsertToolBlock(blocks: ToolBlock[], next: ToolBlock, merge = false): T
           status: next.status,
           partialArgs: next.partialArgs || block.partialArgs,
           args: next.args || block.args || block.partialArgs,
-          result: next.result ?? block.result,
-          error: next.error ?? block.error,
+          agentProjection: next.agentProjection ?? block.agentProjection,
           toolResult: next.toolResult ?? block.toolResult,
           finishedAt: next.finishedAt ?? block.finishedAt,
         }

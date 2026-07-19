@@ -45,8 +45,7 @@ describe('useChat event affinity', () => {
     });
 
     expect(block.toolResult).toEqual(canonical);
-    expect(block.result).toBe('same projection');
-    expect(block.error).toBeNull();
+    expect(block.agentProjection).toBe('same projection');
   });
 
   it('keeps persisted usage when an idle live snapshot has no usage', () => {

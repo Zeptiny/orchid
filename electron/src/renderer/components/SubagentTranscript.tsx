@@ -25,19 +25,13 @@ export function isVisibleSubagentMessage(message: Message): boolean {
 }
 
 function snapshotToToolBlock(snapshot: SubagentToolSnapshot): ToolBlock {
-  const failed = snapshot.toolResult?.status === 'error';
   return {
     id: snapshot.toolCallId,
     toolName: snapshot.toolName,
-    status: snapshot.status === 'generating' || snapshot.status === 'running'
-      ? snapshot.status
-      : failed
-        ? 'failed'
-        : 'completed',
+    status: snapshot.status === 'error' ? 'failed' : snapshot.status,
     partialArgs: snapshot.partialArgs,
     args: snapshot.args,
-    result: failed ? null : snapshot.content,
-    error: failed ? snapshot.content : null,
+    agentProjection: snapshot.content,
     toolResult: snapshot.toolResult,
     startedAt: snapshot.startedAt,
     finishedAt: snapshot.finishedAt,
@@ -46,33 +40,31 @@ function snapshotToToolBlock(snapshot: SubagentToolSnapshot): ToolBlock {
 
 function messageToToolBlock(message: Message, result: Message | null): ToolBlock {
   const call = message.tool_calls?.[0];
-  const failed = Boolean(result?.is_error);
+  const canonical = result?.tool_result ?? null;
   return {
     id: message.tool_call_id ?? call?.id ?? message.id,
     toolName: call?.function?.name ?? message.name ?? 'tool',
     // Match ChatStream's canonical persisted-message conversion: a call with
     // no paired result is a settled historical tool, not a live operation.
-    status: failed ? 'failed' : 'completed',
+    status: canonical?.status === 'error' ? 'failed' : canonical?.status ?? 'completed',
     partialArgs: '',
     args: call?.function?.arguments ?? message.content,
-    result: failed ? null : result?.content ?? null,
-    error: failed ? result?.content ?? 'Tool failed' : null,
-    toolResult: result?.tool_result ?? null,
+    agentProjection: result?.content ?? null,
+    toolResult: canonical,
     startedAt: message.timestamp,
     finishedAt: result?.timestamp ?? message.timestamp,
   };
 }
 
 function resultToToolBlock(message: Message): ToolBlock {
-  const failed = message.is_error;
+  const canonical = message.tool_result;
   return {
     id: message.tool_call_id ?? message.id,
     toolName: message.name ?? 'tool',
-    status: failed ? 'failed' : 'completed',
+    status: canonical?.status === 'error' ? 'failed' : canonical?.status ?? 'completed',
     partialArgs: '', args: '',
-    result: failed ? null : message.content,
-    error: failed ? message.content : null,
-    toolResult: message.tool_result,
+    agentProjection: message.content,
+    toolResult: canonical,
     startedAt: message.timestamp, finishedAt: message.timestamp,
   };
 }

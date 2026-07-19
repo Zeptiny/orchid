@@ -161,8 +161,7 @@ function ToolCallMessage({ message }: { message: Message }) {
       status: 'completed',
       partialArgs: '',
       args,
-      result: null,
-      error: null,
+      agentProjection: null,
       toolResult: null,
       startedAt: message.timestamp,
       finishedAt: message.timestamp,
@@ -174,15 +173,14 @@ function ToolCallMessage({ message }: { message: Message }) {
 
 function ToolResultMessage({ message }: { message: Message }) {
   const block = useMemo((): ToolBlock => {
-    const isError = Boolean(message.is_error);
+    const status = message.tool_result?.status;
     return {
       id: message.tool_call_id ?? message.id,
       toolName: message.name ?? 'tool',
-      status: isError ? 'failed' : 'completed',
+      status: status === 'error' ? 'failed' : status ?? 'completed',
       partialArgs: '',
       args: '',
-      result: isError ? null : message.content,
-      error: isError ? message.content : null,
+      agentProjection: message.content,
       toolResult: message.tool_result,
       startedAt: message.timestamp,
       finishedAt: message.timestamp,

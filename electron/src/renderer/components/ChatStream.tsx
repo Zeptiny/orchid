@@ -1218,35 +1218,32 @@ function messagePairToToolBlock(call: Message, result: Message | null): ToolBloc
     call.tool_calls?.[0]?.function?.name ?? call.name ?? result?.name ?? 'unknown';
   const args = call.tool_calls?.[0]?.function?.arguments ?? call.content ?? '';
   const callId = call.tool_call_id ?? call.tool_calls?.[0]?.id ?? call.id;
-  // Backend owns failure; never infer from content text.
-  const isError = Boolean(result?.is_error);
+  const canonical = result?.tool_result ?? null;
 
   return {
     id: callId,
     toolName,
-    status: result ? (isError ? 'failed' : 'completed') : 'completed',
+    status: canonical?.status === 'error' ? 'failed' : canonical?.status ?? 'completed',
     partialArgs: '',
     args,
-    result: result && !isError ? result.content : null,
-    error: result && isError ? result.content : null,
-    toolResult: result?.tool_result ?? null,
+    agentProjection: result?.content ?? null,
+    toolResult: canonical,
     startedAt: call.timestamp,
     finishedAt: result?.timestamp ?? call.timestamp,
   };
 }
 
 function resultOnlyToToolBlock(result: Message): ToolBlock {
-  const isError = Boolean(result.is_error);
+  const canonical = result.tool_result;
 
   return {
     id: result.tool_call_id ?? result.id,
     toolName: result.name ?? 'tool',
-    status: isError ? 'failed' : 'completed',
+    status: canonical?.status === 'error' ? 'failed' : canonical?.status ?? 'completed',
     partialArgs: '',
     args: '',
-    result: isError ? null : result.content,
-    error: isError ? result.content : null,
-    toolResult: result.tool_result,
+    agentProjection: result.content,
+    toolResult: canonical,
     startedAt: result.timestamp,
     finishedAt: result.timestamp,
   };
