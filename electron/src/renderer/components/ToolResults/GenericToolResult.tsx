@@ -1,10 +1,7 @@
-import { useMemo, useState } from 'react';
 import type { CanonicalToolResult, JsonValue } from '../../../shared/types/tool-result';
 import { genericToolResultDataSchema } from '../../../shared/types/tool-result';
-import { ResultPager } from './ResultPager';
 import { StatusBadge } from '../ui/StatusBadge';
 
-const PAGE_SIZE = 50;
 const MAX_DEPTH = 8;
 
 export interface GenericToolResultProps {
@@ -43,15 +40,7 @@ export function GenericToolResult({ canonical }: GenericToolResultProps) {
   const parsed = genericToolResultDataSchema.safeParse(canonical.data);
   const value = parsed.success ? parsed.data.value : canonical.data;
   const origin = parsed.success ? parsed.data.origin : undefined;
-  const [page, setPage] = useState(0);
-  const isList = Array.isArray(value);
-  const list = isList ? value : null;
-  const visible = list ? list.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE) : null;
-  const body = useMemo(() => {
-    if (visible) return visible;
-    if (typeof value === 'string') return value;
-    return null;
-  }, [value, visible]);
+  const isText = typeof value === 'string';
 
   return (
     <div className="min-w-0 space-y-2" data-result-family="generic">
@@ -62,14 +51,13 @@ export function GenericToolResult({ canonical }: GenericToolResultProps) {
           <span className="sr-only">Tool-provided data is displayed as inert text.</span>
         </div>
       )}
-      {body !== null ? (
-        <pre className="orchid-tool-result-selectable m-0 max-w-full overflow-x-auto whitespace-pre-wrap break-words font-mono text-sm text-base-content/80">{pretty(body)}</pre>
+      {isText ? (
+        <pre className="orchid-tool-result-selectable m-0 max-h-96 max-w-full overflow-auto whitespace-pre-wrap break-words font-mono text-sm text-base-content/80">{pretty(value)}</pre>
       ) : (
-        <div className="orchid-tool-result-selectable max-w-full overflow-x-auto whitespace-normal break-words font-mono text-sm text-base-content/80">
+        <div className="orchid-tool-result-selectable max-h-96 max-w-full overflow-auto whitespace-normal break-words font-mono text-sm text-base-content/80">
           <JsonValueView value={value as JsonValue} />
         </div>
       )}
-      {list && <ResultPager total={list.length} page={page} pageSize={PAGE_SIZE} onPageChange={setPage} label="generic result items" />}
     </div>
   );
 }

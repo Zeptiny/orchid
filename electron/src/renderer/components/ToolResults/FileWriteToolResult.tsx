@@ -40,7 +40,7 @@ export function FileWriteToolResult({ canonical }: FileWriteToolResultProps) {
         <StatusBadge tone="neutral" outline size="xs">{data.operation}</StatusBadge>
         <span className="text-base-content/70">{writeMetadata(data)}</span>
       </div>
-      <div className="max-w-full overflow-x-auto rounded-box border border-base-300/70">
+      <div className="max-h-96 max-w-full overflow-auto rounded-box border border-base-300/70">
         <pre className="m-0 min-w-max whitespace-pre p-3 font-mono text-xs leading-5 text-base-content/85" aria-label={`Resulting content of ${data.path}`}>
           {data.content || <span className="text-base-content/60">(empty file)</span>}
         </pre>

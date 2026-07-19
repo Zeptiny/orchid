@@ -466,19 +466,9 @@
     @apply flex flex-col gap-0.5;
   }
 
-  .orchid-tool-activity-children-scroll {
-    max-height: calc(12 * 34px);
-    overflow-y: auto;
-  }
-
   .orchid-tool-activity-children .orchid-tool-block,
   .orchid-tool-activity-children .orchid-thought {
     margin-bottom: 0;
-  }
-
-  .orchid-tool-activity-overflow {
-    @apply text-xs text-base-content/50;
-    padding: 4px 14px 2px;
   }
 
   /* Tool call block */

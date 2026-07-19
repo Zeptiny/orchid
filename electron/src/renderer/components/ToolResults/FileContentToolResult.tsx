@@ -1,26 +1,13 @@
-import { useState } from 'react';
 import {
   fileContentDataSchema,
   type FileContentData,
 } from '../../../shared/types/tool-result-filesystem';
 import type { CanonicalToolResult } from '../../../shared/types/tool-result';
-import { ResultPager } from './ResultPager';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Alert } from '../ui/Alert';
 
 export interface FileContentToolResultProps {
   canonical: CanonicalToolResult;
-}
-
-const LINE_PAGE_SIZE = 100;
-
-export function visibleFileContentLines(
-  data: FileContentData,
-  page: number,
-  pageSize = LINE_PAGE_SIZE,
-): readonly FileContentData['lines'][number][] {
-  const start = Math.max(0, page) * pageSize;
-  return data.lines.slice(start, start + pageSize);
 }
 
 function rangeText(range: FileContentData['requestedRange']): string {
@@ -53,8 +40,7 @@ export function FileContentToolResult({ canonical }: FileContentToolResultProps)
   const parsed = fileContentDataSchema.safeParse(canonical.data);
   if (!parsed.success) return null;
   const data = parsed.data;
-  const [page, setPage] = useState(0);
-  const lines = visibleFileContentLines(data, page);
+  const lines = data.lines;
   return (
     <div className="min-w-0 space-y-2" data-result-family="file-content">
       {statusNotice(canonical, data)}
@@ -63,7 +49,7 @@ export function FileContentToolResult({ canonical }: FileContentToolResultProps)
         <span className="text-base-content/70">{fileContentRangeLabel(data)}</span>
         {data.language && <StatusBadge tone="neutral" outline size="xs">{data.language}</StatusBadge>}
       </div>
-      <div className="max-w-full overflow-x-auto rounded-box border border-base-300/70">
+      <div className="max-h-96 max-w-full overflow-auto rounded-box border border-base-300/70">
         <div className="min-w-max font-mono text-xs leading-5" role="table" aria-label={`Source lines from ${data.path}`}>
           {lines.length > 0 ? lines.map((line) => (
             <div role="row" key={line.number} className="flex min-w-max text-base-content/85">
@@ -73,7 +59,6 @@ export function FileContentToolResult({ canonical }: FileContentToolResultProps)
           )) : <div role="row" className="px-3 py-2 text-base-content/70">No lines in the requested range.</div>}
         </div>
       </div>
-      <ResultPager total={data.lines.length} page={page} pageSize={LINE_PAGE_SIZE} onPageChange={setPage} label="source lines" />
     </div>
   );
 }

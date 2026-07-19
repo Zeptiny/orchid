@@ -31,15 +31,24 @@ function canonical(status: CanonicalToolResult['status']): CanonicalToolResult {
 }
 
 describe('shared canonical tool-result renderer', () => {
-  it('has one shell, registry, inert generic body, and pager', () => {
+  it('has one shell, registry, inert generic body, and bounded scrolling', () => {
     expect(fs.existsSync(path.join(rendererDir, 'ToolResults/ToolResultShell.tsx'))).toBe(true);
     expect(fs.existsSync(path.join(rendererDir, 'ToolResults/GenericToolResult.tsx'))).toBe(true);
     expect(fs.existsSync(path.join(rendererDir, 'ToolResults/registry.tsx'))).toBe(true);
-    expect(fs.existsSync(path.join(rendererDir, 'ToolResults/ResultPager.tsx'))).toBe(true);
+    expect(fs.existsSync(path.join(rendererDir, 'ToolResults/ResultPager.tsx'))).toBe(false);
     const source = fs.readFileSync(path.join(rendererDir, 'ToolCallBlock.tsx'), 'utf8');
+    const generic = fs.readFileSync(path.join(rendererDir, 'ToolResults/GenericToolResult.tsx'), 'utf8');
+    const activity = fs.readFileSync(path.join(rendererDir, 'ToolActivityGroup.tsx'), 'utf8');
     expect(source).toContain('ToolResultShell');
     expect(source).not.toContain('parseToolPayload');
     expect(source).not.toContain('truncateResult');
+    expect(generic).toContain('max-h-96');
+    expect(generic).not.toContain('ResultPager');
+    expect(activity).not.toContain('MAX_VISIBLE_CHILDREN');
+    expect(activity).not.toContain('more</div>');
+    const shell = fs.readFileSync(path.join(rendererDir, 'ToolResults/ToolResultShell.tsx'), 'utf8');
+    expect(shell).toMatch(/expansionChoices\.get\(choiceKey\) \?\? false/);
+    expect(shell).not.toMatch(/if \(!expansionChoices\.has\(choiceKey\)\) setExpanded/);
   });
 
   it('resolves tool overrides before family defaults and restores them', () => {
@@ -171,8 +180,8 @@ describe('shared canonical tool-result renderer', () => {
     const markup = renderToStaticMarkup(createElement(SearchToolResult, { canonical: glob }));
     expect(markup).toContain('Glob matches');
     expect(markup).toContain('a.ts-0.ts');
-    expect(markup).toContain('Page 2');
-    expect(markup).toContain('aria-label="Paginate glob matches"');
+    expect(markup).toContain('b.ts-50.ts');
+    expect(markup).not.toContain('Paginate glob matches');
   });
 
   it('keeps unknown structured tool data inert through the generic viewer', () => {

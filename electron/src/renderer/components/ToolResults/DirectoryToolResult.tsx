@@ -195,7 +195,7 @@ export function DirectoryToolResult({ canonical }: DirectoryToolResultProps) {
         <StatusBadge tone="neutral" outline size="xs">{data.totalEntries} entries</StatusBadge>
         <span className="text-base-content/70">depth {data.depthLimit}</span>
       </div>
-      <div role="tree" aria-label={`Directory entries for ${data.root}`} className="min-w-0 max-w-full overflow-x-auto rounded-box border border-base-300/70 py-1">
+      <div role="tree" aria-label={`Directory entries for ${data.root}`} className="max-h-96 min-w-0 max-w-full overflow-auto rounded-box border border-base-300/70 py-1">
         {tree.length > 0 ? tree.map((node, index) => (
           <TreeNode key={`${node.entry.relativePath}:${index}`} node={node} level={1} position={index + 1} setSize={tree.length} expanded={expanded} toggle={toggle} />
         )) : <div className="px-3 py-2 text-sm text-base-content/70">No entries returned.</div>}

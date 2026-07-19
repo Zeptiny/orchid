@@ -1,4 +1,3 @@
-import { useMemo, useState } from 'react';
 import {
   searchResultsDataSchema,
   type GlobResultsData,
@@ -7,7 +6,6 @@ import {
   type SearchResultsData,
 } from '../../../shared/types/tool-result-filesystem';
 import type { CanonicalToolResult } from '../../../shared/types/tool-result';
-import { ResultPager } from './ResultPager';
 import { Alert } from '../ui/Alert';
 import { StatusBadge } from '../ui/StatusBadge';
 
@@ -56,8 +54,8 @@ function statusNotice(canonical: CanonicalToolResult, data: SearchResultsData) {
   return null;
 }
 
-function globBody(data: GlobResultsData, page: number) {
-  const matches = data.matches.slice(page * 50, (page + 1) * 50);
+function globBody(data: GlobResultsData) {
+  const matches = data.matches;
   return (
     <div role="list" aria-label="Glob matches" className="min-w-0 divide-y divide-base-300/60">
       {matches.map((match, index) => (
@@ -73,8 +71,8 @@ function globBody(data: GlobResultsData, page: number) {
   );
 }
 
-function grepBody(data: GrepResultsData, page: number) {
-  const groups = groupGrepMatches(data).slice(page * 20, (page + 1) * 20);
+function grepBody(data: GrepResultsData) {
+  const groups = groupGrepMatches(data);
   return (
     <div role="list" aria-label="Grep matches" className="min-w-0 divide-y divide-base-300/60">
       {groups.map((group) => (
@@ -96,15 +94,13 @@ function grepBody(data: GrepResultsData, page: number) {
   );
 }
 
-/** Grouped, paged search facts; the shell retains complete-copy semantics. */
+/** Grouped search facts; the shell retains complete-copy semantics. */
 export function SearchToolResult({ canonical }: SearchToolResultProps) {
   const parsed = searchResultsDataSchema.safeParse(canonical.data);
   if (!parsed.success) return null;
   const data = parsed.data;
-  const [page, setPage] = useState(0);
   const totalItems = data.kind === 'glob' ? data.matches.length : groupGrepMatches(data).length;
-  const pageSize = data.kind === 'glob' ? 50 : 20;
-  const body = useMemo(() => data.kind === 'glob' ? globBody(data, page) : grepBody(data, page), [data, page]);
+  const body = data.kind === 'glob' ? globBody(data) : grepBody(data);
   const countLabel = data.kind === 'glob'
     ? `${data.matches.length}${data.totalMatches !== data.matches.length ? ` of ${data.totalMatches}` : ''} matches`
     : `${data.matches.length}${data.totalMatches !== data.matches.length ? ` of ${data.totalMatches}` : ''} matches in ${totalItems} files`;
@@ -118,14 +114,7 @@ export function SearchToolResult({ canonical }: SearchToolResultProps) {
         <span className="text-base-content/70">{countLabel}</span>
         <span className="min-w-0 max-w-full break-all text-base-content/60">in {data.root}</span>
       </div>
-      <div className="min-w-0 max-w-full overflow-x-auto rounded-box border border-base-300/70">{body}</div>
-      <ResultPager
-        total={totalItems}
-        page={page}
-        pageSize={pageSize}
-        onPageChange={setPage}
-        label={data.kind === 'glob' ? 'glob matches' : 'grep result files'}
-      />
+      <div className="max-h-96 min-w-0 max-w-full overflow-auto rounded-box border border-base-300/70">{body}</div>
     </div>
   );
 }

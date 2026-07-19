@@ -32,8 +32,6 @@ export interface ToolActivityGroupProps {
   alwaysExpand?: boolean;
 }
 
-const MAX_VISIBLE_CHILDREN = 12;
-
 export function ToolActivityGroup({
   items,
   subagents = [],
@@ -75,10 +73,6 @@ export function ToolActivityGroup({
       : '';
 
   const showLoader = hasActive;
-  const overflow = items.length > MAX_VISIBLE_CHILDREN;
-  const visible = overflow ? items.slice(0, MAX_VISIBLE_CHILDREN) : items;
-  const hiddenCount = overflow ? items.length - MAX_VISIBLE_CHILDREN : 0;
-
   // Prefer most specific family icon present in the group.
   const iconName =
     summary.searchCount > 0
@@ -123,14 +117,8 @@ export function ToolActivityGroup({
 
       {expanded && (
         <div id={panelId} className="orchid-tool-activity-body">
-          <div
-            className={
-              overflow
-                ? 'tool-activity-group-children tool-activity-group-children-scroll orchid-tool-activity-children orchid-tool-activity-children-scroll'
-                : 'tool-activity-group-children orchid-tool-activity-children'
-            }
-          >
-            {visible.map((child, i) => {
+          <div className="tool-activity-group-children orchid-tool-activity-children">
+            {items.map((child, i) => {
               if (child.kind === 'tool') {
                 return (
                   <ToolCallBlock
@@ -149,11 +137,6 @@ export function ToolActivityGroup({
               );
             })}
           </div>
-          {hiddenCount > 0 && (
-            <div className="orchid-tool-activity-overflow">
-              +{hiddenCount} more
-            </div>
-          )}
         </div>
       )}
     </div>

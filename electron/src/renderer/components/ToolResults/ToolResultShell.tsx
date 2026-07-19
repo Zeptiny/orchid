@@ -97,13 +97,12 @@ export function ToolResultShell({
   const canonical = block.toolResult;
   const status = toolStatusLabel(block.status, canonical);
   const choiceKey = block.id || `${block.toolName}:${block.startedAt}`;
-  const [expanded, setExpanded] = useState(() => expansionChoices.get(choiceKey) ?? true);
+  // Result widgets begin closed. Once the user opens or closes a call, that
+  // explicit choice is retained through live-to-terminal replacement and
+  // hydration; lifecycle updates never change it implicitly.
+  const [expanded, setExpanded] = useState(() => expansionChoices.get(choiceKey) ?? false);
   const [announcement, setAnnouncement] = useState('');
   const active = block.status === 'generating' || block.status === 'running';
-
-  useEffect(() => {
-    if (!expansionChoices.has(choiceKey)) setExpanded(true);
-  }, [choiceKey, status]);
 
   useEffect(() => {
     setAnnouncement(`${status} tool result`);

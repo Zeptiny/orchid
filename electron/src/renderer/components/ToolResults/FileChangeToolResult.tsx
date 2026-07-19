@@ -1,29 +1,14 @@
-import { useState } from 'react';
 import {
   fileChangeDataSchema,
-  type FileChangeData,
   type FileChangeHunk,
   type FileChangeLine,
 } from '../../../shared/types/tool-result-filesystem';
 import type { CanonicalToolResult } from '../../../shared/types/tool-result';
-import { ResultPager } from './ResultPager';
 import { Alert } from '../ui/Alert';
 import { StatusBadge } from '../ui/StatusBadge';
 
 export interface FileChangeToolResultProps {
   canonical: CanonicalToolResult;
-}
-
-const HUNK_PAGE_SIZE = 4;
-
-/** Return the hunk window without changing the canonical data or its ordering. */
-export function visibleFileChangeHunks(
-  data: FileChangeData,
-  page: number,
-  pageSize = HUNK_PAGE_SIZE,
-): readonly FileChangeHunk[] {
-  const start = Math.max(0, page) * pageSize;
-  return data.hunks.slice(start, start + pageSize);
 }
 
 function statusNotice(canonical: CanonicalToolResult) {
@@ -81,8 +66,7 @@ export function FileChangeToolResult({ canonical }: FileChangeToolResultProps) {
   const parsed = fileChangeDataSchema.safeParse(canonical.data);
   if (!parsed.success) return null;
   const data = parsed.data;
-  const [page, setPage] = useState(0);
-  const hunks = visibleFileChangeHunks(data, page);
+  const hunks = data.hunks;
   return (
     <div className="min-w-0 space-y-2" data-result-family="file-change">
       {statusNotice(canonical)}
@@ -92,14 +76,13 @@ export function FileChangeToolResult({ canonical }: FileChangeToolResultProps) {
         <span className="text-success">+{data.addedLines}</span>
         <span className="text-error">−{data.removedLines}</span>
       </div>
-      <div role="table" aria-label={`File ${data.operation} diff for ${data.path}`} className="max-w-full overflow-x-auto rounded-box border border-base-300/70">
+      <div role="table" aria-label={`File ${data.operation} diff for ${data.path}`} className="max-h-96 max-w-full overflow-auto rounded-box border border-base-300/70">
         <div className="min-w-max">
           {hunks.length > 0 ? hunks.map((hunk) => <Hunk key={`${hunk.oldStart}:${hunk.newStart}`} hunk={hunk} />) : (
             <div role="row" className="px-3 py-2 text-sm text-base-content/70">No changed lines.</div>
           )}
         </div>
       </div>
-      <ResultPager total={data.hunks.length} page={page} pageSize={HUNK_PAGE_SIZE} onPageChange={setPage} label="diff hunks" />
     </div>
   );
 }
