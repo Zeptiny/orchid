@@ -1,25 +1,31 @@
-# CLAUDE.md — Orchid Electron
+# AGENTS.md — Orchid Electron
 
 This is the Electron desktop client for Orchid, an AI-powered coding assistant.
 
 ## Project Overview
 
-Orchid is a cross-platform (macOS, Windows, Linux) desktop application built with Electron 33 + React 19 + TypeScript 5.7. It provides an agentic chat interface where an LLM can read/edit files, execute commands, search code, and delegate to subagents — all via MCP-compatible tools.
+Orchid is a cross-platform (macOS, Windows, Linux) desktop application built with Electron 43 + React 19 + TypeScript 5.7. It provides an agentic chat interface where an LLM can read/edit files, execute commands, search code, and delegate to subagents — all via MCP-compatible tools.
 
-The Electron application is Orchid's sole runtime. Its main-process architecture keeps the domain boundaries established during the retired Python prototype, while all maintained implementation lives under this directory.
+The Electron application is Orchid's sole runtime. Its main-process architecture keeps the domain boundaries established during the retired Python prototype, while all maintained implementation lives under `electron/`.
+
+## Repository Layout
+
+The repo root holds documentation, design artifacts, and tooling caches. **The Electron application itself lives in `electron/`** — its own `package.json`, `src/`, `tests/`, `scripts/`, and TypeScript configs are all under that directory.
+
+> **Path convention:** Unless otherwise stated, every path in this document is relative to the Electron app root (`electron/`). For example, `src/main/index.ts` means `electron/src/main/index.ts`, and the `npm run …` commands below run from `electron/`.
 
 ## Tech Stack
 
-- **Runtime**: Electron 33 (Chromium)
+- **Runtime**: Electron 43 (Chromium); Node engine `>=24 <25`
 - **Main process**: TypeScript → CommonJS (compiled via `tsc -p tsconfig.node.json`)
 - **Preload**: TypeScript → CommonJS (built via `scripts/build-preload.js` / esbuild)
-- **Renderer**: React 19 + TypeScript → bundled by Vite 6
+- **Renderer**: React 19 + TypeScript → bundled by Vite 8
 - **Styling**: Tailwind CSS 4 + DaisyUI 5
 - **State machines**: XState 5 (agent orchestration)
-- **AI SDK**: Vercel AI SDK 7 (`ai` package) with `@ai-sdk/openai`, `@ai-sdk/openai-compatible`
+- **AI SDK**: Vercel AI SDK 7 (`ai` package) with `@ai-sdk/openai`, `@ai-sdk/openai-compatible`, `@ai-sdk/anthropic`, `@ai-sdk/google`, `@ai-sdk/xai`
 - **Validation**: Zod 3 (all IPC payloads, config, tool inputs)
-- **Testing**: Vitest 3 (unit + integration + parity tests)
-- **Linting**: ESLint 9 + typescript-eslint
+- **Testing**: Vitest 4 (unit + integration + parity + smoke tests)
+- **Linting**: ESLint 10 + typescript-eslint
 
 ## Directory Structure
 
@@ -41,10 +47,13 @@ src/
 │   ├── llm/                 # LLM integration
 │   │   ├── orchestrator.ts  # streamChat() — async generator yielding StreamEvents
 │   │   ├── system-prompt.ts # buildSystemPrompt() — dynamic context injection
+│   │   ├── build-prompt-context.ts # Assemble dynamic per-turn prompt context
+│   │   ├── context-snapshot.ts     # Frozen per-turn context snapshot
 │   │   ├── history.ts       # toApiMessages() — Message[] → AI SDK CoreMessage[]
+│   │   ├── message-factories.ts    # Build AI SDK message objects
+│   │   ├── response-unwrap.ts      # Unwrap provider response shapes
 │   │   ├── tool-dispatch.ts # executeToolCall() — timeout + output offloading
 │   │   ├── model-metadata.ts # Per-model token limits and capabilities
-│   │   ├── cleanup.ts       # Stream cleanup utilities
 │   │   └── middleware/      # AI SDK middleware stack
 │   │       ├── index.ts     # createMiddlewareStack() — retry + quirks + throttle
 │   │       ├── retry.ts     # Exponential backoff retry
@@ -55,6 +64,7 @@ src/
 │   │   ├── index.ts         # ProviderRuntime — resolve typed selection + freeze request snapshot
 │   │   ├── resolver.ts      # Resolve {connectionId, modelId} against connections/catalog
 │   │   ├── connection-store.ts # Non-secret connection metadata
+│   │   ├── runtime-context.ts  # Per-request provider runtime context
 │   │   ├── drivers/         # Code-owned origins, auth, protocols, adapters, status parsing
 │   │   ├── credentials/     # Encrypted vault for API-key secrets
 │   │   ├── catalog/         # Signed bundled/cached catalog and updater
@@ -64,6 +74,8 @@ src/
 │   │   ├── index.ts         # registerBuiltinTools() — singleton registry setup
 │   │   ├── registry.ts      # ToolRegistry class — register/filter/validate/toJsonSchema
 │   │   ├── types.ts         # ToolDefinition, ToolHandler, RegisteredTool
+│   │   ├── result.ts        # Tool result envelope helpers
+│   │   ├── result-retrieval.ts # Retrieve offloaded tool results
 │   │   ├── filesystem/      # read, edit, write, read-directory, glob
 │   │   ├── search/          # grep (ripgrep-style)
 │   │   ├── process/         # execute-command, read-output, send-input, terminate
@@ -76,6 +88,7 @@ src/
 │   │   └── subagent/        # delegate, wait, interrupt
 │   ├── ipc/                 # IPC handlers (main process side)
 │   │   ├── index.ts         # registerAllIPC() / unregisterAllIPC()
+│   │   ├── payload-schemas.ts # Zod schemas for IPC payloads
 │   │   ├── chat.ts          # chat:send, chat:cancel — main agentic loop entry
 │   │   ├── chat-history.ts  # chat history helpers
 │   │   ├── config.ts        # config:get, config:save
@@ -84,6 +97,7 @@ src/
 │   │   ├── session-working-set.ts # working-set IPC
 │   │   ├── tool.ts          # tool:execute
 │   │   ├── definitions.ts   # agents/skills/personalities listing
+│   │   ├── subagents.ts     # subagent listing / detail IPC
 │   │   ├── providers.ts     # provider connection CRUD / models / status
 │   │   ├── mcp.ts           # mcp:status
 │   │   ├── rag.ts           # rag:status, rag:index, rag:clear
@@ -95,9 +109,10 @@ src/
 │   │   ├── validation.ts    # Config validation utilities
 │   │   └── keychain.ts      # OS keychain integration for API keys
 │   ├── session/             # Session persistence
-│   │   ├── index.ts         # Session initialization
 │   │   ├── manager.ts       # SessionManager — CRUD, auto-naming
-│   │   └── storage.ts       # JSON file storage in ~/.orchid/sessions/
+│   │   ├── storage.ts       # JSON file storage in ~/.orchid/sessions/
+│   │   ├── activity.ts      # Session activity tracking
+│   │   └── working-set.ts   # Session working-set tracking
 │   ├── project/             # Workspace binding (session cwd / sticky default)
 │   │   ├── path.ts          # inspect/canonicalize absolute project directories
 │   │   ├── workspace.ts     # draft cwd, sticky default_project_dir, resolveWorkspace*
@@ -117,6 +132,13 @@ src/
 │   │   ├── indexer.ts       # Tree-sitter based code indexing
 │   │   ├── parser.ts        # Tree-sitter parser management
 │   │   └── store.ts         # SQLite-backed symbol store
+│   ├── defs/                # Definition file management (agents/skills/personalities)
+│   │   ├── manage.ts        # Create/update/delete definition files
+│   │   ├── paths.ts         # Resolve definition storage paths
+│   │   └── reload.ts        # Reload definitions on change
+│   ├── personality/         # Personality system
+│   │   ├── registry.ts      # loadPersonalities()
+│   │   └── defaults/        # Built-in personalities
 │   ├── skills/              # Skill system
 │   │   ├── registry.ts      # loadSkills() from ~/.orchid/skills/
 │   │   └── defaults/        # Built-in skills
@@ -162,7 +184,12 @@ src/
 │   │   └── windows-xp.css
 │   └── styles/
 │       ├── index.css        # Global styles + Tailwind imports
-│       └── chat.css         # Chat-specific styles
+│       ├── components.css   # Product composite styles (@layer components)
+│       ├── markdown.css     # Markdown rendering styles
+│       ├── shell.css        # App shell styles
+│       ├── exceptions.css   # Scoped style exceptions
+│       ├── chat.css         # Dead — header-only, no rules (growth-guarded)
+│       └── README.md        # Styling contract documentation
 └── shared/                  # Shared types between main/preload/renderer
     ├── types/
     │   ├── ipc.ts           # IPC channel names, message types, OrchidAPI interface
@@ -183,17 +210,19 @@ src/
 
 ## Build & Development
 
+All commands run from the `electron/` directory.
+
 ```bash
-# Development (starts Vite dev server + Electron)
+# Development (compiles main, builds preload, starts Vite + Electron)
 npm run dev
 
-# Build main process (TypeScript → CommonJS)
+# Build main process (TypeScript → CommonJS) + copy default definitions
 npm run build:main
 
 # Build renderer (Vite bundle)
 npm run build:renderer
 
-# Full build
+# Full build (main + defaults + preload + renderer)
 npm run build
 
 # Type-check (no emit)
@@ -205,19 +234,31 @@ npm run lint
 # Run tests
 npm run test
 
-# Package for distribution
-npm run package        # All platforms
+# Provider catalog tooling
+npm run catalog:seed       # Seed dev model catalog
+npm run catalog:validate   # Validate catalog
+npm run catalog:sign       # Sign catalog
+
+# Native module rebuild (better-sqlite3, node-pty, onnxruntime)
+npm run rebuild:native
+
+# Package for distribution (build + native rebuild + electron-builder)
+npm run package        # Current platform
 npm run package:mac
 npm run package:win
 npm run package:linux
+npm run package:all    # mac + win + linux
 ```
 
 **Dev server**: Vite runs on `localhost:5173` (strict port). Electron loads this URL in dev mode.
 
-**Build pipeline**:
+**Build pipeline** (`npm run build`):
 1. `tsc -p tsconfig.node.json` → `dist/main/` + `dist/preload/` + `dist/shared/` (CJS)
-2. `node scripts/build-preload.js` → preload bundle (esbuild, CJS)
-3. `vite build` → `dist/renderer/` (bundled HTML/JS/CSS)
+2. `node scripts/copy-defaults.js` → copy built-in agent/skill/personality definitions into `dist/`
+3. `node scripts/build-preload.js` → preload bundle (esbuild, CJS)
+4. `vite build` → `dist/renderer/` (bundled HTML/JS/CSS)
+
+Packaging additionally runs `scripts/ensure-native-runtime.mjs` to rebuild native modules against Electron's Node ABI before `electron-builder`.
 
 ## Key Architecture Patterns
 
@@ -302,6 +343,9 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 | `rag.top_k` | 5 | RAG result count |
 | `rag.max_file_size` | 512000 | Max file size for RAG |
 | `rag.embedding_model` | `fastembed/BAAI/bge-small-en-v1.5` | Embedding model |
+| `rag.embedding_threads` | 2 | ONNX embedding worker threads (1–64) |
+| `rag.embedding_batch_size` | 16 | ONNX embedding batch size (1–256) |
+| `rag.embedding_api_model` | `null` | Optional API embedder, bound to chat connection/model |
 | `ast_max_file_size` | 1MB | Max file for AST indexing |
 | `mcp_startup_timeout` | 60s | MCP server startup timeout |
 | `mcp_per_server_timeout` | 10s | Per-MCP-server timeout |
@@ -311,6 +355,8 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 | `llm_stream_idle_timeout` | 300s | Stream idle timeout |
 | `llm_stream_retries` | 3 | LLM retry count |
 | `background_command_idle_timeout` | 900s | Background cmd timeout |
+| `max_tool_steps` | 100 | Max multi-step tool-loop iterations per stream (AI SDK `stopWhen`) |
+| `always_expand_tool_groups` | `false` | Open chat tool-activity groups by default |
 | `default_project_dir` | `null` | Sticky absolute project dir for new sessions / draft workspace |
 
 ### Config Locations
@@ -346,7 +392,7 @@ The renderer uses a **primitives-as-API, DaisyUI-as-engine** model. Full contrac
 
 **chat.css is dead.** It is header-only (10 lines, no CSS rules). Any new CSS rule belongs in `components.css` `@layer components` (for product composites) or `markdown.css` (for markdown rendering). The growth guard fails on any increase.
 
-**components.css growth.** components.css is at ~1,789 lines. Prefer splitting by surface area (onboarding, config, session, chat) if it crosses ~2,000 lines. Avoid adding new rules when a primitive or Tailwind utility can express the same result.
+**components.css growth.** components.css is at ~1,963 lines. Prefer splitting by surface area (onboarding, config, session, chat) if it crosses ~2,000 lines. Avoid adding new rules when a primitive or Tailwind utility can express the same result.
 
 **Baseline trimming protocol.** Every PR that migrates call sites must trim the corresponding `BASELINE_DAISYUI_HITS` entries in the contract test. Stale entries mask real regressions. The total-token-count check (baseline 65) catches same-root growth within baselined files.
 
@@ -378,6 +424,8 @@ The renderer uses a **primitives-as-API, DaisyUI-as-engine** model. Full contrac
 - Unit tests: `tests/unit/` — individual modules
 - Integration tests: `tests/integration/` — component/UI flows
 - Contract tests: `tests/parity/` — protect the migrated tool, agent, skill, command, and configuration inventories
+- Smoke tests: `tests/smoke/` — live provider smoke (`npm run test:providers:live`)
+- Fixtures: `tests/fixtures/` — shared test data
 - Mock `window.orchid` for renderer tests
 - Use `vi.mock()` for module mocking
 
@@ -415,8 +463,7 @@ The renderer uses a **primitives-as-API, DaisyUI-as-engine** model. Full contrac
 
 ## Tool output contract
 
-Agent-facing tool results use the convention documented in
-`docs/tools/README.md`.
+Agent-facing tool results use the convention documented below.
 
 Every result is framed by one XML envelope:
 
