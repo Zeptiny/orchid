@@ -61,7 +61,6 @@ describe('tool widget titles', () => {
         args: JSON.stringify({ subagent_ids: ['subagent-1', 'subagent-2'] }),
         partialArgs: '',
         result: '<subagents><subagent name="review auth flow" /><subagent name="run integration tests" /></subagents>',
-        summary: 'Waited for 2 subagent(s)',
         subagents,
       }),
     ).toBe('Received results from “review auth flow” and “run integration tests”');
@@ -106,6 +105,42 @@ describe('tool widget titles', () => {
         partialArgs: '',
       }),
     ).toBe('Reading src/renderer/Chat.tsx');
+  });
+
+  it('keeps the action in terminal file and search titles', () => {
+    expect(titleText({
+      toolName: 'read',
+      status: 'completed',
+      args: JSON.stringify({ file_path: 'src/renderer/Chat.tsx' }),
+      partialArgs: '',
+      toolResult: {
+        schemaVersion: 1,
+        family: 'file-content',
+        status: 'complete',
+        completeness: 'complete',
+        data: {
+          path: 'src/renderer/Chat.tsx',
+          lines: [{ number: 12, content: 'export function Chat() {' }],
+          requestedRange: { start: 12, end: 24 },
+          returnedRange: { start: 12, end: 24 },
+          totalLineCount: 80,
+        },
+      },
+    })).toBe('Read src/renderer/Chat.tsx lines 12-24');
+
+    expect(titleText({
+      toolName: 'read',
+      status: 'completed',
+      args: JSON.stringify({ file_path: 'src/renderer/Chat.tsx' }),
+      partialArgs: '',
+    })).toBe('Read src/renderer/Chat.tsx');
+
+    expect(titleText({
+      toolName: 'grep',
+      status: 'completed',
+      args: JSON.stringify({ pattern: 'ToolResultShell' }),
+      partialArgs: '',
+    })).toBe('Found matches for ToolResultShell');
   });
 
   it('falls back to a humanized tool name when no specific arguments are available', () => {

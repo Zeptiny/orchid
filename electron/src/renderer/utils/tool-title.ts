@@ -6,6 +6,8 @@
  * and avoids exposing raw JSON fragments in the title.
  */
 
+import type { CanonicalToolResult } from '../../shared/types/tool-result';
+
 export type ToolTitleStatus = 'generating' | 'running' | 'completed' | 'failed';
 
 export interface SubagentTitleRecord {
@@ -19,7 +21,7 @@ export interface ToolTitleInput {
   status: ToolTitleStatus;
   args: string;
   partialArgs: string;
-  summary?: string | null;
+  toolResult?: CanonicalToolResult | null;
   result?: string | null;
   subagents?: readonly SubagentTitleRecord[];
 }
@@ -225,19 +227,33 @@ function withLifecycle(
   status: ToolTitleStatus,
   lifecycle: { preparing: string; running: string; completed: string; failed: string },
   subject?: string,
-  summary?: string | null,
+  subjectSuffix = '',
 ): ToolTitle {
-  if (status === 'generating') return labeled(lifecycle.preparing, subject);
-  if (status === 'running') return labeled(lifecycle.running, subject);
-  if (status === 'failed') return labeled(`Couldn’t ${lifecycle.failed}`, subject);
-  return summary ? plain(summary) : labeled(lifecycle.completed, subject);
+  if (status === 'generating') return labeled(lifecycle.preparing, subject, subjectSuffix);
+  if (status === 'running') return labeled(lifecycle.running, subject, subjectSuffix);
+  if (status === 'failed') return labeled(`Couldn’t ${lifecycle.failed}`, subject, subjectSuffix);
+  return labeled(lifecycle.completed, subject, subjectSuffix);
+}
+
+function readReturnedRange(result: CanonicalToolResult | null | undefined): string | null {
+  if (result?.family !== 'file-content' || typeof result.data !== 'object' || result.data === null || Array.isArray(result.data)) {
+    return null;
+  }
+
+  const returnedRange = (result.data as { returnedRange?: unknown }).returnedRange;
+  if (typeof returnedRange !== 'object' || returnedRange === null || Array.isArray(returnedRange)) return null;
+
+  const range = returnedRange as { start?: unknown; end?: unknown };
+  return typeof range.start === 'number' && Number.isInteger(range.start) &&
+    typeof range.end === 'number' && Number.isInteger(range.end)
+    ? `${range.start}-${range.end}`
+    : null;
 }
 
 function commandTitle(
   status: ToolTitleStatus,
   description: string | null,
   command: string | null,
-  summary: string | null | undefined,
 ): ToolTitle {
   const display = description || (command ? `$ ${command}` : null);
   const commandDetail = command && description && description !== command ? `$ ${command}` : null;
@@ -251,20 +267,7 @@ function commandTitle(
   }
 
   if (status === 'failed') {
-    if (summary?.toLowerCase().includes('timed out')) {
-      return labeled('Command timed out', display ?? undefined);
-    }
     return labeled('Command failed', display ?? undefined);
-  }
-
-  if (summary?.toLowerCase().includes('timed out')) {
-    return labeled('Command timed out', display ?? undefined);
-  }
-  if (summary?.toLowerCase().includes('execution error')) {
-    return labeled('Command failed', display ?? undefined);
-  }
-  if (summary?.includes('(id:') && summary.includes('background')) {
-    return command ? compose(strong('Started background command'), text(' '), code(`$ ${command}`)) : plain(summary);
   }
   return display ? labeled('Ran', display) : plain('Ran command');
 }
@@ -281,10 +284,10 @@ export function buildToolTitle(input: ToolTitleInput): ToolTitle {
   const query = valueForKey(rawArgs, args, ['query']);
   const command = valueForKey(rawArgs, args, ['command', 'cmd']);
   const description = valueForKey(rawArgs, args, ['description']);
-  const summary = input.summary?.trim() || null;
+  const readRange = readReturnedRange(input.toolResult);
 
   if (tool === 'execute_command') {
-    return commandTitle(input.status, description, command, summary);
+    return commandTitle(input.status, description, command);
   }
 
   if (tool === 'delegate_to_subagent') {
@@ -313,38 +316,34 @@ export function buildToolTitle(input: ToolTitleInput): ToolTitle {
         );
       }
       if (input.status === 'failed') {
-        return summary?.toLowerCase().includes('timed out')
-          ? labeled('Wait timed out while waiting for', subject)
-          : labeled('Couldn’t wait for', subject);
+        return labeled('Couldn’t wait for', subject);
       }
       return labeled('Received results from', subject);
     }
     if (input.status === 'generating') return labeled('Preparing to stop', subject);
     if (input.status === 'running') return labeled('Stopping', subject);
     if (input.status === 'failed') return labeled('Couldn’t stop', subject);
-    return summary?.toLowerCase().includes('no running subagents')
-      ? plain(summary)
-      : labeled('Stopped', subject);
+    return labeled('Stopped', subject);
   }
 
   if (tool === 'read') return withLifecycle(input.status, {
     preparing: 'Preparing to read', running: 'Reading', completed: 'Read', failed: 'read',
-  }, pathValue ?? undefined, summary);
+  }, pathValue ?? undefined, readRange ? ` lines ${readRange}` : '');
   if (tool === 'write') return withLifecycle(input.status, {
     preparing: 'Preparing to write', running: 'Writing', completed: 'Wrote', failed: 'write',
-  }, pathValue ?? undefined, summary);
+  }, pathValue ?? undefined);
   if (tool === 'edit') return withLifecycle(input.status, {
     preparing: 'Preparing to edit', running: 'Editing', completed: 'Edited', failed: 'edit',
-  }, pathValue ?? undefined, summary);
+  }, pathValue ?? undefined);
   if (tool === 'glob') return withLifecycle(input.status, {
     preparing: 'Preparing to find files matching', running: 'Finding files matching', completed: 'Found files matching', failed: 'find files matching',
-  }, pattern ?? undefined, summary);
+  }, pattern ?? undefined);
   if (tool === 'grep') return withLifecycle(input.status, {
     preparing: 'Preparing to search for', running: 'Searching for', completed: 'Found matches for', failed: 'search for',
-  }, pattern ?? undefined, summary);
+  }, pattern ?? undefined);
   if (tool === 'read_directory') return withLifecycle(input.status, {
     preparing: 'Preparing to list', running: 'Listing', completed: 'Listed', failed: 'list',
-  }, pathValue ?? undefined, summary?.replace(/^Read directory\b/i, 'Listed') || summary);
+  }, pathValue ?? undefined);
 
   if (tool === 'read_output' || tool === 'send_input' || tool === 'terminate_command') {
     const id = numberForKey(rawArgs, args, ['id']);
@@ -354,53 +353,53 @@ export function buildToolTitle(input: ToolTitleInput): ToolTitle {
       : tool === 'send_input'
         ? { preparing: 'Preparing to send input to', running: 'Sending input to', completed: 'Sent input to', failed: 'send input to' }
         : { preparing: 'Preparing to stop', running: 'Stopping', completed: 'Stopped', failed: 'stop' };
-    return withLifecycle(input.status, lifecycle, subject, summary);
+    return withLifecycle(input.status, lifecycle, subject);
   }
 
   if (tool === 'todo_create') return withLifecycle(input.status, {
     preparing: 'Preparing to create task', running: 'Creating task', completed: 'Created task', failed: 'create task',
-  }, valueForKey(rawArgs, args, ['title']) ?? undefined, summary);
+  }, valueForKey(rawArgs, args, ['title']) ?? undefined);
   if (tool === 'todo_update') return withLifecycle(input.status, {
     preparing: 'Preparing to update task', running: 'Updating task', completed: 'Updated task', failed: 'update task',
-  }, valueForKey(rawArgs, args, ['title', 'id']) ?? undefined, summary);
+  }, valueForKey(rawArgs, args, ['title', 'id']) ?? undefined);
   if (tool === 'todo_delete') return withLifecycle(input.status, {
     preparing: 'Preparing to delete task', running: 'Deleting task', completed: 'Deleted task', failed: 'delete task',
-  }, valueForKey(rawArgs, args, ['title', 'id']) ?? undefined, summary);
+  }, valueForKey(rawArgs, args, ['title', 'id']) ?? undefined);
   if (tool === 'todo_list') return withLifecycle(input.status, {
     preparing: 'Preparing to list tasks', running: 'Listing tasks', completed: 'Listed tasks', failed: 'list tasks',
-  }, undefined, summary);
+  });
 
   if (tool === 'web_fetch') return withLifecycle(input.status, {
     preparing: 'Preparing to fetch', running: 'Fetching', completed: 'Fetched', failed: 'fetch',
-  }, valueForKey(rawArgs, args, ['url']) ?? undefined, summary);
+  }, valueForKey(rawArgs, args, ['url']) ?? undefined);
   if (tool === 'skill') return withLifecycle(input.status, {
     preparing: 'Preparing to load skill', running: 'Loading skill', completed: 'Loaded skill', failed: 'load skill',
-  }, nameValue ?? undefined, summary);
+  }, nameValue ?? undefined);
   if (tool === 'rag_search') return withLifecycle(input.status, {
     preparing: 'Preparing to search code for', running: 'Searching code for', completed: 'Searched code for', failed: 'search code for',
-  }, query ?? undefined, summary);
+  }, query ?? undefined);
   if (tool === 'rag_index') {
     const lifecycle = actionForIndex(valueForKey(rawArgs, args, ['action']), 'semantic index');
-    return withLifecycle(input.status, lifecycle, undefined, summary);
+    return withLifecycle(input.status, lifecycle);
   }
   if (tool === 'ast_index') {
     const lifecycle = actionForIndex(valueForKey(rawArgs, args, ['action']), 'code structure');
-    return withLifecycle(input.status, lifecycle, undefined, summary);
+    return withLifecycle(input.status, lifecycle);
   }
 
   if (tool === 'find_symbol_references') return withLifecycle(input.status, {
     preparing: 'Preparing to find references to', running: 'Finding references to', completed: 'Found references to', failed: 'find references to',
-  }, valueForKey(rawArgs, args, ['symbol_name', 'symbol']) ?? undefined, summary);
+  }, valueForKey(rawArgs, args, ['symbol_name', 'symbol']) ?? undefined);
   if (tool === 'get_file_skeleton') return withLifecycle(input.status, {
     preparing: 'Preparing to inspect', running: 'Inspecting structure of', completed: 'Inspected structure of', failed: 'inspect',
-  }, pathValue ?? undefined, summary);
+  }, pathValue ?? undefined);
   if (tool === 'get_function') {
     const functionName = valueForKey(rawArgs, args, ['function_name', 'name']);
     const file = valueForKey(rawArgs, args, ['file_path', 'path']);
     const subject = functionName && file ? `${quoted(functionName)} from ${file}` : functionName || file;
     return withLifecycle(input.status, {
       preparing: 'Preparing to read function', running: 'Reading function', completed: 'Read function', failed: 'read function',
-    }, subject ?? undefined, summary);
+    }, subject ?? undefined);
   }
   if (tool === 'rename_symbol') {
     const oldName = valueForKey(rawArgs, args, ['old_name']);
@@ -408,17 +407,17 @@ export function buildToolTitle(input: ToolTitleInput): ToolTitle {
     const subject = oldName && newName ? `${oldName} to ${newName}` : oldName || newName;
     return withLifecycle(input.status, {
       preparing: 'Preparing to rename', running: 'Renaming', completed: 'Renamed', failed: 'rename',
-    }, subject ?? undefined, summary);
+    }, subject ?? undefined);
   }
   if (tool === 'replace_symbol') return withLifecycle(input.status, {
     preparing: 'Preparing to replace', running: 'Replacing', completed: 'Replaced', failed: 'replace',
-  }, valueForKey(rawArgs, args, ['symbol_name', 'symbol']) ?? undefined, summary);
+  }, valueForKey(rawArgs, args, ['symbol_name', 'symbol']) ?? undefined);
   if (tool === 'list_mcp_resources') return withLifecycle(input.status, {
     preparing: 'Preparing to list MCP resources', running: 'Listing MCP resources', completed: 'Listed MCP resources', failed: 'list MCP resources',
-  }, undefined, summary);
+  });
   if (tool === 'read_mcp_resource') return withLifecycle(input.status, {
     preparing: 'Preparing to read MCP resource', running: 'Reading MCP resource', completed: 'Read MCP resource', failed: 'read MCP resource',
-  }, valueForKey(rawArgs, args, ['uri']) ?? undefined, summary);
+  }, valueForKey(rawArgs, args, ['uri']) ?? undefined);
 
   const displayName = humanizeToolName(input.toolName);
   const genericSubject = valueForKey(rawArgs, args, [
@@ -428,7 +427,7 @@ export function buildToolTitle(input: ToolTitleInput): ToolTitle {
   if (input.status === 'generating') return labeled('Preparing', genericSubject ?? displayName);
   if (input.status === 'running') return labeled('Running', genericSubject ?? displayName);
   if (input.status === 'failed') return labeled('Couldn’t run', genericSubject ?? displayName);
-  return summary ? plain(summary) : labeled('Ran', genericSubject ?? displayName);
+  return labeled('Ran', genericSubject ?? displayName);
 }
 
 export function toolTitleText(title: ToolTitle): string {

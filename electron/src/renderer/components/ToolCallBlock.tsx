@@ -26,19 +26,6 @@ function iconForTool(name: string): IconName {
   return 'terminal';
 }
 
-function canonicalSummary(block: ToolBlock): string | null {
-  const data = block.toolResult?.data;
-  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
-  const record = data as Record<string, unknown>;
-  if (typeof record.path === 'string') return record.path;
-  if (typeof record.pattern === 'string') {
-    const count = typeof record.totalMatches === 'number' ? record.totalMatches : Array.isArray(record.matches) ? record.matches.length : null;
-    return count === null ? record.pattern : `${count} match${count === 1 ? '' : 'es'} · ${record.pattern}`;
-  }
-  if (typeof record.value === 'string') return record.value.split('\n')[0] || null;
-  return null;
-}
-
 function titleStatus(status: ToolBlock['status']): 'generating' | 'running' | 'completed' | 'failed' {
   if (status === 'generating' || status === 'running') return status;
   return status === 'failed' || status === 'error' ? 'failed' : 'completed';
@@ -46,18 +33,17 @@ function titleStatus(status: ToolBlock['status']): 'generating' | 'running' | 'c
 
 export function ToolCallBlock({ block, subagents = [] }: ToolCallBlockProps) {
   const argsText = block.args || block.partialArgs;
-  const summary = useMemo(() => canonicalSummary(block), [block]);
   const title = useMemo(
     () => buildToolTitle({
       toolName: block.toolName,
       status: titleStatus(block.status),
       args: block.args,
       partialArgs: block.partialArgs,
-      summary,
+      toolResult: block.toolResult,
       result: null,
       subagents,
     }),
-    [block.toolName, block.status, block.args, block.partialArgs, summary, subagents],
+    [block.toolName, block.status, block.args, block.partialArgs, block.toolResult, subagents],
   );
 
   const runningDetailText = toolTitleRunningText(title);
