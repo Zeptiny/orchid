@@ -7,6 +7,7 @@ import {
 } from '../../../shared/types/tool-result-filesystem';
 import type { CanonicalToolResult } from '../../../shared/types/tool-result';
 import { ResultPager } from './ResultPager';
+import { Alert } from '../ui/Alert';
 import { StatusBadge } from '../ui/StatusBadge';
 
 export interface FileChangeToolResultProps {
@@ -27,13 +28,13 @@ export function visibleFileChangeHunks(
 
 function statusNotice(canonical: CanonicalToolResult) {
   if (canonical.status === 'error') {
-    return <div role="alert" className="alert alert-error alert-soft mb-2 text-sm">{canonical.error.message}</div>;
+    return <Alert tone="error" variant="soft" className="mb-2 text-sm">{canonical.error.message}</Alert>;
   }
   if (canonical.status === 'cancelled') {
-    return <div role="status" className="alert alert-warning alert-soft mb-2 text-sm">Change was cancelled before completion.</div>;
+    return <Alert tone="warning" variant="soft" role="status" className="mb-2 text-sm">Change was cancelled before completion.</Alert>;
   }
   if (canonical.status === 'empty') {
-    return <div role="status" className="alert alert-info alert-soft mb-2 text-sm">No file changes were produced.</div>;
+    return <Alert tone="info" variant="soft" role="status" className="mb-2 text-sm">No file changes were produced.</Alert>;
   }
   return null;
 }
@@ -56,9 +57,9 @@ function DiffLine({ line }: { line: FileChangeLine }) {
   const marker = line.kind === 'add' ? '+' : line.kind === 'remove' ? '-' : ' ';
   return (
     <div role="row" aria-label={`${rowLabel(line)}: ${line.content}`} className={`flex min-w-max font-mono text-xs leading-5 ${lineClass(line.kind)}`}>
-      <span role="cell" aria-hidden className="w-12 shrink-0 select-none border-r border-base-300/60 px-2 text-right text-base-content/50">{oldNumber}</span>
-      <span role="cell" aria-hidden className="w-12 shrink-0 select-none border-r border-base-300/60 px-2 text-right text-base-content/50">{newNumber}</span>
-      <span aria-hidden className="w-5 shrink-0 select-none px-1 text-center font-semibold">{marker}</span>
+      <span role="cell" aria-hidden className="w-12 shrink-0 border-r border-base-300/60 px-2 text-right text-base-content/50">{oldNumber}</span>
+      <span role="cell" aria-hidden className="w-12 shrink-0 border-r border-base-300/60 px-2 text-right text-base-content/50">{newNumber}</span>
+      <span aria-hidden className="w-5 shrink-0 px-1 text-center font-semibold">{marker}</span>
       <span role="cell" className="whitespace-pre px-2">{line.content || ' '}</span>
     </div>
   );

@@ -4,6 +4,7 @@ import {
 } from '../../../shared/types/tool-result-filesystem';
 import type { CanonicalToolResult } from '../../../shared/types/tool-result';
 import { StatusBadge } from '../ui/StatusBadge';
+import { Alert } from '../ui/Alert';
 
 export interface FileWriteToolResultProps {
   canonical: CanonicalToolResult;
@@ -11,13 +12,13 @@ export interface FileWriteToolResultProps {
 
 function statusNotice(canonical: CanonicalToolResult) {
   if (canonical.status === 'error') {
-    return <div role="alert" className="alert alert-error alert-soft mb-2 text-sm">{canonical.error.message}</div>;
+    return <Alert tone="error" variant="soft" className="mb-2 text-sm">{canonical.error.message}</Alert>;
   }
   if (canonical.status === 'cancelled') {
-    return <div role="status" className="alert alert-warning alert-soft mb-2 text-sm">Write was cancelled before completion.</div>;
+    return <Alert tone="warning" variant="soft" role="status" className="mb-2 text-sm">Write was cancelled before completion.</Alert>;
   }
   if (canonical.status === 'empty') {
-    return <div role="status" className="alert alert-info alert-soft mb-2 text-sm">No file content was written.</div>;
+    return <Alert tone="info" variant="soft" role="status" className="mb-2 text-sm">No file content was written.</Alert>;
   }
   return null;
 }

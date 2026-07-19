@@ -6,6 +6,7 @@ import {
 import type { CanonicalToolResult } from '../../../shared/types/tool-result';
 import { ResultPager } from './ResultPager';
 import { StatusBadge } from '../ui/StatusBadge';
+import { Alert } from '../ui/Alert';
 
 export interface FileContentToolResultProps {
   canonical: CanonicalToolResult;
@@ -33,16 +34,16 @@ export function fileContentRangeLabel(data: FileContentData): string {
 
 function statusNotice(canonical: CanonicalToolResult, data: FileContentData) {
   if (canonical.status === 'error') {
-    return <div role="alert" className="alert alert-error alert-soft mb-2 text-sm">{canonical.error.message}</div>;
+    return <Alert tone="error" variant="soft" className="mb-2 text-sm">{canonical.error.message}</Alert>;
   }
   if (canonical.status === 'cancelled') {
-    return <div role="status" className="alert alert-warning alert-soft mb-2 text-sm">Read was cancelled before completion.</div>;
+    return <Alert tone="warning" variant="soft" role="status" className="mb-2 text-sm">Read was cancelled before completion.</Alert>;
   }
   if (canonical.status === 'empty' || data.returnedRange === null) {
-    return <div role="status" className="alert alert-info alert-soft mb-2 text-sm">The requested range is empty.</div>;
+    return <Alert tone="info" variant="soft" role="status" className="mb-2 text-sm">The requested range is empty.</Alert>;
   }
   if (canonical.status === 'partial') {
-    return <div role="status" className="alert alert-warning alert-soft mb-2 text-sm">Showing the returned range. More lines are available.</div>;
+    return <Alert tone="warning" variant="soft" role="status" className="mb-2 text-sm">Showing the returned range. More lines are available.</Alert>;
   }
   return null;
 }
@@ -66,7 +67,7 @@ export function FileContentToolResult({ canonical }: FileContentToolResultProps)
         <div className="min-w-max font-mono text-xs leading-5" role="table" aria-label={`Source lines from ${data.path}`}>
           {lines.length > 0 ? lines.map((line) => (
             <div role="row" key={line.number} className="flex min-w-max text-base-content/85">
-              <span role="cell" aria-hidden className="w-14 shrink-0 select-none border-r border-base-300/60 px-2 text-right text-base-content/50">{line.number}</span>
+              <span role="cell" aria-hidden className="w-14 shrink-0 border-r border-base-300/60 px-2 text-right text-base-content/50">{line.number}</span>
               <code role="cell" className={`whitespace-pre px-3 language-${data.language ?? 'text'}`}>{line.content || ' '}</code>
             </div>
           )) : <div role="row" className="px-3 py-2 text-base-content/70">No lines in the requested range.</div>}

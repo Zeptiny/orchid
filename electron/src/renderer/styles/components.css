@@ -594,6 +594,10 @@
     min-height: 1.75rem;
   }
 
+  .orchid-tool-result-selectable {
+    user-select: text;
+  }
+
   .orchid-tool-block,
   .orchid-tool-block-title,
   .orchid-tool-block-content {

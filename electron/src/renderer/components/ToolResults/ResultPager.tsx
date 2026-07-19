@@ -37,11 +37,10 @@ export function ResultPager({
   if (total <= pageSize) return null;
 
   return (
-    <nav className="join mt-2 flex flex-wrap items-center gap-1" aria-label={`Paginate ${label}`}>
+    <nav className="mt-2 flex flex-wrap items-center gap-1" aria-label={`Paginate ${label}`}>
       <Button
         size="xs"
         variant="ghost"
-        className="join-item"
         onClick={() => onPageChange(currentPage - 1)}
         disabled={currentPage === 0}
         aria-label="Previous page"
@@ -54,7 +53,6 @@ export function ResultPager({
           key={index}
           size="xs"
           variant={index === currentPage ? 'neutral' : 'ghost'}
-          className="join-item"
           onClick={() => onPageChange(index)}
           aria-current={index === currentPage ? 'page' : undefined}
           aria-label={`Page ${index + 1}`}
@@ -62,12 +60,11 @@ export function ResultPager({
           {index + 1}
         </Button>
       )) : (
-        <span className="join-item btn btn-xs btn-ghost" aria-hidden>{currentPage + 1} / {pageCount}</span>
+        <span className="px-2 text-xs text-base-content/70" aria-hidden>{currentPage + 1} / {pageCount}</span>
       )}
       <Button
         size="xs"
         variant="ghost"
-        className="join-item"
         onClick={() => onPageChange(currentPage + 1)}
         disabled={currentPage >= pageCount - 1}
         aria-label="Next page"

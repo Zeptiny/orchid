@@ -5,6 +5,7 @@ import type { ToolBlock } from '../../hooks/useChat';
 import { Icon, type IconName } from '../Icon';
 import { Spinner } from '../ui/Spinner';
 import { StatusBadge } from '../ui/StatusBadge';
+import { Button } from '../ui/Button';
 import { GenericToolResult } from './GenericToolResult';
 import { resolveToolResultRenderer } from './registry';
 
@@ -57,7 +58,7 @@ function completeCopy(block: ToolBlock, canonical: CanonicalToolResult | null): 
 function ResultBody({ block, canonical }: { block: ToolBlock; canonical: CanonicalToolResult | null }) {
   if (!canonical) {
     return (
-      <pre className="orchid-tool-result-body select-text">
+      <pre className="orchid-tool-result-body orchid-tool-result-selectable">
         {legacyBody(block) || (block.status === 'completed' ? 'No output.' : 'Tool failed')}
       </pre>
     );
@@ -164,7 +165,7 @@ export function ToolResultShell({
         <div id={panelId} className="orchid-tool-block-content min-w-0" aria-describedby={announcementId}>
           <div className="orchid-tool-result-toolbar flex flex-wrap items-center justify-end gap-1">
             <span className="sr-only">{status} tool result</span>
-            {!active && <button type="button" className="btn btn-ghost btn-xs" onClick={copy}>Copy complete result</button>}
+            {!active && <Button size="xs" variant="ghost" onClick={copy}>Copy complete result</Button>}
           </div>
           {body}
           <span id={announcementId} className="sr-only" role="status" aria-live="polite">{announcement}</span>

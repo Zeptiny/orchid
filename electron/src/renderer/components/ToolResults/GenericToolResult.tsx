@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { CanonicalToolResult, JsonValue } from '../../../shared/types/tool-result';
 import { genericToolResultDataSchema } from '../../../shared/types/tool-result';
 import { ResultPager } from './ResultPager';
+import { StatusBadge } from '../ui/StatusBadge';
 
 const PAGE_SIZE = 50;
 const MAX_DEPTH = 8;
@@ -56,15 +57,15 @@ export function GenericToolResult({ canonical }: GenericToolResultProps) {
     <div className="min-w-0 space-y-2" data-result-family="generic">
       {origin && (origin.kind === 'dynamic' || origin.kind === 'mcp') && (
         <div className="flex flex-wrap items-center gap-1 text-xs text-base-content/70">
-          <span className="badge badge-outline badge-xs">{origin.kind}</span>
+          <StatusBadge tone="neutral" outline size="xs">{origin.kind}</StatusBadge>
           <span className="break-all">{origin.name}</span>
           <span className="sr-only">Tool-provided data is displayed as inert text.</span>
         </div>
       )}
       {body !== null ? (
-        <pre className="m-0 max-w-full overflow-x-auto whitespace-pre-wrap break-words font-mono text-sm text-base-content/80 select-text">{pretty(body)}</pre>
+        <pre className="orchid-tool-result-selectable m-0 max-w-full overflow-x-auto whitespace-pre-wrap break-words font-mono text-sm text-base-content/80">{pretty(body)}</pre>
       ) : (
-        <div className="max-w-full overflow-x-auto whitespace-normal break-words font-mono text-sm text-base-content/80 select-text">
+        <div className="orchid-tool-result-selectable max-w-full overflow-x-auto whitespace-normal break-words font-mono text-sm text-base-content/80">
           <JsonValueView value={value as JsonValue} />
         </div>
       )}
