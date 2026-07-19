@@ -8,6 +8,7 @@ import { FileWriteToolResult } from './FileWriteToolResult';
 import { FileContentToolResult } from './FileContentToolResult';
 import { DirectoryToolResult } from './DirectoryToolResult';
 import { SearchToolResult } from './SearchToolResult';
+import { ApplyPatchToolResult } from './ApplyPatchToolResult';
 import { LiveCommandInline } from '../ToolWidgets/LiveCommandInline';
 import { StatusBadge } from '../ui/StatusBadge';
 
@@ -107,6 +108,7 @@ toolRenderers.set('read', FileContentToolResult);
 toolRenderers.set('read_directory', DirectoryToolResult);
 toolRenderers.set('glob', SearchToolResult);
 toolRenderers.set('grep', SearchToolResult);
+toolRenderers.set('apply_patch', ApplyPatchToolResult);
 const builtInToolRenderers = new Map(toolRenderers);
 
 export function registerToolResultRenderer(

@@ -25,6 +25,9 @@ import {
   globHandler,
 } from '../../src/main/tools/filesystem/glob';
 import {
+  applyPatchDefinition,
+} from '../../src/main/tools/filesystem/apply-patch';
+import {
   grepHandler,
   grepToolDefinition,
 } from '../../src/main/tools/search/grep';
@@ -53,6 +56,7 @@ import {
   type GrepResultsData,
   type SearchResultsData,
 } from '../../src/shared/types/tool-result-filesystem';
+import { applyPatchResultDataSchema } from '../../src/shared/types/tool-result-apply-patch';
 
 let tmpDir: string;
 
@@ -86,6 +90,7 @@ describe('filesystem result metadata', () => {
     [readDirectoryDefinition, 'directory-entries', directoryEntriesDataSchema],
     [globDefinition, 'search-results', searchResultsDataSchema],
     [grepToolDefinition, 'search-results', searchResultsDataSchema],
+    [applyPatchDefinition, 'generic', applyPatchResultDataSchema],
   ] as const)('declares the typed family for %s', (definition, family, schema) => {
     expect(definition.resultFamily).toBe(family);
     expect(definition.outputDataSchema).toBe(schema);

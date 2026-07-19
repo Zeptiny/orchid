@@ -17,6 +17,7 @@ import { editDefinition, editHandler } from './filesystem/edit';
 import { writeDefinition, writeHandler } from './filesystem/write';
 import { readDirectoryDefinition, readDirectoryHandler } from './filesystem/read-directory';
 import { globDefinition, globHandler } from './filesystem/glob';
+import { applyPatchDefinition, applyPatchHandler } from './filesystem/apply-patch';
 import { grepToolDefinition, grepHandler } from './search/grep';
 import { ragSearchDefinition, ragSearchHandler } from './rag/search';
 import { ragIndexDefinition, ragIndexHandler } from './rag';
@@ -213,6 +214,7 @@ function registerBuiltinToolsInto(
   registry.register(writeDefinition, writeHandler);
   registry.register(readDirectoryDefinition, readDirectoryHandler);
   registry.register(globDefinition, globHandler);
+  registry.register(applyPatchDefinition, applyPatchHandler);
   registry.register(grepToolDefinition, grepHandler);
   registry.register(ragSearchDefinition, ragSearchHandler);
   registry.register(ragIndexDefinition, ragIndexHandler);

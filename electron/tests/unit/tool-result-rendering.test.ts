@@ -21,6 +21,7 @@ import { FileContentToolResult } from '../../src/renderer/components/ToolResults
 import { DirectoryToolResult, buildDirectoryTree } from '../../src/renderer/components/ToolResults/DirectoryToolResult';
 import { SearchToolResult, groupGrepMatches } from '../../src/renderer/components/ToolResults/SearchToolResult';
 import { GenericToolResult } from '../../src/renderer/components/ToolResults/GenericToolResult';
+import { ApplyPatchToolResult } from '../../src/renderer/components/ToolResults/ApplyPatchToolResult';
 
 const rendererDir = path.resolve(__dirname, '../../src/renderer/components');
 
@@ -219,5 +220,78 @@ describe('shared canonical tool-result renderer', () => {
     );
     expect(shellSource).toContain('aria-controls={panelId}');
     expect(shellSource).toContain('id={panelId}');
+  });
+
+  it('resolves apply_patch to the dedicated multi-file renderer', () => {
+    expect(resolveToolResultRenderer('apply_patch', 'generic')).toBe(ApplyPatchToolResult);
+  });
+
+  it('renders a multi-file apply_patch result with diffs and error sections', () => {
+    const patchResult = {
+      schemaVersion: 1 as const,
+      family: 'generic' as const,
+      status: 'complete' as const,
+      completeness: 'complete' as const,
+      data: {
+        files: [
+          {
+            path: 'src/new.ts',
+            operation: 'create' as const,
+            status: 'complete' as const,
+            fileChange: {
+              path: 'src/new.ts',
+              operation: 'create' as const,
+              addedLines: 1,
+              removedLines: 0,
+              resultingContent: 'export const x = 1;\n',
+              hunks: [{
+                oldStart: 0, oldLines: 0, newStart: 1, newLines: 1,
+                lines: [{ kind: 'add' as const, content: 'export const x = 1;', newLineNumber: 1 }],
+              }],
+            },
+          },
+          {
+            path: 'src/existing.ts',
+            operation: 'update' as const,
+            status: 'complete' as const,
+            fileChange: {
+              path: 'src/existing.ts',
+              operation: 'update' as const,
+              addedLines: 1,
+              removedLines: 1,
+              resultingContent: 'const y = 2;\n',
+              hunks: [{
+                oldStart: 1, oldLines: 1, newStart: 1, newLines: 1,
+                lines: [
+                  { kind: 'remove' as const, content: 'const y = 1;', oldLineNumber: 1 },
+                  { kind: 'add' as const, content: 'const y = 2;', newLineNumber: 1 },
+                ],
+              }],
+            },
+          },
+          {
+            path: 'src/broken.ts',
+            operation: 'update' as const,
+            status: 'error' as const,
+            error: { code: 'match_failed', message: 'Failed to find expected lines' },
+          },
+        ],
+        added: 1,
+        modified: 1,
+        deleted: 0,
+        failed: 1,
+      },
+    };
+    const markup = renderToStaticMarkup(createElement(ApplyPatchToolResult, { canonical: patchResult, toolName: 'apply_patch' }));
+    expect(markup).toContain('src/new.ts');
+    expect(markup).toContain('src/existing.ts');
+    expect(markup).toContain('src/broken.ts');
+    expect(markup).toContain('export const x = 1;');
+    expect(markup).toContain('const y = 2;');
+    expect(markup).toContain('Failed to find expected lines');
+    expect(markup).toContain('3 files');
+    expect(markup).toContain('1 added');
+    expect(markup).toContain('1 modified');
+    expect(markup).toContain('1 failed');
   });
 });
