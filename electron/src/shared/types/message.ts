@@ -89,12 +89,6 @@ export interface Message {
   readonly hidden: boolean;
   /** Canonical terminal facts for TOOL_RESULT messages; null for other messages. */
   readonly tool_result: CanonicalToolResult | null;
-  /**
-   * Explicit tool failure flag (TOOL_RESULT). Set by the backend when the tool
-   * execution failed; frontend must render from this field only — never infer
-   * failure from content text.
-   */
-  readonly is_error: boolean;
 }
 
 // ── Storage dict ────────────────────────────────────────────────────────────
@@ -206,6 +200,9 @@ export function messageToStorageDict(msg: Message): MessageStorageDict {
   if (msg.hidden) {
     d.hidden = true;
   }
+  if (msg.tool_result?.status === 'error') {
+    d.is_error = true;
+  }
   if (msg.tool_result) {
     d.tool_result = msg.tool_result;
   }
@@ -280,6 +277,5 @@ export function messageFromStorageDict(data: unknown): Message {
     usage,
     hidden: raw.hidden === true,
     tool_result: toolResult,
-    is_error: toolResult?.status === 'error',
   };
 }

@@ -1101,7 +1101,6 @@ function buildLiveTailItems(opts: {
             usage: null,
             hidden: false,
             tool_result: null,
-    is_error: false,
   },
           stillStreaming,
         );
@@ -1125,7 +1124,6 @@ function buildLiveTailItems(opts: {
             usage: null,
             hidden: false,
             tool_result: null,
-    is_error: false,
   },
           stillStreamingThink,
         );
@@ -1154,7 +1152,6 @@ function buildLiveTailItems(opts: {
         usage: null,
         hidden: false,
         tool_result: null,
-    is_error: false,
   },
       true,
     );

@@ -13,7 +13,7 @@ import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 const message = (overrides: Partial<Message>): Message => ({
   id: 'message', role: MessageRole.ASSISTANT, content: 'text', type: MessageType.TEXT,
   tool_calls: null, tool_call_id: null, name: null, thinking: null,
-  timestamp: '2026-07-18T00:00:00.000Z', usage: null, hidden: false, is_error: false,
+  timestamp: '2026-07-18T00:00:00.000Z', usage: null, hidden: false,
   tool_result: null,
   ...overrides,
 });

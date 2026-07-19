@@ -815,7 +815,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         usage: null,
         hidden: false,
         tool_result: null,
-    is_error: false,
   };
 
       // On retry after error, the last user message is already in the list —
@@ -1234,7 +1233,6 @@ function commitSegmentsToMessages(opts: {
           usage: index === lastTextIndex ? usage : null,
           hidden: false,
           tool_result: null,
-    is_error: false,
   });
         return;
       }
@@ -1252,7 +1250,6 @@ function commitSegmentsToMessages(opts: {
           usage: null,
           hidden: false,
           tool_result: null,
-    is_error: false,
   });
       }
     });
@@ -1284,7 +1281,6 @@ function commitSegmentsToMessages(opts: {
       usage,
       hidden: false,
       tool_result: null,
-    is_error: false,
   });
   }
   return out;
@@ -1314,7 +1310,6 @@ function toolBlockToMessages(block: ToolBlock): Message[] {
     usage: null,
     hidden: false,
     tool_result: null,
-    is_error: false,
   };
 
   if (!block.toolResult) return [call];
@@ -1331,7 +1326,6 @@ function toolBlockToMessages(block: ToolBlock): Message[] {
     usage: null,
     hidden: false,
     tool_result: block.toolResult,
-    is_error: block.toolResult.status === 'error',
   };
 
   return [call, result];

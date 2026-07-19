@@ -11,6 +11,7 @@ import {
 import {
   terminalStatusForBlock,
   toolStatusLabel,
+  ToolResultShell,
 } from '../../src/renderer/components/ToolResults/ToolResultShell';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
@@ -192,5 +193,31 @@ describe('shared canonical tool-result renderer', () => {
     expect(markup).toContain('hello');
     expect(markup).not.toContain('<script');
     expect(resolveToolResultRenderer('unknown_tool', 'generic')).toBe(GenericToolResult);
+  });
+
+  it('wires aria-controls on the toggle to the body panel id', () => {
+    const block = {
+      id: 'aria-test-block',
+      toolName: 'read',
+      status: 'complete' as const,
+      partialArgs: '',
+      args: '{"path":"/tmp/a.ts"}',
+      agentProjection: 'content',
+      toolResult: canonical('complete'),
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    };
+    const markup = renderToStaticMarkup(createElement(ToolResultShell, { block }));
+    const ariaMatch = markup.match(/aria-controls="([^"]+)"/);
+    expect(ariaMatch).not.toBeNull();
+    const panelId = ariaMatch![1];
+    expect(panelId.length).toBeGreaterThan(0);
+    expect(markup).toContain(`aria-expanded="false"`);
+    const shellSource = fs.readFileSync(
+      path.join(rendererDir, 'ToolResults/ToolResultShell.tsx'),
+      'utf8',
+    );
+    expect(shellSource).toContain('aria-controls={panelId}');
+    expect(shellSource).toContain('id={panelId}');
   });
 });

@@ -74,7 +74,7 @@ function textMessage(id: string, content: string, type: MessageType, isStreaming
     id, role: type === MessageType.THINKING ? MessageRole.ASSISTANT : MessageRole.ASSISTANT,
     content, type, tool_calls: null, tool_call_id: null, name: null, thinking: null,
     timestamp: new Date().toISOString(), usage: null, hidden: false,
-    tool_result: null, is_error: false,
+    tool_result: null,
     ...(isStreaming ? {} : {}),
   };
 }

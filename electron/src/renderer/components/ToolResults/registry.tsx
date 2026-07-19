@@ -1,5 +1,7 @@
 import type { ComponentType } from 'react';
+import { z } from 'zod';
 import type { CanonicalToolResult, ToolResultFamily } from '../../../shared/types/tool-result';
+import { genericToolResultDataSchema } from '../../../shared/types/tool-result';
 import { GenericToolResult } from './GenericToolResult';
 import { FileChangeToolResult } from './FileChangeToolResult';
 import { FileWriteToolResult } from './FileWriteToolResult';
@@ -7,6 +9,7 @@ import { FileContentToolResult } from './FileContentToolResult';
 import { DirectoryToolResult } from './DirectoryToolResult';
 import { SearchToolResult } from './SearchToolResult';
 import { LiveCommandInline } from '../ToolWidgets/LiveCommandInline';
+import { StatusBadge } from '../ui/StatusBadge';
 
 export interface ToolResultRendererProps {
   canonical: CanonicalToolResult;
@@ -33,24 +36,68 @@ familyRenderers.set('file-content', FileContentToolResult);
 familyRenderers.set('directory-entries', DirectoryToolResult);
 familyRenderers.set('search-results', SearchToolResult);
 
+const backgroundCommandValueSchema = z.object({
+  commandId: z.number().int(),
+  command: z.string(),
+  description: z.string().optional(),
+  background: z.literal(true),
+  running: z.boolean(),
+}).passthrough();
+
+const STATUS_TONE: Record<string, 'success' | 'error' | 'warning' | 'neutral'> = {
+  complete: 'success',
+  error: 'error',
+  cancelled: 'warning',
+  partial: 'neutral',
+  empty: 'neutral',
+};
+
+function TerminalBackgroundResult({
+  command,
+  status,
+}: {
+  command: z.infer<typeof backgroundCommandValueSchema>;
+  status: string;
+}) {
+  const tone = STATUS_TONE[status] ?? 'neutral';
+  return (
+    <div className="orchid-live-command">
+      <div className="orchid-live-command-title">
+        <span className="font-mono text-xs min-w-0 truncate">
+          $ {command.command}
+        </span>
+        <span className="inline-flex shrink-0 items-center gap-1.5">
+          <StatusBadge tone={tone} size="xs">{status}</StatusBadge>
+        </span>
+      </div>
+      {command.description && (
+        <div className="orchid-live-command-body">
+          <div className="text-xs text-base-content/60 px-2 py-1">{command.description}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, isLive }) => {
-  const value = canonical.data && typeof canonical.data === 'object' && !Array.isArray(canonical.data)
-    ? (canonical.data as { value?: unknown }).value
-    : null;
-  const command = value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-  const commandId = command && typeof command.commandId === 'number'
-    ? command.commandId
-    : command && typeof command.command_id === 'number'
-      ? command.command_id
-      : null;
-  const commandText = command && typeof command.command === 'string' ? command.command : '';
-  const description = command && typeof command.description === 'string' ? command.description : undefined;
-  if (isLive && commandId !== null) {
-    return <LiveCommandInline commandId={commandId} commandText={commandText} description={description} />;
+  const outer = genericToolResultDataSchema.safeParse(canonical.data);
+  if (!outer.success) {
+    return <GenericToolResult canonical={canonical} />;
   }
-  return <GenericToolResult canonical={canonical} />;
+  const bg = backgroundCommandValueSchema.safeParse(outer.data.value);
+  if (!bg.success) {
+    return <GenericToolResult canonical={canonical} />;
+  }
+  if (isLive) {
+    return (
+      <LiveCommandInline
+        commandId={bg.data.commandId}
+        commandText={bg.data.command}
+        description={bg.data.description}
+      />
+    );
+  }
+  return <TerminalBackgroundResult command={bg.data} status={canonical.status} />;
 };
 
 toolRenderers.set('execute_command', ExecuteCommandRenderer);

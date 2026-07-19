@@ -2,7 +2,7 @@
  * Unit tests for shared Message factories (message-factories.ts).
  *
  * Ensures a single shape for conversation history construction across chat
- * IPC, subagent manager, and tool-dispatch — including explicit is_error.
+ * IPC, subagent manager, and tool-dispatch.
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -54,7 +54,6 @@ describe('makeUserMessage', () => {
     expect(msg.thinking).toBeNull();
     expect(msg.usage).toBeNull();
     expect(msg.hidden).toBe(false);
-    expect(msg.is_error).toBe(false);
     expect(msg.id).toBeTruthy();
     expect(msg.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
@@ -75,7 +74,6 @@ describe('makeAssistantMessage', () => {
     expect(msg.usage).toBeNull();
     expect(msg.tool_calls).toBeNull();
     expect(msg.hidden).toBe(false);
-    expect(msg.is_error).toBe(false);
   });
 
   it('attaches usage when provided', () => {
@@ -109,7 +107,6 @@ describe('makeToolCallMessage', () => {
     expect(msg.content).toBe('');
     expect(msg.tool_call_id).toBe('tc-1');
     expect(msg.name).toBe('read_file');
-    expect(msg.is_error).toBe(false);
     expect(msg.tool_calls).toEqual([
       {
         id: 'tc-1',
@@ -126,7 +123,7 @@ describe('makeToolCallMessage', () => {
 });
 
 describe('makeToolResultMessage', () => {
-  it('builds a successful TOOL_RESULT with is_error false and unchanged content', () => {
+  it('builds a successful TOOL_RESULT with unchanged content', () => {
     const canonical = canonicalResult('complete', 'file contents');
     const msg = makeToolResultMessage('tc-1', 'read_file', 'file contents', canonical);
     expect(msg.role).toBe(MessageRole.TOOL);
@@ -135,11 +132,10 @@ describe('makeToolResultMessage', () => {
     expect(msg.tool_call_id).toBe('tc-1');
     expect(msg.name).toBe('read_file');
     expect(msg.tool_calls).toBeNull();
-    expect(msg.is_error).toBe(false);
     expect(msg.tool_result).toEqual(canonical);
   });
 
-  it('stores is_error true without rewriting content', () => {
+  it('stores error status in tool_result without rewriting content', () => {
     const msg = makeToolResultMessage(
       'tc-1',
       'read_file',
@@ -147,10 +143,10 @@ describe('makeToolResultMessage', () => {
       canonicalResult('error', 'not found'),
     );
     expect(msg.content).toBe('not found');
-    expect(msg.is_error).toBe(true);
+    expect(msg.tool_result?.status).toBe('error');
   });
 
-  it('does not add or strip Error: prefix based on isError', () => {
+  it('does not add or strip Error: prefix based on status', () => {
     const already = makeToolResultMessage(
       'tc-1',
       'read_file',
@@ -158,7 +154,7 @@ describe('makeToolResultMessage', () => {
       canonicalResult('error', 'Error: already formatted'),
     );
     expect(already.content).toBe('Error: already formatted');
-    expect(already.is_error).toBe(true);
+    expect(already.tool_result?.status).toBe('error');
 
     const successLookingLikeError = makeToolResultMessage(
       'tc-1',
@@ -167,10 +163,10 @@ describe('makeToolResultMessage', () => {
       canonicalResult('complete', 'Error: is just text here'),
     );
     expect(successLookingLikeError.content).toBe('Error: is just text here');
-    expect(successLookingLikeError.is_error).toBe(false);
+    expect(successLookingLikeError.tool_result?.status).toBe('complete');
   });
 
-  it('allows empty error content with is_error true', () => {
+  it('allows empty error content with error status', () => {
     const msg = makeToolResultMessage(
       'tc-1',
       'read_file',
@@ -178,7 +174,7 @@ describe('makeToolResultMessage', () => {
       canonicalResult('error', ''),
     );
     expect(msg.content).toBe('');
-    expect(msg.is_error).toBe(true);
+    expect(msg.tool_result?.status).toBe('error');
   });
 
   it('allows null tool name (legacy tool-dispatch style)', () => {
@@ -189,7 +185,6 @@ describe('makeToolResultMessage', () => {
       canonicalResult('complete', 'ok'),
     );
     expect(msg.name).toBeNull();
-    expect(msg.is_error).toBe(false);
   });
 
   it('keeps cancelled distinct from failed without inspecting projection text', () => {
@@ -209,8 +204,6 @@ describe('makeToolResultMessage', () => {
     );
 
     expect(cancelledMessage.tool_result?.status).toBe('cancelled');
-    expect(cancelledMessage.is_error).toBe(false);
     expect(failedMessage.tool_result?.status).toBe('error');
-    expect(failedMessage.is_error).toBe(true);
   });
 });

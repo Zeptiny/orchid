@@ -111,8 +111,7 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     thinking: null,
     timestamp: new Date().toISOString(),
     usage: null,
-    hidden: false,
-    is_error: false,...overrides,
+    hidden: false,...overrides,
   };
 }
 
@@ -580,6 +579,58 @@ describe('executeToolCall', () => {
     } finally {
       _setResultRetrievalCacheRootForTests(null);
       fs.rmSync(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to a complete generic projection when recovery cache write fails', async () => {
+    const blocker = path.join(os.tmpdir(), `orchid-cache-blocker-${Date.now()}`);
+    fs.writeFileSync(blocker, 'not a directory');
+    _setResultRetrievalCacheRootForTests(blocker);
+    registry.register(
+      {
+        name: 'partial_with_cache',
+        description: 'Produces a partial projection expecting cache recovery',
+        inputSchema: z.object({}),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+        agentProjector: () => ({
+          content: 'partial preview',
+          completeness: 'partial',
+          retrieval: {
+            kind: 'cache',
+            path: 'pending',
+            instructions: ['pending'],
+          },
+        }),
+        category: 'test',
+      },
+      async () => ({
+        status: 'complete',
+        data: { value: { detail: 'full canonical data' } },
+      }),
+    );
+
+    try {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const result = await executeToolCall(
+        makeToolCall('cache-fail-call', 'partial_with_cache'),
+        registry,
+        { cwd: TEST_TOOL_CWD, sessionId: 'session-cache-fail' },
+      );
+
+      expect(result.agentProjection.completeness).toBe('complete');
+      if (result.agentProjection.completeness === 'partial') {
+        throw new Error('Expected complete fallback, got partial');
+      }
+      expect(
+        'retrieval' in result.agentProjection &&
+          result.agentProjection.retrieval?.kind === 'cache',
+      ).toBe(false);
+      expect(result.agentProjection.content).toContain('full canonical data');
+      warn.mockRestore();
+    } finally {
+      _setResultRetrievalCacheRootForTests(null);
+      fs.rmSync(blocker, { force: true });
     }
   });
 

@@ -530,6 +530,17 @@ export class MCPManager {
               errorMessage: raw,
             });
           }
+          const serialized = JSON.stringify(raw);
+          if (serialized.length > 5 * 1024 * 1024) {
+            return {
+              status: 'partial',
+              data: {
+                value: serialized.slice(0, 10000) + '\n...[truncated: ' + serialized.length + ' bytes total]',
+                origin: { kind: 'mcp', name: registryName },
+              },
+              retrieval: { kind: 'rerun', toolName: registryName, input: {} },
+            };
+          }
           const serverReportedError = raw != null && typeof raw === 'object'
             && (raw as { isError?: unknown }).isError === true;
           return createDynamicToolOutcome(registryName, raw, 'mcp', {

@@ -110,7 +110,6 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     usage: overrides.usage ?? null,
     hidden: overrides.hidden ?? false,
     tool_result: overrides.tool_result ?? null,
-    is_error: overrides.is_error,
   };
 }
 
@@ -411,7 +410,6 @@ describe('saveSession → loadSession round-trip', () => {
       content: 'exact persisted agent projection',
       tool_call_id: 'session-tool-call',
       tool_result: canonical,
-      is_error: false,
     });
     const session = makeSession({
       id: sessionId,
@@ -479,7 +477,6 @@ describe('saveSession → loadSession round-trip', () => {
               usage: null,
               hidden: false,
               tool_result: null,
-              is_error: false,
             },
             {
               id: 'msg-2',
@@ -499,7 +496,6 @@ describe('saveSession → loadSession round-trip', () => {
               },
               hidden: false,
               tool_result: null,
-              is_error: false,
             },
           ],
           status: 'completed',

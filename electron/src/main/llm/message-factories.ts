@@ -3,7 +3,7 @@
  *
  * Single source of truth for constructing Message objects so chat IPC,
  * subagent manager, and tool-dispatch stay aligned. Canonical status is the
- * terminal authority; `is_error` is a derived transport field.
+ * terminal authority.
  */
 
 import type { Message, Usage } from '../../shared/types/message';
@@ -33,7 +33,6 @@ export function makeUserMessage(content: string): Message {
     usage: null,
     hidden: false,
     tool_result: null,
-    is_error: false,
   };
 }
 
@@ -56,7 +55,6 @@ export function makeAssistantMessage(
     usage,
     hidden: false,
     tool_result: null,
-    is_error: false,
   };
 }
 
@@ -75,7 +73,6 @@ export function makeThinkingMessage(content: string, id: string = newId()): Mess
     usage: null,
     hidden: false,
     tool_result: null,
-    is_error: false,
   };
 }
 
@@ -105,15 +102,13 @@ export function makeToolCallMessage(
     usage: null,
     hidden: false,
     tool_result: null,
-    is_error: false,
   };
 }
 
 /**
  * Create a TOOL_RESULT message.
  *
- * Content is the exact finalized agent projection. Canonical status derives
- * the explicit `is_error` transport flag; no content inspection is performed.
+ * Content is the exact finalized agent projection.
  */
 export function makeToolResultMessage(
   toolCallId: string,
@@ -135,6 +130,5 @@ export function makeToolResultMessage(
     usage: null,
     hidden: false,
     tool_result: toolResult,
-    is_error: toolResult.status === 'error',
   };
 }

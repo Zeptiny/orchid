@@ -64,7 +64,6 @@ function makeMessage(overrides: Partial<Message> & { role: MessageRole }): Messa
     timestamp: overrides.timestamp ?? new Date().toISOString(),
     usage: overrides.usage ?? null,
     hidden: overrides.hidden ?? false,
-    is_error: overrides.is_error ?? false,
     tool_result: overrides.tool_result ?? null,
   };
 }

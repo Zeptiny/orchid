@@ -108,21 +108,22 @@ export const editHandler: ToolHandler = async (input: unknown, ctx) => {
     ? content.replaceAll(old_string, new_string)
     : content.replace(old_string, new_string);
 
+  let validated: FileChangeData | undefined;
   try {
-    // This computes, validates, and fully materializes all canonical facts
-    // before the source is touched.
     const data = buildStructuredFileChange({
       path: filePath,
       operation: 'update',
       oldContent: content,
       newContent,
     });
-    // Keep this explicit validation at the mutation boundary in case the
-    // structured helper is replaced by a test seam or future implementation.
-    const validated = fileChangeDataSchema.parse(data);
+    validated = fileChangeDataSchema.parse(data);
     atomicWrite(filePath, newContent);
     return { status: 'complete', data: validated };
   } catch (error) {
+    const actualContent = fs.readFileSync(filePath, 'utf-8');
+    if (actualContent === newContent && validated !== undefined) {
+      return { status: 'complete', data: validated };
+    }
     const message = error instanceof Error ? error.message : String(error);
     return errorOutcome(
       filePath,
