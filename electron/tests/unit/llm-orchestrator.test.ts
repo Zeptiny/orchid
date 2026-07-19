@@ -51,6 +51,26 @@ import {
   type ToolExecutionResult,
 } from '../../src/shared/types/tool-result';
 
+function canonicalStreamOutput(
+  content: string,
+  status: 'complete' | 'error' = 'complete',
+): ToolExecutionResult {
+  const canonical = status === 'error'
+    ? createCanonicalToolResult('generic', {
+        status,
+        data: { value: content },
+        error: { code: 'fixture_error', message: content },
+      })
+    : createCanonicalToolResult('generic', {
+        status,
+        data: { value: content },
+      });
+  return {
+    canonical,
+    agentProjection: { content, completeness: 'complete' },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // AI SDK mock (streamChat imports `ai` via importESM)
 // ---------------------------------------------------------------------------
@@ -427,11 +447,13 @@ describe('executeToolCall', () => {
         name: 'echo',
         description: 'Echo input',
         inputSchema: z.object({ text: z.string() }),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
         category: 'test',
       },
       async (input) => {
         const args = input as { text: string };
-        return `Echo: ${args.text}`;
+        return { status: 'complete', data: { value: `Echo: ${args.text}` } };
       },
     );
 
@@ -646,6 +668,8 @@ describe('executeToolCall', () => {
         name: 'echo',
         description: 'Echo input',
         inputSchema: z.object({ text: z.string() }),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
         category: 'test',
       },
       handler,
@@ -662,7 +686,7 @@ describe('executeToolCall', () => {
   it('passes Zod-parsed data to the handler on the agent path', async () => {
     const handler = vi.fn(async (input) => {
       const args = input as { text: string; count?: number };
-      return `Echo: ${args.text} x${args.count ?? 1}`;
+      return { status: 'complete', data: { value: `Echo: ${args.text} x${args.count ?? 1}` } };
     });
     registry.register(
       {
@@ -672,6 +696,8 @@ describe('executeToolCall', () => {
           text: z.string(),
           count: z.number().optional().default(1),
         }),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
         category: 'test',
       },
       handler,
@@ -759,10 +785,12 @@ describe('executeToolCall', () => {
           name: 'custom_long',
           description: 'Long-running exempt tool',
           inputSchema: z.object({}),
+          resultFamily: 'generic',
+          outputDataSchema: genericToolResultDataSchema,
           category: 'test',
           noTimeout: true,
         },
-        async () => 'ok',
+        async () => ({ status: 'complete', data: { value: 'ok' } }),
       );
 
       const toolCall = makeToolCall('tc-1', 'custom_long', '{}');
@@ -805,9 +833,11 @@ describe('executeToolCall', () => {
           name: 'read_output',
           description: 'Read output tool',
           inputSchema: z.object({}),
+          resultFamily: 'generic',
+          outputDataSchema: genericToolResultDataSchema,
           category: 'test',
         },
-        async () => 'output',
+        async () => ({ status: 'complete', data: { value: 'output' } }),
       );
 
       const toolCall = makeToolCall('tc-1', 'read_output', '{}');
@@ -1374,7 +1404,7 @@ describe('streamChat', () => {
         {
           type: 'tool-output-available',
           toolCallId: 'tc-1',
-          output: 'file contents',
+          output: canonicalStreamOutput('file contents'),
         },
         { type: 'text-delta', text: 'Done' },
       ],
@@ -1410,22 +1440,22 @@ describe('streamChat', () => {
           toolCallId: 'tc-err',
           errorText: 'Tool boom',
         },
-        // Explicit failure from tool execute payload (not content sniffing)
+        // Explicit failure from the canonical tool execution payload.
         {
           type: 'tool-output-available',
           toolCallId: 'tc-soft',
-          output: { content: 'Tool execution failed', isError: true },
+          output: canonicalStreamOutput('Tool execution failed', 'error'),
         },
         {
           type: 'tool-output-available',
           toolCallId: 'tc-timeout',
-          output: { content: "Tool 'slow' timed out after 30 seconds", isError: true },
+          output: canonicalStreamOutput("Tool 'slow' timed out after 30 seconds", 'error'),
         },
-        // Content that *looks* like an error but has no isError flag stays success
+        // Content that looks like an error remains a successful canonical result.
         {
           type: 'tool-output-available',
           toolCallId: 'tc-false-positive',
-          output: 'Error: is just text in a successful tool result',
+          output: canonicalStreamOutput('Error: is just text in a successful tool result'),
         },
       ],
     });
@@ -1503,7 +1533,7 @@ describe('streamChat', () => {
     ]);
   });
 
-  it('supports legacy tool-call / tool-result part types', async () => {
+  it('supports canonical tool-call / tool-result part types', async () => {
     setupStreamText({
       fullStreamParts: [
         {
@@ -1515,7 +1545,7 @@ describe('streamChat', () => {
         {
           type: 'tool-result',
           id: 'legacy-1',
-          result: { matches: 2 },
+          result: canonicalStreamOutput(JSON.stringify({ matches: 2 })),
         },
       ],
     });
@@ -1757,7 +1787,7 @@ describe('streamChat', () => {
           { toolCallId: 'tc-step', toolName: 'echo', input: { text: 'hi' } },
         ],
         toolResults: [
-          { toolCallId: 'tc-step', output: 'hi', isError: false },
+          { toolCallId: 'tc-step', output: canonicalStreamOutput('hi') },
         ],
       },
     });

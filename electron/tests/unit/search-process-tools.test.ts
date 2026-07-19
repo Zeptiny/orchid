@@ -15,7 +15,7 @@ import {
   BackgroundProcessStore,
   setBackgroundStore,
 } from '../../src/main/tools/process/background-store';
-import { executeGrep, grepHandler } from '../../src/main/tools/search/grep';
+import { executeGrepOutcome, grepHandler } from '../../src/main/tools/search/grep';
 import {
   executeCommand as executeCommandRaw,
   executeCommandHandler as executeCommandHandlerRaw,
@@ -190,13 +190,12 @@ describe('grep tool', () => {
     writeFile('src/utils.ts', 'const helper = () => {};\nexport function helperFn() {}\n');
     writeFile('src/data.json', '{"key": "value"}');
 
-    const result = await executeGrep('function', tmpDir, '*.ts');
+    const result = await executeGrepOutcome('function', tmpDir, '*.ts');
 
-    expect(result.display).toContain('Found');
-    expect(result.content).toContain('src/index.ts');
-    expect(result.content).toContain('src/utils.ts');
+    expect(result.status).toBe('complete');
+    expect(result.data.matches.map((match) => match.path)).toEqual(['src/index.ts', 'src/utils.ts']);
     // Should not include .json files
-    expect(result.content).not.toContain('data.json');
+    expect(result.data.matches.map((match) => match.path)).not.toContain('data.json');
   });
 
   it('should skip binary files', async () => {
@@ -205,10 +204,10 @@ describe('grep tool', () => {
     const binPath = path.join(tmpDir, 'binary.bin');
     fs.writeFileSync(binPath, Buffer.from([0x00, 0x01, 0x02, 0x03, 0x00]));
 
-    const result = await executeGrep('test', tmpDir);
+    const result = await executeGrepOutcome('test', tmpDir);
 
-    expect(result.content).toContain('code.ts');
-    expect(result.content).not.toContain('binary.bin');
+    expect(result.data.matches.map((match) => match.path)).toContain('src/code.ts');
+    expect(result.data.matches.map((match) => match.path)).not.toContain('binary.bin');
   });
 
   it('should respect max_results and truncate', async () => {
@@ -217,44 +216,46 @@ describe('grep tool', () => {
       writeFile(`src/file${i}.ts`, `function match${i}() {}\nfunction another${i}() {}\n`);
     }
 
-    const result = await executeGrep('function', tmpDir, undefined, undefined, 5);
+    const result = await executeGrepOutcome('function', tmpDir, undefined, undefined, 5);
 
-    expect(result.display).toContain('5');
-    expect(result.content).toContain('truncated to 5');
+    expect(result.status).toBe('partial');
+    expect(result.data.matches).toHaveLength(5);
+    expect(result.data.limitReached).toBe(true);
   });
 
   it('should handle invalid regex gracefully', async () => {
     writeFile('src/test.ts', 'hello');
 
-    const result = await executeGrep('[invalid', tmpDir);
+    const result = await executeGrepOutcome('[invalid', tmpDir);
 
-    expect(result.display).toContain('Invalid regex');
-    expect(result.content).toContain('Error');
+    expect(result.status).toBe('error');
+    expect(result.error.code).toBe('invalid_regex');
+    expect(result.error.message).toContain('Invalid regex');
   });
 
   it('should handle non-existent directory', async () => {
-    const result = await executeGrep('test', '/nonexistent/path');
+    const result = await executeGrepOutcome('test', '/nonexistent/path');
 
-    expect(result.display).toContain('Directory not found');
-    expect(result.content).toContain('does not exist');
+    expect(result.status).toBe('error');
+    expect(result.error.code).toBe('directory_not_found');
+    expect(result.error.message).toContain('does not exist');
   });
 
   it('should return no matches message when nothing found', async () => {
     writeFile('src/test.ts', 'const x = 1;');
 
-    const result = await executeGrep('nonexistent_pattern_xyz', tmpDir);
+    const result = await executeGrepOutcome('nonexistent_pattern_xyz', tmpDir);
 
-    expect(result.display).toContain('No matches');
-    expect(result.content).toContain('No matches found');
+    expect(result.status).toBe('empty');
+    expect(result.data.matches).toHaveLength(0);
   });
 
   it('should support case insensitive search', async () => {
     writeFile('src/test.ts', 'function Hello() {}\nFUNCTION world() {}');
 
-    const result = await executeGrep('function', tmpDir, undefined, true);
+    const result = await executeGrepOutcome('function', tmpDir, undefined, true);
 
-    expect(result.content).toContain('Hello');
-    expect(result.content).toContain('world');
+    expect(result.data.matches.map((match) => match.text)).toEqual(['function Hello() {}', 'FUNCTION world() {}']);
   });
 
   it('uses frozen project grep limits and ignored directories', async () => {
@@ -290,14 +291,14 @@ describe('execute_command foreground', () => {
   it('should run echo hello and return stdout with exit code 0', async () => {
     const result = await executeCommand('echo hello');
 
-    expect(result.isError).toBeFalsy();
+    expect(result.canonical.status).toBe('complete');
     expect(result.agentProjection.content).toContain('hello');
   });
 
   it('should capture stderr', async () => {
     const result = await executeCommand('echo error >&2');
 
-    expect(result.isError).toBeFalsy();
+    expect(result.canonical.status).toBe('complete');
     expect(result.agentProjection.content).toContain('error');
   });
 

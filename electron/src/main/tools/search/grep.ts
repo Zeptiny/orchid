@@ -305,62 +305,6 @@ export async function executeGrepOutcome(
   return { status: 'complete', data };
 }
 
-/**
- * Transitional string adapter retained for direct callers of the old helper.
- * The registered handler below is canonical; this adapter does not participate
- * in dispatch or persistence.
- */
-export async function executeGrep(
-  pattern: string,
-  directoryPath: string,
-  includePattern?: string,
-  caseInsensitive?: boolean,
-  maxResults?: number,
-  config?: Pick<Config, 'grep_max_results' | 'ignored_dirs'>,
-): Promise<{ display: string; content: string; isError?: boolean }> {
-  const outcome = await executeGrepOutcome(
-    pattern,
-    directoryPath,
-    includePattern,
-    caseInsensitive,
-    maxResults,
-    config,
-  );
-  if (outcome.status === 'error') {
-    const display = outcome.error.code === 'invalid_regex'
-      ? `Invalid regex: ${pattern}`
-      : outcome.error.code === 'directory_not_found'
-        ? `Directory not found: ${directoryPath}`
-        : `Grep error: ${pattern}`;
-    return {
-      display,
-      content: outcome.error.code === 'invalid_regex'
-        ? `Error: ${outcome.error.message}`
-        : outcome.error.message,
-      isError: true,
-    };
-  }
-  if (outcome.status === 'empty') {
-    return {
-      display: `No matches for '${pattern}'`,
-      content: `No matches found for pattern '${pattern}' in '${directoryPath}'.`,
-    };
-  }
-  const lines = outcome.data.matches.map((match) =>
-    `${match.path}:${match.line}:${match.column ?? 1}: ${match.text}`,
-  );
-  return {
-    display: `Found ${outcome.data.matches.length} matches for '${pattern}'`,
-    content: [
-      `Found ${outcome.data.matches.length} match(es) for pattern '${pattern}':`,
-      ...lines,
-      ...(outcome.data.limitReached
-        ? [`\n... (truncated to ${outcome.data.matches.length} results)`]
-        : []),
-    ].join('\n'),
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Tool definition / handler
 // ---------------------------------------------------------------------------

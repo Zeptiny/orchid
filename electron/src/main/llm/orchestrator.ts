@@ -47,7 +47,6 @@ import {
   type ToolDispatchOptions,
 } from './tool-dispatch';
 import {
-  normalizeToolHandlerResult,
   parseToolExecutionResult,
 } from '../tools/result';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
@@ -99,7 +98,6 @@ export type StreamEvent =
       type: 'tool_result';
       toolCallId: string;
       content: string;
-      isError: boolean;
       /** Raw canonical execution retained by Orchid; U3 transports it durably. */
       execution: ToolExecutionResult;
     }
@@ -158,7 +156,6 @@ export type PendingToolCall = {
 export type PendingToolResult = {
   toolCallId: string;
   content: string;
-  isError: boolean;
   execution: ToolExecutionResult;
 };
 
@@ -225,23 +222,17 @@ function genericSdkExecution(
 }
 
 /**
- * Validate the raw AI SDK execution wrapper. Transitional non-wrapper values
- * are adapted only for provider/MCP results that did not run through dispatch.
+ * Validate the raw AI SDK execution wrapper. Provider stream parts must carry
+ * the canonical execution wrapper; malformed values become explicit generic
+ * errors rather than being interpreted as a legacy content result.
  */
 function executionFromSdkOutput(
   raw: unknown,
   toolName: string = 'unknown',
-  explicitError: boolean = false,
 ): ToolExecutionResult {
   try {
     const execution = parseToolExecutionResult(raw);
-    if (!explicitError || execution.canonical.status === 'error') {
-      return execution;
-    }
-    return genericSdkExecution(toolName, execution.agentProjection.content, {
-      status: 'error',
-      errorCode: 'sdk_tool_error',
-    });
+    return execution;
   } catch {
     if (
       raw != null &&
@@ -257,11 +248,11 @@ function executionFromSdkOutput(
     }
   }
 
-  const normalized = normalizeToolHandlerResult(raw);
-  return genericSdkExecution(toolName, normalized.content, {
-    status: explicitError || normalized.isError ? 'error' : undefined,
-    errorCode: 'sdk_tool_error',
-  });
+  return genericSdkExecution(
+    toolName,
+    `Tool '${toolName}' returned an invalid execution result.`,
+    { status: 'error', errorCode: 'invalid_tool_result' },
+  );
 }
 
 function sdkPreExecutionError(
@@ -279,11 +270,10 @@ function sdkPreExecutionError(
 
 function streamResultFields(execution: ToolExecutionResult): Pick<
   PendingToolResult,
-  'content' | 'isError' | 'execution'
+  'content' | 'execution'
 > {
   return {
     content: execution.agentProjection.content,
-    isError: execution.canonical.status === 'error',
     execution,
   };
 }
@@ -545,7 +535,6 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             toolCallId: string;
             output?: unknown;
             result?: unknown;
-            isError?: boolean;
             error?: unknown;
           }>) {
             const raw = tr.output ?? tr.result ?? tr.error ?? '';
@@ -557,7 +546,6 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               : executionFromSdkOutput(
                   raw,
                   'unknown',
-                  Boolean(tr.isError) || tr.error != null,
                 );
             pendingToolResults.push({
               toolCallId: tr.toolCallId,

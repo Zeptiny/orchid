@@ -49,11 +49,11 @@ export interface ToolDefinition {
   /** Zod schema for tool input — single source of truth */
   inputSchema: z.ZodType;
 
-  /** Canonical result family. Optional only during the coordinated migration. */
-  resultFamily?: ToolResultFamily;
+  /** Canonical result family for this tool's typed result data. */
+  resultFamily: ToolResultFamily;
 
-  /** Schema for canonical `data`. Optional only during the coordinated migration. */
-  outputDataSchema?: z.ZodTypeAny;
+  /** Schema for canonical `data`. */
+  outputDataSchema: z.ZodTypeAny;
 
   /** Tool-level agent projector override (wins over its family default). */
   agentProjector?: AgentProjector;
@@ -66,17 +66,6 @@ export interface ToolDefinition {
 
   /** If true, skip timeout for this tool */
   noTimeout?: boolean;
-}
-
-/**
- * Transitional pre-canonical handler shape. U4 removes this after every
- * built-in handler returns ToolHandlerOutcome.
- */
-export interface LegacyToolHandlerResult {
-  display?: string;
-  content: string;
-  isError?: boolean;
-  is_error?: boolean;
 }
 
 /**
@@ -141,12 +130,7 @@ export function resolveToolPath(cwd: string, userPath: string): string {
 export type ToolHandler = (
   input: unknown,
   ctx: ToolExecutionContext,
-) => Promise<
-  | ToolHandlerOutcome<JsonValue>
-  | string
-  | LegacyToolHandlerResult
-  | object
->;
+) => Promise<ToolHandlerOutcome<JsonValue>>;
 
 /** A registered tool combining definition and handler */
 export interface RegisteredTool {

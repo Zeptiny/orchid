@@ -24,7 +24,6 @@ import {
 import {
   finalizeToolExecutionResult,
   genericAgentProjector,
-  normalizeToolHandlerResult,
 } from '../tools/result';
 import type { ToolExecutionContext } from '../tools/types';
 import type { ProjectRuntime } from '../project/runtime';
@@ -355,34 +354,10 @@ function finalizeHandlerResult(
   }
 
   if (!isToolHandlerOutcome(result)) {
-    const legacy = normalizeToolHandlerResult(result);
-    if (legacy.isError) {
-      return genericTerminalExecution(
-        toolCall.id,
-        toolCall.function.name,
-        'error',
-        legacy.content,
-        'tool_error',
-      );
-    }
-    const canonical = createCanonicalToolResult('generic', {
-      status: legacy.content.length === 0 ? 'empty' : 'complete',
-      data: {
-        value: legacy.content,
-        origin: { kind: 'built-in', name: toolCall.function.name },
-      },
-    });
-    return finalizeToolExecutionResult({
-      canonical,
-      toolName: toolCall.function.name,
-      toolCallId: toolCall.id,
-      expectedFamily: 'generic',
-      projector: registry.resolveAgentProjector(toolCall.function.name).projector,
-    });
+    throw new TypeError(`Tool '${toolCall.function.name}' returned a non-canonical result`);
   }
 
-  const family = registered.definition.resultFamily ?? 'generic';
-  const canonical = createCanonicalToolResult(family, result);
+  const canonical = createCanonicalToolResult(registered.definition.resultFamily, result);
   return finalizeToolExecutionResult({
     canonical,
     toolName: toolCall.function.name,
