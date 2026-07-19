@@ -49,6 +49,8 @@ describe('shared canonical tool-result renderer', () => {
     const shell = fs.readFileSync(path.join(rendererDir, 'ToolResults/ToolResultShell.tsx'), 'utf8');
     expect(shell).toMatch(/expansionChoices\.get\(choiceKey\) \?\? false/);
     expect(shell).not.toMatch(/if \(!expansionChoices\.has\(choiceKey\)\) setExpanded/);
+    expect(shell).not.toContain('Copy complete result');
+    expect(shell).toContain("status === 'partial' || status === 'complete'");
   });
 
   it('resolves tool overrides before family defaults and restores them', () => {

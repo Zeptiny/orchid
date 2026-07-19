@@ -1,11 +1,9 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import type { CanonicalToolResult, TerminalToolResultStatus } from '../../../shared/types/tool-result';
-import { serializeCanonicalResultForCopy } from '../../../shared/types/tool-result';
 import type { ToolBlock } from '../../hooks/useChat';
 import { Icon, type IconName } from '../Icon';
 import { Spinner } from '../ui/Spinner';
 import { StatusBadge } from '../ui/StatusBadge';
-import { Button } from '../ui/Button';
 import { GenericToolResult } from './GenericToolResult';
 import { resolveToolResultRenderer } from './registry';
 
@@ -46,10 +44,6 @@ export function toolStatusLabel(status: ToolBlock['status'], canonical?: Canonic
   return 'complete';
 }
 
-function completeCopy(canonical: CanonicalToolResult): string {
-  return serializeCanonicalResultForCopy(canonical);
-}
-
 function ResultBody({ block, canonical }: { block: ToolBlock; canonical: CanonicalToolResult }) {
 
   try {
@@ -63,6 +57,7 @@ function ResultBody({ block, canonical }: { block: ToolBlock; canonical: Canonic
 function lifecycleBadge(block: ToolBlock, canonical: CanonicalToolResult | null, custom?: ReactNode) {
   if (custom) return custom;
   const status = toolStatusLabel(block.status, canonical);
+  if (status === 'partial' || status === 'complete') return null;
   if (status === 'generating') return <StatusBadge tone="info" size="xs">generating</StatusBadge>;
   if (status === 'running') return <StatusBadge tone="warning" size="xs">running</StatusBadge>;
   if (status === 'error') return <StatusBadge tone="error" size="xs">error</StatusBadge>;
@@ -118,19 +113,6 @@ export function ToolResultShell({
     setExpanded(next);
   };
 
-  const copy = async () => {
-    try {
-      if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
-        throw new Error('Clipboard API unavailable');
-      }
-      if (!canonical) return;
-      await navigator.clipboard.writeText(completeCopy(canonical));
-      setAnnouncement('Complete result copied to clipboard.');
-    } catch {
-      setAnnouncement('Unable to copy result.');
-    }
-  };
-
   return (
     <div className={`orchid-tool-block ${status === 'complete' ? '' : status}`} data-tool-result-status={status}>
       <button
@@ -151,11 +133,8 @@ export function ToolResultShell({
       </button>
       {expanded && (
         <div id={panelId} className="orchid-tool-block-content min-w-0" aria-describedby={announcementId}>
-          <div className="orchid-tool-result-toolbar flex flex-wrap items-center justify-end gap-1">
-            <span className="sr-only">{status} tool result</span>
-            {!active && canonical && <Button size="xs" variant="ghost" onClick={copy}>Copy complete result</Button>}
-          </div>
           {body}
+          <span className="sr-only">{status} tool result</span>
           <span id={announcementId} className="sr-only" role="status" aria-live="polite">{announcement}</span>
         </div>
       )}
