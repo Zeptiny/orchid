@@ -512,6 +512,7 @@ export class MCPManager {
           name: registryName,
           description: tool.description ?? '',
           inputSchema: this._jsonSchemaToZod(tool.inputSchema),
+          rawInputJsonSchema: tool.inputSchema as Record<string, unknown>,
           resultFamily: 'generic',
           outputDataSchema: genericToolResultDataSchema,
           category: 'mcp',

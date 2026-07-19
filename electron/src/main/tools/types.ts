@@ -49,6 +49,14 @@ export interface ToolDefinition {
   /** Zod schema for tool input — single source of truth */
   inputSchema: z.ZodType;
 
+  /**
+   * Raw JSON Schema from the origin server (MCP tools only).
+   * When present, the LLM receives this schema directly instead of the
+   * Zod-derived one — preserving parameter names, types, and descriptions
+   * that the opaque Zod passthrough would discard.
+   */
+  rawInputJsonSchema?: Record<string, unknown>;
+
   /** Canonical result family for this tool's typed result data. */
   resultFamily: ToolResultFamily;
 

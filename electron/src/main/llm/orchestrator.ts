@@ -32,6 +32,7 @@
 import { createHash } from 'node:crypto';
 import type { AssistantContent, ModelMessage, Tool } from 'ai';
 import { getErrorMessage, type LanguageModelV4 } from '@ai-sdk/provider';
+import { jsonSchema } from '@ai-sdk/provider-utils';
 import type { Message, Usage } from '../../shared/types/message';
 import type { Agent } from '../../shared/types/agent';
 import type { Skill } from '../../shared/types/skill';
@@ -1002,7 +1003,9 @@ export function buildToolMap(
 
       toolMap[providerName] = {
         description: definition.description,
-        inputSchema: definition.inputSchema,
+        inputSchema: definition.rawInputJsonSchema
+          ? jsonSchema(definition.rawInputJsonSchema as Parameters<typeof jsonSchema>[0])
+          : definition.inputSchema,
         outputSchema,
         execute: async (
           args: unknown,
