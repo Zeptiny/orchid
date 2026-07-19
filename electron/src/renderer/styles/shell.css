@@ -737,7 +737,8 @@
   .session-project-sessions > .session-project-expand {
     margin-right: 7px;
     margin-bottom: 4px;
-    margin-top: 1px;
+    margin-top: 0;
+    border: none;
   }
 
   .session-row {
