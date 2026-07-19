@@ -1127,13 +1127,18 @@ describe('ToolRegistry integration with dispatch', () => {
           inputSchema: z.object({ query: z.string().optional() }),
           category: 'mcp',
         },
-        handler: vi.fn(),
+        handler: vi.fn(async (input: unknown, ctx: { abortSignal?: AbortSignal }) =>
+          callTool(name, input, { signal: ctx.abortSignal })),
       })),
       callTool,
     } as unknown as MCPManager;
 
-    const firstBuild = buildToolMap(['*'], registry, mcpManager, {});
-    const secondBuild = buildToolMap(['*'], registry, mcpManager, {});
+    const firstBuild = buildToolMap(['*'], registry, mcpManager, {
+      cwd: TEST_TOOL_CWD,
+    });
+    const secondBuild = buildToolMap(['*'], registry, mcpManager, {
+      cwd: TEST_TOOL_CWD,
+    });
     const aliases = Object.keys(firstBuild);
 
     expect(aliases).toHaveLength(internalNames.length);
