@@ -52,6 +52,10 @@ function computeReplacements(
       lineIndex = found;
     }
 
+    if (chunk.oldLines.length === 0 && chunk.newLines.length === 0) {
+      continue;
+    }
+
     if (chunk.oldLines.length === 0) {
       const insertionIdx = lines.length > 0 && lines[lines.length - 1] === ''
         ? lines.length - 1

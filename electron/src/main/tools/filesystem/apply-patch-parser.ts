@@ -117,7 +117,7 @@ export function parsePatch(input: string): ParseResult {
       );
     }
     const lastChunk = hunk.chunks[hunk.chunks.length - 1];
-    if (lastChunk.oldLines.length === 0 && lastChunk.newLines.length === 0) {
+    if (lastChunk.changeContext === null && lastChunk.oldLines.length === 0 && lastChunk.newLines.length === 0) {
       throw new ParseError('Update hunk does not contain any lines', lineNum);
     }
     updateState = null;
@@ -224,7 +224,11 @@ export function parsePatch(input: string): ParseResult {
       if (updateLine.startsWith(CHANGE_CONTEXT_MARKER)) {
         const ctx = updateLine.slice(CHANGE_CONTEXT_MARKER.length);
         if (lastChunk && lastChunk.oldLines.length === 0 && lastChunk.newLines.length === 0) {
-          lastChunk.changeContext = ctx;
+          if (lastChunk.changeContext !== null) {
+            hunk.chunks.push(newChunk(ctx));
+          } else {
+            lastChunk.changeContext = ctx;
+          }
         } else {
           hunk.chunks.push(newChunk(ctx));
         }

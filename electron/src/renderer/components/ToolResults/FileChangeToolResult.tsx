@@ -1,11 +1,8 @@
-import {
-  fileChangeDataSchema,
-  type FileChangeHunk,
-  type FileChangeLine,
-} from '../../../shared/types/tool-result-filesystem';
+import { fileChangeDataSchema } from '../../../shared/types/tool-result-filesystem';
 import type { CanonicalToolResult } from '../../../shared/types/tool-result';
 import { Alert } from '../ui/Alert';
 import { StatusBadge } from '../ui/StatusBadge';
+import { Hunk } from './diff-view';
 
 export interface FileChangeToolResultProps {
   canonical: CanonicalToolResult;
@@ -22,43 +19,6 @@ function statusNotice(canonical: CanonicalToolResult) {
     return <Alert tone="info" variant="soft" role="status" className="mb-2 text-sm">No file changes were produced.</Alert>;
   }
   return null;
-}
-
-function rowLabel(line: FileChangeLine): string {
-  if (line.kind === 'add') return `Added line ${line.newLineNumber}`;
-  if (line.kind === 'remove') return `Removed line ${line.oldLineNumber}`;
-  return `Unchanged line ${line.newLineNumber}`;
-}
-
-function lineClass(kind: FileChangeLine['kind']): string {
-  if (kind === 'add') return 'bg-success/10 text-success-content';
-  if (kind === 'remove') return 'bg-error/10 text-error-content';
-  return 'text-base-content/80';
-}
-
-function DiffLine({ line }: { line: FileChangeLine }) {
-  const oldNumber = line.kind === 'add' ? '' : String(line.oldLineNumber);
-  const newNumber = line.kind === 'remove' ? '' : String(line.newLineNumber);
-  const marker = line.kind === 'add' ? '+' : line.kind === 'remove' ? '-' : ' ';
-  return (
-    <div role="row" aria-label={`${rowLabel(line)}: ${line.content}`} className={`flex min-w-max font-mono text-xs leading-5 ${lineClass(line.kind)}`}>
-      <span role="cell" aria-hidden className="w-12 shrink-0 border-r border-base-300/60 px-2 text-right text-base-content/50">{oldNumber}</span>
-      <span role="cell" aria-hidden className="w-12 shrink-0 border-r border-base-300/60 px-2 text-right text-base-content/50">{newNumber}</span>
-      <span aria-hidden className="w-5 shrink-0 px-1 text-center font-semibold">{marker}</span>
-      <span role="cell" className="whitespace-pre px-2">{line.content || ' '}</span>
-    </div>
-  );
-}
-
-function Hunk({ hunk }: { hunk: FileChangeHunk }) {
-  return (
-    <section role="rowgroup" className="border-b border-base-300/60 last:border-b-0">
-      <div role="row" className="min-w-max bg-base-200/60 px-2 py-1 font-mono text-xs text-base-content/70">
-        <span role="cell">@@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@</span>
-      </div>
-      {hunk.lines.map((line, index) => <DiffLine key={`${hunk.oldStart}:${hunk.newStart}:${index}`} line={line} />)}
-    </section>
-  );
 }
 
 /** Native structured diff presentation. The shell owns lifecycle and complete-copy. */

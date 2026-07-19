@@ -75,6 +75,23 @@ describe('applyChunksToContent', () => {
     );
   });
 
+  it('uses stacked context-advancing chunks to narrow search', () => {
+    const lines = Array.from({ length: 21 }, (_, i) => `line${i + 1}`);
+    lines[0] = 'class Foo';
+    lines[4] = 'def bar';
+    lines[5] = 'target';
+    lines[19] = 'target';
+    const content = lines.join('\n') + '\n';
+    const chunks = [
+      chunk({ changeContext: 'class Foo', oldLines: [], newLines: [] }),
+      chunk({ changeContext: 'def bar', oldLines: ['target'], newLines: ['CHANGED'] }),
+    ];
+    const result = applyChunksToContent(content, chunks, 'test.txt');
+    const resultLines = result.split('\n');
+    expect(resultLines[5]).toBe('CHANGED');
+    expect(resultLines[19]).toBe('target');
+  });
+
   it('retries without trailing empty line in oldLines', () => {
     const content = 'alpha\nbeta\n';
     const chunks = [

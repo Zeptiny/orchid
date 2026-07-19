@@ -191,7 +191,7 @@ describe('@@ context hint', () => {
 // ── Happy path: stacked @@ hints ───────────────────────────────────────────
 
 describe('stacked @@ hints', () => {
-  it('should use the last hint as changeContext', () => {
+  it('should produce multiple chunks for stacked hints', () => {
     const patch = [
       '*** Begin Patch',
       '*** Update File: app.py',
@@ -205,10 +205,45 @@ describe('stacked @@ hints', () => {
     const result = parsePatch(patch);
     const hunk = result.hunks[0] as Extract<PatchHunk, { type: 'update' }>;
 
-    expect(hunk.chunks).toHaveLength(1);
-    expect(hunk.chunks[0].changeContext).toBe('def bar():');
-    expect(hunk.chunks[0].oldLines).toEqual(['    pass']);
-    expect(hunk.chunks[0].newLines).toEqual(['    return 1']);
+    expect(hunk.chunks).toHaveLength(2);
+
+    expect(hunk.chunks[0].changeContext).toBe('class Foo');
+    expect(hunk.chunks[0].oldLines).toEqual([]);
+    expect(hunk.chunks[0].newLines).toEqual([]);
+
+    expect(hunk.chunks[1].changeContext).toBe('def bar():');
+    expect(hunk.chunks[1].oldLines).toEqual(['    pass']);
+    expect(hunk.chunks[1].newLines).toEqual(['    return 1']);
+  });
+
+  it('should produce three chunks for three stacked hints', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: app.py',
+      '@@ a',
+      '@@ b',
+      '@@ c',
+      '-x',
+      '+y',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = parsePatch(patch);
+    const hunk = result.hunks[0] as Extract<PatchHunk, { type: 'update' }>;
+
+    expect(hunk.chunks).toHaveLength(3);
+
+    expect(hunk.chunks[0].changeContext).toBe('a');
+    expect(hunk.chunks[0].oldLines).toEqual([]);
+    expect(hunk.chunks[0].newLines).toEqual([]);
+
+    expect(hunk.chunks[1].changeContext).toBe('b');
+    expect(hunk.chunks[1].oldLines).toEqual([]);
+    expect(hunk.chunks[1].newLines).toEqual([]);
+
+    expect(hunk.chunks[2].changeContext).toBe('c');
+    expect(hunk.chunks[2].oldLines).toEqual(['x']);
+    expect(hunk.chunks[2].newLines).toEqual(['y']);
   });
 });
 

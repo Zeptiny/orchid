@@ -13,6 +13,7 @@ import {
   renderXmlToolResult,
   xmlTextElement,
   escapeXmlText,
+  escapeXmlAttribute,
   projectionWithCanonicalCompleteness,
 } from '../result';
 import type { AgentProjector } from '../../../shared/types/tool-result';
@@ -68,11 +69,11 @@ const applyPatchAgentProjector: AgentProjector = (canonical, toolName = 'apply_p
 
     const attrString = Object.entries(attrs)
       .filter(([, v]) => v !== undefined)
-      .map(([k, v]) => ` ${k}="${escapeXmlText(v)}"`)
+      .map(([k, v]) => ` ${k}="${escapeXmlAttribute(v)}"`)
       .join('');
 
     if (file.status === 'error' && file.error) {
-      return `<file${attrString}>\n<error code="${escapeXmlText(file.error.code)}">${escapeXmlText(file.error.message)}</error>\n</file>`;
+      return `<file${attrString}>\n<error code="${escapeXmlAttribute(file.error.code)}">${escapeXmlText(file.error.message)}</error>\n</file>`;
     }
 
     if (!file.fileChange) {
@@ -250,6 +251,12 @@ export const applyPatchHandler: ToolHandler = async (input: unknown, ctx) => {
 
     try {
       if (hunk.type === 'add') {
+        if (fs.existsSync(resolved)) {
+          files.push(fileError(hunk.path, 'create', 'already_exists',
+            `File '${hunk.path}' already exists. Use *** Update File to modify existing files.`));
+          failed++;
+          continue;
+        }
         fs.mkdirSync(path.dirname(resolved), { recursive: true });
         atomicWrite(resolved, hunk.contents);
         fs.chmodSync(resolved, 0o644);
@@ -304,7 +311,6 @@ export const applyPatchHandler: ToolHandler = async (input: unknown, ctx) => {
           newContent,
         });
         const validated = fileChangeDataSchema.parse(data);
-        atomicWrite(resolved, newContent);
 
         if (hunk.movePath) {
           const moveResolved = resolveToolPath(ctx.cwd, hunk.movePath);
@@ -319,6 +325,7 @@ export const applyPatchHandler: ToolHandler = async (input: unknown, ctx) => {
           fs.unlinkSync(resolved);
           files.push({ path: hunk.path, operation: 'update', status: 'complete', fileChange: validated, movePath: hunk.movePath });
         } else {
+          atomicWrite(resolved, newContent);
           files.push({ path: hunk.path, operation: 'update', status: 'complete', fileChange: validated });
         }
         modified++;

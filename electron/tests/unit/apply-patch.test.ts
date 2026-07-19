@@ -2,9 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { applyPatchHandler } from '../../src/main/tools/filesystem/apply-patch';
+import { applyPatchHandler, applyPatchDefinition } from '../../src/main/tools/filesystem/apply-patch';
 import type { ToolExecutionContext } from '../../src/main/tools/types';
 import type { ApplyPatchResultData } from '../../src/shared/types/tool-result-apply-patch';
+import type { CanonicalToolResult } from '../../src/shared/types/tool-result';
+import type { FileChangeData } from '../../src/shared/types/tool-result-filesystem';
 
 let tmpDir: string;
 
@@ -247,5 +249,284 @@ describe('apply_patch handler', () => {
     if (result.status === 'error') {
       expect(result.error.code).toBe('parse_error');
     }
+  });
+
+  it('move-path traversal leaves source unchanged', async () => {
+    writeFile('source.ts', 'const x = 1;\n');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: source.ts',
+      '*** Move to: ../../outside.ts',
+      '@@',
+      '-const x = 1;',
+      '+const x = 2;',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.failed).toBe(1);
+    expect(data.files[0].error?.code).toBe('path_traversal');
+    expect(readFile('source.ts')).toBe('const x = 1;\n');
+    expect(fs.existsSync(path.join(tmpDir, '..', 'outside.ts'))).toBe(false);
+  });
+
+  it('move-path absolute path leaves source unchanged', async () => {
+    writeFile('source.ts', 'const x = 1;\n');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: source.ts',
+      '*** Move to: /tmp/evil.ts',
+      '@@',
+      '-const x = 1;',
+      '+const x = 2;',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.failed).toBe(1);
+    expect(data.files[0].error?.code).toBe('path_traversal');
+    expect(readFile('source.ts')).toBe('const x = 1;\n');
+  });
+
+  it('add file onto existing file fails with already_exists', async () => {
+    writeFile('target.ts', 'original content\n');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Add File: target.ts',
+      '+overwritten content',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.failed).toBe(1);
+    expect(data.files[0].error?.code).toBe('already_exists');
+    expect(readFile('target.ts')).toBe('original content\n');
+  });
+});
+
+describe('apply_patch agentProjector', () => {
+  const projector = applyPatchDefinition.agentProjector!;
+
+  function canonical(data: ApplyPatchResultData, status: 'complete' | 'error' = 'complete'): CanonicalToolResult {
+    return {
+      schemaVersion: 1,
+      family: 'generic',
+      status,
+      completeness: 'complete',
+      data,
+    };
+  }
+
+  function fileChange(overrides: Partial<FileChangeData> & { hunks: FileChangeData['hunks'] }): FileChangeData {
+    return {
+      path: 'file.ts',
+      operation: 'update',
+      addedLines: 0,
+      removedLines: 0,
+      resultingContent: '',
+      ...overrides,
+    };
+  }
+
+  it('renders mixed success/error multi-file result', () => {
+    const data: ApplyPatchResultData = {
+      files: [
+        {
+          path: 'new.ts',
+          operation: 'create',
+          status: 'complete',
+          fileChange: fileChange({
+            path: 'new.ts',
+            operation: 'create',
+            addedLines: 1,
+            hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 1, lines: [{ kind: 'add', content: 'export const x = 1;', newLineNumber: 1 }] }],
+            resultingContent: 'export const x = 1;\n',
+          }),
+        },
+        {
+          path: 'src/app.ts',
+          operation: 'update',
+          status: 'complete',
+          fileChange: fileChange({
+            path: 'src/app.ts',
+            operation: 'update',
+            addedLines: 1,
+            removedLines: 1,
+            hunks: [{
+              oldStart: 1, oldLines: 3, newStart: 1, newLines: 3,
+              lines: [
+                { kind: 'context', content: 'import { a } from "./a";', oldLineNumber: 1, newLineNumber: 1 },
+                { kind: 'remove', content: 'const old = true;', oldLineNumber: 2 },
+                { kind: 'add', content: 'const updated = true;', newLineNumber: 2 },
+                { kind: 'context', content: 'export default old;', oldLineNumber: 3, newLineNumber: 3 },
+              ],
+            }],
+            resultingContent: 'import { a } from "./a";\nconst updated = true;\nexport default old;\n',
+          }),
+        },
+        {
+          path: 'bad.ts',
+          operation: 'update',
+          status: 'error',
+          error: { code: 'match_failed', message: 'Could not match hunk' },
+        },
+      ],
+      added: 1,
+      modified: 1,
+      deleted: 0,
+      failed: 1,
+    };
+
+    const result = projector(canonical(data));
+
+    expect(result.content).toContain('<tool_result name="apply_patch"');
+    expect(result.content).toContain('<file path="new.ts" operation="create" status="complete"');
+    expect(result.content).toContain('<file path="src/app.ts" operation="update" status="complete"');
+    expect(result.content).toContain('<file path="bad.ts" operation="update" status="error"');
+    expect(result.content).toContain('<error code="match_failed"');
+    expect(result.content).toContain('3 files');
+    expect(result.content).toContain('1 failed');
+  });
+
+  it('renders move_path attribute', () => {
+    const data: ApplyPatchResultData = {
+      files: [
+        {
+          path: 'old.ts',
+          operation: 'update',
+          status: 'complete',
+          movePath: 'new-location.ts',
+          fileChange: fileChange({
+            path: 'old.ts',
+            operation: 'update',
+            addedLines: 1,
+            removedLines: 1,
+            hunks: [{
+              oldStart: 1, oldLines: 1, newStart: 1, newLines: 1,
+              lines: [
+                { kind: 'remove', content: 'const a = 1;', oldLineNumber: 1 },
+                { kind: 'add', content: 'const a = 2;', newLineNumber: 1 },
+              ],
+            }],
+            resultingContent: 'const a = 2;\n',
+          }),
+        },
+      ],
+      added: 0,
+      modified: 1,
+      deleted: 0,
+      failed: 0,
+    };
+
+    const result = projector(canonical(data));
+
+    expect(result.content).toContain('move_path="new-location.ts"');
+  });
+
+  it('renders delete-only result with empty file body', () => {
+    const data: ApplyPatchResultData = {
+      files: [
+        { path: 'obsolete.txt', operation: 'delete', status: 'complete' },
+      ],
+      added: 0,
+      modified: 0,
+      deleted: 1,
+      failed: 0,
+    };
+
+    const result = projector(canonical(data));
+
+    expect(result.content).toContain('<file path="obsolete.txt" operation="delete" status="complete"');
+    expect(result.content).toContain('<file path="obsolete.txt" operation="delete" status="complete">\n</file>');
+    expect(result.content).not.toContain('<old_string>');
+    expect(result.content).not.toContain('<new_string>');
+  });
+
+  it('omits failed attribute when failed=0', () => {
+    const data: ApplyPatchResultData = {
+      files: [
+        { path: 'a.ts', operation: 'create', status: 'complete' },
+        { path: 'b.ts', operation: 'delete', status: 'complete' },
+      ],
+      added: 1,
+      modified: 0,
+      deleted: 1,
+      failed: 0,
+    };
+
+    const result = projector(canonical(data));
+
+    expect(result.content).not.toContain('failed=');
+  });
+
+  it('escapes XML metacharacters in paths', () => {
+    const data: ApplyPatchResultData = {
+      files: [
+        { path: 'src/say "hi" & <bye>.ts', operation: 'delete', status: 'complete' },
+      ],
+      added: 0,
+      modified: 0,
+      deleted: 1,
+      failed: 0,
+    };
+
+    const result = projector(canonical(data));
+
+    expect(result.content).toContain('&quot;');
+    expect(result.content).toContain('&amp;');
+    expect(result.content).toContain('&lt;');
+    expect(result.content).not.toContain('path="src/say "hi"');
+    expect(result.content).not.toContain('<bye>');
+  });
+
+  it('renders old_string/new_string from hunks', () => {
+    const data: ApplyPatchResultData = {
+      files: [
+        {
+          path: 'src/util.ts',
+          operation: 'update',
+          status: 'complete',
+          fileChange: fileChange({
+            path: 'src/util.ts',
+            operation: 'update',
+            addedLines: 1,
+            removedLines: 1,
+            hunks: [{
+              oldStart: 10, oldLines: 4, newStart: 10, newLines: 4,
+              lines: [
+                { kind: 'context', content: 'function greet() {', oldLineNumber: 10, newLineNumber: 10 },
+                { kind: 'remove', content: '  return "hi";', oldLineNumber: 11 },
+                { kind: 'add', content: '  return "hello";', newLineNumber: 11 },
+                { kind: 'context', content: '}', oldLineNumber: 12, newLineNumber: 12 },
+              ],
+            }],
+            resultingContent: '',
+          }),
+        },
+      ],
+      added: 0,
+      modified: 1,
+      deleted: 0,
+      failed: 0,
+    };
+
+    const result = projector(canonical(data));
+
+    expect(result.content).toContain('<old_string>');
+    expect(result.content).toContain('function greet() {\n  return "hi";\n}');
+    expect(result.content).toContain('<new_string>');
+    expect(result.content).toContain('function greet() {\n  return "hello";\n}');
   });
 });
