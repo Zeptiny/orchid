@@ -14,7 +14,7 @@
  * 6. Usage tracking: Stream ends with usage data → Usage object populated
  * 7. Timeout: Tool >60s → TimeoutError caught, error result returned
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -30,6 +30,9 @@ import {
   maybeOffloadToolOutput,
 } from '../../src/main/llm/tool-dispatch';
 import {
+  _setResultRetrievalCacheRootForTests,
+} from '../../src/main/tools/result-retrieval';
+import {
   buildToolMap,
   streamChat,
   drainPendingToolEvents,
@@ -41,6 +44,32 @@ import { ToolRegistry } from '../../src/main/tools/registry';
 import type { MCPManager } from '../../src/main/mcp/manager';
 import { defaults } from '../../src/main/config/schema';
 import { z } from 'zod';
+import {
+  createCanonicalToolResult,
+  genericToolResultDataSchema,
+  serializeCanonicalResultForRetrieval,
+  type ToolExecutionResult,
+} from '../../src/shared/types/tool-result';
+
+function canonicalStreamOutput(
+  content: string,
+  status: 'complete' | 'error' = 'complete',
+): ToolExecutionResult {
+  const canonical = status === 'error'
+    ? createCanonicalToolResult('generic', {
+        status,
+        data: { value: content },
+        error: { code: 'fixture_error', message: content },
+      })
+    : createCanonicalToolResult('generic', {
+        status,
+        data: { value: content },
+      });
+  return {
+    canonical,
+    agentProjection: { content, completeness: 'complete' },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // AI SDK mock (streamChat imports `ai` via importESM)
@@ -82,8 +111,7 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     thinking: null,
     timestamp: new Date().toISOString(),
     usage: null,
-    hidden: false,
-    is_error: false,...overrides,
+    hidden: false,...overrides,
   };
 }
 
@@ -412,48 +440,275 @@ describe('executeToolCall', () => {
     registry = new ToolRegistry();
   });
 
-  it('executes a tool and returns TOOL_RESULT message', async () => {
+  it('executes a tool and returns a canonical execution result', async () => {
     registry.register(
       {
         name: 'echo',
         description: 'Echo input',
         inputSchema: z.object({ text: z.string() }),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
         category: 'test',
       },
       async (input) => {
         const args = input as { text: string };
-        return `Echo: ${args.text}`;
+        return { status: 'complete', data: { value: `Echo: ${args.text}` } };
       },
     );
 
     const toolCall = makeToolCall('tc-1', 'echo', '{"text":"hello"}');
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
-    expect(result.role).toBe(MessageRole.TOOL);
-    expect(result.type).toBe(MessageType.TOOL_RESULT);
-    expect(result.tool_call_id).toBe('tc-1');
-    expect(result.content).toBe('Echo: hello');
+    expect(result.canonical).toMatchObject({
+      schemaVersion: 1,
+      family: 'generic',
+      status: 'complete',
+      data: { value: 'Echo: hello' },
+    });
+    expect(result.agentProjection).toMatchObject({ completeness: 'complete' });
+    expect(result.agentProjection.content).toContain('<tool_result name="echo" status="complete">');
+    expect(result.agentProjection.content).toContain('<data>Echo: hello</data>');
+  });
+
+  it('validates typed canonical data before returning the execution wrapper', async () => {
+    registry.register(
+      {
+        name: 'typed',
+        description: 'Typed result',
+        inputSchema: z.object({}),
+        resultFamily: 'generic',
+        outputDataSchema: z.object({ value: z.number() }).strict(),
+        category: 'test',
+      },
+      async () => ({ status: 'complete', data: { value: 'wrong' } }),
+    );
+
+    const result = await executeToolCall(
+      makeToolCall('typed-call', 'typed'),
+      registry,
+      { cwd: TEST_TOOL_CWD },
+    );
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.canonical.family).toBe('generic');
+    expect(result.agentProjection.content).toContain('invalid result');
+  });
+
+  it('maps parent cancellation to cancelled without turning it into model error output', async () => {
+    const parentAbort = new AbortController();
+    registry.register(
+      {
+        name: 'abortable',
+        description: 'Waits for cancellation',
+        inputSchema: z.object({}),
+        category: 'test',
+      },
+      async (_input, ctx) => {
+        await new Promise<void>((resolve) => {
+          if (ctx.abortSignal?.aborted) return resolve();
+          ctx.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+        return 'late success';
+      },
+    );
+
+    const pending = executeToolCall(
+      makeToolCall('cancel-call', 'abortable'),
+      registry,
+      { cwd: TEST_TOOL_CWD, abortSignal: parentAbort.signal },
+    );
+    parentAbort.abort();
+    const result = await pending;
+
+    expect(result.canonical.status).toBe('cancelled');
+    expect(result.agentProjection.content).toContain('cancelled');
+  });
+
+  it('materializes and verifies deterministic canonical recovery before a partial projection', async () => {
+    const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-retrieval-'));
+    _setResultRetrievalCacheRootForTests(cacheRoot);
+    registry.register(
+      {
+        name: 'bounded',
+        description: 'Bounds agent output',
+        inputSchema: z.object({}),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+        agentProjector: () => ({
+          content: 'bounded preview',
+          completeness: 'partial',
+          retrieval: {
+            kind: 'cache',
+            path: 'pending',
+            instructions: ['pending'],
+          },
+        }),
+        category: 'test',
+      },
+      async () => ({
+        status: 'complete',
+        data: { value: { last: 'preserved', first: 'preserved' } },
+      }),
+    );
+
+    try {
+      const call = makeToolCall('stable-provider-call-id', 'bounded');
+      const first = await executeToolCall(call, registry, {
+        cwd: TEST_TOOL_CWD,
+        sessionId: 'session-1',
+      });
+      const second = await executeToolCall(call, registry, {
+        cwd: TEST_TOOL_CWD,
+        sessionId: 'session-1',
+      });
+
+      expect(first.agentProjection.completeness).toBe('partial');
+      expect(second.agentProjection).toEqual(first.agentProjection);
+      if (first.agentProjection.completeness !== 'partial') {
+        throw new Error('Expected partial projection');
+      }
+      expect(first.agentProjection.retrieval.kind).toBe('cache');
+      if (first.agentProjection.retrieval.kind !== 'cache') {
+        throw new Error('Expected cache retrieval');
+      }
+      const recoveryPath = first.agentProjection.retrieval.path;
+      expect(fs.readFileSync(recoveryPath, 'utf-8')).toBe(
+        serializeCanonicalResultForRetrieval(first.canonical),
+      );
+      expect(first.agentProjection.content).toContain(recoveryPath);
+    } finally {
+      _setResultRetrievalCacheRootForTests(null);
+      fs.rmSync(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to a complete generic projection when recovery cache write fails', async () => {
+    const blocker = path.join(os.tmpdir(), `orchid-cache-blocker-${Date.now()}`);
+    fs.writeFileSync(blocker, 'not a directory');
+    _setResultRetrievalCacheRootForTests(blocker);
+    registry.register(
+      {
+        name: 'partial_with_cache',
+        description: 'Produces a partial projection expecting cache recovery',
+        inputSchema: z.object({}),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+        agentProjector: () => ({
+          content: 'partial preview',
+          completeness: 'partial',
+          retrieval: {
+            kind: 'cache',
+            path: 'pending',
+            instructions: ['pending'],
+          },
+        }),
+        category: 'test',
+      },
+      async () => ({
+        status: 'complete',
+        data: { value: { detail: 'full canonical data' } },
+      }),
+    );
+
+    try {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const result = await executeToolCall(
+        makeToolCall('cache-fail-call', 'partial_with_cache'),
+        registry,
+        { cwd: TEST_TOOL_CWD, sessionId: 'session-cache-fail' },
+      );
+
+      expect(result.agentProjection.completeness).toBe('complete');
+      if (result.agentProjection.completeness === 'partial') {
+        throw new Error('Expected complete fallback, got partial');
+      }
+      expect(
+        'retrieval' in result.agentProjection &&
+          result.agentProjection.retrieval?.kind === 'cache',
+      ).toBe(false);
+      expect(result.agentProjection.content).toContain('full canonical data');
+      warn.mockRestore();
+    } finally {
+      _setResultRetrievalCacheRootForTests(null);
+      fs.rmSync(blocker, { force: true });
+    }
+  });
+
+  it('offloads only an oversized agent projection and leaves canonical data complete inline', async () => {
+    const cacheHome = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-projection-offload-'));
+    _setToolOutputCacheRootForTests(cacheHome);
+    const canonicalOnly = 'CANONICAL_ONLY_SENTINEL';
+    const largeProjection = `${'agent '.repeat(5_000)}projection-end`;
+    registry.register(
+      {
+        name: 'large_projected',
+        description: 'Large projection',
+        inputSchema: z.object({}),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+        agentProjector: () => ({
+          content: largeProjection,
+          completeness: 'complete',
+        }),
+        category: 'test',
+      },
+      async () => ({
+        status: 'complete',
+        data: { value: { canonicalOnly } },
+      }),
+    );
+
+    try {
+      const result = await executeToolCall(
+        makeToolCall('provider-offload-call', 'large_projected'),
+        registry,
+        { cwd: TEST_TOOL_CWD, sessionId: 'session-offload' },
+      );
+
+      expect(result.canonical).toEqual(
+        createCanonicalToolResult('generic', {
+          status: 'complete',
+          data: { value: { canonicalOnly } },
+        }),
+      );
+      expect(result.agentProjection.content).not.toContain(canonicalOnly);
+      expect(result.agentProjection.content).toContain('was written to');
+      expect(result.agentProjection.completeness).toBe('partial');
+      if (result.agentProjection.completeness !== 'partial') {
+        throw new Error('Expected offloaded projection to be partial');
+      }
+      expect(result.agentProjection.retrieval.kind).toBe('cache');
+      if (result.agentProjection.retrieval.kind !== 'cache') {
+        throw new Error('Expected cache retrieval');
+      }
+      expect(fs.readFileSync(result.agentProjection.retrieval.path, 'utf-8')).toBe(
+        largeProjection,
+      );
+    } finally {
+      _setToolOutputCacheRootForTests(null);
+      fs.rmSync(cacheHome, { recursive: true, force: true });
+    }
   });
 
   it('handles invalid JSON arguments', async () => {
     const toolCall = makeToolCall('tc-1', 'echo', 'not-json');
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
-    expect(result.content).toContain('invalid JSON');
+    expect(result.agentProjection.content).toContain('invalid JSON');
   });
 
   it('handles non-object arguments', async () => {
     const toolCall = makeToolCall('tc-1', 'echo', '"just a string"');
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
-    expect(result.content).toContain('must be a JSON object');
+    expect(result.agentProjection.content).toContain('must be a JSON object');
   });
 
   it('handles unknown tool', async () => {
     const toolCall = makeToolCall('tc-1', 'nonexistent', '{}');
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
-    expect(result.content).toContain("does not exist");
+    expect(result.agentProjection.content).toContain("does not exist");
   });
 
   it('rejects invalid args via Zod validation on the agent path', async () => {
@@ -463,6 +718,8 @@ describe('executeToolCall', () => {
         name: 'echo',
         description: 'Echo input',
         inputSchema: z.object({ text: z.string() }),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
         category: 'test',
       },
       handler,
@@ -471,15 +728,15 @@ describe('executeToolCall', () => {
     const toolCall = makeToolCall('tc-1', 'echo', '{}');
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
-    expect(result.is_error).toBe(true);
-    expect(result.content).toContain('Invalid arguments');
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('Invalid arguments');
     expect(handler).not.toHaveBeenCalled();
   });
 
   it('passes Zod-parsed data to the handler on the agent path', async () => {
     const handler = vi.fn(async (input) => {
       const args = input as { text: string; count?: number };
-      return `Echo: ${args.text} x${args.count ?? 1}`;
+      return { status: 'complete', data: { value: `Echo: ${args.text} x${args.count ?? 1}` } };
     });
     registry.register(
       {
@@ -489,6 +746,8 @@ describe('executeToolCall', () => {
           text: z.string(),
           count: z.number().optional().default(1),
         }),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
         category: 'test',
       },
       handler,
@@ -497,8 +756,8 @@ describe('executeToolCall', () => {
     const toolCall = makeToolCall('tc-1', 'echo', '{"text":"hi"}');
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
-    expect(result.is_error).not.toBe(true);
-    expect(result.content).toBe('Echo: hi x1');
+    expect(result.canonical.status).toBe('complete');
+    expect(result.agentProjection.content).toContain('<data>Echo: hi x1</data>');
     expect(handler).toHaveBeenCalledWith(
       { text: 'hi', count: 1 },
       expect.objectContaining({ cwd: TEST_TOOL_CWD }),
@@ -521,8 +780,8 @@ describe('executeToolCall', () => {
     const toolCall = makeToolCall('tc-1', 'fail', '{}');
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
-    expect(result.content).toContain('internal error');
-    expect(result.is_error).toBe(true);
+    expect(result.agentProjection.content).toContain('internal error');
+    expect(result.canonical.status).toBe('error');
   });
 
   describe('timeout', () => {
@@ -545,9 +804,9 @@ describe('executeToolCall', () => {
         timeoutSeconds: 0.1, // 100ms timeout
       });
 
-      expect(result.content).toContain('timed out');
-      expect(result.is_error).toBe(true);
-      expect(result.content).toContain("Tool 'slow' timed out after");
+      expect(result.agentProjection.content).toContain('timed out');
+      expect(result.canonical.status).toBe('error');
+      expect(result.agentProjection.content).toContain("Tool 'slow' timed out after");
     }, 10000);
 
     it('rejects zero/negative timeout immediately', async () => {
@@ -566,8 +825,8 @@ describe('executeToolCall', () => {
         timeoutSeconds: 0,
       });
 
-      expect(result.content).toContain('timed out');
-      expect(result.is_error).toBe(true);
+      expect(result.agentProjection.content).toContain('timed out');
+      expect(result.canonical.status).toBe('error');
     });
 
     it('skips timeout when definition.noTimeout is set', async () => {
@@ -576,10 +835,12 @@ describe('executeToolCall', () => {
           name: 'custom_long',
           description: 'Long-running exempt tool',
           inputSchema: z.object({}),
+          resultFamily: 'generic',
+          outputDataSchema: genericToolResultDataSchema,
           category: 'test',
           noTimeout: true,
         },
-        async () => 'ok',
+        async () => ({ status: 'complete', data: { value: 'ok' } }),
       );
 
       const toolCall = makeToolCall('tc-1', 'custom_long', '{}');
@@ -588,7 +849,7 @@ describe('executeToolCall', () => {
         timeoutSeconds: 0.001,
       });
 
-      expect(result.content).toBe('ok');
+      expect(result.agentProjection.content).toContain('<data>ok</data>');
     });
 
     it('applies outer timeout to wait_for_subagent (not in TOOLS_WITHOUT_TIMEOUT)', async () => {
@@ -611,9 +872,9 @@ describe('executeToolCall', () => {
         waitTimeoutSeconds: 0.05,
       });
 
-      expect(result.is_error).toBe(true);
-      expect(result.content).toContain('timed out');
-      expect(result.content).toContain('wait_for_subagent');
+      expect(result.canonical.status).toBe('error');
+      expect(result.agentProjection.content).toContain('timed out');
+      expect(result.agentProjection.content).toContain('wait_for_subagent');
     }, 10000);
 
     it('skips timeout for tools in TOOLS_WITHOUT_TIMEOUT set', async () => {
@@ -622,9 +883,11 @@ describe('executeToolCall', () => {
           name: 'read_output',
           description: 'Read output tool',
           inputSchema: z.object({}),
+          resultFamily: 'generic',
+          outputDataSchema: genericToolResultDataSchema,
           category: 'test',
         },
-        async () => 'output',
+        async () => ({ status: 'complete', data: { value: 'output' } }),
       );
 
       const toolCall = makeToolCall('tc-1', 'read_output', '{}');
@@ -632,7 +895,7 @@ describe('executeToolCall', () => {
         timeoutSeconds: 0.001,
       });
 
-      expect(result.content).toBe('output');
+      expect(result.agentProjection.content).toContain('<data>output</data>');
     });
 
     it('aborts tool context signal on outer timeout so process tools can kill children', async () => {
@@ -671,8 +934,8 @@ describe('executeToolCall', () => {
         timeoutSeconds: 0.1,
       });
 
-      expect(result.content).toContain('timed out');
-      expect(result.is_error).toBe(true);
+      expect(result.agentProjection.content).toContain('timed out');
+      expect(result.canonical.status).toBe('error');
       expect(sawAbort).toBe(true);
     }, 10_000);
   });
@@ -797,8 +1060,8 @@ describe('ToolRegistry integration with dispatch', () => {
     const toolCall = makeToolCall('tc-1', 'nonexistent', '{}');
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
-    expect(result.content).toContain('does not exist');
-    expect(result.content).toContain('existing');
+    expect(result.agentProjection.content).toContain('does not exist');
+    expect(result.agentProjection.content).toContain('existing');
   });
 
   it('buildToolMap exposes AI SDK-compatible input schemas', async () => {
@@ -815,16 +1078,117 @@ describe('ToolRegistry integration with dispatch', () => {
 
     const tools = buildToolMap(['test_tool'], registry, null, {});
     const { asSchema } = await import('ai');
+    const testTool = tools.test_tool as { inputSchema: z.ZodType };
 
-    expect((tools.test_tool as any).inputSchema).toBe(inputSchema);
+    expect(testTool.inputSchema).toBe(inputSchema);
     const jsonSchema = await Promise.resolve(
-      asSchema((tools.test_tool as any).inputSchema).jsonSchema,
+      asSchema(testTool.inputSchema).jsonSchema,
     );
     expect(jsonSchema).toMatchObject({
       type: 'object',
       properties: {
         query: { type: 'string' },
       },
+    });
+  });
+
+  it('buildToolMap keeps canonical output raw while toModelOutput exposes only the projection', async () => {
+    const canonicalOnly = 'CANONICAL_ONLY_SENTINEL';
+    registry.register(
+      {
+        name: 'projected',
+        description: 'Projection boundary',
+        inputSchema: z.object({}),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+        agentProjector: () => ({
+          content: 'agent-visible summary',
+          completeness: 'complete',
+        }),
+        category: 'test',
+      },
+      async () => ({
+        status: 'complete',
+        data: { value: { canonicalOnly } },
+      }),
+    );
+
+    const tools = buildToolMap(['projected'], registry, null, {
+      cwd: TEST_TOOL_CWD,
+    });
+    const projected = tools.projected as unknown as {
+      outputSchema: z.ZodType;
+      execute: (
+        input: unknown,
+        options: { toolCallId: string },
+      ) => Promise<ToolExecutionResult>;
+      toModelOutput: (options: {
+        toolCallId: string;
+        input: unknown;
+        output: ToolExecutionResult;
+      }) => PromiseLike<unknown> | unknown;
+    };
+
+    const execution = await projected.execute({}, { toolCallId: 'provider-call-123' });
+    expect(projected.outputSchema.parse(execution)).toEqual(execution);
+    expect(JSON.stringify(execution.canonical)).toContain(canonicalOnly);
+
+    const modelOutput = await projected.toModelOutput({
+      toolCallId: 'provider-call-123',
+      input: {},
+      output: execution,
+    });
+    expect(modelOutput).toEqual({ type: 'text', value: 'agent-visible summary' });
+    expect(JSON.stringify(modelOutput)).not.toContain(canonicalOnly);
+  });
+
+  it('toModelOutput uses error-text only for canonical error, not cancellation', async () => {
+    registry.register(
+      {
+        name: 'status_result',
+        description: 'Status result',
+        inputSchema: z.object({ status: z.enum(['error', 'cancelled']) }),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+        category: 'test',
+      },
+      async (input) => {
+        const { status } = input as { status: 'error' | 'cancelled' };
+        return status === 'error'
+          ? {
+              status,
+              data: { value: null },
+              error: { code: 'expected', message: 'expected failure' },
+            }
+          : { status, data: { value: null } };
+      },
+    );
+    const tool = buildToolMap(['status_result'], registry, null, {
+      cwd: TEST_TOOL_CWD,
+    }).status_result as unknown as {
+      execute: (
+        input: unknown,
+        options: { toolCallId: string },
+      ) => Promise<ToolExecutionResult>;
+      toModelOutput: (options: { output: ToolExecutionResult }) => unknown;
+    };
+
+    const failed = await tool.execute(
+      { status: 'error' },
+      { toolCallId: 'error-call' },
+    );
+    const cancelled = await tool.execute(
+      { status: 'cancelled' },
+      { toolCallId: 'cancel-call' },
+    );
+
+    expect(await tool.toModelOutput({ output: failed })).toMatchObject({
+      type: 'error-text',
+      value: failed.agentProjection.content,
+    });
+    expect(await tool.toModelOutput({ output: cancelled })).toMatchObject({
+      type: 'text',
+      value: cancelled.agentProjection.content,
     });
   });
 
@@ -841,15 +1205,22 @@ describe('ToolRegistry integration with dispatch', () => {
           name,
           description: `MCP tool ${index}`,
           inputSchema: z.object({ query: z.string().optional() }),
+          resultFamily: 'generic',
+          outputDataSchema: genericToolResultDataSchema,
           category: 'mcp',
         },
-        handler: vi.fn(),
+        handler: vi.fn(async (input: unknown, ctx: { abortSignal?: AbortSignal }) =>
+          callTool(name, input, { signal: ctx.abortSignal })),
       })),
       callTool,
     } as unknown as MCPManager;
 
-    const firstBuild = buildToolMap(['*'], registry, mcpManager, {});
-    const secondBuild = buildToolMap(['*'], registry, mcpManager, {});
+    const firstBuild = buildToolMap(['*'], registry, mcpManager, {
+      cwd: TEST_TOOL_CWD,
+    });
+    const secondBuild = buildToolMap(['*'], registry, mcpManager, {
+      cwd: TEST_TOOL_CWD,
+    });
     const aliases = Object.keys(firstBuild);
 
     expect(aliases).toHaveLength(internalNames.length);
@@ -860,13 +1231,20 @@ describe('ToolRegistry integration with dispatch', () => {
       expect(alias).not.toContain('::');
     }
 
-    await (firstBuild[aliases[0]] as any).execute({ query: 'routing check' });
+    const routedMcpTool = firstBuild[aliases[0]] as unknown as {
+      execute: (input: unknown) => Promise<ToolExecutionResult>;
+    };
+    const routedResult = await routedMcpTool.execute({ query: 'routing check' });
 
     expect(callTool).toHaveBeenCalledWith(
       internalNames[0],
       { query: 'routing check' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+    expect(routedResult.agentProjection.content).toContain(
+      '<tool_result name="mcp::context7::query.docs"',
+    );
+    expect(routedResult.agentProjection.content).not.toContain(aliases[0]);
   });
 });
 
@@ -942,9 +1320,9 @@ type MockStepFinish = {
     toolCallId: string;
     output?: unknown;
     result?: unknown;
-    isError?: boolean;
     error?: unknown;
   }>;
+  content?: Array<Record<string, unknown>>;
 };
 
 type MockStreamTextOptions = {
@@ -1081,7 +1459,7 @@ describe('streamChat', () => {
         {
           type: 'tool-output-available',
           toolCallId: 'tc-1',
-          output: 'file contents',
+          output: canonicalStreamOutput('file contents'),
         },
         { type: 'text-delta', text: 'Done' },
       ],
@@ -1099,17 +1477,17 @@ describe('streamChat', () => {
         toolName: 'read',
         args: JSON.stringify({ path: '/a' }),
       },
-      {
+      expect.objectContaining({
         type: 'tool_result',
         toolCallId: 'tc-1',
         content: 'file contents',
-        isError: false,
-      },
+        execution: canonicalStreamOutput('file contents'),
+      }),
       { type: 'content', text: 'Done' },
     ]);
   });
 
-  it('maps tool-output-error and structured isError tool-output-available as errors', async () => {
+  it('maps tool-output-error and canonical error tool-output-available as errors', async () => {
     setupStreamText({
       fullStreamParts: [
         {
@@ -1117,22 +1495,22 @@ describe('streamChat', () => {
           toolCallId: 'tc-err',
           errorText: 'Tool boom',
         },
-        // Explicit failure from tool execute payload (not content sniffing)
+        // Explicit failure from the canonical tool execution payload.
         {
           type: 'tool-output-available',
           toolCallId: 'tc-soft',
-          output: { content: 'Tool execution failed', isError: true },
+          output: canonicalStreamOutput('Tool execution failed', 'error'),
         },
         {
           type: 'tool-output-available',
           toolCallId: 'tc-timeout',
-          output: { content: "Tool 'slow' timed out after 30 seconds", isError: true },
+          output: canonicalStreamOutput("Tool 'slow' timed out after 30 seconds", 'error'),
         },
-        // Content that *looks* like an error but has no isError flag stays success
+        // Content that looks like an error remains a successful canonical result.
         {
           type: 'tool-output-available',
           toolCallId: 'tc-false-positive',
-          output: 'Error: is just text in a successful tool result',
+          output: canonicalStreamOutput('Error: is just text in a successful tool result'),
         },
       ],
     });
@@ -1141,25 +1519,30 @@ describe('streamChat', () => {
     const results = events.filter((e) => e.type === 'tool_result');
 
     expect(results).toEqual([
-      { type: 'tool_result', toolCallId: 'tc-err', content: 'Tool boom', isError: true },
-      {
+      expect.objectContaining({
+        type: 'tool_result',
+        toolCallId: 'tc-err',
+        content: expect.stringContaining('Tool boom'),
+        execution: expect.objectContaining({ canonical: expect.objectContaining({ status: 'error' }) }),
+      }),
+      expect.objectContaining({
         type: 'tool_result',
         toolCallId: 'tc-soft',
         content: 'Tool execution failed',
-        isError: true,
-      },
-      {
+        execution: canonicalStreamOutput('Tool execution failed', 'error'),
+      }),
+      expect.objectContaining({
         type: 'tool_result',
         toolCallId: 'tc-timeout',
         content: "Tool 'slow' timed out after 30 seconds",
-        isError: true,
-      },
-      {
+        execution: canonicalStreamOutput("Tool 'slow' timed out after 30 seconds", 'error'),
+      }),
+      expect.objectContaining({
         type: 'tool_result',
         toolCallId: 'tc-false-positive',
         content: 'Error: is just text in a successful tool result',
-        isError: false,
-      },
+        execution: canonicalStreamOutput('Error: is just text in a successful tool result'),
+      }),
     ]);
   });
 
@@ -1210,7 +1593,7 @@ describe('streamChat', () => {
     ]);
   });
 
-  it('supports legacy tool-call / tool-result part types', async () => {
+  it('supports canonical tool-call / tool-result part types', async () => {
     setupStreamText({
       fullStreamParts: [
         {
@@ -1222,7 +1605,7 @@ describe('streamChat', () => {
         {
           type: 'tool-result',
           id: 'legacy-1',
-          result: { matches: 2 },
+          result: canonicalStreamOutput(JSON.stringify({ matches: 2 })),
         },
       ],
     });
@@ -1236,12 +1619,12 @@ describe('streamChat', () => {
         toolName: 'grep',
         args: JSON.stringify({ pattern: 'foo' }),
       },
-      {
+      expect.objectContaining({
         type: 'tool_result',
         toolCallId: 'legacy-1',
         content: JSON.stringify({ matches: 2 }),
-        isError: false,
-      },
+        execution: canonicalStreamOutput(JSON.stringify({ matches: 2 })),
+      }),
     ]);
   });
 
@@ -1267,13 +1650,67 @@ describe('streamChat', () => {
         toolName: 'read',
         args: JSON.stringify({ path: 123 }),
       },
-      {
+      expect.objectContaining({
         type: 'tool_result',
         toolCallId: 'tc-bad',
-        content: 'Invalid tool input',
-        isError: true,
-      },
+        content: expect.stringContaining('Invalid tool input'),
+        execution: expect.objectContaining({ canonical: expect.objectContaining({ status: 'error' }) }),
+      }),
     ]);
+  });
+
+  it('adapts a pre-execution SDK tool-error once across fullStream and step finish', async () => {
+    const sdkError = 'Invalid tool input: path must be a string';
+    const sdkPart = {
+      type: 'tool-error',
+      toolCallId: 'tc-sdk-error',
+      toolName: 'read',
+      input: { path: 123 },
+      error: sdkError,
+      dynamic: true,
+    };
+    setupStreamText({
+      fullStreamParts: [
+        {
+          type: 'tool-call',
+          toolCallId: 'tc-sdk-error',
+          toolName: 'read',
+          input: { path: 123 },
+        },
+        sdkPart,
+      ],
+      stepFinish: {
+        toolCalls: [
+          {
+            toolCallId: 'tc-sdk-error',
+            toolName: 'read',
+            input: { path: 123 },
+          },
+        ],
+        content: [sdkPart],
+      },
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+    const results = events.filter((event) => event.type === 'tool_result');
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      type: 'tool_result',
+      toolCallId: 'tc-sdk-error',
+      content: expect.stringContaining(sdkError),
+      execution: {
+        canonical: {
+          family: 'generic',
+          status: 'error',
+          error: { code: 'sdk_tool_error', message: sdkError },
+        },
+        agentProjection: {
+          content: expect.stringContaining(sdkError),
+          completeness: 'complete',
+        },
+      },
+    });
   });
 
   it('falls back to textStream when fullStream fails before any part', async () => {
@@ -1409,7 +1846,7 @@ describe('streamChat', () => {
           { toolCallId: 'tc-step', toolName: 'echo', input: { text: 'hi' } },
         ],
         toolResults: [
-          { toolCallId: 'tc-step', output: 'hi', isError: false },
+          { toolCallId: 'tc-step', output: canonicalStreamOutput('hi') },
         ],
       },
     });
@@ -1425,12 +1862,12 @@ describe('streamChat', () => {
           toolName: 'echo',
           args: JSON.stringify({ text: 'hi' }),
         },
-        {
+        expect.objectContaining({
           type: 'tool_result',
           toolCallId: 'tc-step',
           content: 'hi',
-          isError: false,
-        },
+          execution: canonicalStreamOutput('hi'),
+        }),
         { type: 'content', text: 'after tools' },
       ]),
     );
@@ -1506,6 +1943,7 @@ describe('streamChat', () => {
                 { once: true },
               );
             });
+            yield { type: 'unreachable-after-abort' };
           },
         },
         textStream: createAsyncIterable<string>([]),
@@ -1562,7 +2000,7 @@ describe('streamChat', () => {
             yield {
               type: 'tool-output-available',
               toolCallId: 'tc-1',
-              output: { content: 'done', isError: false },
+              output: canonicalStreamOutput('done'),
             };
           },
         },
@@ -1610,7 +2048,7 @@ describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
       { toolCallId: 'tc-1', toolName: 'read', args: '{"path":"a.ts"}' },
     ];
     const pendingToolResults = [
-      { toolCallId: 'tc-1', content: 'file contents', isError: false },
+      { toolCallId: 'tc-1', content: 'file contents', execution: canonicalStreamOutput('file contents') },
     ];
     // Simulate fullStream already yielding tool_call + tool_result for tc-1
     const seenToolCallIds = new Set(['tc-1']);
@@ -1634,8 +2072,8 @@ describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
       { toolCallId: 'tc-2', toolName: 'grep', args: '{"pattern":"x"}' },
     ];
     const pendingToolResults = [
-      { toolCallId: 'tc-1', content: 'ok', isError: false },
-      { toolCallId: 'tc-2', content: 'Error: boom', isError: true },
+      { toolCallId: 'tc-1', content: 'ok', execution: canonicalStreamOutput('ok') },
+      { toolCallId: 'tc-2', content: 'Error: boom', execution: canonicalStreamOutput('Error: boom', 'error') },
     ];
     const seenToolCallIds = new Set<string>();
     const seenToolResultIds = new Set<string>();
@@ -1650,8 +2088,8 @@ describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
     expect(events).toEqual([
       { type: 'tool_call', toolCallId: 'tc-1', toolName: 'read', args: '{"path":"a.ts"}' },
       { type: 'tool_call', toolCallId: 'tc-2', toolName: 'grep', args: '{"pattern":"x"}' },
-      { type: 'tool_result', toolCallId: 'tc-1', content: 'ok', isError: false },
-      { type: 'tool_result', toolCallId: 'tc-2', content: 'Error: boom', isError: true },
+      { type: 'tool_result', toolCallId: 'tc-1', content: 'ok', execution: canonicalStreamOutput('ok') },
+      { type: 'tool_result', toolCallId: 'tc-2', content: 'Error: boom', execution: canonicalStreamOutput('Error: boom', 'error') },
     ]);
     expect(seenToolCallIds.has('tc-1')).toBe(true);
     expect(seenToolCallIds.has('tc-2')).toBe(true);
@@ -1665,8 +2103,8 @@ describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
       { toolCallId: 'tc-pending-only', toolName: 'write', args: '{}' },
     ];
     const pendingToolResults = [
-      { toolCallId: 'tc-stream', content: 'from-stream-dup', isError: false },
-      { toolCallId: 'tc-pending-only', content: 'from-pending', isError: false },
+      { toolCallId: 'tc-stream', content: 'from-stream-dup', execution: canonicalStreamOutput('from-stream-dup') },
+      { toolCallId: 'tc-pending-only', content: 'from-pending', execution: canonicalStreamOutput('from-pending') },
     ];
     // fullStream already emitted tc-stream call+result
     const seenToolCallIds = new Set(['tc-stream']);
@@ -1690,7 +2128,7 @@ describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
         type: 'tool_result',
         toolCallId: 'tc-pending-only',
         content: 'from-pending',
-        isError: false,
+        execution: canonicalStreamOutput('from-pending'),
       },
     ]);
     // Duplicate drain must be a no-op
@@ -1707,7 +2145,7 @@ describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
     const pendingToolCalls = [
       { toolCallId: 'tc-1', toolName: 'read', args: '{}' },
     ];
-    const pendingToolResults: Array<{ toolCallId: string; content: string; isError: boolean }> = [];
+    const pendingToolResults: Array<{ toolCallId: string; content: string; execution: ToolExecutionResult }> = [];
     const seenToolCallIds = new Set<string>();
     const seenToolResultIds = new Set<string>();
 

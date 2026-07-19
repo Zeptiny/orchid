@@ -3,6 +3,7 @@ import {
   acceptChatEvent,
   beginCancelRequest,
   bindChatSession,
+  chatToolSnapshotToBlock,
   consumePendingCancel,
   dropOptimisticUserMessageIfLast,
   drainBufferedHydrationEvents,
@@ -15,6 +16,7 @@ import {
   type ChatEventAffinity,
 } from '../../src/renderer/hooks/useChat';
 import type { Message, Usage } from '../../src/shared/types/message';
+import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 function affinity(selectedSessionId: string | null): ChatEventAffinity {
   return { selectedSessionId, streamSessionId: selectedSessionId, streamTurnId: null, lastSequence: -1 };
@@ -25,6 +27,27 @@ function emptyCancelQueue(): CancelQueueState {
 }
 
 describe('useChat event affinity', () => {
+  it('retains canonical facts while reconstructing a hydrated tool block', () => {
+    const canonical = createCanonicalToolResult('generic', {
+      status: 'cancelled',
+      data: { value: 'same projection' },
+    });
+    const block = chatToolSnapshotToBlock({
+      toolCallId: 'tool-1',
+      toolName: 'read',
+      status: 'cancelled',
+      partialArgs: '{}',
+      args: '{}',
+      content: 'same projection',
+      toolResult: canonical,
+      startedAt: '2026-07-18T00:00:00.000Z',
+      finishedAt: '2026-07-18T00:00:01.000Z',
+    });
+
+    expect(block.toolResult).toEqual(canonical);
+    expect(block.agentProjection).toBe('same projection');
+  });
+
   it('keeps persisted usage when an idle live snapshot has no usage', () => {
     const persisted: Usage = {
       prompt_tokens: 900,

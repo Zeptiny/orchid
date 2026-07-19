@@ -13,7 +13,7 @@
  * Test scenarios from plan U10.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { createActor } from 'xstate';
 import { agentMachine } from '../../src/main/agents/xstate/agent-machine';
 import { interruptMachine } from '../../src/main/agents/xstate/interrupt-machine';
@@ -21,6 +21,7 @@ import { SubagentManager, SubagentState } from '../../src/main/agents/manager';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import type { Agent } from '../../src/shared/types/agent';
 import { AgentType, AgentTier } from '../../src/shared/types/agent';
+import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,26 @@ const mockAgent: Agent = {
   allowed_tools: ['*'],
   allowed_skills: ['*'],
 };
+
+function successfulToolResult(
+  toolCallId: string,
+  content: string,
+): Extract<StreamEvent, { type: 'tool_result' }> {
+  const canonical = createCanonicalToolResult('generic', {
+    status: 'complete',
+    data: { value: content },
+  });
+  return {
+    type: 'tool_result',
+    toolCallId,
+    content,
+    isError: false,
+    execution: {
+      canonical,
+      agentProjection: { content, completeness: 'complete' },
+    },
+  };
+}
 
 /**
  * Create a mock stream function that yields a sequence of StreamEvents.
@@ -212,12 +233,7 @@ describe('Agent Machine', () => {
       };
       // After tool call, the stream pauses. Tool executes, result feeds back.
       // In the real flow, AI SDK handles this. For testing, we simulate.
-      yield {
-        type: 'tool_result',
-        toolCallId: 'tc-1',
-        content: 'file contents',
-        isError: false,
-      };
+      yield successfulToolResult('tc-1', 'file contents');
       yield { type: 'content', text: ' Done.' };
       yield { type: 'finish', finishReason: 'stop' };
     };
@@ -250,12 +266,7 @@ describe('Agent Machine', () => {
         toolName: 'read_file',
         args: '{"file_path":"README.md"}',
       },
-      {
-        type: 'tool_result',
-        toolCallId: 'tc-1',
-        content: 'file contents',
-        isError: false,
-      },
+      successfulToolResult('tc-1', 'file contents'),
       { type: 'finish', finishReason: 'stop' },
     ]);
 
@@ -276,8 +287,9 @@ describe('Agent Machine', () => {
     expect(update).toMatchObject({
       toolCallId: 'tc-1',
       toolName: 'read_file',
-      status: 'completed',
-      result: 'file contents',
+      status: 'complete',
+      content: 'file contents',
+      toolResult: expect.objectContaining({ status: 'complete' }),
     });
     expect(actor.getSnapshot().context.toolUpdateSequence).toBe(2);
   });
@@ -310,13 +322,7 @@ describe('Agent Machine', () => {
 
   it('error → USER_INPUT → streaming (recovery)', async () => {
     let callCount = 0;
-    const streamFn = async function* (params: {
-      message: string;
-      agent: Agent;
-      systemPrompt: string;
-      abortSignal: AbortSignal;
-      model?: string | null;
-    }): AsyncGenerator<StreamEvent> {
+    const streamFn = async function* (): AsyncGenerator<StreamEvent> {
       callCount++;
       if (callCount === 1) {
         yield { type: 'error', title: 'Error', detail: 'Rate limit' };

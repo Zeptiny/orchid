@@ -85,12 +85,12 @@ describe('project-scoped tool registries', () => {
       { cwd: '/tmp', agentScopeId: 'main' },
     );
 
-    expect(aSpawn).not.toMatchObject({ isError: true });
-    expect(aCannotSpawnB).toMatchObject({ isError: true });
-    expect(bSpawn).not.toMatchObject({ isError: true });
+    expect(aSpawn.status).toBe('complete');
+    expect(aCannotSpawnB.status).toBe('error');
+    expect(bSpawn.status).toBe('complete');
     expect(projectAManager.allRecords().map((record) => record.agent.name)).toEqual(['a-worker']);
     expect(projectBManager.allRecords().map((record) => record.agent.name)).toEqual(['b-worker']);
-    expect(aSkillResult).not.toMatchObject({ isError: true });
-    expect(aCannotLoadB).toMatchObject({ isError: true });
+    expect(aSkillResult.status).toBe('complete');
+    expect(aCannotLoadB.status).toBe('error');
   });
 });

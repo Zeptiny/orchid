@@ -8,11 +8,13 @@ import {
 import { MessageRole, MessageType, type Message } from '../../src/shared/types/message';
 import type { Chain } from '../../src/shared/types/chain';
 import type { SubagentLiveProjection, SubagentRecord } from '../../src/shared/types/subagent';
+import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 const message = (overrides: Partial<Message>): Message => ({
   id: 'message', role: MessageRole.ASSISTANT, content: 'text', type: MessageType.TEXT,
   tool_calls: null, tool_call_id: null, name: null, thinking: null,
-  timestamp: '2026-07-18T00:00:00.000Z', usage: null, hidden: false, is_error: false,
+  timestamp: '2026-07-18T00:00:00.000Z', usage: null, hidden: false,
+  tool_result: null,
   ...overrides,
 });
 
@@ -48,13 +50,40 @@ describe('SubagentTranscript pure rendering contract (U4)', () => {
           content: '', tool_call_id: 'tool-1', name: 'read',
           tool_calls: [{ id: 'tool-1', type: 'function', function: { name: 'read', arguments: '{}' } }] }),
         message({ id: 'result', role: MessageRole.TOOL, type: MessageType.TOOL_RESULT,
-          content: 'done', tool_call_id: 'tool-1', name: 'read' }),
+          content: 'done', tool_call_id: 'tool-1', name: 'read',
+          tool_result: createCanonicalToolResult('generic', {
+            status: 'complete', data: { value: 'done' },
+          }) }),
       ]),
       live([{ kind: 'text', id: 'live-1', content: 'after' }]),
     );
     expect(items.map((item) => item.kind)).toEqual(['message', 'tool', 'message']);
     expect(items.map((item) => item.kind === 'message' ? item.message.content : item.block.toolName))
       .toEqual(['before', 'read', 'after']);
+  });
+
+  it('retains canonical facts when reconstructing a live subagent tool block', () => {
+    const canonical = createCanonicalToolResult('generic', {
+      status: 'cancelled',
+      data: { value: 'cancelled projection' },
+    });
+    const projection = live([{ kind: 'tool', id: 'segment-tool', toolCallId: 'tool-1' }]);
+    projection.toolCalls = [{
+      toolCallId: 'tool-1',
+      toolName: 'read',
+      status: 'cancelled',
+      partialArgs: '{}',
+      args: '{}',
+      content: 'cancelled projection',
+      toolResult: canonical,
+      startedAt: '2026-07-18T00:00:00.000Z',
+      finishedAt: '2026-07-18T00:00:01.000Z',
+    }];
+
+    const items = buildSubagentTranscriptItems(record([]), projection);
+    expect(items).toHaveLength(1);
+    expect(items[0].kind === 'tool' && items[0].block.toolResult).toEqual(canonical);
+    expect(items[0].kind === 'tool' && items[0].block.agentProjection).toBe('cancelled projection');
   });
 
   it('filters hidden/system messages and preserves thinking as a collapsible message', () => {
@@ -70,16 +99,21 @@ describe('SubagentTranscript pure rendering contract (U4)', () => {
     expect(items[0].kind === 'message' && items[0].message.type).toBe(MessageType.THINKING);
   });
 
-  it('uses explicit is_error semantics for durable tool results', () => {
+  it('uses canonical status semantics for durable tool results', () => {
+    const canonical = createCanonicalToolResult('generic', {
+      status: 'error',
+      data: { value: 'failed' },
+      error: { code: 'tool_failed', message: 'failed' },
+    });
     const items = buildSubagentTranscriptItems(record([
       message({ id: 'call', type: MessageType.TOOL_CALL, content: '', tool_call_id: 'tool-1',
         tool_calls: [{ id: 'tool-1', type: 'function', function: { name: 'exec', arguments: '{}' } }] }),
       message({ id: 'result', role: MessageRole.TOOL, type: MessageType.TOOL_RESULT,
-        content: 'failed', tool_call_id: 'tool-1', name: 'exec', is_error: true }),
+        content: 'failed', tool_call_id: 'tool-1', name: 'exec', tool_result: canonical }),
     ]), null);
     expect(items).toHaveLength(1);
     expect(items[0].kind === 'tool' && items[0].block.status).toBe('failed');
-    expect(items[0].kind === 'tool' && items[0].block.error).toBe('failed');
+    expect(items[0].kind === 'tool' && items[0].block.agentProjection).toBe('failed');
   });
 
   it('treats a persisted tool call without a result as completed like ChatStream', () => {

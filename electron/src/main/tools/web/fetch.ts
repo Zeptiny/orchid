@@ -15,6 +15,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { URL } from 'node:url';
 import type { ToolDefinition, ToolExecutionContext, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { HOME_CONFIG_DIR } from '../../config/loader';
 
 // ---------------------------------------------------------------------------
@@ -66,14 +68,7 @@ export interface WebFetchOptions {
 /**
  * Result returned by the web_fetch handler.
  */
-export interface WebFetchResult {
-  /** Brief summary for UI display */
-  display: string;
-  /** Full content */
-  content: string;
-  /** Explicit failure flag for UI/status (never inferred from content). */
-  isError?: boolean;
-}
+export type WebFetchResult = GenericBuiltInToolOutcome;
 
 // ---------------------------------------------------------------------------
 // URL validation — security-critical
@@ -207,6 +202,7 @@ export function buildWebFetchTool(
   options?: WebFetchOptions,
 ): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
+    ...genericToolResultMetadata,
     name: 'web_fetch',
     description:
       'Fetch a URL and extract information from it. Without a query, returns the converted page ' +
@@ -237,7 +233,7 @@ export function buildWebFetchTool(
     // Validate URL
     const urlError = validateUrl(url);
     if (urlError) {
-      return { display: 'Invalid URL', content: `Error: ${urlError}`, isError: true };
+      return genericBuiltInToolOutcome('web_fetch', `Error: ${urlError}`, 'error');
     }
 
     // Fetch the URL — combine outer tool-dispatch abort with the 30s HTTP budget
@@ -272,38 +268,22 @@ export function buildWebFetchTool(
       if (aborted) {
         // Prefer outer cancel over the local 30s budget when both could apply.
         if (parentAbort?.aborted && !timeoutController.signal.aborted) {
-          return {
-            display: 'Fetch cancelled',
-            content: 'Error: Request was cancelled.',
-            isError: true,
-          };
+          return genericBuiltInToolOutcome('web_fetch', 'Request was cancelled.', 'cancelled');
         }
-        return {
-          display: 'Fetch timed out',
-          content: 'Error: Request timed out after 30 seconds.',
-          isError: true,
-        };
+        return genericBuiltInToolOutcome('web_fetch', 'Error: Request timed out after 30 seconds.', 'error');
       }
-      return { display: 'Fetch failed', content: `Error: ${message}`, isError: true };
+      return genericBuiltInToolOutcome('web_fetch', `Error: ${message}`, 'error');
     } finally {
       clearTimeout(timeoutId);
     }
 
     if (parentAbort?.aborted) {
-      return {
-        display: 'Fetch cancelled',
-        content: 'Error: Request was cancelled.',
-        isError: true,
-      };
+      return genericBuiltInToolOutcome('web_fetch', 'Request was cancelled.', 'cancelled');
     }
 
     // Check HTTP status
     if (!response.ok) {
-      return {
-        display: `HTTP ${response.status}`,
-        content: `Error: Request failed with HTTP status ${response.status}.`,
-        isError: true,
-      };
+      return genericBuiltInToolOutcome('web_fetch', `Error: Request failed with HTTP status ${response.status}.`, 'error');
     }
 
     // Read response body with size limit
@@ -311,16 +291,12 @@ export function buildWebFetchTool(
     try {
       const buffer = await response.arrayBuffer();
       if (buffer.byteLength > MAX_BODY_SIZE) {
-        return {
-          display: 'Response too large',
-          content: `Error: Response body exceeds ${MAX_BODY_SIZE} bytes limit.`,
-          isError: true,
-        };
+        return genericBuiltInToolOutcome('web_fetch', `Error: Response body exceeds ${MAX_BODY_SIZE} bytes limit.`, 'error');
       }
       body = new TextDecoder().decode(buffer);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { display: 'Read failed', content: `Error: Failed to read response: ${message}`, isError: true };
+      return genericBuiltInToolOutcome('web_fetch', `Error: Failed to read response: ${message}`, 'error');
     }
 
     // Get final URL (after redirects)
@@ -345,21 +321,12 @@ export function buildWebFetchTool(
 
     // Summarize mode
     if (!options?.summarize) {
-      return {
-        display: 'Summarize not available',
-        content:
-          'Error: Summarize mode requires a summarize callback. ' +
-          'Omit query to get the page content directly.',
-        isError: true,
-      };
+      return genericBuiltInToolOutcome('web_fetch', 'Error: Summarize mode requires a summarize callback. ' +
+          'Omit query to get the page content directly.', 'error');
     }
 
     if (parentAbort?.aborted) {
-      return {
-        display: 'Fetch cancelled',
-        content: 'Error: Request was cancelled.',
-        isError: true,
-      };
+      return genericBuiltInToolOutcome('web_fetch', 'Request was cancelled.', 'cancelled');
     }
 
     try {
@@ -372,20 +339,19 @@ export function buildWebFetchTool(
         ctx,
       );
 
-      return {
-        display: `Fetched and summarized ${finalUrl}`,
-        content:
-          `<web_fetch_summarize url="${escapeXmlAttr(finalUrl)}" title="${escapeXmlAttr(title || '(none)')}" content_type="${escapeXmlAttr(contentType)}" length="${content.length}">\n` +
-          `${answer}\n` +
-          `</web_fetch_summarize>`,
-      };
+      return genericBuiltInToolOutcome('web_fetch', {
+        url: finalUrl,
+        title: title || '(none)',
+        contentType,
+        content: answer,
+        length: content.length,
+      }, 'complete');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return {
-        display: 'Summarization failed',
-        content: `Error: ${message}`,
-        isError: true,
-      };
+      if (parentAbort?.aborted) {
+        return genericBuiltInToolOutcome('web_fetch', 'Request was cancelled.', 'cancelled');
+      }
+      return genericBuiltInToolOutcome('web_fetch', `Error: ${message}`, 'error');
     }
   };
 
@@ -395,15 +361,6 @@ export function buildWebFetchTool(
 // ---------------------------------------------------------------------------
 // Raw result builder
 // ---------------------------------------------------------------------------
-
-/** Escape a value for use inside a double-quoted XML attribute. */
-function escapeXmlAttr(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
 
 /**
  * Build the raw mode result. If content exceeds threshold and a session ID
@@ -417,45 +374,27 @@ function buildRawResult(
   sessionId?: string,
   cacheRoot: string = HOME_CONFIG_DIR,
 ): WebFetchResult {
-  const attrs =
-    `url="${escapeXmlAttr(url)}"` +
-    (title ? ` title="${escapeXmlAttr(title)}"` : '') +
-    ` content_type="${escapeXmlAttr(contentType)}"` +
-    ` length="${content.length}"`;
-
-  // Small content: return inline
   if (content.length < RAW_CONTENT_THRESHOLD) {
-    return {
-      display: `Fetched ${content.length} characters`,
-      content: `<web_fetch_raw ${attrs}>\n${content}\n</web_fetch_raw>`,
-    };
+    return genericBuiltInToolOutcome('web_fetch', {
+      url, title, contentType, content, length: content.length,
+    }, 'complete');
   }
 
-  // Large content: write to cache file
   if (!sessionId) {
-    return {
-      display: 'No active session',
-      content:
-        'Error: Large raw web_fetch results require an active session for cache storage.',
-      isError: true,
-    };
+    return genericBuiltInToolOutcome('web_fetch', 'Error: Large raw web_fetch results require an active session for cache storage.', 'error');
   }
 
   try {
     const filePath = writeCacheFile(cacheRoot, sessionId, url, content);
-    return {
-      display: `Fetched ${content.length} characters to ${filePath}`,
-      content:
-        `<web_fetch_raw ${attrs} file="${filePath}">\n` +
-        `<warning>Content exceeded ${RAW_CONTENT_THRESHOLD} characters and was written to cache - ${filePath}, use grep and read tools to get the result</warning>\n` +
-        `</web_fetch_raw>`,
-    };
+    return genericBuiltInToolOutcome('web_fetch', {
+      url, title, contentType, content: '', length: content.length,
+      cachePath: filePath,
+      warning: 'Content exceeded ' + RAW_CONTENT_THRESHOLD +
+        ' characters and was written to cache - ' + filePath +
+        ', use grep and read tools to get the result',
+    }, 'complete');
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return {
-      display: 'Cache write failed',
-      content: `Error: ${message}`,
-      isError: true,
-    };
+    return genericBuiltInToolOutcome('web_fetch', `Error: ${message}`, 'error');
   }
 }

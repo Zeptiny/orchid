@@ -8,9 +8,27 @@ import { minimatch } from 'minimatch';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { type ZodError } from 'zod';
 import type { ToolDefinition, ToolHandler, RegisteredTool } from './types';
+import {
+  createToolExecutionResultSchema,
+  type AgentProjector,
+  type ToolResultFamily,
+} from '../../shared/types/tool-result';
+import {
+  defaultFamilyAgentProjectors,
+  genericAgentProjector,
+} from './result';
+
+export interface ResolvedAgentProjector {
+  projector: AgentProjector;
+  source: 'tool' | 'family' | 'generic';
+}
 
 export class ToolRegistry {
   private tools = new Map<string, RegisteredTool>();
+  private familyAgentProjectors = new Map<ToolResultFamily, AgentProjector>(
+    defaultFamilyAgentProjectors,
+  );
+  private genericAgentProjector: AgentProjector = genericAgentProjector;
 
   /**
    * Register a tool with its definition and handler.
@@ -28,6 +46,49 @@ export class ToolRegistry {
    */
   get(name: string): RegisteredTool | undefined {
     return this.tools.get(name);
+  }
+
+  /** Register or replace the code-owned default projector for one family. */
+  registerFamilyAgentProjector(
+    family: ToolResultFamily,
+    projector: AgentProjector,
+  ): void {
+    this.familyAgentProjectors.set(family, projector);
+  }
+
+  /** Replace the generic-family projector (primarily for composition/tests). */
+  setGenericAgentProjector(projector: AgentProjector): void {
+    this.genericAgentProjector = projector;
+  }
+
+  /** Tool override > explicit family default > generic fallback. */
+  resolveAgentProjector(toolName: string): ResolvedAgentProjector {
+    const definition = this.tools.get(toolName)?.definition;
+    if (definition?.agentProjector) {
+      return { projector: definition.agentProjector, source: 'tool' };
+    }
+    if (definition?.resultFamily) {
+      const familyProjector = this.familyAgentProjectors.get(
+        definition.resultFamily,
+      );
+      if (familyProjector) {
+        return { projector: familyProjector, source: 'family' };
+      }
+    }
+    return { projector: this.genericAgentProjector, source: 'generic' };
+  }
+
+  /**
+   * Generate the AI SDK raw execution-result schema from the tool's canonical
+   * data metadata.
+   */
+  getToolExecutionResultSchema(toolName: string) {
+    const definition = this.tools.get(toolName)?.definition;
+    if (!definition) return undefined;
+    return createToolExecutionResultSchema(
+      definition.outputDataSchema,
+      definition.resultFamily,
+    );
   }
 
   /**
@@ -88,6 +149,7 @@ export class ToolRegistry {
         ...(definition.actionLabel && { actionLabel: definition.actionLabel }),
         ...(definition.category && { category: definition.category }),
         ...(definition.noTimeout !== undefined && { noTimeout: definition.noTimeout }),
+        resultFamily: definition.resultFamily,
       };
     }
     return schemas;

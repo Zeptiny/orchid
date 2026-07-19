@@ -14,11 +14,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { AgentType, AgentTier, type Agent } from '../../src/shared/types/agent';
 import { SubagentManager, SubagentState } from '../../src/main/agents/manager';
-import { buildDelegateTool } from '../../src/main/tools/subagent/delegate';
-import { buildWaitTool } from '../../src/main/tools/subagent/wait';
-import { buildInterruptTool } from '../../src/main/tools/subagent/interrupt';
-import type { SubagentToolResult } from '../../src/main/tools/subagent/delegate';
-import type { ToolExecutionContext } from '../../src/main/tools/types';
+import { buildDelegateTool as buildDelegateToolRaw } from '../../src/main/tools/subagent/delegate';
+import { buildWaitTool as buildWaitToolRaw } from '../../src/main/tools/subagent/wait';
+import { buildInterruptTool as buildInterruptToolRaw } from '../../src/main/tools/subagent/interrupt';
+import type { ToolDefinition, ToolExecutionContext, ToolHandler } from '../../src/main/tools/types';
+import { finalizeToolExecutionResult } from '../../src/main/tools/result';
+import {
+  createCanonicalToolResult,
+  type GenericToolResultData,
+  type ToolExecutionResult,
+  type ToolHandlerOutcome,
+} from '../../src/shared/types/tool-result';
 
 const tierSelections = {
   seed: { connectionId: '11111111-1111-4111-8111-111111111111', modelId: 'model-for-seed' },
@@ -80,6 +86,31 @@ const toolContext = {
   },
 } as ToolExecutionContext;
 
+function canonicalizeTool(tool: { definition: ToolDefinition; handler: ToolHandler }) {
+  return {
+    ...tool,
+    handler: async (
+      input: unknown,
+      ctx: ToolExecutionContext = { cwd: '/tmp' },
+    ): Promise<ToolExecutionResult> => {
+      const outcome = await tool.handler(input, ctx) as ToolHandlerOutcome<GenericToolResultData>;
+      return finalizeToolExecutionResult({
+        canonical: createCanonicalToolResult('generic', outcome),
+        toolName: tool.definition.name,
+        outputDataSchema: tool.definition.outputDataSchema,
+        expectedFamily: tool.definition.resultFamily,
+      });
+    },
+  };
+}
+
+const buildDelegateTool = (...args: Parameters<typeof buildDelegateToolRaw>) =>
+  canonicalizeTool(buildDelegateToolRaw(...args));
+const buildWaitTool = (...args: Parameters<typeof buildWaitToolRaw>) =>
+  canonicalizeTool(buildWaitToolRaw(...args));
+const buildInterruptTool = (...args: Parameters<typeof buildInterruptToolRaw>) =>
+  canonicalizeTool(buildInterruptToolRaw(...args));
+
 // ── delegate_to_subagent ─────────────────────────────────────────────────────
 
 describe('delegate_to_subagent', () => {
@@ -99,13 +130,13 @@ describe('delegate_to_subagent', () => {
       name: 'review auth',
       task: 'Review the authentication module for security issues',
       type: 'code-reviewer',
-    }, toolContext)) as SubagentToolResult;
+    }, toolContext)) as ToolExecutionResult;
 
-    expect(result.display).toContain('Subagent');
-    expect(result.display).toContain('review auth');
-    expect(result.display).toContain('spawned');
-    expect(result.content).toContain('subagent');
-    expect(result.content).toContain('pending');
+    expect(result.canonical.status).toBe('complete');
+    expect(result.canonical.status).toBe('complete');
+    expect(result.canonical.status).toBe('complete');
+    expect(result.agentProjection.content).toContain('subagent');
+    expect(result.agentProjection.content).toContain('pending');
 
     // Verify a record was created in the manager
     const records = manager.allRecords();
@@ -151,11 +182,11 @@ describe('delegate_to_subagent', () => {
       name: 'test',
       task: 'Do something',
       type: 'nonexistent-agent',
-    })) as SubagentToolResult;
+    })) as ToolExecutionResult;
 
-    expect(result.display).toContain('Unknown agent type');
-    expect(result.content).toContain('nonexistent-agent');
-    expect(result.content).toContain('Available agents');
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('nonexistent-agent');
+    expect(result.agentProjection.content).toContain('Available agents');
     // No subagent should be spawned
     expect(manager.allRecords()).toHaveLength(0);
   });
@@ -168,11 +199,11 @@ describe('delegate_to_subagent', () => {
       task: 'Do something',
       type: 'code-reviewer',
       tier: 'invalid-tier',
-    })) as SubagentToolResult;
+    })) as ToolExecutionResult;
 
-    expect(result.display).toContain('Invalid tier');
-    expect(result.content).toContain('invalid-tier');
-    expect(result.content).toContain('Available tiers');
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('invalid-tier');
+    expect(result.agentProjection.content).toContain('Available tiers');
     // No subagent should be spawned
     expect(manager.allRecords()).toHaveLength(0);
   });
@@ -266,12 +297,12 @@ describe('wait_for_subagent', () => {
 
     const result = (await handler({
       subagent_ids: [record.id],
-    })) as SubagentToolResult;
+    })) as ToolExecutionResult;
 
-    expect(result.display).toContain('Waited for 1 subagent(s)');
-    expect(result.content).toContain(record.id);
-    expect(result.content).toContain('completed');
-    expect(result.content).toContain('Found 3 issues');
+    expect(result.canonical.status).toBe('complete');
+    expect(result.agentProjection.content).toContain(record.id);
+    expect(result.agentProjection.content).toContain('completed');
+    expect(result.agentProjection.content).toContain('Found 3 issues');
   });
 
   it('should block until subagent completes then return result', async () => {
@@ -284,9 +315,9 @@ describe('wait_for_subagent', () => {
     // Complete after a small delay
     setTimeout(() => manager.markCompleted(record.id, 'Done!'), 10);
 
-    const result = (await waitPromise) as SubagentToolResult;
-    expect(result.content).toContain('Done!');
-    expect(result.content).toContain('completed');
+    const result = (await waitPromise) as ToolExecutionResult;
+    expect(result.agentProjection.content).toContain('Done!');
+    expect(result.agentProjection.content).toContain('completed');
   });
 
   it('should return error message for empty subagent_ids', async () => {
@@ -294,10 +325,10 @@ describe('wait_for_subagent', () => {
 
     const result = (await handler({
       subagent_ids: [],
-    })) as SubagentToolResult;
+    })) as ToolExecutionResult;
 
-    expect(result.display).toContain('No subagent IDs provided');
-    expect(result.content).toContain('Error');
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('Error');
   });
 
   it('should report not found IDs', async () => {
@@ -305,11 +336,11 @@ describe('wait_for_subagent', () => {
 
     const result = (await handler({
       subagent_ids: ['nonexistent-id-1', 'nonexistent-id-2'],
-    })) as SubagentToolResult;
+    })) as ToolExecutionResult;
 
-    expect(result.display).toContain('No subagents found');
-    expect(result.content).toContain('nonexistent-id-1');
-    expect(result.content).toContain('nonexistent-id-2');
+    expect(result.canonical.status).toBe('empty');
+    expect(result.agentProjection.content).toContain('nonexistent-id-1');
+    expect(result.agentProjection.content).toContain('nonexistent-id-2');
   });
 
   it('does not expose a subagent owned by another session', async () => {
@@ -322,12 +353,12 @@ describe('wait_for_subagent', () => {
     const result = (await handler(
       { subagent_ids: [peer.id] },
       { cwd: '/tmp/project', sessionId: 'sess-a' },
-    )) as SubagentToolResult;
+    )) as ToolExecutionResult;
 
-    expect(result.content).toContain('No subagents found');
-    expect(result.content).toContain(peer.id);
-    expect(result.content).not.toContain('private task');
-    expect(result.content).not.toContain('private result');
+    expect(result.agentProjection.content).toContain('No subagents found');
+    expect(result.agentProjection.content).toContain(peer.id);
+    expect(result.agentProjection.content).not.toContain('private task');
+    expect(result.agentProjection.content).not.toContain('private result');
   });
 
   it('should include task in the output', async () => {
@@ -337,9 +368,9 @@ describe('wait_for_subagent', () => {
 
     const result = (await handler({
       subagent_ids: [record.id],
-    })) as SubagentToolResult;
+    })) as ToolExecutionResult;
 
-    expect(result.content).toContain('Review the auth module');
+    expect(result.agentProjection.content).toContain('Review the auth module');
   });
 
   it('formats elapsed time and omits token usage from the output', async () => {
@@ -359,12 +390,12 @@ describe('wait_for_subagent', () => {
 
       const result = (await handler({
         subagent_ids: [record.id],
-      })) as SubagentToolResult;
+      })) as ToolExecutionResult;
 
-      expect(result.content).toContain('elapsed="2m 5s"');
-      expect(result.content).not.toContain('prompt_tokens=');
-      expect(result.content).not.toContain('completion_tokens=');
-      expect(result.content).not.toContain('cached_tokens=');
+      expect(result.agentProjection.content).toContain('elapsed="2m 5s"');
+      expect(result.agentProjection.content).not.toContain('prompt_tokens=');
+      expect(result.agentProjection.content).not.toContain('completion_tokens=');
+      expect(result.agentProjection.content).not.toContain('cached_tokens=');
     } finally {
       vi.useRealTimers();
     }
@@ -377,10 +408,10 @@ describe('wait_for_subagent', () => {
 
     const result = (await handler({
       subagent_ids: [record.id],
-    })) as SubagentToolResult;
+    })) as ToolExecutionResult;
 
-    expect(result.content).toContain('failed');
-    expect(result.content).toContain('Connection timeout');
+    expect(result.agentProjection.content).toContain('failed');
+    expect(result.agentProjection.content).toContain('Connection timeout');
   });
 
   it('should handle mix of found and not-found IDs', async () => {
@@ -390,11 +421,11 @@ describe('wait_for_subagent', () => {
 
     const result = (await handler({
       subagent_ids: [record.id, 'missing-id'],
-    })) as SubagentToolResult;
+    })) as ToolExecutionResult;
 
-    expect(result.content).toContain(record.id);
-    expect(result.content).toContain('not_found');
-    expect(result.content).toContain('missing-id');
+    expect(result.agentProjection.content).toContain(record.id);
+    expect(result.agentProjection.content).toContain('not_found');
+    expect(result.agentProjection.content).toContain('missing-id');
   });
 
   it('should have correct tool definition', () => {
@@ -417,13 +448,13 @@ describe('wait_for_subagent', () => {
 
     const result = (await handler({
       subagent_ids: [record.id],
-    })) as SubagentToolResult;
+    })) as ToolExecutionResult;
 
-    expect(result.isError).toBe(true);
-    expect(result.display).toMatch(/timed out/i);
-    expect(result.content).toContain('Only the wait tool stopped waiting');
-    expect(result.content).toContain('were not cancelled or interrupted');
-    expect(result.content).toContain(record.id);
+    expect(result.canonical.status).toBe('error');
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('Only the wait tool stopped waiting');
+    expect(result.agentProjection.content).toContain('were not cancelled or interrupted');
+    expect(result.agentProjection.content).toContain(record.id);
     expect(record.state).toBe(SubagentState.RUNNING);
     waitSpy.mockRestore();
   });
@@ -449,11 +480,11 @@ describe('interrupt_subagents', () => {
     const result = (await handler(
       { subagent_ids: [record.id] },
       sessionCtx,
-    )) as SubagentToolResult;
+    )) as ToolExecutionResult;
 
-    expect(result.display).toContain('Interrupted 1 subagent(s)');
-    expect(result.content).toContain('Interrupted');
-    expect(result.content).toContain(record.id);
+    expect(result.canonical.status).toBe('complete');
+    expect(result.agentProjection.content).toContain('<interrupted>');
+    expect(result.agentProjection.content).toContain(record.id);
     expect(record.state).toBe(SubagentState.INTERRUPTED);
   });
 
@@ -471,11 +502,11 @@ describe('interrupt_subagents', () => {
     const result = (await handler(
       { subagent_ids: [] },
       sessionCtx,
-    )) as SubagentToolResult;
+    )) as ToolExecutionResult;
 
-    expect(result.display).toContain('Interrupted 2 subagent(s)');
-    expect(result.content).toContain(a.id);
-    expect(result.content).toContain(b.id);
+    expect(result.canonical.status).toBe('complete');
+    expect(result.agentProjection.content).toContain(a.id);
+    expect(result.agentProjection.content).toContain(b.id);
     expect(a.state).toBe(SubagentState.INTERRUPTED);
     expect(b.state).toBe(SubagentState.INTERRUPTED);
   });
@@ -494,9 +525,9 @@ describe('interrupt_subagents', () => {
     const result = (await handler(
       { subagent_ids: [] },
       sessionCtx,
-    )) as SubagentToolResult;
+    )) as ToolExecutionResult;
 
-    expect(result.display).toContain('Interrupted 1 subagent(s)');
+    expect(result.canonical.status).toBe('complete');
     expect(mine.state).toBe(SubagentState.INTERRUPTED);
     expect(peer.state).toBe(SubagentState.RUNNING);
   });
@@ -511,11 +542,11 @@ describe('interrupt_subagents', () => {
     const result = (await handler(
       { subagent_ids: [record.id] },
       sessionCtx,
-    )) as SubagentToolResult;
+    )) as ToolExecutionResult;
 
-    expect(result.display).toBe('No subagents interrupted');
-    expect(result.content).toContain('Already finished');
-    expect(result.content).toContain(record.id);
+    expect(result.canonical.status).toBe('empty');
+    expect(result.agentProjection.content).toContain('<already_finished>');
+    expect(result.agentProjection.content).toContain(record.id);
   });
 
   it('should report not found subagents', async () => {
@@ -524,11 +555,11 @@ describe('interrupt_subagents', () => {
     const result = (await handler(
       { subagent_ids: ['nonexistent-id'] },
       sessionCtx,
-    )) as SubagentToolResult;
+    )) as ToolExecutionResult;
 
-    expect(result.display).toBe('No subagents interrupted');
-    expect(result.content).toContain('Not found');
-    expect(result.content).toContain('nonexistent-id');
+    expect(result.canonical.status).toBe('empty');
+    expect(result.agentProjection.content).toContain('<not_found>');
+    expect(result.agentProjection.content).toContain('nonexistent-id');
   });
 
   it('does not interrupt an explicit subagent owned by another session', async () => {
@@ -541,9 +572,9 @@ describe('interrupt_subagents', () => {
     const result = (await handler(
       { subagent_ids: [peer.id] },
       sessionCtx,
-    )) as SubagentToolResult;
+    )) as ToolExecutionResult;
 
-    expect(result.content).toContain('Not found');
+    expect(result.agentProjection.content).toContain('<not_found>');
     expect(peer.state).toBe(SubagentState.RUNNING);
   });
 
@@ -563,14 +594,14 @@ describe('interrupt_subagents', () => {
         subagent_ids: [running.id, completed.id, 'missing-id'],
       },
       sessionCtx,
-    )) as SubagentToolResult;
+    )) as ToolExecutionResult;
 
-    expect(result.content).toContain('Interrupted');
-    expect(result.content).toContain(running.id);
-    expect(result.content).toContain('Already finished');
-    expect(result.content).toContain(completed.id);
-    expect(result.content).toContain('Not found');
-    expect(result.content).toContain('missing-id');
+    expect(result.agentProjection.content).toContain('<interrupted>');
+    expect(result.agentProjection.content).toContain(running.id);
+    expect(result.agentProjection.content).toContain('<already_finished>');
+    expect(result.agentProjection.content).toContain(completed.id);
+    expect(result.agentProjection.content).toContain('<not_found>');
+    expect(result.agentProjection.content).toContain('missing-id');
   });
 
   it('should report no running subagents when all are terminal', async () => {
@@ -583,10 +614,10 @@ describe('interrupt_subagents', () => {
     const result = (await handler(
       { subagent_ids: [] },
       sessionCtx,
-    )) as SubagentToolResult;
+    )) as ToolExecutionResult;
 
-    expect(result.display).toContain('No running subagents');
-    expect(result.content).toContain('No running subagents found');
+    expect(result.canonical.status).toBe('empty');
+    expect(result.agentProjection.content).toContain('No running subagents found');
   });
 
   it('should cancel pending (not yet running) subagents', async () => {
@@ -599,9 +630,9 @@ describe('interrupt_subagents', () => {
     const result = (await handler(
       { subagent_ids: [pending.id] },
       sessionCtx,
-    )) as SubagentToolResult;
+    )) as ToolExecutionResult;
 
-    expect(result.display).toContain('Interrupted 1 subagent(s)');
+    expect(result.canonical.status).toBe('complete');
     expect(pending.state).toBe(SubagentState.INTERRUPTED);
   });
 

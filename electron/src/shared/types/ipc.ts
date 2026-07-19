@@ -9,6 +9,11 @@
 
 import type { Session } from './session';
 import type { Message, Usage } from './message';
+import type {
+  CanonicalToolResult,
+  TerminalToolResultStatus,
+  ToolExecutionResult,
+} from './tool-result';
 import type { SubagentLiveProjection, SubagentRecord } from './subagent';
 import type {
   CustomConnectionModel,
@@ -115,11 +120,13 @@ export type ChatSnapshotState = 'idle' | 'streaming' | 'error';
 export interface ChatToolCallSnapshot {
   toolCallId: string;
   toolName: string;
-  status: 'generating' | 'running' | 'completed' | 'failed';
+  status: 'generating' | 'running' | TerminalToolResultStatus;
   partialArgs: string;
   args: string;
-  result: string | null;
-  error: string | null;
+  /** Exact finalized agent projection for terminal snapshots. */
+  content: string | null;
+  /** Canonical terminal authority; null while generating/running. */
+  toolResult: CanonicalToolResult | null;
   startedAt: string;
   finishedAt: string | null;
 }
@@ -243,10 +250,12 @@ export interface ChatToolCallUpdateEvent extends ChatEventIdentity {
   type: 'tool_call_update';
   toolCallId: string;
   toolName?: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | TerminalToolResultStatus;
   args?: string;
-  result?: string;
-  error?: string;
+  /** Exact finalized agent projection; required for terminal updates. */
+  content?: string;
+  /** Canonical terminal authority; required for terminal updates. */
+  toolResult?: CanonicalToolResult;
 }
 
 // ── Background Command API ────────────────────────────────────────────────
@@ -624,10 +633,7 @@ export interface ToolExecuteMessage {
   args: unknown;
 }
 
-export interface ToolExecuteResult {
-  content: string;
-  isError: boolean;
-}
+export type ToolExecuteResult = ToolExecutionResult;
 
 // ── RAG API ──────────────────────────────────────────────────────────────────
 

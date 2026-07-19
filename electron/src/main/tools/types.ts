@@ -13,6 +13,26 @@ import { getConfig } from '../config/loader';
 import type { Config } from '../config/schema';
 import type { ProjectRuntime } from '../project/runtime';
 import type { ModelSelection } from '../../shared/types/provider';
+import type {
+  AgentProjector,
+  JsonValue,
+  ToolHandlerOutcome,
+  ToolResultFamily,
+} from '../../shared/types/tool-result';
+import { genericToolResultDataSchema } from '../../shared/types/tool-result';
+
+/** Shared explicit result contract for built-ins using the generic family. */
+export const genericToolResultMetadata = {
+  resultFamily: 'generic',
+  outputDataSchema: genericToolResultDataSchema,
+} as const satisfies Pick<ToolDefinition, 'resultFamily' | 'outputDataSchema'>;
+
+export type {
+  AgentProjection,
+  CanonicalToolResult,
+  ToolExecutionResult,
+  ToolHandlerOutcome,
+} from '../../shared/types/tool-result';
 
 /**
  * Defines a tool's metadata and schema.
@@ -29,8 +49,22 @@ export interface ToolDefinition {
   /** Zod schema for tool input — single source of truth */
   inputSchema: z.ZodType;
 
-  /** Optional zod schema for tool output */
-  outputSchema?: z.ZodType;
+  /**
+   * Raw JSON Schema from the origin server (MCP tools only).
+   * When present, the LLM receives this schema directly instead of the
+   * Zod-derived one — preserving parameter names, types, and descriptions
+   * that the opaque Zod passthrough would discard.
+   */
+  rawInputJsonSchema?: Record<string, unknown>;
+
+  /** Canonical result family for this tool's typed result data. */
+  resultFamily: ToolResultFamily;
+
+  /** Schema for canonical `data`. */
+  outputDataSchema: z.ZodTypeAny;
+
+  /** Tool-level agent projector override (wins over its family default). */
+  agentProjector?: AgentProjector;
 
   /** Action label shown in UI (e.g., "Reading file", "Editing file") */
   actionLabel?: string;
@@ -40,13 +74,6 @@ export interface ToolDefinition {
 
   /** If true, skip timeout for this tool */
   noTimeout?: boolean;
-}
-
-export interface StructuredToolResultLike {
-  display?: string;
-  content: string;
-  isError?: boolean;
-  is_error?: boolean;
 }
 
 /**
@@ -111,7 +138,7 @@ export function resolveToolPath(cwd: string, userPath: string): string {
 export type ToolHandler = (
   input: unknown,
   ctx: ToolExecutionContext,
-) => Promise<string | StructuredToolResultLike>;
+) => Promise<ToolHandlerOutcome<JsonValue>>;
 
 /** A registered tool combining definition and handler */
 export interface RegisteredTool {

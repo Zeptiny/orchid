@@ -12,6 +12,10 @@ import { z } from 'zod';
 import type { Chain } from './chain';
 import type { Usage } from './message';
 import { chainFromStorageDict, chainToStorageDict } from './chain';
+import type {
+  CanonicalToolResult,
+  TerminalToolResultStatus,
+} from './tool-result';
 
 // ── Enums as const objects ──────────────────────────────────────────────────
 
@@ -35,11 +39,11 @@ export type SubagentLiveSegment =
 export interface SubagentToolSnapshot {
   readonly toolCallId: string;
   readonly toolName: string;
-  readonly status: 'generating' | 'running' | 'completed' | 'error';
+  readonly status: 'generating' | 'running' | TerminalToolResultStatus;
   readonly partialArgs: string;
   readonly args: string;
-  readonly result: string | null;
-  readonly error: string | null;
+  readonly content: string | null;
+  readonly toolResult: CanonicalToolResult | null;
   readonly startedAt: string;
   readonly finishedAt: string | null;
 }

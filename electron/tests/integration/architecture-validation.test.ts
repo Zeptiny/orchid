@@ -22,6 +22,10 @@ import {
 } from '../../src/main/agents/manager';
 import { agentMachine } from '../../src/main/agents/xstate/agent-machine';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
+import {
+  createCanonicalToolResult,
+  type ToolExecutionResult,
+} from '../../src/shared/types/tool-result';
 import type { Agent } from '../../src/shared/types/agent';
 import { AgentType, AgentTier } from '../../src/shared/types/agent';
 import {
@@ -67,6 +71,17 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
       signal.addEventListener('abort', onAbort, { once: true });
     }
   });
+}
+
+function streamExecution(content: string): ToolExecutionResult {
+  const canonical = createCanonicalToolResult('generic', {
+    status: 'complete',
+    data: { value: content },
+  });
+  return {
+    canonical,
+    agentProjection: { content, completeness: 'complete' },
+  };
 }
 
 /**
@@ -213,7 +228,7 @@ describe('Architecture Properties (real modules)', () => {
           type: 'tool_result',
           toolCallId: 'tc-read',
           content: 'file contents',
-          isError: false,
+          execution: streamExecution('file contents'),
         };
         await delay(5, params.abortSignal);
         yield {
@@ -227,7 +242,7 @@ describe('Architecture Properties (real modules)', () => {
           type: 'tool_result',
           toolCallId: 'tc-edit',
           content: 'ok',
-          isError: false,
+          execution: streamExecution('ok'),
         };
         yield { type: 'content', text: ' Done.' };
         yield { type: 'finish', finishReason: 'stop' };
@@ -277,16 +292,16 @@ describe('Architecture Properties (real modules)', () => {
       const statusesFor = (id: string) =>
         lifecycleSnapshots.filter((s) => s.toolCallId === id).map((s) => s.status);
       expect(statusesFor('tc-read')).toContain('running');
-      expect(statusesFor('tc-read')).toContain('completed');
+      expect(statusesFor('tc-read')).toContain('complete');
       expect(statusesFor('tc-edit')).toContain('running');
-      expect(statusesFor('tc-edit')).toContain('completed');
+      expect(statusesFor('tc-edit')).toContain('complete');
 
       // Final context retains last lifecycle update and full response text
       const final = actor.getSnapshot().context;
       expect(final.response).toContain('Checking…');
       expect(final.response).toContain('Done.');
       expect(final.toolLifecycleUpdate?.toolCallId).toBe('tc-edit');
-      expect(final.toolLifecycleUpdate?.status).toBe('completed');
+      expect(final.toolLifecycleUpdate?.status).toBe('complete');
       expect(final.toolUpdateSequence).toBeGreaterThanOrEqual(4);
 
       actor.stop();

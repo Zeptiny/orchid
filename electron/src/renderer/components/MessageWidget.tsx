@@ -14,7 +14,6 @@ import {
 } from '../utils/thought-grouping';
 import type { ToolBlock } from '../hooks/useChat';
 import { MarkdownContent } from './MarkdownContent';
-import { LiveCommandInline } from './ToolWidgets/LiveCommandInline';
 import { Icon } from './Icon';
 import { ToolCallBlock } from './ToolCallBlock';
 import { Alert } from './ui/Alert';
@@ -23,24 +22,6 @@ import { Spinner } from './ui/Spinner';
 interface MessageWidgetProps {
   message: Message;
   isStreaming?: boolean;
-}
-
-// Regex matching Python's _BACKGROUND_CMD_RE for background command tool results.
-const BG_CMD_RE =
-  /<background_command\s+id="(\d+)"[^>]*command="([^"]*)"[^>]*description="([^"]*)"[^>]*\/>/;
-
-function parseBackgroundCommand(content: string): {
-  commandId: number;
-  command: string;
-  description: string;
-} | null {
-  const match = BG_CMD_RE.exec(content);
-  if (!match) return null;
-  return {
-    commandId: parseInt(match[1], 10),
-    command: match[2],
-    description: match[3],
-  };
 }
 
 export function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
@@ -180,8 +161,8 @@ function ToolCallMessage({ message }: { message: Message }) {
       status: 'completed',
       partialArgs: '',
       args,
-      result: null,
-      error: null,
+      agentProjection: null,
+      toolResult: null,
       startedAt: message.timestamp,
       finishedAt: message.timestamp,
     };
@@ -191,35 +172,20 @@ function ToolCallMessage({ message }: { message: Message }) {
 }
 
 function ToolResultMessage({ message }: { message: Message }) {
-  const bgCmd = useMemo(
-    () => parseBackgroundCommand(message.content),
-    [message.content],
-  );
-
   const block = useMemo((): ToolBlock => {
-    const isError = Boolean(message.is_error);
+    const status = message.tool_result?.status;
     return {
       id: message.tool_call_id ?? message.id,
       toolName: message.name ?? 'tool',
-      status: isError ? 'failed' : 'completed',
+      status: status === 'error' ? 'failed' : status ?? 'completed',
       partialArgs: '',
       args: '',
-      result: isError ? null : message.content,
-      error: isError ? message.content : null,
+      agentProjection: message.content,
+      toolResult: message.tool_result,
       startedAt: message.timestamp,
       finishedAt: message.timestamp,
     };
   }, [message]);
-
-  if (bgCmd) {
-    return (
-      <LiveCommandInline
-        commandId={bgCmd.commandId}
-        commandText={bgCmd.command}
-        description={bgCmd.description}
-      />
-    );
-  }
 
   return <ToolCallBlock block={block} />;
 }

@@ -24,6 +24,10 @@ import type { StreamEvent } from '../../llm/orchestrator';
 import type { AgentEvent } from './events';
 import type { Agent } from '../../../shared/types/agent';
 import type { Usage } from '../../../shared/types/message';
+import type {
+  CanonicalToolResult,
+  TerminalToolResultStatus,
+} from '../../../shared/types/tool-result';
 
 // ── Context ─────────────────────────────────────────────────────────────────
 
@@ -47,10 +51,10 @@ export interface AgentContext {
     sequence: number;
     toolCallId: string;
     toolName?: string;
-    status: 'running' | 'completed' | 'failed';
+    status: 'running' | TerminalToolResultStatus;
     args?: string;
-    result?: string;
-    error?: string;
+    content?: string;
+    toolResult?: CanonicalToolResult;
   } | null;
   /** Monotonic sequence number for tool lifecycle updates. */
   toolUpdateSequence: number;
@@ -176,12 +180,14 @@ const streamCallback = fromCallback(
               });
               break;
             case 'tool_result':
+              {
+                const execution = event.execution;
               sendBack({
                 type: 'TOOL_RESULT',
                 toolCallId: event.toolCallId,
-                content: event.content,
-                isError: event.isError,
+                execution,
               });
+              }
               break;
             case 'finish':
               sendBack({ type: 'STREAM_END', finishReason: event.finishReason });
@@ -368,13 +374,14 @@ export const agentMachine = setup({
             toolLifecycleUpdate: ({ context, event }) => {
               const sequence = context.toolUpdateSequence + 1;
               const toolName = context.toolCallNames[event.toolCallId];
+              const execution = event.execution;
               return {
                 sequence,
                 toolCallId: event.toolCallId,
                 toolName,
-                status: event.isError ? 'failed' : 'completed',
-                result: event.isError ? undefined : event.content,
-                error: event.isError ? event.content : undefined,
+                status: execution.canonical.status,
+                content: execution.agentProjection.content,
+                toolResult: execution.canonical,
               };
             },
           }),

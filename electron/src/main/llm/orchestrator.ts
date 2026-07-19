@@ -31,7 +31,8 @@
  */
 import { createHash } from 'node:crypto';
 import type { AssistantContent, ModelMessage, Tool } from 'ai';
-import type { LanguageModelV4 } from '@ai-sdk/provider';
+import { getErrorMessage, type LanguageModelV4 } from '@ai-sdk/provider';
+import { jsonSchema } from '@ai-sdk/provider-utils';
 import type { Message, Usage } from '../../shared/types/message';
 import type { Agent } from '../../shared/types/agent';
 import type { Skill } from '../../shared/types/skill';
@@ -44,11 +45,13 @@ import type { ProjectRuntime } from '../project/runtime';
 import { toApiMessages } from './history';
 import {
   executeToolCall,
-  runWithToolTimeout,
-  ToolTimeoutError,
   type ToolDispatchOptions,
 } from './tool-dispatch';
-import { parseToolExecuteOutput } from '../tools/result';
+import {
+  finalizeToolExecutionResult,
+  genericAgentProjector,
+  parseToolExecutionResult,
+} from '../tools/result';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
 import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
@@ -56,6 +59,10 @@ import { buildContextSnapshot } from './context-snapshot';
 import { importESM } from '../utils/esm-import';
 import { buildSkillTool } from '../tools/skill/skill';
 import { getSkillsRegistry } from '../tools';
+import {
+  createCanonicalToolResult,
+  type ToolExecutionResult,
+} from '../../shared/types/tool-result';
 
 const PROVIDER_TOOL_NAME_MAX_LENGTH = 64;
 const PROVIDER_TOOL_NAME_HASH_LENGTH = 16;
@@ -78,6 +85,17 @@ function toProviderMcpToolName(internalName: string): string {
   return `${safePrefix.slice(0, prefixLength)}_${hash}`;
 }
 
+function toInternalToolName(
+  toolName: string,
+  mcpManager: MCPManager | null,
+): string {
+  if (!mcpManager || toolName.startsWith('mcp::')) return toolName;
+  const match = mcpManager.getTools().find(
+    ({ definition }) => toProviderMcpToolName(definition.name) === toolName,
+  );
+  return match?.definition.name ?? toolName;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -89,7 +107,13 @@ export type StreamEvent =
   | { type: 'tool_call'; toolCallId: string; toolName: string; args: string }
   | { type: 'tool_call_start'; toolCallId: string; toolName: string }
   | { type: 'tool_call_delta'; toolCallId: string; argsDelta: string }
-  | { type: 'tool_result'; toolCallId: string; content: string; isError: boolean }
+  | {
+      type: 'tool_result';
+      toolCallId: string;
+      content: string;
+      /** Raw canonical execution retained by Orchid; U3 transports it durably. */
+      execution: ToolExecutionResult;
+    }
   | { type: 'usage'; usage: Usage }
   | { type: 'error'; title: string; detail: string }
   | { type: 'step_finish'; stepIndex: number; finishReason: string }
@@ -145,7 +169,7 @@ export type PendingToolCall = {
 export type PendingToolResult = {
   toolCallId: string;
   content: string;
-  isError: boolean;
+  execution: ToolExecutionResult;
 };
 
 /**
@@ -173,6 +197,102 @@ export function* drainPendingToolEvents(
     seenToolResultIds.add(tr.toolCallId);
     yield { type: 'tool_result', ...tr };
   }
+}
+
+/** Build one exact-projection generic terminal execution at an SDK boundary. */
+function genericSdkExecution(
+  toolName: string,
+  content: string,
+  options: {
+    status?: 'complete' | 'empty' | 'error' | 'cancelled';
+    errorCode?: string;
+    originKind?: 'built-in' | 'dynamic' | 'mcp';
+  } = {},
+): ToolExecutionResult {
+  const status = options.status ?? (content.length === 0 ? 'empty' : 'complete');
+  const data = {
+    value: content,
+    origin: {
+      kind: options.originKind ?? 'built-in',
+      name: toolName || 'unknown',
+    },
+  } as const;
+  const canonical = status === 'error'
+    ? createCanonicalToolResult('generic', {
+        status,
+        data,
+        error: {
+          code: options.errorCode ?? 'sdk_tool_error',
+          message: content,
+        },
+      })
+    : createCanonicalToolResult('generic', { status, data });
+
+  return finalizeToolExecutionResult({
+    canonical,
+    toolName,
+    expectedFamily: 'generic',
+    projector: genericAgentProjector,
+  }) as ToolExecutionResult;
+}
+
+/**
+ * Validate the raw AI SDK execution wrapper. Provider stream parts must carry
+ * the canonical execution wrapper; malformed values become explicit generic
+ * errors rather than being interpreted as a legacy content result.
+ */
+function executionFromSdkOutput(
+  raw: unknown,
+  toolName: string = 'unknown',
+): ToolExecutionResult {
+  try {
+    const execution = parseToolExecutionResult(raw);
+    return execution;
+  } catch {
+    if (
+      raw != null &&
+      typeof raw === 'object' &&
+      !Array.isArray(raw) &&
+      ('canonical' in raw || 'agentProjection' in raw)
+    ) {
+      return genericSdkExecution(
+        toolName,
+        `Tool '${toolName}' returned an invalid execution result.`,
+        { status: 'error', errorCode: 'invalid_tool_result' },
+      );
+    }
+  }
+
+  return genericSdkExecution(
+    toolName,
+    `Tool '${toolName}' returned an invalid execution result.`,
+    { status: 'error', errorCode: 'invalid_tool_result' },
+  );
+}
+
+function sdkPreExecutionError(
+  part: Record<string, unknown>,
+  mcpManager: MCPManager | null = null,
+): ToolExecutionResult {
+  const content = typeof part.errorText === 'string'
+    ? part.errorText
+    : getErrorMessage(part.error ?? 'Tool failed');
+  const providerToolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+  const toolName = toInternalToolName(providerToolName, mcpManager);
+  return genericSdkExecution(toolName, content, {
+    status: 'error',
+    errorCode: 'sdk_tool_error',
+  });
+}
+
+function streamResultFields(execution: ToolExecutionResult): Pick<
+  PendingToolResult,
+  'content' | 'execution'
+> {
+  return {
+    content: execution.agentProjection.content,
+    execution,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +523,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       abortSignal: combinedAbort,
       // Retry ownership belongs to Orchid's accounting-aware middleware.
       maxRetries: 0,
-      onStepFinish: async ({ usage, request, toolCalls, toolResults }) => {
+      onStepFinish: async ({ usage, request, toolCalls, toolResults, content }) => {
         if (usage) {
           const cachedTokens = usage.inputTokenDetails?.cacheReadTokens ?? 0;
           totalUsage = {
@@ -422,7 +542,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           for (const tc of toolCalls as Array<{ toolCallId: string; toolName: string; input?: unknown }>) {
             pendingToolCalls.push({
               toolCallId: tc.toolCallId,
-              toolName: tc.toolName,
+              toolName: toInternalToolName(tc.toolName, mcpManager),
               args: stringifyToolInput(tc.input),
             });
           }
@@ -432,17 +552,34 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             toolCallId: string;
             output?: unknown;
             result?: unknown;
-            isError?: boolean;
             error?: unknown;
           }>) {
-            const raw = tr.output ?? tr.result ?? '';
-            const parsed = parseToolExecuteOutput(raw);
-            const isError =
-              Boolean(tr.isError) || tr.error != null || parsed.isError;
+            const raw = tr.output ?? tr.result ?? tr.error ?? '';
+            const execution = tr.error != null && tr.output == null && tr.result == null
+              ? genericSdkExecution('unknown', getErrorMessage(tr.error), {
+                  status: 'error',
+                  errorCode: 'sdk_tool_error',
+                })
+              : executionFromSdkOutput(
+                  raw,
+                  'unknown',
+                );
             pendingToolResults.push({
               toolCallId: tr.toolCallId,
-              content: parsed.content,
-              isError,
+              ...streamResultFields(execution),
+            });
+          }
+        }
+        if (content) {
+          for (const rawPart of content as Array<Record<string, unknown>>) {
+            const type = String(rawPart.type ?? '');
+            if (type !== 'tool-error' && type !== 'tool-input-error') continue;
+            const toolCallId = streamToolCallId(rawPart);
+            if (!toolCallId) continue;
+            const execution = sdkPreExecutionError(rawPart, mcpManager);
+            pendingToolResults.push({
+              toolCallId,
+              ...streamResultFields(execution),
             });
           }
         }
@@ -476,7 +613,10 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             case 'tool-input-start': {
               armIdleTimer();
               const toolCallId = streamToolCallId(part);
-              const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+              const toolName = toInternalToolName(
+                typeof part.toolName === 'string' ? part.toolName : 'unknown',
+                mcpManager,
+              );
               if (toolCallId) {
                 deliveredAny = true;
                 yield { type: 'tool_call_start', toolCallId, toolName };
@@ -505,7 +645,10 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             case 'tool-call': {
               pauseIdleForTool();
               const toolCallId = streamToolCallId(part);
-              const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+              const toolName = toInternalToolName(
+                typeof part.toolName === 'string' ? part.toolName : 'unknown',
+                mcpManager,
+              );
               const args = stringifyToolInput(part.input ?? part.args);
               if (toolCallId && !seenToolCallIds.has(toolCallId)) {
                 seenToolCallIds.add(toolCallId);
@@ -520,15 +663,18 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               resumeIdleAfterTool();
               const toolCallId = streamToolCallId(part);
               const raw = part.output ?? part.result ?? '';
-              const parsed = parseToolExecuteOutput(raw);
+              const toolName = toInternalToolName(
+                typeof part.toolName === 'string' ? part.toolName : 'unknown',
+                mcpManager,
+              );
+              const execution = executionFromSdkOutput(raw, toolName);
               if (toolCallId && !seenToolResultIds.has(toolCallId)) {
                 seenToolResultIds.add(toolCallId);
                 deliveredAny = true;
                 yield {
                   type: 'tool_result',
                   toolCallId,
-                  content: parsed.content,
-                  isError: parsed.isError,
+                  ...streamResultFields(execution),
                 };
               }
               break;
@@ -538,16 +684,15 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             case 'tool-error': {
               resumeIdleAfterTool();
               const toolCallId = streamToolCallId(part);
-              const content =
-                typeof part.errorText === 'string'
-                  ? part.errorText
-                  : typeof part.error === 'string'
-                    ? part.error
-                    : stringifyToolInput(part.errorText ?? part.error ?? 'Tool failed');
+              const execution = sdkPreExecutionError(part, mcpManager);
               if (toolCallId && !seenToolResultIds.has(toolCallId)) {
                 seenToolResultIds.add(toolCallId);
                 deliveredAny = true;
-                yield { type: 'tool_result', toolCallId, content, isError: true };
+                yield {
+                  type: 'tool_result',
+                  toolCallId,
+                  ...streamResultFields(execution),
+                };
               }
               break;
             }
@@ -556,12 +701,12 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               // Args never became valid — no execute, keep/reset idle
               armIdleTimer();
               const toolCallId = streamToolCallId(part);
-              const content =
-                typeof part.errorText === 'string'
-                  ? part.errorText
-                  : 'Invalid tool input';
+              const execution = sdkPreExecutionError(part, mcpManager);
               if (toolCallId) {
-                const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+                const toolName = toInternalToolName(
+                  typeof part.toolName === 'string' ? part.toolName : 'unknown',
+                  mcpManager,
+                );
                 if (!seenToolCallIds.has(toolCallId)) {
                   seenToolCallIds.add(toolCallId);
                   deliveredAny = true;
@@ -574,7 +719,11 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
                 }
                 if (!seenToolResultIds.has(toolCallId)) {
                   seenToolResultIds.add(toolCallId);
-                  yield { type: 'tool_result', toolCallId, content, isError: true };
+                  yield {
+                    type: 'tool_result',
+                    toolCallId,
+                    ...streamResultFields(execution),
+                  };
                 }
               }
               break;
@@ -740,12 +889,20 @@ export function buildToolMap(
   const filtered = registry.filter([...allowedTools]);
 
   for (const { definition } of filtered) {
+    const outputSchema = registry.getToolExecutionResultSchema(definition.name);
+    if (!outputSchema) {
+      throw new TypeError(`No execution schema registered for tool '${definition.name}'`);
+    }
     toolMap[definition.name] = {
       description: definition.description,
       inputSchema: definition.inputSchema,
-      execute: async (args: unknown) => {
+      outputSchema,
+      execute: async (
+        args: unknown,
+        executionOptions: { toolCallId: string; abortSignal?: AbortSignal },
+      ) => {
         const toolCall: ToolCall = {
-          id: crypto.randomUUID(),
+          id: executionOptions.toolCallId,
           type: 'function',
           function: {
             name: definition.name,
@@ -753,9 +910,18 @@ export function buildToolMap(
           },
         };
 
-        const result = await executeToolCall(toolCall, registry, dispatchOptions);
-        // Structured payload so orchestrator can read isError without content sniffing.
-        return { content: result.content, isError: result.is_error };
+        return executeToolCall(
+          toolCall,
+          registry,
+          withSdkAbortSignal(dispatchOptions, executionOptions.abortSignal),
+        );
+      },
+      toModelOutput: ({ output }: { output: unknown }) => {
+        const execution = outputSchema.parse(output) as ToolExecutionResult;
+        return {
+          type: execution.canonical.status === 'error' ? 'error-text' : 'text',
+          value: execution.agentProjection.content,
+        };
       },
     };
   }
@@ -770,20 +936,38 @@ export function buildToolMap(
     const { definition, handler } = buildSkillTool(skillOptions.skills, allowed);
     const skillRegistry = new ToolRegistryClass();
     skillRegistry.register(definition, handler);
+    const outputSchema = skillRegistry.getToolExecutionResultSchema(definition.name);
+    if (!outputSchema) {
+      throw new TypeError(`No execution schema registered for tool '${definition.name}'`);
+    }
     toolMap.skill = {
       description: definition.description,
       inputSchema: definition.inputSchema,
-      execute: async (args: unknown) => {
+      outputSchema,
+      execute: async (
+        args: unknown,
+        executionOptions: { toolCallId: string; abortSignal?: AbortSignal },
+      ) => {
         const toolCall: ToolCall = {
-          id: crypto.randomUUID(),
+          id: executionOptions.toolCallId,
           type: 'function',
           function: {
             name: definition.name,
             arguments: JSON.stringify(args),
           },
         };
-        const result = await executeToolCall(toolCall, skillRegistry, dispatchOptions);
-        return { content: result.content, isError: result.is_error };
+        return executeToolCall(
+          toolCall,
+          skillRegistry,
+          withSdkAbortSignal(dispatchOptions, executionOptions.abortSignal),
+        );
+      },
+      toModelOutput: ({ output }: { output: unknown }) => {
+        const execution = outputSchema.parse(output) as ToolExecutionResult;
+        return {
+          type: execution.canonical.status === 'error' ? 'error-text' : 'text',
+          value: execution.agentProjection.content,
+        };
       },
     };
   }
@@ -791,7 +975,7 @@ export function buildToolMap(
   // Add MCP tools if available
   if (mcpManager) {
     const mcpTools = mcpManager.getTools();
-    for (const { definition } of mcpTools) {
+    for (const { definition, handler } of mcpTools) {
       const isAllowed = allowedTools.some((pattern) => {
         if (pattern === '*') return true;
         if (pattern.includes('*')) {
@@ -810,53 +994,62 @@ export function buildToolMap(
           `Provider tool name collision for MCP tool "${internalName}": "${providerName}"`,
         );
       }
+      const dynamicRegistry = new ToolRegistryClass();
+      dynamicRegistry.register(definition, handler);
+      const outputSchema = dynamicRegistry.getToolExecutionResultSchema(internalName);
+      if (!outputSchema) {
+        throw new TypeError(`No execution schema registered for MCP tool '${internalName}'`);
+      }
 
       toolMap[providerName] = {
         description: definition.description,
-        inputSchema: definition.inputSchema,
-        execute: async (args: unknown) => {
-          // Mirror executeToolCall: abort on outer timeout so MCP SDK cancels
-          // the in-flight request instead of abandoning it after the race.
-          const timeoutAbort = new AbortController();
-          const parentAbort = dispatchOptions.abortSignal;
-          const combinedAbort =
-            parentAbort !== undefined
-              ? AbortSignal.any([parentAbort, timeoutAbort.signal])
-              : timeoutAbort.signal;
-          try {
-            const result = await runWithToolTimeout(
-              () =>
-                mcpManager.callTool(internalName, args, {
-                  signal: combinedAbort,
-                }),
-              internalName,
-              {
-                timeoutSeconds: dispatchOptions.timeoutSeconds,
-                abortController: timeoutAbort,
-              },
-            );
-            // MCP legacy: plain "Error:" string indicates failure
-            if (typeof result === 'string' && result.startsWith('Error:')) {
-              return { content: result, isError: true };
-            }
-            // Structured result → delegate to parseToolExecuteOutput
-            if (typeof result === 'object' && result !== null) {
-              return parseToolExecuteOutput(result);
-            }
-            return { content: String(result), isError: false };
-          } catch (err) {
-            if (err instanceof ToolTimeoutError) {
-              return { content: err.message, isError: true };
-            }
-            const message = err instanceof Error ? err.message : String(err);
-            return { content: message, isError: true };
-          }
+        inputSchema: definition.rawInputJsonSchema
+          ? jsonSchema(definition.rawInputJsonSchema as Parameters<typeof jsonSchema>[0])
+          : definition.inputSchema,
+        outputSchema,
+        execute: async (
+          args: unknown,
+          executionOptions: { toolCallId: string; abortSignal?: AbortSignal } = {
+            toolCallId: crypto.randomUUID(),
+          },
+        ) => {
+          const toolCall: ToolCall = {
+            id: executionOptions.toolCallId,
+            type: 'function',
+            function: { name: internalName, arguments: JSON.stringify(args) },
+          };
+          return executeToolCall(
+            toolCall,
+            dynamicRegistry,
+            withSdkAbortSignal(dispatchOptions, executionOptions.abortSignal),
+          );
+        },
+        toModelOutput: ({ output }: { output: unknown }) => {
+          const execution = outputSchema.parse(output) as ToolExecutionResult;
+          return {
+            type: execution.canonical.status === 'error' ? 'error-text' : 'text',
+            value: execution.agentProjection.content,
+          };
         },
       };
     }
   }
 
   return toolMap as Record<string, Tool>;
+}
+
+function withSdkAbortSignal(
+  dispatchOptions: ToolDispatchOptions,
+  sdkAbortSignal?: AbortSignal,
+): ToolDispatchOptions {
+  if (!sdkAbortSignal) return dispatchOptions;
+  if (!dispatchOptions.abortSignal) {
+    return { ...dispatchOptions, abortSignal: sdkAbortSignal };
+  }
+  return {
+    ...dispatchOptions,
+    abortSignal: AbortSignal.any([dispatchOptions.abortSignal, sdkAbortSignal]),
+  };
 }
 
 /**

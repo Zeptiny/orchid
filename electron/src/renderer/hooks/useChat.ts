@@ -23,6 +23,7 @@ import type {
   ChatToolCallDeltaEvent,
   ChatToolCallStartEvent,
   ChatToolCallUpdateEvent,
+  ChatToolCallSnapshot,
   ChatSnapshot,
   ChatSessionSnapshot,
 } from '../../shared/types/ipc';
@@ -31,6 +32,7 @@ import {
   computeContextBreakdown,
 } from '../components/ContextGrid';
 import { hasUsage, latestUsageFromMessages } from '../../shared/usage';
+import type { CanonicalToolResult } from '../../shared/types/tool-result';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,7 +40,16 @@ export type ChatStatus = 'idle' | 'streaming' | 'error';
 
 export type InterruptState = 'idle' | 'confirmAgent' | 'confirmSubagents';
 
-export type ToolBlockStatus = 'generating' | 'running' | 'completed' | 'failed';
+export type ToolBlockStatus =
+  | 'generating'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'complete'
+  | 'partial'
+  | 'empty'
+  | 'error'
+  | 'cancelled';
 
 export interface ToolBlock {
   id: string;
@@ -46,10 +57,27 @@ export interface ToolBlock {
   status: ToolBlockStatus;
   partialArgs: string;
   args: string;
-  result: string | null;
-  error: string | null;
+  /** Exact finalized agent projection for terminal tool calls. */
+  agentProjection: string | null;
+  /** Canonical terminal facts; null while generating/running. */
+  toolResult: CanonicalToolResult | null;
   startedAt: string;
   finishedAt: string | null;
+}
+
+/** Preserve canonical facts while adapting a main-process live snapshot. */
+export function chatToolSnapshotToBlock(tool: ChatToolCallSnapshot): ToolBlock {
+  return {
+    id: tool.toolCallId,
+    toolName: tool.toolName,
+    status: tool.status,
+    partialArgs: tool.partialArgs,
+    args: tool.args,
+    agentProjection: tool.content,
+    toolResult: tool.toolResult,
+    startedAt: tool.startedAt,
+    finishedAt: tool.finishedAt,
+  };
 }
 
 /**
@@ -683,8 +711,8 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         status: 'generating',
         partialArgs: '',
         args: '',
-        result: null,
-        error: null,
+        agentProjection: null,
+        toolResult: null,
         startedAt: new Date().toISOString(),
         finishedAt: null,
       }));
@@ -708,7 +736,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         return {
           ...block,
           partialArgs: block.partialArgs + event.argsDelta,
-          status: block.status === 'completed' || block.status === 'failed'
+          status: block.status !== 'generating' && block.status !== 'running'
             ? block.status
             : 'generating',
         };
@@ -721,19 +749,15 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       applyToolBlocks((prev) => upsertToolBlock(prev, {
         id: event.toolCallId,
         toolName: event.toolName ?? 'unknown',
-        status: event.status === 'failed'
-          ? 'failed'
-          : event.status === 'completed'
-            ? 'completed'
-            : 'running',
+        status: event.status === 'running'
+          ? 'running'
+          : event.status,
         partialArgs: '',
         args: event.args ?? '',
-        result: event.result ?? null,
-        error: event.error ?? null,
+        agentProjection: event.content ?? null,
+        toolResult: event.toolResult ?? null,
         startedAt: new Date().toISOString(),
-        finishedAt: event.status === 'completed' || event.status === 'failed'
-          ? new Date().toISOString()
-          : null,
+        finishedAt: event.status === 'running' ? null : new Date().toISOString(),
       }, true));
       // Ensure tools that skip start events still appear in order.
       applyStreamSegments((prev) => {
@@ -790,7 +814,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         timestamp: new Date().toISOString(),
         usage: null,
         hidden: false,
-    is_error: false,
+        tool_result: null,
   };
 
       // On retry after error, the last user message is already in the list —
@@ -1098,17 +1122,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     streamSessionIdRef.current = live.sessionId;
     streamTurnIdRef.current = live.turnId;
     lastSequenceRef.current = live.sequence;
-    const liveTools: ToolBlock[] = live.toolCalls.map((tool) => ({
-      id: tool.toolCallId,
-      toolName: tool.toolName,
-      status: tool.status,
-      partialArgs: tool.partialArgs,
-      args: tool.args,
-      result: tool.result,
-      error: tool.error,
-      startedAt: tool.startedAt,
-      finishedAt: tool.finishedAt,
-    }));
+    const liveTools: ToolBlock[] = live.toolCalls.map(chatToolSnapshotToBlock);
     applyToolBlocks(liveTools);
     applyStreamSegments(live.streamSegments.map((segment) => ({ ...segment })));
     accumulatedContentRef.current = live.response;
@@ -1218,7 +1232,7 @@ function commitSegmentsToMessages(opts: {
           timestamp: new Date().toISOString(),
           usage: index === lastTextIndex ? usage : null,
           hidden: false,
-    is_error: false,
+          tool_result: null,
   });
         return;
       }
@@ -1235,7 +1249,7 @@ function commitSegmentsToMessages(opts: {
           timestamp: new Date().toISOString(),
           usage: null,
           hidden: false,
-    is_error: false,
+          tool_result: null,
   });
       }
     });
@@ -1266,7 +1280,7 @@ function commitSegmentsToMessages(opts: {
       timestamp: new Date().toISOString(),
       usage,
       hidden: false,
-    is_error: false,
+      tool_result: null,
   });
   }
   return out;
@@ -1295,18 +1309,14 @@ function toolBlockToMessages(block: ToolBlock): Message[] {
     timestamp: block.startedAt,
     usage: null,
     hidden: false,
-    is_error: false,
+    tool_result: null,
   };
 
-  const resultContent =
-    block.status === 'failed'
-      ? block.error ?? 'Tool failed'
-      : block.result ?? '';
-
+  if (!block.toolResult) return [call];
   const result: Message = {
     id: crypto.randomUUID(),
     role: MessageRole.TOOL,
-    content: resultContent,
+    content: block.agentProjection ?? '',
     type: MessageType.TOOL_RESULT,
     tool_calls: null,
     tool_call_id: callId,
@@ -1315,7 +1325,7 @@ function toolBlockToMessages(block: ToolBlock): Message[] {
     timestamp: block.finishedAt ?? block.startedAt,
     usage: null,
     hidden: false,
-    is_error: block.status === 'failed',
+    tool_result: block.toolResult,
   };
 
   return [call, result];
@@ -1334,8 +1344,8 @@ function upsertToolBlock(blocks: ToolBlock[], next: ToolBlock, merge = false): T
           status: next.status,
           partialArgs: next.partialArgs || block.partialArgs,
           args: next.args || block.args || block.partialArgs,
-          result: next.result ?? block.result,
-          error: next.error ?? block.error,
+          agentProjection: next.agentProjection ?? block.agentProjection,
+          toolResult: next.toolResult ?? block.toolResult,
           finishedAt: next.finishedAt ?? block.finishedAt,
         }
       : { ...block, ...next };

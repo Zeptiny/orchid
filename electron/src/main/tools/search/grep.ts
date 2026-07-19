@@ -1,11 +1,10 @@
 /**
- * grep tool — search file contents using regex.
+ * grep — search file contents using a regular expression.
  *
- * Returns matching lines with file paths and line numbers. Bounded concurrency
- * (semaphore=32), per-file timeout (10s), binary detection, glob-to-regex
- * file filtering, max_results cancellation.
- *
- * Ported from Python `src/orchid/tools/search.py`.
+ * The handler returns structured path/line/column/text facts.  Binary files,
+ * hidden/ignored directories and files that exceed the per-file timeout are
+ * skipped as before; reaching max_results is represented as canonical
+ * partiality with native rerun guidance.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -15,12 +14,20 @@ import type { Config } from '../../config/schema';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { getToolConfig, resolveToolPath } from '../types';
 import { isBinaryFile } from '../ast/utils';
+import {
+  grepMatchSchema,
+  searchResultsDataSchema,
+  type GrepResultsData,
+} from '../../../shared/types/tool-result-filesystem';
+import type { JsonValue, ToolHandlerOutcome } from '../../../shared/types/tool-result';
+
+type GrepMatch = z.infer<typeof grepMatchSchema>;
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const PER_FILE_TIMEOUT_MS = 10_000; // 10 seconds
+const PER_FILE_TIMEOUT_MS = 10_000;
 const SEMAPHORE_LIMIT = 32;
 
 // ---------------------------------------------------------------------------
@@ -28,30 +35,25 @@ const SEMAPHORE_LIMIT = 32;
 // ---------------------------------------------------------------------------
 
 class Semaphore {
-  private _permits: number;
-  private _queue: Array<() => void> = [];
+  private permits: number;
+  private queue: Array<() => void> = [];
 
   constructor(permits: number) {
-    this._permits = permits;
+    this.permits = permits;
   }
 
   async acquire(): Promise<void> {
-    if (this._permits > 0) {
-      this._permits--;
+    if (this.permits > 0) {
+      this.permits--;
       return;
     }
-    return new Promise<void>((resolve) => {
-      this._queue.push(resolve);
-    });
+    return new Promise<void>((resolve) => this.queue.push(resolve));
   }
 
   release(): void {
-    const next = this._queue.shift();
-    if (next) {
-      next();
-    } else {
-      this._permits++;
-    }
+    const next = this.queue.shift();
+    if (next) next();
+    else this.permits++;
   }
 }
 
@@ -59,41 +61,36 @@ class Semaphore {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Convert a glob pattern (like *.ts, *.py) to a regex.
- * Uses fnmatch.translate() equivalent logic.
- */
+/** Convert a glob pattern (like *.ts, *.py) to a fnmatch-style regex. */
 function globToRegex(pattern: string): RegExp {
   let regex = '';
-  let i = 0;
-  while (i < pattern.length) {
-    const c = pattern[i];
-    if (c === '*') {
+  let index = 0;
+  while (index < pattern.length) {
+    const character = pattern[index];
+    if (character === '*') {
       regex += '.*';
-    } else if (c === '?') {
+    } else if (character === '?') {
       regex += '.';
-    } else if (c === '[') {
-      // Find closing bracket
-      const j = pattern.indexOf(']', i + 1);
-      if (j !== -1) {
-        regex += '[' + pattern.substring(i + 1, j).replace(/\\/g, '\\\\') + ']';
-        i = j;
+    } else if (character === '[') {
+      const end = pattern.indexOf(']', index + 1);
+      if (end !== -1) {
+        regex += `[${pattern.substring(index + 1, end).replace(/\\/g, '\\\\')}]`;
+        index = end;
       } else {
         regex += '\\[';
       }
-    } else if (c === '.') {
+    } else if (character === '.') {
       regex += '\\.';
     } else {
-      regex += c.replace(/[\\^$+{}()|]/g, '\\$&');
+      regex += character.replace(/[\\^$+{}()|]/g, '\\$&');
     }
-    i++;
+    index++;
   }
-  return new RegExp('^' + regex + '$', 'i');
+  return new RegExp(`^${regex}$`, 'i');
 }
 
 function shouldSkipDir(dirname: string, ignored: Set<string>): boolean {
-  if (ignored.has(dirname)) return true;
-  return dirname.startsWith('.');
+  return dirname.startsWith('.') || ignored.has(dirname);
 }
 
 async function collectFiles(
@@ -103,40 +100,32 @@ async function collectFiles(
 ): Promise<string[]> {
   const collected: string[] = [];
 
-  async function walk(dir: string): Promise<void> {
+  async function walk(directoryPath: string): Promise<void> {
     let entries: fs.Dirent[];
     try {
-      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      entries = await fs.promises.readdir(directoryPath, { withFileTypes: true });
     } catch {
-      return; // skip unreadable directories
+      return;
     }
-
-    // Filter directories (in-place equivalent)
-    const subdirs: string[] = [];
-    const files: string[] = [];
+    entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
 
     for (const entry of entries) {
       if (entry.isDirectory()) {
         if (!shouldSkipDir(entry.name, ignored)) {
-          subdirs.push(path.join(dir, entry.name));
+          await walk(path.join(directoryPath, entry.name));
         }
-      } else if (entry.isFile()) {
-        if (fileRegex && !fileRegex.test(entry.name)) continue;
-        files.push(path.join(dir, entry.name));
+      } else if (entry.isFile() && (!fileRegex || fileRegex.test(entry.name))) {
+        collected.push(path.join(directoryPath, entry.name));
       }
-    }
-
-    files.sort();
-    collected.push(...files);
-
-    // Recurse into subdirectories
-    for (const subdir of subdirs) {
-      await walk(subdir);
     }
   }
 
   await walk(basePath);
-  return collected;
+  return collected.sort((left, right) => {
+    const leftRelative = path.relative(basePath, left);
+    const rightRelative = path.relative(basePath, right);
+    return leftRelative < rightRelative ? -1 : leftRelative > rightRelative ? 1 : 0;
+  });
 }
 
 function searchFileSync(
@@ -144,23 +133,53 @@ function searchFileSync(
   regex: RegExp,
   basePath: string,
   maxResults: number,
-): string[] | null {
+): GrepMatch[] | null {
   try {
     const content = fs.readFileSync(filePath, 'utf-8');
-    const lines = content.split('\n');
-    const matches: string[] = [];
     const relativePath = path.relative(basePath, filePath);
-
-    for (let i = 0; i < lines.length; i++) {
-      if (regex.test(lines[i])) {
-        matches.push(`${relativePath}:${i + 1}: ${lines[i].replace(/\s+$/, '')}`);
-        if (matches.length >= maxResults) break;
-      }
+    const matches: GrepMatch[] = [];
+    for (const [index, line] of content.split('\n').entries()) {
+      const matchIndex = line.search(regex);
+      if (matchIndex < 0) continue;
+        matches.push({
+          path: relativePath,
+          line: index + 1,
+          column: matchIndex + 1,
+          // CR is the line separator in a CRLF file, not source content.
+          // Preserve all other trailing whitespace exactly.
+          text: line.endsWith('\r') ? line.slice(0, -1) : line,
+        });
+      if (matches.length >= maxResults) break;
     }
     return matches;
   } catch {
     return null;
   }
+}
+
+function emptyData(root: string, pattern: string): GrepResultsData {
+  return {
+    kind: 'grep',
+    root,
+    pattern,
+    matches: [],
+    totalMatches: 0,
+    limitReached: false,
+  };
+}
+
+function rerunInput(
+  pattern: string,
+  directoryPath: string,
+  includePattern: string | undefined,
+  caseInsensitive: boolean | undefined,
+): Record<string, JsonValue> {
+  return {
+    pattern,
+    directory_path: directoryPath,
+    ...(includePattern === undefined ? {} : { include_pattern: includePattern }),
+    ...(caseInsensitive === undefined ? {} : { case_insensitive: caseInsensitive }),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -169,10 +188,18 @@ function searchFileSync(
 
 export const grepInputSchema = z.object({
   pattern: z.string().describe('The regex pattern to search for'),
-  directory_path: z.string().describe('The directory to search in, relative to the current working directory'),
-  include_pattern: z.string().optional().describe('Glob pattern to filter files (e.g., "*.py", "*.txt"). If not set, all files are searched.'),
-  case_insensitive: z.boolean().optional().describe('Whether the search should be case insensitive (default: false)'),
-  max_results: z.number().int().positive().optional().describe('Maximum number of matching lines to return (default: 100)'),
+  directory_path: z.string().describe(
+    'The directory to search in, relative to the current working directory',
+  ),
+  include_pattern: z.string().optional().describe(
+    'Glob pattern to filter files (e.g., "*.py", "*.txt"). If not set, all files are searched.',
+  ),
+  case_insensitive: z.boolean().optional().describe(
+    'Whether the search should be case insensitive (default: false)',
+  ),
+  max_results: z.number().int().positive().optional().describe(
+    'Maximum number of matching lines to return (default: 100)',
+  ),
 });
 
 export type GrepInput = z.infer<typeof grepInputSchema>;
@@ -181,122 +208,107 @@ export type GrepInput = z.infer<typeof grepInputSchema>;
 // Executor
 // ---------------------------------------------------------------------------
 
-export async function executeGrep(
+export async function executeGrepOutcome(
   pattern: string,
   directoryPath: string,
   includePattern?: string,
   caseInsensitive?: boolean,
   maxResults?: number,
   config?: Pick<Config, 'grep_max_results' | 'ignored_dirs'>,
-): Promise<{ display: string; content: string; isError?: boolean }> {
-  if (maxResults === undefined) {
-    maxResults = config?.grep_max_results ?? getConfig().grep_max_results;
-  }
+): Promise<ToolHandlerOutcome<GrepResultsData>> {
+  const effectiveMaxResults = maxResults
+    ?? config?.grep_max_results
+    ?? getConfig().grep_max_results;
+  const empty = emptyData(path.resolve(directoryPath), pattern);
 
-  // Compile regex
   let regex: RegExp;
   try {
-    const flags = caseInsensitive ? 'i' : '';
-    regex = new RegExp(pattern, flags);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    regex = new RegExp(pattern, caseInsensitive ? 'i' : '');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     return {
-      display: `Invalid regex: ${pattern}`,
-      content: `Error: Invalid regex pattern '${pattern}': ${msg}`,
-      isError: true,
+      status: 'error',
+      data: empty,
+      error: {
+        code: 'invalid_regex',
+        message: `Invalid regex pattern '${pattern}': ${message}`,
+      },
     };
   }
 
-  // Resolve base path
   const basePath = path.resolve(directoryPath);
   try {
     const stat = await fs.promises.stat(basePath);
-    if (!stat.isDirectory()) {
-      return {
-        display: `Directory not found: ${directoryPath}`,
-        content: `Error: Directory '${directoryPath}' does not exist.`,
-      isError: true,
-      };
-    }
+    if (!stat.isDirectory()) throw new Error('path is not a directory');
   } catch {
     return {
-      display: `Directory not found: ${directoryPath}`,
-      content: `Error: Directory '${directoryPath}' does not exist.`,
-      isError: true,
+      status: 'error',
+      data: emptyData(basePath, pattern),
+      error: {
+        code: 'directory_not_found',
+        message: `Directory '${directoryPath}' does not exist.`,
+      },
     };
   }
 
-  // Build ignored set
   const ignored = new Set(config?.ignored_dirs ?? getConfig().ignored_dirs);
-
-  // Compile file filter regex
   let fileRegex: RegExp | null = null;
-  if (includePattern) {
-    fileRegex = globToRegex(includePattern);
-  }
-
-  // Collect all files
+  if (includePattern) fileRegex = globToRegex(includePattern);
   const filePaths = await collectFiles(basePath, fileRegex, ignored);
-
-  // Search files with bounded concurrency
   const semaphore = new Semaphore(SEMAPHORE_LIMIT);
-  const results: string[] = [];
-  let cancelled = false;
+  const perFile = new Map<string, GrepMatch[]>();
 
-  const searchTasks = filePaths.map(async (filePath) => {
-    if (cancelled) return;
+  await Promise.all(filePaths.map(async (filePath) => {
     await semaphore.acquire();
     try {
-      if (cancelled) return;
-
-      // Binary detection
       if (await isBinaryFile(filePath, { unreadableAsBinary: true })) return;
-
-      // Per-file timeout
       const matches = await Promise.race([
-        Promise.resolve().then(() => searchFileSync(filePath, regex, basePath, maxResults!)),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), PER_FILE_TIMEOUT_MS)),
+        Promise.resolve().then(() => searchFileSync(
+          filePath,
+          regex,
+          basePath,
+          effectiveMaxResults,
+        )),
+        new Promise<GrepMatch[] | null>((resolve) => {
+          setTimeout(() => resolve(null), PER_FILE_TIMEOUT_MS);
+        }),
       ]);
-
-      if (matches && !cancelled) {
-        for (const match of matches) {
-          if (cancelled) break;
-          results.push(match);
-          if (results.length >= maxResults!) {
-            cancelled = true;
-            break;
-          }
-        }
-      }
+      if (matches) perFile.set(filePath, matches);
     } finally {
       semaphore.release();
     }
-  });
+  }));
 
-  await Promise.allSettled(searchTasks);
+  const allMatches = filePaths.flatMap((filePath) => perFile.get(filePath) ?? []);
+  const returnedMatches = allMatches.slice(0, effectiveMaxResults);
+  const limitReached = allMatches.length >= effectiveMaxResults;
+  const data: GrepResultsData = {
+    kind: 'grep',
+    root: basePath,
+    pattern,
+    matches: returnedMatches,
+    totalMatches: returnedMatches.length,
+    limitReached,
+  };
+  searchResultsDataSchema.parse(data);
 
-  if (results.length === 0) {
+  if (returnedMatches.length === 0) return { status: 'empty', data };
+  if (limitReached) {
     return {
-      display: `No matches for '${pattern}'`,
-      content: `No matches found for pattern '${pattern}' in '${directoryPath}'.`,
+      status: 'partial',
+      data,
+      retrieval: {
+        kind: 'rerun',
+        toolName: 'grep',
+        input: rerunInput(pattern, basePath, includePattern, caseInsensitive),
+      },
     };
   }
-
-  const outputLines = [`Found ${results.length} match(es) for pattern '${pattern}':`];
-  outputLines.push(...results);
-
-  if (results.length >= maxResults!) {
-    outputLines.push(`\n... (truncated to ${maxResults} results)`);
-  }
-
-  return {
-    display: `Found ${results.length} matches for '${pattern}'`,
-    content: outputLines.join('\n'),
-  };
+  return { status: 'complete', data };
 }
 
 // ---------------------------------------------------------------------------
-// Tool definition
+// Tool definition / handler
 // ---------------------------------------------------------------------------
 
 export const grepToolDefinition: ToolDefinition = {
@@ -305,21 +317,30 @@ export const grepToolDefinition: ToolDefinition = {
     'Search file contents using regex. Returns matching lines with file paths and line numbers. ' +
     'Use to find function definitions, variable references, error messages, or any text pattern across the codebase.',
   inputSchema: grepInputSchema,
+  resultFamily: 'search-results',
+  outputDataSchema: searchResultsDataSchema,
   actionLabel: 'Grepping...',
   category: 'search',
 };
 
-export const grepHandler: ToolHandler = async (input: unknown, ctx) => {
-  const { pattern, directory_path, include_pattern, case_insensitive, max_results } =
-    input as GrepInput;
+export const grepHandler: ToolHandler = async (
+  input: unknown,
+  ctx,
+): Promise<ToolHandlerOutcome<GrepResultsData>> => {
+  const {
+    pattern,
+    directory_path,
+    include_pattern,
+    case_insensitive,
+    max_results,
+  } = input as GrepInput;
   const resolvedDir = resolveToolPath(ctx.cwd, directory_path);
-  const config = getToolConfig(ctx);
-  return executeGrep(
+  return executeGrepOutcome(
     pattern,
     resolvedDir,
     include_pattern,
     case_insensitive,
     max_results,
-    config,
+    getToolConfig(ctx),
   );
 };

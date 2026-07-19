@@ -7,6 +7,17 @@
 import { describe, it, expect } from 'vitest';
 import { executeCommand } from '../../src/main/tools/process/execute-command';
 
+function resultText(result: Awaited<ReturnType<typeof executeCommand>>): string {
+  const candidate = result as unknown as { data?: { value?: unknown }; canonical?: { data?: { value?: unknown } }; content?: unknown };
+  const value = candidate.data?.value ?? candidate.canonical?.data?.value ?? candidate.content;
+  return typeof value === 'string' ? value : JSON.stringify(value ?? '');
+}
+
+function resultStatus(result: Awaited<ReturnType<typeof executeCommand>>): string {
+  const candidate = result as unknown as { status?: string; canonical?: { status?: string }; isError?: boolean };
+  return candidate.status ?? candidate.canonical?.status ?? (candidate.isError ? 'error' : 'complete');
+}
+
 describe('execute_command shell=false', () => {
   it('should run echo hello and return stdout with exit code 0', async () => {
     const result = await executeCommand(
@@ -17,8 +28,8 @@ describe('execute_command shell=false', () => {
       false, // shell=false
     );
 
-    expect(result.display).toContain('exit code: 0');
-    expect(result.content).toContain('hello');
+    expect(resultStatus(result)).toBe('complete');
+    expect(resultText(result)).toContain('hello');
   });
 
   it('should preserve quoted arguments', async () => {
@@ -30,8 +41,8 @@ describe('execute_command shell=false', () => {
       false, // shell=false
     );
 
-    expect(result.display).toContain('exit code: 0');
-    expect(result.content).toContain('hello world');
+    expect(resultStatus(result)).toBe('complete');
+    expect(resultText(result)).toContain('hello world');
   });
 
   it('should return error when shell=false with background=true', async () => {
@@ -44,9 +55,10 @@ describe('execute_command shell=false', () => {
       true,  // background=true
     );
 
-    expect(result.display).toContain('incompatible');
-    expect(result.content).toContain('shell=false');
-    expect(result.content).toContain('background=true');
+    expect(resultStatus(result)).toBe('error');
+    expect(resultText(result)).toContain('not supported');
+    expect(resultText(result)).toContain('shell=false');
+    expect(resultText(result)).toContain('background=true');
   });
 
   it('should return error for command not found with shell=false', async () => {
@@ -58,8 +70,8 @@ describe('execute_command shell=false', () => {
       false, // shell=false
     );
 
-    expect(result.display).toContain('error');
+    expect(resultStatus(result)).toBe('error');
     // spawn with shell=false will throw ENOENT or similar
-    expect(result.content).toContain('Error');
+    expect(resultText(result)).toContain('Error');
   });
 });

@@ -8,18 +8,21 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { type GenericBuiltInToolOutcome } from '../result';
+import { createDynamicToolOutcome } from '../../../shared/types/tool-result';
 import type { MCPManager } from '../../mcp/manager';
 
 /**
  * Result returned by the MCP resource tool handler.
  */
-export interface McpResourceResult {
-  /** Brief summary for UI display */
-  display: string;
-  /** Full content */
-  content: string;
-  /** Explicit failure flag for UI/status (never inferred from content). */
-  isError?: boolean;
+export type McpResourceResult = GenericBuiltInToolOutcome;
+
+function mcpResourceOutcome(
+  value: unknown,
+  options: Parameters<typeof createDynamicToolOutcome>[3] = {},
+): McpResourceResult {
+  return createDynamicToolOutcome('read_mcp_resource', value, 'mcp', options);
 }
 
 /**
@@ -31,6 +34,7 @@ export function buildMcpResourceTool(
   manager: MCPManager,
 ): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
+    ...genericToolResultMetadata,
     name: 'read_mcp_resource',
     description:
       'Read a resource from an MCP server by URI. Use to access files, schemas, or other data exposed by MCP servers.',
@@ -50,11 +54,11 @@ export function buildMcpResourceTool(
 
     const serverName = manager.getResourceServer(uri);
     if (serverName === undefined) {
-      return {
-        display: 'Resource not found',
-        content: `Error: No MCP server found for URI '${uri}'.`,
-        isError: true,
-      };
+      return mcpResourceOutcome(`Error: No MCP server found for URI '${uri}'.`, {
+        status: 'error',
+        errorCode: 'mcp_resource_not_found',
+        errorMessage: `Error: No MCP server found for URI '${uri}'.`,
+      });
     }
 
     try {
@@ -62,23 +66,20 @@ export function buildMcpResourceTool(
         signal: ctx?.abortSignal,
       });
       if (typeof content === 'string' && content.startsWith('Error:')) {
-        return {
-          display: 'MCP read error',
-          content,
-          isError: true,
-        };
+        return mcpResourceOutcome(content, {
+          status: 'error',
+          errorCode: 'mcp_resource_error',
+          errorMessage: content,
+        });
       }
-      return {
-        display: `MCP resource '${uri}'`,
-        content,
-      };
+      return mcpResourceOutcome({ uri, content }, { status: 'complete' });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return {
-        display: 'MCP read error',
-        content: `Error reading MCP resource: ${message}`,
-        isError: true,
-      };
+      return mcpResourceOutcome(`Error reading MCP resource: ${message}`, {
+        status: 'error',
+        errorCode: 'mcp_resource_error',
+        errorMessage: `Error reading MCP resource: ${message}`,
+      });
     }
   };
 

@@ -31,8 +31,8 @@ function snapshotToToolBlock(snapshot: SubagentToolSnapshot): ToolBlock {
     status: snapshot.status === 'error' ? 'failed' : snapshot.status,
     partialArgs: snapshot.partialArgs,
     args: snapshot.args,
-    result: snapshot.status === 'error' ? null : snapshot.result,
-    error: snapshot.error,
+    agentProjection: snapshot.content,
+    toolResult: snapshot.toolResult,
     startedAt: snapshot.startedAt,
     finishedAt: snapshot.finishedAt,
   };
@@ -40,31 +40,31 @@ function snapshotToToolBlock(snapshot: SubagentToolSnapshot): ToolBlock {
 
 function messageToToolBlock(message: Message, result: Message | null): ToolBlock {
   const call = message.tool_calls?.[0];
-  const failed = Boolean(result?.is_error);
+  const canonical = result?.tool_result ?? null;
   return {
     id: message.tool_call_id ?? call?.id ?? message.id,
     toolName: call?.function?.name ?? message.name ?? 'tool',
     // Match ChatStream's canonical persisted-message conversion: a call with
     // no paired result is a settled historical tool, not a live operation.
-    status: failed ? 'failed' : 'completed',
+    status: canonical?.status === 'error' ? 'failed' : canonical?.status ?? 'completed',
     partialArgs: '',
     args: call?.function?.arguments ?? message.content,
-    result: failed ? null : result?.content ?? null,
-    error: failed ? result?.content ?? 'Tool failed' : null,
+    agentProjection: result?.content ?? null,
+    toolResult: canonical,
     startedAt: message.timestamp,
     finishedAt: result?.timestamp ?? message.timestamp,
   };
 }
 
 function resultToToolBlock(message: Message): ToolBlock {
-  const failed = message.is_error;
+  const canonical = message.tool_result;
   return {
     id: message.tool_call_id ?? message.id,
     toolName: message.name ?? 'tool',
-    status: failed ? 'failed' : 'completed',
+    status: canonical?.status === 'error' ? 'failed' : canonical?.status ?? 'completed',
     partialArgs: '', args: '',
-    result: failed ? null : message.content,
-    error: failed ? message.content : null,
+    agentProjection: message.content,
+    toolResult: canonical,
     startedAt: message.timestamp, finishedAt: message.timestamp,
   };
 }
@@ -73,7 +73,8 @@ function textMessage(id: string, content: string, type: MessageType, isStreaming
   return {
     id, role: type === MessageType.THINKING ? MessageRole.ASSISTANT : MessageRole.ASSISTANT,
     content, type, tool_calls: null, tool_call_id: null, name: null, thinking: null,
-    timestamp: new Date().toISOString(), usage: null, hidden: false, is_error: false,
+    timestamp: new Date().toISOString(), usage: null, hidden: false,
+    tool_result: null,
     ...(isStreaming ? {} : {}),
   };
 }

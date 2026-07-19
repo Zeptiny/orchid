@@ -18,8 +18,16 @@
 - Erros are not being returned / used correclty on the interface
   - Also needs to check if subagent errors are properly propagating
   - For example, API returned 429 but no message appeared on the interface
+- Add dedicated interface output handling instead of the generic structured viewer for:
+  - RAG: `rag_search`, `rag_index`
+  - Process: `read_output`, `send_input`, `terminate_command`
+  - AST: `ast_index`, `get_file_skeleton`, `get_function`, `find_symbol_references`, `replace_symbol`, `rename_symbol`
+  - Todo: `todo_create`, `todo_update`, `todo_list`, `todo_delete`
+  - Web/subagents/skills: `web_fetch`, `delegate_to_subagent`, `wait_for_subagent`, `interrupt_subagents`, `skill`
+  - MCP: `read_mcp_resource`, `list_mcp_resources`, and dynamically registered MCP tools
 
 ### TODOs geral
+- apply_patch tool
 - Change session storage to SQLite
 - Tools should start the execution as son as the generation is complete, even if the model is still generating output for other commands
 - RAG/AST Post Write Callback + automatic updating if changes are detected (Can be changed via commands / manually / etc that post write callback does not detect)
