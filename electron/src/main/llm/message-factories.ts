@@ -119,9 +119,15 @@ export function makeToolResultMessage(
   toolCallId: string,
   toolName: string | null,
   content: string,
-  toolResult: CanonicalToolResult,
+  toolResultOrError: CanonicalToolResult | boolean,
   id: string = newId(),
 ): Message {
+  // Keep the legacy boolean call shape readable for older callers and stored
+  // fixtures while canonical callers retain the structured terminal facts.
+  const toolResult = typeof toolResultOrError === 'boolean' ? null : toolResultOrError;
+  const isError = typeof toolResultOrError === 'boolean'
+    ? toolResultOrError
+    : toolResultOrError.status === 'error';
   return {
     id,
     role: MessageRole.TOOL,
@@ -135,6 +141,6 @@ export function makeToolResultMessage(
     usage: null,
     hidden: false,
     tool_result: toolResult,
-    is_error: toolResult.status === 'error',
+    is_error: isError,
   };
 }
