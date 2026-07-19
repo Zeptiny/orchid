@@ -60,7 +60,7 @@ function lifecycleBadge(block: ToolBlock, canonical: CanonicalToolResult | null,
   if (status === 'partial' || status === 'complete') return null;
   if (status === 'generating') return <StatusBadge tone="info" size="xs">generating</StatusBadge>;
   if (status === 'running') return <StatusBadge tone="warning" size="xs">running</StatusBadge>;
-  if (status === 'error') return <StatusBadge tone="error" size="xs">error</StatusBadge>;
+  if (status === 'error') return null;
   if (status === 'partial') return <StatusBadge tone="warning" size="xs">partial</StatusBadge>;
   if (status === 'cancelled') return <StatusBadge tone="ghost" size="xs">cancelled</StatusBadge>;
   if (status === 'empty') return <StatusBadge tone="ghost" size="xs">empty</StatusBadge>;

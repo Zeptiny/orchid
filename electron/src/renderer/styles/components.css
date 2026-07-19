@@ -379,33 +379,31 @@
   /* Thought disclosure */
   .orchid-thought {
     @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
-    border: 1px solid var(--border-default, color-mix(in srgb, var(--color-base-content) 12%, transparent));
     border-radius: 5px;
-    background: color-mix(in srgb, var(--color-base-200) 84%, var(--color-base-300));
   }
 
   .orchid-thought-title {
-    @apply flex w-full items-center justify-between gap-1.5 border-none text-left font-semibold;
-    min-height: 30px;
+    @apply flex w-full items-center justify-between gap-1.5 border-none bg-transparent text-left font-medium text-base-content/70;
+    min-height: 28px;
     padding: 7px 14px;
     font-size: 12px;
     cursor: pointer;
-    color: var(--msg-thinking-text, var(--color-info));
-    border-left: 2px solid var(--msg-thinking-text, var(--color-info));
+    border-left: 2px solid color-mix(in srgb, var(--msg-thinking-text, var(--color-info)) 55%, transparent);
     border-radius: 0 4px 4px 0;
-    background: color-mix(in srgb, var(--msg-thinking-text, var(--color-info)) 6%, transparent);
     font-family: inherit;
+    line-height: 1.35;
   }
 
   .orchid-thought-title:hover {
-    filter: brightness(1.08);
+    color: var(--msg-thinking-text, var(--color-info));
+    background: color-mix(in srgb, var(--msg-thinking-text, var(--color-info)) 5%, transparent);
   }
 
   .orchid-thought-content {
     @apply leading-snug text-base-content/70;
     font-size: 1rem;
     padding: 8px 14px 10px;
-    border-left: 2px solid var(--msg-thinking-text, var(--color-info));
+    border-left: 2px solid color-mix(in srgb, var(--msg-thinking-text, var(--color-info)) 55%, transparent);
     cursor: pointer;
   }
 
@@ -474,27 +472,24 @@
   /* Tool call block */
   .orchid-tool-block {
     @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
-    border: 1px solid var(--border-default, color-mix(in srgb, var(--color-base-content) 12%, transparent));
     border-radius: 5px;
-    background: color-mix(in srgb, var(--color-base-200) 84%, var(--color-base-300));
   }
 
   .orchid-tool-block-title {
-    @apply flex w-full items-center justify-between gap-1.5 border-none text-left font-semibold;
-    min-height: 30px;
+    @apply flex w-full items-center justify-between gap-1.5 border-none bg-transparent text-left font-medium text-base-content/70;
+    min-height: 28px;
     padding: 7px 14px;
     font-size: 12px;
     cursor: pointer;
-    color: var(--color-secondary);
-    border-left: 2px solid var(--color-secondary);
+    border-left: 2px solid color-mix(in srgb, var(--color-secondary) 55%, transparent);
     border-radius: 0 4px 4px 0;
-    background: color-mix(in srgb, var(--color-secondary) 6%, transparent);
     font-family: inherit;
     line-height: 1.35;
   }
 
   .orchid-tool-block-title:hover {
-    filter: brightness(1.08);
+    color: var(--color-secondary);
+    background: color-mix(in srgb, var(--color-secondary) 5%, transparent);
   }
 
   .orchid-tool-block-title-left {
@@ -517,7 +512,7 @@
     @apply text-base-content/70;
     font-size: 1rem;
     padding: 8px 14px 10px;
-    border-left: 2px solid var(--color-secondary);
+    border-left: 2px solid color-mix(in srgb, var(--color-secondary) 55%, transparent);
     cursor: pointer;
   }
 
@@ -532,32 +527,36 @@
 
   .orchid-tool-block.running > .orchid-tool-block-title {
     color: var(--color-warning);
-    border-left-color: var(--color-warning);
-    background: color-mix(in srgb, var(--color-warning) 6%, transparent);
+    border-left-color: color-mix(in srgb, var(--color-warning) 55%, transparent);
   }
 
   .orchid-tool-block.running > .orchid-tool-block-content {
-    border-left-color: var(--color-warning);
+    border-left-color: color-mix(in srgb, var(--color-warning) 55%, transparent);
   }
 
   .orchid-tool-block.generating > .orchid-tool-block-title {
     color: var(--color-info);
-    border-left-color: var(--color-info);
-    background: color-mix(in srgb, var(--color-info) 6%, transparent);
+    border-left-color: color-mix(in srgb, var(--color-info) 55%, transparent);
   }
 
   .orchid-tool-block.generating > .orchid-tool-block-content {
-    border-left-color: var(--color-info);
+    border-left-color: color-mix(in srgb, var(--color-info) 55%, transparent);
   }
 
-  .orchid-tool-block.failed > .orchid-tool-block-title {
+  .orchid-tool-block.failed > .orchid-tool-block-title,
+  .orchid-tool-block.error > .orchid-tool-block-title {
+    border-left-color: color-mix(in srgb, var(--color-error) 55%, transparent);
+  }
+
+  .orchid-tool-block.failed > .orchid-tool-block-title:hover,
+  .orchid-tool-block.error > .orchid-tool-block-title:hover {
     color: var(--color-error);
-    border-left-color: var(--color-error);
-    background: color-mix(in srgb, var(--color-error) 6%, transparent);
+    background: color-mix(in srgb, var(--color-error) 5%, transparent);
   }
 
-  .orchid-tool-block.failed > .orchid-tool-block-content {
-    border-left-color: var(--color-error);
+  .orchid-tool-block.failed > .orchid-tool-block-content,
+  .orchid-tool-block.error > .orchid-tool-block-content {
+    border-left-color: color-mix(in srgb, var(--color-error) 55%, transparent);
   }
 
   .orchid-tool-args-stream {

@@ -9,7 +9,6 @@ import {
 import type { IconName } from './Icon';
 import { ToolResultShell } from './ToolResults/ToolResultShell';
 import { Spinner } from './ui/Spinner';
-import { StatusBadge } from './ui/StatusBadge';
 
 export interface ToolCallBlockProps {
   block: ToolBlock;
@@ -50,10 +49,6 @@ export function ToolCallBlock({ block, subagents = [] }: ToolCallBlockProps) {
   const loadingIndicator = block.status === 'generating' || block.status === 'running'
     ? <Spinner size="xs" aria-hidden className="shrink-0" />
     : undefined;
-  const statusBadge = block.status === 'failed' || block.status === 'error'
-    ? <StatusBadge tone="error" size="xs">error</StatusBadge>
-    : undefined;
-
   // Keep args/running copy in the shared shell; this fallback string is only
   // an invocation hint and never used to reconstruct a terminal result.
   void argsText;
@@ -64,7 +59,6 @@ export function ToolCallBlock({ block, subagents = [] }: ToolCallBlockProps) {
       title={renderToolTitle(title)}
       iconName={iconForTool(block.toolName)}
       loadingIndicator={loadingIndicator}
-      statusBadge={statusBadge}
     />
   );
 }
