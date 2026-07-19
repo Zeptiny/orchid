@@ -277,16 +277,16 @@ describe('Architecture Properties (real modules)', () => {
       const statusesFor = (id: string) =>
         lifecycleSnapshots.filter((s) => s.toolCallId === id).map((s) => s.status);
       expect(statusesFor('tc-read')).toContain('running');
-      expect(statusesFor('tc-read')).toContain('completed');
+      expect(statusesFor('tc-read')).toContain('complete');
       expect(statusesFor('tc-edit')).toContain('running');
-      expect(statusesFor('tc-edit')).toContain('completed');
+      expect(statusesFor('tc-edit')).toContain('complete');
 
       // Final context retains last lifecycle update and full response text
       const final = actor.getSnapshot().context;
       expect(final.response).toContain('Checking…');
       expect(final.response).toContain('Done.');
       expect(final.toolLifecycleUpdate?.toolCallId).toBe('tc-edit');
-      expect(final.toolLifecycleUpdate?.status).toBe('completed');
+      expect(final.toolLifecycleUpdate?.status).toBe('complete');
       expect(final.toolUpdateSequence).toBeGreaterThanOrEqual(4);
 
       actor.stop();

@@ -26,8 +26,11 @@ import type { Agent } from '../../../shared/types/agent';
 import type { Usage } from '../../../shared/types/message';
 import type {
   CanonicalToolResult,
+  ToolExecutionResult,
   TerminalToolResultStatus,
+  ToolHandlerOutcome,
 } from '../../../shared/types/tool-result';
+import { createCanonicalToolResult } from '../../../shared/types/tool-result';
 
 // ── Context ─────────────────────────────────────────────────────────────────
 
@@ -90,6 +93,22 @@ export type StreamFn = (params: {
   systemPrompt: string;
   abortSignal: AbortSignal;
 }) => AsyncGenerator<StreamEvent>;
+
+/** Compatibility bridge for older stream fixtures without canonical facts. */
+function legacyToolExecution(content: string, isError: boolean): ToolExecutionResult {
+  const outcome: ToolHandlerOutcome<{ value: string }> = isError
+    ? {
+        status: 'error',
+        data: { value: content },
+        error: { code: 'legacy_tool_error', message: content },
+      }
+    : { status: 'complete', data: { value: content } };
+  const canonical = createCanonicalToolResult('generic', outcome);
+  return {
+    canonical,
+    agentProjection: { content, completeness: 'complete' },
+  };
+}
 
 // ── Stream callback input ───────────────────────────────────────────────────
 
@@ -180,11 +199,19 @@ const streamCallback = fromCallback(
               });
               break;
             case 'tool_result':
+              // Older stream fixtures may omit the canonical execution while
+              // still providing the compatibility projection fields.
+              {
+                const execution = event.execution ?? legacyToolExecution(
+                  typeof event.content === 'string' ? event.content : '',
+                  event.isError === true,
+                );
               sendBack({
                 type: 'TOOL_RESULT',
                 toolCallId: event.toolCallId,
-                execution: event.execution,
+                execution,
               });
+              }
               break;
             case 'finish':
               sendBack({ type: 'STREAM_END', finishReason: event.finishReason });
@@ -371,13 +398,14 @@ export const agentMachine = setup({
             toolLifecycleUpdate: ({ context, event }) => {
               const sequence = context.toolUpdateSequence + 1;
               const toolName = context.toolCallNames[event.toolCallId];
+              const execution = event.execution ?? legacyToolExecution('', false);
               return {
                 sequence,
                 toolCallId: event.toolCallId,
                 toolName,
-                status: event.execution.canonical.status,
-                content: event.execution.agentProjection.content,
-                toolResult: event.execution.canonical,
+                status: execution.canonical.status,
+                content: execution.agentProjection.content,
+                toolResult: execution.canonical,
               };
             },
           }),
