@@ -48,14 +48,15 @@ export const ragIndexHandler: ToolHandler = async (
   switch (action) {
     case 'status': {
       const status = getStatus(projectPath);
-      const lines = [
-        'RAG Index Status:',
-        `  Total chunks: ${status.totalChunks}`,
-        `  Total files: ${status.totalFiles}`,
-        `  Last indexed: ${status.lastIndexed ?? 'never'}`,
-        `  Last index duration: ${status.lastIndexDuration != null ? status.lastIndexDuration.toFixed(1) + 's' : 'N/A'}`,
-      ];
-      return genericBuiltInToolOutcome('rag_index', lines.join('\n'));
+      return genericBuiltInToolOutcome('rag_index', {
+        action: 'status',
+        totalChunks: status.totalChunks,
+        totalFiles: status.totalFiles,
+        lastIndexed: status.lastIndexed ?? 'never',
+        lastDuration: status.lastIndexDuration != null
+          ? status.lastIndexDuration.toFixed(1) + 's'
+          : 'N/A',
+      });
     }
 
     case 'index': {
@@ -68,30 +69,21 @@ export const ragIndexHandler: ToolHandler = async (
         undefined,
         { config: ctx.projectRuntime?.config },
       );
-      const lines = [
-        'RAG Index Complete:',
-        `  Files scanned: ${result.filesScanned}`,
-        `  Files indexed: ${result.filesIndexed}`,
-        `  Files skipped: ${result.filesSkipped}`,
-        `  Files deleted: ${result.filesDeleted}`,
-        `  Chunks created: ${result.chunksCreated}`,
-        `  Duration: ${result.durationSeconds.toFixed(1)}s`,
-      ];
-      if (result.errors.length > 0) {
-        lines.push(`  Errors: ${result.errors.length}`);
-        for (const err of result.errors.slice(0, 5)) {
-          lines.push(`    - ${err}`);
-        }
-        if (result.errors.length > 5) {
-          lines.push(`    ... and ${result.errors.length - 5} more`);
-        }
-      }
-      return genericBuiltInToolOutcome('rag_index', lines.join('\n'));
+      return genericBuiltInToolOutcome('rag_index', {
+        action: 'index',
+        filesScanned: result.filesScanned,
+        filesIndexed: result.filesIndexed,
+        filesSkipped: result.filesSkipped,
+        filesDeleted: result.filesDeleted,
+        chunksCreated: result.chunksCreated,
+        duration: result.durationSeconds.toFixed(1) + 's',
+        errors: result.errors.length,
+      });
     }
 
     case 'clear': {
       clearIndex(projectPath);
-      return genericBuiltInToolOutcome('rag_index', 'RAG index cleared.');
+      return genericBuiltInToolOutcome('rag_index', { action: 'clear' });
     }
 
     default:

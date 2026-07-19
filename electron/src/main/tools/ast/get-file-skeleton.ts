@@ -13,7 +13,6 @@ import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { resolveToolPath } from '../types';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from '../../ast/parser';
-import { xmlAttr, extractCallNames } from './utils';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -52,8 +51,9 @@ export const getFileSkeletonHandler: ToolHandler = async (input: unknown, ctx) =
 
   try {
     if (!fs.existsSync(file_path)) {
-      return genericBuiltInToolOutcome('get_file_skeleton', `<ast_error tool="get_file_skeleton" file="${xmlAttr(file_path)}">` +
-          `File not found: ${file_path}</ast_error>`, 'error');
+      return genericBuiltInToolOutcome('get_file_skeleton',
+        { error: 'File not found: ' + file_path, file: file_path },
+        'error', 'tool_error', 'File not found: ' + file_path);
     }
 
     const langName = langForExtension(file_path);
@@ -63,80 +63,27 @@ export const getFileSkeletonHandler: ToolHandler = async (input: unknown, ctx) =
 
     try {
       const captures = await runQuery(tree, langName, queryText, content);
-
-      const definitions: Array<{ lineNum: number; name: string; parentNode: any }> = []; // eslint-disable-line @typescript-eslint/no-explicit-any
-
-      for (const [capName, results] of Object.entries(captures)) {
-        if (capName.startsWith('name.definition.')) {
-          for (const r of results) {
-            // Get parent node for line range and call extraction
-            // We need to traverse the tree to find the parent
-            definitions.push({
-              lineNum: r.startLine,
-              name: r.text,
-              parentNode: null, // Will be resolved below
-            });
-          }
-        }
-      }
-
-      if (definitions.length === 0) {
-        return genericBuiltInToolOutcome('get_file_skeleton', `<file_skeleton file="${xmlAttr(file_path)}" definitions="0">\n` +
-            'No definitions found.\n</file_skeleton>', 'complete');
-      }
-
-      // Sort by line number
-      definitions.sort((a, b) => a.lineNum - b.lineNum);
-
-      // For call extraction, we need to walk the tree
-      // Re-run with parent node resolution
       const definitionsWithParents = resolveParentNodes(tree, content, captures);
+      const totalLines = content.split('\n').length;
 
-      const lines: string[] = [];
-      lines.push(
-        `<file_skeleton file="${xmlAttr(file_path)}" definitions="${definitionsWithParents.length}">`,
-      );
+      const structuredDefinitions = definitionsWithParents.map((def) => ({
+        line: def.lineNum + 1,
+        name: def.name,
+        lineCount: def.parentEndLine === undefined ? 0 : def.parentEndLine - def.lineNum,
+      }));
 
-      let prevLine: number | null = null;
-      for (const def of definitionsWithParents) {
-        if (prevLine !== null && def.lineNum > prevLine + 1) {
-          lines.push('  |----');
-        }
-
-        let callsStr = '';
-        let lineCountStr = '';
-
-        if (def.parentEndLine !== undefined) {
-          const lineCount = def.parentEndLine - (def.lineNum + 1);
-          lineCountStr = `  # Lines: ${lineCount}`;
-          const calls = extractCallNames(def.parentNode, content);
-          const filteredCalls = calls.filter((c) => c !== def.name);
-          if (filteredCalls.length > 0) {
-            callsStr = `  # Calls: [${filteredCalls.join(', ')}]`;
-          }
-        }
-
-        lines.push(
-          `  ${String(def.lineNum + 1).padStart(4)} | ${def.name}${callsStr}${lineCountStr}`,
-        );
-
-        prevLine = def.lineNum;
-      }
-
-      lines.push('</file_skeleton>');
-
-      return genericBuiltInToolOutcome('get_file_skeleton', lines.join('\n'), 'complete');
+      return genericBuiltInToolOutcome('get_file_skeleton', {
+        file: file_path,
+        definitions: structuredDefinitions,
+        totalLines,
+      }, 'complete');
     } finally {
       tree.delete();
     }
   } catch (err) {
-    if (err instanceof Error && err.message.includes('Unsupported file extension')) {
-      return genericBuiltInToolOutcome('get_file_skeleton', `<ast_error tool="get_file_skeleton" file="${xmlAttr(file_path)}">` +
-          `${err.message}</ast_error>`, 'error');
-    }
     const msg = err instanceof Error ? err.message : String(err);
-    return genericBuiltInToolOutcome('get_file_skeleton', `<ast_error tool="get_file_skeleton" file="${xmlAttr(file_path)}">` +
-        `${msg}</ast_error>`, 'error');
+    return genericBuiltInToolOutcome('get_file_skeleton',
+      { error: msg, file: file_path }, 'error', 'tool_error', msg);
   }
 };
 

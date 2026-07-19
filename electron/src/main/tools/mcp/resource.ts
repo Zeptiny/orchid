@@ -9,13 +9,21 @@
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { genericToolResultMetadata } from '../types';
-import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
+import { type GenericBuiltInToolOutcome } from '../result';
+import { createDynamicToolOutcome } from '../../../shared/types/tool-result';
 import type { MCPManager } from '../../mcp/manager';
 
 /**
  * Result returned by the MCP resource tool handler.
  */
 export type McpResourceResult = GenericBuiltInToolOutcome;
+
+function mcpResourceOutcome(
+  value: unknown,
+  options: Parameters<typeof createDynamicToolOutcome>[3] = {},
+): McpResourceResult {
+  return createDynamicToolOutcome('read_mcp_resource', value, 'mcp', options);
+}
 
 /**
  * Build the read_mcp_resource tool.
@@ -46,7 +54,11 @@ export function buildMcpResourceTool(
 
     const serverName = manager.getResourceServer(uri);
     if (serverName === undefined) {
-      return genericBuiltInToolOutcome('read_mcp_resource', `Error: No MCP server found for URI '${uri}'.`, 'error');
+      return mcpResourceOutcome(`Error: No MCP server found for URI '${uri}'.`, {
+        status: 'error',
+        errorCode: 'mcp_resource_not_found',
+        errorMessage: `Error: No MCP server found for URI '${uri}'.`,
+      });
     }
 
     try {
@@ -54,12 +66,20 @@ export function buildMcpResourceTool(
         signal: ctx?.abortSignal,
       });
       if (typeof content === 'string' && content.startsWith('Error:')) {
-        return genericBuiltInToolOutcome('read_mcp_resource', content, 'error');
+        return mcpResourceOutcome(content, {
+          status: 'error',
+          errorCode: 'mcp_resource_error',
+          errorMessage: content,
+        });
       }
-      return genericBuiltInToolOutcome('read_mcp_resource', content, 'complete');
+      return mcpResourceOutcome({ uri, content }, { status: 'complete' });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return genericBuiltInToolOutcome('read_mcp_resource', `Error reading MCP resource: ${message}`, 'error');
+      return mcpResourceOutcome(`Error reading MCP resource: ${message}`, {
+        status: 'error',
+        errorCode: 'mcp_resource_error',
+        errorMessage: `Error reading MCP resource: ${message}`,
+      });
     }
   };
 

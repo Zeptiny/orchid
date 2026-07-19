@@ -466,10 +466,9 @@ describe('executeToolCall', () => {
       status: 'complete',
       data: { value: 'Echo: hello' },
     });
-    expect(result.agentProjection).toEqual({
-      content: 'Echo: hello',
-      completeness: 'complete',
-    });
+    expect(result.agentProjection).toMatchObject({ completeness: 'complete' });
+    expect(result.agentProjection.content).toContain('<tool_result name="echo" status="complete">');
+    expect(result.agentProjection.content).toContain('<data>Echo: hello</data>');
   });
 
   it('validates typed canonical data before returning the execution wrapper', async () => {
@@ -707,7 +706,7 @@ describe('executeToolCall', () => {
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.canonical.status).toBe('complete');
-    expect(result.agentProjection.content).toBe('Echo: hi x1');
+    expect(result.agentProjection.content).toContain('<data>Echo: hi x1</data>');
     expect(handler).toHaveBeenCalledWith(
       { text: 'hi', count: 1 },
       expect.objectContaining({ cwd: TEST_TOOL_CWD }),
@@ -799,7 +798,7 @@ describe('executeToolCall', () => {
         timeoutSeconds: 0.001,
       });
 
-      expect(result.agentProjection.content).toBe('ok');
+      expect(result.agentProjection.content).toContain('<data>ok</data>');
     });
 
     it('applies outer timeout to wait_for_subagent (not in TOOLS_WITHOUT_TIMEOUT)', async () => {
@@ -845,7 +844,7 @@ describe('executeToolCall', () => {
         timeoutSeconds: 0.001,
       });
 
-      expect(result.agentProjection.content).toBe('output');
+      expect(result.agentProjection.content).toContain('<data>output</data>');
     });
 
     it('aborts tool context signal on outer timeout so process tools can kill children', async () => {
@@ -1155,6 +1154,8 @@ describe('ToolRegistry integration with dispatch', () => {
           name,
           description: `MCP tool ${index}`,
           inputSchema: z.object({ query: z.string().optional() }),
+          resultFamily: 'generic',
+          outputDataSchema: genericToolResultDataSchema,
           category: 'mcp',
         },
         handler: vi.fn(async (input: unknown, ctx: { abortSignal?: AbortSignal }) =>
@@ -1182,13 +1183,17 @@ describe('ToolRegistry integration with dispatch', () => {
     const routedMcpTool = firstBuild[aliases[0]] as unknown as {
       execute: (input: unknown) => Promise<ToolExecutionResult>;
     };
-    await routedMcpTool.execute({ query: 'routing check' });
+    const routedResult = await routedMcpTool.execute({ query: 'routing check' });
 
     expect(callTool).toHaveBeenCalledWith(
       internalNames[0],
       { query: 'routing check' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+    expect(routedResult.agentProjection.content).toContain(
+      '<tool_result name="mcp::context7::query.docs"',
+    );
+    expect(routedResult.agentProjection.content).not.toContain(aliases[0]);
   });
 });
 
@@ -1466,7 +1471,7 @@ describe('streamChat', () => {
       expect.objectContaining({
         type: 'tool_result',
         toolCallId: 'tc-err',
-        content: 'Tool boom',
+        content: expect.stringContaining('Tool boom'),
         execution: expect.objectContaining({ canonical: expect.objectContaining({ status: 'error' }) }),
       }),
       expect.objectContaining({
@@ -1597,7 +1602,7 @@ describe('streamChat', () => {
       expect.objectContaining({
         type: 'tool_result',
         toolCallId: 'tc-bad',
-        content: 'Invalid tool input',
+        content: expect.stringContaining('Invalid tool input'),
         execution: expect.objectContaining({ canonical: expect.objectContaining({ status: 'error' }) }),
       }),
     ]);
@@ -1642,7 +1647,7 @@ describe('streamChat', () => {
     expect(results[0]).toMatchObject({
       type: 'tool_result',
       toolCallId: 'tc-sdk-error',
-      content: sdkError,
+      content: expect.stringContaining(sdkError),
       execution: {
         canonical: {
           family: 'generic',
@@ -1650,7 +1655,7 @@ describe('streamChat', () => {
           error: { code: 'sdk_tool_error', message: sdkError },
         },
         agentProjection: {
-          content: sdkError,
+          content: expect.stringContaining(sdkError),
           completeness: 'complete',
         },
       },

@@ -64,7 +64,11 @@ export function buildInterruptTool(
         return genericBuiltInToolOutcome('interrupt_subagents', 'No running subagents found to interrupt.', 'empty');
       }
 
-      return genericBuiltInToolOutcome('interrupt_subagents', `Interrupted subagents: ${cancelled.join(', ')}`, 'complete');
+      return genericBuiltInToolOutcome('interrupt_subagents', {
+        interrupted: cancelled,
+        already_finished: [],
+        not_found: [],
+      }, 'complete');
     }
 
     // Cancel specific subagents by ID
@@ -85,25 +89,13 @@ export function buildInterruptTool(
       }
     }
 
-    // Build status message
-    const parts: string[] = [];
-    if (cancelled.length > 0) {
-      parts.push(`Interrupted: ${cancelled.join(', ')}`);
-    }
-    if (alreadyDone.length > 0) {
-      parts.push(`Already finished: ${alreadyDone.join(', ')}`);
-    }
-    if (notFound.length > 0) {
-      parts.push(`Not found: ${notFound.join(', ')}`);
-    }
-
-    const content = parts.length > 0
-      ? parts.join('. ') + '.'
-      : 'No subagents matched.';
-
     return genericBuiltInToolOutcome(
       'interrupt_subagents',
-      content,
+      {
+        interrupted: cancelled,
+        already_finished: alreadyDone,
+        not_found: notFound,
+      },
       cancelled.length > 0 ? 'complete' : 'empty',
     );
   };

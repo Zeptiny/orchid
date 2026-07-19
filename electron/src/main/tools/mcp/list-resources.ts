@@ -45,17 +45,17 @@ export function buildListMcpResourcesTool(
     }
 
     if (resources.length === 0) {
-      return genericBuiltInToolOutcome('list_mcp_resources', 'No MCP resources available. Connect MCP servers that expose resources.', 'empty');
+      return genericBuiltInToolOutcome('list_mcp_resources', { resources: [] }, 'empty');
     }
 
-    const lines = resources.map((r) => {
-      const parts = [`uri=${r.uri}`, `server=${r.server}`];
-      if (r.name) parts.push(`name=${r.name}`);
-      if (r.description) parts.push(`description=${r.description}`);
-      return parts.join(' | ');
-    });
-
-    return genericBuiltInToolOutcome('list_mcp_resources', lines.join('\n'), 'complete');
+    return genericBuiltInToolOutcome('list_mcp_resources', {
+      resources: resources.map((resource) => ({
+        uri: resource.uri,
+        server: resource.server,
+        ...(resource.name ? { name: resource.name } : {}),
+        ...(resource.description ? { description: resource.description } : {}),
+      })),
+    }, 'complete');
   };
 
   return { definition, handler };

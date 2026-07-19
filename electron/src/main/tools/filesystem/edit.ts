@@ -73,7 +73,7 @@ export const editHandler: ToolHandler = async (input: unknown, ctx) => {
     content = fs.readFileSync(filePath, 'utf-8');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return errorOutcome(filePath, `Error reading file ${filePath}: ${message}`, 'read_failed');
+    return errorOutcome(filePath, `Error reading file ${filePath}: ${message}`, 'read_failed', '');
   }
 
   if (old_string === '') {

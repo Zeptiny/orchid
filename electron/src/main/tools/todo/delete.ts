@@ -57,7 +57,10 @@ export function buildDeleteTool(
       await notifyChanged(ctx);
     }
 
-    return genericBuiltInToolOutcome('todo_delete', `Task '${task.id}' (${task.title}) deleted successfully.`, 'complete');
+    return genericBuiltInToolOutcome('todo_delete', {
+      taskId: task.id,
+      title: task.title,
+    }, 'complete');
   };
 
   return { definition, handler };

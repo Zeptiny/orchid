@@ -118,29 +118,15 @@ export function resolveSkillDependencies(
  * Mirrors Python `_format_resource_listing`.
  */
 function formatResourceListing(skill: Skill): string {
-  // Group resources by directory prefix
-  const groups = new Map<string, Array<{ path: string; description: string }>>();
-
-  for (const resource of skill.resources) {
-    const slashIdx = resource.path.indexOf('/');
-    const label =
-      slashIdx > 0 ? resource.path.slice(0, slashIdx) : 'other';
-    if (!groups.has(label)) {
-      groups.set(label, []);
-    }
-    groups.get(label)!.push(resource);
-  }
-
-  const sections: string[] = [];
-  for (const [label, resources] of groups) {
-    const lines = resources.map((r) =>
-      r.description ? `- ${r.path} — ${r.description}` : `- ${r.path}`,
-    );
-    sections.push(`<${label}>\n${lines.join('\n')}\n</${label}>`);
-  }
-
-  if (sections.length === 0) return '';
-  return `<skill_resources>\n${sections.join('\n')}\n</skill_resources>`;
+  if (skill.resources.length === 0) return '<resources />';
+  const lines = skill.resources.map((resource) =>
+    `<resource path="${escapeXml(resource.path)}"` +
+    (resource.description
+      ? ` description="${escapeXml(resource.description)}"`
+      : '') +
+    ' />',
+  );
+  return `<resources count="${lines.length}">\n${lines.join('\n')}\n</resources>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -234,9 +220,9 @@ function executeResourceRead(
 
   const e = escapeXml;
   const content =
-    `<skill_resource skill="${e(skillName)}" path="${e(resourcePath)}">\n` +
-    `${e(fileContent)}\n` +
-    `</skill_resource>`;
+    `<resource skill="${e(skillName)}" path="${e(resourcePath)}">\n` +
+    `<content>${e(fileContent)}</content>\n` +
+    `</resource>`;
 
   return genericBuiltInToolOutcome('skill', content, 'complete');
 }
@@ -296,9 +282,9 @@ function executeSkill(
       skill.content ??
       `Skill '${skill.name}' loaded (no content file found)`;
     parts.push(
-      `<skill_content name="${e(skill.name)}">\n` +
+      `<instructions skill="${e(skill.name)}">\n` +
         `${e(skillContent)}\n` +
-        `</skill_content>`,
+        `</instructions>`,
     );
 
     const resourceListing = formatResourceListing(skill);

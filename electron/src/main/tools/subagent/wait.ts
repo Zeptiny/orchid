@@ -10,7 +10,7 @@
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { genericToolResultMetadata } from '../types';
-import { genericBuiltInToolOutcome } from '../result';
+import { escapeXmlAttribute, escapeXmlText, genericBuiltInToolOutcome } from '../result';
 import {
   DEFAULT_WAIT_TIMEOUT_MS,
   SubagentWaitTimeoutError,
@@ -118,24 +118,28 @@ export function buildWaitTool(
           : null;
 
       const attrs =
-        `id="${sid}" name="${record.label}" type="${record.agent.type}" ` +
-        `status="${record.state}"` +
-        (elapsed !== null ? ` elapsed="${formatElapsed(elapsed)}"` : '');
+        'id="' + escapeXmlAttribute(sid) +
+        '" name="' + escapeXmlAttribute(record.label) +
+        '" type="' + escapeXmlAttribute(record.agent.type) +
+        '" status="' + escapeXmlAttribute(record.state) + '"' +
+        (elapsed !== null ? ' elapsed="' + escapeXmlAttribute(formatElapsed(elapsed)) + '"' : '');
 
       const taskBlock = record.task
-        ? `<task>\n${record.task}\n</task>`
+        ? '<task>' + escapeXmlText(record.task) + '</task>'
         : '';
 
       if (record.result) {
         parts.push(
-          `<subagent ${attrs}>\n${taskBlock}\n<result>\n${record.result}\n</result>\n</subagent>`,
+          '<subagent ' + attrs + '>' + taskBlock +
+            '<result>' + escapeXmlText(record.result) + '</result></subagent>',
         );
       } else if (record.error) {
         parts.push(
-          `<subagent ${attrs}>\n${taskBlock}\n<error>\n${record.error}\n</error>\n</subagent>`,
+          '<subagent ' + attrs + '>' + taskBlock +
+            '<error>' + escapeXmlText(record.error) + '</error></subagent>',
         );
       } else {
-        parts.push(`<subagent ${attrs}>\n${taskBlock}\n</subagent>`);
+        parts.push('<subagent ' + attrs + '>' + taskBlock + '</subagent>');
       }
     }
 
@@ -143,10 +147,10 @@ export function buildWaitTool(
     const foundIds = new Set(records.keys());
     const missing = subagent_ids.filter((id) => !foundIds.has(id));
     const missingBlock = missing.length > 0
-      ? `\n<not_found>${missing.join(', ')}</not_found>`
+      ? '<not_found>' + escapeXmlText(missing.join(', ')) + '</not_found>'
       : '';
 
-    const content = `<subagents>\n${parts.join('\n')}\n</subagents>${missingBlock}`;
+    const content = '<subagents>' + parts.join('\n') + missingBlock + '</subagents>';
 
     return genericBuiltInToolOutcome('wait_for_subagent', content, 'complete');
   };

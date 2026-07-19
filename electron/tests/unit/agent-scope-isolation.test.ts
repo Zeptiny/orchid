@@ -78,14 +78,14 @@ describe('todo tools agent isolation', () => {
 
     const listA = await list.handler({}, ctx('sub-a'));
     expect(listA.status).toBe('complete');
-    expect(String(listA.data.value)).toContain('SubA task');
-    expect(String(listA.data.value)).not.toContain('Main task');
-    expect(String(listA.data.value)).not.toContain('SubB task');
+    expect(JSON.stringify(listA.data.value)).toContain('SubA task');
+    expect(JSON.stringify(listA.data.value)).not.toContain('Main task');
+    expect(JSON.stringify(listA.data.value)).not.toContain('SubB task');
 
     const listMain = await list.handler({}, ctx('main'));
     expect(listMain.status).toBe('complete');
-    expect(String(listMain.data.value)).toContain('Main task');
-    expect(String(listMain.data.value)).not.toContain('SubA task');
+    expect(JSON.stringify(listMain.data.value)).toContain('Main task');
+    expect(JSON.stringify(listMain.data.value)).not.toContain('SubA task');
 
     const subATodos = store.list().filter((t) => t.subagent_id === 'sub-a');
     const subBTodos = store.list().filter((t) => t.subagent_id === 'sub-b');

@@ -576,18 +576,24 @@ describe('get_file_skeleton', () => {
     fs.writeFileSync(filePath, SAMPLE_PYTHON);
     const { getFileSkeletonHandler } = await import('../../src/main/tools/ast/get-file-skeleton');
     const result = await getFileSkeletonHandler({ file_path: filePath }, { cwd: tmpDir }) as any;
-    expect(outputText(result)).toContain('<file_skeleton');
-    expect(outputText(result)).toContain('greet');
-    expect(outputText(result)).toContain('Calculator');
-    expect(outputText(result)).toContain('process_data');
-    expect(outputText(result)).toMatch(/\d+\s*\|/);
+    const value = result.data.value;
+    expect(value.definitions).toBeInstanceOf(Array);
+    expect(value.definitions.length).toBeGreaterThan(0);
+    const names = value.definitions.map((d: any) => d.name);
+    expect(names).toContain('greet');
+    expect(names).toContain('Calculator');
+    expect(names).toContain('process_data');
+    for (const def of value.definitions) {
+      expect(def).toHaveProperty('line');
+      expect(def).toHaveProperty('lineCount');
+    }
   });
 
   it('should return error for non-existent file', async () => {
     const { getFileSkeletonHandler } = await import('../../src/main/tools/ast/get-file-skeleton');
     const result = await getFileSkeletonHandler({ file_path: '/nonexistent.py' }, { cwd: tmpDir }) as any;
     expect(outputText(result)).toContain('File not found');
-    expect(outputText(result)).toContain('ast_error');
+    expect(result.data.value).toHaveProperty('error');
   });
 
   it('should return error for unsupported file type', async () => {
@@ -598,12 +604,15 @@ describe('get_file_skeleton', () => {
     expect(outputText(result)).toContain('Unsupported file extension');
   });
 
-  it('should show visual separators between non-contiguous definitions', async () => {
+  it('should return definitions with correct line numbers for non-contiguous definitions', async () => {
     const filePath = path.join(tmpDir, 'test.py');
     fs.writeFileSync(filePath, 'def foo():\n    pass\n\ndef bar():\n    pass\n');
     const { getFileSkeletonHandler } = await import('../../src/main/tools/ast/get-file-skeleton');
     const result = await getFileSkeletonHandler({ file_path: filePath }, { cwd: tmpDir }) as any;
-    expect(outputText(result)).toContain('|----');
+    const value = result.data.value;
+    const bar = value.definitions.find((d: any) => d.name === 'bar');
+    expect(bar).toBeDefined();
+    expect(bar.line).toBe(4);
   });
 });
 
@@ -667,7 +676,7 @@ describe('find_symbol_references', () => {
       await indexProject({ projectPath: projectDir, inline: true });
       const { findSymbolReferencesHandler } = await import('../../src/main/tools/ast/find-symbol-references');
       const result = await findSymbolReferencesHandler({ symbol_name: 'greet' }, { cwd: projectDir }) as any;
-      expect(outputText(result)).toContain('symbol_references');
+      expect(outputText(result)).toContain('<references');
       expect(outputText(result)).toContain('test.py');
     } finally { process.cwd = origCwd; }
   });
@@ -691,14 +700,14 @@ describe('find_symbol_references', () => {
   it('should return error for empty symbol name', async () => {
     const { findSymbolReferencesHandler } = await import('../../src/main/tools/ast/find-symbol-references');
     const result = await findSymbolReferencesHandler({ symbol_name: '' }, { cwd: tmpDir }) as any;
-    expect(outputText(result)).toContain('ast_error');
+    expect(result.data.value).toHaveProperty('error');
   });
 });
 
 // ── Tool: replace_symbol ──────────────────────────────────────────────────
 
 describe('replace_symbol', () => {
-  it('should replace a function body and produce a diff', async () => {
+  it('should replace a function body and report old/new source', async () => {
     const filePath = path.join(tmpDir, 'test.py');
     fs.writeFileSync(filePath, SAMPLE_PYTHON);
     const { replaceSymbolHandler } = await import('../../src/main/tools/ast/replace-symbol');
@@ -706,19 +715,23 @@ describe('replace_symbol', () => {
       file_path: filePath, symbol_name: 'greet',
       new_source: 'def greet(name):\n    """Custom greeting."""\n    return f"Hi, {name}!"',
     }, { cwd: tmpDir }) as any;
-    expect(outputText(result)).toContain('<edit_result');
-    expect(outputText(result)).toContain('success="true"');
+    const value = result.data.value;
+    expect(value.success).toBe(true);
+    expect(value.replacements).toBeGreaterThan(0);
+    expect(value.items).toBeInstanceOf(Array);
+    expect(value.items[0]).toHaveProperty('oldString');
+    expect(value.items[0]).toHaveProperty('newString');
     expect(fs.readFileSync(filePath, 'utf-8')).toContain('Hi,');
   });
 
-  it('should produce a unified diff', async () => {
+  it('should not produce a unified diff', async () => {
     const filePath = path.join(tmpDir, 'test.py');
     fs.writeFileSync(filePath, SAMPLE_PYTHON);
     const { replaceSymbolHandler } = await import('../../src/main/tools/ast/replace-symbol');
     const result = await replaceSymbolHandler({
       file_path: filePath, symbol_name: 'greet', new_source: 'def greet(name):\n    return "hi"',
     }, { cwd: tmpDir }) as any;
-    expect(outputText(result)).toContain('diff format="unified"');
+    expect(outputText(result)).not.toContain('diff format="unified"');
   });
 
   it('should return error for ambiguous symbol', async () => {
@@ -786,12 +799,12 @@ describe('rename_symbol', () => {
   it('should return error for empty symbol name', async () => {
     const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
     const result = await renameSymbolHandler({ old_name: '', new_name: 'x' }, { cwd: tmpDir }) as any;
-    expect(outputText(result)).toContain('ast_error');
+    expect(result.data.value).toHaveProperty('error');
   });
 
   it('should return error for empty new name', async () => {
     const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
     const result = await renameSymbolHandler({ old_name: 'x', new_name: '' }, { cwd: tmpDir }) as any;
-    expect(outputText(result)).toContain('ast_error');
+    expect(result.data.value).toHaveProperty('error');
   });
 });

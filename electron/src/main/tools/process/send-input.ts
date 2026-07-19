@@ -63,7 +63,10 @@ export async function executeSendInput(
   // Record user input time
   entry.lastUserInputAt = Date.now();
 
-  return genericBuiltInToolOutcome('send_input', `Input sent to command ${id}`, 'complete');
+  return genericBuiltInToolOutcome('send_input', {
+    commandId: id,
+    input: text,
+  }, 'complete');
 }
 
 // ---------------------------------------------------------------------------

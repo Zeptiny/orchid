@@ -63,9 +63,11 @@ export async function executeReadOutput(
   }
 
   const { tail, exitCode } = result;
-  const exitLine = exitCode !== null ? `\nExit code: ${exitCode}` : '';
-
-  return genericBuiltInToolOutcome('read_output', tail + exitLine, 'complete');
+  return genericBuiltInToolOutcome('read_output', {
+    commandId: id,
+    output: tail,
+    ...(exitCode === null ? {} : { exitCode }),
+  }, 'complete');
 }
 
 // ---------------------------------------------------------------------------

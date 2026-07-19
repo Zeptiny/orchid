@@ -92,11 +92,11 @@ describe('Todo Tools', () => {
       })) as ToolExecutionResult;
 
       expect(result.canonical.status).toBe('complete');
-      expect(result.agentProjection.content).toContain('Task created successfully');
-      expect(result.agentProjection.content).toContain('Status: OPEN');
+      expect(result.agentProjection.content).toContain('<task id=');
+      expect(result.agentProjection.content).toContain('status="OPEN"');
 
       // Extract ID from content
-      const idMatch = result.agentProjection.content.match(/ID: ([a-f0-9]{8})/);
+      const idMatch = result.agentProjection.content.match(/<task id="([a-f0-9]{8})"/);
       expect(idMatch).not.toBeNull();
       const id = idMatch![1];
 
@@ -118,7 +118,7 @@ describe('Todo Tools', () => {
         subagent_id: 'sub-123',
       })) as ToolExecutionResult;
 
-      const idMatch = result.agentProjection.content.match(/ID: ([a-f0-9]{8})/);
+      const idMatch = result.agentProjection.content.match(/<task id="([a-f0-9]{8})"/);
       const id = idMatch![1];
       const task = store.get(id);
       expect(task!.subagent_id).toBe('sub-123');
@@ -132,7 +132,7 @@ describe('Todo Tools', () => {
         const result = (await callTool(handler, {
           title: `Task ${i}`,
         })) as ToolExecutionResult;
-        const idMatch = result.agentProjection.content.match(/ID: ([a-f0-9]{8})/);
+        const idMatch = result.agentProjection.content.match(/<task id="([a-f0-9]{8})"/);
         expect(idMatch).not.toBeNull();
         ids.add(idMatch![1]);
       }
@@ -150,7 +150,7 @@ describe('Todo Tools', () => {
       const createResult = (await callTool(createHandler, {
         title: 'Original',
       })) as ToolExecutionResult;
-      const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
+      const id = createResult.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
 
       const updateHandler = buildUpdateTool(store, notifyChanged).handler;
       const result = (await callTool(updateHandler, {
@@ -159,7 +159,7 @@ describe('Todo Tools', () => {
       })) as ToolExecutionResult;
 
       expect(result.canonical.status).toBe('complete');
-      expect(result.agentProjection.content).toContain('Title: Updated');
+      expect(result.agentProjection.content).toContain('<title>Updated</title>');
       expect(store.get(id)!.title).toBe('Updated');
       expect(notifyCalled).toBe(true);
     });
@@ -169,7 +169,7 @@ describe('Todo Tools', () => {
       const createResult = (await callTool(createHandler, {
         title: 'Test',
       })) as ToolExecutionResult;
-      const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
+      const id = createResult.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
 
       const updateHandler = buildUpdateTool(store).handler;
       const result = (await callTool(updateHandler, {
@@ -177,7 +177,7 @@ describe('Todo Tools', () => {
         status: 'in_progress',
       })) as ToolExecutionResult;
 
-      expect(result.agentProjection.content).toContain('Status: IN_PROGRESS');
+      expect(result.agentProjection.content).toContain('<status>IN_PROGRESS</status>');
       expect(store.get(id)!.status).toBe(TodoStatus.IN_PROGRESS);
     });
 
@@ -186,7 +186,7 @@ describe('Todo Tools', () => {
       const createResult = (await callTool(createHandler, {
         title: 'Test',
       })) as ToolExecutionResult;
-      const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
+      const id = createResult.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
 
       const updateHandler = buildUpdateTool(store).handler;
 
@@ -199,7 +199,7 @@ describe('Todo Tools', () => {
         status: 'done',
       })) as ToolExecutionResult;
 
-      expect(result.agentProjection.content).toContain('Status: DONE');
+      expect(result.agentProjection.content).toContain('<status>DONE</status>');
       expect(store.get(id)!.status).toBe(TodoStatus.DONE);
     });
 
@@ -208,7 +208,7 @@ describe('Todo Tools', () => {
       const createResult = (await callTool(createHandler, {
         title: 'Test',
       })) as ToolExecutionResult;
-      const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
+      const id = createResult.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
 
       const updateHandler = buildUpdateTool(store).handler;
 
@@ -232,7 +232,7 @@ describe('Todo Tools', () => {
       const createResult = (await callTool(createHandler, {
         title: 'Test',
       })) as ToolExecutionResult;
-      const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
+      const id = createResult.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
 
       const updateHandler = buildUpdateTool(store).handler;
       const result = (await callTool(updateHandler, {
@@ -249,7 +249,7 @@ describe('Todo Tools', () => {
       const createResult = (await callTool(createHandler, {
         title: 'Test',
       })) as ToolExecutionResult;
-      const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
+      const id = createResult.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
 
       const updateHandler = buildUpdateTool(store).handler;
       const result = (await callTool(updateHandler, {
@@ -302,7 +302,7 @@ describe('Todo Tools', () => {
       const r2 = (await callTool(createHandler, { title: 'Progress task' })) as {
         content: string;
       };
-      const id2 = r2.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
+      const id2 = r2.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
 
       const updateHandler = buildUpdateTool(store).handler;
       await callTool(updateHandler, { id: id2, status: 'in_progress' });
@@ -355,7 +355,7 @@ describe('Todo Tools', () => {
       };
 
       expect(result.canonical.status).toBe('empty');
-      expect(result.agentProjection.content).toContain('No tasks for agent scope');
+      expect(result.agentProjection.content).toContain('<tasks scope="main" count="0"');
     });
 
     it('should reject invalid status filter', async () => {
@@ -377,7 +377,7 @@ describe('Todo Tools', () => {
       const createResult = (await callTool(createHandler, {
         title: 'To delete',
       })) as ToolExecutionResult;
-      const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
+      const id = createResult.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
 
       const deleteHandler = buildDeleteTool(store, notifyChanged).handler;
       const result = (await callTool(deleteHandler, { id })) as {
@@ -386,7 +386,7 @@ describe('Todo Tools', () => {
       };
 
       expect(result.canonical.status).toBe('complete');
-      expect(result.agentProjection.content).toContain('deleted successfully');
+      expect(result.agentProjection.content).toContain('<deleted task_id="');
       expect(store.get(id)).toBeUndefined();
       expect(notifyCalled).toBe(true);
     });
@@ -411,7 +411,7 @@ describe('Todo Tools', () => {
       const createResult = (await callTool(buildCreateTool(store, notifyChanged).handler, {
         title: 'Lifecycle task',
       })) as ToolExecutionResult;
-      const id = createResult.agentProjection.content.match(/ID: ([a-f0-9]{8})/)![1];
+      const id = createResult.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
       expect(store.get(id)!.status).toBe(TodoStatus.OPEN);
 
       // Update: OPEN → IN_PROGRESS
@@ -531,7 +531,7 @@ describe('Web Fetch Tools', () => {
 
           expect(result.canonical.status).toBe('complete');
           expect(result.canonical.status).toBe('complete');
-          expect(result.agentProjection.content).toContain('<web_fetch_raw');
+          expect(result.agentProjection.content).toContain('<page ');
           expect(mockFetch).toHaveBeenCalledWith(
             url,
             expect.objectContaining({ redirect: 'follow' }),
@@ -561,7 +561,7 @@ describe('Web Fetch Tools', () => {
         })) as ToolExecutionResult;
 
         expect(result.canonical.status).toBe('complete');
-        expect(result.agentProjection.content).toContain('<web_fetch_raw');
+        expect(result.agentProjection.content).toContain('<page ');
         expect(result.agentProjection.content).toContain('Hello');
       } finally {
         globalThis.fetch = originalFetch;
@@ -588,7 +588,7 @@ describe('Web Fetch Tools', () => {
         })) as ToolExecutionResult;
 
         expect(result.canonical.status).toBe('complete');
-        expect(result.agentProjection.content).toContain('<web_fetch_raw');
+        expect(result.agentProjection.content).toContain('<page ');
       } finally {
         globalThis.fetch = originalFetch;
       }
@@ -613,7 +613,7 @@ describe('Web Fetch Tools', () => {
           mode: 'invalid',
         })) as ToolExecutionResult;
 
-        expect(result.agentProjection.content).toContain('<web_fetch_raw');
+        expect(result.agentProjection.content).toContain('<page ');
       } finally {
         globalThis.fetch = originalFetch;
       }
@@ -709,7 +709,7 @@ describe('Web Fetch Tools', () => {
         })) as ToolExecutionResult;
 
         expect(result.canonical.status).toBe('complete');
-        expect(result.agentProjection.content).toContain('<web_fetch_raw');
+        expect(result.agentProjection.content).toContain('<page ');
         expect(result.agentProjection.content).toContain('Hello world');
         expect(result.agentProjection.content).toContain('Small Page');
       } finally {
@@ -743,7 +743,7 @@ describe('Web Fetch Tools', () => {
         )) as ToolExecutionResult;
 
         expect(result.canonical.status).toBe('complete');
-        expect(result.agentProjection.content).toContain('<web_fetch_raw');
+        expect(result.agentProjection.content).toContain('<page ');
         expect(result.agentProjection.content).toContain('warning');
         expect(result.agentProjection.content).toContain('cache');
         expect(result.agentProjection.content).toContain('test-session');

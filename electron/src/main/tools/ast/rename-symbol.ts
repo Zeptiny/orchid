@@ -14,7 +14,7 @@ import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { ensureIndexed } from '../../ast/indexer';
 import { ASTStore, type SymbolRow } from '../../ast/store';
-import { xmlAttr, generateDiff, countDiffChanges, atomicWrite, cdataText } from './utils';
+import { atomicWrite } from './utils';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -59,11 +59,11 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
 
   try {
     if (!old_name || !old_name.trim()) {
-      return genericBuiltInToolOutcome('rename_symbol', '<ast_error tool="rename_symbol">Symbol name is required.</ast_error>', 'error');
+      return genericBuiltInToolOutcome('rename_symbol', { error: 'Symbol name is required.' }, 'error', 'tool_error', 'Symbol name is required.');
     }
 
     if (!new_name || !new_name.trim()) {
-      return genericBuiltInToolOutcome('rename_symbol', '<ast_error tool="rename_symbol">New name is required.</ast_error>', 'error');
+      return genericBuiltInToolOutcome('rename_symbol', { error: 'New name is required.' }, 'error', 'tool_error', 'New name is required.');
     }
 
     const projectPath = ctx.cwd;
@@ -73,11 +73,9 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
     const symbols = store.getSymbolsByName(old_name, 'both');
 
     if (symbols.length === 0) {
-      return genericBuiltInToolOutcome('rename_symbol', `<ast_error tool="rename_symbol">` +
-          `No references found for '${old_name}'. No files modified.</ast_error>`, 'error');
+      return genericBuiltInToolOutcome('rename_symbol', { error: `No references found for '${old_name}'. No files modified.` }, 'error', 'tool_error', `No references found for '${old_name}'. No files modified.`);
     }
 
-    // Group symbols by file
     const byFile = new Map<string, SymbolRow[]>();
     for (const s of symbols) {
       const list = byFile.get(s.filePath) ?? [];
@@ -85,7 +83,6 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
       byFile.set(s.filePath, list);
     }
 
-    // Phase 1: compute all new contents without writing
     interface PlannedChange {
       relPath: string;
       absPath: string;
@@ -114,8 +111,6 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
 
       const lines = content.split('\n');
 
-      // Sort symbols in reverse order (by line, then column) so replacements
-      // don't shift offsets
       const sortedSyms = [...fileSymbols].sort((a, b) => {
         if (a.startLine !== b.startLine) return b.startLine - a.startLine;
         return b.startColumn - a.startColumn;
@@ -131,7 +126,6 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
 
         const line = lines[lineIdx];
 
-        // Convert byte-based column to character-based column
         const lineBytes = Buffer.from(line, 'utf-8');
         if (byteCol > lineBytes.length) continue;
 
@@ -140,7 +134,6 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
 
         if (line.slice(charCol, charEnd) !== old_name) continue;
 
-        // Word boundary check
         if (charCol > 0 && IDENT_CHARS.has(line[charCol - 1])) continue;
         if (charEnd < line.length && IDENT_CHARS.has(line[charEnd])) continue;
 
@@ -162,61 +155,49 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
     }
 
     if (planned.length === 0) {
-      return genericBuiltInToolOutcome('rename_symbol', `<ast_error tool="rename_symbol">` +
-          `No changes made for '${old_name}'.</ast_error>`, 'error');
+      return genericBuiltInToolOutcome('rename_symbol', { error: `No changes made for '${old_name}'.` }, 'error', 'tool_error', `No changes made for '${old_name}'.`);
     }
 
-    // Phase 2: write all files
-    let totalAdded = 0;
-    let totalRemoved = 0;
-    const editResults: string[] = [];
+    const edits: Array<Record<string, string | number | boolean>> = [];
 
     for (const change of planned) {
       try {
         atomicWrite(change.absPath, change.newContent);
       } catch (writeErr) {
         failedFiles.push(change.relPath);
-        editResults.push(
-          `<edit_result path="${xmlAttr(change.relPath)}" success="false" ` +
-          `replacements="0" replace_all="false" ` +
-          `added="0" removed="0" ` +
-          `error="${xmlAttr(String(writeErr))}" />`,
-        );
+        edits.push({
+          path: change.relPath,
+          success: false,
+          replacements: 0,
+          replaceAll: false,
+          added: 0,
+          removed: 0,
+          error: String(writeErr),
+        });
         continue;
       }
 
-      const diffText = generateDiff(change.oldContent, change.newContent, change.relPath);
-      const { added, removed } = countDiffChanges(diffText);
-      totalAdded += added;
-      totalRemoved += removed;
-
-      editResults.push(
-        `<edit_result path="${xmlAttr(change.relPath)}" success="true" ` +
-        `replacements="${change.replacements}" replace_all="false" ` +
-        `added="${added}" removed="${removed}">\n` +
-        `<diff format="unified"><![CDATA[${cdataText(diffText)}]]></diff>\n` +
-        `</edit_result>`,
-      );
+      edits.push({
+        path: change.relPath,
+        replacements: change.replacements,
+      });
     }
 
-    if (editResults.length === 0) {
-      return genericBuiltInToolOutcome('rename_symbol', `<ast_error tool="rename_symbol">` +
-          `No changes made for '${old_name}'.</ast_error>`, 'error');
+    if (edits.length === 0) {
+      return genericBuiltInToolOutcome('rename_symbol', { error: `No changes made for '${old_name}'.` }, 'error', 'tool_error', `No changes made for '${old_name}'.`);
     }
 
     const overallSuccess = failedFiles.length === 0;
-    const resultXml =
-      `<rename_result name="${xmlAttr(old_name)}" ` +
-      `new_name="${xmlAttr(new_name)}" ` +
-      `files="${editResults.length}" ` +
-      `total_added="${totalAdded}" total_removed="${totalRemoved}" ` +
-      `success="${overallSuccess}">\n` +
-      editResults.join('\n') +
-      '\n</rename_result>';
 
-    return genericBuiltInToolOutcome('rename_symbol', resultXml, 'complete');
+    return genericBuiltInToolOutcome('rename_symbol', {
+      oldName: old_name,
+      newName: new_name,
+      files: edits.length,
+      success: overallSuccess,
+      edits,
+    }, 'complete');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return genericBuiltInToolOutcome('rename_symbol', `<ast_error tool="rename_symbol">${msg}</ast_error>`, 'error');
+    return genericBuiltInToolOutcome('rename_symbol', { error: msg }, 'error', 'tool_error', msg);
   }
 };

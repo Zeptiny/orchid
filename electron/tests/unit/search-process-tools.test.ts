@@ -452,9 +452,9 @@ describe('execute_command background', () => {
       { cwd, sessionId },
     );
     expect(spawnResult.canonical.status).toBe('complete');
-    expect(spawnResult.agentProjection.content).toMatch(/id\s+(\d+)/);
+    expect(spawnResult.agentProjection.content).toMatch(/id="(\d+)"/);
 
-    const idMatch = spawnResult.agentProjection.content.match(/id\s+(\d+)/);
+    const idMatch = spawnResult.agentProjection.content.match(/id="(\d+)"/);
     const procId = Number(idMatch![1]);
 
     await new Promise((r) => setTimeout(r, 500));

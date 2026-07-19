@@ -12,7 +12,10 @@ import type { Agent } from '../../../shared/types/agent';
 import { AgentType, AgentTier, TIER_DESCRIPTIONS } from '../../../shared/types/agent';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { genericToolResultMetadata } from '../types';
-import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
+import {
+  genericBuiltInToolOutcome,
+  type GenericBuiltInToolOutcome,
+} from '../result';
 import type { SubagentManager } from '../../agents/manager';
 import { getTierModelSelection } from '../../config/loader';
 import { getSessionManager } from '../../ipc/session';
@@ -140,9 +143,18 @@ export function buildDelegateTool(
       projectRuntime: ctx.projectRuntime,
     });
 
-    return genericBuiltInToolOutcome('delegate_to_subagent', `<subagent id="${record.id}" name="${name}" type="${type}" status="${record.state}" tier="${resolvedTier}">\n` +
-        `<task>\n${task}\n</task>\n` +
-        `</subagent>`, 'complete');
+    return genericBuiltInToolOutcome(
+      'delegate_to_subagent',
+      {
+        id: record.id,
+        name,
+        type,
+        status: record.state,
+        tier: resolvedTier,
+        task,
+      },
+      'complete',
+    );
   };
 
   return { definition, handler };

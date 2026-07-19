@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -32,6 +32,7 @@ import {
   _setStructuredPatchForTests,
   buildStructuredFileChange,
 } from '../../src/main/tools/filesystem/structured-diff';
+import { finalizeToolExecutionResult } from '../../src/main/tools/result';
 import {
   _setResultRetrievalCacheRootForTests,
 } from '../../src/main/tools/result-retrieval';
@@ -345,5 +346,148 @@ describe('bounded family projections', () => {
     }
     const cached = fs.readFileSync(execution.agentProjection.retrieval.path, 'utf-8');
     expect(cached).toContain('many/file-239.ts');
+  });
+});
+
+describe('XML agent projections', () => {
+  it('preserves read line content while escaping XML syntax', async () => {
+    const filePath = writeFixture('exact.txt', '  <tag>&\nblank\n');
+    const registry = new ToolRegistry();
+    registry.register(readDefinition, readHandler);
+
+    const execution = await executeToolCall({
+      id: 'read-exact',
+      type: 'function',
+      function: {
+        name: 'read',
+        arguments: JSON.stringify({ file_path: filePath }),
+      },
+    }, registry, { cwd: tmpDir });
+
+    expect(execution.agentProjection.content).toContain(
+      '<tool_result name="read" status="complete"',
+    );
+    expect(execution.agentProjection.content).toContain(
+      '1 |   &lt;tag&gt;&amp;',
+    );
+    expect(execution.agentProjection.content).toContain('2 | blank');
+    expect(execution.agentProjection.content).not.toContain('1 | &lt;tag&gt;');
+  });
+
+  it('uses the compact edit, glob, grep, and directory formats', async () => {
+    const first = writeFixture('src/a.ts', 'needle first\n');
+    writeFixture('src/b.ts', 'needle second\n');
+    const registry = new ToolRegistry();
+    registry.register(editDefinition, editHandler);
+    registry.register(globDefinition, globHandler);
+    registry.register(grepToolDefinition, grepHandler);
+    registry.register(readDirectoryDefinition, readDirectoryHandler);
+    const context = {
+      cwd: tmpDir,
+      projectRuntime: { config: { ignored_dirs: [] } as never },
+    };
+
+    const edit = await executeToolCall({
+      id: 'edit-xml',
+      type: 'function',
+      function: {
+        name: 'edit',
+        arguments: JSON.stringify({
+          file_path: first,
+          old_string: 'needle',
+          new_string: 'changed',
+        }),
+      },
+    }, registry, context);
+    expect(edit.agentProjection.content).toContain('<old_string>needle first</old_string>');
+    expect(edit.agentProjection.content).toContain('<new_string>changed first</new_string>');
+    expect(edit.agentProjection.content).not.toContain('@@');
+
+    const glob = await executeToolCall({
+      id: 'glob-xml',
+      type: 'function',
+      function: {
+        name: 'glob',
+        arguments: JSON.stringify({ directory_path: tmpDir, pattern: '**/*.ts' }),
+      },
+    }, registry, context);
+    expect(glob.agentProjection.content).toContain('<query ');
+    expect(glob.agentProjection.content).toContain('<files format="path-per-line">');
+    expect(glob.agentProjection.content).toContain('src/a.ts');
+    expect(glob.agentProjection.content).not.toContain('<file>');
+
+    const grep = await executeToolCall({
+      id: 'grep-xml',
+      type: 'function',
+      function: {
+        name: 'grep',
+        arguments: JSON.stringify({ directory_path: tmpDir, pattern: 'needle' }),
+      },
+    }, registry, context);
+    expect(grep.agentProjection.content).toContain(
+      '<matches format="path | line | content">',
+    );
+    expect(grep.agentProjection.content).toContain('src/b.ts | 1 | needle second');
+    expect(grep.agentProjection.content).not.toContain('column');
+
+    const directory = await executeToolCall({
+      id: 'directory-xml',
+      type: 'function',
+      function: {
+        name: 'read_directory',
+        arguments: JSON.stringify({ directory_path: tmpDir, max_depth: 2 }),
+      },
+    }, registry, context);
+    expect(directory.agentProjection.content).toContain('<tree>\n');
+    expect(directory.agentProjection.content).toContain('└── src/');
+    expect(directory.agentProjection.content).not.toContain('format="dynamic-system-prompt"');
+  });
+});
+
+describe('projector-error fallback', () => {
+  function fileChangeCanonical() {
+    return {
+      schemaVersion: 1 as const,
+      family: 'file-change' as const,
+      status: 'complete' as const,
+      completeness: 'complete' as const,
+      data: buildStructuredFileChange({
+        path: '/repo/example.ts',
+        operation: 'update',
+        oldContent: 'before\n',
+        newContent: 'after\n',
+      }),
+    };
+  }
+
+  it('falls back to the generic projector and logs a diagnostic', () => {
+    const fallbackLogger = vi.fn();
+    const result = finalizeToolExecutionResult({
+      canonical: fileChangeCanonical(),
+      toolName: 'edit',
+      projector: () => {
+        throw new Error('projector exploded');
+      },
+      fallbackOnProjectorError: true,
+      fallbackLogger,
+    });
+
+    expect(result.agentProjection.content).toContain('<tool_result');
+    expect(fallbackLogger).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: 'projection' }),
+    );
+  });
+
+  it('rethrows the original error when fallback is disabled', () => {
+    expect(() =>
+      finalizeToolExecutionResult({
+        canonical: fileChangeCanonical(),
+        toolName: 'edit',
+        projector: () => {
+          throw new Error('projector exploded');
+        },
+        fallbackOnProjectorError: false,
+      }),
+    ).toThrow('projector exploded');
   });
 });

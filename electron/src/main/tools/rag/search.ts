@@ -100,18 +100,14 @@ export const ragSearchHandler: ToolHandler = async (
     return genericBuiltInToolOutcome('rag_search', 'No relevant results found.', 'complete');
   }
 
-  // Format results
-  const lines: string[] = [`Found ${results.length} relevant chunks:\n`];
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i]!;
-    lines.push(
-      `--- Result ${i + 1} (score: ${r.score.toFixed(4)}) ---`,
-      `File: ${r.filePath} (lines ${r.startLine}-${r.endLine})`,
-      '```',
-      r.content,
-      '```\n',
-    );
-  }
-
-  return genericBuiltInToolOutcome('rag_search', lines.join('\n'));
+  return genericBuiltInToolOutcome('rag_search', {
+    query,
+    results: results.map((result) => ({
+      score: result.score.toFixed(4),
+      file: result.filePath,
+      startLine: result.startLine,
+      endLine: result.endLine,
+      content: result.content,
+    })),
+  });
 };

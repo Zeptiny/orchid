@@ -22,8 +22,11 @@ import {
   TOOLS_WITHOUT_OUTPUT_OFFLOAD,
 } from './middleware/provider-quirks';
 import {
+  escapeXmlAttribute,
+  escapeXmlText,
   finalizeToolExecutionResult,
   genericAgentProjector,
+  renderRetrieval,
 } from '../tools/result';
 import type { ToolExecutionContext } from '../tools/types';
 import type { ProjectRuntime } from '../project/runtime';
@@ -31,8 +34,8 @@ import { DEFAULT_WAIT_TIMEOUT_MS } from '../agents/manager';
 import {
   createCanonicalToolResult,
   toolExecutionResultSchema,
-  type AgentProjection,
   type JsonValue,
+  type ToolResultRetrieval,
   type ToolExecutionResult,
   type ToolHandlerOutcome,
 } from '../../shared/types/tool-result';
@@ -306,10 +309,6 @@ function isToolHandlerOutcome(value: unknown): value is ToolHandlerOutcome<JsonV
   );
 }
 
-function exactProjection(content: string): AgentProjection {
-  return { content, completeness: 'complete' };
-}
-
 export function genericTerminalExecution(
   toolCallId: string,
   toolName: string,
@@ -338,7 +337,7 @@ export function genericTerminalExecution(
     toolName,
     toolCallId,
     expectedFamily: 'generic',
-    projector: () => exactProjection(message),
+    projector: genericAgentProjector,
   });
   return toolExecutionResultSchema.parse(execution) as ToolExecutionResult;
 }
@@ -397,12 +396,11 @@ function ensureProjectionRecovery(
     return {
       canonical: execution.canonical,
       agentProjection: {
-        content: [
+        content: appendXmlRetrieval(
           execution.agentProjection.content,
-          '',
-          `Complete result: ${retrieval.path}`,
-          ...retrieval.instructions,
-        ].join('\n'),
+          retrieval,
+          toolCall.function.name,
+        ),
         completeness: 'partial',
         retrieval,
       },
@@ -417,9 +415,33 @@ function ensureProjectionRecovery(
     });
     return {
       canonical: execution.canonical,
-      agentProjection: genericAgentProjector(execution.canonical),
+      agentProjection: genericAgentProjector(execution.canonical, toolCall.function.name),
     };
   }
+}
+
+function appendXmlRetrieval(
+  content: string,
+  retrieval: ToolResultRetrieval,
+  toolName: string,
+): string {
+  const retrievalXml = renderRetrieval(retrieval);
+  const closingTag = '</tool_result>';
+  const closingIndex = content.lastIndexOf(closingTag);
+  const startsWithEnvelope = content.startsWith('<tool_result');
+  const hasClosingTag = closingIndex >= 0;
+  if (startsWithEnvelope && hasClosingTag) {
+    return content.slice(0, closingIndex).trimEnd() + '\n' +
+      retrievalXml + '\n' + content.slice(closingIndex);
+  }
+  console.warn('[tool-dispatch] Projection content is not a well-formed tool_result envelope; wrapping in fallback envelope', {
+    toolName,
+    startsWithEnvelope,
+    hasClosingTag,
+  });
+  return '<tool_result name="' + escapeXmlAttribute(toolName) + '" status="partial">\n' +
+    '<payload>' + escapeXmlText(content) + '</payload>\n' +
+    retrievalXml + '\n</tool_result>';
 }
 
 function maybeOffloadAgentProjection(
@@ -505,11 +527,13 @@ function maybeOffloadToolOutputDetailed(
     // No session — hard-truncate
     const truncated = content.slice(0, TOOL_OUTPUT_INLINE_THRESHOLD);
     return { content: (
-      `<${toolName}_result length=${content.length}>\n` +
+      `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}">\n` +
       `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters ` +
       `and was truncated because no active session is available for cache ` +
       `storage. Use the tool again with narrower scope (offset/limit) to ` +
-      `inspect the full result.</warning>\n${truncated}\n</${toolName}_result>`
+      `inspect the full result.</warning>\n` +
+      `<payload>${escapeXmlText(truncated)}</payload>\n` +
+      `</tool_result>`
     ) };
   }
 
@@ -534,23 +558,26 @@ function maybeOffloadToolOutputDetailed(
       throw new Error('Tool output cache verification failed');
     }
 
-    const escapedPath = escapeHtmlAttr(filePath);
+    const escapedPath = escapeXmlAttribute(filePath);
     return { content: (
-      `<${toolName}_result length=${content.length} file="${escapedPath}">\n` +
+      `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}" file="${escapedPath}">\n` +
       `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters and ` +
-      `was written to ${escapedPath}. Use read (with offset/limit) or grep to inspect ` +
-      `it.</warning>\n</${toolName}_result>`
+      `was written to ${escapeXmlText(filePath)}. Use read (with offset/limit) or grep to inspect ` +
+      `it.</warning>\n` +
+      `<retrieve tool="read" path="${escapedPath}" />\n` +
+      `</tool_result>`
     ), cachePath: filePath };
   } catch (err) {
     // Cache write failed — truncate inline
     console.warn(`Failed to offload tool output for ${toolName}:`, err);
     const truncated = content.slice(0, TOOL_OUTPUT_INLINE_THRESHOLD);
     return { content: (
-      `<${toolName}_result length=${content.length}>\n` +
+      `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}">\n` +
       `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters ` +
-      `and cache write failed (${err instanceof Error ? err.message : err}). Truncated below; re-run the tool with ` +
+      `and cache write failed (${escapeXmlText(err instanceof Error ? err.message : String(err))}). Truncated below; re-run the tool with ` +
       `narrower scope to inspect the full result.</warning>\n` +
-      `${truncated}\n</${toolName}_result>`
+      `<payload>${escapeXmlText(truncated)}</payload>\n` +
+      `</tool_result>`
     ) };
   }
 }
@@ -676,13 +703,4 @@ function toolOutputSlug(toolName: string, toolCallId: string): string {
   // Use first 8 chars of tool_call_id for uniqueness
   const shortId = toolCallId.slice(0, 8);
   return `${toolName}-${shortId}.txt`;
-}
-
-/** Escape a string for use as an HTML attribute value. */
-function escapeHtmlAttr(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }

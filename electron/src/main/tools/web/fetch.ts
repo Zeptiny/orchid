@@ -339,9 +339,13 @@ export function buildWebFetchTool(
         ctx,
       );
 
-      return genericBuiltInToolOutcome('web_fetch', `<web_fetch_summarize url="${escapeXmlAttr(finalUrl)}" title="${escapeXmlAttr(title || '(none)')}" content_type="${escapeXmlAttr(contentType)}" length="${content.length}">\n` +
-          `${answer}\n` +
-          `</web_fetch_summarize>`, 'complete');
+      return genericBuiltInToolOutcome('web_fetch', {
+        url: finalUrl,
+        title: title || '(none)',
+        contentType,
+        content: answer,
+        length: content.length,
+      }, 'complete');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (parentAbort?.aborted) {
@@ -358,15 +362,6 @@ export function buildWebFetchTool(
 // Raw result builder
 // ---------------------------------------------------------------------------
 
-/** Escape a value for use inside a double-quoted XML attribute. */
-function escapeXmlAttr(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
 /**
  * Build the raw mode result. If content exceeds threshold and a session ID
  * is available, writes to a cache file.
@@ -379,27 +374,25 @@ function buildRawResult(
   sessionId?: string,
   cacheRoot: string = HOME_CONFIG_DIR,
 ): WebFetchResult {
-  const attrs =
-    `url="${escapeXmlAttr(url)}"` +
-    (title ? ` title="${escapeXmlAttr(title)}"` : '') +
-    ` content_type="${escapeXmlAttr(contentType)}"` +
-    ` length="${content.length}"`;
-
-  // Small content: return inline
   if (content.length < RAW_CONTENT_THRESHOLD) {
-    return genericBuiltInToolOutcome('web_fetch', `<web_fetch_raw ${attrs}>\n${content}\n</web_fetch_raw>`, 'complete');
+    return genericBuiltInToolOutcome('web_fetch', {
+      url, title, contentType, content, length: content.length,
+    }, 'complete');
   }
 
-  // Large content: write to cache file
   if (!sessionId) {
     return genericBuiltInToolOutcome('web_fetch', 'Error: Large raw web_fetch results require an active session for cache storage.', 'error');
   }
 
   try {
     const filePath = writeCacheFile(cacheRoot, sessionId, url, content);
-    return genericBuiltInToolOutcome('web_fetch', `<web_fetch_raw ${attrs} file="${filePath}">\n` +
-        `<warning>Content exceeded ${RAW_CONTENT_THRESHOLD} characters and was written to cache - ${filePath}, use grep and read tools to get the result</warning>\n` +
-        `</web_fetch_raw>`, 'complete');
+    return genericBuiltInToolOutcome('web_fetch', {
+      url, title, contentType, content: '', length: content.length,
+      cachePath: filePath,
+      warning: 'Content exceeded ' + RAW_CONTENT_THRESHOLD +
+        ' characters and was written to cache - ' + filePath +
+        ', use grep and read tools to get the result',
+    }, 'complete');
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return genericBuiltInToolOutcome('web_fetch', `Error: ${message}`, 'error');

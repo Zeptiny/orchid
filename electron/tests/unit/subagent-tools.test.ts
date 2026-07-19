@@ -483,7 +483,7 @@ describe('interrupt_subagents', () => {
     )) as ToolExecutionResult;
 
     expect(result.canonical.status).toBe('complete');
-    expect(result.agentProjection.content).toContain('Interrupted');
+    expect(result.agentProjection.content).toContain('<interrupted>');
     expect(result.agentProjection.content).toContain(record.id);
     expect(record.state).toBe(SubagentState.INTERRUPTED);
   });
@@ -545,7 +545,7 @@ describe('interrupt_subagents', () => {
     )) as ToolExecutionResult;
 
     expect(result.canonical.status).toBe('empty');
-    expect(result.agentProjection.content).toContain('Already finished');
+    expect(result.agentProjection.content).toContain('<already_finished>');
     expect(result.agentProjection.content).toContain(record.id);
   });
 
@@ -558,7 +558,7 @@ describe('interrupt_subagents', () => {
     )) as ToolExecutionResult;
 
     expect(result.canonical.status).toBe('empty');
-    expect(result.agentProjection.content).toContain('Not found');
+    expect(result.agentProjection.content).toContain('<not_found>');
     expect(result.agentProjection.content).toContain('nonexistent-id');
   });
 
@@ -574,7 +574,7 @@ describe('interrupt_subagents', () => {
       sessionCtx,
     )) as ToolExecutionResult;
 
-    expect(result.agentProjection.content).toContain('Not found');
+    expect(result.agentProjection.content).toContain('<not_found>');
     expect(peer.state).toBe(SubagentState.RUNNING);
   });
 
@@ -596,11 +596,11 @@ describe('interrupt_subagents', () => {
       sessionCtx,
     )) as ToolExecutionResult;
 
-    expect(result.agentProjection.content).toContain('Interrupted');
+    expect(result.agentProjection.content).toContain('<interrupted>');
     expect(result.agentProjection.content).toContain(running.id);
-    expect(result.agentProjection.content).toContain('Already finished');
+    expect(result.agentProjection.content).toContain('<already_finished>');
     expect(result.agentProjection.content).toContain(completed.id);
-    expect(result.agentProjection.content).toContain('Not found');
+    expect(result.agentProjection.content).toContain('<not_found>');
     expect(result.agentProjection.content).toContain('missing-id');
   });
 

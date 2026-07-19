@@ -13,13 +13,7 @@ import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { resolveToolPath } from '../types';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from '../../ast/parser';
-import {
-  generateDiff,
-  countDiffChanges,
-  atomicWrite,
-  formatEditResult,
-  findExtendedRange,
-} from './utils';
+import { atomicWrite, findExtendedRange } from './utils';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -60,15 +54,11 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown, ctx) => 
 
   try {
     if (!fs.existsSync(file_path)) {
-      return genericBuiltInToolOutcome('replace_symbol', formatEditResult({
-          filePath: file_path,
-          success: false,
-          replacements: 0,
-          added: 0,
-          removed: 0,
-          error: 'file_not_found',
-          message: `File not found: ${file_path}`,
-        }), 'error');
+      return genericBuiltInToolOutcome('replace_symbol', {
+        file: file_path, symbol: symbol_name, success: false,
+        replacements: 0, error: 'file_not_found',
+        message: `File not found: ${file_path}`,
+      }, 'error', 'tool_error', `File not found: ${file_path}`);
     }
 
     const content = fs.readFileSync(file_path, 'utf-8');
@@ -88,15 +78,11 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown, ctx) => 
       );
 
       if (targetCaps.length === 0) {
-        return genericBuiltInToolOutcome('replace_symbol', formatEditResult({
-            filePath: file_path,
-            success: false,
-            replacements: 0,
-            added: 0,
-            removed: 0,
-            error: 'symbol_not_found',
-            message: `Symbol '${symbol_name}' not found in ${file_path}`,
-          }), 'error');
+        return genericBuiltInToolOutcome('replace_symbol', {
+          file: file_path, symbol: symbol_name, success: false,
+          replacements: 0, error: 'symbol_not_found',
+          message: `Symbol '${symbol_name}' not found in ${file_path}`,
+        }, 'error', 'tool_error', `Symbol '${symbol_name}' not found in ${file_path}`);
       }
 
       // Find definition nodes and their extended ranges
@@ -125,15 +111,11 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown, ctx) => 
       }
 
       if (replacements.length === 0) {
-        return genericBuiltInToolOutcome('replace_symbol', formatEditResult({
-            filePath: file_path,
-            success: false,
-            replacements: 0,
-            added: 0,
-            removed: 0,
-            error: 'symbol_not_found',
-            message: `Symbol '${symbol_name}' not found in ${file_path}`,
-          }), 'error');
+        return genericBuiltInToolOutcome('replace_symbol', {
+          file: file_path, symbol: symbol_name, success: false,
+          replacements: 0, error: 'symbol_not_found',
+          message: `Symbol '${symbol_name}' not found in ${file_path}`,
+        }, 'error', 'tool_error', `Symbol '${symbol_name}' not found in ${file_path}`);
       }
 
       // Ambiguity guard: if multiple definitions in different parent contexts,
@@ -147,19 +129,15 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown, ctx) => 
           })
           .join('\n');
 
-        return genericBuiltInToolOutcome('replace_symbol', formatEditResult({
-            filePath: file_path,
-            success: false,
-            replacements: 0,
-            added: 0,
-            removed: 0,
-            error: 'ambiguous_symbol',
-            message:
-              `Multiple definitions of '${symbol_name}' found in ${file_path}:\n` +
-              `${locations}\n` +
-              `Please specify which definition to replace (e.g. by providing ` +
-              `the class name or line number).`,
-          }), 'error');
+        return genericBuiltInToolOutcome('replace_symbol', {
+          file: file_path, symbol: symbol_name, success: false,
+          replacements: 0, error: 'ambiguous_symbol',
+          message:
+            `Multiple definitions of '${symbol_name}' found in ${file_path}:\n` +
+            `${locations}\n` +
+            `Please specify which definition to replace (e.g. by providing ` +
+            `the class name or line number).`,
+        }, 'error', 'tool_error', `Multiple definitions of '${symbol_name}' found in ${file_path}`);
       }
 
       // Sort replacements in reverse byte order (so offsets don't shift)
@@ -168,8 +146,10 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown, ctx) => 
       // Apply replacements
       const newSourceBytes = new TextEncoder().encode(new_source);
       let newContentBytes = new TextEncoder().encode(content);
+      const oldSources: string[] = [];
 
       for (const { start, end } of replacements) {
+        oldSources.push(new TextDecoder().decode(newContentBytes.slice(start, end)));
         const before = newContentBytes.slice(0, start);
         const after = newContentBytes.slice(end);
         const combined = new Uint8Array(before.length + newSourceBytes.length + after.length);
@@ -182,56 +162,46 @@ export const replaceSymbolHandler: ToolHandler = async (input: unknown, ctx) => 
       const newContent = new TextDecoder().decode(newContentBytes);
 
       if (newContent === content) {
-        return genericBuiltInToolOutcome('replace_symbol', formatEditResult({
-            filePath: file_path,
-            success: true,
-            replacements: 0,
-            added: 0,
-            removed: 0,
-            message: `No changes needed for '${symbol_name}' in ${file_path}`,
-          }), 'complete');
+        return genericBuiltInToolOutcome('replace_symbol', {
+          file: file_path, symbol: symbol_name, success: true,
+          replacements: 0,
+          message: `No changes needed for '${symbol_name}' in ${file_path}`,
+        }, 'complete');
       }
 
-      // Atomic write
       atomicWrite(file_path, newContent);
 
-      // Generate diff
-      const diffText = generateDiff(content, newContent, file_path);
-      const { added, removed } = countDiffChanges(diffText);
-
-      return genericBuiltInToolOutcome('replace_symbol', formatEditResult({
-          filePath: file_path,
+      return genericBuiltInToolOutcome(
+        'replace_symbol',
+        {
+          file: file_path,
+          symbol: symbol_name,
           success: true,
           replacements: replacements.length,
-          added,
-          removed,
-          diffText,
-        }), 'complete');
+          items: oldSources.map((oldSource) => ({
+            oldString: oldSource,
+            newString: new_source,
+          })),
+        },
+        'complete',
+      );
     } finally {
       tree.delete();
     }
   } catch (err) {
     if (err instanceof Error && err.message.includes('Unsupported file extension')) {
-      return genericBuiltInToolOutcome('replace_symbol', formatEditResult({
-          filePath: file_path,
-          success: false,
-          replacements: 0,
-          added: 0,
-          removed: 0,
-          error: 'unsupported_file',
-          message: err.message,
-        }), 'error');
+      return genericBuiltInToolOutcome('replace_symbol', {
+        file: file_path, symbol: symbol_name, success: false,
+        replacements: 0, error: 'unsupported_file',
+        message: err.message,
+      }, 'error', 'tool_error', err.message);
     }
     const msg = err instanceof Error ? err.message : String(err);
-    return genericBuiltInToolOutcome('replace_symbol', formatEditResult({
-        filePath: file_path,
-        success: false,
-        replacements: 0,
-        added: 0,
-        removed: 0,
-        error: 'replace_error',
-        message: `Error replacing '${symbol_name}' in ${file_path}: ${msg}`,
-      }), 'error');
+    return genericBuiltInToolOutcome('replace_symbol', {
+      file: file_path, symbol: symbol_name, success: false,
+      replacements: 0, error: 'replace_error',
+      message: `Error replacing '${symbol_name}' in ${file_path}: ${msg}`,
+    }, 'error', 'tool_error', `Error replacing '${symbol_name}' in ${file_path}: ${msg}`);
   }
 };
 

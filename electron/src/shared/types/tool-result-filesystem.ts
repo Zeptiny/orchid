@@ -44,6 +44,10 @@ export const fileChangeDataSchema = z.object({
   addedLines: z.number().int().nonnegative(),
   removedLines: z.number().int().nonnegative(),
   resultingContent: z.string(),
+  oldString: z.string().optional(),
+  newString: z.string().optional(),
+  replaceAll: z.boolean().optional(),
+  replacementCount: z.number().int().nonnegative().optional(),
 }).strict();
 
 export type FileChangeData = z.infer<typeof fileChangeDataSchema>;

@@ -13,7 +13,6 @@ import { genericBuiltInToolOutcome } from '../result';
 import { resolveToolPath } from '../types';
 import { ensureIndexed } from '../../ast/indexer';
 import { ASTStore } from '../../ast/store';
-import { xmlAttr } from './utils';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -54,7 +53,7 @@ export const findSymbolReferencesHandler: ToolHandler = async (input: unknown, c
 
   try {
     if (!symbol_name || !symbol_name.trim()) {
-      return genericBuiltInToolOutcome('find_symbol_references', '<ast_error tool="find_symbol_references">Symbol name is required.</ast_error>', 'error');
+      return genericBuiltInToolOutcome('find_symbol_references', { error: 'Symbol name is required.' }, 'error', 'tool_error', 'Symbol name is required.');
     }
 
     const projectPath = ctx.cwd;
@@ -63,7 +62,6 @@ export const findSymbolReferencesHandler: ToolHandler = async (input: unknown, c
     const store = new ASTStore(projectPath);
     const symbols = store.getSymbolsByName(symbol_name, 'both');
 
-    // Filter by file if specified (resolve relative paths against session cwd)
     const filterPath = file_path ? resolveToolPath(ctx.cwd, file_path) : undefined;
     const filtered = filterPath
       ? symbols.filter(
@@ -75,32 +73,27 @@ export const findSymbolReferencesHandler: ToolHandler = async (input: unknown, c
       : symbols;
 
     if (filtered.length === 0) {
-      return genericBuiltInToolOutcome('find_symbol_references', `<symbol_references name="${xmlAttr(symbol_name)}" count="0" />`, 'complete');
-    }
-
-    const parts: string[] = [];
-    for (const s of filtered) {
-      parts.push(
-        `  <symbol name="${xmlAttr(s.name)}" ` +
-        `type="${s.type}" ` +
-        `kind="${s.kind}" ` +
-        `file="${xmlAttr(s.filePath)}" ` +
-        `start_line="${s.startLine + 1}" ` +
-        `start_column="${s.startColumn}" ` +
-        `end_line="${s.endLine + 1}" ` +
-        `end_column="${s.endColumn}" />`,
+      return genericBuiltInToolOutcome(
+        'find_symbol_references',
+        { name: symbol_name, count: 0, references: [] },
+        'complete',
       );
     }
 
-    const resultXml =
-      `<symbol_references name="${xmlAttr(symbol_name)}" ` +
-      `type_filter="both" count="${filtered.length}">\n` +
-      parts.join('\n') +
-      '\n</symbol_references>';
+    const references = filtered.map((s) => ({
+      kind: s.kind,
+      file: s.filePath,
+      startLine: s.startLine + 1,
+      endLine: s.endLine + 1,
+    }));
 
-    return genericBuiltInToolOutcome('find_symbol_references', resultXml, 'complete');
+    return genericBuiltInToolOutcome('find_symbol_references', {
+      name: symbol_name,
+      count: filtered.length,
+      references,
+    }, 'complete');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return genericBuiltInToolOutcome('find_symbol_references', `<ast_error tool="find_symbol_references">${msg}</ast_error>`, 'error');
+    return genericBuiltInToolOutcome('find_symbol_references', { error: msg }, 'error', 'tool_error', msg);
   }
 };

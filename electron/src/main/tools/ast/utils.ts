@@ -5,10 +5,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import {
-  buildStructuredFileChange,
-  serializeStructuredDiff,
-} from '../filesystem/structured-diff';
+import { escapeXmlAttribute, escapeXmlText } from '../result';
 
 // ---------------------------------------------------------------------------
 // XML helpers
@@ -20,40 +17,6 @@ export function xmlAttr(value: unknown): string {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
-}
-
-export function cdataText(value: string): string {
-  return value.replace(/]]>/g, ']]]]><![CDATA[>');
-}
-
-// ---------------------------------------------------------------------------
-// Diff helpers
-// ---------------------------------------------------------------------------
-
-export function countDiffChanges(diffText: string): { added: number; removed: number } {
-  let added = 0;
-  let removed = 0;
-  for (const line of diffText.split('\n')) {
-    if (line.startsWith('+++ ') || line.startsWith('--- ')) continue;
-    if (line.startsWith('+')) added++;
-    else if (line.startsWith('-')) removed++;
-  }
-  return { added, removed };
-}
-
-export function generateDiff(oldContent: string, newContent: string, filePath: string): string {
-  const data = buildStructuredFileChange({
-    path: filePath,
-    operation: 'update',
-    oldContent,
-    newContent,
-  });
-  // Preserve the historical old/new labels for AST tools while deriving all
-  // hunk content and coordinates through the structured direct-diff path.
-  return serializeStructuredDiff(data, {
-    oldPath: `old/${filePath}`,
-    newPath: `new/${filePath}`,
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -184,13 +147,12 @@ export function formatEditResult(opts: {
   replacements: number;
   added: number;
   removed: number;
-  diffText?: string;
   error?: string;
   message?: string;
   replaceAll?: boolean;
 }): string {
   const attrs = [
-    `path="${xmlAttr(opts.filePath)}"`,
+    `path="${escapeXmlAttribute(opts.filePath)}"`,
     `success="${opts.success}"`,
     `replacements="${opts.replacements}"`,
     `replace_all="${opts.replaceAll ?? false}"`,
@@ -198,28 +160,19 @@ export function formatEditResult(opts: {
     `removed="${opts.removed}"`,
   ];
   if (opts.error) {
-    attrs.push(`error="${xmlAttr(opts.error)}"`);
+    attrs.push(`error="${escapeXmlAttribute(opts.error)}"`);
   }
 
   const lines = [`<edit_result ${attrs.join(' ')}>`];
   if (opts.message) {
-    lines.push('<message><![CDATA[');
-    lines.push(cdataText(opts.message));
-    lines.push(']]></message>');
-  }
-  if (opts.diffText) {
-    lines.push('<diff format="unified"><!['  + 'CDATA[');
-    lines.push(cdataText(opts.diffText));
-    lines.push(']]' + '></diff>');
-  } else {
-    lines.push('<diff format="unified" />');
+    lines.push('<message>' + escapeXmlText(opts.message) + '</message>');
   }
   lines.push('</edit_result>');
   return lines.join('\n');
 }
 
 // ---------------------------------------------------------------------------
-// Call extraction (for get_file_skeleton)
+// Extended range (for replace_symbol — includes decorators/comments)
 // ---------------------------------------------------------------------------
 
 interface TreeNode {
@@ -232,47 +185,6 @@ interface TreeNode {
   children: TreeNode[];
   childForFieldName(name: string): TreeNode | null;
 }
-
-/**
- * Walk a tree-sitter node's subtree and collect short names of call expressions.
- */
-export function extractCallNames(node: TreeNode, source: string): string[] {
-  const calls: string[] = [];
-  walkForCalls(node, calls, source);
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const c of calls) {
-    if (!seen.has(c)) {
-      seen.add(c);
-      result.push(c);
-    }
-  }
-  return result;
-}
-
-function walkForCalls(node: TreeNode, out: string[], source: string): void {
-  if (node.type === 'call' || node.type === 'call_expression') {
-    let callee = node.childForFieldName('function');
-    if (!callee && node.children.length > 0) {
-      callee = node.children[0];
-    }
-    if (callee) {
-      let name = source.slice(callee.startIndex, callee.endIndex);
-      // Use short name: last part after '.'
-      if (name.includes('.')) {
-        name = name.split('.').pop()!;
-      }
-      if (name) out.push(name);
-    }
-  }
-  for (const child of node.children) {
-    walkForCalls(child, out, source);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Extended range (for replace_symbol — includes decorators/comments)
-// ---------------------------------------------------------------------------
 
 export function findExtendedRange(
   source: string,

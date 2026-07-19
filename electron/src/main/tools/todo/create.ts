@@ -97,11 +97,12 @@ export function buildCreateTool(
       await notifyChanged(ctx);
     }
 
-    return genericBuiltInToolOutcome('todo_create', `Task created successfully.\n\n` +
-        `ID: ${todo.id}\n` +
-        `Title: ${todo.title}\n` +
-        `Status: ${todo.status}` +
-        (todo.subagent_id ? `\nOwner: ${todo.subagent_id}` : `\nOwner: ${MAIN_AGENT_SCOPE_ID}`), 'complete');
+    return genericBuiltInToolOutcome('todo_create', {
+      id: todo.id,
+      title: todo.title,
+      status: todo.status,
+      owner: todo.subagent_id ?? MAIN_AGENT_SCOPE_ID,
+    }, 'complete');
   };
 
   return { definition, handler };

@@ -102,15 +102,17 @@ export function buildUpdateTool(
       await notifyChanged(ctx);
     }
 
-    // Build change summary
-    const changes: string[] = [];
-    if (title !== undefined) changes.push(`Title: ${task!.title}`);
-    if (status !== undefined) changes.push(`Status: ${task!.status}`);
+    const changes: { title?: string; status?: string; owner?: string } = {};
+    if (title !== undefined) changes.title = task!.title;
+    if (status !== undefined) changes.status = task!.status;
     if (isMainAgentScope(scope) && subagent_id !== undefined) {
-      changes.push(`Owner: ${task!.subagent_id || 'main'}`);
+      changes.owner = task!.subagent_id || 'main';
     }
 
-    return genericBuiltInToolOutcome('todo_update', 'Task updated successfully.\n\n' + (changes.join('\n') || 'No fields changed.'), 'complete');
+    return genericBuiltInToolOutcome('todo_update', {
+      taskId: task!.id,
+      changes,
+    }, 'complete');
   };
 
   return { definition, handler };

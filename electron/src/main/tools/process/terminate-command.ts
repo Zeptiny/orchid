@@ -40,12 +40,18 @@ export async function executeTerminateCommand(
   }
 
   if (entry.exitCode !== null) {
-    return genericBuiltInToolOutcome('terminate_command', `Command ${id} already exited with code ${entry.exitCode}.`, 'complete');
+    return genericBuiltInToolOutcome('terminate_command', {
+      commandId: id,
+      exitCode: entry.exitCode,
+    }, 'complete');
   }
 
   store.terminate(id);
 
-  return genericBuiltInToolOutcome('terminate_command', `Terminated command ${id}: ${entry.command}`, 'complete');
+  return genericBuiltInToolOutcome('terminate_command', {
+    commandId: id,
+    command: entry.command,
+  }, 'complete');
 }
 
 // ---------------------------------------------------------------------------

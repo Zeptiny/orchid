@@ -43,9 +43,12 @@ describe('ast_index tool', () => {
       { cwd: tmpDir },
     );
     expect(result.status).toBe('complete');
-    expect(result.data.value).toContain('AST Index Status');
-    expect(result.data.value).toContain('Total files: 0');
-    expect(result.data.value).toContain('never');
+    expect(result.data.value).toMatchObject({
+      action: 'status',
+      totalFiles: 0,
+      totalSymbols: 0,
+      lastIndexed: 'never',
+    });
   });
 
   it('index returns summary from indexer', async () => {
@@ -54,9 +57,11 @@ describe('ast_index tool', () => {
       { cwd: tmpDir },
     );
     expect(result.status).toBe('complete');
-    expect(result.data.value).toContain('AST Index Complete');
-    expect(result.data.value).toContain('Files scanned: 3');
-    expect(result.data.value).toContain('Symbols extracted: 10');
+    expect(result.data.value).toMatchObject({
+      action: 'index',
+      filesScanned: 3,
+      symbolsExtracted: 10,
+    });
   });
 
   it('clear drops the store', async () => {
@@ -71,7 +76,7 @@ describe('ast_index tool', () => {
       { cwd: tmpDir },
     );
     expect(result.status).toBe('complete');
-    expect(result.data.value).toBe('AST index cleared.');
+    expect(result.data.value).toEqual({ action: 'clear' });
 
     const after = new ASTStore(tmpDir);
     try {

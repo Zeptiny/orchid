@@ -268,6 +268,7 @@ export const agentProjectionSchema = z.discriminatedUnion('completeness', [
 export type AgentProjection = z.infer<typeof agentProjectionSchema>;
 export type AgentProjector = (
   canonical: CanonicalToolResult,
+  toolName?: string,
 ) => AgentProjection;
 
 export interface ToolExecutionResult<TData = JsonValue> {

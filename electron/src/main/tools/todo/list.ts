@@ -68,18 +68,18 @@ export function buildListTool(
     const tasks = filterTodosForScope(all, scope);
 
     if (tasks.length === 0) {
-      return genericBuiltInToolOutcome('todo_list', `No tasks for agent scope '${scope}'.`, 'empty');
+      return genericBuiltInToolOutcome('todo_list', { scope, tasks: [] }, 'empty');
     }
 
-    const lines = [`Found ${tasks.length} task(s) for scope '${scope}':\n`];
-    for (const t of tasks) {
-      const parts = [`[${t.id}] ${t.title}`];
-      parts.push(`  Status: ${t.status}`);
-      parts.push(`  Owner: ${t.subagent_id ?? MAIN_AGENT_SCOPE_ID}`);
-      lines.push(parts.join('\n') + '\n');
-    }
-
-    return genericBuiltInToolOutcome('todo_list', lines.join('\n'), 'complete');
+    return genericBuiltInToolOutcome('todo_list', {
+      scope,
+      tasks: tasks.map((task) => ({
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        owner: task.subagent_id ?? MAIN_AGENT_SCOPE_ID,
+      })),
+    }, 'complete');
   };
 
   return { definition, handler };

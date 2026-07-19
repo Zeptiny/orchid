@@ -10,7 +10,7 @@ import { executeCommand } from '../../src/main/tools/process/execute-command';
 function resultText(result: Awaited<ReturnType<typeof executeCommand>>): string {
   const candidate = result as unknown as { data?: { value?: unknown }; canonical?: { data?: { value?: unknown } }; content?: unknown };
   const value = candidate.data?.value ?? candidate.canonical?.data?.value ?? candidate.content;
-  return typeof value === 'string' ? value : String(value ?? '');
+  return typeof value === 'string' ? value : JSON.stringify(value ?? '');
 }
 
 function resultStatus(result: Awaited<ReturnType<typeof executeCommand>>): string {

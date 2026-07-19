@@ -47,6 +47,8 @@ import {
   type ToolDispatchOptions,
 } from './tool-dispatch';
 import {
+  finalizeToolExecutionResult,
+  genericAgentProjector,
   parseToolExecutionResult,
 } from '../tools/result';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
@@ -58,7 +60,6 @@ import { buildSkillTool } from '../tools/skill/skill';
 import { getSkillsRegistry } from '../tools';
 import {
   createCanonicalToolResult,
-  toolExecutionResultSchema,
   type ToolExecutionResult,
 } from '../../shared/types/tool-result';
 
@@ -81,6 +82,17 @@ function toProviderMcpToolName(internalName: string): string {
   const prefixLength = PROVIDER_TOOL_NAME_MAX_LENGTH - hash.length - 1;
 
   return `${safePrefix.slice(0, prefixLength)}_${hash}`;
+}
+
+function toInternalToolName(
+  toolName: string,
+  mcpManager: MCPManager | null,
+): string {
+  if (!mcpManager || toolName.startsWith('mcp::')) return toolName;
+  const match = mcpManager.getTools().find(
+    ({ definition }) => toProviderMcpToolName(definition.name) === toolName,
+  );
+  return match?.definition.name ?? toolName;
 }
 
 // ---------------------------------------------------------------------------
@@ -215,9 +227,11 @@ function genericSdkExecution(
       })
     : createCanonicalToolResult('generic', { status, data });
 
-  return toolExecutionResultSchema.parse({
+  return finalizeToolExecutionResult({
     canonical,
-    agentProjection: { content, completeness: 'complete' },
+    toolName,
+    expectedFamily: 'generic',
+    projector: genericAgentProjector,
   }) as ToolExecutionResult;
 }
 
@@ -257,11 +271,13 @@ function executionFromSdkOutput(
 
 function sdkPreExecutionError(
   part: Record<string, unknown>,
+  mcpManager: MCPManager | null = null,
 ): ToolExecutionResult {
   const content = typeof part.errorText === 'string'
     ? part.errorText
     : getErrorMessage(part.error ?? 'Tool failed');
-  const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+  const providerToolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+  const toolName = toInternalToolName(providerToolName, mcpManager);
   return genericSdkExecution(toolName, content, {
     status: 'error',
     errorCode: 'sdk_tool_error',
@@ -525,7 +541,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           for (const tc of toolCalls as Array<{ toolCallId: string; toolName: string; input?: unknown }>) {
             pendingToolCalls.push({
               toolCallId: tc.toolCallId,
-              toolName: tc.toolName,
+              toolName: toInternalToolName(tc.toolName, mcpManager),
               args: stringifyToolInput(tc.input),
             });
           }
@@ -559,7 +575,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             if (type !== 'tool-error' && type !== 'tool-input-error') continue;
             const toolCallId = streamToolCallId(rawPart);
             if (!toolCallId) continue;
-            const execution = sdkPreExecutionError(rawPart);
+            const execution = sdkPreExecutionError(rawPart, mcpManager);
             pendingToolResults.push({
               toolCallId,
               ...streamResultFields(execution),
@@ -596,7 +612,10 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             case 'tool-input-start': {
               armIdleTimer();
               const toolCallId = streamToolCallId(part);
-              const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+              const toolName = toInternalToolName(
+                typeof part.toolName === 'string' ? part.toolName : 'unknown',
+                mcpManager,
+              );
               if (toolCallId) {
                 deliveredAny = true;
                 yield { type: 'tool_call_start', toolCallId, toolName };
@@ -625,7 +644,10 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             case 'tool-call': {
               pauseIdleForTool();
               const toolCallId = streamToolCallId(part);
-              const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+              const toolName = toInternalToolName(
+                typeof part.toolName === 'string' ? part.toolName : 'unknown',
+                mcpManager,
+              );
               const args = stringifyToolInput(part.input ?? part.args);
               if (toolCallId && !seenToolCallIds.has(toolCallId)) {
                 seenToolCallIds.add(toolCallId);
@@ -640,7 +662,10 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               resumeIdleAfterTool();
               const toolCallId = streamToolCallId(part);
               const raw = part.output ?? part.result ?? '';
-              const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+              const toolName = toInternalToolName(
+                typeof part.toolName === 'string' ? part.toolName : 'unknown',
+                mcpManager,
+              );
               const execution = executionFromSdkOutput(raw, toolName);
               if (toolCallId && !seenToolResultIds.has(toolCallId)) {
                 seenToolResultIds.add(toolCallId);
@@ -658,7 +683,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             case 'tool-error': {
               resumeIdleAfterTool();
               const toolCallId = streamToolCallId(part);
-              const execution = sdkPreExecutionError(part);
+              const execution = sdkPreExecutionError(part, mcpManager);
               if (toolCallId && !seenToolResultIds.has(toolCallId)) {
                 seenToolResultIds.add(toolCallId);
                 deliveredAny = true;
@@ -675,9 +700,12 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               // Args never became valid — no execute, keep/reset idle
               armIdleTimer();
               const toolCallId = streamToolCallId(part);
-              const execution = sdkPreExecutionError(part);
+              const execution = sdkPreExecutionError(part, mcpManager);
               if (toolCallId) {
-                const toolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
+                const toolName = toInternalToolName(
+                  typeof part.toolName === 'string' ? part.toolName : 'unknown',
+                  mcpManager,
+                );
                 if (!seenToolCallIds.has(toolCallId)) {
                   seenToolCallIds.add(toolCallId);
                   deliveredAny = true;

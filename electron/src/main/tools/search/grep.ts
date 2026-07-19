@@ -141,12 +141,14 @@ function searchFileSync(
     for (const [index, line] of content.split('\n').entries()) {
       const matchIndex = line.search(regex);
       if (matchIndex < 0) continue;
-      matches.push({
-        path: relativePath,
-        line: index + 1,
-        column: matchIndex + 1,
-        text: line.replace(/\s+$/, ''),
-      });
+        matches.push({
+          path: relativePath,
+          line: index + 1,
+          column: matchIndex + 1,
+          // CR is the line separator in a CRLF file, not source content.
+          // Preserve all other trailing whitespace exactly.
+          text: line.endsWith('\r') ? line.slice(0, -1) : line,
+        });
       if (matches.length >= maxResults) break;
     }
     return matches;

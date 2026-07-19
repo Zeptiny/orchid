@@ -325,14 +325,14 @@ export async function executeCommand(
 
       const stdoutStr = stdout.length > 0 ? stdout.toString('utf-8').trim() : '';
       const stderrStr = stderr.length > 0 ? stderr.toString('utf-8').trim() : '';
-
-      const parts: string[] = [];
-      if (stdoutStr) parts.push(`STDOUT:\n${stdoutStr}`);
-      if (stderrStr) parts.push(`STDERR:\n${stderrStr}`);
-      if (truncated) parts.push('(output truncated)');
-
       const exitCode = proc.exitCode ?? 0;
-      return genericBuiltInToolOutcome('execute_command', parts.join('\n\n') || '(no output)', exitCode !== 0 ? 'error' : 'complete');
+      return genericBuiltInToolOutcome(
+        'execute_command',
+        { stdout: stdoutStr, stderr: stderrStr, exitCode, truncated },
+        exitCode !== 0 ? 'error' : 'complete',
+        'tool_error',
+        exitCode !== 0 ? `Command exited with code ${exitCode}` : undefined,
+      );
     } finally {
       abortSignal?.removeEventListener('abort', onAbort);
     }

@@ -19,6 +19,9 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 ## Tools
 
 - **Tool** — A discrete capability available to agents (read, edit, execute_command, delegate_to_subagent, etc.).
+- **Canonical Tool Result** — The authoritative typed outcome of a tool execution from which audience-specific representations are derived.
+- **Agent Projection** — A reasoning-oriented representation of a canonical tool result prepared for model context, including completeness and recovery information when content is omitted.
+- **User Projection** — A human-oriented representation rendered from a canonical tool result for live or persisted replay through generic or specialized tool widgets; it is not a second stored source of facts.
 - **RAG Search** — Semantic code search using embeddings and cosine similarity over indexed project files.
 - **RAG Index** — The vector store (SQLite + numpy) built by indexing and chunking project files.
 
