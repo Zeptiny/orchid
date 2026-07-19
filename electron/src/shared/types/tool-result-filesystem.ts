@@ -132,6 +132,9 @@ export const grepMatchSchema = z.object({
   text: z.string(),
 }).strict();
 
+export type GlobMatch = z.infer<typeof globMatchSchema>;
+export type GrepMatch = z.infer<typeof grepMatchSchema>;
+
 export const globResultsDataSchema = z.object({
   kind: z.literal('glob'),
   root: z.string().min(1),

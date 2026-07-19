@@ -17,6 +17,9 @@ import { createElement } from 'react';
 import { FileChangeToolResult } from '../../src/renderer/components/ToolResults/FileChangeToolResult';
 import { FileWriteToolResult } from '../../src/renderer/components/ToolResults/FileWriteToolResult';
 import { FileContentToolResult } from '../../src/renderer/components/ToolResults/FileContentToolResult';
+import { DirectoryToolResult, buildDirectoryTree } from '../../src/renderer/components/ToolResults/DirectoryToolResult';
+import { SearchToolResult, groupGrepMatches } from '../../src/renderer/components/ToolResults/SearchToolResult';
+import { GenericToolResult } from '../../src/renderer/components/ToolResults/GenericToolResult';
 
 const rendererDir = path.resolve(__dirname, '../../src/renderer/components');
 
@@ -72,6 +75,11 @@ describe('shared canonical tool-result renderer', () => {
     expect(resolveToolResultRenderer('unknown', 'file-change')).toBe(FileChangeToolResult);
     expect(resolveToolResultRenderer('unknown', 'file-write')).toBe(FileWriteToolResult);
     expect(resolveToolResultRenderer('unknown', 'file-content')).toBe(FileContentToolResult);
+    expect(resolveToolResultRenderer('read_directory', 'generic')).toBe(DirectoryToolResult);
+    expect(resolveToolResultRenderer('glob', 'generic')).toBe(SearchToolResult);
+    expect(resolveToolResultRenderer('grep', 'generic')).toBe(SearchToolResult);
+    expect(resolveToolResultRenderer('unknown', 'directory-entries')).toBe(DirectoryToolResult);
+    expect(resolveToolResultRenderer('unknown', 'search-results')).toBe(SearchToolResult);
   });
 
   it('keeps diff semantics, write content, and numbered read lines in native bodies', () => {
@@ -117,5 +125,61 @@ describe('shared canonical tool-result renderer', () => {
     expect(readMarkup).toContain('More lines are available');
     expect(readMarkup).toContain('language-typescript');
     expect(readMarkup).toContain('>one</code>');
+  });
+
+  it('renders a stable, keyboard-expandable directory hierarchy with completeness state', () => {
+    const directory = {
+      schemaVersion: 1 as const,
+      family: 'directory-entries' as const,
+      status: 'partial' as const,
+      completeness: 'partial' as const,
+      retrieval: { kind: 'rerun' as const, toolName: 'read_directory', input: { directory_path: '/tmp/project', max_depth: 3 } },
+      data: {
+        root: '/tmp/project', depthLimit: 2, depthLimitReached: true, totalEntries: 3,
+        entries: [
+          { name: 'src', relativePath: 'src', kind: 'directory' as const, depth: 0, size: 10, modifiedAt: '2026-01-01T00:00:00.000Z' },
+          { name: 'index.ts', relativePath: 'src/index.ts', kind: 'file' as const, depth: 1, parentPath: 'src', size: 12, modifiedAt: '2026-01-01T00:00:00.000Z' },
+          { name: 'README.md', relativePath: 'README.md', kind: 'file' as const, depth: 0, size: 4, modifiedAt: '2026-01-01T00:00:00.000Z' },
+        ],
+      },
+    };
+    const tree = buildDirectoryTree(directory.data);
+    expect(tree).toHaveLength(2);
+    expect(tree[0]?.children[0]?.entry.relativePath).toBe('src/index.ts');
+    const markup = renderToStaticMarkup(createElement(DirectoryToolResult, { canonical: directory }));
+    expect(markup).toContain('role="tree"');
+    expect(markup).toContain('role="treeitem"');
+    expect(markup).toContain('aria-expanded="true"');
+    expect(markup).toContain('data-entry-path="src/index.ts"');
+    expect(markup).toContain('Depth limit 2 reached');
+    expect(markup).toContain('12 bytes');
+  });
+
+  it('groups grep matches by path and pages glob rows without changing canonical order', () => {
+    const matches = Array.from({ length: 51 }, (_, index) => ({
+      path: index === 50 ? 'b.ts' : 'a.ts', line: index + 1, column: 2, text: `match-${index}`,
+    }));
+    const grouped = groupGrepMatches({ kind: 'grep', root: '/tmp', pattern: 'match', matches: matches.slice(0, 3), totalMatches: 3, limitReached: false });
+    expect(grouped.map((group) => [group.path, group.matches.length])).toEqual([['a.ts', 3]]);
+    const glob = {
+      schemaVersion: 1 as const,
+      family: 'search-results' as const,
+      status: 'complete' as const,
+      completeness: 'complete' as const,
+      data: { kind: 'glob' as const, root: '/tmp', pattern: '**/*.ts', matches: matches.map(({ path }, index) => ({ path: `${path}-${index}.ts`, size: index })), totalMatches: matches.length, limitReached: false },
+    };
+    const markup = renderToStaticMarkup(createElement(SearchToolResult, { canonical: glob }));
+    expect(markup).toContain('Glob matches');
+    expect(markup).toContain('a.ts-0.ts');
+    expect(markup).toContain('Page 2');
+    expect(markup).toContain('aria-label="Paginate glob matches"');
+  });
+
+  it('keeps unknown structured tool data inert through the generic viewer', () => {
+    const unknown = canonical('complete');
+    const markup = renderToStaticMarkup(createElement(GenericToolResult, { canonical: unknown }));
+    expect(markup).toContain('hello');
+    expect(markup).not.toContain('<script');
+    expect(resolveToolResultRenderer('unknown_tool', 'generic')).toBe(GenericToolResult);
   });
 });

@@ -4,6 +4,8 @@ import { GenericToolResult } from './GenericToolResult';
 import { FileChangeToolResult } from './FileChangeToolResult';
 import { FileWriteToolResult } from './FileWriteToolResult';
 import { FileContentToolResult } from './FileContentToolResult';
+import { DirectoryToolResult } from './DirectoryToolResult';
+import { SearchToolResult } from './SearchToolResult';
 import { LiveCommandInline } from '../ToolWidgets/LiveCommandInline';
 
 export interface ToolResultRendererProps {
@@ -28,6 +30,8 @@ for (const family of ['file-change', 'file-write', 'file-content', 'directory-en
 familyRenderers.set('file-change', FileChangeToolResult);
 familyRenderers.set('file-write', FileWriteToolResult);
 familyRenderers.set('file-content', FileContentToolResult);
+familyRenderers.set('directory-entries', DirectoryToolResult);
+familyRenderers.set('search-results', SearchToolResult);
 
 const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, isLive }) => {
   const value = canonical.data && typeof canonical.data === 'object' && !Array.isArray(canonical.data)
@@ -53,6 +57,9 @@ toolRenderers.set('execute_command', ExecuteCommandRenderer);
 toolRenderers.set('edit', FileChangeToolResult);
 toolRenderers.set('write', FileWriteToolResult);
 toolRenderers.set('read', FileContentToolResult);
+toolRenderers.set('read_directory', DirectoryToolResult);
+toolRenderers.set('glob', SearchToolResult);
+toolRenderers.set('grep', SearchToolResult);
 const builtInToolRenderers = new Map(toolRenderers);
 
 export function registerToolResultRenderer(
