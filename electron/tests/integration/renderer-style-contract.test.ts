@@ -611,7 +611,6 @@ const BASELINE_DAISYUI_HITS: ReadonlySet<string> = new Set([
 const BASELINE_DAISYUI_TOTAL_TOKENS = 65;
 
 const BASELINE_NON_TOKEN_COLORS: ReadonlyMap<string, number> = new Map([
-  ['styles/components.css:#000', 6],
 ]);
 
 const CHAT_CSS_BASELINE_LINES = 10;

@@ -676,8 +676,14 @@ describe('find_symbol_references', () => {
       await indexProject({ projectPath: projectDir, inline: true });
       const { findSymbolReferencesHandler } = await import('../../src/main/tools/ast/find-symbol-references');
       const result = await findSymbolReferencesHandler({ symbol_name: 'greet' }, { cwd: projectDir }) as any;
-      expect(outputText(result)).toContain('<references');
-      expect(outputText(result)).toContain('test.py');
+      const value = result.data.value;
+      expect(value.name).toBe('greet');
+      expect(value.count).toBeGreaterThan(0);
+      expect(value.references).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ file: expect.stringContaining('test.py') }),
+        ]),
+      );
     } finally { process.cwd = origCwd; }
   });
 
@@ -693,7 +699,7 @@ describe('find_symbol_references', () => {
       await indexProject({ projectPath: projectDir, inline: true });
       const { findSymbolReferencesHandler } = await import('../../src/main/tools/ast/find-symbol-references');
       const result = await findSymbolReferencesHandler({ symbol_name: 'nonexistent' }, { cwd: projectDir }) as any;
-      expect(outputText(result)).toContain('count="0"');
+      expect(result.data.value).toMatchObject({ name: 'nonexistent', count: 0, references: [] });
     } finally { process.cwd = origCwd; }
   });
 
@@ -771,7 +777,12 @@ describe('rename_symbol', () => {
       await indexProject({ projectPath: projectDir, inline: true });
       const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
       const result = await renameSymbolHandler({ old_name: 'greet_helper', new_name: 'format_greeting' }, { cwd: projectDir }) as any;
-      expect(outputText(result)).toContain('<rename_result');
+      expect(result.data.value).toMatchObject({
+        oldName: 'greet_helper',
+        newName: 'format_greeting',
+        success: true,
+      });
+      expect(result.data.value.files).toBeGreaterThan(0);
       const newContent = fs.readFileSync(path.join(projectDir, 'test.py'), 'utf-8');
       expect(newContent).toContain('format_greeting');
       expect(newContent).not.toContain('greet_helper');

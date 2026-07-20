@@ -255,8 +255,8 @@ describe('Preferences & Onboarding File Structure', () => {
     ).toBe(true);
   });
 
-  it('chat.css contains configuration styles', () => {
-    const cssPath = path.resolve(__dirname, '../../src/renderer/styles/chat.css');
+  it('components.css contains configuration styles', () => {
+    const cssPath = path.resolve(__dirname, '../../src/renderer/styles/components.css');
     const css = fs.readFileSync(cssPath, 'utf-8');
     expect(css).toContain('.config-main-header');
     expect(css).toContain('.config-tabs');
@@ -265,8 +265,8 @@ describe('Preferences & Onboarding File Structure', () => {
     expect(css).toContain('.config-form');
   });
 
-  it('chat.css contains onboarding styles', () => {
-    const cssPath = path.resolve(__dirname, '../../src/renderer/styles/chat.css');
+  it('components.css contains onboarding styles', () => {
+    const cssPath = path.resolve(__dirname, '../../src/renderer/styles/components.css');
     const css = fs.readFileSync(cssPath, 'utf-8');
     expect(css).toContain('.onb-overlay');
     expect(css).toContain('.onb-container');

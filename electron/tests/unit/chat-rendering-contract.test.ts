@@ -42,9 +42,12 @@ describe('chat rendering contract (U5)', () => {
 
     it('activity widgets use DaisyUI surrounding states (badge/loading/alert)', () => {
       const tool = read('components/ToolCallBlock.tsx');
+      const toolShell = read('components/ToolResults/ToolResultShell.tsx');
       const thought = read('components/MessageWidget.tsx');
       const error = read('components/ErrorBanner.tsx');
-      expect(tool).toMatch(/StatusBadge|badge/);
+      // Status badges live on the shared shell used by ToolCallBlock
+      expect(tool).toMatch(/ToolResultShell/);
+      expect(toolShell).toMatch(/StatusBadge/);
       // Migrated to Spinner primitive — source uses <Spinner> instead of raw loading classes
       expect(tool).toMatch(/<Spinner\b/);
       expect(thought).toMatch(/<Spinner\b|streaming-cursor/);

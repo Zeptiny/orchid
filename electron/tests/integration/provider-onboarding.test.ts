@@ -30,11 +30,13 @@ describe('provider onboarding and disconnected UX', () => {
 
   it('keeps plain chat disabled with an accessible provider-setup path', () => {
     const composer = source('components', 'InputArea.tsx');
+    const sendLock = source('utils', 'composer-send-lock.ts');
     expect(composer).toContain('providerAvailable');
     expect(composer).toContain('Set up provider');
     expect(composer).toContain('onOpenProviders');
     // Slash commands remain distinct from LLM sends so local commands work.
-    expect(composer).toContain("!trimmed.startsWith('/')");
+    expect(sendLock).toContain("input.trimmed.startsWith('/')");
+    expect(sendLock).toContain("!input.providerAvailable && !isSlash");
   });
 
   it('uses typed connection/model selections and never parses model IDs', () => {
@@ -223,10 +225,10 @@ describe('provider onboarding and disconnected UX', () => {
   });
 
   it('prevents focus scrolling from moving the provider modal shell', () => {
-    const css = source('styles', 'chat.css');
+    const css = source('styles', 'components.css');
 
     expect(css).toMatch(
-      /\.provider-connection-wizard \.modal-box \{[^}]*overflow: clip;/s,
+      /\.provider-connection-wizard \.modal-box \{[^}]*overflow-clip/s,
     );
   });
 });
