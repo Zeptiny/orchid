@@ -21,21 +21,39 @@ export interface SeedDefaultSubdirsOptions {
  * - Missing marker at target: recursive copy of the entire source subtree.
  * - Existing marker: leave user content alone; only copy missing resource dirs.
  */
+function isDirectory(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export function seedDefaultSubdirs(
   sourceDir: string,
   targetDir: string,
   options: SeedDefaultSubdirsOptions,
 ): void {
-  if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
+  if (!isDirectory(sourceDir)) {
     return;
   }
 
   fs.mkdirSync(targetDir, { recursive: true });
 
-  const entries = fs.readdirSync(sourceDir).sort();
+  let dirents: fs.Dirent[];
+  try {
+    dirents = fs.readdirSync(sourceDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  const entries = dirents
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .sort();
+
   for (const entry of entries) {
     const sourceSubdir = path.join(sourceDir, entry);
-    if (!fs.statSync(sourceSubdir).isDirectory()) continue;
 
     const sourceFile = path.join(sourceSubdir, options.markerFilename);
     if (!fs.existsSync(sourceFile)) continue;
@@ -51,11 +69,7 @@ export function seedDefaultSubdirs(
     for (const resource of options.resourceDirs) {
       const sourceResource = path.join(sourceSubdir, resource);
       const targetResource = path.join(targetSubdir, resource);
-      if (
-        fs.existsSync(sourceResource) &&
-        fs.statSync(sourceResource).isDirectory() &&
-        !fs.existsSync(targetResource)
-      ) {
+      if (isDirectory(sourceResource) && !fs.existsSync(targetResource)) {
         fs.cpSync(sourceResource, targetResource, { recursive: true });
       }
     }
