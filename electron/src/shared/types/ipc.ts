@@ -48,7 +48,6 @@ import type {
   ASTIndexProgress,
   IndexRunState,
   RAGConfig,
-  UpdaterState,
 } from './ipc-boundary';
 
 export type {
