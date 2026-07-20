@@ -38,7 +38,7 @@ const DEFAULT_ICON_SIZE: Record<IconButtonSize, number> = {
   md: 16,
 };
 
-/** Accessible icon (or icon+text) control with consistent DaisyUI button chrome. */
+/** Accessible icon (or icon+text) control with consistent Orchid button chrome. */
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
   {
     label,

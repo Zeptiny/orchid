@@ -26,7 +26,7 @@ const VARIANT_CLASS: Record<TabsVariant, string> = {
   pill: 'tabs-pill',
 };
 
-/** Controlled tab switcher using DaisyUI tabs / tab / tab-active. */
+/** Controlled tab switcher using tabs / tab / tab-active. */
 export function Tabs({
   items,
   value,

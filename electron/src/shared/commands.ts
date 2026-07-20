@@ -111,9 +111,10 @@ export function highlightMatch(
 
 // ── Theme and personality constants ──────────────────────────────────────────
 
-export const THEME_NAMES = ['default', 'solarized-light', 'bluey', 'windows-xp', 'green-terminal'] as const;
+export const THEME_NAMES = ['default', 'light', 'solarized-light', 'bluey', 'windows-xp', 'green-terminal'] as const;
 export const THEME_LABELS: Record<string, string> = {
   default: 'Default (Dark)',
+  light: 'Light',
   'solarized-light': 'Solarized Light',
   bluey: 'Bluey',
   'windows-xp': 'Windows XP',

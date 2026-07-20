@@ -1,9 +1,11 @@
 /**
- * Renderer style contract — U8 zero-violation gate.
+ * Renderer style contract — zero-violation gate.
  *
  * Scans class-bearing source (className / class attributes) and feature CSS
  * for styling-contract violations. Arbitrary utilities and top-level reserved
- * DaisyUI redefinitions must be zero outside the approved exception registries.
+ * component-root redefinitions must be zero outside the approved exception
+ * registries. Component roots (`btn`, `input`, `badge`, ...) are owned solely
+ * by `styles/primitives.css` — the engine that replaced DaisyUI.
  */
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
@@ -13,10 +15,13 @@ const RENDERER_ROOT = path.resolve(__dirname, '../../src/renderer');
 const STYLES_ROOT = path.join(RENDERER_ROOT, 'styles');
 const THEMES_ROOT = path.join(RENDERER_ROOT, 'themes');
 const THEMES_INDEX = path.join(THEMES_ROOT, 'index.ts');
+const PRIMITIVES_CSS = path.join(STYLES_ROOT, 'primitives.css');
+const PACKAGE_JSON = path.resolve(__dirname, '../../package.json');
 
 /** Required theme names (R7 / plan compatibility). */
 export const REQUIRED_THEMES = [
   'default',
+  'light',
   'solarized-light',
   'bluey',
   'windows-xp',
@@ -24,10 +29,11 @@ export const REQUIRED_THEMES = [
 ] as const;
 
 /**
- * DaisyUI component roots that must not be redefined in feature CSS.
+ * Component roots owned by `styles/primitives.css`. They must not be
+ * redefined anywhere else in feature CSS.
  * Exact class match only unless listed in RESERVED_MODIFIER_ROOTS.
  */
-export const RESERVED_DAISYUI_SELECTORS = [
+export const RESERVED_COMPONENT_ROOTS = [
   'btn',
   'input',
   'select',
@@ -77,7 +83,7 @@ export const RESERVED_DAISYUI_SELECTORS = [
 ] as const;
 
 /**
- * Known DaisyUI-style modifiers checked as `root-modifier` (e.g. btn-primary).
+ * Known engine modifiers checked as `root-modifier` (e.g. btn-primary).
  * Intentionally closed-set so product classes like `.footer-left` or `.input-area`
  * are not treated as reserved redefinitions.
  */
@@ -187,8 +193,9 @@ export const APPROVED_DYNAMIC_STYLE_PATHS: readonly string[] = [
 export const BASELINE_ARBITRARY_UTILITIES: ReadonlySet<string> = new Set([]);
 
 /**
- * Pre-migration reserved DaisyUI redefinitions (U1). U8 cleared this set:
- * no top-level reserved DaisyUI selector redefinitions remain.
+ * Pre-migration reserved root redefinitions (U1). U8 cleared this set:
+ * no top-level reserved component-root redefinitions remain outside
+ * `styles/primitives.css`.
  */
 export const BASELINE_RESERVED_REDEFINITIONS: ReadonlySet<string> = new Set([]);
 
@@ -430,7 +437,7 @@ function findCssRuleBody(css: string, selector: string): string | null {
 }
 
 function isReservedClassName(className: string): boolean {
-  for (const root of RESERVED_DAISYUI_SELECTORS) {
+  for (const root of RESERVED_COMPONENT_ROOTS) {
     if (className === root) return true;
     if (!RESERVED_MODIFIER_ROOTS.has(root)) continue;
     for (const mod of RESERVED_MODIFIERS) {
@@ -441,7 +448,7 @@ function isReservedClassName(className: string): boolean {
 }
 
 /**
- * Find top-level custom rules whose subject is a reserved DaisyUI class.
+ * Find top-level custom rules whose subject is a reserved component root.
  * Scoped usage (`.composer .input`) is not counted as a redefinition here.
  */
 export function findTopLevelReservedRedefinitions(
@@ -477,6 +484,8 @@ export function scanReservedRedefinitions(stylesRoot = STYLES_ROOT): Map<string,
   const files = walkFiles(stylesRoot, (n) => n.endsWith('.css'));
   for (const file of files) {
     const rel = relRenderer(file);
+    // The primitive engine is the sole owner of reserved component roots.
+    if (rel === 'styles/primitives.css') continue;
     const css = fs.readFileSync(file, 'utf8');
     for (const hit of findTopLevelReservedRedefinitions(css)) {
       const key = `${rel}::${hit.selector}`;
@@ -486,11 +495,11 @@ export function scanReservedRedefinitions(stylesRoot = STYLES_ROOT): Map<string,
   return byKey;
 }
 
-// ─── DaisyUI class-name drift in feature JSX ─────────────────────────────────
+// ─── Component-root drift in feature JSX ─────────────────────────────────────
 
-const DAISYUI_ROOT_SET = new Set<string>(RESERVED_DAISYUI_SELECTORS);
+const COMPONENT_ROOT_SET = new Set<string>(RESERVED_COMPONENT_ROOTS);
 
-function findDaisyUIRootsInClassString(classString: string): Set<string> {
+function findComponentRootsInClassString(classString: string): Set<string> {
   const roots = new Set<string>();
   for (const token of classString.split(/\s+/)) {
     if (!token) continue;
@@ -499,14 +508,14 @@ function findDaisyUIRootsInClassString(classString: string): Set<string> {
     if (token.startsWith('sm:') || token.startsWith('md:') || token.startsWith('lg:') || token.startsWith('xl:')) {
       const inner = token.slice(token.indexOf(':') + 1);
       if (!inner) continue;
-      for (const root of DAISYUI_ROOT_SET) {
+      for (const root of COMPONENT_ROOT_SET) {
         if (inner === root || inner.startsWith(`${root}-`)) {
           roots.add(root);
         }
       }
       continue;
     }
-    for (const root of DAISYUI_ROOT_SET) {
+    for (const root of COMPONENT_ROOT_SET) {
       if (token === root || token.startsWith(`${root}-`)) {
         roots.add(root);
       }
@@ -515,7 +524,7 @@ function findDaisyUIRootsInClassString(classString: string): Set<string> {
   return roots;
 }
 
-export function scanDaisyUIDrift(rendererRoot = RENDERER_ROOT): { findings: string[]; totalTokens: number } {
+export function scanComponentRootDrift(rendererRoot = RENDERER_ROOT): { findings: string[]; totalTokens: number } {
   const findings: string[] = [];
   let totalTokens = 0;
   const files = walkFiles(rendererRoot, (n) => /\.tsx?$/.test(n));
@@ -526,7 +535,7 @@ export function scanDaisyUIDrift(rendererRoot = RENDERER_ROOT): { findings: stri
     const source = fs.readFileSync(file, 'utf8');
     const roots = new Set<string>();
     for (const classString of extractStaticClassStrings(source)) {
-      for (const root of findDaisyUIRootsInClassString(classString)) {
+      for (const root of findComponentRootsInClassString(classString)) {
         roots.add(root);
         totalTokens++;
       }
@@ -569,7 +578,7 @@ export function countChatCssLines(stylesRoot = STYLES_ROOT): number {
 
 // ─── Baselines (migration-driven shrink targets) ─────────────────────────────
 
-const BASELINE_DAISYUI_HITS: ReadonlySet<string> = new Set([
+const BASELINE_COMPONENT_ROOT_HITS: ReadonlySet<string> = new Set([
   'components/CommandPalette.tsx::input',
   'components/ConfigView.tsx::btn',
   'components/ConfigView.tsx::modal',
@@ -607,8 +616,8 @@ const BASELINE_DAISYUI_HITS: ReadonlySet<string> = new Set([
   'components/session-activity-section.tsx::status',
 ]);
 
-/** Total DaisyUI token occurrences captured at baseline time (count guard). */
-const BASELINE_DAISYUI_TOTAL_TOKENS = 65;
+/** Total component-root token occurrences captured at baseline time (count guard). */
+const BASELINE_COMPONENT_ROOT_TOTAL_TOKENS = 65;
 
 const BASELINE_NON_TOKEN_COLORS: ReadonlyMap<string, number> = new Map([
 ]);
@@ -619,7 +628,7 @@ const CHAT_CSS_BASELINE_LINES = 10;
 
 describe('Renderer style contract', () => {
   describe('theme registry', () => {
-    it('registers all five required theme names', () => {
+    it('registers all required theme names', () => {
       const indexSource = fs.readFileSync(THEMES_INDEX, 'utf8');
       for (const name of REQUIRED_THEMES) {
         expect(indexSource, `themes/index.ts missing ${name}`).toMatch(
@@ -827,7 +836,7 @@ describe('Renderer style contract', () => {
     });
   });
 
-  describe('DaisyUI reserved selector redefinitions', () => {
+  describe('reserved component-root redefinitions', () => {
     it('detects top-level reserved redefinitions in CSS', () => {
       const sample = `
         .btn { color: red; }
@@ -845,7 +854,7 @@ describe('Renderer style contract', () => {
       expect(selectors.some((s) => s.includes('orchid-panel'))).toBe(false);
     });
 
-    it('reports zero top-level reserved DaisyUI redefinitions after U8', () => {
+    it('reports zero top-level reserved redefinitions outside primitives.css', () => {
       const found = scanReservedRedefinitions();
       const unexpected: string[] = [];
       for (const key of found.keys()) {
@@ -854,9 +863,59 @@ describe('Renderer style contract', () => {
       }
       expect(
         unexpected,
-        `Reserved DaisyUI redefinitions:\n${unexpected.join('\n')}`,
+        `Reserved component-root redefinitions:\n${unexpected.join('\n')}`,
       ).toEqual([]);
       expect(found.size).toBe(0);
+    });
+  });
+
+  describe('daisyUI removal gate', () => {
+    it('ships the primitive engine as the component-class owner', () => {
+      expect(fs.existsSync(PRIMITIVES_CSS), 'styles/primitives.css is missing').toBe(true);
+      const css = fs.readFileSync(PRIMITIVES_CSS, 'utf8');
+      for (const root of ['.btn', '.input', '.select', '.badge', '.alert', '.modal', '.tabs', '.loading']) {
+        expect(
+          css,
+          `primitives.css missing ${root}`,
+        ).toMatch(new RegExp(`${escapeRegExp(root)}\\s*[,{}]`));
+      }
+    });
+
+    it('index.css no longer loads the daisyUI plugin', () => {
+      const indexCss = fs.readFileSync(path.join(STYLES_ROOT, 'index.css'), 'utf8');
+      expect(indexCss.toLowerCase()).not.toContain('daisyui');
+      expect(indexCss).toContain('@import "./primitives.css"');
+    });
+
+    it('package.json has no daisyui dependency', () => {
+      const pkg = JSON.parse(fs.readFileSync(PACKAGE_JSON, 'utf8')) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      expect(pkg.dependencies?.daisyui).toBeUndefined();
+      expect(pkg.devDependencies?.daisyui).toBeUndefined();
+    });
+
+    it('styles carry no daisyUI-internal fallback variables', () => {
+      const files = walkFiles(STYLES_ROOT, (n) => n.endsWith('.css'));
+      const hits: string[] = [];
+      for (const file of files) {
+        const css = stripCssComments(fs.readFileSync(file, 'utf8'));
+        if (css.includes('--fallback-')) hits.push(relRenderer(file));
+      }
+      expect(hits, `daisyUI fallback vars in: ${hits.join(', ')}`).toEqual([]);
+    });
+
+    it('themes carry no daisyUI-only control variables', () => {
+      const files = walkFiles(THEMES_ROOT, (n) => n.endsWith('.css'));
+      const hits: string[] = [];
+      for (const file of files) {
+        const css = fs.readFileSync(file, 'utf8');
+        for (const banned of ['--depth', '--noise', '--size-field', '--size-selector']) {
+          if (css.includes(banned)) hits.push(`${relRenderer(file)}:${banned}`);
+        }
+      }
+      expect(hits, `daisyUI-only vars in: ${hits.join(', ')}`).toEqual([]);
     });
   });
 
@@ -891,6 +950,7 @@ describe('Renderer style contract', () => {
       expect(readme).toMatch(/class selection/i);
       expect(readme).toMatch(/approved exceptions/i);
       expect(readme).toMatch(/DaisyUI/);
+      expect(readme).toMatch(/primitives\.css/);
       expect(readme).toMatch(/orchid-/);
       for (const name of REQUIRED_THEMES) {
         expect(readme).toContain(name);
@@ -898,33 +958,33 @@ describe('Renderer style contract', () => {
     });
   });
 
-  describe('DaisyUI class-name drift in feature JSX', () => {
-    it('does not introduce new DaisyUI roots outside components/ui/ without baseline', () => {
-      const { findings } = scanDaisyUIDrift();
-      const unexpected = findings.filter((f) => !BASELINE_DAISYUI_HITS.has(f));
+  describe('component-root drift in feature JSX', () => {
+    it('does not introduce new component roots outside components/ui/ without baseline', () => {
+      const { findings } = scanComponentRootDrift();
+      const unexpected = findings.filter((f) => !BASELINE_COMPONENT_ROOT_HITS.has(f));
       expect(
         unexpected,
-        `New DaisyUI roots in feature JSX (baseline: ${BASELINE_DAISYUI_HITS.size} hits):\n${unexpected.join('\n')}\n\nTo allowlist new drift, add entries to BASELINE_DAISYUI_HITS. To remove drift, migrate to primitives in components/ui/.`,
+        `New component roots in feature JSX (baseline: ${BASELINE_COMPONENT_ROOT_HITS.size} hits):\n${unexpected.join('\n')}\n\nTo allowlist new drift, add entries to BASELINE_COMPONENT_ROOT_HITS. To remove drift, migrate to primitives in components/ui/.`,
       ).toEqual([]);
     });
 
     it('reports drift summary (informational)', () => {
-      const { findings } = scanDaisyUIDrift();
+      const { findings } = scanComponentRootDrift();
       const byRoot = new Map<string, number>();
       for (const f of findings) {
         const root = f.split('::')[1]!;
         byRoot.set(root, (byRoot.get(root) ?? 0) + 1);
       }
       const summary = [...byRoot.entries()].sort((a, b) => b[1] - a[1]).map(([r, c]) => `${r}: ${c}`);
-      expect(findings.length, `DaisyUI hits outside ui/ (baseline ${BASELINE_DAISYUI_HITS.size}):\n${summary.join('\n')}`).toBeLessThanOrEqual(BASELINE_DAISYUI_HITS.size);
+      expect(findings.length, `Component-root hits outside ui/ (baseline ${BASELINE_COMPONENT_ROOT_HITS.size}):\n${summary.join('\n')}`).toBeLessThanOrEqual(BASELINE_COMPONENT_ROOT_HITS.size);
     });
 
-    it('total DaisyUI token occurrences do not exceed baseline', () => {
-      const { totalTokens } = scanDaisyUIDrift();
+    it('total component-root token occurrences do not exceed baseline', () => {
+      const { totalTokens } = scanComponentRootDrift();
       expect(
         totalTokens,
-        `DaisyUI total token occurrences (${totalTokens}) exceeded baseline (${BASELINE_DAISYUI_TOTAL_TOKENS}). New file::root pairs or increased usage within baselined files.`,
-      ).toBeLessThanOrEqual(BASELINE_DAISYUI_TOTAL_TOKENS);
+        `Component-root total token occurrences (${totalTokens}) exceeded baseline (${BASELINE_COMPONENT_ROOT_TOTAL_TOKENS}). New file::root pairs or increased usage within baselined files.`,
+      ).toBeLessThanOrEqual(BASELINE_COMPONENT_ROOT_TOTAL_TOKENS);
     });
   });
 

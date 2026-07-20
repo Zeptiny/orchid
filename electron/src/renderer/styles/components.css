@@ -1,10 +1,10 @@
 /**
  * Shared product composites (namespaced orchid-*).
  *
- * Prefer DaisyUI classes in JSX for recognizable controls. Use orchid-* only
- * for repeated product geometry/state. Compose with @apply + semantic tokens
- * when utilities express the contract; keep custom declarations for theme-var
- * surfaces that utilities cannot yet express cleanly.
+ * Recognizable controls come from the ui/ primitives (engine: primitives.css).
+ * Use orchid-* only for repeated product geometry/state. Compose with @apply +
+ * semantic tokens when utilities express the contract; keep custom
+ * declarations for theme-var surfaces that utilities cannot yet express cleanly.
  */
 
 @layer orchid {
@@ -181,7 +181,7 @@
     min-width: 1.35em;
     border: 1px solid color-mix(in srgb, var(--border-default) 92%, var(--accent-primary));
     border-radius: 4px;
-    background: color-mix(in srgb, var(--bg-secondary, var(--color-base-200)) 96%, var(--overlay-color));
+    background: color-mix(in srgb, var(--bg-secondary, var(--color-base-200)) 96%, var(--bg-primary, var(--color-base-100)));
     color: color-mix(in srgb, var(--text-muted, var(--color-base-content)) 94%, var(--accent-primary, var(--color-primary)));
     font-weight: 550;
     letter-spacing: 0.02em;
@@ -208,8 +208,8 @@
     border-radius: 5px;
   }
 
-  /* DaisyUI badges — keep label off the border (scoped via :where so we do not
-     redefine reserved DaisyUI component selectors at the top level). */
+  /* Badges — keep label off the border (scoped via :where so the primitive
+     engine stays the sole owner of the reserved `.badge` root). */
   :where(.badge) {
     padding-inline: 0.5rem;
     padding-block: 0.2rem;
@@ -331,7 +331,9 @@
 
   .orchid-chat-empty-title {
     @apply mb-2 font-bold text-base-content;
-    font-size: 20px;
+    font-family: var(--font-display, inherit);
+    font-size: 22px;
+    letter-spacing: -0.015em;
   }
 
   .orchid-chat-empty-desc {
@@ -339,27 +341,25 @@
     max-width: 360px;
   }
 
-  /* Flat message rows — not DaisyUI chat/chat-bubble.
+  /* Flat message rows — not a chat-bubble component.
      Padding is enforced unlayered in exceptions.css + Tailwind on JSX. */
   .orchid-msg {
-    /* text-md ≈ Tailwind text-base (1rem); no text-md token in Tailwind 4. */
     @apply break-words text-base leading-snug;
     width: 100%;
     max-width: 100%;
-    border-radius: 0.375rem;
+    border-radius: 0.75rem;
     font-size: 1rem;
+    animation: orchid-rise 280ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .orchid-msg-user {
     @apply self-end;
-    /* Extra air after assistant/tool turns. */
     margin-top: 0.5rem;
   }
 
   .orchid-msg-assistant {
     @apply self-start bg-transparent text-base-content;
     max-width: 100%;
-    /* Extra air after the previous user turn. */
     margin-top: 0.5rem;
   }
 
@@ -380,6 +380,7 @@
   .orchid-thought {
     @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
     border-radius: 5px;
+    animation: orchid-rise 220ms ease-out;
   }
 
   .orchid-thought-title {
@@ -415,6 +416,7 @@
   .orchid-tool-activity {
     @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
     border-radius: 5px;
+    animation: orchid-rise 220ms ease-out;
   }
 
   .orchid-tool-activity-title {
@@ -473,6 +475,7 @@
   .orchid-tool-block {
     @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
     border-radius: 5px;
+    animation: orchid-rise 220ms ease-out;
   }
 
   .orchid-tool-block-title {
@@ -711,7 +714,6 @@
 
   .orchid-composer-area {
     @apply relative flex flex-col shrink-0 bg-base-100;
-    /* No top border — continuous with chat; footer has no divider either. */
     border-top: none;
     padding-inline: 16px;
     padding-top: 8px;
@@ -726,24 +728,36 @@
     padding-inline: 0;
   }
 
-  /* Single field shell: textarea + send button share one border/background. */
+  /* Single field shell: textarea + send button share one border/background.
+     Subtle glassmorphism with refined focus state. */
   .orchid-composer-shell {
     @apply flex min-w-0 items-center gap-1.5;
-    border: 1px solid var(--border-default, var(--color-base-300));
-    border-radius: 0.5rem;
-    background: var(--input-bg, var(--color-base-200));
+    border: 1px solid color-mix(in srgb, var(--border-default, var(--color-base-300)) 90%, transparent);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--input-bg, var(--color-base-200)) 85%, transparent);
+    backdrop-filter: blur(12px) saturate(140%);
     padding: 4px;
     min-height: 44px;
-    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+    box-shadow:
+      0 1px 2px color-mix(in srgb, var(--overlay-color) 20%, transparent),
+      inset 0 1px 0 color-mix(in srgb, var(--color-base-content) 3%, transparent);
+    transition:
+      border-color var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+      box-shadow var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+      background-color var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
   }
 
   .orchid-composer-shell:focus-within {
-    border-color: color-mix(in srgb, var(--color-primary) 55%, var(--color-base-300));
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 25%, transparent);
+    border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-base-300));
+    background: color-mix(in srgb, var(--input-bg, var(--color-base-200)) 92%, transparent);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--color-primary) 10%, transparent),
+      0 4px 12px color-mix(in srgb, var(--overlay-color) 15%, transparent),
+      inset 0 1px 0 color-mix(in srgb, var(--color-base-content) 4%, transparent);
   }
 
   .orchid-composer.streaming .orchid-composer-shell {
-    border-color: color-mix(in srgb, var(--color-base-content) 14%, var(--color-base-300));
+    border-color: color-mix(in srgb, var(--color-base-content) 12%, var(--color-base-300));
   }
 
   .orchid-composer .orchid-composer-textarea {
@@ -763,7 +777,7 @@
     width: 32px;
     height: 32px;
     padding: 0 !important;
-    border-radius: 0.375rem !important;
+    border-radius: 0.5rem !important;
   }
 
   .orchid-composer-model-picker {
@@ -775,15 +789,15 @@
 
   .orchid-composer-model-picker .orchid-model-picker-trigger {
     @apply h-8 min-h-8 w-auto max-w-full border-transparent bg-transparent text-base-content/70;
-    border-radius: 0.375rem; /* rounded-md */
+    border-radius: 0.5rem;
     padding: 5px 10px;
   }
 
   .orchid-composer-model-picker .orchid-model-picker-trigger:hover:not(:disabled),
   .orchid-composer-model-picker .orchid-model-picker-trigger:focus-visible {
     @apply text-base-content;
-    border-color: color-mix(in srgb, var(--color-primary) 25%, var(--color-base-300));
-    background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+    border-color: color-mix(in srgb, var(--color-primary) 20%, var(--color-base-300));
+    background: color-mix(in srgb, var(--color-primary) 10%, transparent);
   }
 
   .orchid-slash-menu {
@@ -831,9 +845,8 @@
     font-size: 7px !important;
   }
 
-  /* Soften DaisyUI radial track (default can read as bright white at 0%). */
+  /* Soften the radial track slightly inside the dense footer chrome. */
   .orchid-footer-context-radial.radial-progress {
-    --fallback-b3: color-mix(in srgb, var(--color-base-content) 14%, transparent);
     opacity: 0.92;
   }
 
@@ -981,7 +994,8 @@
   }
   .shortcuts-help-title-text h2 {
     @apply m-0 font-semibold leading-tight;
-    font-size: 14px;
+    font-family: var(--font-display, inherit);
+    font-size: 15px;
     letter-spacing: -0.01em;
     color: var(--text-primary);
   }
@@ -1182,11 +1196,14 @@
   .onb-step h1,
   .onb-step h2 {
     @apply m-0;
+    font-family: var(--font-display, inherit);
+    letter-spacing: -0.02em;
     color: var(--text-primary);
   }
 
   .onb-step h1 {
-    font-size: var(--font-size-xl);
+    font-size: calc(var(--font-size-xl) * 1.35);
+    font-weight: 700;
   }
 
   .onb-step h2 {
@@ -1213,12 +1230,15 @@
     font-weight: 500;
   }
 
-  /* Compact mock-style collapse (inspector panels) */
+  /* Compact mock-style collapse (inspector panels).
+     Surface steps toward the base surface — recessed in dark themes,
+     lifted toward white in light themes. Overlay color is reserved for
+     shadows and veils, never used as a surface tint. */
   .mock-collapse {
     margin-bottom: 4px;
     border: 1px solid var(--border-default);
     border-radius: 5px;
-    background: color-mix(in srgb, var(--bg-secondary) 84%, var(--overlay-color));
+    background: color-mix(in srgb, var(--bg-secondary) 84%, var(--bg-primary));
     overflow: hidden;
   }
   .mock-collapse .mock-collapse-title {
@@ -1237,6 +1257,7 @@
     background: transparent;
     color: inherit;
     font-family: inherit;
+    transition: background-color var(--transition-fast, 150ms ease);
   }
   .mock-collapse .mock-collapse-title:hover {
     filter: brightness(1.06);
@@ -1356,7 +1377,7 @@
     flex-shrink: 0;
     user-select: none;
   }
-  /* Legacy daisy kbd inside footer (streaming status may still use raw kbd) */
+  /* Legacy kbd inside footer (streaming status may still use raw kbd) */
   .orchid-chat-footer .kbd:not(.orchid-keycap) {
     min-width: 16px;
     padding: 1px 3px;
@@ -1471,8 +1492,10 @@
   }
   .config-main-header-text h1 {
     margin: 0;
-    font-size: 14px;
+    font-family: var(--font-display, inherit);
+    font-size: 15px;
     font-weight: 700;
+    letter-spacing: -0.01em;
     line-height: 1.3;
   }
   .config-main-header-text p {
@@ -1513,6 +1536,10 @@
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
+    transition:
+      background-color var(--transition-fast, 150ms ease),
+      color var(--transition-fast, 150ms ease),
+      border-color var(--transition-fast, 150ms ease);
   }
   .config-tab:hover {
     color: var(--text-primary);
@@ -1753,7 +1780,7 @@
     box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color) 55%, transparent);
   }
 
-  /* DaisyUI dropdown-content can neutralize inherited surfaces — reassert chrome. */
+  /* dropdown-content can neutralize inherited surfaces — reassert chrome. */
   .dropdown-content.searchable-picker-menu,
   .dropdown-content.tier-picker-menu,
   .dropdown-content.orchid-model-picker-menu {

@@ -1,7 +1,7 @@
 /**
  * CommandPalette — modal overlay with fuzzy search.
  *
- * Uses DaisyUI modal and list components.
+ * Uses the modal and list primitives.
  */
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
@@ -643,6 +643,7 @@ function HighlightedText({ query, text }: { query: string; text: string }) {
 
 const THEME_SWATCHES: Record<string, string> = {
   default: '#1a1b26',
+  light: '#f9f9fa',
   'solarized-light': '#fdf6e3',
   bluey: '#2e3440',
   'windows-xp': '#3a6ea5',

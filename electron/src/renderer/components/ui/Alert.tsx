@@ -28,7 +28,7 @@ const VARIANT_CLASS: Record<AlertVariant, string> = {
   soft: 'alert-soft',
 };
 
-/** DaisyUI alert with optional icon, title, body, and action slot. */
+/** Orchid alert with optional icon, title, body, and action slot. */
 export function Alert({
   tone = 'info',
   variant = 'default',

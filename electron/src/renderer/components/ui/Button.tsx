@@ -47,7 +47,7 @@ const DEFAULT_ICON_SIZE: Record<ButtonSize, number> = {
   lg: 18,
 };
 
-/** DaisyUI button primitive supporting variants, sizes, shapes, loading state, and icon slots. */
+/** Orchid button primitive supporting variants, sizes, shapes, loading state, and icon slots. */
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   {
     children,

@@ -24,7 +24,7 @@ const VARIANT_CONTENT_CLASS = {
   section: 'px-3 pb-3',
 } as const;
 
-/** Native, keyboard-accessible disclosure with daisyUI collapse styling. */
+/** Native, keyboard-accessible disclosure with collapse styling. */
 export function Disclosure({
   summary,
   children,

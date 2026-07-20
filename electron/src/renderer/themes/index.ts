@@ -5,10 +5,11 @@
  * Theme switching is done by swapping the stylesheet link.
  */
 
-export type ThemeName = 'default' | 'solarized-light' | 'bluey' | 'windows-xp' | 'green-terminal';
+export type ThemeName = 'default' | 'light' | 'solarized-light' | 'bluey' | 'windows-xp' | 'green-terminal';
 
 export const THEMES: Record<ThemeName, string> = {
   default: 'Default (Dark)',
+  light: 'Light',
   'solarized-light': 'Solarized Light',
   bluey: 'Bluey',
   'windows-xp': 'Windows XP',
@@ -23,8 +24,8 @@ export const THEME_NAMES = Object.keys(THEMES) as ThemeName[];
  * static renderer asset via the Vite theme-assets plugin.
  */
 export function applyTheme(name: ThemeName): void {
-  // Keep the document-level attribute in sync so daisyUI and browser-native
-  // controls inherit the selected theme outside the React root as well.
+  // Keep the document-level attribute in sync so browser-native controls
+  // inherit the selected theme outside the React root as well.
   document.documentElement.dataset.theme = name;
 
   // Remove any existing theme link

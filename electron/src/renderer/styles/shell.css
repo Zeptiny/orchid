@@ -7,11 +7,6 @@
 
 @layer orchid {
   /* ── Chat shell / session chrome ──────────────────────────────────────── */
-  /*
-   * These selectors are the stable geometry contracts for the three-panel
-   * shell. They remain separate from the typed primitives because the same
-   * layout is shared by the chat, session catalog, and inspector surfaces.
-   */
 
   .main-pane {
     min-width: 0;
@@ -34,12 +29,12 @@
   }
 
   .left-panel {
-    border-right: 1px solid var(--border-default);
+    border-right: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
   }
 
   .right-panel {
     width: 300px;
-    border-left: 1px solid var(--border-default);
+    border-left: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
   }
 
   .left-panel-collapsed {
@@ -47,7 +42,7 @@
     align-items: center;
     padding: 8px 0 10px;
     gap: 6px;
-    border-right: 1px solid var(--border-default);
+    border-right: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
   }
 
   .left-panel-collapsed-spacer {
@@ -59,7 +54,7 @@
     width: 48px;
     align-items: center;
     padding: 8px 0;
-    border-left: 1px solid var(--border-default);
+    border-left: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
   }
 
   .right-panel-toolbar {
@@ -78,16 +73,17 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    border-bottom: 1px solid var(--border-default);
+    border-bottom: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
     flex: 0 0 auto;
   }
 
   .panel-header .title,
   .title {
     margin: 0;
+    font-family: var(--font-display, inherit);
     font-size: 13px;
     font-weight: 700;
-    letter-spacing: 0;
+    letter-spacing: -0.01em;
     color: var(--text-primary);
   }
 
@@ -155,6 +151,7 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
+    transition: background-color var(--transition-fast, 150ms ease);
   }
 
   .session-activity-select:hover {
@@ -234,6 +231,9 @@
     background: transparent;
     box-sizing: border-box;
     cursor: pointer;
+    transition:
+      background-color var(--transition-fast, 150ms ease),
+      border-color var(--transition-fast, 150ms ease);
   }
 
   .session-tab-active {
@@ -769,6 +769,9 @@
     cursor: pointer;
     overflow: hidden;
     box-sizing: border-box;
+    transition:
+      background-color var(--transition-fast, 150ms ease),
+      border-color var(--transition-fast, 150ms ease);
   }
 
   .session-item:hover {

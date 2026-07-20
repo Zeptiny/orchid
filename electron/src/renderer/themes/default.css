@@ -1,92 +1,93 @@
 /**
  * Default theme — dark.
  *
- * The base dark theme for Orchid. Deep navy background with
- * high-contrast text and blue accents.
+ * Refined dark theme with sophisticated depth. Near-black surfaces with
+ * subtle blue undertones, high-contrast text, and a luminous indigo accent.
  */
 :root {
-  /* Background colors */
-  --bg-primary: #0b0f14;
-  --bg-secondary: #151a21;
-  --bg-tertiary: #26303d;
-  --bg-surface: #0b0f14;
-  --bg-surface-raised: #151a21;
-  --bg-surface-overlay: #26303d;
+  /* Background colors — deep, near-black with cool undertone */
+  --bg-primary: #09090b;
+  --bg-secondary: #111113;
+  --bg-tertiary: #1c1c1f;
+  --bg-surface: #09090b;
+  --bg-surface-raised: #111113;
+  --bg-surface-overlay: #1c1c1f;
 
-  /* Text colors */
-  --text-primary: #eef3f8;
-  --text-secondary: #98a5b5;
-  --text-tertiary: #6b7785;
-  --text-inverse: #0b0f14;
+  /* Text colors — high contrast, slightly warm white */
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-tertiary: #71717a;
+  --text-inverse: #09090b;
 
-  /* Accent colors */
-  --accent-primary: #7e88ff;
-  --accent-primary-hover: #9aa1ff;
-  --accent-secondary: #72a8be;
-  --accent-success: #68d38f;
-  --accent-warning: #f2c665;
-  --accent-error: #ef8383;
-  --accent-info: #76baff;
+  /* Accent colors — luminous indigo primary, refined secondaries */
+  --accent-primary: #818cf8;
+  --accent-primary-hover: #a5b4fc;
+  --accent-secondary: #67e8f9;
+  --accent-success: #4ade80;
+  --accent-warning: #fbbf24;
+  --accent-error: #f87171;
+  --accent-info: #60a5fa;
 
-  /* Border colors */
-  --border-default: #26303d;
-  --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-strong: #3a4658;
-  --border-focus: #7e88ff;
+  /* Border colors — subtle, refined */
+  --border-default: #27272a;
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --border-strong: #3f3f46;
+  --border-focus: #818cf8;
 
   /* Message colors */
-  --msg-user-bg: #5964d8;
-  --msg-user-text: #eef3f8;
+  --msg-user-bg: rgba(129, 140, 248, 0.15);
+  --msg-user-text: #fafafa;
   --msg-assistant-bg: transparent;
-  --msg-assistant-text: #eef3f8;
-  --msg-system-bg: #151a21;
-  --msg-system-text: #98a5b5;
-  --msg-error-bg: #2a1a1e;
-  --msg-error-text: #ef8383;
-  --msg-thinking-bg: rgba(244, 197, 66, 0.06);
-  --msg-thinking-text: #f4c542;
+  --msg-assistant-text: #fafafa;
+  --msg-system-bg: #111113;
+  --msg-system-text: #a1a1aa;
+  --msg-error-bg: rgba(248, 113, 113, 0.1);
+  --msg-error-text: #f87171;
+  --msg-thinking-bg: rgba(251, 191, 36, 0.06);
+  --msg-thinking-text: #fbbf24;
 
-  /* Input colors */
-  --input-bg: #090e15;
-  --input-border: #26303d;
-  --input-focus-border: #7e88ff;
-  --input-text: #eef3f8;
-  --input-placeholder: #98a5b5;
+  /* Input colors — slightly recessed */
+  --input-bg: #0c0c0e;
+  --input-border: #27272a;
+  --input-focus-border: #818cf8;
+  --input-text: #fafafa;
+  --input-placeholder: #71717a;
 
   /* Button colors */
-  --btn-primary-bg: #7e88ff;
+  --btn-primary-bg: #818cf8;
   --btn-primary-text: #ffffff;
-  --btn-primary-hover: #9aa1ff;
-  --btn-secondary-bg: #26303d;
-  --btn-secondary-text: #eef3f8;
-  --btn-secondary-hover: #3a4658;
-  --btn-danger-bg: #ef8383;
+  --btn-primary-hover: #a5b4fc;
+  --btn-secondary-bg: #27272a;
+  --btn-secondary-text: #fafafa;
+  --btn-secondary-hover: #3f3f46;
+  --btn-danger-bg: #f87171;
   --btn-danger-text: #ffffff;
-  --btn-danger-hover: #f4a0a0;
+  --btn-danger-hover: #fca5a5;
 
   /* Sidebar colors */
-  --sidebar-bg: #151a21;
-  --sidebar-border: #26303d;
-  --sidebar-item-hover: rgba(126, 136, 255, 0.12);
-  --sidebar-item-active: rgba(126, 136, 255, 0.18);
+  --sidebar-bg: #111113;
+  --sidebar-border: #27272a;
+  --sidebar-item-hover: rgba(129, 140, 248, 0.08);
+  --sidebar-item-active: rgba(129, 140, 248, 0.14);
 
   /* Scrollbar */
-  --scrollbar-thumb: #26303d;
+  --scrollbar-thumb: #27272a;
   --scrollbar-track: transparent;
 
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.4);
+  /* Shadows — layered, soft */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
 
   /* Typography */
-  --font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --font-size-xs: 0.69rem;    /* ~9px */
-  --font-size-sm: 0.77rem;    /* ~10px */
-  --font-size-base: 0.8125rem;/* ~13px */
-  --font-size-lg: 0.875rem;   /* ~14px */
-  --font-size-xl: 1rem;       /* 16px */
+  --font-family: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: 'Bricolage Grotesque', 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-size-xs: 0.69rem;
+  --font-size-sm: 0.77rem;
+  --font-size-base: 0.8125rem;
+  --font-size-lg: 0.875rem;
+  --font-size-xl: 1rem;
 
   /* Spacing */
   --space-1: 0.25rem;
@@ -96,18 +97,18 @@
   --space-6: 1.5rem;
   --space-8: 2rem;
 
-  /* Border radius */
-  --radius-sm: 0.25rem;
-  --radius-md: 0.5rem;
-  --radius-lg: 0.75rem;
+  /* Border radius — slightly larger for modern feel */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
   --radius-full: 9999px;
 
-  /* Transitions */
-  --transition-fast: 150ms ease;
-  --transition-normal: 200ms ease;
-  --transition-slow: 300ms ease;
+  /* Transitions — snappier */
+  --transition-fast: 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 280ms cubic-bezier(0.4, 0, 0.2, 1);
 
-  /* daisyUI semantic token bridge */
+  /* Semantic token bridge — consumed by Tailwind utilities + primitives.css */
   --color-primary: var(--accent-primary);
   --color-primary-content: var(--btn-primary-text);
   --color-secondary: var(--accent-secondary);
@@ -131,20 +132,15 @@
   --radius-selector: var(--radius-sm);
   --radius-field: var(--radius-md);
   --radius-box: var(--radius-lg);
-  --size-selector: 0.25rem;
-  --size-field: 0.25rem;
-  --border: 1px;
-  --depth: 0;
-  --noise: 0;
-  --text-muted: #c5d0dc;
-  --bg-surface-deep: #0c1016;
+  --text-muted: #d4d4d8;
+  --bg-surface-deep: #0a0a0c;
   --overlay-color: #000000;
   --syntax-comment: #6a9955;
   --syntax-string: #ce9178;
-  --context-free: #303848;
-  --context-system: #54789c;
-  --context-tool: #b08642;
-  --context-user: #7e88ff;
-  --context-assistant: #68d38f;
+  --context-free: #27272a;
+  --context-system: #3b82f6;
+  --context-tool: #f59e0b;
+  --context-user: #818cf8;
+  --context-assistant: #4ade80;
   color-scheme: dark;
 }

@@ -1,7 +1,7 @@
 /**
  * MessageWidget — renders a single message based on its role/type.
  *
- * Flat chat (no DaisyUI chat/chat-bubble). Thought blocks use disclosure
+ * Flat chat (no chat-bubble component). Thought blocks use disclosure
  * chrome; tool call/result messages fall back to ToolCallBlock for edge cases.
  * ChatStream normally converts them into ToolBlocks for consistent ordering.
  */
