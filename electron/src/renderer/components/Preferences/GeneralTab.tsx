@@ -1,15 +1,22 @@
 /**
  * GeneralTab — general application settings.
  *
- * Organized into fieldsets matching the Iteration 012 mock:
- * General (theme, personality, ignored dirs), Tool Limits, Streaming.
- *
- * Dropdowns use the shared daisyUI `select config-control` pattern (same as
- * Tier Models / RAG embedding model).
+ * Organized into fieldsets: General, Tool Limits, MCP, Chat display, Streaming.
  */
 import { useCallback } from 'react';
 import type { ConfigPatch } from '../../../shared/types/ipc';
 import { THEMES, THEME_NAMES, type ThemeName } from '../../themes';
+import {
+  configNumberPatch,
+  parseConfigNumber,
+  type NumericConfigKey,
+} from '../../utils/config-draft';
+import { Checkbox } from '../ui/Checkbox';
+import { FormField } from '../ui/FormField';
+import { Panel } from '../ui/Panel';
+import { SectionHeader } from '../ui/SectionHeader';
+import { Select } from '../ui/Select';
+import { TextInput } from '../ui/TextInput';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -60,17 +67,16 @@ export function GeneralTab({
   alwaysExpandToolGroups,
   onChange,
 }: GeneralTabProps) {
-  // Ensure the currently selected value is always in the list (e.g. if file was removed)
   const personalityOptions =
     personality && !personalities.includes(personality)
       ? [personality, ...personalities]
       : [...personalities];
 
   const handleNumberChange = useCallback(
-    (field: string, value: string, min = 1) => {
-      const num = parseFloat(value);
-      if (!Number.isNaN(num) && num >= min) {
-        onChange({ [field]: num });
+    (field: NumericConfigKey, value: string, min = 1) => {
+      const num = parseConfigNumber(value, min);
+      if (num !== null) {
+        onChange(configNumberPatch(field, num));
       }
     },
     [onChange],
@@ -78,12 +84,10 @@ export function GeneralTab({
 
   /** Integer config fields (schema `.int()`) — reject non-integers like 12.5. */
   const handleIntChange = useCallback(
-    (field: string, value: string) => {
-      const trimmed = value.trim();
-      if (!/^\d+$/.test(trimmed)) return;
-      const num = Number(trimmed);
-      if (num > 0) {
-        onChange({ [field]: num });
+    (field: NumericConfigKey, value: string, min = 1) => {
+      const num = parseConfigNumber(value, min, { integer: true });
+      if (num !== null) {
+        onChange(configNumberPatch(field, num));
       }
     },
     [onChange],
@@ -101,33 +105,33 @@ export function GeneralTab({
   );
 
   return (
-    <div className="config-form">
-      <section className="config-fieldset">
-        <div className="config-fieldset-legend">General</div>
+    <div className="config-form flex flex-col gap-4">
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader title="General" />
         <div className="config-form-grid">
-          <div className="config-field">
-            <label htmlFor="general-theme">Theme</label>
-            <select
+          <FormField label="Theme" htmlFor="general-theme" className="config-field">
+            <Select
               id="general-theme"
               value={theme}
               onChange={(e) => onChange({ theme: e.target.value })}
-              className="select config-control"
+              bordered
+              className="w-full"
             >
               {THEME_NAMES.map((name) => (
                 <option key={name} value={name}>
                   {THEMES[name as ThemeName]}
                 </option>
               ))}
-            </select>
-          </div>
+            </Select>
+          </FormField>
 
-          <div className="config-field">
-            <label htmlFor="general-personality">Personality</label>
-            <select
+          <FormField label="Personality" htmlFor="general-personality" className="config-field">
+            <Select
               id="general-personality"
               value={personality}
               onChange={(e) => onChange({ personality: e.target.value })}
-              className="select config-control"
+              bordered
+              className="w-full"
             >
               {personalityOptions.length === 0 ? (
                 <option value={personality || 'default'}>{personality || 'default'}</option>
@@ -138,203 +142,217 @@ export function GeneralTab({
                   </option>
                 ))
               )}
-            </select>
-          </div>
+            </Select>
+          </FormField>
 
-          <div className="config-field config-form-grid-full">
-            <label htmlFor="general-ignored-dirs">
-              Ignored Directories (file ops, RAG, AST, glob)
-            </label>
+          <FormField
+            label="Ignored Directories (file ops, RAG, AST, glob)"
+            htmlFor="general-ignored-dirs"
+            hint="Comma-separated directory names to skip."
+            className="config-field config-form-grid-full"
+          >
             <textarea
               id="general-ignored-dirs"
-              className="textarea config-textarea"
+              className="textarea textarea-bordered w-full"
               value={ignoredDirs.join(', ')}
               onChange={(e) => handleIgnoredDirsChange(e.target.value)}
               placeholder=".git, node_modules, __pycache__, .venv, dist, build"
               rows={3}
             />
-            <span className="config-field-hint">Comma-separated directory names to skip.</span>
-          </div>
+          </FormField>
         </div>
-      </section>
+      </Panel>
 
-      <section className="config-fieldset">
-        <div className="config-fieldset-legend">Tool Limits</div>
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader title="Tool Limits" />
         <div className="config-form-grid">
-          <div className="config-field">
-            <label htmlFor="general-command-timeout">Command Timeout (s)</label>
-            <input
+          <FormField label="Command Timeout (s)" htmlFor="general-command-timeout" className="config-field">
+            <TextInput
               id="general-command-timeout"
               type="number"
               value={commandTimeout}
               onChange={(e) => handleNumberChange('command_timeout', e.target.value)}
-              className="input config-control"
+              bordered
+              className="w-full"
               min={1}
               max={300}
             />
-          </div>
-          <div className="config-field">
-            <label htmlFor="general-read-line-limit">Read Line Limit</label>
-            <input
+          </FormField>
+          <FormField label="Read Line Limit" htmlFor="general-read-line-limit" className="config-field">
+            <TextInput
               id="general-read-line-limit"
               type="number"
               value={readLineLimit}
               onChange={(e) => handleNumberChange('read_line_limit', e.target.value)}
-              className="input config-control"
+              bordered
+              className="w-full"
               min={1}
               max={10000}
             />
-          </div>
-          <div className="config-field">
-            <label htmlFor="general-grep-max">Grep Max Results</label>
-            <input
+          </FormField>
+          <FormField label="Grep Max Results" htmlFor="general-grep-max" className="config-field">
+            <TextInput
               id="general-grep-max"
               type="number"
               value={grepMaxResults}
               onChange={(e) => handleNumberChange('grep_max_results', e.target.value)}
-              className="input config-control"
+              bordered
+              className="w-full"
               min={1}
               max={1000}
             />
-          </div>
-          <div className="config-field">
-            <label htmlFor="general-tree-depth">Directory Tree Depth</label>
-            <input
+          </FormField>
+          <FormField label="Directory Tree Depth" htmlFor="general-tree-depth" className="config-field">
+            <TextInput
               id="general-tree-depth"
               type="number"
               value={directoryTreeDepth}
               onChange={(e) => handleNumberChange('directory_tree_depth', e.target.value)}
-              className="input config-control"
+              bordered
+              className="w-full"
               min={1}
               max={10}
             />
-          </div>
-          <div className="config-field">
-            <label htmlFor="general-ast-max">AST Max File Size (bytes)</label>
-            <input
+          </FormField>
+          <FormField label="AST Max File Size (bytes)" htmlFor="general-ast-max" className="config-field">
+            <TextInput
               id="general-ast-max"
               type="number"
               value={astMaxFileSize}
               onChange={(e) => handleNumberChange('ast_max_file_size', e.target.value)}
-              className="input config-control"
+              bordered
+              className="w-full"
               min={1}
             />
-          </div>
+          </FormField>
         </div>
-      </section>
+      </Panel>
 
-      <section className="config-fieldset">
-        <div className="config-fieldset-legend">MCP</div>
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader title="MCP" />
         <div className="config-form-grid">
-          <div className="config-field">
-            <label htmlFor="general-mcp-startup-timeout">MCP Startup Timeout (s)</label>
-            <input
+          <FormField
+            label="MCP Startup Timeout (s)"
+            htmlFor="general-mcp-startup-timeout"
+            hint="Overall budget for starting all MCP servers."
+            className="config-field"
+          >
+            <TextInput
               id="general-mcp-startup-timeout"
               type="number"
               value={mcpStartupTimeout}
               onChange={(e) => handleNumberChange('mcp_startup_timeout', e.target.value)}
-              className="input config-control"
+              bordered
+              className="w-full"
               min={1}
             />
-            <span className="config-field-hint">Overall budget for starting all MCP servers.</span>
-          </div>
-          <div className="config-field">
-            <label htmlFor="general-mcp-per-server-timeout">MCP Per-Server Timeout (s)</label>
-            <input
+          </FormField>
+          <FormField
+            label="MCP Per-Server Timeout (s)"
+            htmlFor="general-mcp-per-server-timeout"
+            hint="Connect timeout applied to each MCP server."
+            className="config-field"
+          >
+            <TextInput
               id="general-mcp-per-server-timeout"
               type="number"
               value={mcpPerServerTimeout}
               onChange={(e) => handleNumberChange('mcp_per_server_timeout', e.target.value)}
-              className="input config-control"
+              bordered
+              className="w-full"
               min={1}
             />
-            <span className="config-field-hint">Connect timeout applied to each MCP server.</span>
-          </div>
+          </FormField>
         </div>
-      </section>
+      </Panel>
 
-      <section className="config-fieldset">
-        <div className="config-fieldset-legend">Chat display</div>
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader title="Chat display" />
         <div className="config-form-grid">
-          <div className="config-field config-form-grid-full">
-            <label className="config-checkbox-label" htmlFor="general-expand-tool-groups">
-              <input
+          <div className="config-field config-form-grid-full flex flex-col gap-1">
+            <label className="label cursor-pointer justify-start gap-3 py-0" htmlFor="general-expand-tool-groups">
+              <Checkbox
                 id="general-expand-tool-groups"
-                type="checkbox"
-                className="checkbox checkbox-sm"
+                size="sm"
                 checked={alwaysExpandToolGroups}
                 onChange={(e) =>
                   onChange({ always_expand_tool_groups: e.target.checked })
                 }
               />
-              <span>Always expand tool groups</span>
+              <span className="label-text">Always expand tool groups</span>
             </label>
-            <span className="config-field-hint">
+            <p className="label py-0 text-base-content/60">
               Show individual tool rows under explore summaries (Searched N · Read M)
               by default. When off, groups stay collapsed until you click them.
-            </span>
+            </p>
           </div>
         </div>
-      </section>
+      </Panel>
 
-      <section className="config-fieldset">
-        <div className="config-fieldset-legend">Streaming</div>
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader title="Streaming" />
         <div className="config-form-grid">
-          <div className="config-field">
-            <label htmlFor="general-stream-idle">Stream Idle Timeout (s)</label>
-            <input
+          <FormField label="Stream Idle Timeout (s)" htmlFor="general-stream-idle" className="config-field">
+            <TextInput
               id="general-stream-idle"
               type="number"
               value={llmStreamIdleTimeout}
-              onChange={(e) => handleNumberChange('llm_stream_idle_timeout', e.target.value)}
-              className="input config-control"
+              onChange={(e) => handleNumberChange('llm_stream_idle_timeout', e.target.value, 10)}
+              bordered
+              className="w-full"
               min={10}
               max={600}
             />
-          </div>
-          <div className="config-field">
-            <label htmlFor="general-stream-retries">Stream Retries</label>
-            <input
+          </FormField>
+          <FormField
+            label="Stream Retries"
+            htmlFor="general-stream-retries"
+            hint="Zero disables stream retries."
+            className="config-field"
+          >
+            <TextInput
               id="general-stream-retries"
               type="number"
               value={llmStreamRetries}
-              onChange={(e) => handleNumberChange('llm_stream_retries', e.target.value, 0)}
-              className="input config-control"
+              onChange={(e) => handleIntChange('llm_stream_retries', e.target.value, 0)}
+              bordered
+              className="w-full"
               min={0}
               max={10}
             />
-          </div>
-          <div className="config-field">
-            <label htmlFor="general-max-tool-steps">Max Tool Steps</label>
-            <input
+          </FormField>
+          <FormField
+            label="Max Tool Steps"
+            htmlFor="general-max-tool-steps"
+            hint="Max tool-loop iterations per agent turn (default 100). Higher values allow longer multi-step plans; lower values stop runaway loops sooner."
+            className="config-field"
+          >
+            <TextInput
               id="general-max-tool-steps"
               type="number"
               value={maxToolSteps}
               onChange={(e) => handleIntChange('max_tool_steps', e.target.value)}
-              className="input config-control"
+              bordered
+              className="w-full"
               min={1}
               max={1000}
               step={1}
             />
-            <span className="config-field-hint">
-              Max tool-loop iterations per agent turn (default 100). Higher values
-              allow longer multi-step plans; lower values stop runaway loops sooner.
-            </span>
-          </div>
-          <div className="config-field">
-            <label htmlFor="general-bg-idle">BG Command Idle Timeout (s)</label>
-            <input
+          </FormField>
+          <FormField label="BG Command Idle Timeout (s)" htmlFor="general-bg-idle" className="config-field">
+            <TextInput
               id="general-bg-idle"
               type="number"
               value={backgroundCommandIdleTimeout}
-              onChange={(e) => handleNumberChange('background_command_idle_timeout', e.target.value)}
-              className="input config-control"
+              onChange={(e) => handleNumberChange('background_command_idle_timeout', e.target.value, 30)}
+              bordered
+              className="w-full"
               min={30}
               max={3600}
             />
-          </div>
+          </FormField>
         </div>
-      </section>
+      </Panel>
     </div>
   );
 }

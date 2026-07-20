@@ -7,6 +7,8 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome } from '../result';
 import type { TodoToolResult, TodoStoreSource } from './create';
 import { resolveTodoStore } from './create';
 import { TodoStatus, parseTodoStatus } from '../../../shared/types/todo';
@@ -25,6 +27,7 @@ export function buildListTool(
   store: TodoStoreSource,
 ): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
+    ...genericToolResultMetadata,
     name: 'todo_list',
     description:
       'List tasks owned by the current agent (main or this subagent). ' +
@@ -55,11 +58,7 @@ export function buildListTool(
     if (status !== undefined) {
       const parsed = parseTodoStatus(status);
       if (parsed === null) {
-        return {
-          display: 'Invalid status',
-          content: `Error: Invalid status '${status}'. Valid statuses: ${Object.values(TodoStatus).join(', ')}`,
-          isError: true,
-        };
+        return genericBuiltInToolOutcome('todo_list', `Error: Invalid status '${status}'. Valid statuses: ${Object.values(TodoStatus).join(', ')}`, 'error');
       }
       parsedStatus = parsed;
     }
@@ -69,24 +68,18 @@ export function buildListTool(
     const tasks = filterTodosForScope(all, scope);
 
     if (tasks.length === 0) {
-      return {
-        display: 'No tasks found',
-        content: `No tasks for agent scope '${scope}'.`,
-      };
+      return genericBuiltInToolOutcome('todo_list', { scope, tasks: [] }, 'empty');
     }
 
-    const lines = [`Found ${tasks.length} task(s) for scope '${scope}':\n`];
-    for (const t of tasks) {
-      const parts = [`[${t.id}] ${t.title}`];
-      parts.push(`  Status: ${t.status}`);
-      parts.push(`  Owner: ${t.subagent_id ?? MAIN_AGENT_SCOPE_ID}`);
-      lines.push(parts.join('\n') + '\n');
-    }
-
-    return {
-      display: `Found ${tasks.length} task(s)`,
-      content: lines.join('\n'),
-    };
+    return genericBuiltInToolOutcome('todo_list', {
+      scope,
+      tasks: tasks.map((task) => ({
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        owner: task.subagent_id ?? MAIN_AGENT_SCOPE_ID,
+      })),
+    }, 'complete');
   };
 
   return { definition, handler };

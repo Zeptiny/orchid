@@ -17,6 +17,7 @@ import { editDefinition, editHandler } from './filesystem/edit';
 import { writeDefinition, writeHandler } from './filesystem/write';
 import { readDirectoryDefinition, readDirectoryHandler } from './filesystem/read-directory';
 import { globDefinition, globHandler } from './filesystem/glob';
+import { applyPatchDefinition, applyPatchHandler } from './filesystem/apply-patch';
 import { grepToolDefinition, grepHandler } from './search/grep';
 import { ragSearchDefinition, ragSearchHandler } from './rag/search';
 import { ragIndexDefinition, ragIndexHandler } from './rag';
@@ -43,7 +44,6 @@ import { buildListMcpResourcesTool } from './mcp/list-resources';
 import { buildDelegateTool } from './subagent/delegate';
 import { buildWaitTool } from './subagent/wait';
 import { buildInterruptTool } from './subagent/interrupt';
-import { registerSessionTools } from './session';
 import { SubagentManager } from '../agents/manager';
 import { getTierModelSelection } from '../config/loader';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
@@ -214,6 +214,7 @@ function registerBuiltinToolsInto(
   registry.register(writeDefinition, writeHandler);
   registry.register(readDirectoryDefinition, readDirectoryHandler);
   registry.register(globDefinition, globHandler);
+  registry.register(applyPatchDefinition, applyPatchHandler);
   registry.register(grepToolDefinition, grepHandler);
   registry.register(ragSearchDefinition, ragSearchHandler);
   registry.register(ragIndexDefinition, ragIndexHandler);
@@ -265,7 +266,6 @@ function registerBuiltinToolsInto(
   );
   registry.register(listMcpResources.definition, listMcpResources.handler);
 
-  registerSessionTools(registry);
 }
 
 /** Build a dedicated, immutable-definition registry for one project runtime. */

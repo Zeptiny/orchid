@@ -2,17 +2,24 @@
  * Footer — chat footer at the bottom of the center pane.
  *
  * Left: keyboard shortcuts (idle) or agent / interrupt status (streaming).
- * Right: context radial (always visible) with dropup breakdown.
+ * Right: model picker + context radial with dropup breakdown.
  * Wording mirrors the multi-stage cancel button on the composer.
  */
-import { useEffect, useId, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useId, useState, type CSSProperties } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
+import type { CommandContext } from '../../shared/types/ipc-boundary';
+import type { ProviderModelOption } from '../../shared/types/ipc';
 import type { InterruptState } from '../hooks/useChat';
 import { FOOTER_SHORTCUT_IDS, getShortcut } from '../keyboard';
-import { ContextLegend } from './ContextGrid';
+import { resolveModelNotifyLabel } from '../utils/provider-selection';
+import { ContextLegend, ContextStackedBar, contextPercent as getContextPercent } from './ContextGrid';
 import { contextUsedTokens } from '../../shared/usage';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
+import { ModelPicker } from './ModelPicker';
+import { Button } from './ui/Button';
+import { Spinner } from './ui/Spinner';
+import { StatusBadge } from './ui/StatusBadge';
 
 interface FooterProps {
   elapsedSeconds: number;
@@ -22,6 +29,10 @@ interface FooterProps {
   usage?: Usage | null;
   maxContext?: number | null;
   messages?: readonly Message[];
+  model?: string;
+  modelLabels?: Readonly<Record<string, string>>;
+  modelDetails?: Readonly<Record<string, ProviderModelOption>>;
+  commandContext?: CommandContext;
 }
 
 export function Footer({
@@ -31,24 +42,28 @@ export function Footer({
   usage,
   maxContext,
   messages = [],
+  model = '',
+  modelLabels,
+  modelDetails,
+  commandContext,
 }: FooterProps) {
   const confirming = interruptState && interruptState !== 'idle';
   const [contextOpen, setContextOpen] = useState(false);
   const contextMenuId = useId();
 
-  const contextPercent =
-    usage && maxContext && maxContext > 0
-      ? Math.min(100, Math.round((contextUsedTokens(usage) / maxContext) * 100))
-      : 0;
+  const usedContextTokens = contextUsedTokens(usage);
+  const contextPercent = getContextPercent(usage, maxContext);
 
-  const radialTone =
-    contextPercent >= 85
-      ? 'text-error'
-      : contextPercent >= 60
-        ? 'text-warning'
-        : contextPercent > 0
-          ? 'text-info'
-          : 'text-base-content/40';
+  const contextTone =
+    contextPercent == null
+      ? usedContextTokens > 0 ? 'text-info' : 'text-base-content/25'
+      : contextPercent >= 85
+        ? 'text-error'
+        : contextPercent >= 60
+          ? 'text-warning'
+          : contextPercent > 0
+            ? 'text-info'
+            : 'text-base-content/25';
 
   useEffect(() => {
     if (!contextOpen) return;
@@ -69,9 +84,36 @@ export function Footer({
     };
   }, [contextOpen]);
 
+  const badgeTone =
+    contextPercent != null && contextPercent >= 85
+      ? 'error'
+      : contextPercent != null && contextPercent >= 60
+        ? 'warning'
+        : contextPercent != null && contextPercent > 0
+          ? 'info'
+          : 'neutral';
+
+  const availableModels = commandContext?.getAvailableModels() ?? [];
+
+  const handleSelectModel = useCallback(
+    async (next: string) => {
+      if (!commandContext || next === model) return;
+      try {
+        await commandContext.onSetModel(next);
+        commandContext.onNotify(
+          `Model changed to ${resolveModelNotifyLabel(next, modelDetails, modelLabels)}`,
+          'info',
+        );
+      } catch {
+        // Non-fatal — parent may already toast
+      }
+    },
+    [commandContext, model, modelDetails, modelLabels],
+  );
+
   return (
-    <div className="chat-footer">
-      <div className="chat-footer-main min-w-0 flex-1 flex items-center gap-2 overflow-hidden">
+    <div className="orchid-chat-footer">
+      <div className="orchid-chat-footer-main min-w-0 flex-1 flex items-center gap-2 overflow-hidden">
         {isStreaming || confirming ? (
           <>
             {confirming ? (
@@ -83,14 +125,14 @@ export function Footer({
               </span>
             ) : (
               <span className="agent-status inline-flex items-center gap-1 text-success shrink-0">
-                <Icon name="loader" size={12} className="animate-spin" />
+                <Spinner size="xs" aria-hidden />
                 Running
               </span>
             )}
             <span className="opacity-40 shrink-0">-</span>
             <span className="shrink-0">elapsed {formatElapsed(elapsedSeconds)}</span>
             <span className="opacity-40 shrink-0">-</span>
-            <span className="chat-footer-hint">
+            <span className="orchid-chat-footer-hint">
               <Keycaps chord="Esc" size="xs" />
               <span className="chat-footer-hint-sep">or</span>
               <Icon name="square" size={10} className="opacity-80 shrink-0" />
@@ -115,7 +157,7 @@ export function Footer({
                       ·
                     </span>
                   )}
-                  <span className="chat-footer-hint">
+                  <span className="orchid-chat-footer-hint">
                     <Keycaps chord={def.chord} size="xs" />
                     <span className="chat-footer-hint-label">
                       {def.footerLabel ?? def.label}
@@ -128,42 +170,70 @@ export function Footer({
         )}
       </div>
 
-      {/* Context radial — always on the right; full ring = 100% used */}
+      <div className="orchid-chat-footer-end shrink-0 flex items-center gap-1.5">
+        {commandContext && (
+          <ModelPicker
+            value={model}
+            options={availableModels}
+            optionLabels={modelLabels}
+            optionDetails={modelDetails}
+            onChange={(next) => void handleSelectModel(next)}
+            placement="top"
+            align="end"
+            label="Select model"
+            showSelectedContext={false}
+            disabled={isStreaming || interruptState === 'confirmAgent'}
+            className="orchid-footer-model-picker"
+          />
+        )}
+
       <div
         className={`dropdown dropdown-top dropdown-end shrink-0 ${contextOpen ? 'dropdown-open' : ''}`}
         data-footer-context-dropup
       >
-        <button
-          type="button"
-          className="footer-context-btn"
+        <Button
+          variant="ghost"
+          shape="circle"
+          size="xs"
+          className="orchid-footer-context-btn"
           aria-haspopup="dialog"
           aria-expanded={contextOpen}
           aria-controls={contextMenuId}
-          title={`${contextPercent}% context`}
+          title={contextPercent == null
+            ? usedContextTokens > 0
+              ? `${formatTokens(usedContextTokens)} context tokens used`
+              : 'Context usage unavailable'
+            : `${contextPercent}% context`}
           onClick={() => setContextOpen((o) => !o)}
         >
           <div
-            className={`radial-progress footer-context-radial ${radialTone}`}
+            className={`radial-progress orchid-footer-context-radial ${contextTone}`}
             style={
               {
-                '--value': contextPercent,
+                '--value': contextPercent ?? 0,
                 '--size': '1.4rem',
                 '--thickness': '2px',
               } as CSSProperties
             }
-            aria-valuenow={contextPercent}
+            aria-valuenow={contextPercent ?? 0}
             role="progressbar"
-            aria-label={`${contextPercent}% context used`}
+            aria-label={contextPercent == null
+              ? usedContextTokens > 0
+                ? `${formatTokens(usedContextTokens)} context tokens used; context window loading`
+                : 'Context usage unavailable'
+              : `${contextPercent}% context used`}
           >
-            <span className="footer-context-value">{contextPercent}</span>
+            <span className="footer-context-value">
+              {contextPercent == null ? '—' : contextPercent}
+            </span>
           </div>
-        </button>
+        </Button>
         {contextOpen && (
           <div
             id={contextMenuId}
             role="dialog"
             aria-label="Context breakdown"
-            className="dropdown-content footer-context-panel z-50 mb-1"
+            className="dropdown-content orchid-footer-context-panel z-50 mb-1"
           >
             <div className="footer-context-panel-header">
               <div className="footer-context-panel-title">
@@ -171,19 +241,13 @@ export function Footer({
                 <span>Context</span>
               </div>
               <div className="footer-context-panel-meta mono">
-                <span
-                  className={`footer-context-panel-badge ${
-                    contextPercent >= 85
-                      ? 'is-error'
-                      : contextPercent >= 60
-                        ? 'is-warning'
-                        : contextPercent > 0
-                          ? 'is-info'
-                          : ''
-                  }`}
-                >
-                  {contextPercent}% used
-                </span>
+                <StatusBadge tone={badgeTone} size="xs">
+                  {contextPercent == null
+                    ? usedContextTokens > 0
+                      ? `${formatTokens(usedContextTokens)} used`
+                      : 'window loading'
+                    : `${contextPercent}% used`}
+                </StatusBadge>
                 {maxContext && maxContext > 0 ? (
                   <span className="footer-context-panel-window">
                     {formatTokens(maxContext)} window
@@ -192,6 +256,11 @@ export function Footer({
               </div>
             </div>
             <div className="footer-context-panel-body">
+              <ContextStackedBar
+                usage={usage}
+                messages={messages}
+                maxContext={maxContext}
+              />
               <ContextLegend
                 usage={usage}
                 messages={messages}
@@ -201,6 +270,7 @@ export function Footer({
             </div>
           </div>
         )}
+      </div>
       </div>
     </div>
   );

@@ -10,12 +10,20 @@ import { ModelPicker } from '../ModelPicker';
 import type { ProviderModelOption } from '../../../shared/types/ipc';
 import type { ModelSelection } from '../../../shared/types/provider';
 import { useProviders } from '../../hooks/useProviders';
+import {
+  parseConfigNumber,
+  type NumericRAGConfigKey,
+} from '../../utils/config-draft';
 import { isEmbeddingModel } from '../../utils/models';
 import {
   providerModelOptionDisplayName,
   providerModelOptionKey,
   selectionKey,
 } from '../../utils/provider-selection';
+import { FormField } from '../ui/FormField';
+import { Panel } from '../ui/Panel';
+import { SectionHeader } from '../ui/SectionHeader';
+import { TextInput } from '../ui/TextInput';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -78,10 +86,10 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
   );
 
   const handleNumberChange = useCallback(
-    (field: keyof RAGConfig, value: string, min = 1) => {
-      const num = parseInt(value, 10);
-      if (!Number.isNaN(num) && num >= min) {
-        updateField(field, num as RAGConfig[typeof field]);
+    (field: NumericRAGConfigKey, value: string, min = 1) => {
+      const num = parseConfigNumber(value, min, { integer: true });
+      if (num !== null) {
+        updateField(field, num);
       }
     },
     [updateField],
@@ -128,68 +136,77 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
   }, [localModelOptions, onChange, providerEmbeddingOptions, rag]);
 
   return (
-    <div className="config-form">
-      <section className="config-fieldset">
-        <div className="config-fieldset-legend">RAG Configuration</div>
+    <div className="config-form flex flex-col gap-4">
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader title="RAG Configuration" />
         <div className="config-form-grid">
-          <div className="config-field">
-            <label htmlFor="rag-chunk-size">Chunk Size (tokens)</label>
-            <input
+          <FormField label="Chunk Size (tokens)" htmlFor="rag-chunk-size" className="config-field">
+            <TextInput
               id="rag-chunk-size"
               type="number"
               value={rag.chunk_size}
-              onChange={(e) => handleNumberChange('chunk_size', e.target.value)}
-              className="input config-control"
+              onChange={(e) => handleNumberChange('chunk_size', e.target.value, 100)}
+              bordered
+              className="w-full"
               min={100}
               max={10000}
             />
-          </div>
+          </FormField>
 
-          <div className="config-field">
-            <label htmlFor="rag-chunk-overlap">Chunk Overlap (tokens)</label>
-            <input
+          <FormField
+            label="Chunk Overlap (tokens)"
+            htmlFor="rag-chunk-overlap"
+            hint="Zero disables overlap between consecutive chunks."
+            className="config-field"
+          >
+            <TextInput
               id="rag-chunk-overlap"
               type="number"
               value={rag.chunk_overlap}
               onChange={(e) => handleNumberChange('chunk_overlap', e.target.value, 0)}
-              className="input config-control"
+              bordered
+              className="w-full"
               min={0}
               max={2000}
             />
-          </div>
+          </FormField>
 
-          <div className="config-field">
-            <label htmlFor="rag-top-k">Top K Results</label>
-            <input
+          <FormField label="Top K Results" htmlFor="rag-top-k" className="config-field">
+            <TextInput
               id="rag-top-k"
               type="number"
               value={rag.top_k}
               onChange={(e) => handleNumberChange('top_k', e.target.value)}
-              className="input config-control"
+              bordered
+              className="w-full"
               min={1}
               max={50}
             />
-          </div>
+          </FormField>
 
-          <div className="config-field">
-            <label htmlFor="rag-max-file-size">Max File Size (bytes)</label>
-            <input
+          <FormField label="Max File Size (bytes)" htmlFor="rag-max-file-size" className="config-field">
+            <TextInput
               id="rag-max-file-size"
               type="number"
               value={rag.max_file_size}
-              onChange={(e) => handleNumberChange('max_file_size', e.target.value)}
-              className="input config-control"
+              onChange={(e) => handleNumberChange('max_file_size', e.target.value, 1024)}
+              bordered
+              className="w-full"
               min={1024}
               max={10_485_760}
             />
-          </div>
+          </FormField>
         </div>
-      </section>
+      </Panel>
 
-      <section className="config-fieldset">
-        <div className="config-fieldset-legend">Embedding Model</div>
-        <div className="config-field">
-          <label>Model</label>
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader title="Embedding Model" />
+        <FormField
+          label="Model"
+          htmlFor="rag-embedding-model"
+          hint="Choose a local ONNX model or a provider embedding model. Provider models use the selected connection's embedding endpoint."
+          className="config-field"
+        >
           <ModelPicker
             id="rag-embedding-model"
             value={activeModel}
@@ -203,47 +220,44 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
             className="config-model-picker"
             emptyMessage="No embedding models available"
           />
-          <span className="config-field-hint">
-            Choose a local ONNX model or a provider embedding model. Provider models use the selected connection's embedding endpoint.
-          </span>
-        </div>
-      </section>
+        </FormField>
+      </Panel>
 
-      <section className="config-fieldset">
-        <div className="config-fieldset-legend">Resource Limits</div>
-        <p className="config-help text-sm opacity-70 mb-2">
-          Caps local ONNX embedding CPU and peak memory during indexing and search.
-        </p>
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader
+          title="Resource Limits"
+          description="Caps local ONNX embedding CPU and peak memory during indexing and search."
+        />
         <div className="config-form-grid">
-          <div className="config-field">
-            <label htmlFor="rag-embedding-threads">Embedding Threads</label>
-            <input
+          <FormField label="Embedding Threads" htmlFor="rag-embedding-threads" className="config-field">
+            <TextInput
               id="rag-embedding-threads"
               type="number"
               value={rag.embedding_threads ?? 2}
               onChange={(e) => handleNumberChange('embedding_threads', e.target.value)}
-              className="input config-control"
+              bordered
+              className="w-full"
               min={1}
               max={64}
               title="ONNX Runtime CPU threads (intra-op). Default 2."
             />
-          </div>
+          </FormField>
 
-          <div className="config-field">
-            <label htmlFor="rag-embedding-batch-size">Embedding Batch Size</label>
-            <input
+          <FormField label="Embedding Batch Size" htmlFor="rag-embedding-batch-size" className="config-field">
+            <TextInput
               id="rag-embedding-batch-size"
               type="number"
               value={rag.embedding_batch_size ?? 16}
               onChange={(e) => handleNumberChange('embedding_batch_size', e.target.value)}
-              className="input config-control"
+              bordered
+              className="w-full"
               min={1}
               max={256}
               title="Texts per forward pass. Lower = less peak RAM/CPU."
             />
-          </div>
+          </FormField>
         </div>
-      </section>
+      </Panel>
     </div>
   );
 }

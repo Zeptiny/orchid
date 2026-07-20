@@ -10,6 +10,7 @@ allowed_tools:
   - grep
   - edit
   - write
+  - apply_patch
   - execute_command
   - read_output
   - send_input
@@ -35,12 +36,6 @@ allowed_tools:
   - replace_symbol
   - rename_symbol
   - ast_index
-  - session_list
-  - session_create
-  - session_load
-  - session_rename
-  - session_delete
-  - session_change_model
 allowed_skills:
   - '*'
 ---

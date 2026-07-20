@@ -54,10 +54,6 @@ function readFile(relPath: string): string {
   return fs.readFileSync(path.join(tmpDir, relPath), 'utf-8');
 }
 
-function exists(relPath: string): boolean {
-  return fs.existsSync(path.join(tmpDir, relPath));
-}
-
 /**
  * Generate a file with N lines, each containing "line N".
  */
@@ -87,14 +83,17 @@ describe('read tool', () => {
       limit: 11,
     }, toolCtx());
 
-    expect(result.display).toContain('Read');
-    expect(result.display).toContain('10-20');
-    expect(result.content).toContain('Showing lines 10-20 of 100');
-    expect(result.content).toContain('10 | line 10');
-    expect(result.content).toContain('20 | line 20');
+    expect(result.status).toBe('partial');
+    expect(result.data).toMatchObject({
+      requestedRange: { start: 10, end: 20 },
+      returnedRange: { start: 10, end: 20 },
+      totalLineCount: 100,
+    });
+    expect(result.data.lines).toContainEqual({ number: 10, content: 'line 10' });
+    expect(result.data.lines).toContainEqual({ number: 20, content: 'line 20' });
     // Should NOT contain line 9 or 21
-    expect(result.content).not.toContain('9 | line 9');
-    expect(result.content).not.toContain('21 | line 21');
+    expect(result.data.lines).not.toContainEqual({ number: 9, content: 'line 9' });
+    expect(result.data.lines).not.toContainEqual({ number: 21, content: 'line 21' });
   });
 
   it('should handle empty file', async () => {
@@ -102,9 +101,9 @@ describe('read tool', () => {
 
     const result = await readHandler({ file_path: filePath }, toolCtx());
 
-    expect(result.display).toContain('empty');
-    expect(result.content).toContain('empty');
-    expect(result.content).toContain('0 lines');
+    expect(result.status).toBe('empty');
+    expect(result.data.totalLineCount).toBe(0);
+    expect(result.data.lines).toEqual([]);
   });
 
   it('should use default limit from config when not specified', async () => {
@@ -113,9 +112,10 @@ describe('read tool', () => {
     const result = await readHandler({ file_path: filePath }, toolCtx());
 
     // Default limit is 1000
-    expect(result.content).toContain('Showing lines 1-1000 of 2000');
-    expect(result.content).toContain('1 | line 1');
-    expect(result.content).toContain('1000 | line 1000');
+    expect(result.status).toBe('partial');
+    expect(result.data.returnedRange).toEqual({ start: 1, end: 1000 });
+    expect(result.data.lines[0]).toEqual({ number: 1, content: 'line 1' });
+    expect(result.data.lines.at(-1)).toEqual({ number: 1000, content: 'line 1000' });
   });
 
   it('uses the frozen project read limit instead of global config', async () => {
@@ -126,8 +126,9 @@ describe('read tool', () => {
       toolCtx(undefined, { read_line_limit: 2 }),
     );
 
-    expect(result.content).toContain('Showing lines 1-2 of 10');
-    expect(result.content).not.toContain('3 | line 3');
+    expect(result.status).toBe('partial');
+    expect(result.data.returnedRange).toEqual({ start: 1, end: 2 });
+    expect(result.data.lines).not.toContainEqual({ number: 3, content: 'line 3' });
   });
 
   it('should detect and skip binary files', async () => {
@@ -137,8 +138,8 @@ describe('read tool', () => {
 
     const result = await readHandler({ file_path: filePath }, toolCtx());
 
-    expect(result.display).toContain('error');
-    expect(result.content).toContain('binary');
+    expect(result.status).toBe('error');
+    expect(result.error.message).toContain('binary');
   });
 
   it('should return error when offset > line count', async () => {
@@ -150,8 +151,8 @@ describe('read tool', () => {
       limit: 5,
     }, toolCtx());
 
-    expect(result.display).toContain('out of range');
-    expect(result.content).toContain('Offset of 10 is greater than the file line count 3');
+    expect(result.status).toBe('error');
+    expect(result.error.message).toContain('Offset of 10 is greater than the file line count 3');
   });
 
   it('should return error for nonexistent file', async () => {
@@ -159,8 +160,8 @@ describe('read tool', () => {
       file_path: path.join(tmpDir, 'nonexistent.txt'),
     }, toolCtx());
 
-    expect(result.display).toContain('error');
-    expect(result.content).toContain('Error reading file');
+    expect(result.status).toBe('error');
+    expect(result.error.message).toContain('Error reading file');
   });
 });
 
@@ -176,7 +177,7 @@ describe('edit tool', () => {
       new_string: 'baz qux',
     }, toolCtx());
 
-    expect(result.display).toContain('Edited');
+    expect(result.status).toBe('complete');
     const content = readFile('edit.txt');
     expect(content).toContain('baz qux');
     expect(content).not.toContain('foo bar');
@@ -194,8 +195,8 @@ describe('edit tool', () => {
       new_string: 'goodbye',
     }, toolCtx());
 
-    expect(result.display).toContain('Multiple matches');
-    expect(result.content).toContain('found 3 times');
+    expect(result.status).toBe('error');
+    expect(result.error.message).toContain('found 3 times');
     // File should be unchanged
     const content = readFile('multi.txt');
     expect(content).toContain('hello world');
@@ -214,7 +215,7 @@ describe('edit tool', () => {
       replace_all: true,
     }, toolCtx());
 
-    expect(result.display).toContain('Edited');
+    expect(result.status).toBe('complete');
     const content = readFile('multi.txt');
     expect(content).toContain('goodbye world');
     expect(content).toContain('goodbye again');
@@ -231,8 +232,8 @@ describe('edit tool', () => {
       new_string: 'replacement',
     }, toolCtx());
 
-    expect(result.display).toContain('not found');
-    expect(result.content).toContain('not found');
+    expect(result.status).toBe('error');
+    expect(result.error.message).toContain('not found');
   });
 
   it('should produce a diff', async () => {
@@ -244,10 +245,13 @@ describe('edit tool', () => {
       new_string: 'modified line 2',
     }, toolCtx());
 
-    expect(result.content).toContain('---');
-    expect(result.content).toContain('+++');
-    expect(result.content).toContain('-line 2');
-    expect(result.content).toContain('+modified line 2');
+    expect(result.status).toBe('complete');
+    expect(result.data.hunks.flatMap((hunk) => hunk.lines)).toContainEqual(
+      expect.objectContaining({ kind: 'remove', content: 'line 2' }),
+    );
+    expect(result.data.hunks.flatMap((hunk) => hunk.lines)).toContainEqual(
+      expect.objectContaining({ kind: 'add', content: 'modified line 2' }),
+    );
   });
 
   it('should preserve file permissions after edit', async () => {
@@ -297,8 +301,8 @@ describe('write tool', () => {
       content: 'hello world',
     }, toolCtx());
 
-    expect(result.display).toContain('Wrote');
-    expect(result.display).toContain('1 lines');
+    expect(result.status).toBe('complete');
+    expect(result.data).toMatchObject({ operation: 'create', lineCount: 1, byteCount: 11 });
     expect(fs.existsSync(filePath)).toBe(true);
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('hello world');
   });
@@ -311,7 +315,8 @@ describe('write tool', () => {
       content: 'new content',
     }, toolCtx());
 
-    expect(result.display).toContain('Wrote');
+    expect(result.status).toBe('complete');
+    expect(result.data.operation).toBe('replace');
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('new content');
   });
 
@@ -323,9 +328,9 @@ describe('write tool', () => {
       content: 'first\nsecond\nthird',
     }, toolCtx());
 
-    expect(result.content).toContain('1 | first');
-    expect(result.content).toContain('2 | second');
-    expect(result.content).toContain('3 | third');
+    expect(result.status).toBe('complete');
+    expect(result.data.content).toBe('first\nsecond\nthird');
+    expect(result.data.lineCount).toBe(3);
   });
 
   it('should preserve file permissions when overwriting existing file', async () => {
@@ -372,11 +377,13 @@ describe('read_directory tool', () => {
       directory_path: tmpDir,
     }, toolCtx());
 
-    expect(result.display).toContain('Read directory');
-    expect(result.content).toContain('package.json');
-    expect(result.content).toContain('src/');
-    expect(result.content).toContain('├──');
-    expect(result.content).toContain('└──');
+    expect(result.status).toBe('complete');
+    expect(result.data.entries.map((entry) => entry.relativePath)).toEqual([
+      'package.json',
+      'src',
+      'src/index.ts',
+      'src/utils.ts',
+    ]);
   });
 
   it('should respect max_depth parameter', async () => {
@@ -387,10 +394,10 @@ describe('read_directory tool', () => {
       max_depth: 2,
     }, toolCtx());
 
-    // Depth 2: should show a/ and b/ but not c/ or deeper
-    expect(result.content).toContain('a/');
-    expect(result.content).toContain('b/');
-    expect(result.content).not.toContain('c/');
+    // Depth 2: should show a/ and b/ but not c/ or deeper.
+    expect(result.status).toBe('partial');
+    expect(result.data.entries.map((entry) => entry.relativePath)).toEqual(['a', 'a/b']);
+    expect(result.data.depthLimitReached).toBe(true);
   });
 
   it('should exclude hidden files by default', async () => {
@@ -402,9 +409,7 @@ describe('read_directory tool', () => {
       directory_path: tmpDir,
     }, toolCtx());
 
-    expect(result.content).toContain('visible.txt');
-    expect(result.content).not.toContain('.hidden-file');
-    expect(result.content).not.toContain('.hidden-dir');
+    expect(result.data.entries.map((entry) => entry.relativePath)).toEqual(['visible.txt']);
   });
 
   it('should include hidden files when include_hidden is true', async () => {
@@ -416,8 +421,10 @@ describe('read_directory tool', () => {
       include_hidden: true,
     }, toolCtx());
 
-    expect(result.content).toContain('visible.txt');
-    expect(result.content).toContain('.hidden-file');
+    expect(result.data.entries.map((entry) => entry.relativePath)).toEqual([
+      '.hidden-file',
+      'visible.txt',
+    ]);
   });
 
   it('uses the frozen project ignored directories', async () => {
@@ -429,8 +436,7 @@ describe('read_directory tool', () => {
       toolCtx(undefined, { directory_tree_depth: 4, ignored_dirs: ['generated'] }),
     );
 
-    expect(result.content).toContain('visible.txt');
-    expect(result.content).not.toContain('generated');
+    expect(result.data.entries.map((entry) => entry.relativePath)).toEqual(['visible.txt']);
   });
 });
 
@@ -454,17 +460,11 @@ describe('glob tool', () => {
       pattern: '**/*.ts',
     }, toolCtx());
 
-    expect(result.display).toContain('Found');
-    expect(result.display).toContain('matches');
+    expect(result.status).toBe('complete');
     // Should find a.ts and b.ts, not c.js
-    expect(result.content).toContain('a.ts');
-    expect(result.content).toContain('b.ts');
-    expect(result.content).not.toContain('c.js');
+    expect(result.data.matches.map((match) => match.path)).toEqual(['src/b.ts', 'src/a.ts']);
 
     // Should be sorted by mtime newest first
-    const lines = result.content.split('\n').slice(1); // skip header
-    expect(lines[0]).toContain('b.ts'); // newest
-    expect(lines[1]).toContain('a.ts'); // oldest
   });
 
   it('should return "no matches" for pattern with no results', async () => {
@@ -475,8 +475,8 @@ describe('glob tool', () => {
       pattern: '**/*.py',
     }, toolCtx());
 
-    expect(result.display).toContain('No matches');
-    expect(result.content).toContain('No files found');
+    expect(result.status).toBe('empty');
+    expect(result.data.matches).toEqual([]);
   });
 
   it('should exclude hidden files by default', async () => {
@@ -488,8 +488,7 @@ describe('glob tool', () => {
       pattern: '**/*.ts',
     }, toolCtx());
 
-    expect(result.content).toContain('visible.ts');
-    expect(result.content).not.toContain('.hidden.ts');
+    expect(result.data.matches.map((match) => match.path)).toEqual(['visible.ts']);
   });
 
   it('should include hidden files when include_hidden is true', async () => {
@@ -502,8 +501,7 @@ describe('glob tool', () => {
       include_hidden: true,
     }, toolCtx());
 
-    expect(result.content).toContain('visible.ts');
-    expect(result.content).toContain('.hidden.ts');
+    expect(result.data.matches.map((match) => match.path)).toEqual(['.hidden.ts', 'visible.ts']);
   });
 });
 
@@ -518,8 +516,8 @@ describe('session cwd path resolution', () => {
       toolCtx(tmpDir),
     );
 
-    expect(result.isError).toBeFalsy();
-    expect(result.content).toContain('hello from session cwd');
+    expect(result.status).toBe('complete');
+    expect(result.data.lines).toContainEqual({ number: 1, content: 'hello from session cwd' });
   });
 
   it('should resolve relative read differently under another cwd', async () => {
@@ -531,8 +529,8 @@ describe('session cwd path resolution', () => {
       const a = await readHandler({ file_path: 'only-here.txt' }, toolCtx(tmpDir));
       const b = await readHandler({ file_path: 'only-here.txt' }, toolCtx(otherDir));
 
-      expect(a.content).toContain('in tmpDir');
-      expect(b.content).toContain('in otherDir');
+      expect(a.data.lines).toContainEqual({ number: 1, content: 'in tmpDir' });
+      expect(b.data.lines).toContainEqual({ number: 1, content: 'in otherDir' });
     } finally {
       fs.rmSync(otherDir, { recursive: true, force: true });
     }
@@ -546,7 +544,7 @@ describe('session cwd path resolution', () => {
         { file_path: filePath },
         toolCtx(otherDir),
       );
-      expect(result.content).toContain('absolute ok');
+      expect(result.data.lines).toContainEqual({ number: 1, content: 'absolute ok' });
     } finally {
       fs.rmSync(otherDir, { recursive: true, force: true });
     }

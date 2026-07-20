@@ -20,6 +20,10 @@ import {
   RENDERER_ALLOWED_TOOLS,
   toolExecuteSchema,
 } from './payload-schemas';
+import {
+  executeToolCall,
+  genericTerminalExecution,
+} from '../llm/tool-dispatch';
 
 /**
  * Resolve tool context for renderer-initiated tool:execute (outside an agent turn).
@@ -55,51 +59,53 @@ export function registerToolIPC(): void {
 
     // Security: reject tools not in the allowlist
     if (!RENDERER_ALLOWED_TOOLS.has(name)) {
-      return {
-        content: `Tool '${name}' is not allowed via IPC. Use the agent layer for non-read-only tools.`,
-        isError: true,
-      };
+      return genericTerminalExecution(
+        crypto.randomUUID(),
+        name,
+        'error',
+        `Tool '${name}' is not allowed via IPC. Use the agent layer for non-read-only tools.`,
+        'ipc_tool_not_allowed',
+      );
     }
 
     const tool = toolRegistry.get(name);
 
     if (!tool) {
-      return {
-        content: `Tool '${name}' not found in registry`,
-        isError: true,
-      };
+      return genericTerminalExecution(
+        crypto.randomUUID(),
+        name,
+        'error',
+        `Tool '${name}' not found in registry`,
+        'unknown_tool',
+      );
     }
 
     const windowId = String(event.sender.id);
     const toolCtx = resolveToolExecuteContext(windowId);
     if (!toolCtx) {
-      return {
-        content:
-          'No project folder selected. Choose a folder before running tools.',
-        isError: true,
-      };
+      return genericTerminalExecution(
+        crypto.randomUUID(),
+        name,
+        'error',
+        'No project folder selected. Choose a folder before running tools.',
+        'missing_workspace',
+      );
     }
 
-    // Validate args against the tool's Zod input schema before the handler
-    const validation = toolRegistry.validate(name, args);
-    if (!validation.ok) {
-      return {
-        content: validation.error,
-        isError: true,
-      };
-    }
-
-    try {
-      const { normalizeToolHandlerResult } = await import('../tools/result');
-      const result = await tool.handler(validation.data, toolCtx);
-      return normalizeToolHandlerResult(result);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      return {
-        content: `Tool execution failed: ${errorMessage}`,
-        isError: true,
-      };
-    }
+    return executeToolCall(
+      {
+        id: crypto.randomUUID(),
+        type: 'function',
+        function: { name, arguments: JSON.stringify(args) },
+      },
+      toolRegistry,
+      {
+        cwd: toolCtx.cwd,
+        sessionId: toolCtx.sessionId,
+        agentScopeId: toolCtx.agentScopeId,
+        projectRuntime: toolCtx.projectRuntime,
+      },
+    );
   });
 }
 

@@ -24,11 +24,17 @@ import type { Message, Usage } from '../../shared/types/message';
 import { MessageType } from '../../shared/types/message';
 import type { StreamEvent } from '../llm/orchestrator';
 import type { ProjectRuntime } from '../project/runtime';
-import { addUsage, hasUsage } from '../../shared/usage';
+import { addStepUsage } from '../../shared/usage';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
-import { SubagentStatus } from '../../shared/types/subagent';
+import {
+  SubagentStatus,
+  type SubagentLiveChange,
+  type SubagentLiveProjection,
+  type SubagentToolSnapshot,
+} from '../../shared/types/subagent';
 import {
   makeAssistantMessage,
+  makeThinkingMessage,
   makeToolCallMessage,
   makeToolResultMessage,
   makeUserMessage,
@@ -74,6 +80,7 @@ export type SubagentStreamRunner = (params: {
 }) => AsyncGenerator<StreamEvent>;
 
 export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
+export type SubagentLiveChangeListener = (change: SubagentLiveChange) => void;
 
 /** Default max time `wait_for_subagent` will block (5 minutes). */
 export const DEFAULT_WAIT_TIMEOUT_MS = 300_000;
@@ -142,6 +149,10 @@ export interface SubagentRecord {
   _resolveWait: Array<(record: SubagentRecord) => void> | null;
   /** In-flight run promise (for debugging / optional await). */
   _runPromise: Promise<void> | null;
+  /** Runtime-only live projection; durable history remains in `chain`. */
+  live: SubagentLiveProjection;
+  _liveCommittedSegmentCount: number;
+  _liveTerminalEmitted: boolean;
 }
 
 // ── SubagentResult ──────────────────────────────────────────────────────────
@@ -166,6 +177,7 @@ export class SubagentManager {
   private _subagents: Map<string, SubagentRecord> = new Map();
   private _runner: SubagentStreamRunner | null = null;
   private _onChange: SubagentChangeListener | null = null;
+  private _onLiveChange: SubagentLiveChangeListener | null = null;
 
   /**
    * Configure the stream runner. When set, spawn() starts a background run.
@@ -178,6 +190,11 @@ export class SubagentManager {
   /** Register a listener invoked after any state/message change. */
   setOnChange(listener: SubagentChangeListener | null): void {
     this._onChange = listener;
+  }
+
+  /** Subscribe to ordered, low-latency changes for active subagent runs. */
+  setOnLiveChange(listener: SubagentLiveChangeListener | null): void {
+    this._onLiveChange = listener;
   }
 
   /**
@@ -228,6 +245,9 @@ export class SubagentManager {
       abortController: null,
       _resolveWait: [],
       _runPromise: null,
+      live: makeLiveProjection(id, options.sessionId ?? null, 'pending'),
+      _liveCommittedSegmentCount: 0,
+      _liveTerminalEmitted: false,
     };
 
     this._subagents.set(id, record);
@@ -247,6 +267,7 @@ export class SubagentManager {
     const record = this._subagents.get(subagentId);
     if (record && record.state === SubagentState.PENDING) {
       record.state = SubagentState.RUNNING;
+      this._updateLive(record, { state: SubagentState.RUNNING });
       this._notify();
     }
   }
@@ -263,6 +284,7 @@ export class SubagentManager {
     record.result = result;
     record.endTime = Date.now();
     this._finalizeChain(record, ChainStatus.COMPLETED);
+    this._finishLive(record, SubagentState.COMPLETED);
     this._resolveWaiters(record);
     this._notify();
   }
@@ -279,6 +301,7 @@ export class SubagentManager {
     record.error = error;
     record.endTime = Date.now();
     this._finalizeChain(record, ChainStatus.FAILED);
+    this._finishLive(record, SubagentState.FAILED);
     this._resolveWaiters(record);
     this._notify();
   }
@@ -429,7 +452,13 @@ export class SubagentManager {
     record.error = record.error ?? 'Interrupted by user';
     record.endTime = record.endTime ?? Date.now();
     record.abortController?.abort();
-    this._finalizeChain(record, ChainStatus.INTERRUPTED);
+    // The runner owns the async interruption boundary. It must materialize its
+    // partial live tail before the terminal projection is emitted; otherwise
+    // the terminal event can make the renderer flush an incomplete record.
+    if (!record._runPromise) {
+      this._finalizeChain(record, ChainStatus.INTERRUPTED);
+      this._finishLive(record, SubagentState.INTERRUPTED);
+    }
     this._resolveWaiters(record);
     this._notify();
     return true;
@@ -524,6 +553,16 @@ export class SubagentManager {
     return this._subagents.get(subagentId);
   }
 
+  getLiveProjection(subagentId: string): SubagentLiveProjection | undefined {
+    return this._subagents.get(subagentId)?.live;
+  }
+
+  getLiveProjections(sessionId?: string | null): SubagentLiveProjection[] {
+    return this.allRecords()
+      .filter((record) => sessionId === undefined || record.sessionId === sessionId)
+      .map((record) => record.live);
+  }
+
   allRecords(): SubagentRecord[] {
     return Array.from(this._subagents.values());
   }
@@ -538,7 +577,7 @@ export class SubagentManager {
       sessionId === undefined
         ? this.allRecords()
         : this.allRecords().filter((r) => r.sessionId === sessionId);
-    return records.map(runtimeToDomain);
+    return records.map((record) => runtimeToDomain(record));
   }
 
   // ── Private: run loop ─────────────────────────────────────────────────────
@@ -586,22 +625,21 @@ export class SubagentManager {
           case 'content': {
             responseText += event.text;
             resultText += event.text;
+            this._appendLiveText(record, 'text', event.text);
             break;
           }
           case 'usage': {
-            accumulatedUsage = hasUsage(accumulatedUsage)
-              ? addUsage(accumulatedUsage, event.usage)
-              : { ...event.usage };
+            accumulatedUsage = addStepUsage(accumulatedUsage, event.usage);
             record.usage = accumulatedUsage;
+            this._updateLive(record, { usage: accumulatedUsage });
+            break;
+          }
+          case 'thinking': {
+            this._appendLiveText(record, 'thinking', event.text);
             break;
           }
           case 'tool_call':
           case 'tool_call_start': {
-            // Flush any assistant text that arrived before this tool
-            if (responseText.trim()) {
-              messages.push(makeAssistantMessage(responseText, null));
-              responseText = '';
-            }
             const toolCallId =
               'toolCallId' in event ? event.toolCallId : randomUUID();
             const toolName =
@@ -609,12 +647,36 @@ export class SubagentManager {
             const args =
               event.type === 'tool_call' && 'args' in event ? event.args : '{}';
             toolNames.set(toolCallId, toolName);
+            this._ensureLiveTool(record, toolCallId, toolName);
             // Only record tool_call once we have args (tool_call event)
             if (event.type === 'tool_call') {
-              messages.push(makeToolCallMessage(toolCallId, toolName, args));
+              const toolSegment = record.live.segments.find(
+                (segment) => segment.kind === 'tool' && segment.toolCallId === toolCallId,
+              );
+              const toolIndex = toolSegment
+                ? record.live.segments.indexOf(toolSegment)
+                : record.live.segments.length;
+              this._commitLiveSegments(record, messages, toolIndex);
+              this._updateLiveTool(record, toolCallId, {
+                status: 'running',
+                args,
+                partialArgs: args,
+              });
+              messages.push(makeToolCallMessage(toolCallId, toolName, args, toolSegment?.id));
+              this._markLiveCommitted(record);
               this._setChainMessages(record, messages);
               this._notify();
             }
+            break;
+          }
+          case 'tool_call_delta': {
+            const current = record.live.toolCalls.find(
+              (tool) => tool.toolCallId === event.toolCallId,
+            );
+            this._ensureLiveTool(record, event.toolCallId, current?.toolName ?? 'unknown');
+            this._updateLiveTool(record, event.toolCallId, {
+              partialArgs: `${current?.partialArgs ?? ''}${event.argsDelta}`,
+            });
             break;
           }
           case 'tool_result': {
@@ -625,8 +687,11 @@ export class SubagentManager {
                 m.type === MessageType.TOOL_CALL &&
                 m.tool_call_id === event.toolCallId,
             )) {
+              const toolSegment = record.live.segments.find(
+                (segment) => segment.kind === 'tool' && segment.toolCallId === event.toolCallId,
+              );
               messages.push(
-                makeToolCallMessage(event.toolCallId, toolName, '{}'),
+                makeToolCallMessage(event.toolCallId, toolName, '{}', toolSegment?.id),
               );
             }
             messages.push(
@@ -634,9 +699,17 @@ export class SubagentManager {
                 event.toolCallId,
                 toolName,
                 event.content,
-                event.isError,
+                event.execution.canonical,
+                `${event.toolCallId}:result`,
               ),
             );
+            this._updateLiveTool(record, event.toolCallId, {
+              status: event.execution.canonical.status,
+              content: event.content,
+              toolResult: event.execution.canonical,
+              finishedAt: new Date().toISOString(),
+            });
+            this._markLiveCommitted(record);
             this._setChainMessages(record, messages);
             this._notify();
             break;
@@ -645,9 +718,7 @@ export class SubagentManager {
             throw new Error(event.detail || event.title || 'Subagent stream error');
           }
           case 'finish':
-          case 'thinking':
           case 'step_finish':
-          case 'tool_call_delta':
           default:
             break;
         }
@@ -664,21 +735,14 @@ export class SubagentManager {
         return;
       }
 
-      // Final assistant text with usage on the last bubble
-      if (responseText.trim() || accumulatedUsage) {
-        messages.push(
-          makeAssistantMessage(
-            responseText,
-            accumulatedUsage && hasUsage(accumulatedUsage)
-              ? accumulatedUsage
-              : null,
-          ),
-        );
-      }
+      // Commit the remaining live prefix in exactly the order emitted. Segment
+      // IDs become message IDs so a durable handoff cannot duplicate bubbles.
+      this._commitLiveSegments(record, messages, record.live.segments.length, accumulatedUsage);
 
       record.result = resultText || record.result;
       record.usage = accumulatedUsage;
       this._setChainMessages(record, messages);
+      this._markLiveCommitted(record);
       this.markCompleted(record.id, record.result ?? '');
     } catch (err) {
       if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
@@ -691,15 +755,18 @@ export class SubagentManager {
         );
         return;
       }
-      // Keep partial content
-      if (responseText.trim()) {
-        messages.push(makeAssistantMessage(responseText, accumulatedUsage));
-        this._setChainMessages(record, messages);
-      }
+      // Keep partial content in the same chronological, ID-stable form as a
+      // normal completion. The live projection may already contain both text
+      // and thinking, so do not append the accumulator a second time.
+      this._commitLiveSegments(record, messages, record.live.segments.length, accumulatedUsage);
+      this._setChainMessages(record, messages);
       const message = err instanceof Error ? err.message : String(err);
       record.usage = accumulatedUsage;
       this.markFailed(record.id, message);
     } finally {
+      if (record.state === SubagentState.INTERRUPTED) {
+        this._finishLive(record, SubagentState.INTERRUPTED);
+      }
       record.abortController = null;
     }
   }
@@ -711,22 +778,45 @@ export class SubagentManager {
     resultText: string,
     accumulatedUsage: Usage | null,
   ): void {
-    if (responseText.trim()) {
-      messages.push(makeAssistantMessage(responseText, accumulatedUsage));
-    }
+    this._commitLiveSegments(record, messages, record.live.segments.length, accumulatedUsage);
     if (resultText) {
       record.result = resultText;
     }
     if (accumulatedUsage) {
       record.usage = accumulatedUsage;
     }
-    if (responseText.trim() || resultText) {
-      this._setChainMessages(record, messages);
-      if (record.state === SubagentState.INTERRUPTED) {
-        this._finalizeChain(record, ChainStatus.INTERRUPTED);
+    this._setChainMessages(record, messages);
+    this._markLiveCommitted(record);
+    if (record.state === SubagentState.INTERRUPTED) this._finalizeChain(record, ChainStatus.INTERRUPTED);
+    this._notify();
+  }
+
+  /** Commit only the live segment prefix before `endIndex`, preserving order. */
+  private _commitLiveSegments(
+    record: SubagentRecord,
+    messages: Message[],
+    endIndex: number,
+    usage: Usage | null = null,
+  ): void {
+    const segments = record.live.segments;
+    const lastTextIndex = segments
+      .slice(record._liveCommittedSegmentCount, endIndex)
+      .map((segment, index) => ({ segment, index: record._liveCommittedSegmentCount + index }))
+      .filter(({ segment }) => segment.kind === 'text')
+      .at(-1)?.index;
+    for (let index = record._liveCommittedSegmentCount; index < endIndex; index += 1) {
+      const segment = segments[index];
+      if (segment.kind === 'text' && segment.content.trim()) {
+        messages.push(makeAssistantMessage(
+          segment.content,
+          usage && index === lastTextIndex ? usage : null,
+          segment.id,
+        ));
+      } else if (segment.kind === 'thinking' && segment.content.trim()) {
+        messages.push(makeThinkingMessage(segment.content, segment.id));
       }
-      this._notify();
     }
+    record._liveCommittedSegmentCount = Math.max(record._liveCommittedSegmentCount, endIndex);
   }
 
   private _setChainMessages(record: SubagentRecord, messages: Message[]): void {
@@ -779,6 +869,65 @@ export class SubagentManager {
     }
   }
 
+  private _appendLiveText(record: SubagentRecord, kind: 'text' | 'thinking', content: string): void {
+    const segments = [...record.live.segments];
+    const last = segments.at(-1);
+    if (last?.kind === kind) segments[segments.length - 1] = { ...last, content: last.content + content };
+    else segments.push({ kind, id: randomUUID(), content });
+    this._updateLive(record, { segments });
+  }
+
+  private _ensureLiveTool(record: SubagentRecord, toolCallId: string, toolName: string): void {
+    if (record.live.toolCalls.some((tool) => tool.toolCallId === toolCallId)) return;
+    const tool: SubagentToolSnapshot = {
+      toolCallId, toolName, status: 'generating', partialArgs: '', args: '',
+      content: null, toolResult: null, startedAt: new Date().toISOString(), finishedAt: null,
+    };
+    this._updateLive(record, {
+      toolCalls: [...record.live.toolCalls, tool],
+      segments: [...record.live.segments, { kind: 'tool', id: randomUUID(), toolCallId }],
+    });
+  }
+
+  private _updateLiveTool(record: SubagentRecord, toolCallId: string, patch: Partial<SubagentToolSnapshot>): void {
+    this._updateLive(record, {
+      toolCalls: record.live.toolCalls.map((tool) => tool.toolCallId === toolCallId ? { ...tool, ...patch } : tool),
+    });
+  }
+
+  private _markLiveCommitted(record: SubagentRecord): void {
+    record._liveCommittedSegmentCount = record.live.segments.length;
+  }
+
+  private _updateLive(
+    record: SubagentRecord,
+    patch: Partial<Omit<SubagentLiveProjection, 'sequence' | 'subagentId' | 'runId'>>,
+  ): void {
+    const next: SubagentLiveProjection = {
+      ...record.live, ...patch, sequence: record.live.sequence + 1,
+      segments: patch.segments ? [...patch.segments] : [...record.live.segments],
+      toolCalls: patch.toolCalls ? [...patch.toolCalls] : [...record.live.toolCalls],
+    };
+    record.live = next;
+    const change: SubagentLiveChange = {
+      sessionId: next.sessionId, subagentId: next.subagentId, runId: next.runId,
+      sequence: next.sequence, projection: next,
+    };
+    try { this._onLiveChange?.(change); } catch (err) {
+      console.debug('Subagent live listener failed (non-fatal):', err);
+    }
+  }
+
+  private _finishLive(record: SubagentRecord, state: SubagentState): void {
+    if (record._liveTerminalEmitted) return;
+    record._liveTerminalEmitted = true;
+    this._updateLive(record, {
+      state, result: record.result, error: record.error, usage: record.usage,
+      segments: [], toolCalls: [],
+    });
+    record._liveCommittedSegmentCount = 0;
+  }
+
   private _notify(): void {
     try {
       this._onChange?.(this.allRecords());
@@ -790,8 +939,16 @@ export class SubagentManager {
 
 // ── Persistence helpers ─────────────────────────────────────────────────────
 
+export interface RuntimeToDomainOptions {
+  /** Include the uncommitted live tail in the returned durable chain. */
+  includeLiveTail?: boolean;
+}
+
 /** Map runtime record → domain SubagentRecord for session JSON. */
-export function runtimeToDomain(record: SubagentRecord): DomainSubagentRecord {
+export function runtimeToDomain(
+  record: SubagentRecord,
+  options: RuntimeToDomainOptions = {},
+): DomainSubagentRecord {
   const statusMap: Record<SubagentState, DomainSubagentRecord['status']> = {
     [SubagentState.PENDING]: SubagentStatus.PENDING,
     [SubagentState.RUNNING]: SubagentStatus.RUNNING,
@@ -803,21 +960,53 @@ export function runtimeToDomain(record: SubagentRecord): DomainSubagentRecord {
   const chain =
     record.chain ??
     makeEmptyChain(record.sessionId ?? '', record.selection, record.agent);
+  const checkpointChain = options.includeLiveTail === false
+    ? chain
+    : materializeLiveTail(record, chain);
 
   return {
     id: record.id,
-    agent_name: record.agent.name || record.label,
-    agent_type: record.agent.type || 'subagent',
+    // `label` is the descriptive name supplied to delegate_to_subagent;
+    // `agent.name` is only the registry role (for example, "explorer").
+    agent_name: record.label || record.agent.name,
+    agent_type: record.agent.name || record.agent.type || 'subagent',
     agent_tier: record.agent.tier || 'bloom',
     task: record.task,
     status: statusMap[record.state],
-    chain_id: chain.id,
+    chain_id: checkpointChain.id,
     start_time: new Date(record.startTime).toISOString(),
     end_time: record.endTime ? new Date(record.endTime).toISOString() : null,
     result: record.result,
     error: record.error,
     parentChainIndex: record.parentChainIndex,
-    chain,
+    chain: checkpointChain,
+  };
+}
+
+/** Materialize only the uncommitted live tail for persistence checkpoints. */
+function materializeLiveTail(record: SubagentRecord, chain: Chain): Chain {
+  const tail = record.live.segments.slice(record._liveCommittedSegmentCount);
+  if (tail.length === 0) return chain;
+  const messages = [...chain.messages];
+  const lastTextIndex = tail.findLastIndex((segment) => segment.kind === 'text');
+  for (const [index, segment] of tail.entries()) {
+    if (segment.kind === 'thinking' && segment.content) {
+      messages.push(makeThinkingMessage(segment.content, segment.id));
+    } else if (segment.kind === 'text' && segment.content) {
+      messages.push(makeAssistantMessage(segment.content, index === lastTextIndex ? record.usage : null, segment.id));
+    }
+  }
+  return { ...chain, messages };
+}
+
+function makeLiveProjection(
+  subagentId: string,
+  sessionId: string | null,
+  state: SubagentStatus,
+): SubagentLiveProjection {
+  return {
+    sessionId, subagentId, runId: randomUUID(), sequence: 0, state,
+    segments: [], toolCalls: [], usage: null, result: null, error: null,
   };
 }
 

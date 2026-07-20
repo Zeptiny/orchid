@@ -113,7 +113,7 @@ export function summarizeToolGroup(
   for (const block of blocks) {
     const family = toolFamily(block.toolName);
     if (isActiveToolStatus(block.status)) hasActive = true;
-    if (block.status === 'failed') failedCount += 1;
+    if (block.status === 'failed' || block.status === 'error') failedCount += 1;
 
     if (family === 'search') searchCount += 1;
     else if (family === 'read') readCount += 1;

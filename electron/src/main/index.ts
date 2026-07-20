@@ -28,7 +28,7 @@ import { initUpdater, destroyUpdater, checkForUpdates, setUpdaterWindow } from '
 import { initFileLogging, closeFileLogging } from './logging';
 import { registerBuiltinTools } from './tools';
 import { getBackgroundStore } from './tools/process/background-store';
-import { wireSubagentRuntime } from './agents/wire-subagents';
+import { wireSubagentRuntime, flushSubagentPersistence } from './agents/wire-subagents';
 import { getConfig } from './config/loader';
 import { ProviderCatalogStore } from './providers/catalog/store';
 import { ProviderCatalogUpdater, createHttpCatalogTransport } from './providers/catalog/updater';
@@ -280,6 +280,7 @@ app.whenReady().then(async () => {
       initUpdater({
         window: mainWindow,
         signed: detectReleaseSigned(),
+        flushBeforeInstall: flushSubagentPersistence,
       });
 
       // Check for updates on startup (non-blocking)
@@ -351,6 +352,9 @@ app.on('before-quit', async (event) => {
     // 2. Close file logging stream (bounded; see FileLogger.close timeout)
     await closeFileLogging();
 
+    // Flush live subagent checkpoints before IPC/runtime teardown.
+    flushSubagentPersistence();
+
     // 3. Unregister IPC handlers
     unregisterAllIPC();
 
@@ -369,6 +373,8 @@ app.on('before-quit', async (event) => {
     resetProviderAccountingStore();
 
     // 7. Now actually quit
+    // Final safety flush after teardown, immediately before process exit.
+    flushSubagentPersistence();
     clearTimeout(forceExitTimer);
     app.exit(0);
   } catch (err) {

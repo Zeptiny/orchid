@@ -383,6 +383,17 @@ describe('quitAndInstall', () => {
     expect(mockTerminateAll).toHaveBeenCalled();
     expect(mockApp.removeAllListeners).toHaveBeenCalledWith('before-quit');
   });
+
+  it('flushes subagents before removing the quit guard', () => {
+    const order: string[] = [];
+    mockApp.removeAllListeners.mockImplementationOnce(() => order.push('remove'));
+    updater.initUpdater({
+      window: mockBrowserWindow as unknown as Electron.BrowserWindow,
+      flushBeforeInstall: () => order.push('flush'),
+    });
+    updater.quitAndInstall();
+    expect(order).toEqual(['flush', 'remove']);
+  });
 });
 
 // ===========================================================================

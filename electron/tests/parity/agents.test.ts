@@ -137,6 +137,7 @@ describe('Agent Parity', () => {
     expect(general.allowed_tools).toContain('grep');
     expect(general.allowed_tools).toContain('edit');
     expect(general.allowed_tools).toContain('write');
+    expect(general.allowed_tools).toContain('apply_patch');
     expect(general.allowed_tools).toContain('delegate_to_subagent');
     expect(general.allowed_skills).toContain('*');
 
@@ -145,6 +146,9 @@ describe('Agent Parity', () => {
 
     const sessionNamer = getAgent('session-namer')!;
     expect(sessionNamer.allowed_tools).toEqual([]);
+
+    const implementer = getAgent('implementer')!;
+    expect(implementer.allowed_tools).toContain('apply_patch');
   });
 
   it('explorer has read-only tools (no edit/write)', () => {

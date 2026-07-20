@@ -13,6 +13,10 @@
 import { z } from 'zod';
 import type { ToolCall } from './tool';
 import { toolCallToStorageDict, toolCallFromStorageDict } from './tool';
+import {
+  canonicalToolResultSchema,
+  type CanonicalToolResult,
+} from './tool-result';
 
 // ── Enums as const objects ──────────────────────────────────────────────────
 
@@ -83,12 +87,8 @@ export interface Message {
   readonly timestamp: string;
   readonly usage: Usage | null;
   readonly hidden: boolean;
-  /**
-   * Explicit tool failure flag (TOOL_RESULT). Set by the backend when the tool
-   * execution failed; frontend must render from this field only — never infer
-   * failure from content text.
-   */
-  readonly is_error: boolean;
+  /** Canonical terminal facts for TOOL_RESULT messages; null for other messages. */
+  readonly tool_result: CanonicalToolResult | null;
 }
 
 // ── Storage dict ────────────────────────────────────────────────────────────
@@ -112,6 +112,8 @@ export interface MessageStorageDict {
   hidden?: boolean;
   /** Explicit tool failure; only meaningful for tool_result messages. */
   is_error?: boolean;
+  /** Canonical terminal facts for TOOL_RESULT records. */
+  tool_result?: unknown;
   // Forward-compat: extra keys tolerated on restore
   [key: string]: unknown;
 }
@@ -198,8 +200,11 @@ export function messageToStorageDict(msg: Message): MessageStorageDict {
   if (msg.hidden) {
     d.hidden = true;
   }
-  if (msg.is_error) {
+  if (msg.tool_result?.status === 'error') {
     d.is_error = true;
+  }
+  if (msg.tool_result) {
+    d.tool_result = msg.tool_result;
   }
   return d;
 }
@@ -254,6 +259,10 @@ export function messageFromStorageDict(data: unknown): Message {
   // (every loaded message becomes ""), so always assign a real id.
   const id =
     typeof raw.id === 'string' && raw.id.length > 0 ? raw.id : newMessageId();
+  const parsedToolResult = canonicalToolResultSchema.safeParse(raw.tool_result);
+  const toolResult = parsedToolResult.success
+    ? parsedToolResult.data as CanonicalToolResult
+    : null;
 
   return {
     id,
@@ -267,6 +276,6 @@ export function messageFromStorageDict(data: unknown): Message {
     timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : new Date().toISOString(),
     usage,
     hidden: raw.hidden === true,
-    is_error: raw.is_error === true,
+    tool_result: toolResult,
   };
 }

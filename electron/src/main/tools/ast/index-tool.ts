@@ -5,6 +5,8 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { indexProject } from '../../ast/indexer';
 import { ASTStore } from '../../ast/store';
 
@@ -29,6 +31,7 @@ const astIndexSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const astIndexDefinition: ToolDefinition = {
+  ...genericToolResultMetadata,
   name: 'ast_index',
   description:
     'Manage the AST (Abstract Syntax Tree) symbol index. ' +
@@ -47,7 +50,7 @@ export const astIndexDefinition: ToolDefinition = {
 export const astIndexHandler: ToolHandler = async (
   input: unknown,
   ctx,
-): Promise<string> => {
+): Promise<GenericBuiltInToolOutcome> => {
   const { action, force } = input as {
     action: 'status' | 'index' | 'clear';
     force?: boolean;
@@ -59,14 +62,15 @@ export const astIndexHandler: ToolHandler = async (
       const store = new ASTStore(projectPath);
       try {
         const status = store.status();
-        const lines = [
-          'AST Index Status:',
-          `  Total files: ${status.totalFiles}`,
-          `  Total symbols: ${status.totalSymbols}`,
-          `  Last indexed: ${status.lastIndexed ?? 'never'}`,
-          `  Last index duration: ${status.lastIndexDuration != null ? status.lastIndexDuration.toFixed(1) + 's' : 'N/A'}`,
-        ];
-        return lines.join('\n');
+        return genericBuiltInToolOutcome('ast_index', {
+          action: 'status',
+          totalFiles: status.totalFiles,
+          totalSymbols: status.totalSymbols,
+          lastIndexed: status.lastIndexed ?? 'never',
+          lastDuration: status.lastIndexDuration != null
+            ? status.lastIndexDuration.toFixed(1) + 's'
+            : 'N/A',
+        });
       } finally {
         store.dispose();
       }
@@ -77,25 +81,16 @@ export const astIndexHandler: ToolHandler = async (
         projectPath,
         force: force === true,
       });
-      const lines = [
-        'AST Index Complete:',
-        `  Files scanned: ${result.filesScanned}`,
-        `  Files indexed: ${result.filesIndexed}`,
-        `  Files skipped: ${result.filesSkipped}`,
-        `  Files deleted: ${result.filesDeleted}`,
-        `  Symbols extracted: ${result.symbolsExtracted}`,
-        `  Duration: ${result.durationSeconds.toFixed(1)}s`,
-      ];
-      if (result.errors.length > 0) {
-        lines.push(`  Errors: ${result.errors.length}`);
-        for (const err of result.errors.slice(0, 5)) {
-          lines.push(`    - ${err}`);
-        }
-        if (result.errors.length > 5) {
-          lines.push(`    ... and ${result.errors.length - 5} more`);
-        }
-      }
-      return lines.join('\n');
+      return genericBuiltInToolOutcome('ast_index', {
+        action: 'index',
+        filesScanned: result.filesScanned,
+        filesIndexed: result.filesIndexed,
+        filesSkipped: result.filesSkipped,
+        filesDeleted: result.filesDeleted,
+        symbolsExtracted: result.symbolsExtracted,
+        duration: result.durationSeconds.toFixed(1) + 's',
+        errors: result.errors.length,
+      });
     }
 
     case 'clear': {
@@ -105,10 +100,14 @@ export const astIndexHandler: ToolHandler = async (
       } finally {
         store.dispose();
       }
-      return 'AST index cleared.';
+      return genericBuiltInToolOutcome('ast_index', { action: 'clear' });
     }
 
     default:
-      return `Unknown action: ${action}. Use "status", "index", or "clear".`;
+      return genericBuiltInToolOutcome(
+        'ast_index',
+        `Unknown action: ${action}. Use "status", "index", or "clear".`,
+        'error',
+      );
   }
 };

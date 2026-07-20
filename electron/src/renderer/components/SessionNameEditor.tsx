@@ -5,6 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
+import { TextInput } from './ui/TextInput';
 
 interface SessionNameEditorProps {
   name: string;
@@ -74,8 +75,10 @@ export function SessionNameEditor({
 
   if (editing) {
     return (
-      <input
+      <TextInput
         ref={inputRef}
+        size="xs"
+        bordered={false}
         className={`session-name-editor-input ${className ?? ''}`}
         value={draft}
         aria-label="Rename session"

@@ -578,16 +578,57 @@ describe('Command Palette File Structure', () => {
     expect(fs.existsSync(path.join(commandsDir, 'registry.ts'))).toBe(true);
   });
 
-  it('chat.css contains command palette styles', () => {
-    const cssPath = path.resolve(__dirname, '../../src/renderer/styles/chat.css');
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.command-palette-overlay');
-    expect(css).toContain('.command-palette');
-    expect(css).toContain('.command-palette-input');
-    expect(css).toContain('.command-palette-results');
-    expect(css).toContain('.command-palette-item');
-    expect(css).toContain('.command-palette-group');
-    expect(css).toContain('.command-palette-footer');
-    expect(css).toContain('.command-palette-highlight');
+  it('chat.css or components.css contain command palette styles', () => {
+    const chatCss = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/styles/chat.css'),
+      'utf-8',
+    );
+    const componentsCss = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/styles/components.css'),
+      'utf-8',
+    );
+    const css = `${chatCss}\n${componentsCss}`;
+    expect(css).toContain('.orchid-command-palette-overlay');
+    expect(css).toContain('.orchid-command-palette');
+    expect(css).toContain('.orchid-command-palette-results');
+    expect(css).toContain('.orchid-command-palette-item');
+    expect(css).toContain('.orchid-command-palette-group');
+    expect(css).toContain('.orchid-command-palette-footer');
+  });
+
+  it('wires orchid:navigate from palette to ChatView/Sidebar', () => {
+    const palette = fs.readFileSync(
+      path.join(componentsDir, 'CommandPalette.tsx'),
+      'utf-8',
+    );
+    const chatView = fs.readFileSync(
+      path.join(componentsDir, 'ChatView.tsx'),
+      'utf-8',
+    );
+    expect(palette).toContain("orchid:navigate");
+    expect(chatView).toContain("orchid:navigate");
+    expect(chatView).toContain('setInspectorFocusSection');
+  });
+
+  it('Sidebar re-opens collapsed inspector section on same-section re-nav', () => {
+    const sidebar = fs.readFileSync(
+      path.join(componentsDir, 'Sidebar.tsx'),
+      'utf-8',
+    );
+    expect(sidebar).toContain('forceOpenEpoch');
+    expect(sidebar).toContain('forceOpenToken');
+    expect(sidebar).toMatch(/shouldOpenCollapseFromToken\(forceOpenToken\)/);
+  });
+
+  it('CommandPalette ignores re-entrant selection while async select is in flight', () => {
+    const palette = fs.readFileSync(
+      path.join(componentsDir, 'CommandPalette.tsx'),
+      'utf-8',
+    );
+    expect(palette).toContain('selectingRef');
+    expect(palette).toMatch(/if \(selectingRef\.current\) return/);
+    expect(palette).toMatch(/selectingRef\.current = true/);
+    expect(palette).toMatch(/finally \{[\s\S]*selectingRef\.current = false/);
+    expect(palette).toMatch(/disabled=\{isSelecting\}/);
   });
 });

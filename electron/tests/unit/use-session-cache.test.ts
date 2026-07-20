@@ -251,4 +251,124 @@ describe('useSession shared cache', () => {
     expect(__sessionCacheTest.getSnapshot().activeSession?.id).toBe('n1');
     unsub();
   });
+
+  it('ChatView and ConfigView both consume the shared useSession store', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const rendererRoot = path.resolve(__dirname, '../../src/renderer');
+    const chatView = fs.readFileSync(path.join(rendererRoot, 'components/ChatView.tsx'), 'utf8');
+    const configView = fs.readFileSync(path.join(rendererRoot, 'components/ConfigView.tsx'), 'utf8');
+    const useSessionSrc = fs.readFileSync(path.join(rendererRoot, 'hooks/useSession.ts'), 'utf8');
+    const appSrc = fs.readFileSync(path.join(rendererRoot, 'App.tsx'), 'utf8');
+
+    expect(chatView).toMatch(/import\s*\{\s*useSession\s*\}\s*from\s*['"].*useSession['"]/);
+    expect(configView).toMatch(/import\s*\{\s*useSession\s*\}\s*from\s*['"].*useSession['"]/);
+    expect(chatView).toMatch(/const\s+session\s*=\s*useSession\s*\(\s*\)/);
+    expect(configView).toMatch(/const\s+session\s*=\s*useSession\s*\(\s*\)/);
+    // No local session ownership in either consumer.
+    expect(chatView).not.toMatch(/useState\s*<\s*Session\s*>/);
+    expect(configView).not.toMatch(/useState\s*<\s*Session\s*>/);
+    // Shared store is the canonical source.
+    expect(useSessionSrc).toMatch(/useSyncExternalStore/);
+    expect(useSessionSrc).toMatch(/Shared store \(one session state for all useSession\(\) callers\)/);
+    // Chat stays mounted under Config so both hooks remain live on one store.
+    expect(appSrc).toMatch(/Keep ChatView mounted under Config/);
+    expect(appSrc).toMatch(/configOpen \? 'hidden' : 'contents'/);
+  });
+
+  it('Config session pick routes through ChatView hydrate (not store-only load)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const rendererRoot = path.resolve(__dirname, '../../src/renderer');
+    const chatView = fs.readFileSync(path.join(rendererRoot, 'components/ChatView.tsx'), 'utf8');
+    const configView = fs.readFileSync(path.join(rendererRoot, 'components/ConfigView.tsx'), 'utf8');
+
+    // Config must not activate via session.load alone — that rebinds the store
+    // without beginSessionSwitch / hydrateSnapshot affinity.
+    expect(configView).toMatch(/orchid:select-session/);
+    expect(configView).not.toMatch(/await session\.load\(id\)/);
+
+    // ChatView listens and runs the full sidebar select path.
+    expect(chatView).toMatch(/orchid:select-session/);
+    expect(chatView).toMatch(/handleSessionSelect/);
+    expect(chatView).toMatch(/beginSessionSwitch/);
+    expect(chatView).toMatch(/hydrateSnapshot/);
+    expect(chatView).toMatch(/addEventListener\('orchid:select-session'/);
+  });
+
+  it('Config orchid:select-session event carries session id for Chat hydrate', () => {
+    const target = new EventTarget();
+    const received: string[] = [];
+    const handler = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+      if (id) received.push(id);
+    };
+    target.addEventListener('orchid:select-session', handler);
+    target.dispatchEvent(
+      new CustomEvent('orchid:select-session', { detail: { id: 'session-from-config' } }),
+    );
+    target.removeEventListener('orchid:select-session', handler);
+    expect(received).toEqual(['session-from-config']);
+  });
+
+  it('dual subscribers observe the same snapshot after load/rename/workspace updates', async () => {
+    const sessionA = makeSession({ id: 'a', name: 'Alpha', cwd: '/proj/a' });
+    const sessionB = makeSession({ id: 'b', name: 'Beta', cwd: '/proj/b' });
+    listMock.mockResolvedValue([
+      { id: 'a', name: 'Alpha', modelLabel: null, cwd: '/proj/a', chainCount: 1, updatedAt: 1 },
+      { id: 'b', name: 'Beta', modelLabel: null, cwd: '/proj/b', chainCount: 1, updatedAt: 2 },
+    ]);
+    getWorkspaceMock.mockResolvedValue({ cwd: '/proj/a', source: 'session', status: 'valid' });
+    loadMock.mockImplementation(async ({ id }: { id: string }) => (
+      id === 'a' ? sessionA : sessionB
+    ));
+    renameMock.mockResolvedValue(undefined);
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+
+    // Simulate ChatView + ConfigView both mounted (two store subscribers).
+    const chatListener = vi.fn();
+    const configListener = vi.fn();
+    const unsubChat = __sessionCacheTest.subscribe(chatListener);
+    const unsubConfig = __sessionCacheTest.subscribe(configListener);
+    __sessionCacheTest.ensureBootstrapped();
+    await __sessionCacheTest.refresh();
+
+    await __sessionCacheTest.load('a');
+    const snapAfterLoad = __sessionCacheTest.getSnapshot();
+    expect(snapAfterLoad.activeSession?.id).toBe('a');
+    expect(chatListener).toHaveBeenCalled();
+    expect(configListener).toHaveBeenCalled();
+
+    // Config renames while Chat is mounted — both see the shared snapshot.
+    await __sessionCacheTest.rename('a', 'Alpha Renamed');
+    expect(__sessionCacheTest.getSnapshot().activeSession?.name).toBe('Alpha Renamed');
+    expect(__sessionCacheTest.getActiveSession()?.name).toBe('Alpha Renamed');
+
+    // Config selects another session — Chat consumer observes via shared store.
+    getWorkspaceMock.mockResolvedValue({ cwd: '/proj/b', source: 'session', status: 'valid' });
+    await __sessionCacheTest.load('b');
+    expect(__sessionCacheTest.getSnapshot().activeSession?.id).toBe('b');
+    expect(__sessionCacheTest.getSnapshot().activeSession?.name).toBe('Beta');
+
+    // Workspace event fans out to every subscriber.
+    chatListener.mockClear();
+    configListener.mockClear();
+    for (const handler of workspaceHandlers) {
+      handler({ workspace: { cwd: '/proj/b', source: 'session', status: 'valid' } });
+    }
+    expect(__sessionCacheTest.getSnapshot().workspace?.cwd).toBe('/proj/b');
+    expect(chatListener).toHaveBeenCalled();
+    expect(configListener).toHaveBeenCalled();
+
+    // Generation guards remain shared (draft + load).
+    const genBefore = __sessionCacheTest.getDraftGeneration();
+    await __sessionCacheTest.enterDraft();
+    expect(__sessionCacheTest.getDraftGeneration()).toBeGreaterThan(genBefore);
+    expect(__sessionCacheTest.getSnapshot().activeSession).toBeNull();
+
+    unsubChat();
+    unsubConfig();
+  });
 });

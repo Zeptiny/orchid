@@ -245,11 +245,11 @@ Index table, then full write-ups (Why it Matters · Evidence · Suggested Fix).
 
 ### M-P0-024 — Session lifecycle + model change UI-only
 
-- **Status:** fixed · session_list/create/load/rename/delete/change_model tools + general allowlist
+- **Status:** not part of the agent tool surface; session lifecycle remains available through the existing UI IPC
 - **Primary:** commands + session IPC · **Sections:** S6, S1 · **Conf:** 100 · **Autofix:** manual
 - **Why it matters:** Core multi-session product (`/new`, `/sessions`, `/rename`, `/delete`, `/model`) is UI/IPC-only—agent cannot create, switch, rename, delete sessions or change session model mid-session.
-- **Evidence:** `renderer/commands/registry.ts` defines session/model commands; `session:*` IPC; no session_list/create/load/rename/delete or session_change_model tools; coding tools do not rebind session selection.
-- **Suggested fix:** Session primitives over same `SessionManager` as UI (`session_list`, `session_create`, `session_load`, `session_rename`, `session_delete`, `session_change_model` with typed selection); emit existing `SESSION_*` events for UI refresh.
+- **Evidence:** `renderer/commands/registry.ts` defines session/model commands and `session:*` IPC owns lifecycle operations; coding tools do not rebind session selection.
+- **Suggested fix:** Keep session lifecycle operations on the existing typed `SessionManager`/UI IPC path; do not expose them as agent tools.
 
 ---
 
@@ -1125,7 +1125,7 @@ Status: `open` = still present · `partial` = mitigated but residual · `fixed` 
 - **Status:** partial
 - **Primary:** `renderer/commands/registry.ts` · **Sections:** S6 · **Conf:** 85 · **Autofix:** manual
 - **Why it matters:** Agents cannot fully drive UI command-palette workflows; automation/agent-native parity is incomplete. Session tools landed under M-P0-024.
-- **Evidence:** Session tools exist: session_list/create/load/rename/delete/change_model. Palette still has /cd, /model, /sessions, /personality. No agent tools for cwd rebind, personality, or definition CRUD.
+- **Evidence:** Session lifecycle is available through `session:*` IPC. Palette still has /cd, /model, /sessions, /personality. No agent tools for cwd rebind, personality, or definition CRUD.
 - **Suggested fix:** Add missing agent tools (cwd, personality) or document intentional UI-only surface; map palette actions to tools where product wants agent parity.
 
 ### M-P1-106 — Workspace rebind (`/cd`) no agent equivalent

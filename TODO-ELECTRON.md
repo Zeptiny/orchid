@@ -10,8 +10,30 @@
   - Subagents should make it easier to fully follow the plan
 - The skills and agents are not updated for the current capabilities of the harness
 
+### Interface
+- Verify if all tool have a generating and running state
+  - Edit / write appears to not have
+- Execute command widget should show the command description on the title, with the command itself on the dropdown / content
+- Allow to view the background commands and send input when necessary
+- Erros are not being returned / used correclty on the interface
+  - Also needs to check if subagent errors are properly propagating
+  - For example, API returned 429 but no message appeared on the interface
+- Add dedicated interface output handling instead of the generic structured viewer for:
+  - RAG: `rag_search`, `rag_index`
+  - Process: `read_output`, `send_input`, `terminate_command`
+  - AST: `ast_index`, `get_file_skeleton`, `get_function`, `find_symbol_references`, `replace_symbol`, `rename_symbol`
+  - Todo: `todo_create`, `todo_update`, `todo_list`, `todo_delete`
+  - Web/subagents/skills: `web_fetch`, `delegate_to_subagent`, `wait_for_subagent`, `interrupt_subagents`, `skill`
+  - MCP: `read_mcp_resource`, `list_mcp_resources`, and dynamically registered MCP tools
+
 ### TODOs geral
-- RAG/AST Post Write Callback
+- **P0: Realpath-based path sandboxing for all filesystem tools** — `resolveToolPath` is lexical-only; symlinks inside the project can escape the working directory. apply_patch has a lexical containment check but it's bypassable via directory symlinks. `write`/`edit` have no containment at all. Reuse `assertPathInScopeRoot` from `defs/paths.ts:116` (realpaths root + parent + leaf). Apply uniformly to all mutating filesystem tools. (code review 2026-07-19, P0)
+- **P1: apply_patch sync matching can block event loop** — `seekSequence` is O(n×m×4) synchronous. Large file + non-matching pattern blocks the main process indefinitely; `Promise.race` timeout can't fire. Add a line-count guard in `applyChunksToContent` and `.max()` on the patch Zod schema. (code review 2026-07-19, P1)
+- **P1: apply_patch agent projector emits redundant full diffs** — full `<old_string>`/`<new_string>` per file can exceed 20KB offload threshold, stripping per-file error info the agent needs. Make projector compact: per-file status + errors only, omit diffs (UI renderer keeps them). (code review 2026-07-19, P1)
+- Change session storage to SQLite
+- Tools should start the execution as son as the generation is complete, even if the model is still generating output for other commands
+- RAG/AST Post Write Callback + automatic updating if changes are detected (Can be changed via commands / manually / etc that post write callback does not detect)
+- wait_for_subagent sending duplicated information
 - Still work to do on 2026-07-15-electron-simplification-review.md
 - Verify if remote embeddings model works correctly
 - Subagents vieweing

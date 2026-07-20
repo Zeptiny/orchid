@@ -38,7 +38,12 @@ import {
   type ActivityChild,
 } from './ToolActivityGroup';
 import { Icon } from './Icon';
+import { Button } from './ui/Button';
 import orchidIcon from '../assets/orchid-icon.svg';
+import { useSmartAutoScroll } from '../hooks/useSmartAutoScroll';
+import { shouldAutoScroll } from '../hooks/useSmartAutoScroll';
+
+export { AUTO_SCROLL_THRESHOLD_PX, isUserScrolledAwayFromBottom, shouldAutoScroll } from '../hooks/useSmartAutoScroll';
 
 /** Maximum fully-mounted chains; older ones collapse to stubs (Python parity). */
 export const CHAIN_COLLAPSE_THRESHOLD = 20;
@@ -98,24 +103,15 @@ type StreamItem =
       chainIndex: number;
     };
 
-export const AUTO_SCROLL_THRESHOLD_PX = 100;
+type FooterStreamItem = Extract<StreamItem, { kind: 'footer' }>;
 
-/**
- * Pure helper: whether the scroll container is far enough from the bottom
- * that auto-scroll should stay off. Used by ChatStream and architecture tests.
- */
-export function isUserScrolledAwayFromBottom(
-  scrollTop: number,
-  scrollHeight: number,
-  clientHeight: number,
-  thresholdPx: number = AUTO_SCROLL_THRESHOLD_PX,
-): boolean {
-  return scrollHeight - scrollTop - clientHeight > thresholdPx;
-}
-
-/** Pure helper: auto-scroll only when the user has not scrolled away. */
-export function shouldAutoScroll(isUserScrolledUp: boolean): boolean {
-  return !isUserScrolledUp;
+export function shouldRenderChainFooter(input: {
+  isActive: boolean;
+  isTerminal: boolean;
+  hasBody: boolean;
+  hasUser: boolean;
+}): boolean {
+  return input.isActive || input.isTerminal || input.hasBody || input.hasUser;
 }
 
 
@@ -139,9 +135,15 @@ export function ChatStream({
   interrupted,
   alwaysExpandToolGroups = false,
 }: ChatStreamProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
+  const scrollContentKey = useMemo(
+    () =>
+      `${messages.length}:${streamingContent}:${JSON.stringify(toolBlocks)}:${JSON.stringify(streamSegments)}`,
+    [messages.length, streamingContent, toolBlocks, streamSegments],
+  );
+  const { containerRef, isUserScrolledUp, jumpToLatest } = useSmartAutoScroll({
+    resetKey: sessionId,
+    contentKey: scrollContentKey,
+  });
   /** Chain indexes the user expanded from a collapsed stub. */
   const [expandedChainIndexes, setExpandedChainIndexes] = useState<Set<number>>(
     () => new Set(),
@@ -156,39 +158,20 @@ export function ChatStream({
     });
   }, []);
 
-  const scrollToBottom = useCallback(() => {
-    if (shouldAutoScroll(isUserScrolledUp)) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  // When a new stream starts, pin to bottom only if the user was already near
+  // the bottom. Do not force-scroll readers who scrolled away mid-history.
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (status === 'streaming' && prev !== 'streaming') {
+      if (shouldAutoScroll(isUserScrolledUp)) {
+        jumpToLatest();
+      }
     }
-  }, [isUserScrolledUp]);
+  }, [status, isUserScrolledUp, jumpToLatest]);
 
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const handleScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = container;
-      setIsUserScrolledUp(
-        isUserScrolledAwayFromBottom(scrollTop, scrollHeight, clientHeight),
-      );
-    };
-
-    container.addEventListener('scroll', handleScroll, { passive: true });
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, []);
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages.length, streamingContent, toolBlocks, streamSegments, scrollToBottom]);
-
-  useEffect(() => {
-    if (status === 'streaming') {
-      setIsUserScrolledUp(false);
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [status]);
-
-  // Reset expanded stubs only when the session is replaced (not every new turn).
+  // Reset scroll-away + expanded stubs only when the session is replaced.
   useEffect(() => {
     setExpandedChainIndexes(new Set());
   }, [sessionId]);
@@ -253,33 +236,36 @@ export function ChatStream({
     !error
   ) {
     return (
-      <div className="chat-scroll flex min-h-0 flex-1 items-center justify-center">
-        <div className="empty-state">
-          <div className="empty-state-icon" aria-hidden>
+      <div className="orchid-chat-scroll flex min-h-0 flex-1 items-center justify-center px-6 py-5">
+        <div className="orchid-chat-empty">
+          <div className="orchid-chat-empty-icon" aria-hidden>
             <img src={orchidIcon} alt="" width={96} height={96} />
           </div>
           {workspaceUnbound ? (
             <>
-              <div className="empty-state-title">Choose a project folder</div>
-              <div className="empty-state-desc">
+              <div className="orchid-chat-empty-title">
+                Choose a project folder
+              </div>
+              <div className="orchid-chat-empty-desc">
                 Orchid needs a working directory before the agent can run tools
                 or create sessions.
               </div>
               {onPickProjectDir && (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm mt-3"
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="mt-3"
                   onClick={onPickProjectDir}
                 >
                   <Icon name="folder" size={14} />
                   Open folder
-                </button>
+                </Button>
               )}
             </>
           ) : (
             <>
-              <div className="empty-state-title">Welcome to Orchid</div>
-              <div className="empty-state-desc">
+              <div className="orchid-chat-empty-title">Welcome to Orchid</div>
+              <div className="orchid-chat-empty-desc">
                 Start a conversation by typing a message below.
               </div>
             </>
@@ -290,26 +276,39 @@ export function ChatStream({
   }
 
   return (
-    <div className="chat-scroll" ref={containerRef}>
-      {error && (
-        <div className="error-banner-slot">
-          <ErrorBanner
-            message={error}
-            onDismiss={onClearError}
-            onOpenSettings={onOpenSettings}
-            onRetry={onRetry}
-          />
-        </div>
-      )}
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="orchid-chat-scroll px-6 py-5" ref={containerRef}>
+        {error && (
+          <div className="orchid-error-slot">
+            <ErrorBanner
+              message={error}
+              onDismiss={onClearError}
+              onOpenSettings={onOpenSettings}
+              onRetry={onRetry}
+            />
+          </div>
+        )}
 
-      {historyItems.map((item) =>
-        renderStreamItem(item, alwaysExpandToolGroups, expandChain),
-      )}
-      {liveGroupedItems.map((item) =>
-        renderStreamItem(item, alwaysExpandToolGroups, expandChain),
-      )}
-
-      <div ref={messagesEndRef} />
+        {historyItems.map((item) =>
+          renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
+        )}
+        {liveGroupedItems.map((item) =>
+          renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
+        )}
+        {history.activeFooter &&
+          renderStreamItem(history.activeFooter, alwaysExpandToolGroups, expandChain, subagents)}
+      </div>
+      {isUserScrolledUp ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="pointer-events-auto absolute bottom-4 right-6 z-10"
+          onClick={jumpToLatest}
+        >
+          Jump to latest
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -318,15 +317,17 @@ function renderStreamItem(
   item: StreamItem,
   alwaysExpandToolGroups: boolean,
   onExpandChain: (chainIndex: number) => void,
+  subagents: readonly SubagentRecord[],
 ): ReactNode {
   if (item.kind === 'tool') {
-    return <ToolCallBlock key={item.key} block={item.block} />;
+    return <ToolCallBlock key={item.key} block={item.block} subagents={subagents} />;
   }
   if (item.kind === 'tool-group') {
     return (
       <ToolActivityGroup
         key={item.key}
         items={item.children}
+        subagents={subagents}
         alwaysExpand={alwaysExpandToolGroups}
       />
     );
@@ -424,6 +425,8 @@ interface HistoryBuildResult {
   items: StreamItem[];
   /** Tool ids already rendered in committed history (live tail skips these). */
   emittedToolIds: ReadonlySet<string>;
+  /** Active-chain footer is rendered after the live tail. */
+  activeFooter: FooterStreamItem | null;
 }
 
 /**
@@ -454,8 +457,8 @@ function buildHistoryStreamItems(opts: {
 }
 
 /**
- * Multi-chain layout: walk each session chain, collapse old ones, one footer
- * per finished chain with model + cumulative usage + sub attribution.
+ * Multi-chain layout: walk each session chain, collapse old ones, and render
+ * one footer per chain with model + cumulative usage + sub attribution.
  */
 function buildMultiChainHistoryStreamItems(opts: {
   toolBlocks: ToolBlock[];
@@ -489,6 +492,7 @@ function buildMultiChainHistoryStreamItems(opts: {
   const items: StreamItem[] = [];
   const emittedToolIds = new Set<string>();
   const liveById = new Map(toolBlocks.map((b) => [b.id, b]));
+  let activeFooter: FooterStreamItem | null = null;
 
   // Each chain body comes from chain.messages (authoritative storage). Live
   // tools/text for the active turn still render via buildLiveTailItems.
@@ -527,11 +531,6 @@ function buildMultiChainHistoryStreamItems(opts: {
     });
     items.push(...chainItems.items);
 
-    // Footer for finished chains; omit while the active chain is still streaming.
-    if (isActive && liveStreaming) {
-      continue;
-    }
-
     const chainUsage = sumChainUsage(chain);
     const turnUsage =
       isLastChain && (status === 'idle' || status === 'error' || interrupted)
@@ -561,10 +560,9 @@ function buildMultiChainHistoryStreamItems(opts: {
     const hasUser = chain.messages.some(
       (m) => m.role === MessageRole.USER && m.type === MessageType.TEXT,
     );
-    // Terminal chains always get a footer (Interrupted/Failed badges) even if
-    // the turn was user-only (cancel/error before any model output).
-    if (terminal || hasBody || hasUser) {
-      items.push({
+    // Every visible chain gets a footer, including the running/active chain.
+    if (shouldRenderChainFooter({ isActive, isTerminal: terminal, hasBody, hasUser })) {
+      const footer: FooterStreamItem = {
         kind: 'footer',
         key: `footer-chain-${chain.id || chainIndex}`,
         usage: turnUsage,
@@ -575,7 +573,12 @@ function buildMultiChainHistoryStreamItems(opts: {
           chain.status === ChainStatus.INTERRUPTED ||
           (isLastChain && interrupted),
         failed: chain.status === ChainStatus.FAILED,
-      });
+      };
+      if (isActive) {
+        activeFooter = footer;
+      } else {
+        items.push(footer);
+      }
     }
   }
 
@@ -593,7 +596,7 @@ function buildMultiChainHistoryStreamItems(opts: {
     }
   }
 
-  return { items, emittedToolIds };
+  return { items, emittedToolIds, activeFooter };
 }
 
 /** Walk a message slice into stream items (multi-chain + shared helpers). */
@@ -751,6 +754,7 @@ function buildLegacyPerUserTurnHistory(opts: {
   const consumedResults = new Set<string>();
   const emittedToolIds = new Set<string>();
   const liveStreaming = status === 'streaming';
+  let activeFooter: FooterStreamItem | null = null;
 
   // Track per-turn metadata for footers (still one footer per user turn).
   let turnIndex = -1;
@@ -820,9 +824,14 @@ function buildLegacyPerUserTurnHistory(opts: {
   };
 
   const flushFooter = (isLastTurn: boolean, isLastTurnOfParentChain: boolean) => {
-    if (!turnHasBody) return;
-    // While the active turn is still streaming, omit its footer.
-    if (isLastTurn && liveStreaming) return;
+    const isActive = isLastTurn && liveStreaming;
+    const isTerminal = isLastTurn && (status === 'error' || interrupted);
+    if (!shouldRenderChainFooter({
+      isActive,
+      isTerminal,
+      hasBody: turnHasBody,
+      hasUser: isLastTurn && turnUserId != null,
+    })) return;
 
     const turnUsage =
       isLastTurn && (status === 'idle' || status === 'error' || interrupted)
@@ -834,14 +843,19 @@ function buildLegacyPerUserTurnHistory(opts: {
       subUsageShownForChain.add(turnChainIndex);
     }
 
-    items.push({
+    const footer: FooterStreamItem = {
       kind: 'footer',
       key: `footer-${turnUserId || turnIndex}`,
       usage: turnUsage,
       subUsage,
       elapsedSeconds: isLastTurn ? elapsedSeconds : undefined,
       interrupted: isLastTurn ? interrupted : false,
-    });
+    };
+    if (isActive) {
+      activeFooter = footer;
+    } else {
+      items.push(footer);
+    }
   };
 
   const startTurn = (user: Message | null) => {
@@ -986,11 +1000,11 @@ function buildLegacyPerUserTurnHistory(opts: {
     }
   }
 
-  // Footer for the final turn (if complete / not streaming).
+  // Footer for the final turn, including the active turn while streaming.
   if (turnIndex >= 0) {
-    // turnHasBody may be true only for user; require assistant/tools for footer
+    // A user-only active turn still gets a footer while it is running.
     const bodyBeyondUser = items.length > turnItemCountAtStart + (turnUserId ? 1 : 0);
-    if (bodyBeyondUser || turnHasBody) {
+    if (bodyBeyondUser || turnHasBody || turnUserId != null) {
       // Recompute: footer if we had tools or assistant content
       const hasRenderableBody = items
         .slice(turnItemCountAtStart)
@@ -1000,14 +1014,19 @@ function buildLegacyPerUserTurnHistory(opts: {
             it.kind === 'tool-group' ||
             (it.kind === 'message' && it.message.role !== MessageRole.USER),
         );
-      if (hasRenderableBody) {
-        turnHasBody = true;
+      if (shouldRenderChainFooter({
+        isActive: liveStreaming,
+        isTerminal: status === 'error' || interrupted,
+        hasBody: hasRenderableBody,
+        hasUser: turnUserId != null,
+      })) {
+        turnHasBody ||= hasRenderableBody;
         flushFooter(true, true);
       }
     }
   }
 
-  return { items, emittedToolIds };
+  return { items, emittedToolIds, activeFooter };
 }
 
 /**
@@ -1081,7 +1100,7 @@ function buildLiveTailItems(opts: {
             timestamp: ts,
             usage: null,
             hidden: false,
-    is_error: false,
+            tool_result: null,
   },
           stillStreaming,
         );
@@ -1104,7 +1123,7 @@ function buildLiveTailItems(opts: {
             timestamp: ts,
             usage: null,
             hidden: false,
-    is_error: false,
+            tool_result: null,
   },
           stillStreamingThink,
         );
@@ -1132,7 +1151,7 @@ function buildLiveTailItems(opts: {
         timestamp: new Date().toISOString(),
         usage: null,
         hidden: false,
-    is_error: false,
+        tool_result: null,
   },
       true,
     );
@@ -1196,33 +1215,32 @@ function messagePairToToolBlock(call: Message, result: Message | null): ToolBloc
     call.tool_calls?.[0]?.function?.name ?? call.name ?? result?.name ?? 'unknown';
   const args = call.tool_calls?.[0]?.function?.arguments ?? call.content ?? '';
   const callId = call.tool_call_id ?? call.tool_calls?.[0]?.id ?? call.id;
-  // Backend owns failure; never infer from content text.
-  const isError = Boolean(result?.is_error);
+  const canonical = result?.tool_result ?? null;
 
   return {
     id: callId,
     toolName,
-    status: result ? (isError ? 'failed' : 'completed') : 'completed',
+    status: canonical?.status === 'error' ? 'failed' : canonical?.status ?? 'completed',
     partialArgs: '',
     args,
-    result: result && !isError ? result.content : null,
-    error: result && isError ? result.content : null,
+    agentProjection: result?.content ?? null,
+    toolResult: canonical,
     startedAt: call.timestamp,
     finishedAt: result?.timestamp ?? call.timestamp,
   };
 }
 
 function resultOnlyToToolBlock(result: Message): ToolBlock {
-  const isError = Boolean(result.is_error);
+  const canonical = result.tool_result;
 
   return {
     id: result.tool_call_id ?? result.id,
     toolName: result.name ?? 'tool',
-    status: isError ? 'failed' : 'completed',
+    status: canonical?.status === 'error' ? 'failed' : canonical?.status ?? 'completed',
     partialArgs: '',
     args: '',
-    result: isError ? null : result.content,
-    error: isError ? result.content : null,
+    agentProjection: result.content,
+    toolResult: canonical,
     startedAt: result.timestamp,
     finishedAt: result.timestamp,
   };

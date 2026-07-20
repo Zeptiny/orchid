@@ -1,11 +1,11 @@
 /**
  * MessageWidget — renders a single message based on its role/type.
  *
- * Iteration 012 mock-aligned: flat chat (no daisyUI bubbles), thought blocks.
- * Tool call/result messages fall back to ToolCallBlock for edge cases;
+ * Flat chat (no DaisyUI chat/chat-bubble). Thought blocks use disclosure
+ * chrome; tool call/result messages fall back to ToolCallBlock for edge cases.
  * ChatStream normally converts them into ToolBlocks for consistent ordering.
  */
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useId } from 'react';
 import type { Message } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import {
@@ -14,31 +14,14 @@ import {
 } from '../utils/thought-grouping';
 import type { ToolBlock } from '../hooks/useChat';
 import { MarkdownContent } from './MarkdownContent';
-import { LiveCommandInline } from './ToolWidgets/LiveCommandInline';
 import { Icon } from './Icon';
 import { ToolCallBlock } from './ToolCallBlock';
+import { Alert } from './ui/Alert';
+import { Spinner } from './ui/Spinner';
 
 interface MessageWidgetProps {
   message: Message;
   isStreaming?: boolean;
-}
-
-// Regex matching Python's _BACKGROUND_CMD_RE for background command tool results.
-const BG_CMD_RE =
-  /<background_command\s+id="(\d+)"[^>]*command="([^"]*)"[^>]*description="([^"]*)"[^>]*\/>/;
-
-function parseBackgroundCommand(content: string): {
-  commandId: number;
-  command: string;
-  description: string;
-} | null {
-  const match = BG_CMD_RE.exec(content);
-  if (!match) return null;
-  return {
-    commandId: parseInt(match[1], 10),
-    command: match[2],
-    description: match[3],
-  };
 }
 
 export function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
@@ -70,7 +53,11 @@ export function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
 }
 
 function UserMessage({ message }: { message: Message }) {
-  return <div className="msg msg-user">{message.content}</div>;
+  return (
+    <div className="orchid-msg orchid-msg-user px-4 py-3 rounded-md">
+      {message.content}
+    </div>
+  );
 }
 
 function AssistantMessage({
@@ -82,9 +69,8 @@ function AssistantMessage({
 }) {
   if (!message.content && !isStreaming) return null;
   return (
-    <div className="msg msg-assistant">
+    <div className="orchid-msg orchid-msg-assistant px-1 py-1">
       {message.content ? <MarkdownContent content={message.content} /> : null}
-      {isStreaming && <span className="streaming-cursor" />}
     </div>
   );
 }
@@ -99,9 +85,14 @@ function ThinkingMessage({
   // Stay open while reasoning streams; user can still toggle.
   const [expanded, setExpanded] = useState(Boolean(isStreaming));
   const [userToggled, setUserToggled] = useState(false);
+  const panelId = useId();
   const toggle = useCallback(() => {
     setUserToggled(true);
     setExpanded((prev) => !prev);
+  }, []);
+  const collapse = useCallback(() => {
+    setUserToggled(true);
+    setExpanded(false);
   }, []);
   const content = message.content || (message.thinking ?? '');
   // Mock shows "Thought 936ms" — estimate from content length when no duration field
@@ -118,11 +109,19 @@ function ThinkingMessage({
   }, [isStreaming, userToggled]);
 
   return (
-    <div className={`thought-block ${isStreaming ? 'thought-block-streaming' : ''}`}>
-      <button type="button" className="thought-block-title" onClick={toggle}>
+    <div
+      className={`orchid-thought ${isStreaming ? 'thought-block-streaming' : ''}`}
+    >
+      <button
+        type="button"
+        className="orchid-thought-title"
+        onClick={toggle}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+      >
         <span className="inline-flex items-center gap-1.5">
           {isStreaming ? (
-            <Icon name="loader" size={12} className="animate-spin" />
+            <Spinner size="xs" aria-hidden />
           ) : (
             <Icon name="alertCircle" size={12} />
           )}
@@ -131,9 +130,21 @@ function ThinkingMessage({
         <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
       </button>
       {expanded && (
-        <div className="thought-block-content">
+        <div
+          id={panelId}
+          className="orchid-thought-content"
+          onClick={collapse}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              collapse();
+            }
+          }}
+          role="button"
+          tabIndex={0}
+          title="Click to collapse"
+        >
           {content}
-          {isStreaming && <span className="streaming-cursor" />}
         </div>
       )}
     </div>
@@ -150,8 +161,8 @@ function ToolCallMessage({ message }: { message: Message }) {
       status: 'completed',
       partialArgs: '',
       args,
-      result: null,
-      error: null,
+      agentProjection: null,
+      toolResult: null,
       startedAt: message.timestamp,
       finishedAt: message.timestamp,
     };
@@ -161,55 +172,47 @@ function ToolCallMessage({ message }: { message: Message }) {
 }
 
 function ToolResultMessage({ message }: { message: Message }) {
-  const bgCmd = useMemo(
-    () => parseBackgroundCommand(message.content),
-    [message.content],
-  );
-
   const block = useMemo((): ToolBlock => {
-    const isError = Boolean(message.is_error);
+    const status = message.tool_result?.status;
     return {
       id: message.tool_call_id ?? message.id,
       toolName: message.name ?? 'tool',
-      status: isError ? 'failed' : 'completed',
+      status: status === 'error' ? 'failed' : status ?? 'completed',
       partialArgs: '',
       args: '',
-      result: isError ? null : message.content,
-      error: isError ? message.content : null,
+      agentProjection: message.content,
+      toolResult: message.tool_result,
       startedAt: message.timestamp,
       finishedAt: message.timestamp,
     };
   }, [message]);
-
-  if (bgCmd) {
-    return (
-      <LiveCommandInline
-        commandId={bgCmd.commandId}
-        commandText={bgCmd.command}
-        description={bgCmd.description}
-      />
-    );
-  }
 
   return <ToolCallBlock block={block} />;
 }
 
 function ErrorMessage({ message }: { message: Message }) {
   return (
-    <div className="error-banner-inline">
-      <Icon name="alertCircle" size={16} className="shrink-0 text-error" />
-      <div className="min-w-0 flex-1">
-        <div className="error-banner-title">Error</div>
-        <div className="error-banner-message">{message.content}</div>
+    <Alert
+      tone="error"
+      icon="alertCircle"
+      className="orchid-error-banner"
+    >
+      <div className="min-w-0 flex-1 orchid-error-body">
+        <div className="orchid-error-title">Error</div>
+        <div className="orchid-error-message">{message.content}</div>
       </div>
-    </div>
+    </Alert>
   );
 }
 
 function SystemMessage({ message }: { message: Message }) {
-  return <div className="msg-system">{message.content}</div>;
+  return (
+    <div className="orchid-msg-system">{message.content}</div>
+  );
 }
 
 function DefaultMessage({ message }: { message: Message }) {
-  return <div className="msg msg-assistant">{message.content}</div>;
+  return (
+    <div className="orchid-msg orchid-msg-assistant">{message.content}</div>
+  );
 }

@@ -8,13 +8,16 @@
  * Level 1 expand → finished thoughts + tool rows in chronological order
  * Level 2 → expand a tool row for details (existing ToolCallBlock)
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import type { Message } from '../../shared/types/message';
 import type { ToolBlock } from '../hooks/useChat';
 import { summarizeToolGroup } from '../utils/tool-grouping';
+import type { SubagentTitleRecord } from '../utils/tool-title';
 import { Icon } from './Icon';
 import { MessageWidget } from './MessageWidget';
 import { ToolCallBlock } from './ToolCallBlock';
+import { Spinner } from './ui/Spinner';
+import { StatusBadge } from './ui/StatusBadge';
 
 export type ActivityChild =
   | { kind: 'tool'; block: ToolBlock }
@@ -23,16 +26,18 @@ export type ActivityChild =
 export interface ToolActivityGroupProps {
   /** Ordered entries (thoughts + tools) as they appeared in the stream. */
   items: readonly ActivityChild[];
+  /** Active-session subagents used to turn wait/interrupt IDs into names. */
+  subagents?: readonly SubagentTitleRecord[];
   /** When true, groups start expanded. */
   alwaysExpand?: boolean;
 }
 
-const MAX_VISIBLE_CHILDREN = 12;
-
 export function ToolActivityGroup({
   items,
+  subagents = [],
   alwaysExpand = false,
 }: ToolActivityGroupProps) {
+  const panelId = useId();
   const tools = useMemo(
     () => items.filter((c): c is Extract<ActivityChild, { kind: 'tool' }> => c.kind === 'tool'),
     [items],
@@ -68,10 +73,6 @@ export function ToolActivityGroup({
       : '';
 
   const showLoader = hasActive;
-  const overflow = items.length > MAX_VISIBLE_CHILDREN;
-  const visible = overflow ? items.slice(0, MAX_VISIBLE_CHILDREN) : items;
-  const hiddenCount = overflow ? items.length - MAX_VISIBLE_CHILDREN : 0;
-
   // Prefer most specific family icon present in the group.
   const iconName =
     summary.searchCount > 0
@@ -88,43 +89,44 @@ export function ToolActivityGroup({
   const badgeCount = tools.length > 0 ? tools.length : items.length;
 
   return (
-    <div className={`tool-activity-group ${stateClass}`}>
+    <div className={`orchid-tool-activity ${stateClass}`}>
       <button
         type="button"
-        className="tool-activity-group-title"
+        className="orchid-tool-activity-title"
         onClick={() => setExpanded((prev) => !prev)}
         aria-expanded={expanded}
+        aria-controls={panelId}
       >
-        <span className="tool-activity-group-title-left">
+        <span className="orchid-tool-activity-title-left">
           {showLoader ? (
-            <Icon name="loader" size={12} className="animate-spin shrink-0" />
+            <Spinner size="xs" aria-hidden className="shrink-0" />
           ) : (
             <Icon name={iconName} size={12} className="shrink-0" />
           )}
-          <span className="tool-activity-group-title-text">
+          <span className="orchid-tool-activity-title-text">
             {summary.title || 'Activity'}
           </span>
-          <span className="tool-activity-group-count badge badge-ghost badge-xs">
+          <StatusBadge tone="ghost" size="xs" className="tool-activity-group-count">
             {badgeCount}
-          </span>
+          </StatusBadge>
         </span>
-        <span className="tool-activity-group-title-right">
+        <span className="orchid-tool-activity-title-right">
           <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
         </span>
       </button>
 
       {expanded && (
-        <div className="tool-activity-group-body">
-          <div
-            className={
-              overflow
-                ? 'tool-activity-group-children tool-activity-group-children-scroll'
-                : 'tool-activity-group-children'
-            }
-          >
-            {visible.map((child, i) => {
+        <div id={panelId} className="orchid-tool-activity-body">
+          <div className="tool-activity-group-children orchid-tool-activity-children">
+            {items.map((child, i) => {
               if (child.kind === 'tool') {
-                return <ToolCallBlock key={child.block.id} block={child.block} />;
+                return (
+                  <ToolCallBlock
+                    key={child.block.id}
+                    block={child.block}
+                    subagents={subagents}
+                  />
+                );
               }
               return (
                 <MessageWidget
@@ -135,11 +137,6 @@ export function ToolActivityGroup({
               );
             })}
           </div>
-          {hiddenCount > 0 && (
-            <div className="tool-activity-group-overflow">
-              +{hiddenCount} more
-            </div>
-          )}
         </div>
       )}
     </div>

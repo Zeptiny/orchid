@@ -23,10 +23,20 @@ import type {
   ProviderAuthMethod,
   ProviderProtocol,
 } from '../../../shared/types/provider';
-import { useFocusTrap } from '../../keyboard';
 import { isTextGenerationModel } from '../../utils/models';
 import { Icon } from '../Icon';
-import { SearchableOptionPicker, type SearchableOption } from '../SearchableOptionPicker';
+import { Alert } from '../ui/Alert';
+import { Button } from '../ui/Button';
+import { Checkbox } from '../ui/Checkbox';
+import { DialogSurface } from '../ui/DialogSurface';
+import { FormField } from '../ui/FormField';
+import { IconButton } from '../ui/IconButton';
+import { Panel } from '../ui/Panel';
+import { PopoverList, type PopoverListOption } from '../ui/PopoverList';
+import { SectionHeader } from '../ui/SectionHeader';
+import { Select } from '../ui/Select';
+import { StatusBadge } from '../ui/StatusBadge';
+import { TextInput } from '../ui/TextInput';
 import {
   ConnectionModelsEditor,
   connectionCustomModelDrafts,
@@ -97,7 +107,6 @@ export function ConnectionWizard({
   onValidate,
   onComplete,
 }: ConnectionWizardProps) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const wasOpenRef = useRef(false);
   const previousTargetIdRef = useRef<string | null>(null);
@@ -126,7 +135,7 @@ export function ConnectionWizard({
     () => definitions.find((definition) => definition.id === providerId) ?? null,
     [definitions, providerId],
   );
-  const providerPickerOptions = useMemo<readonly SearchableOption[]>(
+  const providerPickerOptions = useMemo<readonly PopoverListOption[]>(
     () => definitions.map((definition) => ({
       value: definition.id,
       label: definition.displayName,
@@ -150,12 +159,6 @@ export function ConnectionWizard({
       || endpointChanged
   );
   const metadataLocked = submitting || (pendingConnection !== null && !existingConnection);
-
-  useFocusTrap({
-    enabled: isOpen,
-    containerRef: dialogRef,
-    initialFocusRef: nameInputRef,
-  });
 
   const resetForDefinition = useCallback((definition: ProviderDefinitionView | undefined) => {
     const nextProtocol = defaultProtocol(definition);
@@ -410,68 +413,69 @@ export function ConnectionWizard({
     }
   };
 
-  if (!isOpen) return null;
-
   return (
-    <dialog
-      ref={dialogRef}
-      className="modal modal-open provider-connection-wizard"
-      open
-      aria-modal="true"
-      aria-labelledby="provider-connection-wizard-title"
-      onCancel={(event) => {
-        event.preventDefault();
-        close();
-      }}
+    <DialogSurface
+      isOpen={isOpen}
+      onClose={() => close()}
+      labelledBy="provider-connection-wizard-title"
+      initialFocusRef={nameInputRef}
+      variant="modal"
+      closeOnBackdrop={!submitting}
+      closeOnEscape={!submitting}
+      className="provider-connection-wizard"
+      overlayClassName="modal modal-open provider-connection-wizard"
+      panelClassName="modal-box"
     >
-      <div className="modal-box">
-        <header className="provider-wizard-header">
-          <div className="min-w-0">
+        <SectionHeader
+          className="provider-wizard-header"
+          title={
             <h2 id="provider-connection-wizard-title" className="text-base font-semibold tracking-tight">
               {existingConnection ? `Edit connection · ${existingConnection.name}` : 'Connect a provider'}
             </h2>
-            <p className="mt-1 text-sm text-base-content/70">
-              {existingConnection
-                ? 'Update connection details, authentication, and models in one place.'
-                : 'Connections are independent accounts or endpoints. Orchid never chooses one automatically.'}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm btn-circle"
-            aria-label={existingConnection ? 'Close connection editor' : 'Close provider connection setup'}
-            onClick={() => close()}
-            disabled={submitting}
-          >
-            <Icon name="x" size={16} />
-          </button>
-        </header>
+          }
+          description={
+            existingConnection
+              ? 'Update connection details, authentication, and models in one place.'
+              : 'Connections are independent accounts or endpoints. Orchid never chooses one automatically.'
+          }
+          actions={
+            <IconButton
+              label={existingConnection ? 'Close connection editor' : 'Close provider connection setup'}
+              icon="x"
+              size="sm"
+              iconSize={16}
+              onClick={() => close()}
+              disabled={submitting}
+            />
+          }
+        />
 
         {availableDefinitions.length === 0 ? (
           <div className="provider-wizard-body">
-            <div role="alert" className="alert alert-warning">
-              <Icon name="alert" size={16} />
-              <span>No enabled provider presets are available in this build.</span>
-            </div>
+            <Alert tone="warning" icon="alert">
+              No enabled provider presets are available in this build.
+            </Alert>
           </div>
         ) : (
           <form className="flex min-h-0 flex-1 flex-col" onSubmit={submit}>
             <div className="provider-wizard-body">
-              <fieldset className="fieldset">
-                <legend className="fieldset-legend">
-                  {existingConnection ? 'Connection details' : 'Provider and connection'}
-                </legend>
+              <Panel as="section" className="config-fieldset flex flex-col gap-3">
+                <SectionHeader
+                  title={existingConnection ? 'Connection details' : 'Provider and connection'}
+                />
                 {existingConnection ? (
                   <div className="flex items-center justify-between gap-3 rounded-box bg-base-200 px-3 py-2">
                     <span className="text-sm text-base-content/70">Provider</span>
-                    <span className="badge">{selectedDefinition?.displayName ?? providerId}</span>
+                    <StatusBadge tone="neutral" size="sm">
+                      {selectedDefinition?.displayName ?? providerId}
+                    </StatusBadge>
                   </div>
                 ) : (
                   <>
                     <label className="label" htmlFor="provider-wizard-preset">
                       Provider preset
                     </label>
-                    <SearchableOptionPicker
+                    <PopoverList
                       id="provider-wizard-preset"
                       value={providerId}
                       options={providerPickerOptions}
@@ -481,6 +485,9 @@ export function ConnectionWizard({
                       searchPlaceholder="Search providers..."
                       emptyMessage="No provider presets available"
                       disabled={metadataLocked}
+                      triggerIcon="globe"
+                      align="start"
+                      placement="bottom"
                     />
                     {selectedDefinition?.unavailableReason && (
                       <p className="label text-warning">{selectedDefinition.unavailableReason}</p>
@@ -488,31 +495,37 @@ export function ConnectionWizard({
                   </>
                 )}
 
-                <label className="label mt-3" htmlFor="provider-wizard-name">
-                  Connection name
-                </label>
-                <input
-                  ref={nameInputRef}
-                  id="provider-wizard-name"
-                  className="input w-full"
-                  value={connectionName}
-                  onChange={(event) => setConnectionName(event.target.value)}
-                  placeholder="e.g. Work account"
-                  disabled={metadataLocked}
+                <FormField
+                  className="mt-3"
+                  label="Connection name"
+                  htmlFor="provider-wizard-name"
+                  hint="This name distinguishes accounts for the same provider."
                   required
-                />
-                <p className="label">This name distinguishes accounts for the same provider.</p>
-              </fieldset>
+                >
+                  <TextInput
+                    ref={nameInputRef}
+                    id="provider-wizard-name"
+                    bordered={false}
+                    className="w-full"
+                    value={connectionName}
+                    onChange={(event) => setConnectionName(event.target.value)}
+                    placeholder="e.g. Work account"
+                    disabled={metadataLocked}
+                    required
+                  />
+                </FormField>
+              </Panel>
 
               {!existingConnection && (
-                <fieldset className="fieldset">
-                  <legend className="fieldset-legend">Protocol</legend>
+                <Panel as="section" className="config-fieldset flex flex-col gap-3">
+                  <SectionHeader title="Protocol" />
                   <label className="label" htmlFor="provider-wizard-protocol">
                     Connection protocol
                   </label>
-                  <select
+                  <Select
                     id="provider-wizard-protocol"
-                    className="select w-full"
+                    bordered={false}
+                    className="w-full"
                     value={protocol}
                     onChange={(event) => selectProtocol(event.target.value as ProviderProtocol)}
                     disabled={metadataLocked}
@@ -522,23 +535,24 @@ export function ConnectionWizard({
                         {protocolLabel(candidate)}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                   <p className="label">
                     Protocol is fixed after creation. Configure every model for this connection
                     below before saving.
                   </p>
-                </fieldset>
+                </Panel>
               )}
 
               {supportsCustomEndpoint && (
-                <fieldset className="fieldset">
-                  <legend className="fieldset-legend">Custom endpoint</legend>
+                <Panel as="section" className="config-fieldset flex flex-col gap-3">
+                  <SectionHeader title="Custom endpoint" />
                   <label className="label" htmlFor="provider-wizard-endpoint">
                     Base URL
                   </label>
-                  <input
+                  <TextInput
                     id="provider-wizard-endpoint"
-                    className="input w-full"
+                    bordered={false}
+                    className="w-full"
                     type="url"
                     value={endpoint}
                     onChange={(event) => setEndpoint(event.target.value)}
@@ -547,9 +561,8 @@ export function ConnectionWizard({
                     required
                   />
                   <label className="label mt-2 cursor-pointer justify-start gap-2">
-                    <input
-                      type="checkbox"
-                      className="checkbox checkbox-sm"
+                    <Checkbox
+                      size="sm"
                       checked={allowInsecureHttp}
                       onChange={(event) => setAllowInsecureHttp(event.target.checked)}
                       disabled={metadataLocked}
@@ -560,17 +573,18 @@ export function ConnectionWizard({
                     Use HTTPS whenever possible. Orchid validates the endpoint before binding any
                     credential.
                   </p>
-                </fieldset>
+                </Panel>
               )}
 
-              <fieldset className="fieldset">
-                <legend className="fieldset-legend">Authentication</legend>
+              <Panel as="section" className="config-fieldset flex flex-col gap-3">
+                <SectionHeader title="Authentication" />
                 <label className="label" htmlFor="provider-wizard-auth">
                   Method
                 </label>
-                <select
+                <Select
                   id="provider-wizard-auth"
-                  className="select w-full"
+                  bordered={false}
+                  className="w-full"
                   value={authMethod}
                   onChange={(event) => {
                     setAuthMethod(event.target.value as ProviderAuthMethod);
@@ -585,7 +599,7 @@ export function ConnectionWizard({
                       {authMethodLabel(method)}
                     </option>
                   ))}
-                </select>
+                </Select>
 
                 {authMethod === 'api-key' && (
                   <>
@@ -594,11 +608,12 @@ export function ConnectionWizard({
                         <label className="label mt-3" htmlFor="provider-wizard-api-key">
                           API key
                         </label>
-                        <input
+                        <TextInput
                           id="provider-wizard-api-key"
                           type="password"
                           autoComplete="off"
-                          className="input w-full"
+                          bordered={false}
+                          className="w-full"
                           value={apiKey}
                           onChange={(event) => setApiKey(event.target.value)}
                           placeholder={existingConnection
@@ -614,16 +629,13 @@ export function ConnectionWizard({
                         </p>
                       </>
                     ) : (
-                      <div role="alert" className="alert alert-warning mt-3">
-                        <Icon name="alert" size={16} />
-                        <span>
-                          Secure credential storage is unavailable
-                          {secureStorage.reason ? ` (${secureStorage.reason})` : ''}.
-                          {selectedDefinition?.supportedAuthMethods.includes('environment')
-                            ? ' Use an environment variable reference instead.'
-                            : ' Choose an available authentication method or restore secure storage before continuing.'}
-                        </span>
-                      </div>
+                      <Alert tone="warning" className="mt-3" icon="alert">
+                        Secure credential storage is unavailable
+                        {secureStorage.reason ? ` (${secureStorage.reason})` : ''}.
+                        {selectedDefinition?.supportedAuthMethods.includes('environment')
+                          ? ' Use an environment variable reference instead.'
+                          : ' Choose an available authentication method or restore secure storage before continuing.'}
+                      </Alert>
                     )}
                   </>
                 )}
@@ -633,9 +645,10 @@ export function ConnectionWizard({
                     <label className="label mt-3" htmlFor="provider-wizard-environment">
                       Environment variable
                     </label>
-                    <input
+                    <TextInput
                       id="provider-wizard-environment"
-                      className="input w-full"
+                      bordered={false}
+                      className="w-full"
                       value={environmentVariable}
                       onChange={(event) => setEnvironmentVariable(event.target.value.toUpperCase())}
                       placeholder="PROVIDER_API_KEY"
@@ -651,7 +664,7 @@ export function ConnectionWizard({
                   </>
                 )}
 
-              </fieldset>
+              </Panel>
 
               {selectedDefinition && (
                 <ConnectionModelsEditor
@@ -668,31 +681,24 @@ export function ConnectionWizard({
               )}
 
               {feedback && (
-                <div role="status" aria-live="polite" className="alert alert-info">
-                  <Icon name="alertCircle" size={16} />
-                  <span>{feedback}</span>
-                </div>
+                <Alert tone="info" role="status" icon="alertCircle" aria-live="polite">{feedback}</Alert>
               )}
               {error && (
-                <div role="alert" aria-live="assertive" className="alert alert-error">
-                  <Icon name="alertCircle" size={16} />
-                  <span>{error}</span>
-                </div>
+                <Alert tone="error" icon="alertCircle" aria-live="assertive">{error}</Alert>
               )}
             </div>
 
             <div className="provider-wizard-actions">
-              <button
-                type="button"
-                className="btn btn-ghost"
+              <Button
+                variant="ghost"
                 onClick={() => close()}
                 disabled={submitting}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 type="submit"
-                className="btn btn-primary"
+                variant="primary"
                 disabled={submitting || modelsEditing || (requiresNewApiKey && !apiKeyPersistenceAvailable)}
               >
                 {submitting
@@ -702,22 +708,11 @@ export function ConnectionWizard({
                     : pendingConnection
                       ? 'Continue setup'
                       : 'Create connection'}
-              </button>
+              </Button>
             </div>
           </form>
         )}
-      </div>
-      <form method="dialog" className="modal-backdrop">
-        <button
-          type="button"
-          aria-label="Close provider connection setup"
-          onClick={() => close()}
-          disabled={submitting}
-        >
-          close
-        </button>
-      </form>
-    </dialog>
+    </DialogSurface>
   );
 }
 

@@ -1,9 +1,16 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ModelMetadata } from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption } from '../../shared/types/ipc';
 import { withCurrentModelOption } from '../utils/models';
 import { providerModelOptionContextLabel } from '../utils/provider-selection';
 import { Icon } from './Icon';
+import { Button } from './ui/Button';
+import {
+  useClampActiveIndex,
+  usePopoverListbox,
+  type PopoverAlign,
+  type PopoverPlacement,
+} from './ui/usePopoverListbox';
 
 interface ModelPickerProps {
   id?: string;
@@ -11,8 +18,8 @@ interface ModelPickerProps {
   options: readonly string[];
   onChange: (value: string) => void;
   label?: string;
-  placement?: 'top' | 'bottom';
-  align?: 'start' | 'end';
+  placement?: PopoverPlacement;
+  align?: PopoverAlign;
   className?: string;
   disabled?: boolean;
   emptyMessage?: string;
@@ -50,11 +57,23 @@ export function ModelPicker({
   optionDetails,
   additionalOptions = [],
 }: ModelPickerProps) {
-  const pickerRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const menuId = useId();
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
+  const {
+    pickerRef,
+    triggerRef,
+    searchRef,
+    menuId,
+    open,
+    query,
+    activeIndex,
+    setActiveIndex,
+    toggleOpen,
+    closeAndRestoreFocus,
+    setQuery,
+    onSearchChange,
+    onSearchKeyDown,
+    dropdownClassName,
+  } = usePopoverListbox();
+
   const [metadata, setMetadata] = useState<Record<string, ModelMetadata | null>>({});
   const additionalOptionsByValue = useMemo(
     () => new Map(additionalOptions.map((option) => [option.value, option])),
@@ -81,19 +100,7 @@ export function ModelPicker({
     });
   }, [additionalOptionsByValue, modelOptions, optionDetails, optionLabels, query]);
 
-  useEffect(() => {
-    if (!open) return;
-    searchRef.current?.focus();
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (!pickerRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [open]);
+  useClampActiveIndex(activeIndex, filteredModels.length, setActiveIndex);
 
   useEffect(() => {
     // Connection-scoped provider options carry their own catalog metadata.
@@ -124,7 +131,7 @@ export function ModelPicker({
     if (additionalOptionsByValue.get(model)?.disabled) return;
     onChange(model);
     setQuery('');
-    setOpen(false);
+    closeAndRestoreFocus();
   };
 
   const selectedAdditionalOption = additionalOptionsByValue.get(value);
@@ -139,25 +146,32 @@ export function ModelPicker({
   return (
     <div
       ref={pickerRef}
-      className={`dropdown ${align === 'start' ? 'dropdown-start' : 'dropdown-end'} ${placement === 'top' ? 'dropdown-top' : ''} ${open ? 'dropdown-open' : ''} ${className} model-picker-align-${align}`.trim()}
+      className={dropdownClassName(
+        align,
+        placement,
+        `${className} model-picker-align-${align} orchid-model-picker`,
+      )}
     >
-      <button
+      <Button
+        ref={triggerRef}
         id={id}
-        type="button"
-        className={`btn btn-ghost model-picker-trigger${selectedTriggerSubLabel ? ' model-picker-trigger-with-sub-label' : ''}`}
+        variant="ghost"
+        className={`orchid-model-picker-trigger orchid-model-picker-trigger${selectedTriggerSubLabel ? ' model-picker-trigger-with-sub-label' : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={menuId}
         aria-label={label}
         title={selectedTriggerSubLabel ? `${selectedDisplayName} · ${selectedTriggerSubLabel}` : selectedDisplayName || label}
         disabled={disabled}
-        onClick={() => setOpen((previous) => !previous)}
+        onClick={toggleOpen}
       >
         <Icon name="cpu" size={13} className="shrink-0 opacity-70" />
-        <span className="model-picker-trigger-copy">
-          <span className="model-picker-trigger-label">{selectedDisplayName || displayModelId(value)}</span>
+        <span className="orchid-model-picker-trigger-copy min-w-0 flex-1 flex flex-col items-start overflow-hidden">
+          <span className="model-picker-trigger-label truncate">{selectedDisplayName || displayModelId(value)}</span>
           {selectedTriggerSubLabel && (
-            <span className="model-picker-trigger-sub-label">{selectedTriggerSubLabel}</span>
+            <span className="model-picker-trigger-sub-label truncate text-xs font-normal text-base-content/60">
+              {selectedTriggerSubLabel}
+            </span>
           )}
         </span>
         <Icon
@@ -165,42 +179,58 @@ export function ModelPicker({
           size={12}
           className={`shrink-0 opacity-60 transition-transform ${open ? 'rotate-180' : ''}`}
         />
-      </button>
+      </Button>
 
       {open && (
         <div
           id={menuId}
           role="listbox"
           aria-label={label}
-          className="dropdown-content model-picker-menu z-50"
+          className="dropdown-content orchid-model-picker-menu z-50"
         >
-          <div className="model-picker-heading">
+          <div className="orchid-model-picker-heading flex items-start justify-between gap-3.5 border-b border-base-content/10 px-3.5 py-3">
             <div>
-              <div className="model-picker-title">Models</div>
+              <div className="model-picker-title text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                Models
+              </div>
             </div>
-            <span className="model-picker-current">
-              <span className="model-picker-current-name">{selectedDisplayName || 'None selected'}</span>
+            <span className="model-picker-current flex min-w-0 flex-col items-end gap-0.5">
+              <span className="model-picker-current-name truncate text-xs font-medium">
+                {selectedDisplayName || 'None selected'}
+              </span>
               {selectedSubLabel && (
-                <span className="model-picker-current-sub-label">{selectedSubLabel}</span>
+                <span className="model-picker-current-sub-label truncate text-xs text-base-content/60">
+                  {selectedSubLabel}
+                </span>
               )}
             </span>
           </div>
 
-          <label className="input input-sm model-picker-search">
+          <label className="input input-sm orchid-model-picker-search mx-2 my-2">
             <Icon name="search" size={14} className="shrink-0 opacity-50" />
+            {/* NOTE (known deferred case): raw <input> instead of <TextInput> because the
+                parent <label> already uses the DaisyUI "input" compound class; adding
+                TextInput would double-up the "input" class. */}
             <input
               ref={searchRef}
+              className="orchid-model-picker-search-input grow"
               type="search"
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') {
-                  event.preventDefault();
-                  setOpen(false);
-                }
-              }}
+              onChange={(event) => onSearchChange(event.target.value)}
+              onKeyDown={(event) =>
+                onSearchKeyDown(event, filteredModels.length, (index) => {
+                  const model = filteredModels[index];
+                  if (model) selectModel(model);
+                })
+              }
               placeholder="Search models..."
               aria-label="Search models"
+              aria-controls={menuId}
+              aria-activedescendant={
+                filteredModels[activeIndex]
+                  ? `${menuId}-option-${filteredModels[activeIndex]}`
+                  : undefined
+              }
             />
           </label>
 
@@ -215,7 +245,7 @@ export function ModelPicker({
                 </tr>
               </thead>
               <tbody>
-                {filteredModels.map((model) => {
+                {filteredModels.map((model, index) => {
                   const modelMetadata = metadata[model];
                   const detail = optionDetails?.[model];
                   const additionalOption = additionalOptionsByValue.get(model);
@@ -240,15 +270,18 @@ export function ModelPicker({
                         ? detail.unavailableReason ?? 'Unavailable'
                         : providerModelOptionContextLabel(detail)
                       : null);
+                  const active = index === activeIndex;
                   return (
                     <tr
                       key={model}
+                      id={`${menuId}-option-${model}`}
                       role="option"
                       tabIndex={0}
                       aria-selected={selected}
-                      className={`${selected ? 'model-picker-row is-selected' : 'model-picker-row'}${unavailable ? ' opacity-60' : ''}`}
+                      className={`${selected ? 'model-picker-row is-selected' : 'model-picker-row'}${active ? ' is-active' : ''}${unavailable ? ' opacity-60' : ''}`}
                       aria-disabled={unavailable || undefined}
                       onClick={() => selectModel(model)}
+                      onMouseEnter={() => setActiveIndex(index)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault();

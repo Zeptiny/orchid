@@ -30,6 +30,10 @@ export const chatStopSchema = z.object({
   sessionId: z.string().uuid(),
 });
 
+export const subagentSnapshotSchema = z.object({
+  sessionId: z.string().uuid(),
+}).strict();
+
 // ── Config ───────────────────────────────────────────────────────────────────
 
 /**

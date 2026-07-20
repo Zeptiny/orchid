@@ -24,6 +24,7 @@ function themeAssets() {
 export default defineConfig({
   plugins: [react(), tailwindcss(), themeAssets()],
   root: path.resolve(__dirname, 'src/renderer'),
+  base: './',
   build: {
     outDir: path.resolve(__dirname, 'dist/renderer'),
     emptyOutDir: true,

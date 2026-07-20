@@ -14,9 +14,15 @@ import { LeftSidebar } from './LeftSidebar';
 import { useProviders } from '../hooks/useProviders';
 import { useSession } from '../hooks/useSession';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
-import { Icon } from './Icon';
-import { Keycaps } from './Keycaps';
+import { applyConfigDraft } from '../utils/config-draft';
 import { withMapDeletionTombstones } from '../utils/config-tombstones';
+import { Keycaps } from './Keycaps';
+import { Alert } from './ui/Alert';
+import { Button } from './ui/Button';
+import { DialogSurface } from './ui/DialogSurface';
+import { StateMessage } from './ui/StateMessage';
+import { StatusBadge } from './ui/StatusBadge';
+import { Tabs } from './ui/Tabs';
 
 type TabId =
   | 'general'
@@ -73,6 +79,8 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
   const [definitions, setDefinitions] = useState<DefinitionsListResult | null>(null);
   const [defsLoading, setDefsLoading] = useState(true);
   const tabSwitchGen = useRef(0);
+  const unsavedSaveRef = useRef<HTMLButtonElement>(null);
+  const restartPrimaryRef = useRef<HTMLButtonElement>(null);
 
   useFocusTrap({
     enabled: true,
@@ -201,9 +209,14 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
     };
   }, [loadDefinitions]);
 
+  const tabItems = useMemo(
+    () => TABS.map((tab) => ({ ...tab, ariaBusy: pendingTab === tab.id })),
+    [pendingTab],
+  );
+
   const currentConfig = useMemo(() => {
     if (!originalConfig) return null;
-    return { ...originalConfig, ...draft } as Config;
+    return applyConfigDraft(originalConfig, draft);
   }, [originalConfig, draft]);
 
   const updateDraft = useCallback((updates: ConfigPatch) => {
@@ -273,11 +286,14 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
   });
 
   const handleSessionSelect = useCallback(
-    async (id: string) => {
-      await session.load(id);
+    (id: string) => {
+      // ChatView owns hydrate/affinity; rebind store alone leaves messages stale.
+      window.dispatchEvent(
+        new CustomEvent('orchid:select-session', { detail: { id } }),
+      );
       onClose();
     },
-    [onClose, session],
+    [onClose],
   );
 
   const handleSessionCreate = useCallback(async () => {
@@ -304,7 +320,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
   return (
     <div
       ref={rootRef}
-      className="grid h-screen min-h-0 grid-cols-[auto_minmax(460px,1fr)] overflow-hidden bg-base-100 text-base-content"
+      className="config-shell grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
     >
       <LeftSidebar
         activeSessionId={session.activeSession?.id ?? null}
@@ -344,60 +360,67 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
           </div>
           <div className="config-main-header-actions">
             {isDirty && (
-              <span className="badge badge-sm badge-warning badge-outline">Unsaved</span>
+              <StatusBadge tone="warning" size="sm" outline>
+                Unsaved
+              </StatusBadge>
             )}
-            <button
-              className="btn btn-primary btn-sm h-8 min-h-8"
+            <Button
+              variant="primary"
+              size="sm"
               onClick={handleSave}
               disabled={!isDirty || saving}
-              type="button"
+              loading={saving}
             >
-              {saving && <span className="loading loading-spinner loading-xs" />}
               Save
-            </button>
-            <button className="btn btn-ghost btn-sm h-8 min-h-8" onClick={requestClose} type="button">
+            </Button>
+            <Button variant="ghost" size="sm" onClick={requestClose}>
               Close
-            </button>
+            </Button>
           </div>
         </header>
 
         {error && (
-          <div className="alert alert-error rounded-none py-2.5 text-sm">
-            <Icon name="alert" size={14} />
-            <span>{error}</span>
-            <button className="btn btn-ghost btn-xs" onClick={() => setError(null)} type="button">
-              Dismiss
-            </button>
-          </div>
+          <Alert
+            tone="error"
+            className="rounded-none py-2.5 text-sm"
+            icon="alert"
+            iconSize={14}
+            action={
+              <Button variant="ghost" size="xs" onClick={() => setError(null)}>
+                Dismiss
+              </Button>
+            }
+          >
+            {error}
+          </Alert>
         )}
 
         {diagnostics.map((diagnostic) => (
-          <div key={diagnostic.code} role="alert" className="alert alert-warning rounded-none py-2.5 text-sm">
-            <Icon name="alert" size={14} />
-            <span>{diagnostic.message}</span>
-          </div>
+          <Alert
+            key={diagnostic.code}
+            tone="warning"
+            className="rounded-none py-2.5 text-sm"
+            icon="alert"
+            iconSize={14}
+          >
+            {diagnostic.message}
+          </Alert>
         ))}
 
-        <div className="config-tabs">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              className={`config-tab ${activeTab === tab.id ? 'config-tab-active' : ''}`}
-              onClick={() => { void requestTab(tab.id); }}
-              type="button"
-              aria-busy={pendingTab === tab.id || undefined}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          items={tabItems}
+          value={activeTab}
+          onValueChange={(id) => { void requestTab(id as TabId); }}
+          variant="boxed"
+          className="config-tabs bg-base-200"
+          itemClassName="config-tab"
+          activeItemClassName="config-tab-active"
+          aria-label="Configuration sections"
+        />
 
         <div className="config-body">
           {loading ? (
-            <div className="flex items-center gap-3 py-6 text-base-content/60">
-              <span className="loading loading-spinner loading-sm" />
-              <span>Loading configuration...</span>
-            </div>
+            <StateMessage kind="loading" title="Loading configuration…" />
           ) : currentConfig ? (
             renderTab(
               activeTab,
@@ -409,10 +432,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
               loadDefinitions,
             )
           ) : (
-            <div className="alert alert-warning">
-              <Icon name="alert" />
-              <span>Configuration could not be loaded.</span>
-            </div>
+            <StateMessage kind="warning" title="Configuration could not be loaded." />
           )}
         </div>
 
@@ -431,42 +451,84 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
         </footer>
       </main>
 
-      {showUnsavedDialog && (
-        <div className="modal modal-open">
-          <div className="modal-box">
-            <h2 className="text-lg font-semibold">Unsaved changes</h2>
-            <p className="py-3 text-sm text-base-content/70">Save your configuration changes before returning to chat?</p>
-            <div className="modal-action">
-              <button className="btn btn-primary" onClick={async () => { await handleSave(); onClose(); }}>
-                Save
-              </button>
-              <button className="btn btn-error" onClick={() => { setDraft({}); onClose(); }}>
-                Discard
-              </button>
-              <button className="btn btn-ghost" onClick={() => setShowUnsavedDialog(false)}>
-                Cancel
-              </button>
-            </div>
-          </div>
+      <DialogSurface
+        isOpen={showUnsavedDialog}
+        onClose={() => setShowUnsavedDialog(false)}
+        labelledBy="config-unsaved-title"
+        describedBy="config-unsaved-desc"
+        initialFocusRef={unsavedSaveRef}
+        variant="modal"
+        closeOnBackdrop={false}
+      >
+        <h2 id="config-unsaved-title" className="text-lg font-semibold">
+          Unsaved changes
+        </h2>
+        <p id="config-unsaved-desc" className="py-3 text-sm text-base-content/70">
+          Save your configuration changes before returning to chat?
+        </p>
+        <div className="modal-action">
+          <Button
+            ref={unsavedSaveRef}
+            variant="primary"
+            onClick={async () => {
+              await handleSave();
+              onClose();
+            }}
+          >
+            Save
+          </Button>
+          <Button
+            variant="error"
+            onClick={() => {
+              setDraft({});
+              onClose();
+            }}
+          >
+            Discard
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => setShowUnsavedDialog(false)}
+          >
+            Cancel
+          </Button>
         </div>
-      )}
+      </DialogSurface>
 
-      {showRestartDialog && (
-        <div className="modal modal-open">
-          <div className="modal-box">
-            <h2 className="text-lg font-semibold">Restart required</h2>
-            <p className="py-3 text-sm text-base-content/70">MCP server changes require an application restart to take effect.</p>
-            <div className="modal-action">
-              <button className="btn btn-primary" onClick={() => { setShowRestartDialog(false); onClose(); }}>
-                Return to chat
-              </button>
-              <button className="btn btn-ghost" onClick={() => setShowRestartDialog(false)}>
-                Later
-              </button>
-            </div>
-          </div>
+      <DialogSurface
+        isOpen={showRestartDialog}
+        onClose={() => setShowRestartDialog(false)}
+        labelledBy="config-restart-title"
+        describedBy="config-restart-desc"
+        initialFocusRef={restartPrimaryRef}
+        variant="modal"
+        closeOnBackdrop={false}
+      >
+        <h2 id="config-restart-title" className="text-lg font-semibold">
+          Restart required
+        </h2>
+        <p id="config-restart-desc" className="py-3 text-sm text-base-content/70">
+          MCP server changes require an application restart to take effect.
+        </p>
+        <div className="modal-action">
+          <Button
+            ref={restartPrimaryRef}
+            variant="primary"
+            onClick={() => {
+              setShowRestartDialog(false);
+              onClose();
+            }}
+          >
+            Return to chat
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => setShowRestartDialog(false)}
+          >
+            Later
+          </Button>
         </div>
-      )}
+      </DialogSurface>
     </div>
   );
 }
@@ -531,29 +593,17 @@ function renderTab(
     case 'skills':
       // requestTab gates until definitions are loaded — only show error if failed.
       if (!definitions) {
-        return (
-          <div className="alert alert-warning">
-            <span>Skills could not be loaded.</span>
-          </div>
-        );
+        return <StateMessage kind="warning" title="Skills could not be loaded." />;
       }
       return <SkillsTab data={definitions} onReload={reloadDefinitions} />;
     case 'agents':
       if (!definitions) {
-        return (
-          <div className="alert alert-warning">
-            <span>Agents could not be loaded.</span>
-          </div>
-        );
+        return <StateMessage kind="warning" title="Agents could not be loaded." />;
       }
       return <AgentsTab data={definitions} onReload={reloadDefinitions} />;
     case 'personalities':
       if (!definitions) {
-        return (
-          <div className="alert alert-warning">
-            <span>Personalities could not be loaded.</span>
-          </div>
-        );
+        return <StateMessage kind="warning" title="Personalities could not be loaded." />;
       }
       return <PersonalitiesTab data={definitions} onReload={reloadDefinitions} />;
   }

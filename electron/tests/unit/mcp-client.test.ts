@@ -96,7 +96,6 @@ vi.mock('@modelcontextprotocol/sdk/client/sse.js', () => ({
 }));
 
 // Import mocked modules for assertions
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 
@@ -214,7 +213,7 @@ describe('MCPManager', () => {
         undefined,
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
-      expect(result).toBe('library-id-123');
+      expect(result).toEqual(callToolResult('library-id-123'));
 
       // Shutdown clears all state
       await manager.shutdown();
@@ -250,7 +249,7 @@ describe('MCPManager', () => {
 
       mockInstances[0].callTool.mockResolvedValueOnce(callToolResult('search results here'));
       const result = await manager.callTool('mcp::tavily::search', { query: 'MCP protocol' });
-      expect(result).toBe('search results here');
+      expect(result).toEqual(callToolResult('search results here'));
 
       await manager.shutdown();
     });
@@ -566,7 +565,7 @@ describe('MCPManager', () => {
       await manager.shutdown();
     });
 
-    it('should concatenate multiple text blocks', async () => {
+    it('should preserve multiple text content blocks exactly', async () => {
       enqueueMock({
         listToolsResult: toolsResult([{ name: 'multi-text', description: 'Multi text' }]),
         listResourcesResult: [],
@@ -574,20 +573,21 @@ describe('MCPManager', () => {
 
       await manager.startAll({ server: makeStdioConfig() });
 
-      mockInstances[0].callTool.mockResolvedValueOnce({
+      const rawResult = {
         content: [
           { type: 'text', text: 'Line 1' },
           { type: 'text', text: 'Line 2' },
         ],
-      });
+      };
+      mockInstances[0].callTool.mockResolvedValueOnce(rawResult);
 
       const result = await manager.callTool('mcp::server::multi-text', {});
-      expect(result).toBe('Line 1\nLine 2');
+      expect(result).toEqual(rawResult);
 
       await manager.shutdown();
     });
 
-    it('should convert non-text blocks to placeholders', async () => {
+    it('should preserve mixed content blocks exactly', async () => {
       enqueueMock({
         listToolsResult: toolsResult([{ name: 'mixed', description: 'Mixed content' }]),
         listResourcesResult: [],
@@ -595,16 +595,16 @@ describe('MCPManager', () => {
 
       await manager.startAll({ server: makeStdioConfig() });
 
-      mockInstances[0].callTool.mockResolvedValueOnce({
+      const rawResult = {
         content: [
           { type: 'text', text: 'Here is the result:' },
           { type: 'image', mimeType: 'image/png', data: 'base64...' },
         ],
-      });
+      };
+      mockInstances[0].callTool.mockResolvedValueOnce(rawResult);
 
       const result = await manager.callTool('mcp::server::mixed', {});
-      expect(result).toContain('Here is the result:');
-      expect(result).toContain('[image: image/png]');
+      expect(result).toEqual(rawResult);
 
       await manager.shutdown();
     });
@@ -787,8 +787,15 @@ describe('MCPManager', () => {
 
       mockInstances[0].callTool.mockResolvedValueOnce(callToolResult('echoed: hello'));
 
+      const rawResult = callToolResult('echoed: hello');
       const result = await tools[0].handler({ message: 'hello' });
-      expect(result).toBe('echoed: hello');
+      expect(result).toEqual({
+        status: 'complete',
+        data: {
+          value: rawResult,
+          origin: { kind: 'mcp', name: 'mcp::server::echo' },
+        },
+      });
 
       expect(mockInstances[0].callTool).toHaveBeenCalledWith(
         {

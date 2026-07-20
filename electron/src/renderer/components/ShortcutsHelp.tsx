@@ -1,10 +1,12 @@
 /**
  * Keyboard shortcuts help modal — content from the central registry.
  */
-import { useEffect, useRef } from 'react';
-import { formatShortcut, groupShortcutsForHelp, useFocusTrap } from '../keyboard';
+import { useRef } from 'react';
+import { formatShortcut, groupShortcutsForHelp } from '../keyboard';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
+import { DialogSurface } from './ui/DialogSurface';
+import { IconButton } from './ui/IconButton';
 
 interface ShortcutsHelpProps {
   isOpen: boolean;
@@ -12,97 +14,87 @@ interface ShortcutsHelpProps {
 }
 
 export function ShortcutsHelp({ isOpen, onClose }: ShortcutsHelpProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
-
-  useFocusTrap({
-    enabled: isOpen,
-    containerRef,
-    initialFocusRef: closeRef,
-  });
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
   const groups = groupShortcutsForHelp();
 
   return (
-    <div
-      className="shortcuts-help-overlay"
-      onClick={onClose}
-      role="presentation"
+    <DialogSurface
+      isOpen={isOpen}
+      onClose={onClose}
+      label="Keyboard shortcuts"
+      initialFocusRef={closeRef}
+      overlayClassName="orchid-shortcuts-help-overlay fixed inset-0 z-[60] flex items-start justify-center bg-black/60 pt-[10vh] px-4 pb-6"
+      panelClassName="orchid-shortcuts-help-dialog flex max-h-[min(40rem,82vh)] w-full max-w-lg flex-col overflow-hidden rounded-box border border-base-300 bg-base-200 shadow-2xl"
+      variant="overlay"
     >
-      <div
-        ref={containerRef}
-        className="shortcuts-help-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Keyboard shortcuts"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="shortcuts-help-header">
-          <div className="shortcuts-help-title-block">
-            <span className="shortcuts-help-icon-wrap" aria-hidden>
-              <Icon name="command" size={15} />
-            </span>
-            <div className="shortcuts-help-title-text">
-              <h2>Keyboard shortcuts</h2>
-              <p>Navigate Orchid without leaving the keyboard</p>
-            </div>
-          </div>
-          <button
-            ref={closeRef}
-            type="button"
-            className="btn btn-ghost btn-sm btn-circle shortcuts-help-close"
-            onClick={onClose}
-            aria-label="Close"
+      <header className="orchid-shortcuts-help-header flex items-start justify-between gap-3 border-b border-base-300 px-4 py-4">
+        <div className="shortcuts-help-title-block flex min-w-0 items-start gap-3">
+          <span
+            className="shortcuts-help-icon-wrap inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-primary/30 bg-primary/10 text-primary"
+            aria-hidden
           >
-            <Icon name="x" size={14} />
-          </button>
-        </header>
-
-        <div className="shortcuts-help-body">
-          {groups.map((g) => (
-            <section key={g.group} className="shortcuts-help-section">
-              <h3 className="shortcuts-help-section-title">{g.label}</h3>
-              <ul className="shortcuts-help-list">
-                {g.items.map((item) => (
-                  <li key={item.id} className="shortcuts-help-row">
-                    <span className="shortcuts-help-label">{item.label}</span>
-                    <Keycaps chord={item.chord} size="sm" />
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
+            <Icon name="command" size={15} />
+          </span>
+          <div className="shortcuts-help-title-text min-w-0">
+            <h2 className="m-0 text-sm font-semibold leading-tight">Keyboard shortcuts</h2>
+            <p className="mt-1 text-xs text-base-content/60">
+              Navigate Orchid without leaving the keyboard
+            </p>
+          </div>
         </div>
+        <IconButton
+          ref={closeRef}
+          label="Close"
+          icon="x"
+          size="sm"
+          className="shortcuts-help-close -mr-1 -mt-0.5"
+          onClick={onClose}
+          iconSize={14}
+        />
+      </header>
 
-        <footer className="shortcuts-help-footer">
-          <span className="shortcuts-help-footer-hint">
-            <Keycaps chord="Esc" size="xs" />
-            <span>close</span>
-          </span>
-          <span className="shortcuts-help-footer-dot" aria-hidden>
-            ·
-          </span>
-          <span className="shortcuts-help-footer-hint">
-            <Keycaps chord={formatShortcut('shortcuts.help')} size="xs" />
-            <span>toggle anytime</span>
-          </span>
-        </footer>
+      <div className="orchid-shortcuts-help-body flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto p-3.5">
+        {groups.map((g) => (
+          <section
+            key={g.group}
+            className="orchid-shortcuts-help-section rounded-lg border border-base-300 bg-base-100/50 p-2.5"
+          >
+            <h3 className="shortcuts-help-section-title mb-2 border-b border-base-300 px-1 pb-1.5 text-xs font-semibold uppercase tracking-wider text-base-content/60">
+              {g.label}
+            </h3>
+            <ul className="shortcuts-help-list m-0 flex list-none flex-col gap-0.5 p-0">
+              {g.items.map((item) => (
+                <li
+                  key={item.id}
+                  className="shortcuts-help-row flex min-h-8 items-center justify-between gap-4 rounded-md px-2 py-1.5 hover:bg-primary/10"
+                >
+                  <span className="shortcuts-help-label min-w-0 text-xs leading-snug">
+                    {item.label}
+                  </span>
+                  <Keycaps chord={item.chord} size="sm" />
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
       </div>
-    </div>
+
+      <footer className="orchid-shortcuts-help-footer flex flex-wrap items-center gap-2 border-t border-base-300 px-4 py-2.5 text-xs text-base-content/60">
+        <span className="shortcuts-help-footer-hint inline-flex items-center gap-1.5">
+          <Keycaps chord="Esc" size="xs" />
+          <span>close</span>
+        </span>
+        <span className="shortcuts-help-footer-dot opacity-40" aria-hidden>
+          ·
+        </span>
+        <span className="shortcuts-help-footer-hint inline-flex items-center gap-1.5">
+          <Keycaps chord={formatShortcut('shortcuts.help')} size="xs" />
+          <span>toggle anytime</span>
+        </span>
+      </footer>
+    </DialogSurface>
   );
 }

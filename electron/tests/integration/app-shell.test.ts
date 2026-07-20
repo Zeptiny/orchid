@@ -42,6 +42,8 @@ describe('IPC Channel Names', () => {
     expect(IPC_CHANNELS.CHAT_CHUNK).toBe('chat:chunk');
     expect(IPC_CHANNELS.CHAT_STATE).toBe('chat:state');
     expect(IPC_CHANNELS.CHAT_DONE).toBe('chat:done');
+    expect(IPC_CHANNELS.SUBAGENTS_SNAPSHOT).toBe('subagents:snapshot');
+    expect(IPC_CHANNELS.SUBAGENTS_EVENT).toBe('subagents:event');
     expect(IPC_CHANNELS.CHAT_ERROR).toBe('chat:error');
   });
 
@@ -87,6 +89,7 @@ describe('IPC Security', () => {
     // All invoke channels should be in the allowed list
     const invokeChannels = [
       IPC_CHANNELS.CHAT_SEND,
+      IPC_CHANNELS.SUBAGENTS_SNAPSHOT,
       IPC_CHANNELS.CHAT_CANCEL,
       IPC_CHANNELS.CONFIG_GET,
       IPC_CHANNELS.CONFIG_SAVE,
@@ -121,6 +124,7 @@ describe('IPC Security', () => {
       IPC_CHANNELS.CHAT_TOOL_CALL_START,
       IPC_CHANNELS.CHAT_TOOL_CALL_DELTA,
       IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
+      IPC_CHANNELS.SUBAGENTS_EVENT,
     ];
 
     for (const channel of eventChannels) {
@@ -394,12 +398,42 @@ describe('Theme CSS Custom Properties', () => {
   });
 
   it('active renderer rules do not hard-code a palette', () => {
-    const css = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/styles/chat.css'), 'utf-8');
-    const activeCss = css.slice(css.indexOf('/* ── Iteration 012 mock-aligned components'));
+    const stylesDir = path.resolve(__dirname, '../../src/renderer/styles');
+    const activeCss = [
+      fs.readFileSync(path.join(stylesDir, 'chat.css'), 'utf-8'),
+      fs.readFileSync(path.join(stylesDir, 'components.css'), 'utf-8'),
+      fs.readFileSync(path.join(stylesDir, 'markdown.css'), 'utf-8'),
+      fs.readFileSync(path.join(stylesDir, 'exceptions.css'), 'utf-8'),
+    ].join('\n');
     expect(activeCss).not.toMatch(/#[0-9a-fA-F]{3,8}/);
     expect(activeCss).not.toMatch(/rgba?\(/);
     expect(activeCss).toContain('var(--bg-primary)');
     expect(activeCss).toContain('var(--accent-primary)');
+  });
+
+  it('loads styles through the canonical index.css entry', () => {
+    const mainTsx = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/main.tsx'), 'utf-8');
+    const appTsx = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/App.tsx'), 'utf-8');
+    const indexCss = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/styles/index.css'), 'utf-8');
+    expect(mainTsx).toContain("./styles/index.css");
+    expect(appTsx).not.toMatch(/import\s+['"]\.\/styles\/chat\.css['"]/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/components\.css["']/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/markdown\.css["']/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/exceptions\.css["']/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/chat\.css["']/);
+    expect(indexCss).toContain('@plugin "daisyui"');
+  });
+
+  it('preserves existing shell topology entry points', () => {
+    const chatView = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/components/ChatView.tsx'),
+      'utf-8',
+    );
+    expect(chatView).toContain('app-frame');
+    expect(chatView).toContain('main-pane');
+    expect(chatView).toMatch(/LeftSidebar|left-panel/);
+    expect(chatView).toMatch(/Sidebar|right-panel/);
+    expect(chatView).not.toMatch(/Focused Workspace/i);
   });
 });
 
@@ -434,7 +468,7 @@ describe('IPC Handler Module Structure', () => {
   });
 
   it('each IPC handler file has register and unregister exports', () => {
-    const handlerFiles = ['chat', 'config', 'session', 'tool', 'mcp', 'rag', 'ast'];
+    const handlerFiles = ['chat', 'config', 'session', 'tool', 'mcp', 'rag', 'ast', 'subagents'];
     const ipcDir = path.resolve(__dirname, '../../src/main/ipc');
 
     // Map file names to expected export name casing
@@ -446,6 +480,7 @@ describe('IPC Handler Module Structure', () => {
       mcp: 'MCP',
       rag: 'RAG',
       ast: 'AST',
+      subagents: 'Subagent',
     };
 
     for (const name of handlerFiles) {

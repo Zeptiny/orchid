@@ -1,31 +1,32 @@
 /**
- * glob tool — find files matching a glob pattern.
+ * glob — find files matching a glob pattern and return structured matches.
  *
- * Params: directory_path (required), pattern (required), include_hidden (optional).
- * Returns matching file paths sorted by modification time (newest first).
- *
- * Ported from Python `src/orchid/tools/file_manipulation.py` lines 253-308.
- *
- * Security note (P1-2):
- * This tool operates on arbitrary absolute paths with no restriction to the
- * project directory. A malicious agent could discover sensitive files outside
- * the workspace. Path sandboxing is deferred to R20 — the permission system
- * will enforce directory restrictions.
+ * Matching and ordering remain the same as the legacy tool (newest mtime
+ * first), while display strings are now derived from the canonical records.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { resolveToolPath } from '../types';
+import {
+  searchResultsDataSchema,
+  type GlobResultsData,
+} from '../../../shared/types/tool-result-filesystem';
+import type { ToolHandlerOutcome } from '../../../shared/types/tool-result';
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 
 export const globInputSchema = z.object({
-  directory_path: z.string().describe('The directory to search in, relative to the current working directory'),
+  directory_path: z.string().describe(
+    'The directory to search in, relative to the current working directory',
+  ),
   pattern: z.string().describe(
     'The glob pattern to match file names (e.g., \'*.py\', \'**/*.txt\', \'src/**/*.py\')',
   ),
-  include_hidden: z.boolean().optional().describe('Whether to include hidden files (starting with .) (default: false)'),
+  include_hidden: z.boolean().optional().describe(
+    'Whether to include hidden files (starting with .) (default: false)',
+  ),
 });
 
 export type GlobInput = z.infer<typeof globInputSchema>;
@@ -38,6 +39,8 @@ export const globDefinition: ToolDefinition = {
     'Find files matching a glob pattern. Use to locate files by name when you know the pattern ' +
     '(e.g. \'*.py\', \'**/*.test.ts\'). Returns matching file paths sorted by modification time, newest first.',
   inputSchema: globInputSchema,
+  resultFamily: 'search-results',
+  outputDataSchema: searchResultsDataSchema,
   actionLabel: 'Globbing...',
   category: 'filesystem',
 };
@@ -50,166 +53,171 @@ export const globDefinition: ToolDefinition = {
  */
 function globSync(baseDir: string, pattern: string): string[] {
   const fullPattern = path.join(baseDir, pattern);
-  const segments = fullPattern.split(path.sep).filter((s) => s !== '');
+  const segments = fullPattern.split(path.sep).filter((segment) => segment !== '');
   const results: string[] = [];
   walkGlob(segments, 0, path.sep, results);
   return results;
 }
 
-/**
- * Walk the filesystem according to glob pattern segments.
- * currentPath starts as '/' (the filesystem root).
- */
+/** Walk the filesystem according to glob pattern segments. */
 function walkGlob(
   segments: string[],
-  idx: number,
+  index: number,
   currentPath: string,
   results: string[],
 ): void {
-  if (idx >= segments.length) {
+  if (index >= segments.length) {
     try {
-      const stat = fs.statSync(currentPath);
-      if (stat.isFile()) {
-        results.push(currentPath);
-      }
+      if (fs.statSync(currentPath).isFile()) results.push(currentPath);
     } catch {
-      // doesn't exist
+      // Doesn't exist or became unreadable.
     }
     return;
   }
 
-  const segment = segments[idx];
-
+  const segment = segments[index];
   if (segment === '**') {
-    // ** matches zero or more directories
-    walkGlob(segments, idx + 1, currentPath, results);
+    // ** matches zero or more directories.
+    walkGlob(segments, index + 1, currentPath, results);
 
     let entries: string[];
     try {
-      entries = fs.readdirSync(currentPath);
+      entries = fs.readdirSync(currentPath).sort();
     } catch {
       return;
     }
     for (const entry of entries) {
       const childPath = path.join(currentPath, entry);
       try {
-        const stat = fs.statSync(childPath);
-        if (stat.isDirectory()) {
-          walkGlob(segments, idx, childPath, results);
+        if (fs.statSync(childPath).isDirectory()) {
+          walkGlob(segments, index, childPath, results);
         }
       } catch {
-        // skip
+        // Skip entries that disappear during traversal.
       }
     }
     return;
   }
 
-  // Regular segment — may contain * or ? wildcards
   const regex = globSegmentToRegex(segment);
   let entries: string[];
   try {
-    entries = fs.readdirSync(currentPath);
+    entries = fs.readdirSync(currentPath).sort();
   } catch {
     return;
   }
-
   for (const entry of entries) {
     if (regex.test(entry)) {
-      const childPath = path.join(currentPath, entry);
-      walkGlob(segments, idx + 1, childPath, results);
+      walkGlob(segments, index + 1, path.join(currentPath, entry), results);
     }
   }
 }
 
-/**
- * Convert a single glob segment (no path separators) to a regex.
- * Supports: *, ?, ** (handled separately).
- */
+/** Convert a single glob segment (without path separators) to a regex. */
 function globSegmentToRegex(segment: string): RegExp {
-  let regexStr = '^';
-  let i = 0;
-  while (i < segment.length) {
-    const ch = segment[i];
-    if (ch === '*') {
-      regexStr += '.*';
-    } else if (ch === '?') {
-      regexStr += '.';
-    } else if (ch === '.') {
-      regexStr += '\\.';
-    } else {
-      regexStr += escapeRegex(ch);
-    }
-    i++;
+  let regex = '^';
+  for (const character of segment) {
+    if (character === '*') regex += '.*';
+    else if (character === '?') regex += '.';
+    else regex += escapeRegex(character);
   }
-  regexStr += '$';
-  return new RegExp(regexStr);
+  return new RegExp(`${regex}$`);
 }
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function emptyData(root: string, pattern: string): GlobResultsData {
+  return {
+    kind: 'glob',
+    root,
+    pattern,
+    matches: [],
+    totalMatches: 0,
+    limitReached: false,
+  };
+}
+
+function globOutcome(
+  directoryPath: string,
+  pattern: string,
+  includeHidden: boolean,
+): ToolHandlerOutcome<GlobResultsData> {
+  const empty = emptyData(directoryPath, pattern);
+  try {
+    const matches = globSync(directoryPath, pattern);
+    const filtered = includeHidden
+      ? matches
+      : matches.filter((match) => {
+          const relativePath = path.relative(directoryPath, match);
+          return !relativePath.split(path.sep).some((part) => part.startsWith('.'));
+        });
+
+    const ordered = filtered
+      .map((absolutePath) => {
+        try {
+          const stat = fs.statSync(absolutePath);
+          return {
+            absolutePath,
+            modifiedAt: stat.mtimeMs,
+            path: path.relative(directoryPath, absolutePath),
+            size: stat.size,
+            modifiedAtIso: stat.mtime.toISOString(),
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter((match): match is NonNullable<typeof match> => match !== null)
+      .sort((left, right) =>
+        // Files created during one scan often differ by filesystem
+        // sub-second noise.  Use the timestamp precision exposed by the
+        // canonical ISO metadata (milliseconds) only as a tie-breaker within
+        // the same second, so a scan's order remains stable across filesystems
+        // while preserving deliberate cross-second mtime ordering.
+        Math.floor(right.modifiedAt / 1000) - Math.floor(left.modifiedAt / 1000)
+        || (left.path < right.path ? -1 : left.path > right.path ? 1 : 0),
+      );
+
+    const data: GlobResultsData = {
+      kind: 'glob',
+      root: directoryPath,
+      pattern,
+      matches: ordered.map((match) => ({
+        path: match.path,
+        size: match.size,
+        modifiedAt: match.modifiedAtIso,
+      })),
+      totalMatches: ordered.length,
+      limitReached: false,
+    };
+    searchResultsDataSchema.parse(data);
+    return ordered.length === 0 ? { status: 'empty', data } : { status: 'complete', data };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      status: 'error',
+      data: empty,
+      error: {
+        code: 'glob_failed',
+        message: `Error searching for files using pattern '${pattern}': ${message}`,
+      },
+    };
+  }
 }
 
 // ── Handler ────────────────────────────────────────────────────────────────
 
-export const globHandler: ToolHandler = async (input: unknown, ctx) => {
-  const { directory_path: rawDir, pattern, include_hidden = false } = input as GlobInput;
-  const directory_path = resolveToolPath(ctx.cwd, rawDir);
-
-  try {
-    const matches = globSync(directory_path, pattern);
-
-    // Filter hidden files
-    let filtered = matches;
-    if (!include_hidden) {
-      filtered = matches.filter((m) => {
-        const relPath = path.relative(directory_path, m);
-        const parts = relPath.split(path.sep);
-        return !parts.some((p) => p.startsWith('.'));
-      });
-    }
-
-    if (filtered.length === 0) {
-      return {
-        display: `No matches for ${pattern}`,
-        content: `No files found matching pattern '${pattern}' in '${directory_path}'.`,
-      };
-    }
-
-    // Sort by modification time, newest first
-    filtered.sort((a, b) => {
-      try {
-        const statA = fs.statSync(a);
-        const statB = fs.statSync(b);
-        return statB.mtimeMs - statA.mtimeMs;
-      } catch {
-        return 0;
-      }
-    });
-
-    // Convert to relative paths
-    const relativePaths = filtered.map((m) => path.relative(directory_path, m));
-
-    const lines = [`Found ${relativePaths.length} file(s) matching '${pattern}':`];
-    for (const p of relativePaths) {
-      try {
-        const fullPath = path.join(directory_path, p);
-        const stat = fs.statSync(fullPath);
-        lines.push(stat.isDirectory() ? `${p}/` : p);
-      } catch {
-        lines.push(p);
-      }
-    }
-
-    return {
-      display: `Found ${relativePaths.length} matches for ${pattern}`,
-      content: lines.join('\n'),
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return {
-      display: `Glob error pattern: ${pattern}`,
-      content: `Error searching for files using pattern ${pattern}: ${msg}`,
-      isError: true
-    };
-  }
+export const globHandler: ToolHandler = async (
+  input: unknown,
+  ctx,
+): Promise<ToolHandlerOutcome<GlobResultsData>> => {
+  const {
+    directory_path: rawDir,
+    pattern,
+    include_hidden = false,
+  } = input as GlobInput;
+  const directoryPath = resolveToolPath(ctx.cwd, rawDir);
+  return globOutcome(directoryPath, pattern, include_hidden);
 };

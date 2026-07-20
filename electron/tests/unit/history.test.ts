@@ -20,7 +20,6 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     timestamp: new Date().toISOString(),
     usage: null,
     hidden: false,
-    is_error: false,
     ...overrides,
   };
 }

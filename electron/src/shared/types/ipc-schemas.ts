@@ -5,6 +5,11 @@
  */
 import { z } from 'zod';
 import { contextSnapshotSchema } from './message';
+import {
+  canonicalToolResultSchema,
+  terminalToolResultStatusSchema,
+  toolExecutionResultSchema,
+} from './tool-result';
 
 // ── Shared fragments ─────────────────────────────────────────────────────────
 
@@ -73,14 +78,34 @@ export const chatToolCallDeltaEventSchema = chatEventIdentitySchema.extend({
   argsDelta: z.string(),
 });
 
-export const chatToolCallUpdateEventSchema = chatEventIdentitySchema.extend({
+const chatToolCallUpdateBaseSchema = chatEventIdentitySchema.extend({
   type: z.literal('tool_call_update'),
   toolCallId: z.string().min(1),
   toolName: z.string().optional(),
-  status: z.enum(['running', 'completed', 'failed']),
   args: z.string().optional(),
-  result: z.string().optional(),
-  error: z.string().optional(),
+});
+export const chatToolCallUpdateEventSchema = z.discriminatedUnion('status', [
+  chatToolCallUpdateBaseSchema.extend({
+    status: z.literal('running'),
+    content: z.never().optional(),
+    toolResult: z.never().optional(),
+  }),
+  chatToolCallUpdateBaseSchema.extend({
+    status: terminalToolResultStatusSchema,
+    content: z.string(),
+    toolResult: canonicalToolResultSchema,
+  }),
+]).superRefine((value, ctx) => {
+  if (
+    value.status !== 'running' &&
+    value.status !== value.toolResult.status
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['toolResult', 'status'],
+      message: 'Tool update status must match canonical result status',
+    });
+  }
 });
 
 // ── Session / workspace events ───────────────────────────────────────────────
@@ -200,10 +225,7 @@ export const chatSendResultSchema = z.discriminatedUnion('status', [
   }),
 ]);
 
-export const toolExecuteResultSchema = z.object({
-  content: z.string(),
-  isError: z.boolean(),
-});
+export const toolExecuteResultSchema = toolExecutionResultSchema;
 
 export const bgCommandSnapshotResultSchema = z.object({
   tail: z.string(),
@@ -236,3 +258,51 @@ export const chatSessionSnapshotSchema = z
       .nullable(),
   })
   .nullable();
+
+const subagentLiveSegmentSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('text'), id: z.string(), content: z.string() }),
+  z.object({ kind: z.literal('thinking'), id: z.string(), content: z.string() }),
+  z.object({ kind: z.literal('tool'), id: z.string(), toolCallId: z.string() }),
+]);
+const subagentToolSchema = z.object({
+  toolCallId: z.string(), toolName: z.string(),
+  status: z.union([z.enum(['generating', 'running']), terminalToolResultStatusSchema]),
+  partialArgs: z.string(), args: z.string(), content: z.string().nullable(),
+  toolResult: canonicalToolResultSchema.nullable(),
+  startedAt: z.string(), finishedAt: z.string().nullable(),
+}).superRefine((value, ctx) => {
+  const isLifecycle = value.status === 'generating' || value.status === 'running';
+  if (isLifecycle && value.toolResult !== null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['toolResult'], message: 'Running tools cannot have terminal facts' });
+  }
+  if (!isLifecycle && (value.toolResult === null || value.content === null)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['toolResult'], message: 'Terminal tools require canonical facts and exact content' });
+  }
+  if (!isLifecycle && value.toolResult?.status !== value.status) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['status'], message: 'Snapshot status must match canonical result status' });
+  }
+});
+export const subagentLiveProjectionSchema = z.object({
+  sessionId: z.string().nullable(), subagentId: z.string(), runId: z.string(),
+  sequence: z.number().int().nonnegative(),
+  state: z.enum(['pending', 'running', 'completed', 'failed', 'interrupted']),
+  segments: z.array(subagentLiveSegmentSchema), toolCalls: z.array(subagentToolSchema),
+  usage: usageSchema.nullable(), result: z.string().nullable(), error: z.string().nullable(),
+});
+export const subagentRecordSchema = z.object({
+  id: z.string(), agent_name: z.string(), agent_type: z.string(), agent_tier: z.string(),
+  task: z.string(), status: z.enum(['pending', 'running', 'completed', 'failed', 'interrupted']),
+  chain_id: z.string(), start_time: z.string(), end_time: z.string().nullable(),
+  result: z.string().nullable(), error: z.string().nullable(), parentChainIndex: z.number().int().nullable(),
+  chain: z.unknown(),
+});
+export const subagentSnapshotSchema = z.object({
+  sessionId: z.string().uuid(), records: z.array(subagentRecordSchema),
+  live: z.array(subagentLiveProjectionSchema),
+});
+export const subagentEventSchema = z.object({
+  sessionId: z.string().uuid(), subagentId: z.string(), runId: z.string(),
+  sequence: z.number().int().positive(), type: z.literal('projection'),
+  projection: subagentLiveProjectionSchema,
+  record: subagentRecordSchema.optional(),
+});

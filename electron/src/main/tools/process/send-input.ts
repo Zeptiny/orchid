@@ -10,6 +10,8 @@ import { z } from 'zod';
 import { normalizeAgentScopeId } from '../../../shared/types/agent-scope';
 import { getBackgroundStore } from './background-store';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 
 // ---------------------------------------------------------------------------
 // Zod schema
@@ -31,62 +33,40 @@ export async function executeSendInput(
   text: string,
   sessionId?: string | null,
   agentScopeId?: string | null,
-): Promise<{ display: string; content: string; isError?: boolean }> {
+): Promise<GenericBuiltInToolOutcome> {
   const store = getBackgroundStore();
   const entry = store.getVisible(id, sessionId ?? null, normalizeAgentScopeId(agentScopeId));
   if (!entry) {
-    return {
-      display: `Background command ${id} not found`,
-      content: `Error: No background command with id ${id}.`,
-      isError: true,
-    };
+    return genericBuiltInToolOutcome('send_input', `Error: No background command with id ${id}.`, 'error');
   }
 
   // Not interactive
   if (!entry.interactive) {
-    return {
-      display: `Command ${id} is not interactive`,
-      content: `Error: Command was not started with interactive=true. Respawn with interactive=true to send input.`,
-      isError: true,
-    };
+    return genericBuiltInToolOutcome('send_input', `Error: Command was not started with interactive=true. Respawn with interactive=true to send input.`, 'error');
   }
 
   // Already exited
   if (entry.exitCode !== null) {
-    return {
-      display: `Command ${id} has exited`,
-      content: `Error: Command has already exited.`,
-      isError: true,
-    };
+    return genericBuiltInToolOutcome('send_input', `Error: Command has already exited.`, 'error');
   }
 
   // User owns input
   if (entry.owner === 'USER') {
-    return {
-      display: `Command ${id} owned by user`,
-      content: `Error: A user currently owns the input for this command (control: USER). Wait for them to release.`,
-      isError: true,
-    };
+    return genericBuiltInToolOutcome('send_input', `Error: A user currently owns the input for this command (control: USER). Wait for them to release.`, 'error');
   }
 
   const ok = await store.send(id, text);
   if (!ok) {
-    return {
-      display: `Failed to send input to command ${id}`,
-      content: `Error: Failed to write to stdin (pipe broken or closed).`,
-      isError: true,
-    };
+    return genericBuiltInToolOutcome('send_input', `Error: Failed to write to stdin (pipe broken or closed).`, 'error');
   }
 
   // Record user input time
   entry.lastUserInputAt = Date.now();
 
-  const preview = text.length > 60 ? text.substring(0, 59) + '...' : text;
-
-  return {
-    display: `Sent input to command ${id}: ${preview}`,
-    content: `Input sent to command ${id}`,
-  };
+  return genericBuiltInToolOutcome('send_input', {
+    commandId: id,
+    input: text,
+  }, 'complete');
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +74,7 @@ export async function executeSendInput(
 // ---------------------------------------------------------------------------
 
 export const sendInputToolDefinition: ToolDefinition = {
+  ...genericToolResultMetadata,
   name: 'send_input',
   description:
     'Send input to an interactive background command\'s stdin. Rejected ' +

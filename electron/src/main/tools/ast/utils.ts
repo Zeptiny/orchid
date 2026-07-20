@@ -5,6 +5,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { escapeXmlAttribute, escapeXmlText } from '../result';
 
 // ---------------------------------------------------------------------------
 // XML helpers
@@ -16,116 +17,6 @@ export function xmlAttr(value: unknown): string {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
-}
-
-export function cdataText(value: string): string {
-  return value.replace(/]]>/g, ']]]]><![CDATA[>');
-}
-
-// ---------------------------------------------------------------------------
-// Diff helpers
-// ---------------------------------------------------------------------------
-
-export function countDiffChanges(diffText: string): { added: number; removed: number } {
-  let added = 0;
-  let removed = 0;
-  for (const line of diffText.split('\n')) {
-    if (line.startsWith('+++ ') || line.startsWith('--- ')) continue;
-    if (line.startsWith('+')) added++;
-    else if (line.startsWith('-')) removed++;
-  }
-  return { added, removed };
-}
-
-export function generateDiff(oldContent: string, newContent: string, filePath: string): string {
-  const oldLines = oldContent.split('\n');
-  const newLines = newContent.split('\n');
-  const result: string[] = [];
-  result.push(`--- old/${filePath}`);
-  result.push(`+++ new/${filePath}`);
-
-  // LCS-based diff
-  const lcs = computeLCS(oldLines, newLines);
-  let oi = 0;
-  let ni = 0;
-  let li = 0;
-  const hunkLines: string[] = [];
-  let hunkOldStart = 0;
-  let hunkNewStart = 0;
-  let hunkOldCount = 0;
-  let hunkNewCount = 0;
-
-  function flushHunk(): void {
-    if (hunkLines.length === 0) return;
-    result.push(
-      `@@ -${hunkOldStart + 1},${hunkOldCount} +${hunkNewStart + 1},${hunkNewCount} @@`,
-    );
-    result.push(...hunkLines);
-    hunkLines.length = 0;
-  }
-
-  while (oi < oldLines.length || ni < newLines.length) {
-    if (
-      li < lcs.length &&
-      oi < oldLines.length &&
-      ni < newLines.length &&
-      oldLines[oi] === lcs[li] &&
-      newLines[ni] === lcs[li]
-    ) {
-      if (hunkLines.length > 0) flushHunk();
-      oi++;
-      ni++;
-      li++;
-    } else {
-      if (hunkLines.length === 0) {
-        hunkOldStart = oi;
-        hunkNewStart = ni;
-        hunkOldCount = 0;
-        hunkNewCount = 0;
-      }
-      if (oi < oldLines.length && (li >= lcs.length || oldLines[oi] !== lcs[li])) {
-        hunkLines.push(`-${oldLines[oi]}`);
-        hunkOldCount++;
-        oi++;
-      }
-      if (ni < newLines.length && (li >= lcs.length || newLines[ni] !== lcs[li])) {
-        hunkLines.push(`+${newLines[ni]}`);
-        hunkNewCount++;
-        ni++;
-      }
-    }
-  }
-
-  flushHunk();
-  return result.map((l) => l.replace(/\r?\n$/, '')).join('\n');
-}
-
-function computeLCS(a: string[], b: string[]): string[] {
-  const m = a.length;
-  const n = b.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
-    }
-  }
-
-  const result: string[] = [];
-  let i = m;
-  let j = n;
-  while (i > 0 && j > 0) {
-    if (a[i - 1] === b[j - 1]) {
-      result.unshift(a[i - 1]);
-      i--;
-      j--;
-    } else if (dp[i - 1][j] > dp[i][j - 1]) {
-      i--;
-    } else {
-      j--;
-    }
-  }
-  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,13 +147,12 @@ export function formatEditResult(opts: {
   replacements: number;
   added: number;
   removed: number;
-  diffText?: string;
   error?: string;
   message?: string;
   replaceAll?: boolean;
 }): string {
   const attrs = [
-    `path="${xmlAttr(opts.filePath)}"`,
+    `path="${escapeXmlAttribute(opts.filePath)}"`,
     `success="${opts.success}"`,
     `replacements="${opts.replacements}"`,
     `replace_all="${opts.replaceAll ?? false}"`,
@@ -270,28 +160,19 @@ export function formatEditResult(opts: {
     `removed="${opts.removed}"`,
   ];
   if (opts.error) {
-    attrs.push(`error="${xmlAttr(opts.error)}"`);
+    attrs.push(`error="${escapeXmlAttribute(opts.error)}"`);
   }
 
   const lines = [`<edit_result ${attrs.join(' ')}>`];
   if (opts.message) {
-    lines.push('<message><![CDATA[');
-    lines.push(cdataText(opts.message));
-    lines.push(']]></message>');
-  }
-  if (opts.diffText) {
-    lines.push('<diff format="unified"><!['  + 'CDATA[');
-    lines.push(cdataText(opts.diffText));
-    lines.push(']]' + '></diff>');
-  } else {
-    lines.push('<diff format="unified" />');
+    lines.push('<message>' + escapeXmlText(opts.message) + '</message>');
   }
   lines.push('</edit_result>');
   return lines.join('\n');
 }
 
 // ---------------------------------------------------------------------------
-// Call extraction (for get_file_skeleton)
+// Extended range (for replace_symbol — includes decorators/comments)
 // ---------------------------------------------------------------------------
 
 interface TreeNode {
@@ -304,47 +185,6 @@ interface TreeNode {
   children: TreeNode[];
   childForFieldName(name: string): TreeNode | null;
 }
-
-/**
- * Walk a tree-sitter node's subtree and collect short names of call expressions.
- */
-export function extractCallNames(node: TreeNode, source: string): string[] {
-  const calls: string[] = [];
-  walkForCalls(node, calls, source);
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const c of calls) {
-    if (!seen.has(c)) {
-      seen.add(c);
-      result.push(c);
-    }
-  }
-  return result;
-}
-
-function walkForCalls(node: TreeNode, out: string[], source: string): void {
-  if (node.type === 'call' || node.type === 'call_expression') {
-    let callee = node.childForFieldName('function');
-    if (!callee && node.children.length > 0) {
-      callee = node.children[0];
-    }
-    if (callee) {
-      let name = source.slice(callee.startIndex, callee.endIndex);
-      // Use short name: last part after '.'
-      if (name.includes('.')) {
-        name = name.split('.').pop()!;
-      }
-      if (name) out.push(name);
-    }
-  }
-  for (const child of node.children) {
-    walkForCalls(child, out, source);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Extended range (for replace_symbol — includes decorators/comments)
-// ---------------------------------------------------------------------------
 
 export function findExtendedRange(
   source: string,

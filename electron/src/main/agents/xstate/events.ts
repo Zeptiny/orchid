@@ -9,6 +9,7 @@
 
 import type { StreamEvent } from '../../llm/orchestrator';
 import type { Usage } from '../../../shared/types/message';
+import type { ToolExecutionResult } from '../../../shared/types/tool-result';
 
 // ── Agent events ────────────────────────────────────────────────────────────
 
@@ -56,8 +57,7 @@ export interface ToolCallDeltaEvent {
 export interface ToolResultEvent {
   type: 'TOOL_RESULT';
   toolCallId: string;
-  content: string;
-  isError: boolean;
+  execution: ToolExecutionResult;
 }
 
 /** LLM stream completed without requesting further tool calls. */

@@ -1,5 +1,6 @@
 /**
  * Focus trap for modal / full-screen overlays with restore on close.
+ * Nested traps form a stack: only the innermost (last enabled) trap handles Tab.
  */
 import { useEffect, type RefObject } from 'react';
 
@@ -38,8 +39,105 @@ export interface UseFocusTrapOptions {
   restoreSelector?: string;
 }
 
+type TrapEntry = {
+  id: number;
+  onKeyDown: (event: KeyboardEvent) => void;
+};
+
+/** Module stack so nested traps do not both handle the same Tab. */
+const trapStack: TrapEntry[] = [];
+let nextTrapId = 0;
+let documentListenerAttached = false;
+
+/** Dispatch Tab (or any key) to the innermost active trap only. */
+export function dispatchActiveFocusTrap(event: KeyboardEvent): void {
+  const top = trapStack[trapStack.length - 1];
+  top?.onKeyDown(event);
+}
+
+function attachDocumentListener(): void {
+  if (documentListenerAttached || typeof document === 'undefined') return;
+  document.addEventListener('keydown', dispatchActiveFocusTrap, true);
+  documentListenerAttached = true;
+}
+
+function detachDocumentListenerIfIdle(): void {
+  if (trapStack.length > 0 || !documentListenerAttached || typeof document === 'undefined') {
+    return;
+  }
+  document.removeEventListener('keydown', dispatchActiveFocusTrap, true);
+  documentListenerAttached = false;
+}
+
+/**
+ * Cycle Tab within container. Pure helper for tests and trap handlers.
+ * @returns true if the event was handled (preventDefault applied).
+ */
+export function cycleFocusOnTab(
+  container: HTMLElement,
+  event: Pick<KeyboardEvent, 'key' | 'shiftKey' | 'preventDefault' | 'stopPropagation'>,
+  active: HTMLElement | null = typeof document !== 'undefined'
+    ? (document.activeElement as HTMLElement | null)
+    : null,
+): boolean {
+  if (event.key !== 'Tab') return false;
+
+  const focusable = getFocusableElements(container);
+  if (focusable.length === 0) {
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (event.shiftKey) {
+    if (!active || active === first || !container.contains(active)) {
+      event.preventDefault();
+      event.stopPropagation();
+      last.focus();
+      return true;
+    }
+  } else if (!active || active === last || !container.contains(active)) {
+    event.preventDefault();
+    event.stopPropagation();
+    first.focus();
+    return true;
+  }
+
+  return false;
+}
+
+/** How many traps are currently stacked. */
+export function getActiveFocusTrapCount(): number {
+  return trapStack.length;
+}
+
+/** @internal Test-only: push a trap handler onto the stack. */
+export function __testOnly_pushFocusTrap(onKeyDown: (event: KeyboardEvent) => void): number {
+  const entry: TrapEntry = { id: nextTrapId++, onKeyDown };
+  trapStack.push(entry);
+  attachDocumentListener();
+  return entry.id;
+}
+
+/** @internal Test-only: remove a trap by id. */
+export function __testOnly_removeFocusTrap(id: number): void {
+  const index = trapStack.findIndex((t) => t.id === id);
+  if (index >= 0) trapStack.splice(index, 1);
+  detachDocumentListenerIfIdle();
+}
+
+/** @internal Test-only: clear the entire trap stack. */
+export function __testOnly_clearFocusTrapStack(): void {
+  trapStack.length = 0;
+  detachDocumentListenerIfIdle();
+}
+
 /**
  * Traps Tab within container while enabled; restores focus on disable/unmount.
+ * When multiple traps are enabled, only the most recently enabled trap handles Tab.
  */
 export function useFocusTrap({
   enabled,
@@ -73,36 +171,20 @@ export function useFocusTrap({
     });
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab') return;
       const container = containerRef.current;
       if (!container) return;
-
-      const focusable = getFocusableElements(container);
-      if (focusable.length === 0) {
-        event.preventDefault();
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement as HTMLElement | null;
-
-      if (event.shiftKey) {
-        if (!active || active === first || !container.contains(active)) {
-          event.preventDefault();
-          last.focus();
-        }
-      } else if (!active || active === last || !container.contains(active)) {
-        event.preventDefault();
-        first.focus();
-      }
+      cycleFocusOnTab(container, event);
     };
 
-    document.addEventListener('keydown', onKeyDown, true);
+    const entry: TrapEntry = { id: nextTrapId++, onKeyDown };
+    trapStack.push(entry);
+    attachDocumentListener();
 
     return () => {
       cancelAnimationFrame(raf);
-      document.removeEventListener('keydown', onKeyDown, true);
+      const index = trapStack.findIndex((t) => t.id === entry.id);
+      if (index >= 0) trapStack.splice(index, 1);
+      detachDocumentListenerIfIdle();
 
       const restore =
         previouslyFocused && document.contains(previouslyFocused)

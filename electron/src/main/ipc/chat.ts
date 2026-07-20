@@ -269,8 +269,8 @@ function ensureToolSnapshot(
     status: 'generating',
     partialArgs: '',
     args: '',
-    result: null,
-    error: null,
+    content: null,
+    toolResult: null,
     startedAt: new Date().toISOString(),
     finishedAt: null,
   };
@@ -322,6 +322,17 @@ function snapshotForAgent(active: ActiveAgent): ChatSnapshot {
   };
 }
 
+function attachUsageToLatestAssistant(messages: Message[], usage: Usage): boolean {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message?.role === MessageRole.ASSISTANT && message.type === MessageType.TEXT) {
+      messages[index] = { ...message, usage };
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Flush partial stream content into turnMessages (thinking + uncommitted
  * assistant text). Shared by forceAbort, replace-on-send, and error paths.
@@ -343,17 +354,12 @@ function flushPartialTurnContent(agent: ActiveAgent, context: AgentContext | und
   if (remaining) {
     agent.turnMessages.push(makeAssistantMessage(remaining, usage));
     agent.responseCommittedLength = partialResponse.length;
-  } else if (usage && agent.turnMessages.length > 0) {
-    const last = agent.turnMessages[agent.turnMessages.length - 1];
-    if (
-      last &&
-      last.role === MessageRole.ASSISTANT &&
-      last.type === MessageType.TEXT
-    ) {
-      agent.turnMessages[agent.turnMessages.length - 1] = {
-        ...last,
-        usage,
-      };
+  } else if (usage) {
+    if (!attachUsageToLatestAssistant(agent.turnMessages, usage)) {
+      agent.turnMessages.push({
+        ...makeAssistantMessage('', usage),
+        hidden: true,
+      });
     }
   }
 }
@@ -1251,15 +1257,12 @@ export function registerChatIPC(): void {
           activeAgent.responseCommittedLength = opts.response.length;
         }
       } else if (opts.usage) {
-        // No remaining text — attach usage to the last assistant message if any.
-        const last = activeAgent.turnMessages[activeAgent.turnMessages.length - 1];
-        if (last && last.role === MessageRole.ASSISTANT && last.type === MessageType.TEXT) {
-          activeAgent.turnMessages[activeAgent.turnMessages.length - 1] = {
-            ...last,
-            usage: opts.usage,
-          };
-        } else if (opts.interrupted) {
-          activeAgent.turnMessages.push(makeAssistantMessage('', opts.usage));
+        // No remaining text — attach usage to prior text, or persist a hidden carrier.
+        if (!attachUsageToLatestAssistant(activeAgent.turnMessages, opts.usage)) {
+          activeAgent.turnMessages.push({
+            ...makeAssistantMessage('', opts.usage),
+            hidden: true,
+          });
         }
       }
 
@@ -1491,12 +1494,9 @@ export function registerChatIPC(): void {
           toolName: update.toolName ?? 'unknown',
           status: update.status,
           args: update.args ?? '',
-          result: update.result ?? null,
-          error: update.error ?? null,
-          finishedAt:
-            update.status === 'completed' || update.status === 'failed'
-              ? new Date().toISOString()
-              : null,
+          content: update.content ?? null,
+          toolResult: update.toolResult ?? null,
+          finishedAt: update.status === 'running' ? null : new Date().toISOString(),
         });
         sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, {
           type: 'tool_call_update',
@@ -1504,8 +1504,8 @@ export function registerChatIPC(): void {
           toolName: update.toolName,
             status: update.status,
             args: update.args,
-            result: update.result,
-            error: update.error,
+            content: update.content,
+            toolResult: update.toolResult,
         });
 
         // Record tool call/result messages once per lifecycle event.
@@ -1530,7 +1530,7 @@ export function registerChatIPC(): void {
           }
         }
 
-        if (update.status === 'completed' || update.status === 'failed') {
+        if (update.status !== 'running') {
           // Ensure tool-call message exists (fallback path without streaming start)
           const hasCall = activeAgent.turnMessages.some(
             (m) =>
@@ -1559,10 +1559,8 @@ export function registerChatIPC(): void {
               makeToolResultMessage(
                 update.toolCallId,
                 update.toolName ?? 'unknown',
-                update.status === 'failed'
-                  ? (update.error ?? 'Tool failed')
-                  : (update.result ?? ''),
-                update.status === 'failed',
+                update.content ?? '',
+                update.toolResult!,
               ),
             );
           }
