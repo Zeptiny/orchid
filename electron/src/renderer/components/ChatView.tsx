@@ -1072,6 +1072,7 @@ export function ChatView() {
           status={chat.status}
           error={chat.error}
           usage={chat.usage}
+          currentTurnUsage={chat.currentTurnUsage}
           subagents={subagents.subagents}
           sessionChains={session.activeSession?.chains ?? []}
           sessionId={session.activeSession?.id ?? null}

@@ -194,6 +194,20 @@ describe('chat rendering contract (U5)', () => {
       expect(src).not.toMatch(/if \(isActive && liveStreaming\) \{\s*continue;/);
       expect(src).not.toMatch(/if \(isLastTurn && liveStreaming\) return;/);
     });
+
+    it('updates chain-footer agent usage from live stream events mid-turn', () => {
+      const src = read('components/ChatStream.tsx');
+      // Active/last-chain footers prefer live usage over persisted chain sums
+      // so CHAT_USAGE events paint the agent: line before the turn commits.
+      expect(src).toMatch(/footerLiveUsage/);
+      expect(src).toMatch(/currentTurnUsage/);
+      expect(src).toMatch(/isLastChain \? liveUsage \?\? chainUsage/);
+      expect(src).toMatch(/isLastTurn\s*\?\s*liveUsage \?\? turnLastAssistantUsage/);
+      // Must not gate live usage on idle/error only (regression: mid-stream stuck).
+      expect(src).not.toMatch(
+        /status === 'idle' \|\| status === 'error' \|\| interrupted\)\s*\?\s*liveUsage/,
+      );
+    });
   });
 
   describe('component surface files exist', () => {

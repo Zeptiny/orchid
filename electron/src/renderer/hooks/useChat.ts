@@ -114,6 +114,11 @@ export interface ChatState {
   error: string | null;
   /** Latest usage data from the stream. */
   usage: Usage | null;
+  /**
+   * In-flight turn usage only (cleared on send/done). Use for live chain-footer
+   * token lines so a new turn does not flash the previous turn's counters.
+   */
+  currentTurnUsage: Usage | null;
   /** Context token breakdown by category (computed from messages + usage). */
   contextBreakdown: ContextBreakdown | null;
   /**
@@ -1169,6 +1174,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     streamSegments,
     error,
     usage,
+    currentTurnUsage,
     cumulativeUsage,
     contextBreakdown,
     streamStartTime,

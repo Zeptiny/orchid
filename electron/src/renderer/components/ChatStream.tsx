@@ -63,6 +63,12 @@ interface ChatStreamProps {
   error: string | null;
   usage: Usage | null;
   /**
+   * In-flight turn usage (null between turns). Preferred for the active chain
+   * footer while streaming so counters update mid-turn without flashing the
+   * previous turn's totals.
+   */
+  currentTurnUsage?: Usage | null;
+  /**
    * Subagents for the active session — their chain message usage feeds the
    * footer `sub:` line (attributed via parentChainIndex when possible).
    */
@@ -137,6 +143,7 @@ export function ChatStream({
   onPickProjectDir,
   onRetry,
   usage,
+  currentTurnUsage = null,
   subagents = [],
   sessionChains = [],
   sessionId = null,
@@ -192,13 +199,16 @@ export function ChatStream({
 
   // Committed history is independent of per-token stream text and wall-clock
   // elapsed ticks. Keep it stable so long sessions do not rebuild O(n) lists.
+  // Live footer usage: current-turn snapshot while streaming; full usage when idle.
+  const footerLiveUsage =
+    status === 'streaming' ? currentTurnUsage : usage;
   const history = useMemo(
     () =>
       buildHistoryStreamItems({
         messages,
         toolBlocks,
         status,
-        liveUsage: usage,
+        liveUsage: footerLiveUsage,
         subagents,
         sessionChains,
         interrupted: Boolean(interrupted),
@@ -208,7 +218,7 @@ export function ChatStream({
       messages,
       toolBlocks,
       status,
-      usage,
+      footerLiveUsage,
       subagents,
       sessionChains,
       interrupted,
@@ -552,10 +562,9 @@ function buildMultiChainHistoryStreamItems(opts: {
     items.push(...chainItems.items);
 
     const chainUsage = sumChainUsage(chain);
-    const turnUsage =
-      isLastChain && (status === 'idle' || status === 'error' || interrupted)
-        ? liveUsage ?? chainUsage
-        : chainUsage;
+    // Prefer live usage for the active/last chain so CHAT_USAGE events update
+    // the agent: line mid-turn (context radial already uses the same stream).
+    const turnUsage = isLastChain ? liveUsage ?? chainUsage : chainUsage;
 
     let subUsage: Usage | null = subByParent.get(chainIndex) ?? null;
     if (isLastChain && !subUsage) {
@@ -851,10 +860,10 @@ function buildLegacyPerUserTurnHistory(opts: {
       hasUser: isLastTurn && turnUserId != null,
     })) return;
 
-    const turnUsage =
-      isLastTurn && (status === 'idle' || status === 'error' || interrupted)
-        ? liveUsage ?? turnLastAssistantUsage
-        : turnLastAssistantUsage;
+    // Prefer live usage on the last turn so mid-stream CHAT_USAGE updates the footer.
+    const turnUsage = isLastTurn
+      ? liveUsage ?? turnLastAssistantUsage
+      : turnLastAssistantUsage;
 
     const subUsage = resolveSubUsage(isLastTurn, isLastTurnOfParentChain);
     if (subUsage && turnChainIndex != null) {
