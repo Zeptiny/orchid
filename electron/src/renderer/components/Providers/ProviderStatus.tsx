@@ -7,6 +7,11 @@ import type {
   ProviderStatusView,
 } from '../../../shared/types/ipc';
 import { Icon } from '../Icon';
+import { Alert } from '../ui/Alert';
+import { Button } from '../ui/Button';
+import { Panel } from '../ui/Panel';
+import { SectionHeader } from '../ui/SectionHeader';
+import { StatusBadge } from '../ui/StatusBadge';
 
 export interface ProviderStatusProps {
   readonly connection: ProviderConnectionView;
@@ -79,16 +84,18 @@ function availabilityLabel(status: ProviderStatusView | undefined): string {
   }
 }
 
-function availabilityBadge(status: ProviderStatusView | undefined): string {
-  if (!status) return 'badge badge-neutral badge-soft';
-  if (status.stale) return 'badge badge-warning badge-soft';
+function availabilityTone(
+  status: ProviderStatusView | undefined,
+): 'success' | 'warning' | 'error' | 'neutral' {
+  if (!status) return 'neutral';
+  if (status.stale) return 'warning';
   switch (status.availability) {
     case 'available':
-      return 'badge badge-success badge-soft';
+      return 'success';
     case 'unavailable':
-      return 'badge badge-error badge-soft';
+      return 'error';
     case 'unknown':
-      return 'badge badge-neutral badge-soft';
+      return 'neutral';
   }
 }
 
@@ -150,40 +157,34 @@ export function ProviderStatus({
   const statusTitleId = `provider-status-${connection.id}`;
 
   return (
-    <section
+    <Panel
+      as="section"
+      tone="muted"
       aria-labelledby={statusTitleId}
-      className="rounded-box border border-base-300 bg-base-200/40 p-3"
+      className="flex flex-col gap-3"
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h4 id={statusTitleId} className="text-sm font-semibold">
-            Provider status
-          </h4>
-          <p className="mt-1 text-xs text-base-content/70">
-            Informational only · Last observed: {formatTimestamp(status?.observedAt)}
-          </p>
-        </div>
-        <span className={availabilityBadge(status)}>{availabilityLabel(status)}</span>
-      </div>
+      <SectionHeader
+        title={<h4 id={statusTitleId} className="text-sm font-semibold">Provider status</h4>}
+        description={`Informational only · Last observed: ${formatTimestamp(status?.observedAt)}`}
+        actions={
+          <StatusBadge tone={availabilityTone(status)} size="sm">
+            {availabilityLabel(status)}
+          </StatusBadge>
+        }
+      />
 
       {error && (
-        <div role="alert" aria-live="assertive" className="alert alert-warning mt-3">
-          <Icon name="alert" size={16} />
-          <span>{error}</span>
-        </div>
+        <Alert tone="warning" icon="alert" aria-live="assertive">{error}</Alert>
       )}
 
-      <div className="mt-3 flex flex-col gap-3">
+      <div className="flex flex-col gap-3">
         {status?.providerUpdatedAt && (
-          <p className="config-card-desc">
+          <p className="config-card-desc text-sm text-base-content/70">
             Provider updated: {formatTimestamp(status.providerUpdatedAt)}
           </p>
         )}
         {status?.error && (
-          <div role="alert" className="alert alert-warning">
-            <Icon name="alert" size={16} />
-            <span>{status.error.message}</span>
-          </div>
+          <Alert tone="warning" icon="alert">{status.error.message}</Alert>
         )}
 
         {providerId === 'lilac' && <LilacStatusDetails status={status} />}
@@ -195,19 +196,18 @@ export function ProviderStatus({
         )}
 
         <div className="flex justify-end">
-          <button
-            type="button"
-            className="btn btn-sm"
+          <Button
+            size="sm"
             onClick={() => void refresh()}
             disabled={!onRefresh || refreshing || (providerId === 'neuralwatt' && connection.health !== 'ready')}
             aria-label={`Refresh ${definition?.displayName ?? providerId} status for ${connection.name}`}
           >
             <Icon name="refresh" size={14} className={refreshing ? 'animate-spin' : ''} />
             {refreshing ? 'Refreshing…' : 'Refresh status'}
-          </button>
+          </Button>
         </div>
       </div>
-    </section>
+    </Panel>
   );
 }
 
@@ -218,10 +218,9 @@ function LilacStatusDetails({ status }: { readonly status: ProviderStatusView | 
 
   if (models.length === 0) {
     return (
-      <div role="status" className="alert alert-info">
-        <Icon name="activity" size={16} />
-        <span>Lilac performance and supply data are unavailable from the current observation.</span>
-      </div>
+      <Alert tone="info" role="status" icon="activity">
+        Lilac performance and supply data are unavailable from the current observation.
+      </Alert>
     );
   }
 
@@ -241,15 +240,9 @@ function LilacStatusDetails({ status }: { readonly status: ProviderStatusView | 
           <div key={`${modelId}-${index}`} className="rounded-box border border-base-300 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-medium break-all">{modelId}</span>
-              <span
-                className={
-                  subscriptionAvailable
-                    ? 'badge badge-success badge-soft'
-                    : 'badge badge-neutral badge-soft'
-                }
-              >
+              <StatusBadge tone={subscriptionAvailable ? 'success' : 'neutral'} size="sm">
                 {subscriptionAvailable ? 'Supply data available' : 'Supply data unavailable'}
-              </span>
+              </StatusBadge>
             </div>
             <dl className="mt-3 grid gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
               <StatusField
@@ -288,12 +281,9 @@ function NeuralwattStatusDetails({ status }: { readonly status: ProviderStatusVi
   const subscription = asRecord(data?.['subscription']);
   if (!data) {
     return (
-      <div role="status" className="alert alert-info">
-        <Icon name="activity" size={16} />
-        <span>
-          Neuralwatt quota and accounting data are unavailable from the current observation.
-        </span>
-      </div>
+      <Alert tone="info" role="status" icon="activity">
+        Neuralwatt quota and accounting data are unavailable from the current observation.
+      </Alert>
     );
   }
 

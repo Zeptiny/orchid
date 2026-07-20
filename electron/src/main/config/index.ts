@@ -14,7 +14,7 @@ export {
 
 export {
   deepMerge,
-  deepMergeProviderDict,
+  deepMergeNamedEntryDict,
   mergeConfigUpdates,
   mergeLayers,
   applyEnvOverrides,

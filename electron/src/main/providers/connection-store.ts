@@ -12,8 +12,15 @@ import {
   type UpdateProviderConnectionInput,
 } from '../../shared/types/provider';
 import { HOME_CONFIG_DIR, atomicWriteJson } from '../config/loader';
+import {
+  withSerializedWrite,
+  _clearSerializedWriteChains,
+} from '../utils/write-lock';
 
 export const PROVIDER_CONNECTIONS_PATH = path.join(HOME_CONFIG_DIR, 'providers.json');
+
+/** Paths that have used connection-store serialization (for scoped test resets). */
+const connectionStorePaths = new Set<string>([PROVIDER_CONNECTIONS_PATH]);
 
 export interface ConnectionStoreOptions {
   readonly providersPath?: string;
@@ -22,25 +29,9 @@ export interface ConnectionStoreOptions {
   readonly beforePersist?: () => Promise<void>;
 }
 
-const writeChains = new Map<string, Promise<void>>();
-
-function withWriteLock<T>(filePath: string, task: () => T | Promise<T>): Promise<T> {
-  const previous = writeChains.get(filePath) ?? Promise.resolve();
-  const run = previous.catch(() => undefined).then(task);
-  const chain = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  writeChains.set(filePath, chain);
-  chain.then(() => {
-    if (writeChains.get(filePath) === chain) writeChains.delete(filePath);
-  });
-  return run;
-}
-
-/** @internal Test-only reset for isolated temporary stores. */
+/** @internal Test-only reset for connection-store paths only. */
 export function _clearConnectionStoreWriteChains(): void {
-  writeChains.clear();
+  _clearSerializedWriteChains([...connectionStorePaths]);
 }
 
 function emptyDocument(): ProviderConnectionDocument {
@@ -73,6 +64,7 @@ export class ConnectionStore {
     this.filePath = options.providersPath ?? PROVIDER_CONNECTIONS_PATH;
     this.idFactory = options.idFactory ?? randomUUID;
     this.beforePersist = options.beforePersist;
+    connectionStorePaths.add(this.filePath);
   }
 
   async list(): Promise<readonly ProviderConnection[]> {
@@ -86,7 +78,7 @@ export class ConnectionStore {
 
   async create(input: CreateProviderConnectionInput): Promise<ProviderConnection> {
     const parsed = createProviderConnectionSchema.parse(input);
-    return withWriteLock(this.filePath, async () => {
+    return withSerializedWrite(this.filePath, async () => {
       const document = readDocument(this.filePath);
       const connection = providerConnectionSchema.parse({ ...parsed, id: this.idFactory() });
       if (document.connections.some((item) => item.id === connection.id)) {
@@ -103,7 +95,7 @@ export class ConnectionStore {
 
   async update(id: string, patch: UpdateProviderConnectionInput): Promise<ProviderConnection> {
     const parsedPatch = updateProviderConnectionSchema.parse(patch);
-    return withWriteLock(this.filePath, async () => {
+    return withSerializedWrite(this.filePath, async () => {
       const document = readDocument(this.filePath);
       const index = document.connections.findIndex((item) => item.id === id);
       if (index === -1) throw new Error(`Unknown provider connection '${id}'`);

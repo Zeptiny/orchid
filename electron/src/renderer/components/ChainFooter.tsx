@@ -1,6 +1,8 @@
 import type { Usage } from '../../shared/types/message';
 import { hasUsage } from '../../shared/usage';
+import { formatTokenCount, formatUsageSummary } from '../utils/format-usage';
 import { Icon } from './Icon';
+import { StatusBadge } from './ui/StatusBadge';
 
 interface ChainFooterProps {
   usage: Usage | null;
@@ -21,36 +23,34 @@ export function ChainFooter({
   interrupted,
   failed,
 }: ChainFooterProps) {
-  const agentIn = fmt(usage?.prompt_tokens);
-  const agentCached = fmt(usage?.cached_tokens);
-  const agentOut = fmt(usage?.completion_tokens);
   const showSub = hasUsage(subUsage);
   const showUsage = hasUsage(usage);
 
   return (
-    <div className="chain-footer">
+    <div className="orchid-chain-footer">
       {interrupted && (
-        <span className="chain-footer-interrupted">
+        <StatusBadge tone="warning" size="xs" className="gap-1">
           <Icon name="square" size={12} />
           Interrupted
-        </span>
+        </StatusBadge>
       )}
       {failed && !interrupted && (
-        <span className="chain-footer-interrupted">
+        <StatusBadge tone="error" size="xs" className="gap-1">
           <Icon name="alert" size={12} />
           Failed
-        </span>
+        </StatusBadge>
       )}
-      {model ? <span className="chain-footer-model">{model}</span> : null}
+      {model ? (
+        <span className="orchid-chain-footer-model">{model}</span>
+      ) : null}
       {showUsage && (
         <span>
-          agent: in {agentIn} cached {agentCached} out {agentOut}
+          agent: {formatUsageSummary(usage)}
         </span>
       )}
       {showSub && subUsage && (
         <span>
-          sub: in {fmt(subUsage.prompt_tokens)} cached {fmt(subUsage.cached_tokens)} out{' '}
-          {fmt(subUsage.completion_tokens)}
+          sub: {formatUsageSummary(subUsage)}
         </span>
       )}
       {elapsedSeconds != null && elapsedSeconds > 0 && <span>{fmtElapsed(elapsedSeconds)}</span>}
@@ -58,10 +58,8 @@ export function ChainFooter({
   );
 }
 
-function fmt(n: number | undefined): string {
-  if (!n) return '0';
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
+export function formatChainTokens(n: number | undefined): string {
+  return formatTokenCount(n);
 }
 
 function fmtElapsed(seconds: number): string {

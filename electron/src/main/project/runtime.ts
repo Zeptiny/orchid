@@ -129,14 +129,3 @@ export function getProjectRuntimeRegistry(): ProjectRuntimeRegistry {
 export function clearProjectRuntimeRegistry(): void {
   projectRuntimeRegistry.clear();
 }
-
-/**
- * Return the immutable project runtime unchanged. Legacy alias-keyed secrets
- * are deliberately never rehydrated; U3 replaces this compatibility helper
- * with connection-scoped credential access.
- */
-export async function hydrateProjectRuntime(
-  runtime: ProjectRuntime,
-): Promise<ProjectRuntime> {
-  return runtime;
-}

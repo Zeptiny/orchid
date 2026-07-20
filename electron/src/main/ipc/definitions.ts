@@ -78,6 +78,27 @@ function projectDirFromEvent(event: Electron.IpcMainInvokeEvent): string | null 
   return resolveBoundProjectPath(String(event.sender.id));
 }
 
+/**
+ * Validate payload, resolve project dir, run mutation, reload registries.
+ * Shared by skill/agent/personality save and delete handlers.
+ */
+function withDefinitionMutation<TSchema extends z.ZodTypeAny, TResult>(
+  schema: TSchema,
+  channelLabel: string,
+  mutate: (data: z.infer<TSchema>, projectDir: string | null) => TResult,
+): (event: Electron.IpcMainInvokeEvent, payload: unknown) => TResult {
+  return (event, payload) => {
+    const parsed = schema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid ${channelLabel} payload: ${parsed.error.message}`);
+    }
+    const projectDir = projectDirFromEvent(event);
+    const result = mutate(parsed.data, projectDir);
+    reloadDefinitionRegistries(projectDir);
+    return result;
+  };
+}
+
 // ── Registration ─────────────────────────────────────────────────────────────
 
 export function registerDefinitionsIPC(): void {
@@ -100,71 +121,56 @@ export function registerDefinitionsIPC(): void {
     };
   });
 
-  ipcMain.handle(IPC_CHANNELS.SKILL_SAVE, async (event, payload: unknown) => {
-    const parsed = skillSaveSchema.safeParse(payload);
-    if (!parsed.success) {
-      throw new Error(`Invalid skill:save payload: ${parsed.error.message}`);
-    }
-    const projectDir = projectDirFromEvent(event);
-    const saved = saveSkill(parsed.data, projectDir);
-    reloadDefinitionRegistries(projectDir);
-    return saved;
-  });
+  ipcMain.handle(
+    IPC_CHANNELS.SKILL_SAVE,
+    withDefinitionMutation(skillSaveSchema, 'skill:save', (data, projectDir) =>
+      saveSkill(data, projectDir),
+    ),
+  );
 
-  ipcMain.handle(IPC_CHANNELS.SKILL_DELETE, async (event, payload: unknown) => {
-    const parsed = deleteSchema.safeParse(payload);
-    if (!parsed.success) {
-      throw new Error(`Invalid skill:delete payload: ${parsed.error.message}`);
-    }
-    const projectDir = projectDirFromEvent(event);
-    deleteSkill(parsed.data.scope, parsed.data.name, projectDir);
-    reloadDefinitionRegistries(projectDir);
-    return { status: 'deleted' as const };
-  });
+  ipcMain.handle(
+    IPC_CHANNELS.SKILL_DELETE,
+    withDefinitionMutation(deleteSchema, 'skill:delete', (data, projectDir) => {
+      deleteSkill(data.scope, data.name, projectDir);
+      return { status: 'deleted' as const };
+    }),
+  );
 
-  ipcMain.handle(IPC_CHANNELS.AGENT_SAVE, async (event, payload: unknown) => {
-    const parsed = agentSaveSchema.safeParse(payload);
-    if (!parsed.success) {
-      throw new Error(`Invalid agent:save payload: ${parsed.error.message}`);
-    }
-    const projectDir = projectDirFromEvent(event);
-    const saved = saveAgent(parsed.data, projectDir);
-    reloadDefinitionRegistries(projectDir);
-    return saved;
-  });
+  ipcMain.handle(
+    IPC_CHANNELS.AGENT_SAVE,
+    withDefinitionMutation(agentSaveSchema, 'agent:save', (data, projectDir) =>
+      saveAgent(data, projectDir),
+    ),
+  );
 
-  ipcMain.handle(IPC_CHANNELS.AGENT_DELETE, async (event, payload: unknown) => {
-    const parsed = deleteSchema.safeParse(payload);
-    if (!parsed.success) {
-      throw new Error(`Invalid agent:delete payload: ${parsed.error.message}`);
-    }
-    const projectDir = projectDirFromEvent(event);
-    deleteAgent(parsed.data.scope, parsed.data.name, projectDir);
-    reloadDefinitionRegistries(projectDir);
-    return { status: 'deleted' as const };
-  });
+  ipcMain.handle(
+    IPC_CHANNELS.AGENT_DELETE,
+    withDefinitionMutation(deleteSchema, 'agent:delete', (data, projectDir) => {
+      deleteAgent(data.scope, data.name, projectDir);
+      return { status: 'deleted' as const };
+    }),
+  );
 
-  ipcMain.handle(IPC_CHANNELS.PERSONALITY_SAVE, async (event, payload: unknown) => {
-    const parsed = personalitySaveSchema.safeParse(payload);
-    if (!parsed.success) {
-      throw new Error(`Invalid personality:save payload: ${parsed.error.message}`);
-    }
-    const projectDir = projectDirFromEvent(event);
-    const saved = savePersonality(parsed.data, projectDir);
-    reloadDefinitionRegistries(projectDir);
-    return saved;
-  });
+  ipcMain.handle(
+    IPC_CHANNELS.PERSONALITY_SAVE,
+    withDefinitionMutation(
+      personalitySaveSchema,
+      'personality:save',
+      (data, projectDir) => savePersonality(data, projectDir),
+    ),
+  );
 
-  ipcMain.handle(IPC_CHANNELS.PERSONALITY_DELETE, async (event, payload: unknown) => {
-    const parsed = deleteSchema.safeParse(payload);
-    if (!parsed.success) {
-      throw new Error(`Invalid personality:delete payload: ${parsed.error.message}`);
-    }
-    const projectDir = projectDirFromEvent(event);
-    deletePersonality(parsed.data.scope, parsed.data.name, projectDir);
-    reloadDefinitionRegistries(projectDir);
-    return { status: 'deleted' as const };
-  });
+  ipcMain.handle(
+    IPC_CHANNELS.PERSONALITY_DELETE,
+    withDefinitionMutation(
+      deleteSchema,
+      'personality:delete',
+      (data, projectDir) => {
+        deletePersonality(data.scope, data.name, projectDir);
+        return { status: 'deleted' as const };
+      },
+    ),
+  );
 
   ipcMain.handle(IPC_CHANNELS.DEFINITION_REVEAL, async (event, payload: unknown) => {
     const parsed = revealSchema.safeParse(payload);

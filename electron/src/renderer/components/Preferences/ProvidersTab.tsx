@@ -8,7 +8,9 @@ import {
   type ProviderConnectionCompletion,
 } from '../Providers/ConnectionWizard';
 import { ConnectionList } from '../Providers/ConnectionList';
-import { Icon } from '../Icon';
+import { Alert } from '../ui/Alert';
+import { Button } from '../ui/Button';
+import { StateMessage } from '../ui/StateMessage';
 
 export function ProvidersTab() {
   const providers = useProviders();
@@ -29,36 +31,35 @@ export function ProvidersTab() {
   // ConfigView gates tab mount until overview is ready — no intermediate spinner.
   if (!providers.overview) {
     return (
-      <div role="alert" className="alert alert-warning">
-        <Icon name="alert" size={16} />
-        <span>{providers.error ?? 'Provider connections are unavailable in this build.'}</span>
-        <button type="button" className="btn btn-sm" onClick={() => void providers.refresh()}>
-          Retry
-        </button>
-      </div>
+      <StateMessage
+        kind="warning"
+        title={providers.error ?? 'Provider connections are unavailable in this build.'}
+        action={
+          <Button type="button" size="sm" onClick={() => void providers.refresh()}>
+            Retry
+          </Button>
+        }
+      />
     );
   }
 
   const { overview } = providers;
   return (
-    <div className="config-form">
+    <div className="config-form flex flex-col gap-4">
       {!overview.secureStorage.available && (
-        <div role="alert" className="alert alert-warning">
-          <Icon name="alert" size={16} />
-          <span>
-            Secure credential storage is unavailable
-            {overview.secureStorage.reason === 'basic_text' ? ' because this system selected basic_text storage.' : '.'}
-            {' '}Use an environment-variable connection instead of pasting an API key.
-          </span>
-        </div>
+        <Alert tone="warning" icon="alert">
+          Secure credential storage is unavailable
+          {overview.secureStorage.reason === 'basic_text' ? ' because this system selected basic_text storage.' : '.'}
+          {' '}Use an environment-variable connection instead of pasting an API key.
+        </Alert>
       )}
 
       {providers.error && (
-        <div role="alert" className="alert alert-error">
-          <Icon name="alert" size={16} />
-          <span>{providers.error}</span>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={providers.clearError}>Dismiss</button>
-        </div>
+        <Alert tone="error" icon="alert" action={
+          <Button variant="ghost" size="sm" type="button" onClick={providers.clearError}>Dismiss</Button>
+        }>
+          {providers.error}
+        </Alert>
       )}
 
       <ConnectionList
@@ -93,7 +94,6 @@ export function ProvidersTab() {
         onUpdate={providers.updateConnection}
         onSubmitApiKey={providers.submitApiKey}
         onValidate={providers.validateConnection}
-
         onComplete={completeConnection}
       />
     </div>

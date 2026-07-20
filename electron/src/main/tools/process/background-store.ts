@@ -9,6 +9,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { sleep } from '../../utils/async';
 import { HeadTailBuffer } from './head-tail-buffer';
 
 // ---------------------------------------------------------------------------
@@ -63,7 +64,6 @@ export interface ProcessEntry {
   sessionId: string | null;
   agentScopeId: string;
   description: string;
-  drainAbort: AbortController | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,7 +99,6 @@ export class BackgroundProcessStore {
     const now = Date.now();
 
     let proc: ChildProcess | IPty;
-    const abort = new AbortController();
 
     if (interactive) {
       const env = { ...process.env, ...PTY_ENV_SUPPRESSION };
@@ -174,7 +173,6 @@ export class BackgroundProcessStore {
       sessionId,
       agentScopeId,
       description,
-      drainAbort: interactive ? null : abort,
     };
     this._entries.set(procId, entry);
 
@@ -218,6 +216,20 @@ export class BackgroundProcessStore {
   ): { tail: string; exitCode: number | null } | undefined {
     const entry = this.getVisible(procId, sessionId, agentScopeId);
     if (!entry) return undefined;
+    return { tail: entry.buffer.getTail(lastN), exitCode: entry.exitCode };
+  }
+
+  /**
+   * Session-owned snapshot for UI IPC: any agentScopeId within the session
+   * (main or subagent). Does not require agentScopeId === 'main'.
+   */
+  snapshotForSession(
+    procId: number,
+    lastN: number | undefined,
+    sessionId: string,
+  ): { tail: string; exitCode: number | null } | undefined {
+    const entry = this._entries.get(procId);
+    if (!entry || entry.sessionId !== sessionId) return undefined;
     return { tail: entry.buffer.getTail(lastN), exitCode: entry.exitCode };
   }
 
@@ -434,9 +446,5 @@ export function setBackgroundStore(store: BackgroundProcessStore): void {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 export { ENV_SUPPRESSION, PTY_ENV_SUPPRESSION };

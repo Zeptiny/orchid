@@ -1,7 +1,7 @@
 /**
  * Icon-only row actions for definition cards (reveal / edit / delete).
  */
-import { Icon } from '../Icon';
+import { IconButton } from '../ui/IconButton';
 
 export interface DefinitionActionsProps {
   onReveal?: () => void;
@@ -23,37 +23,39 @@ export function DefinitionActions({
   return (
     <div className="flex shrink-0 items-center gap-0.5">
       {onReveal && (
-        <button
-          type="button"
-          className="btn btn-ghost btn-square btn-xs h-7 w-7 min-h-7"
+        <IconButton
+          label="Reveal in folder"
+          icon="folder"
+          size="xs"
+          iconSize={13}
+          className="btn-square h-7 w-7 min-h-7"
           onClick={onReveal}
-          title="Reveal in folder"
-          aria-label="Reveal in folder"
-        >
-          <Icon name="folder" size={13} />
-        </button>
+        />
       )}
       {!readOnly && onEdit && (
-        <button
-          type="button"
-          className="btn btn-ghost btn-square btn-xs h-7 w-7 min-h-7"
+        <IconButton
+          label="Edit"
+          icon="edit"
+          size="xs"
+          iconSize={13}
+          className="btn-square h-7 w-7 min-h-7"
           onClick={onEdit}
-          title="Edit"
-          aria-label="Edit"
-        >
-          <Icon name="edit" size={13} />
-        </button>
+        />
       )}
       {!readOnly && onDelete && (
-        <button
-          type="button"
-          className="btn btn-ghost btn-square btn-xs h-7 w-7 min-h-7 text-error hover:bg-error/10"
+        <IconButton
+          label="Delete"
+          icon="trash"
+          size="xs"
+          /* Ghost + text-error: transparent button with error-colored icon on hover.
+             variant="error" would render a filled error button, which is too heavy
+             for a row action. IconButton has no "ghost-error" variant, so we pair
+             variant="ghost" (transparent) with text-error/hover overrides. */
+          variant="ghost"
+          iconSize={13}
+          className="btn-square h-7 w-7 min-h-7 text-error hover:bg-error/10"
           onClick={onDelete}
-          title="Delete"
-          aria-label="Delete"
-        >
-          <Icon name="trash" size={13} />
-        </button>
+        />
       )}
     </div>
   );

@@ -35,6 +35,11 @@ import type { ToolDefinition, ToolHandler, RegisteredTool } from '../tools/types
 import type { MCPServerConfig, MCPServerStatus, MCPServerStatusValue } from './schema';
 import { isValidServerName } from './schema';
 import { createTransport } from './transport';
+import { withTimeoutPromise } from '../utils/async';
+import {
+  createDynamicToolOutcome,
+  genericToolResultDataSchema,
+} from '../../shared/types/tool-result';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -44,6 +49,14 @@ interface InternalServerStatus {
   status: MCPServerStatusValue;
   toolCount: number;
   error: string | null;
+}
+
+/** MCP resource metadata discovered at connect time. */
+export interface MCPResourceInfo {
+  uri: string;
+  server: string;
+  name?: string;
+  description?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -57,8 +70,8 @@ export class MCPManager {
   // Tools discovered from all servers: namespaced name → { definition, handler }
   private _tools = new Map<string, RegisteredTool>();
 
-  // URI → server name mapping for resource reading
-  private _uriMap = new Map<string, string>();
+  // URI → resource metadata for listing/reading
+  private _uriMap = new Map<string, MCPResourceInfo>();
 
   // Per-server status tracking
   private _serverStatus = new Map<string, InternalServerStatus>();
@@ -151,21 +164,27 @@ export class MCPManager {
         }),
       ]);
     } catch {
-      // Overall budget exhausted — tear down the runner, mark remaining unavailable
+      // Overall budget exhausted — full teardown so no connected ghosts remain
       console.warn(
         `MCP startup timed out after ${this._startupTimeout / 1000}s; continuing with reduced MCP availability`,
       );
       await this._awaitRunner();
 
+      const timeoutErr = `startup timed out after ${Math.round(this._startupTimeout / 1000)}s`;
       for (const [, status] of this._serverStatus) {
-        if (status.status !== 'connected' && status.status !== 'failed') {
-          status.status = 'unavailable';
-          status.error = `startup timed out after ${Math.round(this._startupTimeout / 1000)}s`;
+        if (status.status === 'failed') {
+          continue;
         }
+        // Runner already closed clients — any prior "connected" is a ghost
+        status.status = status.status === 'connected' ? 'failed' : 'unavailable';
+        status.error = timeoutErr;
+        status.toolCount = 0;
       }
 
-      // Clear dead sessions/tools so callTool/readResource report cleanly
-      this._clearDisconnectedState();
+      // Drop all clients/tools/URIs — tools must not stay registered against closed clients
+      this._clients.clear();
+      this._tools.clear();
+      this._uriMap.clear();
       return;
     }
 
@@ -206,9 +225,15 @@ export class MCPManager {
    *
    * @param name - Fully-qualified tool name (e.g. "mcp::context7::read-docs").
    * @param args - Tool arguments (validated by the MCP server's input schema).
-   * @returns Tool result content (text concatenated, non-text blocks noted).
+   * @param options - Optional abort signal from tool-dispatch / parent cancel.
+   * @returns The exact MCP result object. Canonical adapters validate JSON
+   * safety and keep content blocks inert.
    */
-  async callTool(name: string, args: unknown): Promise<unknown> {
+  async callTool(
+    name: string,
+    args: unknown,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown> {
     const { serverName, toolName } = this._parseToolName(name);
     const client = this._clients.get(serverName);
 
@@ -216,47 +241,46 @@ export class MCPManager {
       return `Error: MCP server '${serverName}' is not connected.`;
     }
 
+    if (options?.signal?.aborted) {
+      return `Error: MCP tool '${toolName}' was cancelled.`;
+    }
+
+    const timeoutAbort = new AbortController();
+    const combinedSignal =
+      options?.signal !== undefined
+        ? AbortSignal.any([options.signal, timeoutAbort.signal])
+        : timeoutAbort.signal;
+    const timeoutMessage = `MCP tool '${toolName}' on server '${serverName}' timed out after ${Math.round(this._perServerTimeout / 1000)}s`;
+
     let result: Awaited<ReturnType<typeof client.callTool>>;
     try {
-      result = await this._withTimeout(
-        client.callTool({ name: toolName, arguments: args as Record<string, unknown> }),
+      result = await withTimeoutPromise(
+        client.callTool(
+          { name: toolName, arguments: args as Record<string, unknown> },
+          undefined,
+          { signal: combinedSignal },
+        ),
         this._perServerTimeout,
-        `MCP tool '${toolName}' on server '${serverName}' timed out after ${Math.round(this._perServerTimeout / 1000)}s`,
+        timeoutMessage,
+        { abortController: timeoutAbort },
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (message.toLowerCase().includes('timed out')) {
-        return `Error: ${message}`;
+      const name_ = err instanceof Error ? err.name : '';
+      if (options?.signal?.aborted && !timeoutAbort.signal.aborted) {
+        return `Error: MCP tool '${toolName}' was cancelled.`;
+      }
+      if (
+        message.toLowerCase().includes('timed out') ||
+        name_ === 'AbortError' ||
+        message.toLowerCase().includes('abort')
+      ) {
+        return `Error: ${timeoutMessage}`;
       }
       return `Error: MCP tool '${toolName}' failed: ${message}`;
     }
 
-    // Concatenate text content, note non-text blocks (matching Python behavior)
-    const textParts: string[] = [];
-    const placeholders: string[] = [];
-
-    if ('content' in result && Array.isArray(result.content)) {
-      for (const block of result.content) {
-        if (block.type === 'text') {
-          textParts.push(block.text);
-        } else if (block.type === 'image') {
-          placeholders.push(`[image: ${(block as { mimeType?: string }).mimeType ?? 'application/octet-stream'}]`);
-        } else if (block.type === 'resource') {
-          const resource = (block as { resource?: { uri?: string } }).resource;
-          placeholders.push(`[embedded resource: ${resource?.uri}]`);
-        } else {
-          placeholders.push(`[${(block as { type: string }).type} block]`);
-        }
-      }
-    }
-
-    if (placeholders.length > 0) {
-      console.warn(
-        `MCP tool '${toolName}' returned ${placeholders.length} non-text block(s) that were converted to placeholders`,
-      );
-    }
-
-    return [...textParts, ...placeholders].join('\n');
+    return result;
   }
 
   /**
@@ -264,26 +288,51 @@ export class MCPManager {
    *
    * @param serverName - Name of the MCP server.
    * @param uri - Resource URI to read.
+   * @param options - Optional abort signal from tool-dispatch / parent cancel.
    * @returns Resource content as string.
    */
-  async readResource(serverName: string, uri: string): Promise<string> {
+  async readResource(
+    serverName: string,
+    uri: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<string> {
     const client = this._clients.get(serverName);
 
     if (client === undefined) {
       return `Error: MCP server '${serverName}' is not connected.`;
     }
 
+    if (options?.signal?.aborted) {
+      return `Error: MCP readResource '${uri}' was cancelled.`;
+    }
+
+    const timeoutAbort = new AbortController();
+    const combinedSignal =
+      options?.signal !== undefined
+        ? AbortSignal.any([options.signal, timeoutAbort.signal])
+        : timeoutAbort.signal;
+    const timeoutMessage = `MCP readResource '${uri}' on server '${serverName}' timed out after ${Math.round(this._perServerTimeout / 1000)}s`;
+
     let result: Awaited<ReturnType<typeof client.readResource>>;
     try {
-      result = await this._withTimeout(
-        client.readResource({ uri }),
+      result = await withTimeoutPromise(
+        client.readResource({ uri }, { signal: combinedSignal }),
         this._perServerTimeout,
-        `MCP readResource '${uri}' on server '${serverName}' timed out after ${Math.round(this._perServerTimeout / 1000)}s`,
+        timeoutMessage,
+        { abortController: timeoutAbort },
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (message.toLowerCase().includes('timed out')) {
-        return `Error: ${message}`;
+      const name_ = err instanceof Error ? err.name : '';
+      if (options?.signal?.aborted && !timeoutAbort.signal.aborted) {
+        return `Error: MCP readResource '${uri}' was cancelled.`;
+      }
+      if (
+        message.toLowerCase().includes('timed out') ||
+        name_ === 'AbortError' ||
+        message.toLowerCase().includes('abort')
+      ) {
+        return `Error: ${timeoutMessage}`;
       }
       return `Error: MCP readResource '${uri}' failed: ${message}`;
     }
@@ -311,7 +360,16 @@ export class MCPManager {
    * @returns The server name, or undefined if no server owns this URI.
    */
   getResourceServer(uri: string): string | undefined {
-    return this._uriMap.get(uri);
+    return this._uriMap.get(uri)?.server;
+  }
+
+  /**
+   * List all MCP resources discovered at connect time.
+   *
+   * @returns Resource entries with uri, server, and optional name/description.
+   */
+  listResources(): MCPResourceInfo[] {
+    return Array.from(this._uriMap.values()).map((info) => ({ ...info }));
   }
 
   /**
@@ -455,15 +513,43 @@ export class MCPManager {
           name: registryName,
           description: tool.description ?? '',
           inputSchema: this._jsonSchemaToZod(tool.inputSchema),
+          rawInputJsonSchema: tool.inputSchema as Record<string, unknown>,
+          resultFamily: 'generic',
+          outputDataSchema: genericToolResultDataSchema,
           category: 'mcp',
         };
 
-        const handler: ToolHandler = async (input: unknown, _ctx) => {
-          const raw = await this.callTool(registryName, input);
+        const handler: ToolHandler = async (input: unknown, ctx) => {
+          const raw = await this.callTool(registryName, input, {
+            signal: ctx?.abortSignal,
+          });
           if (typeof raw === 'string' && raw.startsWith('Error:')) {
-            return { content: raw, isError: true };
+            return createDynamicToolOutcome(registryName, raw, 'mcp', {
+              status: ctx.abortSignal?.aborted || /cancelled/i.test(raw)
+                ? 'cancelled'
+                : 'error',
+              errorCode: 'mcp_tool_error',
+              errorMessage: raw,
+            });
           }
-          return raw as string | { display?: string; content: string; isError?: boolean };
+          const serialized = JSON.stringify(raw);
+          if (serialized.length > 5 * 1024 * 1024) {
+            return {
+              status: 'partial',
+              data: {
+                value: serialized.slice(0, 10000) + '\n...[truncated: ' + serialized.length + ' bytes total]',
+                origin: { kind: 'mcp', name: registryName },
+              },
+              retrieval: { kind: 'rerun', toolName: registryName, input: {} },
+            };
+          }
+          const serverReportedError = raw != null && typeof raw === 'object'
+            && (raw as { isError?: unknown }).isError === true;
+          return createDynamicToolOutcome(registryName, raw, 'mcp', {
+            status: serverReportedError ? 'error' : 'complete',
+            errorCode: 'mcp_tool_error',
+            errorMessage: serverReportedError ? 'MCP tool reported an error.' : undefined,
+          });
         };
 
         this._tools.set(registryName, { definition, handler });
@@ -472,7 +558,12 @@ export class MCPManager {
       // Enumerate resources — also bounded by same per-server budget
       const resourcesResult = await this._raceWithSignal(client.listResources(), combined, timeoutMessage);
       for (const resource of resourcesResult.resources) {
-        this._uriMap.set(resource.uri, serverName);
+        this._uriMap.set(resource.uri, {
+          uri: resource.uri,
+          server: serverName,
+          name: resource.name || undefined,
+          description: resource.description || undefined,
+        });
       }
     } catch (err) {
       try {
@@ -537,8 +628,8 @@ export class MCPManager {
     }
 
     // Remove URIs belonging to non-connected servers
-    for (const [uri, serverName] of Array.from(this._uriMap)) {
-      const status = this._serverStatus.get(serverName);
+    for (const [uri, info] of Array.from(this._uriMap)) {
+      const status = this._serverStatus.get(info.server);
       if (!status || status.status !== 'connected') {
         this._uriMap.delete(uri);
       }
@@ -567,44 +658,6 @@ export class MCPManager {
       serverName: rest.slice(0, separatorIdx),
       toolName: rest.slice(separatorIdx + 2),
     };
-  }
-
-  private _withTimeout<T>(
-    promise: Promise<T>,
-    ms: number,
-    message: string,
-  ): Promise<T> {
-    if (!Number.isFinite(ms) || ms <= 0) {
-      promise.then(() => undefined, () => undefined);
-      return Promise.reject(new Error(message));
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let timedOut = false;
-    const timeoutPromise = new Promise<T>((_, reject) => {
-      timer = setTimeout(() => {
-        timedOut = true;
-        reject(new Error(message));
-      }, ms);
-      if (typeof timer === 'object' && timer && 'unref' in timer) {
-        (timer as NodeJS.Timeout).unref();
-      }
-    });
-    return Promise.race([
-      promise.then(
-        (v) => {
-          if (timer !== undefined) clearTimeout(timer);
-          return v;
-        },
-        (err: unknown) => {
-          if (timer !== undefined) clearTimeout(timer);
-          throw err;
-        },
-      ),
-      timeoutPromise,
-    ]).finally(() => {
-      if (timer !== undefined) clearTimeout(timer);
-      if (timedOut) promise.then(() => undefined, () => undefined);
-    });
   }
 
   private _raceWithSignal<T>(

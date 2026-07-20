@@ -9,6 +9,8 @@
 import * as fs from 'node:fs';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome } from '../result';
 import { resolveToolPath } from '../types';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from '../../ast/parser';
 import { xmlAttr, fnv1a } from './utils';
@@ -29,6 +31,7 @@ export type GetFunctionInput = z.infer<typeof getFunctionSchema>;
 // ---------------------------------------------------------------------------
 
 export const getFunctionDefinition: ToolDefinition = {
+  ...genericToolResultMetadata,
   name: 'get_function',
   description:
     'Extract a specific function by name from a source file, including ' +
@@ -38,6 +41,7 @@ export const getFunctionDefinition: ToolDefinition = {
   inputSchema: getFunctionSchema,
   actionLabel: 'Extracting function...',
   category: 'ast',
+  noTimeout: true,
 };
 
 // ---------------------------------------------------------------------------
@@ -78,22 +82,13 @@ export const getFunctionHandler: ToolHandler = async (input: unknown, ctx) => {
 
   try {
     if (!fs.existsSync(file_path)) {
-      return {
-        display: `File not found: ${file_path}`,
-        content:
-          `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
-          `File not found: ${file_path}</ast_error>`,
-      isError: true
-    };
+      return genericBuiltInToolOutcome('get_function', `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
+          `File not found: ${file_path}</ast_error>`, 'error');
     }
 
     const names = [function_name.trim()].filter(Boolean);
     if (names.length === 0) {
-      return {
-        display: 'No function names provided',
-        content: '<ast_error tool="get_function">No valid function names provided.</ast_error>',
-      isError: true
-    };
+      return genericBuiltInToolOutcome('get_function', '<ast_error tool="get_function">No valid function names provided.</ast_error>', 'error');
     }
 
     const content = fs.readFileSync(file_path, 'utf-8');
@@ -201,31 +196,18 @@ export const getFunctionHandler: ToolHandler = async (input: unknown, ctx) => {
         foundFunctions.join('\n') +
         '\n</functions>';
 
-      return {
-        display: `Extracted ${foundFunctions.length} function(s) from ${file_path}`,
-        content: contentXml,
-      };
+      return genericBuiltInToolOutcome('get_function', contentXml, 'complete');
     } finally {
       tree.delete();
     }
   } catch (err) {
     if (err instanceof Error && err.message.includes('Unsupported file extension')) {
-      return {
-        display: `Unsupported file type: ${file_path}`,
-        content:
-          `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
-          `${err.message}</ast_error>`,
-      isError: true
-    };
+      return genericBuiltInToolOutcome('get_function', `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
+          `${err.message}</ast_error>`, 'error');
     }
     const msg = err instanceof Error ? err.message : String(err);
-    return {
-      display: `Error: ${file_path}`,
-      content:
-        `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
-        `${msg}</ast_error>`,
-      isError: true
-    };
+    return genericBuiltInToolOutcome('get_function', `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
+        `${msg}</ast_error>`, 'error');
   }
 };
 

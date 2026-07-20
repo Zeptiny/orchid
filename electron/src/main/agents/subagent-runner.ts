@@ -11,7 +11,6 @@ import { getConfig } from '../config/loader';
 import { getSessionManager } from '../ipc/session';
 import {
   getProjectRuntimeRegistry,
-  hydrateProjectRuntime,
   type ProjectRuntime,
 } from '../project/runtime';
 import type { SubagentStreamRunner } from './manager';
@@ -102,9 +101,8 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       return;
     }
 
-    const baseRuntime =
+    const runtime =
       params.projectRuntime ?? getProjectRuntimeRegistry().get(parentCwd);
-    const runtime = await hydrateProjectRuntime(baseRuntime);
     const config = runtime.config;
     // Resolve selection: explicit override → tier selection → nullable default.
     const selection =
@@ -156,11 +154,9 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         skills: new Map(runtime.skills),
         mcpManager,
       });
-      const allowedPatterns = params.agent.allowed_tools.length > 0
-        ? [...params.agent.allowed_tools]
-        : ['*'];
+      // Empty allowlist = no tools. Agents that need all tools must use ['*'].
       const allowedTools = registry
-        .filter(allowedPatterns)
+        .filter([...params.agent.allowed_tools])
         .map((tool) => tool.definition.name)
         .filter((name) => !SUBAGENT_FORBIDDEN_TOOLS.has(name));
       const agentForRun: Agent = { ...params.agent, allowed_tools: allowedTools };

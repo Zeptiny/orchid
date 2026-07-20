@@ -1,19 +1,24 @@
 /**
- * Tests for flushStateCallbacks (U9).
+ * Tests for flushStateCallbacks and interrupt waiter isolation (M-P0-013).
  *
  * Covers:
  * - flushStateCallbacks() resolves pending _resolveWait promises
  * - flushStateCallbacks() is a no-op when no callbacks are pending
- * - interrupt_subagents calls flushStateCallbacks() before cancelling
- * - Interrupt during tool execution → clean state reset
- *
- * Test scenarios from plan U9.
+ * - interrupt_subagents resolves waiters only for cancelled records
+ *   (does not process-wide flush)
+ * - Session B interrupt does not unblock session A waiters
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AgentType, AgentTier, type Agent } from '../../src/shared/types/agent';
 import { SubagentManager, SubagentState } from '../../src/main/agents/manager';
 import { buildInterruptTool } from '../../src/main/tools/subagent/interrupt';
 import type { SubagentToolResult } from '../../src/main/tools/subagent/delegate';
+
+function resultText(result: SubagentToolResult): string {
+  return typeof result.data.value === 'string'
+    ? result.data.value
+    : JSON.stringify(result.data.value);
+}
 
 // ── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -118,9 +123,9 @@ describe('flushStateCallbacks', () => {
   });
 });
 
-// ── interrupt_subagents integration with flush ───────────────────────────────
+// ── interrupt_subagents waiter isolation (M-P0-013) ─────────────────────────
 
-describe('interrupt_subagents with flush', () => {
+describe('interrupt_subagents waiter isolation', () => {
   let manager: SubagentManager;
   const sessionCtx = { cwd: '/tmp/project', sessionId: 'sess-a' };
 
@@ -128,14 +133,13 @@ describe('interrupt_subagents with flush', () => {
     manager = new SubagentManager();
   });
 
-  it('should flush callbacks before cancelling (happy path)', async () => {
+  it('cancelOne resolves waiters for cancelled records (no process-wide flush)', async () => {
     const { handler } = buildInterruptTool(manager);
     const record = manager.spawn('test', 'task', codeReviewerAgent, {
       sessionId: 'sess-a',
     });
     manager.markRunning(record.id);
 
-    // Set up a pending wait — simulates a caller waiting on the subagent
     const waitPromise = manager.wait([record.id]);
     expect(record._resolveWait).not.toBeNull();
 
@@ -144,17 +148,15 @@ describe('interrupt_subagents with flush', () => {
       sessionCtx,
     )) as SubagentToolResult;
 
-    // Subagent should be interrupted
     expect(record.state).toBe(SubagentState.INTERRUPTED);
-    expect(result.display).toContain('Interrupted 1 subagent(s)');
+    expect(resultText(result)).toContain('"interrupted"');
 
-    // The wait promise should have been resolved (no dangling promise)
     const waitResult = await waitPromise;
     expect(waitResult.has(record.id)).toBe(true);
     expect(record._resolveWait).toBeNull();
   });
 
-  it('should flush callbacks when cancelling all in-session (empty IDs)', async () => {
+  it('empty-list interrupt resolves only cancelled in-session waiters', async () => {
     const { handler } = buildInterruptTool(manager);
     const a = manager.spawn('a', 'task 1', codeReviewerAgent, {
       sessionId: 'sess-a',
@@ -165,7 +167,6 @@ describe('interrupt_subagents with flush', () => {
     manager.markRunning(a.id);
     manager.markRunning(b.id);
 
-    // Set up pending waits
     const waitPromiseA = manager.wait([a.id]);
     const waitPromiseB = manager.wait([b.id]);
 
@@ -174,15 +175,49 @@ describe('interrupt_subagents with flush', () => {
       sessionCtx,
     )) as SubagentToolResult;
 
-    expect(result.display).toContain('Interrupted 2 subagent(s)');
+    expect(resultText(result)).toContain('"interrupted"');
     expect(a.state).toBe(SubagentState.INTERRUPTED);
     expect(b.state).toBe(SubagentState.INTERRUPTED);
 
-    // No dangling promises
     await waitPromiseA;
     await waitPromiseB;
     expect(a._resolveWait).toBeNull();
     expect(b._resolveWait).toBeNull();
+  });
+
+  it('session B interrupt does not unblock session A wait', async () => {
+    const { handler } = buildInterruptTool(manager);
+    const a = manager.spawn('a', 'task a', codeReviewerAgent, {
+      sessionId: 'sess-a',
+    });
+    const b = manager.spawn('b', 'task b', codeReviewerAgent, {
+      sessionId: 'sess-b',
+    });
+    manager.markRunning(a.id);
+    manager.markRunning(b.id);
+
+    let aWaitSettled = false;
+    const waitA = manager.wait([a.id]).then((r) => {
+      aWaitSettled = true;
+      return r;
+    });
+
+    // Session B interrupts its own subagent only
+    const result = (await handler(
+      { subagent_ids: [b.id] },
+      { cwd: '/tmp/project', sessionId: 'sess-b' },
+    )) as SubagentToolResult;
+
+    expect(resultText(result)).toContain('"interrupted"');
+    expect(b.state).toBe(SubagentState.INTERRUPTED);
+    expect(a.state).toBe(SubagentState.RUNNING);
+    expect(a._resolveWait).not.toBeNull();
+    expect(aWaitSettled).toBe(false);
+
+    // Session A still waiting until its own subagent completes
+    manager.markCompleted(a.id, 'done-a');
+    const results = await waitA;
+    expect(results.get(a.id)?.result).toBe('done-a');
   });
 
   it('should handle no pending callbacks gracefully', async () => {
@@ -192,17 +227,16 @@ describe('interrupt_subagents with flush', () => {
     });
     manager.markRunning(record.id);
 
-    // No pending wait — just interrupt
     const result = (await handler(
       { subagent_ids: [record.id] },
       sessionCtx,
     )) as SubagentToolResult;
 
     expect(record.state).toBe(SubagentState.INTERRUPTED);
-    expect(result.display).toContain('Interrupted 1 subagent(s)');
+    expect(resultText(result)).toContain('"interrupted"');
   });
 
-  it('should handle mix of found, not found, and already done with flush', async () => {
+  it('should handle mix of found, not found, and already done', async () => {
     const { handler } = buildInterruptTool(manager);
 
     const running = manager.spawn('running', 'task', codeReviewerAgent, {
@@ -215,7 +249,6 @@ describe('interrupt_subagents with flush', () => {
     });
     manager.markCompleted(completed.id, 'done');
 
-    // Set up a pending wait on the running subagent
     const waitPromise = manager.wait([running.id]);
 
     const result = (await handler(
@@ -225,14 +258,13 @@ describe('interrupt_subagents with flush', () => {
       sessionCtx,
     )) as SubagentToolResult;
 
-    expect(result.content).toContain('Interrupted');
-    expect(result.content).toContain(running.id);
-    expect(result.content).toContain('Already finished');
-    expect(result.content).toContain(completed.id);
-    expect(result.content).toContain('Not found');
-    expect(result.content).toContain('missing-id');
+    expect(resultText(result)).toContain('"interrupted"');
+    expect(resultText(result)).toContain(running.id);
+    expect(resultText(result)).toContain('"already_finished"');
+    expect(resultText(result)).toContain(completed.id);
+    expect(resultText(result)).toContain('"not_found"');
+    expect(resultText(result)).toContain('missing-id');
 
-    // Wait promise should be resolved
     await waitPromise;
     expect(running._resolveWait).toBeNull();
   });

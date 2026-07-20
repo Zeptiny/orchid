@@ -17,6 +17,7 @@ import { editDefinition, editHandler } from './filesystem/edit';
 import { writeDefinition, writeHandler } from './filesystem/write';
 import { readDirectoryDefinition, readDirectoryHandler } from './filesystem/read-directory';
 import { globDefinition, globHandler } from './filesystem/glob';
+import { applyPatchDefinition, applyPatchHandler } from './filesystem/apply-patch';
 import { grepToolDefinition, grepHandler } from './search/grep';
 import { ragSearchDefinition, ragSearchHandler } from './rag/search';
 import { ragIndexDefinition, ragIndexHandler } from './rag';
@@ -39,6 +40,7 @@ import { buildDeleteTool } from './todo/delete';
 import { buildWebFetchTool, type SummarizeCallback } from './web/fetch';
 import { buildSkillTool } from './skill/skill';
 import { buildMcpResourceTool } from './mcp/resource';
+import { buildListMcpResourcesTool } from './mcp/list-resources';
 import { buildDelegateTool } from './subagent/delegate';
 import { buildWaitTool } from './subagent/wait';
 import { buildInterruptTool } from './subagent/interrupt';
@@ -61,6 +63,7 @@ export type BuiltinToolOptions = Partial<BuiltinToolContext>;
 
 const fallbackMcpManager = {
   getResourceServer: () => undefined,
+  listResources: () => [],
   readResource: async () => {
     throw new Error('MCP manager is not available.');
   },
@@ -159,14 +162,8 @@ function buildWebFetchSummarizer(
   const agent = agents.get('web-fetch');
   if (!agent) return undefined;
 
-  // An empty allowed_tools array means "all tools" for normal subagents.
-  // Give this internal worker an explicit non-matching pattern so it remains
-  // a pure summarizer with no tool access.
-  const summarizerAgent: Agent = {
-    ...agent,
-    allowed_tools: Object.freeze(['__web_fetch_summarizer_no_tools__']),
-  };
-
+  // Empty allowed_tools = no tools (canonical). web-fetch ships with [] so
+  // it remains a pure summarizer with no tool access.
   return async (url, title, contentType, content, query, context) => {
     if (!context.projectRuntime || !context.sessionId) {
       throw new Error('Web fetch summarization requires a frozen project runtime and session id.');
@@ -183,7 +180,7 @@ function buildWebFetchSummarizer(
       `${content}\n` +
       '</page_content>';
 
-    const record = manager.spawn('web fetch summary', task, summarizerAgent, {
+    const record = manager.spawn('web fetch summary', task, agent, {
       selection: getTierModelSelection(context.projectRuntime.config, agent.tier),
       sessionId: context.sessionId,
       cwd: context.cwd,
@@ -217,6 +214,7 @@ function registerBuiltinToolsInto(
   registry.register(writeDefinition, writeHandler);
   registry.register(readDirectoryDefinition, readDirectoryHandler);
   registry.register(globDefinition, globHandler);
+  registry.register(applyPatchDefinition, applyPatchHandler);
   registry.register(grepToolDefinition, grepHandler);
   registry.register(ragSearchDefinition, ragSearchHandler);
   registry.register(ragIndexDefinition, ragIndexHandler);
@@ -263,6 +261,11 @@ function registerBuiltinToolsInto(
     context.mcpManager ?? fallbackMcpManager,
   );
   registry.register(mcpResource.definition, mcpResource.handler);
+  const listMcpResources = buildListMcpResourcesTool(
+    context.mcpManager ?? fallbackMcpManager,
+  );
+  registry.register(listMcpResources.definition, listMcpResources.handler);
+
 }
 
 /** Build a dedicated, immutable-definition registry for one project runtime. */

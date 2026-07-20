@@ -46,6 +46,7 @@ import {
   assertTargetDoesNotExist,
   atomicWriteText,
   definitionEntryDir,
+  type DefinitionKind,
   personalityMdPath,
   removeDefinitionDir,
   removeFileInScope,
@@ -143,6 +144,36 @@ function assertNotReservedProjectAgent(
 
 // ── List ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Merge global + project definition entries for one kind.
+ * Project names drive `overriddenByProject` badges on global rows.
+ */
+function listDefinitionEntries<T>(options: {
+  projectDir: string | null;
+  kind: DefinitionKind;
+  globalDir: string;
+  collectProjectNames: (projectRoot: string) => Set<string>;
+  listInDir: (
+    dir: string,
+    scope: DefinitionScope,
+    projectNames: Set<string>,
+  ) => T[];
+}): T[] {
+  const projectRoot = options.projectDir
+    ? path.join(options.projectDir, '.orchid', options.kind)
+    : null;
+  const projectNames =
+    projectRoot && fs.existsSync(projectRoot)
+      ? options.collectProjectNames(projectRoot)
+      : new Set<string>();
+
+  const global = options.listInDir(options.globalDir, 'global', projectNames);
+  const project = projectRoot
+    ? options.listInDir(projectRoot, 'project', new Set())
+    : [];
+  return [...global, ...project];
+}
+
 function listSkillEntriesInDir(
   dir: string,
   scope: DefinitionScope,
@@ -232,24 +263,24 @@ function scanResources(skillDir: string): ManagedSkill['resources'] {
   }
 }
 
-export function listManagedSkills(projectDir: string | null): ManagedSkill[] {
-  const projectRoot = projectDir
-    ? path.join(projectDir, '.orchid', 'skills')
-    : null;
-  const projectNames = new Set<string>();
-  if (projectRoot && fs.existsSync(projectRoot)) {
-    for (const e of fs.readdirSync(projectRoot)) {
-      if (fs.existsSync(path.join(projectRoot, e, 'SKILL.md'))) {
-        projectNames.add(e);
-      }
+function collectSkillProjectNames(projectRoot: string): Set<string> {
+  const names = new Set<string>();
+  for (const e of fs.readdirSync(projectRoot)) {
+    if (fs.existsSync(path.join(projectRoot, e, 'SKILL.md'))) {
+      names.add(e);
     }
   }
+  return names;
+}
 
-  const global = listSkillEntriesInDir(HOME_SKILLS_DIR, 'global', projectNames);
-  const project = projectRoot
-    ? listSkillEntriesInDir(projectRoot, 'project', new Set())
-    : [];
-  return [...global, ...project];
+export function listManagedSkills(projectDir: string | null): ManagedSkill[] {
+  return listDefinitionEntries({
+    projectDir,
+    kind: 'skills',
+    globalDir: HOME_SKILLS_DIR,
+    collectProjectNames: collectSkillProjectNames,
+    listInDir: listSkillEntriesInDir,
+  });
 }
 
 function listAgentEntriesInDir(
@@ -313,27 +344,27 @@ function listAgentEntriesInDir(
   return out;
 }
 
-export function listManagedAgents(projectDir: string | null): ManagedAgent[] {
-  const projectRoot = projectDir
-    ? path.join(projectDir, '.orchid', 'agents')
-    : null;
-  const projectNames = new Set<string>();
-  if (projectRoot && fs.existsSync(projectRoot)) {
-    for (const e of fs.readdirSync(projectRoot)) {
-      if (
-        fs.existsSync(path.join(projectRoot, e, 'AGENT.md')) &&
-        !RESERVED_INTERNAL_AGENT_NAMES.has(e)
-      ) {
-        projectNames.add(e);
-      }
+function collectAgentProjectNames(projectRoot: string): Set<string> {
+  const names = new Set<string>();
+  for (const e of fs.readdirSync(projectRoot)) {
+    if (
+      fs.existsSync(path.join(projectRoot, e, 'AGENT.md')) &&
+      !RESERVED_INTERNAL_AGENT_NAMES.has(e)
+    ) {
+      names.add(e);
     }
   }
+  return names;
+}
 
-  const global = listAgentEntriesInDir(HOME_AGENTS_DIR, 'global', projectNames);
-  const project = projectRoot
-    ? listAgentEntriesInDir(projectRoot, 'project', new Set())
-    : [];
-  return [...global, ...project];
+export function listManagedAgents(projectDir: string | null): ManagedAgent[] {
+  return listDefinitionEntries({
+    projectDir,
+    kind: 'agents',
+    globalDir: HOME_AGENTS_DIR,
+    collectProjectNames: collectAgentProjectNames,
+    listInDir: listAgentEntriesInDir,
+  });
 }
 
 function listPersonalityEntriesInDir(
@@ -375,28 +406,24 @@ function listPersonalityEntriesInDir(
   return out;
 }
 
+function collectPersonalityProjectNames(projectRoot: string): Set<string> {
+  const names = new Set<string>();
+  for (const e of fs.readdirSync(projectRoot)) {
+    if (e.endsWith('.md')) names.add(path.basename(e, '.md'));
+  }
+  return names;
+}
+
 export function listManagedPersonalities(
   projectDir: string | null,
 ): ManagedPersonality[] {
-  const projectRoot = projectDir
-    ? path.join(projectDir, '.orchid', 'personalities')
-    : null;
-  const projectNames = new Set<string>();
-  if (projectRoot && fs.existsSync(projectRoot)) {
-    for (const e of fs.readdirSync(projectRoot)) {
-      if (e.endsWith('.md')) projectNames.add(path.basename(e, '.md'));
-    }
-  }
-
-  const global = listPersonalityEntriesInDir(
-    HOME_PERSONALITIES_DIR,
-    'global',
-    projectNames,
-  );
-  const project = projectRoot
-    ? listPersonalityEntriesInDir(projectRoot, 'project', new Set())
-    : [];
-  return [...global, ...project];
+  return listDefinitionEntries({
+    projectDir,
+    kind: 'personalities',
+    globalDir: HOME_PERSONALITIES_DIR,
+    collectProjectNames: collectPersonalityProjectNames,
+    listInDir: listPersonalityEntriesInDir,
+  });
 }
 
 // ── Save ─────────────────────────────────────────────────────────────────────

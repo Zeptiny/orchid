@@ -32,7 +32,7 @@ import {
   getProviderConnectionStore,
   getProviderCredentialVault,
   getProviderStatusService,
-} from '../index';
+} from '../providers/runtime-context';
 import type { ConnectionStore } from '../providers/connection-store';
 import {
   CredentialVault,
@@ -144,6 +144,15 @@ interface ProviderIPCServices {
 }
 
 let testServices: ProviderIPCServices | null = null;
+/** Process-lifetime driver registry — rebuilt only when tests clear services. */
+let cachedDriverRegistry: ProviderDriverRegistry | null = null;
+
+function getCachedDriverRegistry(): ProviderDriverRegistry {
+  if (!cachedDriverRegistry) {
+    cachedDriverRegistry = createDefaultProviderDriverRegistry();
+  }
+  return cachedDriverRegistry;
+}
 
 function services(): ProviderIPCServices {
   if (testServices) return testServices;
@@ -152,13 +161,55 @@ function services(): ProviderIPCServices {
     connections: getProviderConnectionStore(),
     vault: getProviderCredentialVault(),
     status: getProviderStatusService(),
-    registry: createDefaultProviderDriverRegistry(),
+    registry: getCachedDriverRegistry(),
   };
 }
 
 /** @internal Injection seam for isolated IPC tests. */
 export function _setProviderIPCServicesForTests(value: ProviderIPCServices | null): void {
   testServices = value;
+  // Drop the production registry cache so a later non-test services() call
+  // cannot retain a registry from a prior process lifetime across test isolation.
+  if (value === null) {
+    cachedDriverRegistry = null;
+  }
+}
+
+// ── Per-connection mutation lock ────────────────────────────────────────────
+// Serializes vault + connection-store mutations for the same connection so
+// concurrent submit_api_key / disconnect / disable / enable / update / validate
+// cannot leave a live vault secret after disconnect or clobber terminal health.
+
+const connectionMutationChains = new Map<string, Promise<void>>();
+
+function withConnectionMutationLock<T>(
+  connectionId: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const previous = connectionMutationChains.get(connectionId) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(task);
+  const chain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  connectionMutationChains.set(connectionId, chain);
+  chain.then(() => {
+    if (connectionMutationChains.get(connectionId) === chain) {
+      connectionMutationChains.delete(connectionId);
+    }
+  });
+  return run;
+}
+
+/** @internal Test-only reset for isolated IPC tests. */
+export function _clearConnectionMutationLocksForTests(): void {
+  connectionMutationChains.clear();
+}
+
+function isMutableHealth(
+  health: ProviderConnection['health'],
+): health is 'draft' | 'needs_attention' | 'ready' {
+  return health === 'draft' || health === 'needs_attention' || health === 'ready';
 }
 
 // ── Redacted DTO mapping ────────────────────────────────────────────────────
@@ -421,19 +472,43 @@ async function readiness(
   }
 }
 
-async function validateConnection(connection: ProviderConnection): Promise<ProviderMutationResult> {
+function terminalHealthMessage(health: 'disabled' | 'disconnected'): string {
+  return health === 'disabled'
+    ? 'This connection is disabled. Reconnect or create another connection to use it.'
+    : 'This connection is disconnected. Authenticate it again to use it.';
+}
+
+/**
+ * Refresh readiness and health. Caller must hold `withConnectionMutationLock`
+ * for this connection so concurrent disable/disconnect cannot race the write.
+ * Only draft|needs_attention|ready may transition to ready/needs_attention.
+ */
+async function validateConnection(connectionId: string): Promise<ProviderMutationResult> {
   const current = services();
+  const connection = await requireConnection(connectionId);
   if (connection.health === 'disabled' || connection.health === 'disconnected') {
     return {
       connection: connectionView(connection, current.catalog.getProviderDefinitions()),
-      message: connection.health === 'disabled'
-        ? 'This connection is disabled. Reconnect or create another connection to use it.'
-        : 'This connection is disconnected. Authenticate it again to use it.',
+      message: terminalHealthMessage(connection.health),
     };
   }
   const result = await readiness(connection, current);
-  const updated = await current.connections.update(connection.id, {
-    health: result.ready ? 'ready' : 'needs_attention',
+  const desiredHealth = result.ready ? 'ready' as const : 'needs_attention' as const;
+
+  // Re-read under the connection mutation lock before writing health so a
+  // concurrent disable/disconnect that queued after readiness started cannot
+  // be overwritten (only mutable health may become ready/needs_attention).
+  const latest = await requireConnection(connectionId);
+  if (!isMutableHealth(latest.health)) {
+    return {
+      connection: connectionView(latest, current.catalog.getProviderDefinitions()),
+      message: latest.health === 'disabled' || latest.health === 'disconnected'
+        ? terminalHealthMessage(latest.health)
+        : result.message,
+    };
+  }
+  const updated = await current.connections.update(connectionId, {
+    health: desiredHealth,
   });
   return {
     connection: connectionView(updated, current.catalog.getProviderDefinitions()),
@@ -570,157 +645,185 @@ export function registerProviderIPC(): void {
     const { id: _draftId, ...createInput } = draftConnection;
     // ConnectionStore owns the stable real UUID.
     const connection = await current.connections.create(createInput);
-    return validateConnection(connection);
+    return withConnectionMutationLock(connection.id, () => validateConnection(connection.id));
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_UPDATE, async (_event, payload: unknown) => {
     const parsed = updateConnectionSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:update payload');
-    const current = services();
-    const existing = await requireConnection(parsed.data.connectionId);
-    const nextAuthMethod = parsed.data.authMethod ?? existing.authMethod;
-    const authMethodChanged = nextAuthMethod !== existing.authMethod;
-    const patch = {
-      ...(parsed.data.name === undefined ? {} : { name: parsed.data.name }),
-      ...(parsed.data.authMethod === undefined ? {} : { authMethod: parsed.data.authMethod }),
-      ...(parsed.data.modelIds === undefined ? {} : { modelIds: parsed.data.modelIds }),
-      ...(parsed.data.customModels === undefined ? {} : { customModels: parsed.data.customModels }),
-      ...(parsed.data.endpoint === undefined ? {} : { endpoint: parsed.data.endpoint }),
-      ...(parsed.data.allowInsecureHttp === undefined
-        ? {}
-        : { allowInsecureHttp: parsed.data.allowInsecureHttp }),
-    };
-    if (parsed.data.environmentVariable !== undefined) {
-      if (nextAuthMethod !== 'environment') {
-        throw new Error('Only environment-authenticated connections can change an environment reference');
+    return withConnectionMutationLock(parsed.data.connectionId, async () => {
+      const current = services();
+      const existing = await requireConnection(parsed.data.connectionId);
+      const nextAuthMethod = parsed.data.authMethod ?? existing.authMethod;
+      const authMethodChanged = nextAuthMethod !== existing.authMethod;
+      const patch = {
+        ...(parsed.data.name === undefined ? {} : { name: parsed.data.name }),
+        ...(parsed.data.authMethod === undefined ? {} : { authMethod: parsed.data.authMethod }),
+        ...(parsed.data.modelIds === undefined ? {} : { modelIds: parsed.data.modelIds }),
+        ...(parsed.data.customModels === undefined ? {} : { customModels: parsed.data.customModels }),
+        ...(parsed.data.endpoint === undefined ? {} : { endpoint: parsed.data.endpoint }),
+        ...(parsed.data.allowInsecureHttp === undefined
+          ? {}
+          : { allowInsecureHttp: parsed.data.allowInsecureHttp }),
+      };
+      if (parsed.data.environmentVariable !== undefined) {
+        if (nextAuthMethod !== 'environment') {
+          throw new Error('Only environment-authenticated connections can change an environment reference');
+        }
+        Object.assign(patch, {
+          credential: createEnvironmentCredentialReference(parsed.data.environmentVariable),
+          health: 'draft' as const,
+        });
+      } else if (authMethodChanged) {
+        Object.assign(patch, {
+          credential: { kind: 'none' as const },
+          health: nextAuthMethod === 'none' ? 'ready' as const : 'draft' as const,
+        });
       }
-      Object.assign(patch, {
-        credential: createEnvironmentCredentialReference(parsed.data.environmentVariable),
-        health: 'draft' as const,
-      });
-    } else if (authMethodChanged) {
-      Object.assign(patch, {
-        credential: { kind: 'none' as const },
-        health: nextAuthMethod === 'none' ? 'ready' as const : 'draft' as const,
-      });
-    }
-    const candidate = { ...existing, ...patch } as ProviderConnection;
-    requireStaticConnectionSupport(candidate, current);
+      const candidate = { ...existing, ...patch } as ProviderConnection;
+      requireStaticConnectionSupport(candidate, current);
 
-    // Generic credentials are destination-bound. An origin change must erase
-    // a stored secret or require the renderer to explicitly reconfirm the
-    // environment reference in the same intent before the endpoint is usable.
-    const endpointChanged = parsed.data.endpoint !== undefined
-      && genericOrigin(existing, current) !== genericOrigin(candidate, current);
-    if (existing.credential.kind === 'stored' && (authMethodChanged || endpointChanged)) {
-      await current.vault.deleteConnectionCredentials(existing.id);
-    }
-    if (endpointChanged && nextAuthMethod === 'api-key') {
-      Object.assign(patch, { credential: { kind: 'none' as const }, health: 'draft' });
-    } else if (
-      endpointChanged
-      && nextAuthMethod === 'environment'
-      && parsed.data.environmentVariable === undefined
-    ) {
-      Object.assign(patch, { credential: { kind: 'none' as const }, health: 'draft' });
-    }
-    const updated = await current.connections.update(existing.id, patch);
-    return validateConnection(updated);
+      // Generic credentials are destination-bound. An origin change must erase
+      // a stored secret or require the renderer to explicitly reconfirm the
+      // environment reference in the same intent before the endpoint is usable.
+      const endpointChanged = parsed.data.endpoint !== undefined
+        && genericOrigin(existing, current) !== genericOrigin(candidate, current);
+      if (existing.credential.kind === 'stored' && (authMethodChanged || endpointChanged)) {
+        await current.vault.deleteConnectionCredentials(existing.id);
+      }
+      if (endpointChanged && nextAuthMethod === 'api-key') {
+        Object.assign(patch, { credential: { kind: 'none' as const }, health: 'draft' });
+      } else if (
+        endpointChanged
+        && nextAuthMethod === 'environment'
+        && parsed.data.environmentVariable === undefined
+      ) {
+        Object.assign(patch, { credential: { kind: 'none' as const }, health: 'draft' });
+      }
+      await current.connections.update(existing.id, patch);
+      return validateConnection(existing.id);
+    });
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY, async (_event, payload: unknown) => {
     const parsed = submitApiKeySchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:submit_api_key payload');
-    const current = services();
-    const connection = await requireConnection(parsed.data.connectionId);
-    if (connection.authMethod !== 'api-key') {
-      throw new Error(`Connection '${connection.name}' does not accept an API key`);
-    }
-    requireStaticConnectionSupport(connection, current);
-    const handle = await current.vault.replaceConnectionApiKey(
-      credentialBinding(connection, current),
-      parsed.data.apiKey,
-    );
-    const updated = await current.connections.update(connection.id, {
-      credential: { kind: 'stored', handle },
-      health: 'draft',
+    return withConnectionMutationLock(parsed.data.connectionId, async () => {
+      const current = services();
+      const connection = await requireConnection(parsed.data.connectionId);
+      if (connection.health === 'disabled') {
+        throw new Error(
+          `Connection '${connection.name}' is disabled. Enable it before submitting a credential.`,
+        );
+      }
+      // disconnected is allowed: submit is the re-auth path after disconnect.
+      if (connection.authMethod !== 'api-key') {
+        throw new Error(`Connection '${connection.name}' does not accept an API key`);
+      }
+      requireStaticConnectionSupport(connection, current);
+      const handle = await current.vault.replaceConnectionApiKey(
+        credentialBinding(connection, current),
+        parsed.data.apiKey,
+      );
+      await current.connections.update(connection.id, {
+        credential: { kind: 'stored', handle },
+        health: 'draft',
+      });
+      // CAS cleanup: if health became disconnected after the connection write
+      // (should not happen under this lock, but re-check and erase the key).
+      const afterWrite = await requireConnection(connection.id);
+      if (afterWrite.health === 'disconnected') {
+        await current.vault.deleteConnectionCredentials(connection.id);
+        return {
+          connection: connectionView(afterWrite, current.catalog.getProviderDefinitions()),
+          message: terminalHealthMessage('disconnected'),
+        } satisfies ProviderMutationResult;
+      }
+      return validateConnection(connection.id);
     });
-    return validateConnection(updated);
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_VALIDATE, async (_event, payload: unknown) => {
     const parsed = connectionIdSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:validate payload');
-    return validateConnection(await requireConnection(parsed.data.connectionId));
+    return withConnectionMutationLock(parsed.data.connectionId, () =>
+      validateConnection(parsed.data.connectionId),
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_DISABLE, async (_event, payload: unknown) => {
     const parsed = connectionIdSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:disable payload');
-    const current = services();
-    const connection = await requireConnection(parsed.data.connectionId);
-    const updated = await current.connections.update(connection.id, { health: 'disabled' });
-    const { activeSessionsForProviderConnection } = await import('./chat');
-    return {
-      connection: connectionView(
-        updated,
-        current.catalog.getProviderDefinitions(),
-        activeSessionsForProviderConnection(connection.id).length,
-      ),
-      message: 'The connection is disabled for new requests. Any active turn can finish safely.',
-    } satisfies ProviderMutationResult;
+    return withConnectionMutationLock(parsed.data.connectionId, async () => {
+      const current = services();
+      const connection = await requireConnection(parsed.data.connectionId);
+      const updated = await current.connections.update(connection.id, { health: 'disabled' });
+      const { activeSessionsForProviderConnection } = await import('./chat');
+      return {
+        connection: connectionView(
+          updated,
+          current.catalog.getProviderDefinitions(),
+          activeSessionsForProviderConnection(connection.id).length,
+        ),
+        message: 'The connection is disabled for new requests. Any active turn can finish safely.',
+      } satisfies ProviderMutationResult;
+    });
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_ENABLE, async (_event, payload: unknown) => {
     const parsed = connectionIdSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:enable payload');
-    const current = services();
-    const connection = await requireConnection(parsed.data.connectionId);
-    if (connection.health === 'disconnected') {
-      return {
-        connection: connectionView(connection, current.catalog.getProviderDefinitions()),
-        message: 'Authenticate this disconnected connection before enabling it.',
-      } satisfies ProviderMutationResult;
-    }
-    const updated = await current.connections.update(connection.id, { health: 'draft' });
-    return validateConnection(updated);
+    return withConnectionMutationLock(parsed.data.connectionId, async () => {
+      const current = services();
+      const connection = await requireConnection(parsed.data.connectionId);
+      if (connection.health === 'disconnected') {
+        return {
+          connection: connectionView(connection, current.catalog.getProviderDefinitions()),
+          message: 'Authenticate this disconnected connection before enabling it.',
+        } satisfies ProviderMutationResult;
+      }
+      await current.connections.update(connection.id, { health: 'draft' });
+      return validateConnection(connection.id);
+    });
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_DISCONNECT, async (_event, payload: unknown) => {
     const parsed = disconnectSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:disconnect payload');
-    const current = services();
-    const connection = await requireConnection(parsed.data.connectionId);
-    // KTD15: stop only turns already frozen to this connection. Their ledger
-    // rows are then finalized as interrupted before the credential is erased.
-    const { stopActiveProviderConnectionTurns } = await import('./chat');
-    const stoppedSessionIds = stopActiveProviderConnectionTurns(connection.id);
-    if (stoppedSessionIds.length > 0) {
-      try {
-        getProviderAccountingStore().interruptPendingForConnection(connection.id);
-      } catch (error) {
-        // Cancellation has already prevented further credential use by the
-        // frozen turn, but destructive credential removal must wait until its
-        // durable attempt record is finalized. The user can retry disconnect
-        // once the ledger becomes available.
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Could not finalize active provider accounting; credentials were not removed: ${detail}`,
-          { cause: error },
-        );
+    return withConnectionMutationLock(parsed.data.connectionId, async () => {
+      const current = services();
+      const connection = await requireConnection(parsed.data.connectionId);
+      // KTD15: stop only turns already frozen to this connection. Their ledger
+      // rows are then finalized as interrupted before the credential is erased.
+      const { stopActiveProviderConnectionTurns } = await import('./chat');
+      const stoppedSessionIds = stopActiveProviderConnectionTurns(connection.id);
+      if (stoppedSessionIds.length > 0) {
+        try {
+          getProviderAccountingStore().interruptPendingForConnection(connection.id);
+        } catch (error) {
+          // Cancellation has already prevented further credential use by the
+          // frozen turn, but destructive credential removal must wait until its
+          // durable attempt record is finalized. The user can retry disconnect
+          // once the ledger becomes available.
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `Could not finalize active provider accounting; credentials were not removed: ${detail}`,
+            { cause: error },
+          );
+        }
       }
-    }
-    await current.vault.deleteConnectionCredentials(connection.id);
-    const updated = await current.connections.update(connection.id, {
-      credential: { kind: 'none' },
-      health: 'disconnected',
+      await current.vault.deleteConnectionCredentials(connection.id);
+      const updated = await current.connections.update(connection.id, {
+        credential: { kind: 'none' },
+        health: 'disconnected',
+      });
+      return {
+        connection: connectionView(updated, current.catalog.getProviderDefinitions()),
+        message: stoppedSessionIds.length > 0
+          ? `Cancelled ${stoppedSessionIds.length} active turn${stoppedSessionIds.length === 1 ? '' : 's'} and finalized its accounting before removing stored credentials. Revoke any upstream authorization or generated key from the provider account if needed.`
+          : 'Stored credentials were removed. Revoke any upstream authorization or generated key from the provider account if needed.',
+      } satisfies ProviderMutationResult;
     });
-    return {
-      connection: connectionView(updated, current.catalog.getProviderDefinitions()),
-      message: stoppedSessionIds.length > 0
-        ? `Cancelled ${stoppedSessionIds.length} active turn${stoppedSessionIds.length === 1 ? '' : 's'} and finalized its accounting before removing stored credentials. Revoke any upstream authorization or generated key from the provider account if needed.`
-        : 'Stored credentials were removed. Revoke any upstream authorization or generated key from the provider account if needed.',
-    } satisfies ProviderMutationResult;
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_MODEL_LIST, async (_event, payload: unknown) => {

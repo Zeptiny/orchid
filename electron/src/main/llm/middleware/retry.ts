@@ -7,6 +7,15 @@
  * - Critical guard: "no retry after content delivered" — once any token
  *   has been streamed to the user, retries are suppressed
  *
+ * Retry coverage:
+ * - doStream() setup failures (await throws)
+ * - Mid-stream failures that occur BEFORE any user-visible stream part
+ *   (text, reasoning, tool calls, etc.) is delivered
+ *
+ * Residual limitation: once any content-bearing part has been enqueued to the
+ * consumer, mid-stream drops are NOT retried (would double-deliver content).
+ * Full reconnect-with-continuation is out of scope.
+ *
  * Uses AI SDK's `LanguageModelV1Middleware` interface.
  */
 import type { LanguageModelMiddleware } from 'ai';
@@ -17,6 +26,7 @@ import type {
   LanguageModelV4StreamResult,
 } from '@ai-sdk/provider';
 import { isTransientError } from './error-classification';
+import { sleep } from '../../utils/async';
 
 // ---------------------------------------------------------------------------
 // Constants — match Python client.py:43, 478
@@ -40,8 +50,31 @@ function backoffDelayMs(attempt: number): number {
   return Math.min(exponential + jitter, MAX_DELAY_SECONDS) * 1000;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** Parts that are safe to re-emit after a pre-content retry (metadata only). */
+const NON_CONTENT_STREAM_TYPES = new Set([
+  'stream-start',
+  'response-metadata',
+  'finish',
+  'finish-step',
+  'start-step',
+  'raw',
+]);
+
+/**
+ * True once the consumer has seen something that must not be replayed.
+ * Includes text, reasoning, and tool-call stream parts — not only text-delta.
+ */
+function isContentChunk(chunk: LanguageModelV4StreamPart): boolean {
+  if (NON_CONTENT_STREAM_TYPES.has(chunk.type)) {
+    return false;
+  }
+  if (chunk.type === 'text-delta') {
+    return chunk.delta.length > 0;
+  }
+  if (chunk.type === 'reasoning-delta') {
+    return 'delta' in chunk && typeof chunk.delta === 'string' && chunk.delta.length > 0;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,10 +94,9 @@ export interface RetryMiddlewareOptions {
  * > to the user, retries are suppressed. This prevents re-playing already
  * > visible content.
  *
- * The middleware wraps the stream with a TransformStream that tracks
- * whether any `text-delta` chunk has been emitted. If a transient error
- * occurs BEFORE any content, it retries with backoff. If content has
- * already been delivered, the error propagates immediately.
+ * Retries both doStream() setup failures and mid-stream errors that occur
+ * before any content-bearing part is delivered. After content is delivered,
+ * errors propagate immediately (no reconnect).
  */
 export function createRetryMiddleware(
   options: RetryMiddlewareOptions = {},
@@ -83,53 +115,94 @@ export function createRetryMiddleware(
       let attempt = 0;
       let contentDelivered = false;
 
-      while (true) {
-        try {
-          const result = await doStream();
-          const { stream, ...rest } = result;
-
-          // Wrap the stream to track whether content has been delivered.
-          // This is the critical guard: once any text-delta is emitted,
-          // contentDelivered = true and retries are suppressed.
-          const trackedStream = stream.pipeThrough(
-            new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
-              transform(chunk, controller) {
-                if (
-                  chunk.type === 'text-delta' &&
-                  chunk.delta.length > 0
-                ) {
-                  contentDelivered = true;
-                }
-                controller.enqueue(chunk);
-              },
-            }),
-          );
-
-          return { stream: trackedStream, ...rest };
-        } catch (error) {
-          // Critical guard: no retry after content delivered.
-          // Matches Python client.py:1146-1171 — if any token was already
-          // streamed to the user, we must NOT retry (would re-play content).
-          if (contentDelivered) {
+      const tryDoStream = async (): Promise<LanguageModelV4StreamResult> => {
+        while (true) {
+          try {
+            return await doStream();
+          } catch (error) {
+            if (contentDelivered) {
+              throw error;
+            }
+            if (attempt < maxRetries && isTransientError(error)) {
+              const delayMs = backoffDelayMs(attempt);
+              console.warn(
+                `[retry] Transient error (attempt ${attempt + 1}/${maxRetries}): ${
+                  error instanceof Error ? error.message : error
+                }. Retrying in ${(delayMs / 1000).toFixed(1)}s...`,
+              );
+              await sleep(delayMs);
+              attempt++;
+              continue;
+            }
             throw error;
           }
-
-          // Only retry transient errors up to maxRetries times.
-          if (attempt < maxRetries && isTransientError(error)) {
-            const delayMs = backoffDelayMs(attempt);
-            console.warn(
-              `[retry] Transient error (attempt ${attempt + 1}/${maxRetries}): ${
-                error instanceof Error ? error.message : error
-              }. Retrying in ${(delayMs / 1000).toFixed(1)}s...`,
-            );
-            await sleep(delayMs);
-            attempt++;
-            continue;
-          }
-
-          throw error;
         }
-      }
+      };
+
+      // Obtain first successful setup so we can return stream metadata.
+      const first = await tryDoStream();
+      const { stream: initialStream, ...rest } = first;
+
+      // Outer stream owns mid-stream pre-content retries: if the inner
+      // stream errors before any text-delta, call doStream again (up to
+      // maxRetries). After content is delivered, errors propagate.
+      const trackedStream = new ReadableStream<LanguageModelV4StreamPart>({
+        async start(controller) {
+          let currentStream: ReadableStream<LanguageModelV4StreamPart> = initialStream;
+
+          while (true) {
+            const reader = currentStream.getReader();
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) {
+                  controller.close();
+                  return;
+                }
+                if (isContentChunk(value)) {
+                  contentDelivered = true;
+                }
+                controller.enqueue(value);
+              }
+            } catch (error) {
+              if (contentDelivered) {
+                controller.error(error);
+                return;
+              }
+
+              if (attempt < maxRetries && isTransientError(error)) {
+                const delayMs = backoffDelayMs(attempt);
+                console.warn(
+                  `[retry] Transient mid-stream error before content (attempt ${attempt + 1}/${maxRetries}): ${
+                    error instanceof Error ? error.message : error
+                  }. Retrying in ${(delayMs / 1000).toFixed(1)}s...`,
+                );
+                await sleep(delayMs);
+                attempt++;
+                try {
+                  const next = await tryDoStream();
+                  currentStream = next.stream;
+                  continue;
+                } catch (setupError) {
+                  controller.error(setupError);
+                  return;
+                }
+              }
+
+              controller.error(error);
+              return;
+            } finally {
+              try {
+                reader.releaseLock();
+              } catch {
+                // Reader may already be released if the stream errored.
+              }
+            }
+          }
+        },
+      });
+
+      return { stream: trackedStream, ...rest };
     },
   };
 }

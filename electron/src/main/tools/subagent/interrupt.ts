@@ -8,6 +8,8 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome } from '../result';
 import type { SubagentManager } from '../../agents/manager';
 import { SubagentState } from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
@@ -28,6 +30,7 @@ export function buildInterruptTool(
   manager: SubagentManager,
 ): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
+    ...genericToolResultMetadata,
     name: 'interrupt_subagents',
     description:
       'Interrupt one or more running subagents. ' +
@@ -50,27 +53,22 @@ export function buildInterruptTool(
     // Empty list → cancel all running in this session only (never process-wide).
     if (!subagent_ids || subagent_ids.length === 0) {
       if (!ctx.sessionId) {
-        return {
-          display: 'No running subagents to interrupt',
-          content:
-            'No session context available; cannot interrupt subagents without a session id.',
-        };
+        return genericBuiltInToolOutcome('interrupt_subagents', 'No session context available; cannot interrupt subagents without a session id.', 'empty');
       }
+      // cancelOne (via cancelRunning) already resolves waiters for cancelled
+      // records. Do not flush process-wide waiters — that would unblock
+      // other sessions' waits (M-P0-013).
       const cancelled = manager.cancelRunning(ctx.sessionId);
-      // Flush any remaining pending state callbacks for clean state transitions
-      manager.flushStateCallbacks();
 
       if (cancelled.length === 0) {
-        return {
-          display: 'No running subagents to interrupt',
-          content: 'No running subagents found to interrupt.',
-        };
+        return genericBuiltInToolOutcome('interrupt_subagents', 'No running subagents found to interrupt.', 'empty');
       }
 
-      return {
-        display: `Interrupted ${cancelled.length} subagent(s)`,
-        content: `Interrupted subagents: ${cancelled.join(', ')}`,
-      };
+      return genericBuiltInToolOutcome('interrupt_subagents', {
+        interrupted: cancelled,
+        already_finished: [],
+        not_found: [],
+      }, 'complete');
     }
 
     // Cancel specific subagents by ID
@@ -85,36 +83,21 @@ export function buildInterruptTool(
       } else if (TERMINAL_STATES.has(record.state)) {
         alreadyDone.push(sid);
       } else {
+        // cancelOne resolves waiters for this record only.
         manager.cancelOne(sid);
         cancelled.push(sid);
       }
     }
 
-    // Flush any remaining pending state callbacks for clean state transitions
-    manager.flushStateCallbacks();
-
-    // Build status message
-    const parts: string[] = [];
-    if (cancelled.length > 0) {
-      parts.push(`Interrupted: ${cancelled.join(', ')}`);
-    }
-    if (alreadyDone.length > 0) {
-      parts.push(`Already finished: ${alreadyDone.join(', ')}`);
-    }
-    if (notFound.length > 0) {
-      parts.push(`Not found: ${notFound.join(', ')}`);
-    }
-
-    const content = parts.length > 0
-      ? parts.join('. ') + '.'
-      : 'No subagents matched.';
-
-    return {
-      display: cancelled.length > 0
-        ? `Interrupted ${cancelled.length} subagent(s)`
-        : 'No subagents interrupted',
-      content,
-    };
+    return genericBuiltInToolOutcome(
+      'interrupt_subagents',
+      {
+        interrupted: cancelled,
+        already_finished: alreadyDone,
+        not_found: notFound,
+      },
+      cancelled.length > 0 ? 'complete' : 'empty',
+    );
   };
 
   return { definition, handler };

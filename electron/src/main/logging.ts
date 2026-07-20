@@ -55,14 +55,21 @@ const SENSITIVE_LOG_KEY = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|aut
 export function redactLogString(value: string): string {
   return value
     .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')
-    .replace(/\b(sk-[A-Za-z0-9_-]{8,})\b/g, '[REDACTED]')
+    // Common vendor key prefixes (OpenAI sk-/pk-/rk-, xAI, Gemini, GitHub, GitLab, …)
+    .replace(/\b(?:sk|pk|rk|xai)-[A-Za-z0-9_-]{8,}\b/gi, '[REDACTED]')
+    .replace(/\b(?:gsk_|AIza|ghp_|gho_|ghu_|ghs_|ghr_|glpat-|github_pat_)[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
     .replace(/\b(?:access|refresh)[_-]token[-_A-Za-z0-9.]{8,}\b/gi, '[REDACTED]')
+    // Long hex secrets (64+ chars) — avoids UUIDs (32 hex) and git SHAs (40)
+    .replace(/\b[a-f0-9]{64,}\b/gi, '[REDACTED]')
+    // Padded base64 secrets (padding breaks \b, so use lookaround) or long unpadded blobs
+    .replace(/(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,}={1,2}(?![A-Za-z0-9+/=])/g, '[REDACTED]')
+    .replace(/(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{64,}(?![A-Za-z0-9+/=])/g, '[REDACTED]')
     .replace(
-      /([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|token)=)[^&#\s]+/gi,
+      /([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|key|secret)=)[^&#\s]+/gi,
       '$1[REDACTED]',
     )
     .replace(
-      /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[=:]\s*)(?:Bearer\s+)?[^\s,;"'}]+/gi,
+      /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|secret|password|credential)\s*[=:]\s*)(?:Bearer\s+)?[^\s,;"'}]+/gi,
       '$1[REDACTED]',
     );
 }
@@ -170,8 +177,11 @@ export class FileLogger {
     console.debug = this.origDebug;
   }
 
-  /** Close the write stream. Call on app shutdown. */
-  close(): Promise<void> {
+  /**
+   * Close the write stream. Call on app shutdown.
+   * Races stream end with a short timeout so a stuck drain cannot hang quit.
+   */
+  close(timeoutMs = 2000): Promise<void> {
     return new Promise((resolve) => {
       if (!this.stream) {
         resolve();
@@ -179,7 +189,31 @@ export class FileLogger {
       }
       const s = this.stream;
       this.stream = null;
-      s.end(() => resolve());
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+
+      const timer = setTimeout(() => {
+        try {
+          s.destroy();
+        } catch {
+          // ignore destroy failures during forced close
+        }
+        finish();
+      }, timeoutMs);
+      if (typeof timer === 'object' && timer && 'unref' in timer) {
+        (timer as NodeJS.Timeout).unref();
+      }
+
+      const onDone = (): void => {
+        clearTimeout(timer);
+        finish();
+      };
+      s.once('error', onDone);
+      s.end(onDone);
     });
   }
 

@@ -10,6 +10,11 @@ interface ContextSnapshotInput {
   outputTokens: number | undefined;
 }
 
+type DynamicContextSnapshotInput = Pick<
+  ContextSnapshotInput,
+  'messages' | 'inputTokens' | 'outputTokens'
+>;
+
 interface ContextChars {
   system: number;
   tools: number;
@@ -99,7 +104,44 @@ function allocateInputTokens(chars: ContextChars, inputTokens: number): ContextC
   return allocated;
 }
 
-/** Estimate category tokens from the latest request and provider-reported totals. */
+/** Precompute fixed prompt/tool weights for repeated snapshots in one turn. */
+export function createContextSnapshotBuilder(
+  systemPrompt: string,
+  tools: Record<string, Tool>,
+): (input: DynamicContextSnapshotInput) => ContextSnapshot {
+  const systemChars = systemPrompt.length;
+  const toolsChars = toolDefinitionsLength(tools);
+  return ({
+    messages,
+    inputTokens,
+    outputTokens,
+  }: DynamicContextSnapshotInput): ContextSnapshot => {
+    const input = Math.max(0, inputTokens ?? 0);
+    const output = Math.max(0, outputTokens ?? 0);
+    const messageCounts = messageChars(messages);
+    const allocated = allocateInputTokens(
+      {
+        system: systemChars,
+        tools: toolsChars,
+        ...messageCounts,
+      },
+      input,
+    );
+
+    return {
+      input_tokens: input,
+      output_tokens: output,
+      used_tokens: input + output,
+      system_tokens: allocated.system,
+      tools_tokens: allocated.tools,
+      tool_use_tokens: allocated.toolUse,
+      user_tokens: allocated.user,
+      assistant_tokens: allocated.assistant + output,
+    };
+  };
+}
+
+/** Estimate category tokens from one request and provider-reported totals. */
 export function buildContextSnapshot({
   systemPrompt,
   tools,
@@ -107,26 +149,9 @@ export function buildContextSnapshot({
   inputTokens,
   outputTokens,
 }: ContextSnapshotInput): ContextSnapshot {
-  const input = Math.max(0, inputTokens ?? 0);
-  const output = Math.max(0, outputTokens ?? 0);
-  const messageCounts = messageChars(messages);
-  const allocated = allocateInputTokens(
-    {
-      system: systemPrompt.length,
-      tools: toolDefinitionsLength(tools),
-      ...messageCounts,
-    },
-    input,
-  );
-
-  return {
-    input_tokens: input,
-    output_tokens: output,
-    used_tokens: input + output,
-    system_tokens: allocated.system,
-    tools_tokens: allocated.tools,
-    tool_use_tokens: allocated.toolUse,
-    user_tokens: allocated.user,
-    assistant_tokens: allocated.assistant + output,
-  };
+  return createContextSnapshotBuilder(systemPrompt, tools)({
+    messages,
+    inputTokens,
+    outputTokens,
+  });
 }

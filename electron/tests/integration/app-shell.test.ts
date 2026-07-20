@@ -11,8 +11,7 @@
  * These tests validate the IPC/type layer without requiring
  * a running Electron app (mocked ipcMain/ipcRenderer).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { z } from 'zod';
+import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -21,6 +20,12 @@ import {
   ALLOWED_EVENT_CHANNELS,
 } from '../../src/shared/types/ipc';
 import type { OrchidAPI } from '../../src/shared/types/ipc';
+import {
+  chatSendSchema,
+  configSaveSchema,
+  sessionLoadSchema,
+  toolExecuteSchema,
+} from '../../src/main/ipc/payload-schemas';
 
 // ─── IPC Channel Structure ───────────────────────────────────────────────────
 
@@ -37,6 +42,8 @@ describe('IPC Channel Names', () => {
     expect(IPC_CHANNELS.CHAT_CHUNK).toBe('chat:chunk');
     expect(IPC_CHANNELS.CHAT_STATE).toBe('chat:state');
     expect(IPC_CHANNELS.CHAT_DONE).toBe('chat:done');
+    expect(IPC_CHANNELS.SUBAGENTS_SNAPSHOT).toBe('subagents:snapshot');
+    expect(IPC_CHANNELS.SUBAGENTS_EVENT).toBe('subagents:event');
     expect(IPC_CHANNELS.CHAT_ERROR).toBe('chat:error');
   });
 
@@ -82,6 +89,7 @@ describe('IPC Security', () => {
     // All invoke channels should be in the allowed list
     const invokeChannels = [
       IPC_CHANNELS.CHAT_SEND,
+      IPC_CHANNELS.SUBAGENTS_SNAPSHOT,
       IPC_CHANNELS.CHAT_CANCEL,
       IPC_CHANNELS.CONFIG_GET,
       IPC_CHANNELS.CONFIG_SAVE,
@@ -116,6 +124,7 @@ describe('IPC Security', () => {
       IPC_CHANNELS.CHAT_TOOL_CALL_START,
       IPC_CHANNELS.CHAT_TOOL_CALL_DELTA,
       IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
+      IPC_CHANNELS.SUBAGENTS_EVENT,
     ];
 
     for (const channel of eventChannels) {
@@ -137,60 +146,61 @@ describe('IPC Security', () => {
   });
 });
 
-// ─── Zod Validation ──────────────────────────────────────────────────────────
+// ─── Zod Validation (production schemas) ─────────────────────────────────────
+
+const SESSION_UUID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 
 describe('Zod Validation at Main-Process Boundary', () => {
-  it('chat:send payload validates correctly', () => {
-    const schema = z.object({
-      message: z.string().min(1),
-      sessionId: z.string().optional(),
-    });
+  it('chat:send uses production schema (uuid sessionId, non-empty message)', () => {
+    expect(chatSendSchema.safeParse({ message: 'hello' }).success).toBe(true);
+    expect(
+      chatSendSchema.safeParse({ message: 'hello', sessionId: SESSION_UUID }).success,
+    ).toBe(true);
 
-    // Valid
-    expect(schema.safeParse({ message: 'hello' }).success).toBe(true);
-    expect(schema.safeParse({ message: 'hello', sessionId: 'abc' }).success).toBe(true);
-
-    // Invalid
-    expect(schema.safeParse({ message: '' }).success).toBe(false);
-    expect(schema.safeParse({ message: 123 }).success).toBe(false);
-    expect(schema.safeParse({}).success).toBe(false);
+    // Non-uuid sessionId rejected (weaker local schemas used to accept 'abc')
+    expect(
+      chatSendSchema.safeParse({ message: 'hello', sessionId: 'abc' }).success,
+    ).toBe(false);
+    expect(chatSendSchema.safeParse({ message: '' }).success).toBe(false);
+    expect(chatSendSchema.safeParse({ message: 123 }).success).toBe(false);
+    expect(chatSendSchema.safeParse({}).success).toBe(false);
   });
 
-  it('config:save payload validates correctly', () => {
-    const schema = z.object({
-      updates: z.object({
-        default_model: z.string().optional(),
-        theme: z.string().optional(),
-      }),
-    });
+  it('config:save uses production schema (known keys, rejects providers)', () => {
+    expect(configSaveSchema.safeParse({ updates: { theme: 'dark' } }).success).toBe(true);
+    expect(configSaveSchema.safeParse({ updates: {} }).success).toBe(true);
 
-    expect(schema.safeParse({ updates: { default_model: 'gpt-4' } }).success).toBe(true);
-    expect(schema.safeParse({ updates: { theme: 'dark' } }).success).toBe(true);
-    expect(schema.safeParse({ updates: {} }).success).toBe(true);
-    expect(schema.safeParse({}).success).toBe(false);
+    // Unknown keys rejected
+    expect(
+      configSaveSchema.safeParse({ updates: { not_a_real_key: true } }).success,
+    ).toBe(false);
+    // Legacy providers rejected at boundary
+    expect(
+      configSaveSchema.safeParse({ updates: { providers: { x: {} } } }).success,
+    ).toBe(false);
+    // Strict: extra top-level keys rejected
+    expect(
+      configSaveSchema.safeParse({
+        updates: { theme: 'dark' },
+        providerRenames: [],
+      }).success,
+    ).toBe(false);
+    expect(configSaveSchema.safeParse({}).success).toBe(false);
   });
 
-  it('session:load payload validates correctly', () => {
-    const schema = z.object({
-      id: z.string().min(1),
-    });
-
-    expect(schema.safeParse({ id: 'session-123' }).success).toBe(true);
-    expect(schema.safeParse({ id: '' }).success).toBe(false);
-    expect(schema.safeParse({}).success).toBe(false);
+  it('session:load uses production schema (uuid id)', () => {
+    expect(sessionLoadSchema.safeParse({ id: SESSION_UUID }).success).toBe(true);
+    expect(sessionLoadSchema.safeParse({ id: 'session-123' }).success).toBe(false);
+    expect(sessionLoadSchema.safeParse({ id: '' }).success).toBe(false);
+    expect(sessionLoadSchema.safeParse({}).success).toBe(false);
   });
 
-  it('tool:execute payload validates correctly', () => {
-    const schema = z.object({
-      name: z.string().min(1),
-      args: z.unknown(),
-    });
-
-    expect(schema.safeParse({ name: 'read', args: { path: '/tmp' } }).success).toBe(true);
-    expect(schema.safeParse({ name: 'read', args: null }).success).toBe(true);
-    expect(schema.safeParse({ name: '', args: {} }).success).toBe(false);
+  it('tool:execute uses production schema', () => {
+    expect(toolExecuteSchema.safeParse({ name: 'read', args: { path: '/tmp' } }).success).toBe(true);
+    expect(toolExecuteSchema.safeParse({ name: 'read', args: null }).success).toBe(true);
+    expect(toolExecuteSchema.safeParse({ name: '', args: {} }).success).toBe(false);
+    expect(toolExecuteSchema.safeParse({ args: {} }).success).toBe(false);
   });
-
 });
 
 // ─── API Surface Type (compile-time checks) ─────────────────────────────────
@@ -388,12 +398,42 @@ describe('Theme CSS Custom Properties', () => {
   });
 
   it('active renderer rules do not hard-code a palette', () => {
-    const css = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/styles/chat.css'), 'utf-8');
-    const activeCss = css.slice(css.indexOf('/* ── Iteration 012 mock-aligned components'));
+    const stylesDir = path.resolve(__dirname, '../../src/renderer/styles');
+    const activeCss = [
+      fs.readFileSync(path.join(stylesDir, 'chat.css'), 'utf-8'),
+      fs.readFileSync(path.join(stylesDir, 'components.css'), 'utf-8'),
+      fs.readFileSync(path.join(stylesDir, 'markdown.css'), 'utf-8'),
+      fs.readFileSync(path.join(stylesDir, 'exceptions.css'), 'utf-8'),
+    ].join('\n');
     expect(activeCss).not.toMatch(/#[0-9a-fA-F]{3,8}/);
     expect(activeCss).not.toMatch(/rgba?\(/);
     expect(activeCss).toContain('var(--bg-primary)');
     expect(activeCss).toContain('var(--accent-primary)');
+  });
+
+  it('loads styles through the canonical index.css entry', () => {
+    const mainTsx = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/main.tsx'), 'utf-8');
+    const appTsx = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/App.tsx'), 'utf-8');
+    const indexCss = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/styles/index.css'), 'utf-8');
+    expect(mainTsx).toContain("./styles/index.css");
+    expect(appTsx).not.toMatch(/import\s+['"]\.\/styles\/chat\.css['"]/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/components\.css["']/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/markdown\.css["']/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/exceptions\.css["']/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/chat\.css["']/);
+    expect(indexCss).toContain('@plugin "daisyui"');
+  });
+
+  it('preserves existing shell topology entry points', () => {
+    const chatView = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/components/ChatView.tsx'),
+      'utf-8',
+    );
+    expect(chatView).toContain('app-frame');
+    expect(chatView).toContain('main-pane');
+    expect(chatView).toMatch(/LeftSidebar|left-panel/);
+    expect(chatView).toMatch(/Sidebar|right-panel/);
+    expect(chatView).not.toMatch(/Focused Workspace/i);
   });
 });
 
@@ -428,7 +468,7 @@ describe('IPC Handler Module Structure', () => {
   });
 
   it('each IPC handler file has register and unregister exports', () => {
-    const handlerFiles = ['chat', 'config', 'session', 'tool', 'mcp', 'rag', 'ast'];
+    const handlerFiles = ['chat', 'config', 'session', 'tool', 'mcp', 'rag', 'ast', 'subagents'];
     const ipcDir = path.resolve(__dirname, '../../src/main/ipc');
 
     // Map file names to expected export name casing
@@ -440,6 +480,7 @@ describe('IPC Handler Module Structure', () => {
       mcp: 'MCP',
       rag: 'RAG',
       ast: 'AST',
+      subagents: 'Subagent',
     };
 
     for (const name of handlerFiles) {
@@ -451,14 +492,20 @@ describe('IPC Handler Module Structure', () => {
     }
   });
 
-  it('each IPC handler validates payloads with zod', () => {
+  it('each IPC handler validates payloads with production schemas', () => {
     const handlerFiles = ['chat', 'config', 'session', 'tool', 'rag', 'ast'];
     const ipcDir = path.resolve(__dirname, '../../src/main/ipc');
+
+    // Schemas live in payload-schemas.ts (single source of truth for tests + handlers)
+    const schemasPath = path.join(ipcDir, 'payload-schemas.ts');
+    expect(fs.existsSync(schemasPath)).toBe(true);
+    const schemasContent = fs.readFileSync(schemasPath, 'utf-8');
+    expect(schemasContent).toContain("import { z } from 'zod'");
 
     for (const name of handlerFiles) {
       const filePath = path.join(ipcDir, `${name}.ts`);
       const content = fs.readFileSync(filePath, 'utf-8');
-      expect(content).toContain("import { z } from 'zod'");
+      expect(content).toContain("from './payload-schemas'");
       expect(content).toContain('.safeParse(');
     }
   });
@@ -491,7 +538,7 @@ describe('Theme Loader', () => {
     const loader = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/themes/index.ts'), 'utf-8');
     const viteConfig = fs.readFileSync(path.resolve(__dirname, '../../vite.config.ts'), 'utf-8');
     expect(loader).toContain('document.documentElement.dataset.theme');
-    expect(loader).toContain("orchid:theme-applied");
+    expect(loader).not.toContain('orchid:theme-applied');
     expect(viteConfig).toContain('orchid-theme-assets');
     expect(viteConfig).toContain('themes/${fileName}');
   });

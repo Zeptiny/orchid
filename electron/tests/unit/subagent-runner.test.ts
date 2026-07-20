@@ -10,7 +10,6 @@ const mocks = vi.hoisted(() => ({
     getActive: vi.fn(() => ({ cwd: null })),
   })),
   runtimeRegistry: { get: vi.fn() },
-  hydrateProjectRuntime: vi.fn(async <T>(runtime: T) => runtime),
   modelInstance: { provider: 'trusted-test-driver' },
   providerRuntime: {
     resolveLanguageModel: vi.fn(async () => ({ provider: 'trusted-test-driver' })),
@@ -46,12 +45,15 @@ const mocks = vi.hoisted(() => ({
     backgroundCommands: [],
   })),
   toolRegistry: {
-    filter: vi.fn(() => [
-      { definition: { name: 'read_file' } },
-      { definition: { name: 'delegate_to_subagent' } },
-      { definition: { name: 'wait_for_subagent' } },
-      { definition: { name: 'interrupt_subagents' } },
-    ]),
+    filter: vi.fn((patterns: string[]) => {
+      if (patterns.length === 0) return [];
+      return [
+        { definition: { name: 'read_file' } },
+        { definition: { name: 'delegate_to_subagent' } },
+        { definition: { name: 'wait_for_subagent' } },
+        { definition: { name: 'interrupt_subagents' } },
+      ];
+    }),
   },
   mcpManager: {},
   acquireProjectMCPManager: vi.fn(),
@@ -69,7 +71,6 @@ vi.mock('../../src/main/ipc/session', () => ({
 
 vi.mock('../../src/main/project/runtime', () => ({
   getProjectRuntimeRegistry: () => mocks.runtimeRegistry,
-  hydrateProjectRuntime: mocks.hydrateProjectRuntime,
 }));
 
 vi.mock('../../src/main/providers', () => ({
@@ -109,7 +110,7 @@ const agent: Agent = {
   tier: 'bloom',
   description: 'Test worker',
   system_prompt: 'Test prompt',
-  allowed_tools: [],
+  allowed_tools: ['*'],
   allowed_skills: [],
 };
 
@@ -162,7 +163,7 @@ describe('createSubagentStreamRunner', () => {
       title: 'Missing session',
       detail: expect.stringContaining('explicit parent session id'),
     }]);
-    expect(mocks.hydrateProjectRuntime).not.toHaveBeenCalled();
+    expect(mocks.runtimeRegistry.get).not.toHaveBeenCalled();
   });
 
   it('rejects a subagent with no frozen or parent workspace', async () => {
@@ -180,7 +181,7 @@ describe('createSubagentStreamRunner', () => {
       title: 'No workspace',
       detail: expect.stringContaining('project working directory'),
     }]);
-    expect(mocks.hydrateProjectRuntime).not.toHaveBeenCalled();
+    expect(mocks.runtimeRegistry.get).not.toHaveBeenCalled();
   });
 
   it('requires a typed selection before attempting driver execution', async () => {
@@ -250,5 +251,29 @@ describe('createSubagentStreamRunner', () => {
 
     expect(mocks.acquireProjectMCPManager).toHaveBeenCalledTimes(1);
     expect(mocks.releaseProjectMCPManager).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats empty allowed_tools as no tools (does not coerce to *)', async () => {
+    const emptyToolsAgent: Agent = {
+      ...agent,
+      name: 'summarizer',
+      allowed_tools: [],
+    };
+
+    await collect(createSubagentStreamRunner()({
+      task: 'Summarize this',
+      agent: emptyToolsAgent,
+      selection,
+      abortSignal: new AbortController().signal,
+      agentScopeId: 'scope-empty',
+      sessionId: 'session-empty',
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+    }));
+
+    expect(mocks.toolRegistry.filter).toHaveBeenCalledWith([]);
+    expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
+      agent: expect.objectContaining({ allowed_tools: [] }),
+    }));
   });
 });

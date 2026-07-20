@@ -78,6 +78,9 @@ export class ProviderCatalogStore {
   private readonly now: () => Date;
   private readonly policies: readonly TrustedCatalogProviderPolicy[] | undefined;
   private current: ProviderCatalogSnapshot | null = null;
+  /** Derived from `current`; invalidated when the catalog snapshot reference changes. */
+  private cachedDefinitions: readonly ProviderDefinition[] | null = null;
+  private cachedDefinitionsFor: ProviderCatalogSnapshot | null = null;
 
   constructor(options: ProviderCatalogStoreOptions) {
     this.bundledCatalogPath = options.bundledCatalogPath;
@@ -100,7 +103,14 @@ export class ProviderCatalogStore {
   }
 
   getProviderDefinitions(): readonly ProviderDefinition[] {
-    return catalogToProviderDefinitions(this.load().catalog);
+    const snap = this.load();
+    if (this.cachedDefinitions && this.cachedDefinitionsFor === snap) {
+      return this.cachedDefinitions;
+    }
+    const definitions = catalogToProviderDefinitions(snap.catalog);
+    this.cachedDefinitions = definitions;
+    this.cachedDefinitionsFor = snap;
+    return definitions;
   }
 
   promote(input: CatalogPromotionInput): ProviderCatalogSnapshot {
@@ -130,6 +140,9 @@ export class ProviderCatalogStore {
     });
 
     this.current = snapshot('cache', validated.catalog, validated.stale);
+    // Snapshot identity changed — drop derived definitions so the next read rebuilds.
+    this.cachedDefinitions = null;
+    this.cachedDefinitionsFor = null;
     return this.current;
   }
 

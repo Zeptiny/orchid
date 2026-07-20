@@ -11,6 +11,8 @@
  * Key restore behavior (matching Python):
  * - fromStorageDict() runs orphan tool result reconciliation:
  *   TOOL_RESULT with no preceding assistant tool_calls → dropped
+ * - ACTIVE / Python `running` → INTERRUPTED on restore (process died;
+ *   chain cannot still be live — mirrors subagent PENDING/RUNNING migration)
  */
 
 import {
@@ -29,7 +31,8 @@ import { subagentRecordFromStorageDict, subagentRecordToStorageDict } from './su
 /**
  * Chain lifecycle status.
  * `active` corresponds to Python's RUNNING; `failed` matches Python FAILED.
- * On restore, Python's `running` is accepted as an alias for `active`.
+ * On restore, Python's `running` / `active` are accepted then migrated to
+ * INTERRUPTED (a restored process cannot resume an in-flight chain).
  */
 export const ChainStatus = {
   ACTIVE: 'active',
@@ -250,7 +253,7 @@ export function chainFromStorageDict(data: unknown): Chain {
   let messages = rawMessages.map((m) => messageFromStorageDict(m));
   messages = reconcileOrphanToolResults(messages);
 
-  const status = parseChainStatus(raw.status);
+  let status = parseChainStatus(raw.status);
 
   // Parse subagentRecord if present
   let subagentRecord: SubagentRecord | null = null;
@@ -261,9 +264,16 @@ export function chainFromStorageDict(data: unknown): Chain {
 
   const startTime = parseTimeField(raw.startTime ?? raw.start_time);
   let endTime = parseEndTime(raw.endTime ?? raw.end_time);
-  // Terminal chains without endTime stay null; ACTIVE must not claim endTime.
+
+  // Migrate ACTIVE/running → INTERRUPTED on restore (matching subagent
+  // PENDING/RUNNING → INTERRUPTED). A reloaded session cannot still have a
+  // live write target; leave the chain terminal so UI/manager don't treat it
+  // as the active turn.
   if (status === ChainStatus.ACTIVE) {
-    endTime = null;
+    status = ChainStatus.INTERRUPTED;
+    if (!endTime) {
+      endTime = new Date().toISOString();
+    }
   }
 
   return {

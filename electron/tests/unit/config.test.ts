@@ -20,7 +20,7 @@ import {
   defaults,
   parsePartial,
   deepMerge,
-  deepMergeProviderDict,
+  deepMergeNamedEntryDict,
   mergeConfigUpdates,
   mergeLayers,
   applyEnvOverrides,
@@ -409,9 +409,9 @@ describe('mergeConfigUpdates (config:save)', () => {
   });
 });
 
-describe('deepMergeProviderDict', () => {
+describe('deepMergeNamedEntryDict', () => {
   it('keeps home-only entries', () => {
-    const result = deepMergeProviderDict(
+    const result = deepMergeNamedEntryDict(
       { home_server: { command: 'cmd' } },
       {},
     );
@@ -419,7 +419,7 @@ describe('deepMergeProviderDict', () => {
   });
 
   it('takes project-only entries', () => {
-    const result = deepMergeProviderDict(
+    const result = deepMergeNamedEntryDict(
       {},
       { project_server: { command: 'cmd' } },
     );
@@ -427,7 +427,7 @@ describe('deepMergeProviderDict', () => {
   });
 
   it('merges entries present in both (shallow merge)', () => {
-    const result = deepMergeProviderDict(
+    const result = deepMergeNamedEntryDict(
       { srv: { command: 'old', args: ['a'] } },
       { srv: { command: 'new' } },
     );
@@ -435,7 +435,7 @@ describe('deepMergeProviderDict', () => {
   });
 
   it('merges nested models sub-dict', () => {
-    const result = deepMergeProviderDict(
+    const result = deepMergeNamedEntryDict(
       { prov: { base_url: 'url', models: { m1: {} } } },
       { prov: { models: { m2: {} } } },
     );
@@ -445,7 +445,7 @@ describe('deepMergeProviderDict', () => {
   });
 
   it('project wins when either side is non-dict', () => {
-    const result = deepMergeProviderDict(
+    const result = deepMergeNamedEntryDict(
       { srv: 'home-value' as unknown as Record<string, unknown> },
       { srv: 'project-value' as unknown as Record<string, unknown> },
     );
@@ -580,11 +580,42 @@ describe('applyEnvOverrides', () => {
     applyEnvOverrides(cfg);
     expect(cfg['default_model']).toBe('original');
   });
+
+  it('rejects non-finite numeric env overrides', () => {
+    process.env['ORCHID_COMMAND_TIMEOUT'] = 'not-a-number';
+    process.env['ORCHID_MCP_STARTUP_TIMEOUT'] = 'NaN';
+    process.env['ORCHID_LLM_STREAM_IDLE_TIMEOUT'] = 'Infinity';
+    const cfg = {
+      command_timeout: 30,
+      mcp_startup_timeout: 60,
+      llm_stream_idle_timeout: 300,
+    } as Record<string, unknown>;
+    applyEnvOverrides(cfg);
+    expect(cfg['command_timeout']).toBe(30);
+    expect(cfg['mcp_startup_timeout']).toBe(60);
+    expect(cfg['llm_stream_idle_timeout']).toBe(300);
+  });
 });
 
 // ===========================================================================
 // Validation
 // ===========================================================================
+
+describe('configSchema range rejection', () => {
+  it('rejects non-positive command_timeout', () => {
+    expect(configSchema.safeParse({ command_timeout: 0 }).success).toBe(false);
+    expect(configSchema.safeParse({ command_timeout: -1 }).success).toBe(false);
+  });
+
+  it('rejects negative llm_stream_retries', () => {
+    expect(configSchema.safeParse({ llm_stream_retries: -1 }).success).toBe(false);
+  });
+
+  it('rejects empty theme and personality', () => {
+    expect(configSchema.safeParse({ theme: '' }).success).toBe(false);
+    expect(configSchema.safeParse({ personality: '' }).success).toBe(false);
+  });
+});
 
 describe('validateConfig', () => {
   it('valid config returns no errors', () => {
@@ -594,20 +625,8 @@ describe('validateConfig', () => {
 
   it('empty default_model is an error', () => {
     const cfg = { ...defaults(), default_model: '' };
-    const errors = validateConfig(cfg);
+    const errors = validateConfig(cfg as unknown as ReturnType<typeof defaults>);
     expect(errors.some((e) => e.includes('default_model'))).toBe(true);
-  });
-
-  it('negative command_timeout is an error', () => {
-    const cfg = { ...defaults(), command_timeout: -1 };
-    const errors = validateConfig(cfg);
-    expect(errors.some((e) => e.includes('command_timeout'))).toBe(true);
-  });
-
-  it('zero command_timeout is an error (must be positive)', () => {
-    const cfg = { ...defaults(), command_timeout: 0 };
-    const errors = validateConfig(cfg);
-    expect(errors.some((e) => e.includes('command_timeout'))).toBe(true);
   });
 
   it('rag.chunk_overlap >= rag.chunk_size is an error', () => {
@@ -619,18 +638,12 @@ describe('validateConfig', () => {
     expect(errors.some((e) => e.includes('chunk_overlap') && e.includes('chunk_size'))).toBe(true);
   });
 
-  it('negative llm_stream_retries is an error', () => {
-    const cfg = { ...defaults(), llm_stream_retries: -1 };
-    const errors = validateConfig(cfg);
-    expect(errors.some((e) => e.includes('llm_stream_retries'))).toBe(true);
-  });
-
   it('legacy provider maps are rejected as deprecated', () => {
     const cfg = {
       ...defaults(),
       providers: { 'bad/alias': { base_url: 'url' } },
     };
-    const errors = validateConfig(cfg);
+    const errors = validateConfig(cfg as unknown as ReturnType<typeof defaults>);
     expect(errors.some((e) => e.includes('providers') && e.includes('deprecated'))).toBe(true);
   });
 
@@ -639,7 +652,7 @@ describe('validateConfig', () => {
       ...defaults(),
       providers: { fastembed: { base_url: 'url' } },
     };
-    const errors = validateConfig(cfg);
+    const errors = validateConfig(cfg as unknown as ReturnType<typeof defaults>);
     expect(errors.some((e) => e.includes('providers') && e.includes('deprecated'))).toBe(true);
   });
 
@@ -650,7 +663,7 @@ describe('validateConfig', () => {
         test: { api_key: 'key', api_key_env: 'ENV_VAR' },
       },
     };
-    const errors = validateConfig(cfg);
+    const errors = validateConfig(cfg as unknown as ReturnType<typeof defaults>);
     expect(errors.some((e) => e.includes('providers') && e.includes('deprecated'))).toBe(true);
   });
 
@@ -670,18 +683,6 @@ describe('validateConfig', () => {
     };
     const errors = validateConfig(cfg);
     expect(errors.some((e) => e.includes('command') && e.includes('non-empty'))).toBe(true);
-  });
-
-  it('empty theme is an error', () => {
-    const cfg = { ...defaults(), theme: '' };
-    const errors = validateConfig(cfg);
-    expect(errors.some((e) => e.includes('theme'))).toBe(true);
-  });
-
-  it('empty personality is an error', () => {
-    const cfg = { ...defaults(), personality: '' };
-    const errors = validateConfig(cfg);
-    expect(errors.some((e) => e.includes('personality'))).toBe(true);
   });
 });
 
@@ -1081,10 +1082,10 @@ describe('prototype pollution protection', () => {
     expect(result).toEqual({ a: 1 });
   });
 
-  it('deepMergeProviderDict ignores __proto__ alias', () => {
+  it('deepMergeNamedEntryDict ignores __proto__ alias', () => {
     const home = { good: { command: 'cmd' } };
     const project = { __proto__: { command: 'evil' } } as Record<string, unknown>;
-    const result = deepMergeProviderDict(home, project);
+    const result = deepMergeNamedEntryDict(home, project);
     expect(result).toEqual({ good: { command: 'cmd' } });
     expect(result).not.toHaveProperty('__proto__');
   });

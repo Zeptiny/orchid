@@ -26,45 +26,6 @@ const MCP_SERVER_NAME_RE = /^[a-z0-9-]+$/;
 // Helpers
 // ---------------------------------------------------------------------------
 
-function checkPositiveInt(
-  obj: Record<string, unknown>,
-  field: string,
-  errors: string[],
-  prefix?: string,
-): void {
-  const val = obj[field];
-  const key = prefix ? `${prefix}.${field}` : `'${field}'`;
-  if (typeof val !== 'number' || !Number.isInteger(val) || val <= 0) {
-    errors.push(`${key} must be a positive integer, got ${typeof val === 'number' ? val : typeof val}`);
-  }
-}
-
-function checkNonnegInt(
-  obj: Record<string, unknown>,
-  field: string,
-  errors: string[],
-  prefix?: string,
-): void {
-  const val = obj[field];
-  const key = prefix ? `${prefix}.${field}` : `'${field}'`;
-  if (typeof val !== 'number' || !Number.isInteger(val) || val < 0) {
-    errors.push(`${key} must be a non-negative integer, got ${typeof val === 'number' ? val : typeof val}`);
-  }
-}
-
-function checkPositiveFloat(
-  obj: Record<string, unknown>,
-  field: string,
-  errors: string[],
-  prefix?: string,
-): void {
-  const val = obj[field];
-  const key = prefix ? `${prefix}.${field}` : `'${field}'`;
-  if (typeof val !== 'number' || val <= 0) {
-    errors.push(`${key} must be a positive number, got ${typeof val === 'number' ? val : typeof val}`);
-  }
-}
-
 function checkNullableModelSelection(
   value: unknown,
   field: string,
@@ -84,7 +45,8 @@ function checkNullableModelSelection(
  * Validate a fully-parsed Config and return a list of error messages.
  *
  * Returns an empty list if the config is valid. Each message describes a
- * specific problem with a field path.
+ * specific problem with a field path. Range/type constraints already enforced
+ * by `configSchema` are not re-checked here.
  */
 export function validateConfig(cfg: Config): string[] {
   const errors: string[] = [];
@@ -104,47 +66,14 @@ export function validateConfig(cfg: Config): string[] {
     }
   }
 
-  // --- ignored_dirs ---
-  if (!Array.isArray(cfg.ignored_dirs)) {
-    errors.push("'ignored_dirs' must be a list");
-  }
-
-  // --- Positive int fields ---
-  checkPositiveInt(cfg as unknown as Record<string, unknown>, 'command_timeout', errors);
-  checkPositiveInt(cfg as unknown as Record<string, unknown>, 'read_line_limit', errors);
-  checkPositiveInt(cfg as unknown as Record<string, unknown>, 'grep_max_results', errors);
-  checkPositiveInt(cfg as unknown as Record<string, unknown>, 'directory_tree_depth', errors);
-  checkPositiveInt(cfg as unknown as Record<string, unknown>, 'ast_max_file_size', errors);
-
-  // --- Float/int fields ---
-  checkPositiveFloat(cfg as unknown as Record<string, unknown>, 'llm_stream_idle_timeout', errors);
-  checkNonnegInt(cfg as unknown as Record<string, unknown>, 'llm_stream_retries', errors);
-  checkPositiveFloat(cfg as unknown as Record<string, unknown>, 'mcp_startup_timeout', errors);
-  checkPositiveFloat(cfg as unknown as Record<string, unknown>, 'mcp_per_server_timeout', errors);
-  checkPositiveFloat(cfg as unknown as Record<string, unknown>, 'background_command_idle_timeout', errors);
-  checkPositiveInt(cfg as unknown as Record<string, unknown>, 'max_tool_steps', errors);
-
-  // --- RAG ---
-  const rag = cfg.rag as unknown as Record<string, unknown>;
-  if (typeof rag !== 'object' || rag === null) {
-    errors.push("'rag' must be an object");
-  } else {
-    checkPositiveInt(rag, 'chunk_size', errors, 'rag');
-    checkNonnegInt(rag, 'chunk_overlap', errors, 'rag');
-    if (
-      typeof rag['chunk_size'] === 'number' &&
-      typeof rag['chunk_overlap'] === 'number' &&
-      rag['chunk_overlap'] >= rag['chunk_size']
-    ) {
-      errors.push("'rag.chunk_overlap' must be less than 'rag.chunk_size'");
-    }
-    checkPositiveInt(rag, 'top_k', errors, 'rag');
-    checkPositiveInt(rag, 'max_file_size', errors, 'rag');
-    checkPositiveInt(rag, 'embedding_threads', errors, 'rag');
-    checkPositiveInt(rag, 'embedding_batch_size', errors, 'rag');
-    if (!rag['embedding_model'] || typeof rag['embedding_model'] !== 'string') {
-      errors.push("'rag.embedding_model' must be a non-empty string");
-    }
+  // --- RAG cross-field ---
+  const rag = cfg.rag;
+  if (
+    typeof rag.chunk_size === 'number' &&
+    typeof rag.chunk_overlap === 'number' &&
+    rag.chunk_overlap >= rag.chunk_size
+  ) {
+    errors.push("'rag.chunk_overlap' must be less than 'rag.chunk_size'");
   }
 
   // --- Deprecated providers compatibility map ---
@@ -184,14 +113,6 @@ export function validateConfig(cfg: Config): string[] {
         errors.push(`'mcp_servers.${name}.env': must be a dict`);
       }
     }
-  }
-
-  // --- theme & personality ---
-  if (!cfg.theme || typeof cfg.theme !== 'string') {
-    errors.push("'theme' must be a non-empty string");
-  }
-  if (!cfg.personality || typeof cfg.personality !== 'string') {
-    errors.push("'personality' must be a non-empty string");
   }
 
   return errors;

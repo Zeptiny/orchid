@@ -15,23 +15,73 @@ import {
   BackgroundProcessStore,
   setBackgroundStore,
 } from '../../src/main/tools/process/background-store';
-import { executeGrep, grepHandler } from '../../src/main/tools/search/grep';
+import { executeGrepOutcome, grepHandler } from '../../src/main/tools/search/grep';
 import {
-  executeCommand,
-  executeCommandHandler,
+  executeCommand as executeCommandRaw,
+  executeCommandHandler as executeCommandHandlerRaw,
+  executeCommandToolDefinition,
 } from '../../src/main/tools/process/execute-command';
-import { executeReadOutput, readOutputHandler } from '../../src/main/tools/process/read-output';
-import { executeSendInput, sendInputHandler } from '../../src/main/tools/process/send-input';
 import {
-  executeTerminateCommand,
-  terminateCommandHandler,
+  executeReadOutput as executeReadOutputRaw,
+  readOutputHandler as readOutputHandlerRaw,
+  readOutputToolDefinition,
+} from '../../src/main/tools/process/read-output';
+import {
+  executeSendInput as executeSendInputRaw,
+  sendInputHandler as sendInputHandlerRaw,
+  sendInputToolDefinition,
+} from '../../src/main/tools/process/send-input';
+import {
+  executeTerminateCommand as executeTerminateCommandRaw,
+  terminateCommandHandler as terminateCommandHandlerRaw,
+  terminateCommandToolDefinition,
 } from '../../src/main/tools/process/terminate-command';
 import type { Config } from '../../src/main/config/schema';
 import type { ProjectRuntime } from '../../src/main/project/runtime';
+import type { ToolDefinition } from '../../src/main/tools/types';
+import { finalizeToolExecutionResult } from '../../src/main/tools/result';
+import {
+  createCanonicalToolResult,
+  type GenericToolResultData,
+  type ToolExecutionResult,
+  type ToolHandlerOutcome,
+} from '../../src/shared/types/tool-result';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function canonicalizeOutcome(
+  definition: ToolDefinition,
+  outcome: unknown,
+): ToolExecutionResult {
+  return finalizeToolExecutionResult({
+    canonical: createCanonicalToolResult(
+      'generic',
+      outcome as ToolHandlerOutcome<GenericToolResultData>,
+    ),
+    toolName: definition.name,
+    outputDataSchema: definition.outputDataSchema,
+    expectedFamily: definition.resultFamily,
+  });
+}
+
+const executeCommand = async (...args: Parameters<typeof executeCommandRaw>) =>
+  canonicalizeOutcome(executeCommandToolDefinition, await executeCommandRaw(...args));
+const executeCommandHandler = async (...args: Parameters<typeof executeCommandHandlerRaw>) =>
+  canonicalizeOutcome(executeCommandToolDefinition, await executeCommandHandlerRaw(...args));
+const executeReadOutput = async (...args: Parameters<typeof executeReadOutputRaw>) =>
+  canonicalizeOutcome(readOutputToolDefinition, await executeReadOutputRaw(...args));
+const readOutputHandler = async (...args: Parameters<typeof readOutputHandlerRaw>) =>
+  canonicalizeOutcome(readOutputToolDefinition, await readOutputHandlerRaw(...args));
+const executeSendInput = async (...args: Parameters<typeof executeSendInputRaw>) =>
+  canonicalizeOutcome(sendInputToolDefinition, await executeSendInputRaw(...args));
+const sendInputHandler = async (...args: Parameters<typeof sendInputHandlerRaw>) =>
+  canonicalizeOutcome(sendInputToolDefinition, await sendInputHandlerRaw(...args));
+const executeTerminateCommand = async (...args: Parameters<typeof executeTerminateCommandRaw>) =>
+  canonicalizeOutcome(terminateCommandToolDefinition, await executeTerminateCommandRaw(...args));
+const terminateCommandHandler = async (...args: Parameters<typeof terminateCommandHandlerRaw>) =>
+  canonicalizeOutcome(terminateCommandToolDefinition, await terminateCommandHandlerRaw(...args));
 
 let tmpDir: string;
 
@@ -120,6 +170,14 @@ describe('HeadTailBuffer', () => {
 
     expect(buf.totalWritten).toBe(3000);
   });
+
+  it('should own appended buffers so stream-pool mutation cannot corrupt snapshots', () => {
+    const buf = new HeadTailBuffer();
+    const chunk = Buffer.from('stable-output');
+    buf.append(chunk);
+    chunk.fill(0x58); // simulate Node reusing the stream buffer
+    expect(buf.getTail()).toBe('stable-output');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -140,13 +198,12 @@ describe('grep tool', () => {
     writeFile('src/utils.ts', 'const helper = () => {};\nexport function helperFn() {}\n');
     writeFile('src/data.json', '{"key": "value"}');
 
-    const result = await executeGrep('function', tmpDir, '*.ts');
+    const result = await executeGrepOutcome('function', tmpDir, '*.ts');
 
-    expect(result.display).toContain('Found');
-    expect(result.content).toContain('src/index.ts');
-    expect(result.content).toContain('src/utils.ts');
+    expect(result.status).toBe('complete');
+    expect(result.data.matches.map((match) => match.path)).toEqual(['src/index.ts', 'src/utils.ts']);
     // Should not include .json files
-    expect(result.content).not.toContain('data.json');
+    expect(result.data.matches.map((match) => match.path)).not.toContain('data.json');
   });
 
   it('should skip binary files', async () => {
@@ -155,10 +212,10 @@ describe('grep tool', () => {
     const binPath = path.join(tmpDir, 'binary.bin');
     fs.writeFileSync(binPath, Buffer.from([0x00, 0x01, 0x02, 0x03, 0x00]));
 
-    const result = await executeGrep('test', tmpDir);
+    const result = await executeGrepOutcome('test', tmpDir);
 
-    expect(result.content).toContain('code.ts');
-    expect(result.content).not.toContain('binary.bin');
+    expect(result.data.matches.map((match) => match.path)).toContain('src/code.ts');
+    expect(result.data.matches.map((match) => match.path)).not.toContain('binary.bin');
   });
 
   it('should respect max_results and truncate', async () => {
@@ -167,44 +224,46 @@ describe('grep tool', () => {
       writeFile(`src/file${i}.ts`, `function match${i}() {}\nfunction another${i}() {}\n`);
     }
 
-    const result = await executeGrep('function', tmpDir, undefined, undefined, 5);
+    const result = await executeGrepOutcome('function', tmpDir, undefined, undefined, 5);
 
-    expect(result.display).toContain('5');
-    expect(result.content).toContain('truncated to 5');
+    expect(result.status).toBe('partial');
+    expect(result.data.matches).toHaveLength(5);
+    expect(result.data.limitReached).toBe(true);
   });
 
   it('should handle invalid regex gracefully', async () => {
     writeFile('src/test.ts', 'hello');
 
-    const result = await executeGrep('[invalid', tmpDir);
+    const result = await executeGrepOutcome('[invalid', tmpDir);
 
-    expect(result.display).toContain('Invalid regex');
-    expect(result.content).toContain('Error');
+    expect(result.status).toBe('error');
+    expect(result.error.code).toBe('invalid_regex');
+    expect(result.error.message).toContain('Invalid regex');
   });
 
   it('should handle non-existent directory', async () => {
-    const result = await executeGrep('test', '/nonexistent/path');
+    const result = await executeGrepOutcome('test', '/nonexistent/path');
 
-    expect(result.display).toContain('Directory not found');
-    expect(result.content).toContain('does not exist');
+    expect(result.status).toBe('error');
+    expect(result.error.code).toBe('directory_not_found');
+    expect(result.error.message).toContain('does not exist');
   });
 
   it('should return no matches message when nothing found', async () => {
     writeFile('src/test.ts', 'const x = 1;');
 
-    const result = await executeGrep('nonexistent_pattern_xyz', tmpDir);
+    const result = await executeGrepOutcome('nonexistent_pattern_xyz', tmpDir);
 
-    expect(result.display).toContain('No matches');
-    expect(result.content).toContain('No matches found');
+    expect(result.status).toBe('empty');
+    expect(result.data.matches).toHaveLength(0);
   });
 
   it('should support case insensitive search', async () => {
     writeFile('src/test.ts', 'function Hello() {}\nFUNCTION world() {}');
 
-    const result = await executeGrep('function', tmpDir, undefined, true);
+    const result = await executeGrepOutcome('function', tmpDir, undefined, true);
 
-    expect(result.content).toContain('Hello');
-    expect(result.content).toContain('world');
+    expect(result.data.matches.map((match) => match.text)).toEqual(['function Hello() {}', 'FUNCTION world() {}']);
   });
 
   it('uses frozen project grep limits and ignored directories', async () => {
@@ -225,8 +284,10 @@ describe('grep tool', () => {
       },
     );
 
-    expect(result.content).toContain('truncated to 1');
-    expect(result.content).not.toContain('generated/ignored.ts');
+    expect(result.status).toBe('partial');
+    expect(result.data.matches).toHaveLength(1);
+    expect(result.data.matches[0]?.path).not.toBe('generated/ignored.ts');
+    expect(result.data.limitReached).toBe(true);
   });
 });
 
@@ -236,38 +297,69 @@ describe('grep tool', () => {
 
 describe('execute_command foreground', () => {
   it('should run echo hello and return stdout with exit code 0', async () => {
-    const result = await executeCommand('echo hello');
+    const result = await executeCommand({ command: 'echo hello' });
 
-    expect(result.display).toContain('exit code: 0');
-    expect(result.content).toContain('hello');
+    expect(result.canonical.status).toBe('complete');
+    expect(result.agentProjection.content).toContain('hello');
   });
 
   it('should capture stderr', async () => {
-    const result = await executeCommand('echo error >&2');
+    const result = await executeCommand({ command: 'echo error >&2' });
 
-    expect(result.display).toContain('exit code: 0');
-    expect(result.content).toContain('error');
+    expect(result.canonical.status).toBe('complete');
+    expect(result.agentProjection.content).toContain('error');
   });
 
   it('should report non-zero exit code', async () => {
-    const result = await executeCommand('exit 42');
+    const result = await executeCommand({ command: 'exit 42' });
 
-    expect(result.display).toContain('exit code: 42');
+    expect(result.canonical.status).toBe('error');
   });
 
   it('should timeout long-running commands', async () => {
-    const result = await executeCommand('sleep 30', undefined, undefined, 1);
+    const result = await executeCommand({ command: 'sleep 30', timeout: 1 });
 
-    expect(result.display).toContain('Timed out');
-    expect(result.content).toContain('timed out');
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('timed out');
+  }, 10_000);
+
+  it('should kill the process group on outer abort (dispatch timeout)', async () => {
+    // Marker file written only if sleep completes — must not appear after abort kill
+    const markerDir = createTmpDir();
+    const marker = path.join(markerDir, 'still-alive');
+    const ac = new AbortController();
+    const runPromise = executeCommand({
+      command: `sleep 30; touch "${marker}"`,
+      description: 'long sleep',
+      timeout: 60,
+      shell: true,
+      background: false,
+      interactive: false,
+      abortSignal: ac.signal,
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+    ac.abort();
+
+    const result = await runPromise;
+    expect(result.canonical.status).toBe('cancelled');
+    expect(result.agentProjection.content.toLowerCase()).toContain('cancelled');
+
+    // Give any surviving sleep a moment; marker must not exist
+    await new Promise((r) => setTimeout(r, 500));
+    expect(fs.existsSync(marker)).toBe(false);
+    fs.rmSync(markerDir, { recursive: true, force: true });
   }, 10_000);
 
   it('should use custom working directory', async () => {
     const dir = createTmpDir();
     fs.writeFileSync(path.join(dir, 'test.txt'), 'hello');
-    const result = await executeCommand('cat test.txt', undefined, dir);
+    const result = await executeCommand({
+      command: 'cat test.txt',
+      workingDirectory: dir,
+    });
 
-    expect(result.content).toContain('hello');
+    expect(result.agentProjection.content).toContain('hello');
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -279,8 +371,8 @@ describe('execute_command foreground', () => {
         { command: 'cat session-cwd.txt' },
         { cwd: dir },
       );
-      expect(result.isError).toBeFalsy();
-      expect(result.content).toContain('from-session-cwd');
+      expect(result.canonical.status).toBe('complete');
+      expect(result.agentProjection.content).toContain('from-session-cwd');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -297,8 +389,10 @@ describe('grep handler session cwd', () => {
       },
       { cwd: tmpDir },
     );
-    expect(result.isError).toBeFalsy();
-    expect(result.content).toContain('findme');
+    expect(result.status).toBe('complete');
+    expect(result.data.matches).toEqual([
+      expect.objectContaining({ path: 'hit.ts', line: 1, column: 17, text: 'export function findme() {}' }),
+    ]);
   });
 });
 
@@ -319,19 +413,14 @@ describe('execute_command background', () => {
   });
 
   it('should return ID for background sleep command', async () => {
-    const result = await executeCommand(
-      'sleep 10',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      true,
-      undefined,
-      { sessionId: 'sess-bg-1' },
-    );
+    const result = await executeCommand({
+      command: 'sleep 10',
+      background: true,
+      sessionId: 'sess-bg-1',
+    });
 
-    expect(result.display).toContain('id:');
-    expect(result.display).toContain('background');
+    expect(result.canonical.status).toBe('complete');
+    expect(result.canonical.status).toBe('complete');
   });
 
   it('should read output from background command', async () => {
@@ -346,7 +435,7 @@ describe('execute_command background', () => {
 
     const result = await executeReadOutput(procId, undefined, undefined, sessionId);
 
-    expect(result.content).toContain('hello from background');
+    expect(result.agentProjection.content).toContain('hello from background');
   });
 
   it('should track exit code when background command finishes', async () => {
@@ -367,17 +456,17 @@ describe('execute_command background', () => {
       { command: 'echo "session scoped"; sleep 2', background: true },
       { cwd, sessionId },
     );
-    expect(spawnResult.isError).toBeFalsy();
-    expect(spawnResult.display).toMatch(/id:\s*(\d+)/);
+    expect(spawnResult.canonical.status).toBe('complete');
+    expect(spawnResult.agentProjection.content).toMatch(/id="(\d+)"/);
 
-    const idMatch = spawnResult.display.match(/id:\s*(\d+)/);
+    const idMatch = spawnResult.agentProjection.content.match(/id="(\d+)"/);
     const procId = Number(idMatch![1]);
 
     await new Promise((r) => setTimeout(r, 500));
 
     const readResult = await readOutputHandler({ id: procId }, { cwd, sessionId });
-    expect(readResult.isError).toBeFalsy();
-    expect(readResult.content).toContain('session scoped');
+    expect(readResult.canonical.status).toBe('complete');
+    expect(readResult.agentProjection.content).toContain('session scoped');
   });
 
   it('read/send/terminate not found when sessionId does not match spawn', async () => {
@@ -385,21 +474,21 @@ describe('execute_command background', () => {
     const procId = await store.spawn('sleep 30', { sessionId: 'sess-owner' });
 
     const readMiss = await executeReadOutput(procId, undefined, undefined, 'other-session');
-    expect(readMiss.display).toContain('not found');
-    expect(readMiss.isError).toBe(true);
+    expect(readMiss.canonical.status).toBe('error');
+    expect(readMiss.canonical.status).toBe('error');
 
     const sendMiss = await executeSendInput(procId, 'x\n', 'other-session');
-    expect(sendMiss.display).toContain('not found');
+    expect(sendMiss.canonical.status).toBe('error');
 
     const termMiss = await executeTerminateCommand(procId, 'other-session');
-    expect(termMiss.display).toContain('not found');
+    expect(termMiss.canonical.status).toBe('error');
 
     // Same session can still terminate
     const termOk = await terminateCommandHandler(
       { id: procId },
       { cwd, sessionId: 'sess-owner' },
     );
-    expect(termOk.display).toContain('Terminated');
+    expect(termOk.canonical.status).toBe('complete');
   });
 });
 
@@ -425,8 +514,8 @@ describe('send_input', () => {
 
     const result = await executeSendInput(procId, 'hello\n', sessionId);
 
-    expect(result.display).toContain('not interactive');
-    expect(result.content).toContain('interactive=true');
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('interactive=true');
   });
 
   it('should reject send_input for non-interactive command (even if exited)', async () => {
@@ -439,7 +528,7 @@ describe('send_input', () => {
     const result = await executeSendInput(procId, 'hello\n', sessionId);
 
     // "not interactive" check happens before "exited" check (matches Python)
-    expect(result.display).toContain('not interactive');
+    expect(result.canonical.status).toBe('error');
   });
 
   it('should reject send_input for non-interactive even if USER-owned', async () => {
@@ -453,7 +542,7 @@ describe('send_input', () => {
     );
 
     // "not interactive" check happens before "USER-owned" check (matches Python)
-    expect(result.display).toContain('not interactive');
+    expect(result.canonical.status).toBe('error');
   });
 });
 
@@ -483,8 +572,8 @@ describe('terminate_command', () => {
 
     const result = await executeTerminateCommand(procId, sessionId);
 
-    expect(result.display).toContain('Terminated');
-    expect(result.content).toContain('sleep 30');
+    expect(result.canonical.status).toBe('complete');
+    expect(result.agentProjection.content).toContain('sleep 30');
   });
 
   it('should report already exited command', async () => {
@@ -496,13 +585,13 @@ describe('terminate_command', () => {
 
     const result = await executeTerminateCommand(procId, sessionId);
 
-    expect(result.display).toContain('already exited');
+    expect(result.canonical.status).toBe('complete');
   });
 
   it('should return error for non-existent command', async () => {
     const result = await executeTerminateCommand(999, 'sess-term-3');
 
-    expect(result.display).toContain('not found');
+    expect(result.canonical.status).toBe('error');
   });
 });
 

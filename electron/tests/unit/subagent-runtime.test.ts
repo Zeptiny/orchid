@@ -10,6 +10,27 @@ import {
 import type { Agent } from '../../src/shared/types/agent';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { sumSubagentUsage } from '../../src/shared/usage';
+import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
+
+function successfulToolResult(
+  toolCallId: string,
+  content: string,
+): Extract<StreamEvent, { type: 'tool_result' }> {
+  const canonical = createCanonicalToolResult('generic', {
+    status: 'complete',
+    data: { value: content },
+  });
+  return {
+    type: 'tool_result',
+    toolCallId,
+    content,
+    isError: false,
+    execution: {
+      canonical,
+      agentProjection: { content, completeness: 'complete' },
+    },
+  };
+}
 
 const testAgent: Agent = {
   name: 'explorer',
@@ -28,6 +49,174 @@ describe('SubagentManager runtime', () => {
     manager = new SubagentManager();
   });
 
+  it('exposes live text and ordered changes before completion', async () => {
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'Hello ' };
+      yield { type: 'content', text: 'live' };
+      await paused;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const changes: number[] = [];
+    manager.setOnLiveChange((change) => {
+      changes.push(change.sequence);
+    });
+
+    const record = manager.spawn('live', 'watch', testAgent, { sessionId: 's-live' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(record.state).toBe(SubagentState.RUNNING);
+    expect(record.live.segments).toEqual([{ kind: 'text', id: expect.any(String), content: 'Hello live' }]);
+    expect(record.chain?.messages).toHaveLength(1);
+    expect(changes).toEqual([...changes].sort((a, b) => a - b));
+    expect(new Set(changes).size).toBe(changes.length);
+
+    release();
+    await record._runPromise;
+    expect(record.live.segments).toEqual([]);
+    expect(record.chain?.messages.filter((message) => message.content === 'Hello live')).toHaveLength(1);
+  });
+
+  it('keeps text, thinking, and tool snapshots in stable chronological order', async () => {
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'before' };
+      yield { type: 'thinking', text: 'reason' };
+      yield { type: 'tool_call_start', toolCallId: 'tool-1', toolName: 'grep' };
+      yield { type: 'tool_call_delta', toolCallId: 'tool-1', argsDelta: '{"q":' };
+      yield { type: 'tool_call', toolCallId: 'tool-1', toolName: 'grep', args: '{"q":1}' };
+      yield successfulToolResult('tool-1', 'match');
+      yield { type: 'content', text: 'after' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    let lastLiveIds: string[] = [];
+    manager.setOnLiveChange((change) => {
+      if (change.projection.state === SubagentState.RUNNING) {
+        lastLiveIds = change.projection.segments
+          .filter((segment) => segment.kind !== 'tool')
+          .map((segment) => segment.id);
+      }
+    });
+    const record = manager.spawn('ordered', 'inspect', testAgent);
+    await record._runPromise;
+
+    const types = record.chain?.messages.map((message) => message.type) ?? [];
+    expect(types).toEqual(['text', 'text', 'thinking', 'tool_call', 'tool_result', 'text']);
+    const transcript = record.chain?.messages.slice(1) ?? [];
+    expect(transcript.map((message) => message.content)).toEqual(['before', 'reason', '', 'match', 'after']);
+    expect(transcript.filter((message) => message.type === 'text' || message.type === 'thinking')
+      .map((message) => message.id)).toEqual(lastLiveIds);
+    expect(record.chain?.messages.at(-1)?.content).toBe('after');
+    expect(record.live.toolCalls).toEqual([]);
+    expect(record.live.segments).toEqual([]);
+  });
+
+  it('materializes text-thinking-text tails in emission order with segment IDs', async () => {
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'first' };
+      yield { type: 'thinking', text: 'middle' };
+      yield { type: 'content', text: 'last' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const record = manager.spawn('tail-order', 'inspect', testAgent);
+    await record._runPromise;
+    const messages = record.chain?.messages.slice(1) ?? [];
+    expect(messages.map((message) => message.content)).toEqual(['first', 'middle', 'last']);
+    expect(messages.map((message) => message.type)).toEqual(['text', 'thinking', 'text']);
+    expect(new Set(messages.map((message) => message.id)).size).toBe(3);
+  });
+
+  it('commits a thinking-text prefix before a tool boundary', async () => {
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'thinking', text: 'reason first' };
+      yield { type: 'content', text: 'answer next' };
+      yield { type: 'tool_call', toolCallId: 'tool-prefix', toolName: 'grep', args: '{}' };
+      yield successfulToolResult('tool-prefix', 'done');
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const record = manager.spawn('prefix-order', 'inspect', testAgent);
+    await record._runPromise;
+    expect((record.chain?.messages ?? []).slice(1).map((message) => message.type))
+      .toEqual(['thinking', 'text', 'tool_call', 'tool_result']);
+  });
+
+  it('checkpoint conversion materializes a live tail without mutating canonical messages', async () => {
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'partial' };
+      await paused;
+    });
+    const record = manager.spawn('checkpoint', 'partial', testAgent);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const before = record.chain?.messages.length;
+    const checkpoint = manager.toDomainRecords()[0];
+    const canonical = runtimeToDomain(record, { includeLiveTail: false });
+    expect(checkpoint.chain.messages.at(-1)?.content).toBe('partial');
+    expect(canonical.chain.messages.filter((message) => message.role === 'assistant')).toHaveLength(0);
+    expect(record.live.segments.map((segment) => segment.content)).toEqual(['partial']);
+    expect(record.chain?.messages.length).toBe(before);
+
+    release();
+    manager.cancelOne(record.id);
+    await record._runPromise;
+  });
+
+  it('materializes interleaved live segments chronologically with usage on text', async () => {
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'before' };
+      yield { type: 'thinking', text: 'reason' };
+      yield { type: 'content', text: 'after' };
+      yield { type: 'usage', usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5, cached_tokens: 0 } };
+      await paused;
+    });
+    const record = manager.spawn('ordered-tail', 'partial', testAgent);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const tail = runtimeToDomain(record).chain.messages.slice(1);
+    expect(tail.map((message) => [message.type, message.content])).toEqual([
+      ['text', 'before'], ['thinking', 'reason'], ['text', 'after'],
+    ]);
+    expect(tail.filter((message) => message.type === 'text').map((message) => message.usage)).toEqual([
+      null, record.usage,
+    ]);
+
+    release();
+    manager.cancelOne(record.id);
+    await record._runPromise;
+  });
+
+  it('isolates live sequence identity and ownership for concurrent sessions', async () => {
+    const gates = new Map<string, () => void>();
+    manager.setRunner(async function* ({ sessionId }): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: sessionId };
+      await new Promise<void>((resolve) => gates.set(sessionId!, resolve));
+    });
+    const changes: Array<{ sessionId: string | null; sequence: number }> = [];
+    manager.setOnLiveChange(({ sessionId, sequence }) => changes.push({ sessionId, sequence }));
+    const a = manager.spawn('a', 'a', testAgent, { sessionId: 'session-a' });
+    const b = manager.spawn('b', 'b', testAgent, { sessionId: 'session-b' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(a.live.sessionId).toBe('session-a');
+    expect(b.live.sessionId).toBe('session-b');
+    expect(a.live.sequence).toBeGreaterThan(0);
+    expect(b.live.sequence).toBeGreaterThan(0);
+    expect(changes.filter((change) => change.sessionId === 'session-a').map((change) => change.sequence))
+      .toEqual(expect.arrayContaining([a.live.sequence]));
+    expect(changes.filter((change) => change.sessionId === 'session-b').map((change) => change.sequence))
+      .toEqual(expect.arrayContaining([b.live.sequence]));
+    manager.cancelOne(a.id);
+    manager.cancelOne(b.id);
+    gates.get('session-a')?.();
+    gates.get('session-b')?.();
+    await Promise.all([a._runPromise, b._runPromise]);
+  });
+
   it('starts a runner and records usage on the chain', async () => {
     manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
       yield { type: 'content', text: 'Hello ' };
@@ -38,6 +227,16 @@ describe('SubagentManager runtime', () => {
           completion_tokens: 20,
           total_tokens: 120,
           cached_tokens: 50,
+          context: {
+            input_tokens: 100,
+            output_tokens: 20,
+            used_tokens: 120,
+            system_tokens: 10,
+            tools_tokens: 20,
+            tool_use_tokens: 30,
+            user_tokens: 40,
+            assistant_tokens: 20,
+          },
         },
       };
       yield { type: 'content', text: 'world' };
@@ -48,6 +247,16 @@ describe('SubagentManager runtime', () => {
           completion_tokens: 5,
           total_tokens: 15,
           cached_tokens: 0,
+          context: {
+            input_tokens: 10,
+            output_tokens: 5,
+            used_tokens: 15,
+            system_tokens: 1,
+            tools_tokens: 2,
+            tool_use_tokens: 3,
+            user_tokens: 4,
+            assistant_tokens: 5,
+          },
         },
       };
       yield { type: 'finish', finishReason: 'stop' };
@@ -66,6 +275,11 @@ describe('SubagentManager runtime', () => {
     expect(record.usage?.prompt_tokens).toBe(110);
     expect(record.usage?.completion_tokens).toBe(25);
     expect(record.usage?.cached_tokens).toBe(50);
+    expect(record.usage?.context).toMatchObject({
+      input_tokens: 10,
+      output_tokens: 5,
+      used_tokens: 15,
+    });
 
     const domain = runtimeToDomain(record);
     expect(domain.parentChainIndex).toBe(2);
@@ -73,6 +287,16 @@ describe('SubagentManager runtime', () => {
     const summed = sumSubagentUsage(domain);
     expect(summed?.prompt_tokens).toBe(110);
     expect(summed?.completion_tokens).toBe(25);
+    expect(summed?.context).toMatchObject({
+      input_tokens: 10,
+      output_tokens: 5,
+      used_tokens: 15,
+    });
+    expect(domain.chain?.messages.at(-1)?.usage?.context).toMatchObject({
+      input_tokens: 10,
+      output_tokens: 5,
+      used_tokens: 15,
+    });
   });
 
   it('records tools interleaved with text', async () => {
@@ -84,12 +308,7 @@ describe('SubagentManager runtime', () => {
         toolName: 'grep',
         args: '{"pattern":"foo"}',
       };
-      yield {
-        type: 'tool_result',
-        toolCallId: 'tc1',
-        content: 'match',
-        isError: false,
-      };
+      yield successfulToolResult('tc1', 'match');
       yield { type: 'content', text: 'Found it.' };
       yield {
         type: 'usage',
@@ -156,6 +375,94 @@ describe('SubagentManager runtime', () => {
     await record._runPromise;
   });
 
+  it('commits the partial tail before the terminal interruption projection', async () => {
+    manager.setRunner(async function* ({ abortSignal }): AsyncGenerator<StreamEvent> {
+      yield { type: 'thinking', text: 'reason' };
+      yield { type: 'content', text: 'partial' };
+      await new Promise<void>((resolve) => {
+        const timer = setInterval(() => {
+          if (abortSignal.aborted) { clearInterval(timer); resolve(); }
+        }, 5);
+      });
+    });
+    const changes: Array<{ state: string; messages: string[] }> = [];
+    manager.setOnLiveChange(({ projection }) => {
+      const current = manager.getRecord(projection.subagentId);
+      changes.push({
+        state: projection.state,
+        messages: (current?.chain?.messages ?? []).map((message) => message.content),
+      });
+    });
+    const record = manager.spawn('interrupt-tail', 'partial', testAgent, { sessionId: 's-interrupt' });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    expect(manager.cancelOne(record.id)).toBe(true);
+    await record._runPromise;
+
+    expect(changes.at(-1)).toEqual({ state: SubagentState.INTERRUPTED, messages: ['partial', 'reason', 'partial'] });
+    expect(record.chain?.messages.map((message) => message.content)).toEqual(['partial', 'reason', 'partial']);
+    expect(changes.filter((change) => change.state === SubagentState.INTERRUPTED)).toHaveLength(1);
+  });
+
+  it('interrupt flushes in-flight partial assistant text into chain/result', async () => {
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'partial answer' };
+      await new Promise<void>((resolve) => {
+        const onAbort = () => {
+          params.abortSignal.removeEventListener('abort', onAbort);
+          resolve();
+        };
+        if (params.abortSignal.aborted) {
+          resolve();
+          return;
+        }
+        params.abortSignal.addEventListener('abort', onAbort);
+      });
+    });
+
+    const record = manager.spawn('t-partial', 'stream then cancel', testAgent, {
+      sessionId: 'session-partial',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(record.state).toBe(SubagentState.RUNNING);
+
+    expect(manager.cancelOne(record.id)).toBe(true);
+    await record._runPromise;
+
+    expect(record.state).toBe(SubagentState.INTERRUPTED);
+    expect(record.result).toBe('partial answer');
+    const texts =
+      record.chain?.messages
+        .filter((m) => m.type === 'text' && m.role === 'assistant')
+        .map((m) => m.content) ?? [];
+    expect(texts.some((t) => t?.includes('partial answer'))).toBe(true);
+    expect(record.chain?.status).toBe('interrupted');
+  });
+
+  it('chain.sessionId is parent session UUID, not subagent id', () => {
+    const parentSessionId = '550e8400-e29b-41d4-a716-446655440000';
+    const record = manager.spawn('explorer', 'inspect', testAgent, {
+      sessionId: parentSessionId,
+    });
+
+    expect(record.sessionId).toBe(parentSessionId);
+    expect(record.chain).not.toBeNull();
+    expect(record.chain!.sessionId).toBe(parentSessionId);
+    expect(record.chain!.sessionId).not.toBe(record.id);
+    expect(record.chain!.id).not.toBe(record.id);
+
+    const domain = runtimeToDomain(record);
+    expect(domain.chain?.sessionId).toBe(parentSessionId);
+  });
+
+  it('persists the assigned display name and registry role', () => {
+    const record = manager.spawn('review auth flow', 'Review authentication', testAgent);
+
+    const domain = runtimeToDomain(record);
+
+    expect(domain.agent_name).toBe('review auth flow');
+    expect(domain.agent_type).toBe('explorer');
+  });
+
   it('without runner stays pending until markCompleted', () => {
     const record = manager.spawn('manual', 'task', testAgent);
     expect(record.state).toBe(SubagentState.PENDING);
@@ -195,6 +502,8 @@ describe('SubagentManager runtime', () => {
 
     expect(a.sessionId).toBe('session-a');
     expect(b.sessionId).toBe('session-b');
+    expect(a.chain?.sessionId).toBe('session-a');
+    expect(b.chain?.sessionId).toBe('session-b');
 
     const cancelled = manager.cancelRunning('session-a');
     expect(cancelled).toEqual([a.id]);

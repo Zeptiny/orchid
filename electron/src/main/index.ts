@@ -9,6 +9,7 @@
  * - Graceful shutdown: close MCP, save sessions, cleanup
  */
 import { app, BrowserWindow, Menu } from 'electron';
+import { spawnSync } from 'node:child_process';
 import * as path from 'path';
 import { registerAllIPC, unregisterAllIPC } from './ipc';
 import {
@@ -27,7 +28,7 @@ import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
 import { initFileLogging, closeFileLogging } from './logging';
 import { registerBuiltinTools } from './tools';
 import { getBackgroundStore } from './tools/process/background-store';
-import { wireSubagentRuntime } from './agents/wire-subagents';
+import { wireSubagentRuntime, flushSubagentPersistence } from './agents/wire-subagents';
 import { getConfig } from './config/loader';
 import { ProviderCatalogStore } from './providers/catalog/store';
 import { ProviderCatalogUpdater, createHttpCatalogTransport } from './providers/catalog/updater';
@@ -35,6 +36,13 @@ import type { CatalogKeyring } from './providers/catalog/trust';
 import { CredentialVault } from './providers/credentials/vault';
 import { ConnectionStore } from './providers/connection-store';
 import { initializeProviderRuntime, resetProviderRuntime } from './providers';
+import {
+  resetProviderRuntimeContext,
+  setProviderCatalogStore,
+  setProviderConnectionStore,
+  setProviderCredentialVault,
+  setProviderStatusService,
+} from './providers/runtime-context';
 import { ProviderStatusScheduler, ProviderStatusService } from './providers/status/service';
 import { createLilacStatusSource } from './providers/drivers/lilac';
 import {
@@ -45,13 +53,40 @@ import {
 // ── Global state ─────────────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null;
+/** True once before-quit has begun cleanup; blocks re-entrant preventDefault. */
+let isQuitting = false;
 /** Periodic reclaim of USER-owned bg command stdin after idle timeout. */
 let bgIdleOwnershipTimer: ReturnType<typeof setInterval> | null = null;
-let providerCatalogStore: ProviderCatalogStore | null = null;
-let providerCredentialVault: CredentialVault | null = null;
-let providerConnectionStore: ConnectionStore | null = null;
-let providerStatusService: ProviderStatusService | null = null;
 let providerStatusScheduler: ProviderStatusScheduler | null = null;
+
+/** Hard ceiling for graceful shutdown before forcing process exit. */
+const SHUTDOWN_DEADLINE_MS = 10_000;
+
+/**
+ * Runtime macOS code-signing check (not build-time CSC_NAME / CODESIGN_CERT).
+ * Ad-hoc signatures do not count as distribution-signed for auto-update gating.
+ */
+function isMacOSAppSigned(): boolean {
+  try {
+    const result = spawnSync('codesign', ['-dv', '--verbose=2', process.execPath], {
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    if (result.error || result.status !== 0) return false;
+    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    if (/Signature=adhoc/i.test(output)) return false;
+    return /Authority=/.test(output);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether this packaged build should treat auto-update as signed-release gated. */
+function detectReleaseSigned(): boolean {
+  if (!app.isPackaged) return false;
+  if (process.platform === 'darwin') return isMacOSAppSigned();
+  return true;
+}
 
 /**
  * Release engineering replaces this empty development keyring with public
@@ -76,7 +111,7 @@ function initializeProviderCatalog(): ProviderCatalogStore {
     keyring: RELEASE_CATALOG_KEYRING,
   });
   const snapshot = store.load();
-  providerCatalogStore = store;
+  setProviderCatalogStore(store);
 
   // Refresh is best-effort and entirely independent from provider execution.
   // Until a release embeds a public key, staying offline is the secure default.
@@ -90,17 +125,9 @@ function initializeProviderCatalog(): ProviderCatalogStore {
   return store;
 }
 
-/** Main-process access for future provider IPC and driver registry work. */
-export function getProviderCatalogStore(): ProviderCatalogStore {
-  if (!providerCatalogStore) {
-    throw new Error('Provider catalog has not been initialized');
-  }
-  return providerCatalogStore;
-}
-
 function initializeProviderCredentialVault(): CredentialVault {
   const vault = new CredentialVault();
-  providerCredentialVault = vault;
+  setProviderCredentialVault(vault);
   return vault;
 }
 
@@ -110,7 +137,7 @@ function initializeProviderRuntimeServices(
   status?: ProviderStatusService,
 ): void {
   const connections = new ConnectionStore();
-  providerConnectionStore = connections;
+  setProviderConnectionStore(connections);
   initializeProviderRuntime({
     catalog,
     vault,
@@ -123,7 +150,7 @@ function initializeProviderStatusServices(): ProviderStatusService {
   const service = new ProviderStatusService();
   const scheduler = new ProviderStatusScheduler(service);
   scheduler.start([createLilacStatusSource()]);
-  providerStatusService = service;
+  setProviderStatusService(service);
   providerStatusScheduler = scheduler;
   return service;
 }
@@ -136,30 +163,6 @@ function initializeProviderAccounting(): void {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Provider accounting is unavailable; provider requests are disabled: ${message}`);
   }
-}
-
-/** Main-process credential access for trusted drivers only. */
-export function getProviderCredentialVault(): CredentialVault {
-  if (!providerCredentialVault) {
-    throw new Error('Provider credential vault has not been initialized');
-  }
-  return providerCredentialVault;
-}
-
-/** Main-process connection metadata storage. Credentials remain in the vault. */
-export function getProviderConnectionStore(): ConnectionStore {
-  if (!providerConnectionStore) {
-    throw new Error('Provider connections have not been initialized');
-  }
-  return providerConnectionStore;
-}
-
-/** Main-process access to informational, redacted provider status only. */
-export function getProviderStatusService(): ProviderStatusService {
-  if (!providerStatusService) {
-    throw new Error('Provider status service has not been initialized');
-  }
-  return providerStatusService;
 }
 
 // ── Window creation ──────────────────────────────────────────────────────────
@@ -270,26 +273,20 @@ app.whenReady().then(async () => {
     // 7. Create the main window
     createWindow();
 
-    // 8. Initialize auto-updater (after window is created)
-    if (mainWindow) {
-      // Auto-update is gated to signed releases
-      // For unsigned beta builds, auto-download is disabled but manual check is allowed
-      const isSigned = app.isPackaged && process.platform === 'darwin'
-        ? !!(process.env['CODESIGN_CERT'] || process.env['CSC_NAME'])
-        : app.isPackaged;
+    // 8. Initialize auto-updater (headless — no renderer bridge yet)
+    // Auto-update is gated to signed releases (runtime detection on macOS)
+    // For unsigned beta builds, auto-download is disabled but manual check is allowed
+    initUpdater({
+      signed: detectReleaseSigned(),
+      flushBeforeInstall: flushSubagentPersistence,
+    });
 
-      initUpdater({
-        window: mainWindow,
-        signed: isSigned,
+    // Check for updates on startup (non-blocking)
+    // Only in packaged mode — dev mode has no update server
+    if (app.isPackaged) {
+      checkForUpdates().catch((err) => {
+        console.warn('Startup update check failed (non-fatal):', err);
       });
-
-      // Check for updates on startup (non-blocking)
-      // Only in packaged mode — dev mode has no update server
-      if (app.isPackaged) {
-        checkForUpdates().catch((err) => {
-          console.warn('Startup update check failed (non-fatal):', err);
-        });
-      }
     }
   } catch (err) {
     console.error('Failed to initialize app:', err);
@@ -312,8 +309,20 @@ app.on('activate', () => {
 // ── Graceful shutdown ────────────────────────────────────────────────────────
 
 app.on('before-quit', async (event) => {
-  // Prevent immediate quit to allow cleanup
+  // Re-entrant quit: only the first entry may preventDefault / run cleanup.
+  if (isQuitting) {
+    return;
+  }
+  isQuitting = true;
   event.preventDefault();
+
+  const forceExitTimer = setTimeout(() => {
+    console.error('Shutdown deadline exceeded; forcing exit');
+    app.exit(1);
+  }, SHUTDOWN_DEADLINE_MS);
+  if (typeof forceExitTimer === 'object' && forceExitTimer && 'unref' in forceExitTimer) {
+    (forceExitTimer as NodeJS.Timeout).unref();
+  }
 
   try {
     if (bgIdleOwnershipTimer) {
@@ -321,33 +330,49 @@ app.on('before-quit', async (event) => {
       bgIdleOwnershipTimer = null;
     }
 
-    // 1. Close file logging stream
+    // 1. Kill background process groups before tearing down MCP/IPC
+    const bgStore = getBackgroundStore();
+    bgStore.terminateAll();
+    // Drain for SIGTERM→SIGKILL escalation in BackgroundProcessStore (2s)
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, 2100);
+      if (typeof t === 'object' && t && 'unref' in t) {
+        (t as NodeJS.Timeout).unref();
+      }
+    });
+    bgStore.clear();
+
+    // 2. Close file logging stream (bounded; see FileLogger.close timeout)
     await closeFileLogging();
 
-    // 2. Unregister IPC handlers
+    // Flush live subagent checkpoints before IPC/runtime teardown.
+    flushSubagentPersistence();
+
+    // 3. Unregister IPC handlers
     unregisterAllIPC();
 
-    // 2. Shut down MCP transports
+    // 4. Shut down MCP transports
     await shutdownProjectMCPManagers();
 
-    // 3. Destroy auto-updater
+    // 5. Destroy auto-updater
     destroyUpdater();
 
-    // 4. Reset config manager
+    // 6. Reset config manager
     ConfigManager.reset();
-    providerCatalogStore = null;
-    providerCredentialVault = null;
-    providerConnectionStore = null;
     providerStatusScheduler?.stop();
     providerStatusScheduler = null;
-    providerStatusService = null;
+    resetProviderRuntimeContext();
     resetProviderRuntime();
     resetProviderAccountingStore();
 
-    // 4. Now actually quit
+    // 7. Now actually quit
+    // Final safety flush after teardown, immediately before process exit.
+    flushSubagentPersistence();
+    clearTimeout(forceExitTimer);
     app.exit(0);
   } catch (err) {
     console.error('Error during shutdown:', err);
+    clearTimeout(forceExitTimer);
     app.exit(1);
   }
 });

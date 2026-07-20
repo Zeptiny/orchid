@@ -17,6 +17,8 @@ import { getConfig } from '../../config/loader';
 import type { Config } from '../../config/schema';
 import { getBackgroundStore, ENV_SUPPRESSION } from './background-store';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { getToolConfig, resolveToolPath } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -32,11 +34,13 @@ const MAX_OUTPUT_BYTES = 1 * 1024 * 1024; // 1 MiB
 /**
  * Read stdout + stderr from a child process with bounded size and timeout.
  * Returns [stdout_bytes, stderr_bytes, truncated].
+ * Optional abortSignal rejects with Error('aborted') after the caller kills the process.
  */
 async function readBounded(
   proc: ChildProcess,
   timeoutMs: number,
   maxBytes: number,
+  abortSignal?: AbortSignal,
 ): Promise<{ stdout: Buffer; stderr: Buffer; truncated: boolean }> {
   const stdoutChunks: Buffer[] = [];
   const stderrChunks: Buffer[] = [];
@@ -44,9 +48,29 @@ async function readBounded(
   let truncated = false;
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      abortSignal?.removeEventListener('abort', onAbort);
+      fn();
+    };
+
     const timer = setTimeout(() => {
-      reject(new Error('timeout'));
+      finish(() => reject(new Error('timeout')));
     }, timeoutMs);
+
+    const onAbort = () => {
+      finish(() => reject(new Error('aborted')));
+    };
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        onAbort();
+        return;
+      }
+      abortSignal.addEventListener('abort', onAbort, { once: true });
+    }
 
     const onData = (stream: 'stdout' | 'stderr', chunk: Buffer | string) => {
       const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
@@ -75,36 +99,36 @@ async function readBounded(
     }
 
     proc.on('close', () => {
-      clearTimeout(timer);
-      const stdout = Buffer.concat(stdoutChunks);
-      const stderr = Buffer.concat(stderrChunks);
+      finish(() => {
+        const stdout = Buffer.concat(stdoutChunks);
+        const stderr = Buffer.concat(stderrChunks);
 
-      // Ensure total doesn't exceed maxBytes (trim stderr first)
-      const total = stdout.length + stderr.length;
-      if (total > maxBytes) {
-        const overflow = total - maxBytes;
-        if (stderr.length >= overflow) {
-          resolve({
-            stdout,
-            stderr: stderr.subarray(0, stderr.length - overflow),
-            truncated: true,
-          });
+        // Ensure total doesn't exceed maxBytes (trim stderr first)
+        const total = stdout.length + stderr.length;
+        if (total > maxBytes) {
+          const overflow = total - maxBytes;
+          if (stderr.length >= overflow) {
+            resolve({
+              stdout,
+              stderr: stderr.subarray(0, stderr.length - overflow),
+              truncated: true,
+            });
+          } else {
+            const rem = overflow - stderr.length;
+            resolve({
+              stdout: stdout.subarray(0, stdout.length - rem),
+              stderr: Buffer.alloc(0),
+              truncated: true,
+            });
+          }
         } else {
-          const rem = overflow - stderr.length;
-          resolve({
-            stdout: stdout.subarray(0, stdout.length - rem),
-            stderr: Buffer.alloc(0),
-            truncated: true,
-          });
+          resolve({ stdout, stderr, truncated });
         }
-      } else {
-        resolve({ stdout, stderr, truncated });
-      }
+      });
     });
 
     proc.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
+      finish(() => reject(err));
     });
   });
 }
@@ -139,47 +163,45 @@ export const executeCommandInputSchema = z.object({
 
 export type ExecuteCommandInput = z.infer<typeof executeCommandInputSchema>;
 
+/** Options for the internal `executeCommand` executor. */
+export interface ExecuteCommandOptions {
+  command: string;
+  description?: string;
+  workingDirectory?: string;
+  timeout?: number;
+  shell?: boolean;
+  background?: boolean;
+  interactive?: boolean;
+  sessionId?: string;
+  agentScopeId?: string;
+  config?: Pick<Config, 'command_timeout'>;
+  abortSignal?: AbortSignal;
+}
+
 // ---------------------------------------------------------------------------
 // Executor
 // ---------------------------------------------------------------------------
 
 export async function executeCommand(
-  command: string,
-  description?: string,
-  workingDirectory?: string,
-  timeout?: number,
-  shell?: boolean,
-  background?: boolean,
-  interactive?: boolean,
-  options?: {
-    sessionId?: string;
-    agentScopeId?: string;
-    config?: Pick<Config, 'command_timeout'>;
-  },
-): Promise<{ display: string; content: string; isError?: boolean }> {
-  if (description === undefined) description = command;
+  options: ExecuteCommandOptions,
+): Promise<GenericBuiltInToolOutcome> {
+  const command = options.command;
+  const description = options.description ?? command;
   // Caller (handler) should pass an absolute cwd; '.' remains for direct unit tests.
-  if (workingDirectory === undefined) workingDirectory = '.';
-  if (shell === undefined) shell = true;
-  if (background === undefined) background = false;
-  if (interactive === undefined) interactive = false;
+  const workingDirectory = options.workingDirectory ?? '.';
+  const shell = options.shell ?? true;
+  const background = options.background ?? false;
+  const interactive = options.interactive ?? false;
+  let timeout = options.timeout;
 
   // interactive requires background
   if (interactive && !background) {
-    return {
-      display: 'interactive=true requires background=true',
-      content: `Error: interactive=true is only supported with background=true`,
-      isError: true,
-    };
+    return genericBuiltInToolOutcome('execute_command', `Error: interactive=true is only supported with background=true`, 'error');
   }
 
   // shell=false is incompatible with background
   if (!shell && background) {
-    return {
-      display: 'shell=false is incompatible with background=true',
-      content: `Error: shell=false is not supported with background=true`,
-      isError: true,
-    };
+    return genericBuiltInToolOutcome('execute_command', `Error: shell=false is not supported with background=true`, 'error');
   }
 
   // -- background path -----------------------------------------------------
@@ -190,26 +212,33 @@ export async function executeCommand(
         cwd: workingDirectory,
         interactive,
         description,
-        sessionId: options?.sessionId ?? null,
-        agentScopeId: options?.agentScopeId ?? 'main',
+        sessionId: options.sessionId ?? null,
+        agentScopeId: options.agentScopeId ?? 'main',
       });
-      return {
-        display: `$ ${command} (id: ${procId}, background)`,
-        content: `Background command started with id ${procId}`,
-      };
+      // Keep the command start facts structured so the renderer can present an
+      // active background command without recovering metadata from a string.
+      // The generic projector still emits a compact human-readable sentence
+      // for the model; canonical/session persistence retains every field.
+      return genericBuiltInToolOutcome(
+        'execute_command',
+        {
+          commandId: procId,
+          command,
+          description,
+          background: true,
+          running: true,
+        },
+        'complete',
+      );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      return {
-        display: 'Failed to start background command',
-        content: `Error: ${msg}`,
-      isError: true
-    };
+      return genericBuiltInToolOutcome('execute_command', `Error: ${msg}`, 'error');
     }
   }
 
   // -- foreground path ------------------------------------------------------
   if (timeout === undefined) {
-    timeout = options?.config?.command_timeout ?? getConfig().command_timeout;
+    timeout = options.config?.command_timeout ?? getConfig().command_timeout;
   }
   const timeoutMs = timeout * 1000;
 
@@ -247,8 +276,49 @@ export async function executeCommand(
       env,
     });
 
+    // Outer tool-dispatch timeout aborts this signal — kill the live handle only
+    // (never bare PID after delay; PID reuse risk).
+    const abortSignal = options.abortSignal;
+    const onAbort = () => {
+      if (proc.exitCode === null) {
+        killProcessGroup(proc, 'SIGKILL');
+      }
+    };
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        onAbort();
+      } else {
+        abortSignal.addEventListener('abort', onAbort, { once: true });
+      }
+    }
+
     try {
-      const { stdout, stderr, truncated } = await readBounded(proc, timeoutMs, MAX_OUTPUT_BYTES);
+      let bounded: { stdout: Buffer; stderr: Buffer; truncated: boolean };
+      try {
+        bounded = await readBounded(proc, timeoutMs, MAX_OUTPUT_BYTES, abortSignal);
+      } catch (err) {
+        // Inner command_timeout or outer abort — kill live handle if still running
+        if (proc.exitCode === null) {
+          killProcessGroup(proc, 'SIGKILL');
+        }
+        await waitForExit(proc);
+        if (err instanceof Error && err.message === 'timeout') {
+          return genericBuiltInToolOutcome('execute_command', `Error: ${description} timed out after ${timeout} seconds.`, 'error');
+        }
+        if (
+          (err instanceof Error && err.message === 'aborted') ||
+          abortSignal?.aborted
+        ) {
+          return genericBuiltInToolOutcome(
+            'execute_command',
+            `${description} was cancelled.`,
+            'cancelled',
+          );
+        }
+        throw err;
+      }
+
+      const { stdout, stderr, truncated } = bounded;
 
       // If truncated and still running, kill it
       if (truncated && proc.exitCode === null) {
@@ -260,39 +330,20 @@ export async function executeCommand(
 
       const stdoutStr = stdout.length > 0 ? stdout.toString('utf-8').trim() : '';
       const stderrStr = stderr.length > 0 ? stderr.toString('utf-8').trim() : '';
-
-      const parts: string[] = [];
-      if (stdoutStr) parts.push(`STDOUT:\n${stdoutStr}`);
-      if (stderrStr) parts.push(`STDERR:\n${stderrStr}`);
-      if (truncated) parts.push('(output truncated)');
-
       const exitCode = proc.exitCode ?? 0;
-      return {
-        display: `$ ${description} (exit code: ${exitCode})`,
-        content: parts.join('\n\n') || '(no output)',
-        // Non-zero exit is a real command failure (backend-owned status).
-        isError: exitCode !== 0,
-      };
-    } catch (err) {
-      // Timeout
-      if (err instanceof Error && err.message === 'timeout') {
-        killProcessGroup(proc, 'SIGKILL');
-        await waitForExit(proc);
-        return {
-          display: `$ ${description} - Timed out after ${timeout} seconds`,
-          content: `Error: ${description} timed out after ${timeout} seconds.`,
-      isError: true
-    };
-      }
-      throw err;
+      return genericBuiltInToolOutcome(
+        'execute_command',
+        { stdout: stdoutStr, stderr: stderrStr, exitCode, truncated },
+        exitCode !== 0 ? 'error' : 'complete',
+        'tool_error',
+        exitCode !== 0 ? `Command exited with code ${exitCode}` : undefined,
+      );
+    } finally {
+      abortSignal?.removeEventListener('abort', onAbort);
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return {
-      display: `$ ${description} - Execution error`,
-      content: `Error: ${msg}`,
-      isError: true
-    };
+    return genericBuiltInToolOutcome('execute_command', `Error: ${msg}`, 'error');
   }
 }
 
@@ -312,6 +363,7 @@ function waitForExit(proc: ChildProcess): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export const executeCommandToolDefinition: ToolDefinition = {
+  ...genericToolResultMetadata,
   name: 'execute_command',
   description:
     'Execute a shell command and return its output. Use for running tests, git commands, ' +
@@ -328,18 +380,17 @@ export const executeCommandHandler: ToolHandler = async (input: unknown, ctx) =>
   const resolvedCwd = working_directory
     ? resolveToolPath(ctx.cwd, working_directory)
     : ctx.cwd;
-  return executeCommand(
+  return executeCommand({
     command,
     description,
-    resolvedCwd,
+    workingDirectory: resolvedCwd,
     timeout,
     shell,
     background,
     interactive,
-    {
-      sessionId: ctx.sessionId,
-      agentScopeId: ctx.agentScopeId ?? 'main',
-      config: getToolConfig(ctx),
-    },
-  );
+    sessionId: ctx.sessionId,
+    agentScopeId: ctx.agentScopeId ?? 'main',
+    config: getToolConfig(ctx),
+    abortSignal: ctx.abortSignal,
+  });
 };

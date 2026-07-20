@@ -1,12 +1,12 @@
 /**
- * InputArea — composer with model selector and send/cancel.
+ * InputArea — unified composer shell with send/cancel inside the field.
  *
- * Layout (right-aligned controls, image-#1 style model chip):
- *   [ textarea … ] [ model ▾ ] [ ↑ / ■ ]
+ * Layout:
+ *   [ textarea ………………………………… [ ↑ / ■ ] ]
  *
+ * Model selector lives in Footer (left of context radial).
  * Enter send · Shift+Enter newline · Ctrl/Cmd+S send · Esc multi-stage interrupt.
  * Slash commands: type `/` to open autocomplete above the input.
- * Context radial lives in Footer (always right-aligned).
  */
 import { useRef, useCallback, useEffect, useState, useMemo } from 'react';
 import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
@@ -23,9 +23,12 @@ import {
   type PaletteResult,
 } from '../commands/registry';
 import { resolveModelNotifyLabel } from '../utils/provider-selection';
-import { Icon } from './Icon';
-import { ModelPicker } from './ModelPicker';
+import {
+  evaluateComposerSend,
+  shouldReleaseComposerSendLock,
+} from '../utils/composer-send-lock';
 import { SlashCommandMenu } from './SlashCommandMenu';
+import { IconButton } from './ui/IconButton';
 
 interface InputAreaProps {
   status: ChatStatus;
@@ -51,17 +54,19 @@ interface InputAreaProps {
   /** A typed `{ connectionId, modelId }` selection is required for a send. */
   modelSelected?: boolean;
   onOpenProviders?: () => void;
+  /** ChatView keeps this subtree mounted while the Subagent View owns focus. */
+  isViewActive?: boolean;
 }
 
 type SubPicker = '/theme' | '/personality' | '/model' | '/sessions' | null;
 
-/** Single-line composer height — keep in sync with `.composer-textarea` CSS. */
-const TEXTAREA_MIN_HEIGHT_PX = 34;
+/** Single-line composer height — keep in sync with `.orchid-composer-textarea` CSS. */
+const TEXTAREA_MIN_HEIGHT_PX = 36;
 const TEXTAREA_MAX_HEIGHT_PX = 160;
 
 export function InputArea({
   status,
-  model,
+  model: _model,
   modelLabels,
   modelDetails,
   interruptState = 'idle',
@@ -77,6 +82,7 @@ export function InputArea({
   providerAvailable = true,
   modelSelected = true,
   onOpenProviders,
+  isViewActive = false,
 }: InputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   /** Blocks rapid double-Enter before parent status re-renders to streaming. */
@@ -308,46 +314,41 @@ export function InputArea({
     [slashContext, clearAndClose, modelDetails, modelLabels],
   );
 
-  const handleSelectModel = useCallback(
-    async (next: string) => {
-      if (!commandContext || next === model) return;
-      try {
-        await commandContext.onSetModel(next);
-        commandContext.onNotify(
-          `Model changed to ${resolveModelNotifyLabel(next, modelDetails, modelLabels)}`,
-          'info',
-        );
-      } catch {
-        // Non-fatal — parent may already toast
-      }
-    },
-    [commandContext, model, modelDetails, modelLabels],
-  );
-
   const resizeTextarea = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
-    // Empty fields often report scrollHeight taller than one visual line
-    // (padding / placeholder metrics). Force the compact single-line height
-    // so startup matches the post-send size.
+    // Empty: fixed single-line height with centered text (line-height = height).
+    // Multi-line: normal leading + vertical padding; overflow only at max height.
     if (!el.value) {
       el.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
+      el.style.lineHeight = `${TEXTAREA_MIN_HEIGHT_PX}px`;
+      el.style.paddingTop = '0';
+      el.style.paddingBottom = '0';
+      el.style.overflowY = 'hidden';
       return;
     }
+    el.style.lineHeight = '1.4';
+    el.style.paddingTop = '8px';
+    el.style.paddingBottom = '8px';
     el.style.height = 'auto';
     const next = Math.min(
       Math.max(el.scrollHeight, TEXTAREA_MIN_HEIGHT_PX),
       TEXTAREA_MAX_HEIGHT_PX,
     );
     el.style.height = `${next}px`;
+    el.style.overflowY = next >= TEXTAREA_MAX_HEIGHT_PX ? 'auto' : 'hidden';
   }, []);
 
   useEffect(() => {
-    if (status === 'idle' && interruptState === 'idle') {
+    // Release send lock when not streaming: idle success path and error/gate
+    // recovery (status 'error' never returned to idle without this).
+    if (shouldReleaseComposerSendLock(status, interruptState)) {
       isSendingRef.current = false;
+    }
+    if (!isViewActive && status === 'idle' && interruptState === 'idle') {
       textareaRef.current?.focus();
     }
-  }, [status, interruptState]);
+  }, [status, interruptState, isViewActive]);
 
   useEffect(() => {
     resizeTextarea();
@@ -364,9 +365,12 @@ export function InputArea({
 
   // Multi-stage Esc — same path as the cancel button (agent → subagents).
   // Model dropup closes first; slash menu owns Esc while open.
+  // When Settings is open ChatView stays mounted but Escape belongs to ConfigView.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      if (isViewActive) return;
+      if (document.documentElement.dataset.orchidSettingsOpen === '1') return;
 
       if (!canInterrupt) return;
       // Let slash-menu Esc handlers win when the menu is open on confirmSubagents
@@ -378,31 +382,38 @@ export function InputArea({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canInterrupt, isSlashMode, onCancel]);
+  }, [canInterrupt, isSlashMode, isViewActive, onCancel]);
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim();
     // status and isSendingRef both guard: status can lag one frame behind Enter.
     // Allow send during confirmSubagents so a follow-up can be queued after cancel UI.
-    if (!trimmed || isStreaming || isSendingRef.current) return;
-    // Allow slash commands even when unbound; block plain chat messages.
-    if (!workspaceBound && !trimmed.startsWith('/')) {
+    const gate = evaluateComposerSend({
+      trimmed,
+      isStreaming,
+      isSending: isSendingRef.current,
+      workspaceBound,
+      providerAvailable,
+      modelSelected,
+    });
+    if (gate.action === 'ignore') return;
+    if (gate.action === 'pick-project') {
       onPickProjectDir?.();
       return;
     }
-    if (!providerAvailable && !trimmed.startsWith('/')) {
+    if (gate.action === 'open-providers') {
       onOpenProviders?.();
       return;
     }
-    if (!modelSelected && !trimmed.startsWith('/')) {
-      return;
-    }
+    if (gate.action === 'need-model') return;
     isSendingRef.current = true;
     setInput('');
     setSubPicker(null);
     try {
       await onSend(trimmed);
     } catch {
+      // Failure path: release immediately so a subsequent send is possible.
+      // Gate failures that resolve without throwing are cleared via status effect.
       isSendingRef.current = false;
     }
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
@@ -543,51 +554,60 @@ export function InputArea({
         ? 'Cancel agent'
         : 'Interrupt';
 
-  const cancelClass =
-    interruptState === 'confirmSubagents'
-      ? 'btn btn-warning btn-sm btn-circle composer-action'
-      : 'btn btn-error btn-sm btn-circle composer-action';
+  const cancelVariant = interruptState === 'confirmSubagents' ? 'warning' : 'error';
 
   // During confirmSubagents the agent is done — keep input editable for follow-ups.
   const inputDisabled = isStreaming || interruptState === 'confirmAgent';
   const plainChatBlocked = !workspaceBound || !providerAvailable || !modelSelected;
 
   return (
-    <div className="composer-area">
+    <div className="orchid-composer-area">
       {!workspaceBound && (
-        <div className="composer-workspace-gate" role="status">
+        <div className="orchid-composer-gate alert alert-warning" role="status">
           <span>Select a project folder before chatting.</span>
           {onPickProjectDir && (
-            <button
-              type="button"
-              className="btn btn-warning btn-xs"
+            <IconButton
+              label="Open folder"
+              icon="folder"
+              size="xs"
+              variant="warning"
               onClick={onPickProjectDir}
+              iconSize={12}
             >
-              <Icon name="folder" size={12} />
               Open folder
-            </button>
+            </IconButton>
           )}
         </div>
       )}
 
       {!providerAvailable && (
-        <div className="composer-workspace-gate" role="status" aria-live="polite">
+        <div
+          className="orchid-composer-gate alert alert-info"
+          role="status"
+          aria-live="polite"
+        >
           <span>A provider connection is required before Orchid can send an LLM request.</span>
           {onOpenProviders && (
-            <button
-              type="button"
-              className="btn btn-primary btn-xs"
+            <IconButton
+              label="Set up provider"
+              icon="settings"
+              size="xs"
+              variant="primary"
               onClick={onOpenProviders}
+              iconSize={12}
             >
-              <Icon name="settings" size={12} />
               Set up provider
-            </button>
+            </IconButton>
           )}
         </div>
       )}
 
       {providerAvailable && !modelSelected && (
-        <div className="composer-workspace-gate" role="status" aria-live="polite">
+        <div
+          className="orchid-composer-gate alert alert-warning"
+          role="status"
+          aria-live="polite"
+        >
           <span>Select a connection and model before sending a message.</span>
         </div>
       )}
@@ -604,83 +624,70 @@ export function InputArea({
       )}
 
       <div
-        className={`composer ${isStreaming || confirming ? 'streaming' : ''} ${
+        className={`orchid-composer ${isStreaming || confirming ? 'streaming' : ''} ${
           showCancel ? 'composer-cancel-mode' : ''
         }`}
       >
-        <textarea
-          ref={textareaRef}
-          className="composer-textarea"
-          data-orchid-composer
-          value={input}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            isStreaming || interruptState === 'confirmAgent'
-              ? 'Streaming… (Esc or ■ to interrupt)'
-              : interruptState === 'confirmSubagents'
-                ? 'Type a follow-up, or Esc / ■ to cancel subagents…'
-                : !workspaceBound
-                  ? 'Choose a project folder first… (or /cd)'
-                  : !providerAvailable
-                    ? 'Set up a provider before chatting…'
-                    : !modelSelected
-                      ? 'Select a connection and model first…'
-                  : commandContext
-                    ? 'Type a message or /command… (Enter to send)'
-                    : 'Type a message… (Enter to send, Shift+Enter for newline)'
-          }
-          disabled={inputDisabled}
-          rows={1}
-          aria-autocomplete={commandContext ? 'list' : undefined}
-          aria-expanded={showMenu || undefined}
-          aria-controls={showMenu ? 'slash-command-menu' : undefined}
-        />
-
-        <div className="composer-controls">
-          <ModelPicker
-            value={model}
-            options={availableModels}
-            optionLabels={modelLabels}
-            optionDetails={modelDetails}
-            onChange={(next) => void handleSelectModel(next)}
-            placement="top"
-            label="Select model"
-            showSelectedContext={false}
-            disabled={isStreaming || interruptState === 'confirmAgent'}
-            className="composer-model-picker"
+        <div className="orchid-composer-shell">
+          <textarea
+            ref={textareaRef}
+            className="orchid-composer-textarea"
+            data-orchid-composer
+            value={input}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            placeholder={
+              isStreaming || interruptState === 'confirmAgent'
+                ? 'Streaming… (Esc or ■ to interrupt)'
+                : interruptState === 'confirmSubagents'
+                  ? 'Type a follow-up, or Esc / ■ to cancel subagents…'
+                  : !workspaceBound
+                    ? 'Choose a project folder first… (or /cd)'
+                    : !providerAvailable
+                      ? 'Set up a provider before chatting…'
+                      : !modelSelected
+                        ? 'Select a connection and model first…'
+                        : commandContext
+                          ? 'Type a message or /command… (Enter to send)'
+                          : 'Type a message… (Enter to send, Shift+Enter for newline)'
+            }
+            disabled={inputDisabled}
+            rows={1}
+            aria-autocomplete={commandContext ? 'list' : undefined}
+            aria-expanded={showMenu || undefined}
+            aria-controls={showMenu ? 'slash-command-menu' : undefined}
           />
 
-          {/* Send (arrow up) or Cancel (square) — multi-stage cancel mirrors Esc */}
-          {showCancel ? (
-            <button
-              className={cancelClass}
-              onClick={() => void onCancel()}
-              title={cancelTitle}
-              type="button"
-              aria-label={cancelTitle}
-            >
-              <Icon name="square" size={14} />
-            </button>
-          ) : (
-            <button
-              className="btn btn-primary btn-sm btn-circle composer-action"
-              onClick={() => {
-                if (showMenu && slashResults[selectedIndex]) {
-                  void handleSelectResult(slashResults[selectedIndex]);
-                  return;
-                }
-                void handleSend();
-              }}
-              disabled={!hasInput || (!showMenu && plainChatBlocked)}
-              title={showMenu ? 'Run command' : 'Send'}
-              type="button"
-              aria-label={showMenu ? 'Run command' : 'Send'}
-              aria-disabled={!hasInput || (!showMenu && plainChatBlocked) || undefined}
-            >
-              <Icon name="arrowUp" size={16} />
-            </button>
-          )}
+          <div className="orchid-composer-controls">
+            {showCancel ? (
+              <IconButton
+                label={cancelTitle}
+                icon="square"
+                size="sm"
+                variant={cancelVariant}
+                className="orchid-composer-action btn-square"
+                onClick={() => void onCancel()}
+                iconSize={14}
+              />
+            ) : (
+              <IconButton
+                label={showMenu ? 'Run command' : 'Send'}
+                icon="arrowUp"
+                size="sm"
+                variant="primary"
+                className="orchid-composer-action btn-square"
+                onClick={() => {
+                  if (showMenu && slashResults[selectedIndex]) {
+                    void handleSelectResult(slashResults[selectedIndex]);
+                    return;
+                  }
+                  void handleSend();
+                }}
+                disabled={!hasInput || (!showMenu && plainChatBlocked)}
+                iconSize={16}
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>

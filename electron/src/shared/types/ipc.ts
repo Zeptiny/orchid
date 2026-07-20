@@ -10,6 +10,12 @@
 import type { Session } from './session';
 import type { Message, Usage } from './message';
 import type {
+  CanonicalToolResult,
+  TerminalToolResultStatus,
+  ToolExecutionResult,
+} from './tool-result';
+import type { SubagentLiveProjection, SubagentRecord } from './subagent';
+import type {
   CustomConnectionModel,
   ModelSelection,
   ProviderAuthMethod,
@@ -41,6 +47,8 @@ import type {
   ASTIndexResult,
   ASTIndexProgress,
   IndexRunState,
+  RAGConfig,
+  UpdaterState,
 } from './ipc-boundary';
 
 export type {
@@ -70,6 +78,9 @@ export type {
   ASTIndexResult,
   ASTIndexProgress,
   IndexRunState,
+  RAGConfig,
+  UpdaterState,
+  UpdateStatus,
 } from './ipc-boundary';
 
 // ── Chat API ─────────────────────────────────────────────────────────────────
@@ -109,11 +120,13 @@ export type ChatSnapshotState = 'idle' | 'streaming' | 'error';
 export interface ChatToolCallSnapshot {
   toolCallId: string;
   toolName: string;
-  status: 'generating' | 'running' | 'completed' | 'failed';
+  status: 'generating' | 'running' | TerminalToolResultStatus;
   partialArgs: string;
   args: string;
-  result: string | null;
-  error: string | null;
+  /** Exact finalized agent projection for terminal snapshots. */
+  content: string | null;
+  /** Canonical terminal authority; null while generating/running. */
+  toolResult: CanonicalToolResult | null;
   startedAt: string;
   finishedAt: string | null;
 }
@@ -147,6 +160,23 @@ export interface ChatSessionSnapshot {
   sessionId: string;
   messages: Message[];
   live: ChatSnapshot | null;
+}
+
+export interface SubagentSnapshotRequest { sessionId: string; }
+export interface SubagentSnapshot {
+  sessionId: string;
+  records: SubagentRecord[];
+  live: SubagentLiveProjection[];
+}
+export interface SubagentEvent {
+  sessionId: string;
+  subagentId: string;
+  runId: string;
+  sequence: number;
+  type: 'projection';
+  projection: SubagentLiveProjection;
+  /** Canonical seed for empty hydrated views and terminal handoff. */
+  record?: SubagentRecord;
 }
 
 interface ChatEventIdentity {
@@ -220,10 +250,12 @@ export interface ChatToolCallUpdateEvent extends ChatEventIdentity {
   type: 'tool_call_update';
   toolCallId: string;
   toolName?: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | TerminalToolResultStatus;
   args?: string;
-  result?: string;
-  error?: string;
+  /** Exact finalized agent projection; required for terminal updates. */
+  content?: string;
+  /** Canonical terminal authority; required for terminal updates. */
+  toolResult?: CanonicalToolResult;
 }
 
 // ── Background Command API ────────────────────────────────────────────────
@@ -231,8 +263,13 @@ export interface ChatToolCallUpdateEvent extends ChatEventIdentity {
 export interface BgCommandSnapshotRequest {
   /** The background command ID. */
   commandId: number;
-  /** Optional last N lines to retrieve (default: 50). */
+  /** Optional last N lines to retrieve (default: 50, max: 1000). */
   lastN?: number;
+  /**
+   * Owning session for visibility. When omitted, main resolves the calling
+   * window's active session; cross-session command tails are denied.
+   */
+  sessionId?: string;
 }
 
 export interface BgCommandSnapshotResult {
@@ -244,8 +281,50 @@ export interface BgCommandSnapshotResult {
 
 // ── Config API ───────────────────────────────────────────────────────────────
 
+/**
+ * Nested map under config:save PATCH. `null` values are tombstones that delete
+ * the key under deep-merge (e.g. removed mcp_servers aliases).
+ */
+export type ConfigPatchMap<V> = { readonly [key: string]: V | null };
+
+/**
+ * PATCH-style config update matching main's mergeConfigUpdates semantics:
+ * - Nested plain objects (rag, …) deep-merge field-by-field
+ * - Map entries (mcp_servers, tier_models) accept null tombstones for deletes
+ * - Nullable fields (default_model, default_project_dir) use null as a real value
+ *
+ * Not the same as Partial<Config>: Partial cannot express map tombstones.
+ */
+export type ConfigPatch = {
+  default_model?: ModelSelection | null;
+  tier_models?: ConfigPatchMap<ModelSelection | null>;
+  ignored_dirs?: string[];
+  command_timeout?: number;
+  read_line_limit?: number;
+  grep_max_results?: number;
+  directory_tree_depth?: number;
+  theme?: string;
+  personality?: string;
+  rag?: Partial<RAGConfig> & {
+    embedding_api_model?: ModelSelection | null;
+  };
+  ast_max_file_size?: number;
+  mcp_startup_timeout?: number;
+  mcp_per_server_timeout?: number;
+  mcp_servers?: ConfigPatchMap<Record<string, unknown>>;
+  /** Rejected at the main boundary; kept for draft tombstone helpers only. */
+  providers?: ConfigPatchMap<Record<string, unknown>>;
+  llm_stream_idle_timeout?: number;
+  llm_stream_retries?: number;
+  background_command_idle_timeout?: number;
+  max_tool_steps?: number;
+  default_project_dir?: string | null;
+  always_expand_tool_groups?: boolean;
+  has_completed_onboarding?: boolean;
+};
+
 export interface ConfigSaveMessage {
-  updates: Partial<Config>;
+  updates: ConfigPatch;
 }
 
 // ── Provider API ─────────────────────────────────────────────────────────────
@@ -508,17 +587,43 @@ export interface SessionWorkspaceChangedEvent {
   workspace: WorkspaceInfo;
 }
 
+/** Machine-readable chat:send gate / start failures. */
+export type ChatSendErrorKind =
+  | 'session_not_found'
+  | 'unbound_workspace'
+  | 'provider_required'
+  | 'session_busy'
+  | 'runtime_hydration_failed'
+  | 'provider_unavailable';
+
 /** Result of chat:send (started stream or structured gate failure). */
-export interface ChatSendResult {
-  status: string;
-  /** Session that owns the started turn (present when status is started). */
-  sessionId?: string;
-  /** Turn/chain identity for ordering live events. */
-  turnId?: string;
-  /** Human-readable error when status is not started. */
-  error?: string;
-  /** Machine-readable failure kind (e.g. unbound_workspace). */
-  kind?: string;
+export type ChatSendResult =
+  | {
+      status: 'started';
+      /** Session that owns the started turn. */
+      sessionId: string;
+      /** Turn/chain identity for ordering live events. */
+      turnId: string;
+    }
+  | {
+      status: 'error';
+      kind: ChatSendErrorKind;
+      error: string;
+    };
+
+// ── Updater API ──────────────────────────────────────────────────────────────
+
+/** Detailed download progress emitted on updater:progress. */
+export interface UpdaterProgressEvent {
+  percent: number;
+  bytesPerSecond: number;
+  transferred: number;
+  total: number;
+}
+
+/** Error payload emitted on updater:error. */
+export interface UpdaterErrorEvent {
+  error: string;
 }
 
 // ── Tool API ─────────────────────────────────────────────────────────────────
@@ -528,10 +633,7 @@ export interface ToolExecuteMessage {
   args: unknown;
 }
 
-export interface ToolExecuteResult {
-  content: string;
-  isError: boolean;
-}
+export type ToolExecuteResult = ToolExecutionResult;
 
 // ── RAG API ──────────────────────────────────────────────────────────────────
 
@@ -654,6 +756,11 @@ export interface OrchidAPI {
     onActivityChanged: (callback: (event: SessionActivityChangedEvent) => void) => () => void;
   };
 
+  subagents: {
+    snapshot: (request: SubagentSnapshotRequest) => Promise<SubagentSnapshot>;
+    onEvent: (callback: (event: SubagentEvent) => void) => () => void;
+  };
+
   tool: {
     execute: (message: ToolExecuteMessage) => Promise<ToolExecuteResult>;
   };
@@ -710,7 +817,6 @@ export interface OrchidAPI {
   bgCmd: {
     snapshot: (request: BgCommandSnapshotRequest) => Promise<BgCommandSnapshotResult>;
   };
-
 }
 
 // ── IPC Channel names ────────────────────────────────────────────────────────
@@ -730,6 +836,9 @@ export const IPC_CHANNELS = {
   CHAT_TOOL_CALL_START: 'chat:tool_call_start',
   CHAT_TOOL_CALL_DELTA: 'chat:tool_call_delta',
   CHAT_TOOL_CALL_UPDATE: 'chat:tool_call_update',
+
+  SUBAGENTS_SNAPSHOT: 'subagents:snapshot',
+  SUBAGENTS_EVENT: 'subagents:event',
 
   // Config
   CONFIG_GET: 'config:get',
@@ -835,11 +944,12 @@ export type IPCChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 
 // ── Allowed invoke channels (preload security gate) ──────────────────────────
 
-export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
+export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.CHAT_SEND,
   IPC_CHANNELS.CHAT_CANCEL,
   IPC_CHANNELS.CHAT_STOP,
   IPC_CHANNELS.CHAT_SNAPSHOT,
+  IPC_CHANNELS.SUBAGENTS_SNAPSHOT,
   IPC_CHANNELS.CONFIG_GET,
   IPC_CHANNELS.CONFIG_DIAGNOSTICS,
   IPC_CHANNELS.CONFIG_SAVE,
@@ -891,11 +1001,11 @@ export const ALLOWED_INVOKE_CHANNELS: readonly string[] = [
   IPC_CHANNELS.AST_INDEX,
   IPC_CHANNELS.AST_INDEX_STATE,
   IPC_CHANNELS.BG_CMD_SNAPSHOT,
-];
+] as const satisfies readonly IPCChannel[];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────
 
-export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
+export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.CHAT_CHUNK,
   IPC_CHANNELS.CHAT_THINKING,
   IPC_CHANNELS.CHAT_STATE,
@@ -905,6 +1015,7 @@ export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
   IPC_CHANNELS.CHAT_TOOL_CALL_START,
   IPC_CHANNELS.CHAT_TOOL_CALL_DELTA,
   IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
+  IPC_CHANNELS.SUBAGENTS_EVENT,
   IPC_CHANNELS.SESSION_RENAMED,
   IPC_CHANNELS.SESSION_CREATED,
   IPC_CHANNELS.SESSION_UPDATED,
@@ -915,10 +1026,7 @@ export const ALLOWED_EVENT_CHANNELS: readonly string[] = [
   IPC_CHANNELS.SESSION_WORKING_SET_CHANGED,
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
-  IPC_CHANNELS.UPDATER_STATUS_UPDATE,
-  IPC_CHANNELS.UPDATER_PROGRESS,
-  IPC_CHANNELS.UPDATER_ERROR,
-];
+] as const satisfies readonly IPCChannel[];
 
 // ── Window type augmentation (renderer-side) ─────────────────────────────────
 

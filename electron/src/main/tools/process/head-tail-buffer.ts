@@ -1,9 +1,9 @@
 /**
  * HeadTailBuffer — ring buffer that keeps the first and last ~512 KiB.
  *
- * Total storage never exceeds ~1 MiB. append() is O(1) amortised for the
- * common case (under cap); when the cap is hit the head is trimmed to
- * exactly HEAD_CAP bytes and the remainder lands in the tail.
+ * Total storage never exceeds ~1 MiB. Chunks are stored as a list and only
+ * concatenated when a snapshot (head/tail/getTail) is requested, so append()
+ * stays O(1) amortised even under high-output streams.
  *
  * Ported from Python `src/orchid/tools/background_store.py` HeadTailBuffer.
  */
@@ -13,40 +13,52 @@ const TAIL_CAP = 512 * 1024; // 512 KiB
 const TOTAL_CAP = HEAD_CAP + TAIL_CAP; // ~1 MiB hard cap
 
 export class HeadTailBuffer {
+  /** Frozen first HEAD_CAP bytes once the total cap is exceeded. */
   private _head: Buffer = Buffer.alloc(0);
-  private _tail: Buffer = Buffer.alloc(0);
+  private _headLocked = false;
+
+  /** Pre-lock accumulation (under TOTAL_CAP) as a chunk list. */
+  private _preLockChunks: Buffer[] = [];
+  private _preLockLength = 0;
+
+  /** Post-lock / overflow tail as a chunk list, trimmed to TAIL_CAP. */
+  private _tailChunks: Buffer[] = [];
+  private _tailLength = 0;
+
   private _totalWritten = 0;
 
   /** Append data to the buffer, respecting the hard cap. */
   append(data: Buffer): void {
     if (data.length === 0) return;
-    this._totalWritten += data.length;
+    // Own a copy — Node stream chunks may be reused after the listener returns.
+    const owned = Buffer.from(data);
+    this._totalWritten += owned.length;
 
-    if (this._head.length > 0) {
+    if (this._headLocked) {
       // Head already locked — all new data goes to tail.
-      this._tail = Buffer.concat([this._tail, data]);
-      if (this._tail.length > TAIL_CAP) {
-        this._tail = this._tail.subarray(this._tail.length - TAIL_CAP);
-      }
+      this._pushTail(owned);
       return;
     }
 
-    if (this._head.length + this._tail.length + data.length <= TOTAL_CAP) {
-      // Still under the cap — append to tail.
-      this._tail = Buffer.concat([this._tail, data]);
+    this._preLockChunks.push(owned);
+    this._preLockLength += owned.length;
+
+    if (this._preLockLength <= TOTAL_CAP) {
       return;
     }
 
-    // Over cap — merge everything into a single working buffer, split into
-    // head (first HEAD_CAP) and tail (last TAIL_CAP).
-    const combined = Buffer.concat([this._head, this._tail, data]);
+    // Over cap — materialize once, split into head (first HEAD_CAP) and tail.
+    const combined = Buffer.concat(this._preLockChunks, this._preLockLength);
+    this._preLockChunks = [];
+    this._preLockLength = 0;
+    this._head = Buffer.from(combined.subarray(0, HEAD_CAP));
+    this._headLocked = true;
+
     if (combined.length <= TOTAL_CAP) {
-      // Edge case: merging freed enough room.
-      this._head = combined.subarray(0, HEAD_CAP);
-      this._tail = combined.subarray(HEAD_CAP);
+      // Edge case: merging freed enough room (shouldn't happen after > TOTAL_CAP).
+      this._pushTail(Buffer.from(combined.subarray(HEAD_CAP)));
     } else {
-      this._head = combined.subarray(0, HEAD_CAP);
-      this._tail = combined.subarray(combined.length - TAIL_CAP);
+      this._pushTail(Buffer.from(combined.subarray(combined.length - TAIL_CAP)));
     }
   }
 
@@ -57,16 +69,19 @@ export class HeadTailBuffer {
    * lines from the tail buffer.
    */
   getTail(lastN?: number): string {
-    let raw = this._tail;
+    let raw = this._materializeTail();
     if (lastN !== undefined && lastN >= 0) {
-      raw = this._tailLastNLines(lastN);
+      raw = this._tailLastNLines(raw, lastN);
     }
     return raw.toString('utf-8');
   }
 
   /** Total bytes stored in head + tail. */
   totalBytes(): number {
-    return this._head.length + this._tail.length;
+    if (!this._headLocked) {
+      return this._preLockLength;
+    }
+    return this._head.length + this._tailLength;
   }
 
   /** Total bytes ever written (before dropping). */
@@ -76,17 +91,59 @@ export class HeadTailBuffer {
 
   /** For testing: expose head buffer. */
   get head(): Buffer {
+    if (!this._headLocked) {
+      // Pre-lock: no frozen head yet (legacy: head is empty while under cap).
+      return Buffer.alloc(0);
+    }
     return this._head;
   }
 
   /** For testing: expose tail buffer. */
   get tail(): Buffer {
-    return this._tail;
+    return this._materializeTail();
   }
 
-  private _tailLastNLines(n: number): Buffer {
+  private _pushTail(data: Buffer): void {
+    if (data.length === 0) return;
+    // Caller must pass owned buffers (append copies on ingest).
+    if (data.length >= TAIL_CAP) {
+      this._tailChunks = [Buffer.from(data.subarray(data.length - TAIL_CAP))];
+      this._tailLength = TAIL_CAP;
+      return;
+    }
+    this._tailChunks.push(data);
+    this._tailLength += data.length;
+    this._trimTail();
+  }
+
+  private _trimTail(): void {
+    while (this._tailLength > TAIL_CAP && this._tailChunks.length > 0) {
+      const excess = this._tailLength - TAIL_CAP;
+      const first = this._tailChunks[0];
+      if (first.length <= excess) {
+        this._tailChunks.shift();
+        this._tailLength -= first.length;
+      } else {
+        this._tailChunks[0] = Buffer.from(first.subarray(excess));
+        this._tailLength -= excess;
+        break;
+      }
+    }
+  }
+
+  private _materializeTail(): Buffer {
+    if (!this._headLocked) {
+      // Under cap, all data lives in pre-lock chunks (legacy "tail").
+      if (this._preLockLength === 0) return Buffer.alloc(0);
+      return Buffer.concat(this._preLockChunks, this._preLockLength);
+    }
+    if (this._tailLength === 0) return Buffer.alloc(0);
+    return Buffer.concat(this._tailChunks, this._tailLength);
+  }
+
+  private _tailLastNLines(tail: Buffer, n: number): Buffer {
     if (n === 0) return Buffer.alloc(0);
-    const text = this._tail.toString('utf-8');
+    const text = tail.toString('utf-8');
     // Filter out empty trailing element from split (matches Python splitlines behavior)
     const lines = text.split('\n').filter((l, i, arr) => i < arr.length - 1 || l !== '');
     const selected = lines.slice(-n);

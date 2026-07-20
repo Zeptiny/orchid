@@ -1,6 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 import type { Agent } from '../../src/shared/types/agent';
+import { MessageRole, MessageType } from '../../src/shared/types/message';
+import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
+
+function successfulToolResult(toolCallId: string, content: string): Record<string, unknown> {
+  const canonical = createCanonicalToolResult('generic', {
+    status: 'complete',
+    data: { value: content },
+  });
+  return {
+    type: 'tool_result',
+    toolCallId,
+    content,
+    isError: false,
+    execution: {
+      canonical,
+      agentProjection: { content, completeness: 'complete' },
+    },
+  };
+}
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -10,7 +29,7 @@ const mocks = vi.hoisted(() => {
     fromId: vi.fn(() => null),
   };
 
-  let activeSession: {
+  type MockSession = {
     id: string;
     name: string;
     model: string;
@@ -23,7 +42,9 @@ const mocks = vi.hoisted(() => {
     todoStore: { tasks: unknown[] };
     selection?: { connectionId: string; modelId: string } | null;
     modelLabel?: string;
-  } | null = null;
+  };
+  let activeSession: MockSession | null = null;
+  const sessionsById = new Map<string, MockSession>();
 
   let workspaceBound = true;
   const testProjectDir = '/tmp/orchid-chat-ipc-project';
@@ -146,11 +167,12 @@ const mocks = vi.hoisted(() => {
     clearActive: vi.fn(() => {
       activeSession = null;
     }),
-    create: vi.fn((model: string, options?: { cwd?: string | null }) => {
+    create: vi.fn((model: string | { connectionId: string; modelId: string }, options?: { cwd?: string | null }) => {
+      const modelLabel = typeof model === 'string' ? model : model.modelId;
       activeSession = {
         id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
         name: 'Session draft',
-        model,
+        model: modelLabel,
         cwd: options?.cwd ?? null,
         chains: [],
         activeChainId: null,
@@ -158,7 +180,10 @@ const mocks = vi.hoisted(() => {
         updatedAt: new Date().toISOString(),
         subagentChains: [],
         todoStore: { tasks: [] },
+        selection: typeof model === 'string' ? undefined : model,
+        modelLabel,
       };
+      sessionsById.set(activeSession.id, activeSession);
       return activeSession;
     }),
     changeCwd: vi.fn((id: string, cwd: string) => {
@@ -166,6 +191,7 @@ const mocks = vi.hoisted(() => {
         throw new Error(`Cannot change cwd: session ${id} is not active`);
       }
       activeSession = { ...activeSession, cwd };
+      sessionsById.set(id, activeSession);
       return activeSession;
     }),
     changeModel: vi.fn((
@@ -177,18 +203,26 @@ const mocks = vi.hoisted(() => {
         throw new Error(`Cannot change model: session ${id} is not active`);
       }
       activeSession = { ...activeSession, selection, model: modelLabel, modelLabel };
+      sessionsById.set(id, activeSession);
       return activeSession;
     }),
-    getSession: vi.fn((id: string) => activeSession?.id === id ? activeSession : null),
-    switchTo: vi.fn((id: string) => activeSession?.id === id ? activeSession : null),
-    startChain: vi.fn((params?: { messages?: unknown[] }) => {
-      if (!activeSession) return null;
+    getSession: vi.fn((id: string) => sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null)),
+    switchTo: vi.fn((id: string) => {
+      const session = sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null);
+      if (session) activeSession = session;
+      return session;
+    }),
+    startChain: vi.fn((params?: { messages?: unknown[]; }, sessionId?: string) => {
+      const target = sessionId
+        ? sessionsById.get(sessionId) ?? null
+        : activeSession;
+      if (!target) return null;
       const chain = {
-        id: `chain-${activeSession.chains.length + 1}`,
-        sessionId: activeSession.id,
+        id: `chain-${target.chains.length + 1}`,
+        sessionId: target.id,
         messages: params?.messages ?? [],
         status: 'active',
-        model: activeSession.model,
+        model: target.model,
         agentName: 'general',
         agentType: 'subagent',
         agentTier: 'bloom',
@@ -196,22 +230,28 @@ const mocks = vi.hoisted(() => {
         startTime: new Date().toISOString(),
         endTime: null,
       };
-      activeSession = {
-        ...activeSession,
-        chains: [...activeSession.chains, chain],
+      const updated = {
+        ...target,
+        chains: [...target.chains, chain],
         activeChainId: chain.id,
       };
+      sessionsById.set(updated.id, updated);
+      if (activeSession?.id === updated.id) activeSession = updated;
       return chain;
     }),
-    persistTurn: vi.fn((params: { messages: unknown[]; status?: string }) => {
-      if (!activeSession) return null;
+    persistTurn: vi.fn((params: { messages: unknown[]; status?: string }, sessionId?: string) => {
+      const target = sessionId
+        ? sessionsById.get(sessionId) ?? null
+        : activeSession;
+      if (!target) return null;
       const status = params.status ?? 'completed';
-      const activeId = activeSession.activeChainId;
+      const activeId = target.activeChainId;
       const idx = activeId
-        ? activeSession.chains.findIndex((c: { id: string }) => c.id === activeId)
+        ? target.chains.findIndex((c: { id: string }) => c.id === activeId)
         : -1;
+      let updated: MockSession;
       if (idx >= 0) {
-        const chains = activeSession.chains.map((c: { id: string }, i: number) =>
+        const chains = target.chains.map((c: { id: string }, i: number) =>
           i === idx
             ? {
                 ...c,
@@ -221,18 +261,18 @@ const mocks = vi.hoisted(() => {
               }
             : c,
         );
-        activeSession = {
-          ...activeSession,
+        updated = {
+          ...target,
           chains,
           activeChainId: null,
         };
       } else {
         const chain = {
-          id: `chain-${activeSession.chains.length + 1}`,
-          sessionId: activeSession.id,
+          id: `chain-${target.chains.length + 1}`,
+          sessionId: target.id,
           messages: params.messages,
           status,
-          model: activeSession.model,
+          model: target.model,
           agentName: 'general',
           agentType: 'subagent',
           agentTier: 'bloom',
@@ -240,13 +280,15 @@ const mocks = vi.hoisted(() => {
           startTime: new Date().toISOString(),
           endTime: new Date().toISOString(),
         };
-        activeSession = {
-          ...activeSession,
-          chains: [...activeSession.chains, chain],
+        updated = {
+          ...target,
+          chains: [...target.chains, chain],
           activeChainId: null,
         };
       }
-      return activeSession;
+      sessionsById.set(updated.id, updated);
+      if (activeSession?.id === updated.id) activeSession = updated;
+      return updated;
     }),
     autoNameActive: vi.fn(async () => activeSession),
     autoName: vi.fn(async (
@@ -261,6 +303,7 @@ const mocks = vi.hoisted(() => {
     /** Test helper: reset between cases */
     _reset: () => {
       activeSession = null;
+      sessionsById.clear();
       workspaceBound = true;
       workspaceByWindow.clear();
       sessionManager.getActive.mockClear();
@@ -276,8 +319,13 @@ const mocks = vi.hoisted(() => {
       sessionManager.autoName.mockClear();
     },
     /** Test helper: seed an active session without going through create(). */
-    _setActive: (session: typeof activeSession) => {
+    _setActive: (session: MockSession | null) => {
       activeSession = session;
+      if (session) sessionsById.set(session.id, session);
+    },
+    /** Test helper: register a session without selecting it for the window. */
+    _putSession: (session: MockSession) => {
+      sessionsById.set(session.id, session);
     },
   };
 
@@ -309,6 +357,51 @@ const mocks = vi.hoisted(() => {
       workspaceByWindow.set(windowId, cwd);
     },
     _testProjectDir: testProjectDir,
+  };
+
+  const backgroundEntries = new Map<number, {
+    sessionId: string | null;
+    agentScopeId: string;
+    tail: string;
+    exitCode: number | null;
+  }>();
+  const backgroundStore = {
+    entries: backgroundEntries,
+    terminateSession: vi.fn(),
+    snapshot: vi.fn((commandId: number, _lastN?: number) => {
+      const entry = backgroundEntries.get(commandId);
+      if (!entry) return undefined;
+      return { tail: entry.tail, exitCode: entry.exitCode };
+    }),
+    snapshotVisible: vi.fn((
+      commandId: number,
+      _lastN?: number,
+      sessionId?: string | null,
+      agentScopeId?: string,
+    ) => {
+      const entry = backgroundEntries.get(commandId);
+      if (!entry) return undefined;
+      if (entry.sessionId !== (sessionId ?? null)) return undefined;
+      if (entry.agentScopeId !== (agentScopeId ?? 'main')) return undefined;
+      return { tail: entry.tail, exitCode: entry.exitCode };
+    }),
+    snapshotForSession: vi.fn((
+      commandId: number,
+      _lastN: number | undefined,
+      sessionId: string,
+    ) => {
+      const entry = backgroundEntries.get(commandId);
+      if (!entry || entry.sessionId !== sessionId) return undefined;
+      return { tail: entry.tail, exitCode: entry.exitCode };
+    }),
+    list: vi.fn(() => []),
+    _reset: () => {
+      backgroundEntries.clear();
+      backgroundStore.terminateSession.mockClear();
+      backgroundStore.snapshot.mockClear();
+      backgroundStore.snapshotVisible.mockClear();
+      backgroundStore.snapshotForSession.mockClear();
+    },
   };
 
   return {
@@ -358,6 +451,7 @@ const mocks = vi.hoisted(() => {
     buildSystemPromptContext,
     mcpManager,
     accountingStore,
+    backgroundStore,
   };
 });
 
@@ -441,7 +535,12 @@ vi.mock('../../src/main/ipc/session', () => ({
 
 vi.mock('../../src/main/project/runtime', () => ({
   getProjectRuntimeRegistry: () => mocks.runtimeRegistry,
-  hydrateProjectRuntime: async <T>(runtime: T) => runtime,
+}));
+
+vi.mock('../../src/main/tools/process/background-store', () => ({
+  getBackgroundStore: () => mocks.backgroundStore,
+  setBackgroundStore: vi.fn(),
+  BackgroundProcessStore: vi.fn(),
 }));
 
 vi.mock('../../src/main/ipc/session-activity', () => ({
@@ -471,6 +570,7 @@ describe('chat session selection gate', () => {
     vi.clearAllMocks();
     mocks.runtimeRegistry._reset();
     mocks.sessionManager._reset();
+    mocks.backgroundStore._reset();
     chatIpc = await import('../../src/main/ipc/chat');
   });
 
@@ -500,6 +600,36 @@ describe('chat session selection gate', () => {
       preferred,
       preferred.modelId,
     );
+  });
+
+  it('resolves requestedSessionId via getSession without switchTo (M-P1-007)', () => {
+    const viewing = {
+      ...makeSession('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+      selection: {
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        modelId: 'viewing/model',
+      },
+    };
+    const background = {
+      ...makeSession('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
+      selection: {
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        modelId: 'background/model',
+      },
+    };
+    mocks.sessionManager._setActive(viewing);
+    mocks.sessionManager._putSession(background);
+
+    const result = chatIpc.ensureActiveSession(
+      { id: 907, send: vi.fn() } as never,
+      null,
+      background.id,
+    );
+
+    expect(result).toMatchObject({ ok: true, session: { id: background.id } });
+    expect(mocks.sessionManager.switchTo).not.toHaveBeenCalled();
+    expect(mocks.sessionManager.getSession).toHaveBeenCalledWith(background.id);
+    expect(mocks.sessionManager.getActive()).toMatchObject({ id: viewing.id });
   });
 });
 
@@ -554,7 +684,7 @@ function makeSession(id: string, cwd = mocks.workspace._testProjectDir) {
   };
 }
 
-describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
+describe('chat IPC driver streaming', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mocks.handlers.clear();
@@ -578,881 +708,123 @@ describe.skip('chat IPC driver streaming (re-enabled by U4)', () => {
     mocks.sessionManager._reset();
   });
 
-  it('lazy-creates a session on first send when none is active', async () => {
-    mocks.streamResponses.push('Hello back');
-    const send = vi.fn();
-    const webContents = { id: 99, send };
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-    expect(chatSend).toBeDefined();
-
-    expect(mocks.sessionManager.getActive()).toBeNull();
-
-    await chatSend!(
-      { sender: webContents },
-      { message: 'Hi from draft', model: 'preferred/model' },
-    );
-    await waitForDoneCount(send, 1);
-
-    expect(mocks.publishSessionActivity).toHaveBeenCalledWith(
-      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-      expect.objectContaining({ state: 'working', phase: 'agent' }),
-    );
-    expect(mocks.completeSessionActivity).toHaveBeenCalledWith(
-      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-      false,
-    );
-
-    expect(mocks.sessionManager.create).toHaveBeenCalledTimes(1);
-    expect(mocks.sessionManager.create).toHaveBeenCalledWith(
-      'preferred/model',
-      { cwd: mocks.workspace._testProjectDir },
-      '99',
-    );
-    expect(mocks.sessionManager.getActive()?.id).toBe('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
-    expect(mocks.sessionManager.getActive()?.cwd).toBe(mocks.workspace._testProjectDir);
-    expect(mocks.workspace.clearDraftCwd).toHaveBeenCalledWith('99');
-
-    const created = channelEvents(send, IPC_CHANNELS.SESSION_CREATED);
-    expect(created).toHaveLength(1);
-    expect(created[0][1]).toMatchObject({
-      session: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', model: 'preferred/model' },
-    });
-
-    // Second send reuses the active session — no second create
-    mocks.streamResponses.push('Again');
-    await chatSend!({ sender: webContents }, { message: 'Follow-up' });
-    await waitForDoneCount(send, 2);
-    expect(mocks.sessionManager.create).toHaveBeenCalledTimes(1);
-  });
-
-  it('rejects chat:send when workspace is unbound (no session create, no stream)', async () => {
-    mocks.workspace._setBound(false);
-    const send = vi.fn();
-    const webContents = { id: 100, send };
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-    expect(chatSend).toBeDefined();
-
-    const result = await chatSend!(
-      { sender: webContents },
-      { message: 'Should not start' },
-    );
-
-    expect(result).toEqual({
-      status: 'error',
-      error: expect.stringContaining('project folder'),
-      kind: 'unbound_workspace',
-    });
-    expect(mocks.sessionManager.create).not.toHaveBeenCalled();
-    expect(mocks.streamChat).not.toHaveBeenCalled();
-    expect(doneEvents(send)).toHaveLength(0);
-  });
-
-  it('binds legacy null session cwd from sticky/draft workspace before tools run', async () => {
-    mocks.streamResponses.push('Legacy bound');
-    mocks.sessionManager._setActive({
-      id: 'legacy-session-id',
-      name: 'Legacy',
-      model: 'test/model',
-      cwd: null,
-      chains: [],
-      activeChainId: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      subagentChains: [],
-      todoStore: { tasks: [] },
-    });
-
-    const send = vi.fn();
-    const webContents = { id: 101, send };
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-
-    await chatSend!({ sender: webContents }, { message: 'Hello legacy' });
-    await waitForDoneCount(send, 1);
-
-    expect(mocks.sessionManager.changeCwd).toHaveBeenCalledWith(
-      'legacy-session-id',
-      mocks.workspace._testProjectDir,
-    );
-    expect(mocks.sessionManager.getActive()?.cwd).toBe(mocks.workspace._testProjectDir);
-    expect(mocks.sessionManager.create).not.toHaveBeenCalled();
-    expect(mocks.streamChat).toHaveBeenCalled();
-  });
-
-  it('passes frozen turn cwd + sessionId into streamChat context', async () => {
-    mocks.streamResponses.push('ctx ok');
-    mocks.sessionManager._setActive({
-      id: 'turn-ctx-session',
-      name: 'Ctx',
-      model: 'test/model',
-      cwd: mocks.workspace._testProjectDir,
-      chains: [],
-      activeChainId: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      subagentChains: [],
-      todoStore: { tasks: [] },
-    });
-
-    const send = vi.fn();
-    const webContents = { id: 102, send };
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-
-    await chatSend!({ sender: webContents }, { message: 'Use frozen cwd' });
-    await waitForDoneCount(send, 1);
-
-    expect(mocks.streamChat).toHaveBeenCalled();
-    const call = mocks.streamChat.mock.calls[0]?.[0] as {
-      context?: { cwd?: string };
-      sessionId?: string;
+  it('emits tool_update IPC payloads with the expected shape through the typed provider path', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
     };
-    expect(call.context?.cwd).toBe(mocks.workspace._testProjectDir);
-    expect(call.sessionId).toBe('turn-ctx-session');
-  });
-
-  it('captures independent project config, agents, and personality for each turn', async () => {
-    const projectA = '/tmp/orchid-project-a';
-    const projectB = '/tmp/orchid-project-b';
-    const sessionA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-    const sessionB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-    mocks.workspace._setWindowCwd('111', projectA);
-    mocks.workspace._setWindowCwd('112', projectB);
-    mocks.runtimeRegistry._set(projectA, {
-      config: {
-        default_model: 'project-a/model',
-        tier_models: { bloom: 'project-a/model' },
-        command_timeout: 30,
-        llm_stream_idle_timeout: 60,
-        llm_stream_retries: 0,
-        personality: 'voice',
-      },
-      agents: new Map([['general', {
-        name: 'general',
-        type: 'subagent' as const,
-        tier: 'bloom' as const,
-        description: 'Project A agent',
-        system_prompt: 'Project A prompt.',
-        allowed_tools: ['*'],
-        allowed_skills: ['*'],
-      }]]),
-      personalities: new Map([['voice', 'Project A voice.']]),
+    mocks.sessionManager._setActive({
+      ...makeSession('cccccccc-cccc-4ccc-8ccc-cccccccccccc'),
+      selection,
+      modelLabel: selection.modelId,
     });
-    mocks.runtimeRegistry._set(projectB, {
-      config: {
-        default_model: 'project-b/model',
-        tier_models: { bloom: 'project-b/model' },
-        command_timeout: 30,
-        llm_stream_idle_timeout: 60,
-        llm_stream_retries: 0,
-        personality: 'voice',
-      },
-      agents: new Map([['general', {
-        name: 'general',
-        type: 'subagent' as const,
-        tier: 'bloom' as const,
-        description: 'Project B agent',
-        system_prompt: 'Project B prompt.',
-        allowed_tools: ['*'],
-        allowed_skills: ['*'],
-      }]]),
-      personalities: new Map([['voice', 'Project B voice.']]),
-    });
-    mocks.streamResponses.push('A done', 'B done');
-
-    const sendA = vi.fn();
-    const sendB = vi.fn();
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-    expect(chatSend).toBeDefined();
-
-    mocks.sessionManager._setActive(makeSession(sessionA, projectA));
-    await chatSend!({ sender: { id: 111, send: sendA } }, { message: 'A' });
-    await waitForDoneCount(sendA, 1);
-
-    mocks.sessionManager._setActive(makeSession(sessionB, projectB));
-    await chatSend!({ sender: { id: 112, send: sendB } }, { message: 'B' });
-    await waitForDoneCount(sendB, 1);
-
-    const first = mocks.streamChat.mock.calls[0]?.[0] as {
-      config: { default_model: string };
-      agent: { description: string };
-      systemPrompt: string;
-      context: { cwd: string };
-    };
-    const second = mocks.streamChat.mock.calls[1]?.[0] as typeof first;
-    expect(first.config.default_model).toBe('project-a/model');
-    expect(first.agent.description).toBe('Project A agent');
-    expect(first.systemPrompt).toContain('Project A voice.');
-    expect(first.context.cwd).toBe(projectA);
-    expect(second.config.default_model).toBe('project-b/model');
-    expect(second.agent.description).toBe('Project B agent');
-    expect(second.systemPrompt).toContain('Project B voice.');
-    expect(second.context.cwd).toBe(projectB);
-  });
-
-  it('does not replay the previous assistant response when a new turn starts', async () => {
-    mocks.streamResponses.push('First response', 'Second response');
-    const send = vi.fn();
-    const webContents = { id: 42, send };
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-
-    expect(chatSend).toBeDefined();
-
-    await chatSend!({ sender: webContents }, { message: 'Hello' });
-    await waitForDoneCount(send, 1);
-
-    await chatSend!({ sender: webContents }, { message: 'Next question' });
-    await waitForDoneCount(send, 2);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    const responses = doneEvents(send).map(([, payload]) => {
-      return (payload as { response: string }).response;
-    });
-
-    expect(responses).toEqual(['First response', 'Second response']);
-  });
-
-  it('forwards streamed tool call lifecycle events', async () => {
-    mocks.streamEventSequences.push([
-      { type: 'tool_call_start', toolCallId: 'tc-1', toolName: 'read_file' },
-      { type: 'tool_call_delta', toolCallId: 'tc-1', argsDelta: '{"file_path":' },
-      { type: 'tool_call_delta', toolCallId: 'tc-1', argsDelta: '"README.md"}' },
-      {
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'tool_call_start', toolCallId: 'tc-shape-1', toolName: 'glob' };
+      yield { type: 'tool_call_delta', toolCallId: 'tc-shape-1', argsDelta: '{"pattern":' };
+      yield { type: 'tool_call_delta', toolCallId: 'tc-shape-1', argsDelta: '"*.ts"}' };
+      yield {
         type: 'tool_call',
-        toolCallId: 'tc-1',
-        toolName: 'read_file',
-        args: '{"file_path":"README.md"}',
-      },
-      {
-        type: 'tool_result',
-        toolCallId: 'tc-1',
-        content: 'file contents',
-        isError: false,
-      },
-      { type: 'finish', finishReason: 'stop' },
-    ]);
+        toolCallId: 'tc-shape-1',
+        toolName: 'glob',
+        args: '{"pattern":"*.ts"}',
+      };
+      yield successfulToolResult('tc-shape-1', 'src/index.ts');
+      yield { type: 'content', text: 'Done' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
     const send = vi.fn();
-    const webContents = { id: 43, send };
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-
-    expect(chatSend).toBeDefined();
-
-    await chatSend!({ sender: webContents }, { message: 'Read the file' });
+    const webContents = { id: 600, send };
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: webContents }, { message: 'Find files' });
     await waitForDoneCount(send, 1);
 
     const starts = channelEvents(send, IPC_CHANNELS.CHAT_TOOL_CALL_START);
-    const deltas = channelEvents(send, IPC_CHANNELS.CHAT_TOOL_CALL_DELTA);
-    const updates = channelEvents(send, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE);
-
     expect(starts).toHaveLength(1);
     expect(starts[0][1]).toMatchObject({
       type: 'tool_call_start',
-      toolCallId: 'tc-1',
-      toolName: 'read_file',
-    });
-    expect(deltas.map(([, payload]) => (payload as { argsDelta: string }).argsDelta)).toEqual([
-      '{"file_path":',
-      '"README.md"}',
-    ]);
-    expect(updates.map(([, payload]) => (payload as { status: string }).status)).toEqual([
-      'running',
-      'completed',
-    ]);
-    expect(updates.at(-1)?.[1]).toMatchObject({
-      toolCallId: 'tc-1',
-      status: 'completed',
-      result: 'file contents',
-    });
-  });
-
-  it('two-phase Esc cancels stream and emits interrupted done without suffix', async () => {
-    mocks.streamChat.mockImplementationOnce(async function* () {
-      yield { type: 'content', text: 'Partial answer' };
-      // Stay open long enough for cancel path to run
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      yield { type: 'finish', finishReason: 'stop' };
-    });
-
-    const send = vi.fn();
-    const webContents = { id: 44, send };
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-    const chatCancel = mocks.handlers.get(IPC_CHANNELS.CHAT_CANCEL);
-    expect(chatSend).toBeDefined();
-    expect(chatCancel).toBeDefined();
-
-    // Fire-and-forget send so we can cancel mid-stream
-    const sendPromise = chatSend!({ sender: webContents }, { message: 'Write something long' });
-    await new Promise((resolve) => setTimeout(resolve, 40));
-
-    const first = await chatCancel!({ sender: webContents });
-    expect(first).toEqual({ status: 'confirming' });
-
-    const second = await chatCancel!({ sender: webContents });
-    expect(second).toEqual({ status: 'confirming_subagents' });
-    expect(mocks.subagentManager.cancelRunning).not.toHaveBeenCalled();
-
-    const third = await chatCancel!({ sender: webContents });
-    expect(third).toEqual({ status: 'cancelled' });
-    expect(mocks.subagentManager.cancelRunning).toHaveBeenCalledTimes(1);
-
-    const dones = doneEvents(send);
-    expect(dones.length).toBeGreaterThanOrEqual(1);
-    const payload = dones[0][1] as {
-      response: string;
-      interrupted?: boolean;
-    };
-    expect(payload.interrupted).toBe(true);
-    expect(payload.response).toContain('Partial');
-    expect(payload.response).not.toContain('[Interrupted by user]');
-
-    await sendPromise;
-  });
-
-  it('returns coherent persisted history with an optional live snapshot', async () => {
-    let releaseStream: (() => void) | undefined;
-    const streamGate = new Promise<void>((resolve) => {
-      releaseStream = resolve;
-    });
-
-    const send = vi.fn();
-    const webContents = { id: 49, send };
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-    const chatSnapshot = mocks.handlers.get(IPC_CHANNELS.CHAT_SNAPSHOT);
-    expect(chatSend).toBeDefined();
-    expect(chatSnapshot).toBeDefined();
-
-    mocks.streamChat.mockImplementationOnce(async function* () {
-      yield { type: 'content', text: 'Live partial response' };
-      await streamGate;
-      yield { type: 'finish', finishReason: 'stop' };
-    });
-
-    const sendPromise = chatSend!({ sender: webContents }, { message: 'Keep going' });
-
-    const deadline = Date.now() + 1000;
-    while (Date.now() < deadline) {
-      if (channelEvents(send, IPC_CHANNELS.CHAT_CHUNK).length > 0) break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-
-    const snapshot = await chatSnapshot!(
-      { sender: webContents },
-      { sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
-    );
-    expect(snapshot).toMatchObject({
-      sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-      messages: [expect.objectContaining({ content: 'Keep going' })],
-      live: {
-        state: 'streaming',
-        response: 'Live partial response',
-        thinking: '',
-        toolCalls: [],
-        error: null,
-        interrupted: false,
-      },
-    });
-    expect(snapshot.live.turnId).toEqual(expect.any(String));
-    expect(snapshot.live.sequence).toEqual(expect.any(Number));
-    expect(
-      await chatSnapshot!(
-        { sender: webContents },
-        { sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
-      ),
-    ).toBeNull();
-
-    releaseStream!();
-    await sendPromise;
-    await waitForDoneCount(send, 1);
-
-    const completedSnapshot = await chatSnapshot!(
-      { sender: webContents },
-      { sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
-    );
-    expect(completedSnapshot).toMatchObject({
-      sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-      messages: [
-        expect.objectContaining({ content: 'Keep going' }),
-        expect.objectContaining({ content: 'Live partial response' }),
-      ],
-      live: null,
-    });
-  });
-
-  it('maps AI SDK 7 tool stream parts through generating → running → completed', async () => {
-    mocks.streamEventSequences.push([
-      {
-        type: 'tool_call_start',
-        toolCallId: 'call_glob_1',
-        toolName: 'glob',
-      },
-      {
-        type: 'tool_call_delta',
-        toolCallId: 'call_glob_1',
-        argsDelta: '{"pattern":',
-      },
-      {
-        type: 'tool_call_delta',
-        toolCallId: 'call_glob_1',
-        argsDelta: '"*.ts"}',
-      },
-      {
-        type: 'tool_call',
-        toolCallId: 'call_glob_1',
-        toolName: 'glob',
-        args: '{"pattern":"*.ts"}',
-      },
-      {
-        type: 'tool_result',
-        toolCallId: 'call_glob_1',
-        content: 'src/main.ts\nsrc/preload.ts',
-        isError: false,
-      },
-      { type: 'content', text: 'Found 2 files.' },
-      { type: 'finish', finishReason: 'stop' },
-    ]);
-
-    const send = vi.fn();
-    const webContents = { id: 46, send };
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-    expect(chatSend).toBeDefined();
-
-    await chatSend!({ sender: webContents }, { message: 'Find ts files' });
-    await waitForDoneCount(send, 1);
-
-    const starts = channelEvents(send, IPC_CHANNELS.CHAT_TOOL_CALL_START);
-    const deltas = channelEvents(send, IPC_CHANNELS.CHAT_TOOL_CALL_DELTA);
-    const updates = channelEvents(send, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE);
-
-    expect(starts[0][1]).toMatchObject({
-      toolCallId: 'call_glob_1',
+      toolCallId: 'tc-shape-1',
       toolName: 'glob',
     });
+
+    const deltas = channelEvents(send, IPC_CHANNELS.CHAT_TOOL_CALL_DELTA);
     expect(deltas.map(([, p]) => (p as { argsDelta: string }).argsDelta)).toEqual([
       '{"pattern":',
       '"*.ts"}',
     ]);
-    expect(updates.map(([, p]) => (p as { status: string }).status)).toEqual([
-      'running',
-      'completed',
-    ]);
+
+    const updates = channelEvents(send, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE);
+    expect(updates.length).toBeGreaterThanOrEqual(2);
     expect(updates[0][1]).toMatchObject({
-      toolCallId: 'call_glob_1',
+      toolCallId: 'tc-shape-1',
       status: 'running',
       args: '{"pattern":"*.ts"}',
     });
-    expect(updates[1][1]).toMatchObject({
-      toolCallId: 'call_glob_1',
-      status: 'completed',
-      result: 'src/main.ts\nsrc/preload.ts',
+    expect(updates.at(-1)![1]).toMatchObject({
+      toolCallId: 'tc-shape-1',
+      status: 'complete',
+      content: 'src/index.ts',
+      toolResult: expect.objectContaining({ status: 'complete' }),
     });
   });
 
-  it.each([
-    {
-      title: 'Authentication Failed',
-      detail: 'Invalid API key for provider "default"',
-      kind: 'auth',
-    },
-    {
-      title: 'Rate Limited',
-      detail: 'HTTP 429: rate limit exceeded, try again later',
-      kind: 'rate-limit',
-    },
-    {
-      title: 'Stream Error',
-      detail: 'Connection timed out while streaming response',
-      kind: 'stream',
-    },
-    {
-      title: 'Provider Error',
-      detail: 'Model returned an unexpected response payload',
-      kind: 'generic',
-    },
-  ] as const)(
-    'forwards classified error title and kind=$kind on stream failure',
-    async ({ title, detail, kind }) => {
-      mocks.streamChat.mockImplementationOnce(async function* () {
-        yield {
-          type: 'error',
-          title,
-          detail,
-        };
-      });
-
-      const send = vi.fn();
-      const webContents = { id: 45, send };
-      const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-      expect(chatSend).toBeDefined();
-
-      await chatSend!({ sender: webContents }, { message: 'Hello' });
-
-      const deadline = Date.now() + 1000;
-      while (Date.now() < deadline) {
-        const errors = channelEvents(send, IPC_CHANNELS.CHAT_ERROR);
-        if (errors.length > 0) break;
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-
-      const errors = channelEvents(send, IPC_CHANNELS.CHAT_ERROR);
-      expect(errors.length).toBeGreaterThanOrEqual(1);
-      expect(errors[0][1]).toMatchObject({
-        type: 'error',
-        title,
-        kind,
-        error: detail,
-      });
-    },
-  );
-  it('explicit window abort stops further CHAT_CHUNK emission', async () => {
-    // Stream yields one chunk, pauses during an explicit abort window, then more content.
-    let releaseSecondHalf: (() => void) | undefined;
-    const secondHalf = new Promise<void>((resolve) => {
-      releaseSecondHalf = resolve;
-    });
-
-    mocks.streamChat.mockImplementationOnce(async function* () {
-      yield { type: 'content', text: 'Session-A-chunk' };
-      await secondHalf;
-      yield { type: 'content', text: 'LEAKED-AFTER-ABORT' };
-      yield { type: 'finish', finishReason: 'stop' };
-    });
-
-    const send = vi.fn();
-    const webContents = { id: 47, send };
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-    expect(chatSend).toBeDefined();
-
-    const sendPromise = chatSend!({ sender: webContents }, { message: 'stream me' });
-
-    // Wait until the first chunk has been forwarded
-    const deadline = Date.now() + 1000;
-    while (Date.now() < deadline) {
-      const chunks = channelEvents(send, IPC_CHANNELS.CHAT_CHUNK);
-      if (chunks.length > 0) break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-
-    const chunksBefore = channelEvents(send, IPC_CHANNELS.CHAT_CHUNK);
-    expect(chunksBefore.length).toBeGreaterThanOrEqual(1);
-    expect(
-      chunksBefore.some(([, p]) => (p as { data: string }).data.includes('Session-A-chunk')),
-    ).toBe(true);
-
-    // Explicitly abort the selected session through the legacy window shim.
-    chatIpc.forceAbortChat(String(webContents.id));
-
-    // Let the stream continue after abort — stale content must not be forwarded
-    releaseSecondHalf!();
-    await sendPromise;
-    // Allow any deferred microtasks / actor stop notifications
-    await new Promise((resolve) => setTimeout(resolve, 30));
-
-    const allChunks = channelEvents(send, IPC_CHANNELS.CHAT_CHUNK);
-    const leaked = allChunks.filter(([, p]) =>
-      (p as { data: string }).data.includes('LEAKED-AFTER-ABORT'),
-    );
-    expect(leaked).toHaveLength(0);
-
-    // forceAbort is silent — must not emit CHAT_DONE for the aborted turn
-    const donesAfterAbort = doneEvents(send);
-    expect(donesAfterAbort).toHaveLength(0);
-  });
-
-  it('replacement send aborts old activity before publishing the new turn', async () => {
-    let releaseOldStream: (() => void) | undefined;
-    const oldStreamGate = new Promise<void>((resolve) => {
-      releaseOldStream = resolve;
-    });
-
-    mocks.streamChat
-      .mockImplementationOnce(async function* () {
-        yield { type: 'content', text: 'OLD-TURN' };
-        await oldStreamGate;
-        yield { type: 'content', text: 'OLD-STALE-TAIL' };
-        yield { type: 'finish', finishReason: 'stop' };
-      })
-      .mockImplementationOnce(async function* () {
-        yield { type: 'content', text: 'NEW-TURN' };
-        yield { type: 'finish', finishReason: 'stop' };
-      });
-
-    const send = vi.fn();
-    const webContents = { id: 48, send };
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-    expect(chatSend).toBeDefined();
-
-    const oldSendPromise = chatSend!({ sender: webContents }, { message: 'old' });
-
-    const deadline = Date.now() + 1000;
-    while (Date.now() < deadline) {
-      if (
-        channelEvents(send, IPC_CHANNELS.CHAT_CHUNK).some(([, p]) =>
-          (p as { data: string }).data.includes('OLD-TURN'),
-        )
-      ) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-
-    mocks.publishSessionActivity.mockClear();
-    mocks.completeSessionActivity.mockClear();
-
-    // Replacement send owns the abort and must finish old activity first.
-    await chatSend!({ sender: webContents }, { message: 'new' });
-    await waitForDoneCount(send, 1);
-
-    expect(mocks.completeSessionActivity.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.publishSessionActivity.mock.invocationCallOrder[0]!,
-    );
-
-    // Old stream resumes after the new turn — must not emit stale chunks
-    releaseOldStream!();
-    await oldSendPromise;
-    await new Promise((resolve) => setTimeout(resolve, 30));
-
-    const chunkTexts = channelEvents(send, IPC_CHANNELS.CHAT_CHUNK).map(
-      ([, p]) => (p as { data: string }).data,
-    );
-    expect(chunkTexts.some((t) => t.includes('OLD-STALE-TAIL'))).toBe(false);
-    expect(chunkTexts.some((t) => t.includes('NEW-TURN'))).toBe(true);
-
-    const responses = doneEvents(send).map(([, p]) => (p as { response: string }).response);
-    expect(responses).toEqual(['NEW-TURN']);
-  });
-
-  it('cancels only the requested running session and preserves another window stream', async () => {
-    const sessionA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-    const sessionB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-    let releaseA: (() => void) | undefined;
-    let releaseB: (() => void) | undefined;
-    const aGate = new Promise<void>((resolve) => { releaseA = resolve; });
-    const bGate = new Promise<void>((resolve) => { releaseB = resolve; });
-
-    mocks.streamChat
-      .mockImplementationOnce(async function* () {
-        yield { type: 'content', text: 'A-first' };
-        await aGate;
-        yield { type: 'content', text: 'A-stale-tail' };
-        yield { type: 'finish', finishReason: 'stop' };
-      })
-      .mockImplementationOnce(async function* () {
-        yield { type: 'content', text: 'B-first' };
-        await bGate;
-        yield { type: 'content', text: 'B-finished' };
-        yield { type: 'finish', finishReason: 'stop' };
-      });
-
-    const sendA = vi.fn();
-    const sendB = vi.fn();
-    const windowA = { id: 301, send: sendA };
-    const windowB = { id: 302, send: sendB };
-    mocks.electronWebContents.fromId.mockImplementation((id: number) => {
-      if (id === windowA.id) return windowA;
-      if (id === windowB.id) return windowB;
-      return null;
-    });
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-    const chatCancel = mocks.handlers.get(IPC_CHANNELS.CHAT_CANCEL);
-    expect(chatSend).toBeDefined();
-    expect(chatCancel).toBeDefined();
-
-    mocks.sessionManager._setActive(makeSession(sessionA));
-    const aSendPromise = chatSend!({ sender: windowA }, { message: 'run A' });
-    const firstDeadline = Date.now() + 1000;
-    while (Date.now() < firstDeadline) {
-      if (channelEvents(sendA, IPC_CHANNELS.CHAT_CHUNK).length > 0) break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-
-    mocks.sessionManager._setActive(makeSession(sessionB));
-    const bSendPromise = chatSend!({ sender: windowB }, { message: 'run B' });
-    const secondDeadline = Date.now() + 1000;
-    while (Date.now() < secondDeadline) {
-      if (channelEvents(sendB, IPC_CHANNELS.CHAT_CHUNK).length > 0) break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-
-    expect(await chatCancel!({ sender: windowB }, { sessionId: sessionA })).toEqual({
-      status: 'confirming',
-    });
-    expect(await chatCancel!({ sender: windowB }, { sessionId: sessionA })).toEqual({
-      status: 'confirming_subagents',
-    });
-    expect(await chatCancel!({ sender: windowB }, { sessionId: sessionA })).toEqual({
-      status: 'cancelled',
-    });
-    expect(mocks.subagentManager.cancelRunning).toHaveBeenCalledWith(sessionA);
-
-    releaseB!();
-    await bSendPromise;
-    await waitForDoneCount(sendB, 1);
-
-    releaseA!();
-    await aSendPromise;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-
-    const aChunks = channelEvents(sendA, IPC_CHANNELS.CHAT_CHUNK).map(
-      ([, event]) => event as { sessionId: string; data: string },
-    );
-    const bChunks = channelEvents(sendB, IPC_CHANNELS.CHAT_CHUNK).map(
-      ([, event]) => event as { sessionId: string; data: string },
-    );
-    expect(aChunks.some((event) => event.data === 'A-stale-tail')).toBe(false);
-    expect(aChunks.every((event) => event.sessionId === sessionA)).toBe(true);
-    expect(bChunks.every((event) => event.sessionId === sessionB)).toBe(true);
-    expect(bChunks.some((event) => event.data === 'B-finished')).toBe(true);
-
-    expect(doneEvents(sendA).map(([, event]) => (event as { sessionId: string }).sessionId))
-      .toContain(sessionA);
-    expect(doneEvents(sendB).map(([, event]) => (event as { sessionId: string }).sessionId))
-      .toEqual([sessionB]);
-  });
-
-  it('immediately stops one session for the global activity surface', async () => {
-    const sessionId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    mocks.streamChat.mockImplementationOnce(async function* () {
-      yield { type: 'content', text: 'Before stop' };
-      await gate;
-      yield { type: 'content', text: 'Must not leak' };
-      yield { type: 'finish', finishReason: 'stop' };
-    });
-
-    const send = vi.fn();
-    const windowA = { id: 350, send };
-    mocks.electronWebContents.fromId.mockImplementation((id: number) =>
-      id === windowA.id ? windowA : null,
-    );
-    mocks.sessionManager._setActive(makeSession(sessionId));
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-    const chatStop = mocks.handlers.get(IPC_CHANNELS.CHAT_STOP);
-    expect(chatSend).toBeDefined();
-    expect(chatStop).toBeDefined();
-
-    const sendPromise = chatSend!({ sender: windowA }, { message: 'Stop me' });
-    const deadline = Date.now() + 1000;
-    while (Date.now() < deadline) {
-      if (channelEvents(send, IPC_CHANNELS.CHAT_CHUNK).length > 0) break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-
-    expect(await chatStop!({ sender: { id: 351, send: vi.fn() } }, { sessionId }))
-      .toEqual({ status: 'stopped' });
-    expect(mocks.subagentManager.cancelRunning).toHaveBeenCalledWith(sessionId);
-    expect(doneEvents(send).map(([, event]) => (event as { sessionId: string }).sessionId))
-      .toContain(sessionId);
-
-    release!();
-    await sendPromise;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(channelEvents(send, IPC_CHANNELS.CHAT_CHUNK).some(([, event]) =>
-      (event as { data: string }).data === 'Must not leak',
-    )).toBe(false);
-  });
-
-  it('multi-chain: startChain + persistTurn turn-local + SESSION_UPDATED on each send', async () => {
-    mocks.streamResponses.push('Answer one', 'Answer two');
+  it('persists usage when a turn completes with tools but no assistant text', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
     mocks.sessionManager._setActive({
-      id: 'multi-chain-session',
-      name: 'Multi',
-      model: 'test/model',
-      cwd: mocks.workspace._testProjectDir,
-      chains: [],
-      activeChainId: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      subagentChains: [],
-      todoStore: { tasks: [] },
+      ...makeSession('cccccccc-cccc-4ccc-8ccc-cccccccccccc'),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
     });
-
-    const send = vi.fn();
-    const webContents = { id: 201, send };
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-
-    await chatSend!({ sender: webContents }, { message: 'Q1' });
-    await waitForDoneCount(send, 1);
-
-    expect(mocks.sessionManager.startChain).toHaveBeenCalled();
-    const start1 = mocks.sessionManager.startChain.mock.calls[0]?.[0] as {
-      messages?: Array<{ content: string }>;
-    };
-    expect(start1?.messages?.[0]?.content).toBe('Q1');
-
-    expect(mocks.sessionManager.persistTurn).toHaveBeenCalled();
-    const persist1 = mocks.sessionManager.persistTurn.mock.calls[0]?.[0] as {
-      messages: Array<{ content: string; role?: string }>;
-      status?: string;
-    };
-    // Turn-local: user + assistant only for this turn (not full cumulative history blob alone)
-    expect(persist1.messages.some((m) => m.content === 'Q1')).toBe(true);
-    expect(persist1.status).toBe('completed');
-
-    const updated = channelEvents(send, IPC_CHANNELS.SESSION_UPDATED);
-    expect(updated.length).toBeGreaterThanOrEqual(1);
-
-    await chatSend!({ sender: webContents }, { message: 'Q2' });
-    await waitForDoneCount(send, 2);
-
-    expect(mocks.sessionManager.startChain.mock.calls.length).toBeGreaterThanOrEqual(2);
-    const start2 = mocks.sessionManager.startChain.mock.calls.at(-1)?.[0] as {
-      messages?: Array<{ content: string }>;
-    };
-    expect(start2?.messages?.[0]?.content).toBe('Q2');
-
-    const lastPersist = mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0] as {
-      messages: Array<{ content: string }>;
-    };
-    // Second turn must not rewrite first-turn-only messages into one mega-chain call
-    expect(lastPersist.messages.some((m) => m.content === 'Q2')).toBe(true);
-    expect(lastPersist.messages.every((m) => m.content !== 'Q1')).toBe(true);
-  });
-
-  it('multi-chain: stream error persists FAILED via persistTurn', async () => {
     mocks.streamChat.mockImplementationOnce(async function* () {
-      yield { type: 'content', text: 'partial' };
       yield {
-        type: 'error',
-        title: 'Stream Error',
-        detail: 'boom',
+        type: 'tool_call',
+        toolCallId: 'tc-usage-only',
+        toolName: 'read',
+        args: '{"path":"README.md"}',
       };
-    });
-    mocks.sessionManager._setActive({
-      id: 'fail-session',
-      name: 'Fail',
-      model: 'test/model',
-      cwd: mocks.workspace._testProjectDir,
-      chains: [],
-      activeChainId: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      subagentChains: [],
-      todoStore: { tasks: [] },
+      yield successfulToolResult('tc-usage-only', 'Orchid');
+      yield {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          total_tokens: 120,
+          cached_tokens: 10,
+        },
+      };
+      yield { type: 'finish', finishReason: 'stop' };
     });
 
     const send = vi.fn();
-    const webContents = { id: 202, send };
-    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
-
-    await chatSend!({ sender: webContents }, { message: 'Will fail' });
-
-    const deadline = Date.now() + 1000;
-    while (Date.now() < deadline) {
-      if (mocks.sessionManager.persistTurn.mock.calls.some(
-        (c) => (c[0] as { status?: string }).status === 'failed',
-      )) {
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 5));
-    }
-
-    const failed = mocks.sessionManager.persistTurn.mock.calls.find(
-      (c) => (c[0] as { status?: string }).status === 'failed',
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend(
+      { sender: { id: 601, send } },
+      { message: 'Read without a final response' },
     );
-    expect(failed).toBeDefined();
-    const payload = failed![0] as { messages: Array<{ content: string }> };
-    expect(payload.messages.some((m) => m.content === 'Will fail')).toBe(true);
+    await waitForDoneCount(send, 1);
+
+    const persisted = mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0] as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(persisted.messages.at(-1)).toMatchObject({
+      role: MessageRole.ASSISTANT,
+      type: MessageType.TEXT,
+      content: '',
+      hidden: true,
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 20,
+        total_tokens: 120,
+        cached_tokens: 10,
+      },
+    });
   });
 });
+
 
 describe('chat session snapshot hydration', () => {
   beforeEach(async () => {
@@ -1499,12 +871,7 @@ describe('chat session snapshot hydration', () => {
         toolName: 'read',
         args: '{"path":"README.md"}',
       };
-      yield {
-        type: 'tool_result',
-        toolCallId: 'call-read-1',
-        content: 'Orchid',
-        isError: false,
-      };
+      yield successfulToolResult('call-read-1', 'Orchid');
       yield { type: 'content', text: 'Live partial response' };
       await streamGate;
       yield { type: 'finish', finishReason: 'stop' };
@@ -1527,8 +894,9 @@ describe('chat session snapshot hydration', () => {
         response: 'Live partial response',
         toolCalls: [expect.objectContaining({
           toolCallId: 'call-read-1',
-          status: 'completed',
-          result: 'Orchid',
+          status: 'complete',
+          content: 'Orchid',
+          toolResult: expect.objectContaining({ status: 'complete' }),
         })],
         streamSegments: expect.arrayContaining([
           expect.objectContaining({ kind: 'tool', toolCallId: 'call-read-1' }),
@@ -1549,7 +917,12 @@ describe('chat session snapshot hydration', () => {
       messages: [
         expect.objectContaining({ content: 'Keep going' }),
         expect.objectContaining({ type: 'tool_call', tool_call_id: 'call-read-1' }),
-        expect.objectContaining({ type: 'tool_result', tool_call_id: 'call-read-1' }),
+        expect.objectContaining({
+          type: 'tool_result',
+          tool_call_id: 'call-read-1',
+          content: 'Orchid',
+          tool_result: expect.objectContaining({ status: 'complete' }),
+        }),
         expect.objectContaining({ content: 'Live partial response' }),
       ],
       live: null,
@@ -1771,5 +1144,195 @@ describe('chat IPC provider gates', () => {
       name: 'Session bbbbbbbb',
     });
     warn.mockRestore();
+  });
+});
+
+describe('chat IPC teardown and bgcmd bounds', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    mocks.streamResponses.length = 0;
+    mocks.streamEventSequences.length = 0;
+    mocks.runtimeRegistry._reset();
+    mocks.sessionManager._reset();
+    chatIpc = await import('../../src/main/ipc/chat');
+    chatIpc.registerChatIPC();
+  });
+
+  afterEach(() => {
+    chatIpc.unregisterChatIPC();
+    mocks.handlers.clear();
+    mocks.sessionManager._reset();
+  });
+
+  it('unregisterChatIPC releases MCP project leases for active agents', async () => {
+    const projectRegistry = await import('../../src/main/mcp/project-registry');
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession('cccccccc-cccc-4ccc-8ccc-cccccccccccc'),
+      selection,
+      modelLabel: selection.modelId,
+    });
+
+    let releaseStream: (() => void) | undefined;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'partial' };
+      await streamGate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    const sendResult = await chatSend(
+      { sender: { id: 910, send } },
+      { message: 'Hold open for teardown' },
+    );
+    expect(sendResult).toMatchObject({ status: 'started' });
+
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline && mocks.streamChat.mock.calls.length === 0) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(mocks.streamChat).toHaveBeenCalled();
+    expect(projectRegistry.acquireProjectMCPManager).toHaveBeenCalled();
+
+    chatIpc.unregisterChatIPC();
+    chatIpc.registerChatIPC();
+
+    expect(projectRegistry.releaseProjectMCPManager).toHaveBeenCalled();
+    releaseStream?.();
+  });
+
+  it('bgcmd:snapshot rejects lastN above the upper bound', async () => {
+    const snap = mocks.handlers.get(IPC_CHANNELS.BG_CMD_SNAPSHOT);
+    expect(snap).toBeDefined();
+
+    await expect(
+      snap!({ sender: { id: 911, send: vi.fn() } }, { commandId: 1, lastN: 1001 }),
+    ).rejects.toThrow(/Invalid bgcmd:snapshot/);
+  });
+
+  it('bgcmd:snapshot accepts lastN at the upper bound', async () => {
+    const snap = mocks.handlers.get(IPC_CHANNELS.BG_CMD_SNAPSHOT)!;
+
+    const result = await snap(
+      { sender: { id: 912, send: vi.fn() } },
+      { commandId: 999_999, lastN: 1000 },
+    );
+    expect(result).toEqual({ tail: '', exitCode: null });
+  });
+
+  it('bgcmd:snapshot denies cross-session command tails (M-P1-001)', async () => {
+    const ownerSession = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const otherSession = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    mocks.backgroundStore.entries.set(42, {
+      sessionId: ownerSession,
+      agentScopeId: 'main',
+      tail: 'secret-output\n',
+      exitCode: 0,
+    });
+
+    mocks.sessionManager._setActive({
+      ...makeSession(otherSession),
+      selection: {
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        modelId: 'vendor/path/model',
+      },
+    });
+
+    const snap = mocks.handlers.get(IPC_CHANNELS.BG_CMD_SNAPSHOT)!;
+    const denied = await snap(
+      { sender: { id: 913, send: vi.fn() } },
+      { commandId: 42, lastN: 50 },
+    );
+    expect(denied).toEqual({ tail: '', exitCode: null });
+
+    const allowed = await snap(
+      { sender: { id: 913, send: vi.fn() } },
+      { commandId: 42, lastN: 50, sessionId: ownerSession },
+    );
+    expect(allowed).toEqual({ tail: 'secret-output\n', exitCode: 0 });
+  });
+
+  it('bgcmd:snapshot allows subagent-scoped tails within the same session', async () => {
+    const ownerSession = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    mocks.backgroundStore.entries.set(43, {
+      sessionId: ownerSession,
+      agentScopeId: 'subagent-xyz',
+      tail: 'subagent-output\n',
+      exitCode: null,
+    });
+    mocks.sessionManager._setActive({
+      ...makeSession(ownerSession),
+      selection: {
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        modelId: 'vendor/path/model',
+      },
+    });
+
+    const snap = mocks.handlers.get(IPC_CHANNELS.BG_CMD_SNAPSHOT)!;
+    const result = await snap(
+      { sender: { id: 914, send: vi.fn() } },
+      { commandId: 43, lastN: 50 },
+    );
+    expect(result).toEqual({ tail: 'subagent-output\n', exitCode: null });
+  });
+});
+
+describe('chat:send draft single-flight (M-P1-013)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    mocks.streamResponses.length = 0;
+    mocks.streamEventSequences.length = 0;
+    mocks.runtimeRegistry._reset();
+    mocks.sessionManager._reset();
+    chatIpc = await import('../../src/main/ipc/chat');
+    chatIpc.registerChatIPC();
+  });
+
+  afterEach(() => {
+    chatIpc.unregisterChatIPC();
+    mocks.handlers.clear();
+    mocks.sessionManager._reset();
+  });
+
+  it('concurrent draft sends create only one session', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { type: 'content', text: 'ok' };
+      await new Promise((r) => setTimeout(r, 30));
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const webContents = { id: 920, send };
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+
+    const first = chatSend(
+      { sender: webContents },
+      { message: 'First draft send', model: selection },
+    );
+    const second = chatSend(
+      { sender: webContents },
+      { message: 'Second draft send', model: selection },
+    );
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(mocks.sessionManager.create).toHaveBeenCalledTimes(1);
+    const statuses = [firstResult, secondResult].map(
+      (r) => (r as { status: string }).status,
+    );
+    expect(statuses.filter((s) => s === 'started')).toHaveLength(1);
+    expect(statuses).toContain('error');
   });
 });

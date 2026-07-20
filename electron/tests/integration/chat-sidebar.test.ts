@@ -112,7 +112,6 @@ describe('Message Types', () => {
       timestamp: new Date().toISOString(),
       usage: null,
       hidden: false,
-    is_error: false,
   };
 
     expect(message.id).toBe('test-id');
@@ -745,6 +744,40 @@ describe('Component File Structure', () => {
     expect(fs.existsSync(path.join(hooksDir, 'useSession.ts'))).toBe(true);
   });
 
+  it('shell preserves three-panel topology and shared session store', () => {
+    const chatView = fs.readFileSync(path.join(componentsDir, 'ChatView.tsx'), 'utf-8');
+    const leftSidebar = fs.readFileSync(path.join(componentsDir, 'LeftSidebar.tsx'), 'utf-8');
+    const sidebar = fs.readFileSync(path.join(componentsDir, 'Sidebar.tsx'), 'utf-8');
+    const sessionTabBar = fs.readFileSync(path.join(componentsDir, 'SessionTabBar.tsx'), 'utf-8');
+    const useSession = fs.readFileSync(path.join(hooksDir, 'useSession.ts'), 'utf-8');
+    const exceptions = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/styles/exceptions.css'),
+      'utf-8',
+    );
+
+    // Existing shell: left sessions | center main | right inspector.
+    expect(chatView).toContain('app-frame');
+    expect(chatView).toContain('LeftSidebar');
+    expect(chatView).toContain('main-pane');
+    expect(chatView).toContain('Sidebar');
+    expect(chatView).toContain('--orchid-shell-left');
+    expect(chatView).toContain('--orchid-shell-right');
+    expect(exceptions).toContain('--orchid-shell-left');
+    expect(exceptions).toContain('minmax(460px, 1fr)');
+
+    // Collapsible sections expose expanded state.
+    expect(leftSidebar).toContain('aria-expanded');
+    expect(leftSidebar).toContain('aria-controls');
+    expect(sidebar).toContain('aria-expanded');
+    expect(sidebar).toContain('aria-controls');
+    expect(sessionTabBar).toContain('role="tablist"');
+    expect(sessionTabBar).toContain('role="tab"');
+
+    // Shared session ownership (no dual local stores).
+    expect(useSession).toContain('useSyncExternalStore');
+    expect(chatView).toMatch(/useSession\s*\(/);
+  });
+
   it('useSubagents hook exists', () => {
     expect(fs.existsSync(path.join(hooksDir, 'useSubagents.ts'))).toBe(true);
   });
@@ -760,67 +793,70 @@ describe('CSS Structure', () => {
   const fs = require('node:fs');
   const path = require('node:path');
 
-  const cssPath = path.resolve(__dirname, '../../src/renderer/styles/chat.css');
+  const stylesDir = path.resolve(__dirname, '../../src/renderer/styles');
+  const chatCssPath = path.join(stylesDir, 'chat.css');
+  const componentsCssPath = path.join(stylesDir, 'components.css');
+  const shellCssPath = path.join(stylesDir, 'shell.css');
+  const exceptionsCssPath = path.join(stylesDir, 'exceptions.css');
 
-  it('chat.css exists', () => {
-    expect(fs.existsSync(cssPath)).toBe(true);
+  function readStyles(): string {
+    return [
+      fs.readFileSync(chatCssPath, 'utf-8'),
+      fs.readFileSync(componentsCssPath, 'utf-8'),
+      fs.readFileSync(shellCssPath, 'utf-8'),
+      fs.readFileSync(exceptionsCssPath, 'utf-8'),
+    ].join('\n');
+  }
+
+  it('canonical style layers exist', () => {
+    expect(fs.existsSync(path.join(stylesDir, 'index.css'))).toBe(true);
+    expect(fs.existsSync(componentsCssPath)).toBe(true);
+    expect(fs.existsSync(shellCssPath)).toBe(true);
+    expect(fs.existsSync(exceptionsCssPath)).toBe(true);
+    expect(fs.existsSync(chatCssPath)).toBe(true);
   });
 
-  it('chat.css contains layout classes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.app-layout');
-    expect(css).toContain('.chat-main');
-    expect(css).toContain('.chat-stream');
+  it('shell layout classes remain in style layers', () => {
+    const css = readStyles();
+    expect(css).toContain('.app-frame');
+    expect(css).toContain('.main-pane');
+    expect(css).toContain('.left-panel');
+    expect(css).toContain('.right-panel');
+    expect(css).toContain('.orchid-chat-scroll');
   });
 
-  it('chat.css contains message type classes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.message-user');
-    expect(css).toContain('.message-assistant');
-    expect(css).toContain('.message-thinking');
-    expect(css).toContain('.message-tool-call');
-    expect(css).toContain('.message-tool-result');
-    expect(css).toContain('.message-error');
+  it('flat message classes remain (not DaisyUI chat bubbles)', () => {
+    const css = readStyles();
+    expect(css).toContain('.orchid-msg-user');
+    expect(css).toContain('.orchid-msg-assistant');
+    expect(css).toContain('.orchid-msg-system');
+    expect(css).not.toMatch(/\.chat-bubble\b/);
   });
 
-  it('chat.css contains interaction state classes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.state-loading');
-    expect(css).toContain('.state-empty');
-    expect(css).toContain('.state-error');
-    expect(css).toContain('.state-partial');
+  it('session and panel classes remain', () => {
+    const css = readStyles();
+    expect(css).toContain('.session-list');
+    expect(css).toContain('.session-item');
+    expect(css).toContain('.panel-header');
+    expect(css).toContain('.panel-body');
   });
 
-  it('chat.css contains sidebar classes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.sidebar');
-    expect(css).toContain('.sidebar-section');
-    expect(css).toContain('.sidebar-section-header');
-  });
-
-  it('chat.css contains input area classes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.input-area');
-    expect(css).toContain('.input-textarea');
-  });
-
-  it('composer textarea leaves sizing to its resize effect', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
+  it('composer classes leave sizing to the resize effect', () => {
+    const css = readStyles();
+    expect(css).toContain('.orchid-composer-textarea');
     expect(css).not.toContain('field-sizing: content');
   });
 
-  it('chat.css contains footer classes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.footer');
-    expect(css).toContain('.footer-left');
-    expect(css).toContain('.footer-right');
+  it('chat footer classes remain', () => {
+    const css = readStyles();
+    expect(css).toContain('.orchid-chat-footer');
+    expect(css).toContain('.orchid-chat-footer-hint');
   });
 
-  it('chat.css uses CSS custom properties from themes', () => {
-    const css = fs.readFileSync(cssPath, 'utf-8');
+  it('style layers use theme custom properties', () => {
+    const css = readStyles();
     expect(css).toContain('var(--bg-primary)');
     expect(css).toContain('var(--text-primary)');
     expect(css).toContain('var(--accent-primary)');
-    expect(css).toContain('var(--sidebar-bg)');
   });
 });

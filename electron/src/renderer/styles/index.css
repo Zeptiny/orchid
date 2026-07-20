@@ -1,23 +1,43 @@
+/**
+ * Canonical renderer stylesheet entry.
+ *
+ * Import order matters for Tailwind/DaisyUI processing:
+ * 1. Tailwind + DaisyUI plugin
+ * 2. Document/root defaults
+ * 3. Shared orchid-* composites
+ * 4. Markdown / highlight exceptions
+ * 5. Browser/runtime exceptions
+ * 6. Residual chat.css compatibility bridge (unmigrated product selectors)
+ *
+ * Runtime themes load separately via applyTheme() (themes/*.css + data-theme).
+ */
+
 @import "tailwindcss";
 @plugin "daisyui";
 
-/* ── Custom Theme Variables (aligned to Iteration 012 mock) ─────────────── */
+@import "./components.css";
+@import "./shell.css";
+@import "./markdown.css";
+@import "./exceptions.css";
+@import "./chat.css";
+
+/* ── Fallback semantic tokens (overridden by runtime theme files) ───────── */
 :root {
-  --color-primary: oklch(0.62 0.13 280);    /* #7e88ff purple-blue */
+  --color-primary: oklch(0.62 0.13 280);
   --color-secondary: oklch(0.7 0.13 250);
-  --color-accent: oklch(0.78 0.15 75);       /* warning-ish */
+  --color-accent: oklch(0.78 0.15 75);
   --color-neutral: oklch(0.22 0.01 250);
-  --color-base-100: oklch(0.16 0.01 250);   /* #0b0f14 near-black */
-  --color-base-200: oklch(0.21 0.01 250);   /* #151a21 panel */
-  --color-base-300: oklch(0.3 0.015 250);   /* #26303d border */
-  --color-base-content: oklch(0.92 0.005 230); /* #eef3f8 */
-  --color-info: oklch(0.78 0.13 240);       /* #76baff */
-  --color-success: oklch(0.78 0.16 150);    /* #68d38f */
-  --color-warning: oklch(0.83 0.15 85);    /* #f2c665 */
-  --color-error: oklch(0.72 0.13 15);       /* #ef8383 */
+  --color-base-100: oklch(0.16 0.01 250);
+  --color-base-200: oklch(0.21 0.01 250);
+  --color-base-300: oklch(0.3 0.015 250);
+  --color-base-content: oklch(0.92 0.005 230);
+  --color-info: oklch(0.78 0.13 240);
+  --color-success: oklch(0.78 0.16 150);
+  --color-warning: oklch(0.83 0.15 85);
+  --color-error: oklch(0.72 0.13 15);
 }
 
-/* ── Global Styles ───────────────────────────────────────────────────────── */
+/* ── Document / root ────────────────────────────────────────────────────── */
 html, body {
   margin: 0;
   padding: 0;
@@ -32,37 +52,4 @@ html, body {
 
 #root {
   height: 100%;
-}
-
-/* Kill daisyUI menu dividers/borders if any menu class slips through */
-.menu,
-.menu li,
-.menu :where(li) {
-  border: none !important;
-  border-top: none !important;
-  border-bottom: none !important;
-  box-shadow: none !important;
-}
-.menu :where(li) + :where(li) {
-  margin-top: 0 !important;
-  border: none !important;
-}
-
-/* ── Scrollbar Styles ────────────────────────────────────────────────────── */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background-color: var(--scrollbar-thumb, var(--color-base-300));
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background-color: var(--accent-primary-hover, var(--color-primary));
 }

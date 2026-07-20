@@ -3,14 +3,32 @@
  *
  * Params: subagent_ids (string array).
  * Returns results for each subagent (completed, failed, or interrupted).
+ * Times out after DEFAULT_WAIT_TIMEOUT_MS without cancelling subagents.
  *
  * Ported from Python `src/orchid/tools/subagent.py` (wait_for_subagent / execute_wait_for_subagent).
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
-import type { SubagentManager } from '../../agents/manager';
+import { genericToolResultMetadata } from '../types';
+import { escapeXmlAttribute, escapeXmlText, genericBuiltInToolOutcome } from '../result';
+import {
+  DEFAULT_WAIT_TIMEOUT_MS,
+  SubagentWaitTimeoutError,
+  type SubagentManager,
+} from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
 import { persistSubagentChains } from '../../agents/persist-subagent-chains';
+
+function formatElapsed(ms: number): string {
+  const seconds = Math.floor(Math.max(0, ms) / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}h ${remainingMinutes}m`;
+}
 
 /**
  * Build the wait_for_subagent tool.
@@ -21,11 +39,13 @@ export function buildWaitTool(
   manager: SubagentManager,
 ): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
+    ...genericToolResultMetadata,
     name: 'wait_for_subagent',
     description:
       'Wait for one or more subagents to complete and get their results. ' +
       "Returns the subagent's final output, status, and any errors. " +
-      'Use after delegate_to_subagent to collect results.',
+      'Use after delegate_to_subagent to collect results. ' +
+      'If the wait times out, subagents keep running — call again or interrupt_subagents.',
     inputSchema: z.object({
       subagent_ids: z
         .array(z.string())
@@ -40,11 +60,7 @@ export function buildWaitTool(
 
     // Validate non-empty
     if (!subagent_ids || subagent_ids.length === 0) {
-      return {
-        display: 'No subagent IDs provided',
-        content: 'Error: subagent_ids must be a non-empty list of IDs.',
-      isError: true,
-      };
+      return genericBuiltInToolOutcome('wait_for_subagent', 'Error: subagent_ids must be a non-empty list of IDs.', 'error');
     }
 
     // Explicit IDs are untrusted model input. Keep the same ownership boundary
@@ -58,7 +74,27 @@ export function buildWaitTool(
     // Wait only for records the caller owns. This must happen after filtering:
     // waiting for a peer record would otherwise block this turn and expose its
     // terminal state through timing even if its result were omitted.
-    const records = await manager.wait(ownedIds);
+    let records: Awaited<ReturnType<SubagentManager['wait']>>;
+    try {
+      records = await manager.wait(ownedIds, {
+        timeoutMs: DEFAULT_WAIT_TIMEOUT_MS,
+        signal: ctx?.abortSignal,
+      });
+    } catch (err) {
+      if (err instanceof SubagentWaitTimeoutError) {
+        const statusBlock =
+          err.statusSnapshot.length > 0
+            ? `\n<status>\n${err.statusSnapshot.join('\n')}\n</status>`
+            : '';
+        return genericBuiltInToolOutcome('wait_for_subagent', `${err.message}${statusBlock}`, 'error');
+      }
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return genericBuiltInToolOutcome('wait_for_subagent', 'Wait aborted because the parent turn was cancelled. ' +
+            'Subagents were not cancelled or interrupted by this wait; ' +
+            'call interrupt_subagents to stop them if needed.', 'cancelled');
+      }
+      throw err;
+    }
 
     // Persist latest subagent chains onto each owning session (not blindly active)
     try {
@@ -69,46 +105,41 @@ export function buildWaitTool(
 
     // No records found at all
     if (records.size === 0) {
-      return {
-        display: 'No subagents found',
-        content: `No subagents found for IDs: ${subagent_ids.join(', ')}`,
-      };
+      return genericBuiltInToolOutcome('wait_for_subagent', `No subagents found for IDs: ${subagent_ids.join(', ')}`, 'empty');
     }
 
     // Build result parts for each found subagent
     const parts: string[] = [];
     for (const [sid, record] of records) {
-      const elapsed = record.endTime
+      const elapsed = record.endTime !== null
         ? record.endTime - record.startTime
         : record.startTime
           ? Date.now() - record.startTime
           : null;
 
-      const usage = record.usage;
-      const usageAttr = usage
-        ? ` prompt_tokens="${usage.prompt_tokens}" completion_tokens="${usage.completion_tokens}" cached_tokens="${usage.cached_tokens}"`
-        : '';
-
       const attrs =
-        `id="${sid}" name="${record.label}" type="${record.agent.type}" ` +
-        `status="${record.state}"` +
-        (elapsed !== null ? ` elapsed="${elapsed}"` : '') +
-        usageAttr;
+        'id="' + escapeXmlAttribute(sid) +
+        '" name="' + escapeXmlAttribute(record.label) +
+        '" type="' + escapeXmlAttribute(record.agent.type) +
+        '" status="' + escapeXmlAttribute(record.state) + '"' +
+        (elapsed !== null ? ' elapsed="' + escapeXmlAttribute(formatElapsed(elapsed)) + '"' : '');
 
       const taskBlock = record.task
-        ? `<task>\n${record.task}\n</task>`
+        ? '<task>' + escapeXmlText(record.task) + '</task>'
         : '';
 
       if (record.result) {
         parts.push(
-          `<subagent ${attrs}>\n${taskBlock}\n<result>\n${record.result}\n</result>\n</subagent>`,
+          '<subagent ' + attrs + '>' + taskBlock +
+            '<result>' + escapeXmlText(record.result) + '</result></subagent>',
         );
       } else if (record.error) {
         parts.push(
-          `<subagent ${attrs}>\n${taskBlock}\n<error>\n${record.error}\n</error>\n</subagent>`,
+          '<subagent ' + attrs + '>' + taskBlock +
+            '<error>' + escapeXmlText(record.error) + '</error></subagent>',
         );
       } else {
-        parts.push(`<subagent ${attrs}>\n${taskBlock}\n</subagent>`);
+        parts.push('<subagent ' + attrs + '>' + taskBlock + '</subagent>');
       }
     }
 
@@ -116,15 +147,12 @@ export function buildWaitTool(
     const foundIds = new Set(records.keys());
     const missing = subagent_ids.filter((id) => !foundIds.has(id));
     const missingBlock = missing.length > 0
-      ? `\n<not_found>${missing.join(', ')}</not_found>`
+      ? '<not_found>' + escapeXmlText(missing.join(', ')) + '</not_found>'
       : '';
 
-    const content = `<subagents>\n${parts.join('\n')}\n</subagents>${missingBlock}`;
+    const content = '<subagents>' + parts.join('\n') + missingBlock + '</subagents>';
 
-    return {
-      display: `Waited for ${records.size} subagent(s)`,
-      content,
-    };
+    return genericBuiltInToolOutcome('wait_for_subagent', content, 'complete');
   };
 
   return { definition, handler };

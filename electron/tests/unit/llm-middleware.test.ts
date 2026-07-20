@@ -5,7 +5,6 @@
  * - Retry middleware: transient error → retried with backoff, second attempt succeeds
  * - Retry guard: first token delivered → transient error → NOT retried
  * - Transient error detection: class, status, and message paths covered
- * - Provider quirks: mid-stream empty-choices chunk → stream continues
  * - Throttle: thinking yields are rate-limited
  * - Middleware stack composition
  */
@@ -14,7 +13,6 @@ import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import {
   createRetryMiddleware,
   createThrottleMiddleware,
-  createProviderQuirksMiddleware,
   createMiddlewareStack,
 } from '../../src/main/llm/middleware/index';
 import {
@@ -224,11 +222,16 @@ describe('Retry guard: no retry after content delivered', () => {
     const doStream = async () => {
       doStreamCalls++;
       if (doStreamCalls === 1) {
-        // First call: stream that yields content then throws
+        // Yield content, then error on a later pull so contentDelivered is
+        // set before the failure (sync enqueue+error can surface as error-first).
+        let pulled = 0;
         const stream = new ReadableStream<LanguageModelV4StreamPart>({
-          start(controller) {
-            controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
-            // Simulate a mid-stream error after content was delivered
+          pull(controller) {
+            pulled++;
+            if (pulled === 1) {
+              controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
+              return;
+            }
             controller.error(createHttpError('Rate limit mid-stream', 429));
           },
         });
@@ -251,14 +254,114 @@ describe('Retry guard: no retry after content delivered', () => {
       model: mockModel(),
     });
 
-    // The stream should error when we try to read it
     const reader = result.stream.getReader();
-    const firstRead = reader.read();
-    await expect(firstRead).rejects.toThrow('Rate limit mid-stream');
+    // Content is delivered first
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(first.value).toEqual({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
+    // Then the mid-stream error propagates without retry
+    await expect(reader.read()).rejects.toThrow('Rate limit mid-stream');
 
     // Should NOT have retried (only 1 doStream call)
     expect(doStreamCalls).toBe(1);
   });
+
+  it('does not retry mid-stream after tool-call content was delivered', async () => {
+    vi.useRealTimers();
+    const middleware = createRetryMiddleware({ maxRetries: 3 });
+
+    let doStreamCalls = 0;
+    const doStream = async () => {
+      doStreamCalls++;
+      if (doStreamCalls === 1) {
+        let pulled = 0;
+        const stream = new ReadableStream<LanguageModelV4StreamPart>({
+          pull(controller) {
+            pulled++;
+            if (pulled === 1) {
+              controller.enqueue({
+                type: 'tool-input-start',
+                id: 'call-1',
+                toolName: 'read',
+              } as LanguageModelV4StreamPart);
+              return;
+            }
+            controller.error(createHttpError('Rate limit after tool start', 429));
+          },
+        });
+        return {
+          stream,
+          rawCall: { rawPrompt: '', rawSettings: {} },
+          rawResponse: {},
+          request: { body: '{}' },
+          response: {},
+        };
+      }
+      return createMockDoStream([])();
+    };
+
+    const result = await middleware.wrapStream!({
+      doStream,
+      doGenerate: mockDoGenerate,
+      params: mockParams(),
+      model: mockModel(),
+    });
+
+    const reader = result.stream.getReader();
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(first.value?.type).toBe('tool-input-start');
+    await expect(reader.read()).rejects.toThrow('Rate limit after tool start');
+    expect(doStreamCalls).toBe(1);
+  });
+
+  it('retries mid-stream transient error when no content was delivered yet', async () => {
+    vi.useRealTimers();
+    const middleware = createRetryMiddleware({ maxRetries: 3 });
+
+    let doStreamCalls = 0;
+    const doStream = async () => {
+      doStreamCalls++;
+      if (doStreamCalls === 1) {
+        // Pre-content drop: stream errors before any text-delta
+        const stream = new ReadableStream<LanguageModelV4StreamPart>({
+          start(controller) {
+            controller.error(createHttpError('Connection reset before tokens', 502));
+          },
+        });
+        return {
+          stream,
+          rawCall: { rawPrompt: '', rawSettings: {} },
+          rawResponse: {},
+          request: { body: '{}' },
+          response: {},
+        };
+      }
+      return createMockDoStream([
+        { type: 'text-delta', id: 'txt-0', delta: 'Recovered' },
+        {
+          type: 'finish',
+          finishReason: 'stop',
+          usage: {
+            inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 1, textTokens: 1, reasoningTokens: undefined },
+            totalTokens: 2,
+          },
+        },
+      ])();
+    };
+
+    const result = await middleware.wrapStream!({
+      doStream,
+      doGenerate: mockDoGenerate,
+      params: mockParams(),
+      model: mockModel(),
+    });
+
+    const collected = await collectStream(result.stream);
+    expect(collected[0]).toEqual({ type: 'text-delta', id: 'txt-0', delta: 'Recovered' });
+    expect(doStreamCalls).toBe(2);
+  }, 10000);
 });
 
 // ---------------------------------------------------------------------------
@@ -288,118 +391,6 @@ describe('Transient error detection', () => {
 
   it('does NOT identify unknown errors as transient', () => {
     expect(isTransientError(new Error('something weird'))).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Provider quirks middleware tests
-// ---------------------------------------------------------------------------
-
-describe('Provider quirks middleware', () => {
-  it('passes through normal chunks unchanged', async () => {
-    const middleware = createProviderQuirksMiddleware();
-    const chunks: LanguageModelV4StreamPart[] = [
-      { type: 'text-delta', id: 'txt-0', delta: 'Hello' },
-      { type: 'text-delta', id: 'txt-0', delta: ' world' },
-      { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 5, textTokens: 5, reasoningTokens: undefined }, totalTokens: 15 } },
-    ];
-
-    const result = await middleware.wrapStream!({
-      doStream: createMockDoStream(chunks),
-      doGenerate: mockDoGenerate,
-      params: mockParams(),
-      model: mockModel(),
-    });
-
-    const collected = await collectStream(result.stream);
-    expect(collected).toEqual(chunks);
-  });
-
-  it('handles mid-stream benign error after content delivery', async () => {
-    const middleware = createProviderQuirksMiddleware();
-
-    // Simulate: doStream itself throws a benign error (as AI SDK would
-    // when it encounters a parsing error during stream setup/first read).
-    // The middleware should suppress it if content was already delivered.
-    // Note: In practice, AI SDK surfaces these as errors thrown from doStream(),
-    // not from the stream itself, because the stream pipeline processes eagerly.
-    let doStreamCalls = 0;
-    const doStream = async () => {
-      doStreamCalls++;
-      // First call: throw benign error (simulating AI SDK internal parsing)
-      throw new Error('list index out of range');
-    };
-
-    // Since no content was delivered yet (the error is pre-first-chunk),
-    // the middleware should propagate it. For post-content benign errors,
-    // the stream TransformStream handles it — but AI SDK surfaces these
-    // as doStream() throws, so we test that path.
-    await expect(
-      middleware.wrapStream!({
-        doStream,
-        doGenerate: mockDoGenerate,
-        params: mockParams(),
-        model: mockModel(),
-      }),
-    ).rejects.toThrow('list index out of range');
-    expect(doStreamCalls).toBe(1);
-  });
-
-  it('propagates non-benign errors', async () => {
-    const middleware = createProviderQuirksMiddleware();
-
-    const doStream = async () => {
-      throw createHttpError('Invalid request', 400);
-    };
-
-    await expect(
-      middleware.wrapStream!({
-        doStream,
-        doGenerate: mockDoGenerate,
-        params: mockParams(),
-        model: mockModel(),
-      }),
-    ).rejects.toThrow('Invalid request');
-  });
-
-  it('suppresses benign errors after content was delivered in stream', async () => {
-    const middleware = createProviderQuirksMiddleware();
-
-    // Simulate: stream delivers content, then a benign error occurs.
-    // We use a deferred error (via queueMicrotask) so the stream is created
-    // first, and the error occurs during the first read.
-    let errorFn: (() => void) | null = null;
-    const stream = new ReadableStream<LanguageModelV4StreamPart>({
-      start(controller) {
-        controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
-        // Defer the error so it happens during read, not during construction
-        errorFn = () => controller.error(new Error('list index out of range'));
-      },
-    });
-
-    const doStream = async () => ({
-      stream,
-      rawCall: { rawPrompt: '', rawSettings: {} },
-      rawResponse: {},
-      request: { body: '{}' },
-      response: {},
-    });
-
-    const result = await middleware.wrapStream!({
-      doStream,
-      doGenerate: mockDoGenerate,
-      params: mockParams(),
-      model: mockModel(),
-    });
-
-    const reader = result.stream.getReader();
-    // First read succeeds (the content chunk)
-    const first = await reader.read();
-    expect(first.value).toEqual({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
-
-    // Trigger the deferred error, then try to read — the error should propagate
-    if (errorFn) errorFn();
-    await expect(reader.read()).rejects.toThrow('list index out of range');
   });
 });
 
@@ -466,6 +457,31 @@ describe('Throttle middleware', () => {
     const third = await reader.read();
     expect(third.value).toEqual({ type: 'text-delta', id: 'txt-0', delta: 'Answer' });
   });
+
+  it('does not enqueue after stream cancel when timer fires', async () => {
+    const middleware = createThrottleMiddleware({ intervalMs: 100 });
+    const chunks: LanguageModelV4StreamPart[] = [
+      { type: 'reasoning-delta', id: 'reasoning-0', delta: 'first' },
+      { type: 'reasoning-delta', id: 'reasoning-0', delta: ' buffered' },
+    ];
+
+    const result = await middleware.wrapStream!({
+      doStream: createMockDoStream(chunks),
+      doGenerate: mockDoGenerate,
+      params: mockParams(),
+      model: mockModel(),
+    });
+
+    const reader = result.stream.getReader();
+    const first = await reader.read();
+    expect(first.value).toEqual({ type: 'reasoning-delta', id: 'reasoning-0', delta: 'first' });
+
+    await reader.cancel();
+    await vi.advanceTimersByTimeAsync(200);
+
+    const after = await reader.read();
+    expect(after.done).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -473,22 +489,22 @@ describe('Throttle middleware', () => {
 // ---------------------------------------------------------------------------
 
 describe('Middleware stack composition', () => {
-  it('creates a stack with all middleware', () => {
+  it('creates a stack with retry + throttle', () => {
     const stack = createMiddlewareStack();
-    expect(stack).toHaveLength(3);
+    expect(stack).toHaveLength(2);
   });
 
   it('accepts custom retry options', () => {
     const stack = createMiddlewareStack({
       retry: { maxRetries: 5 },
     });
-    expect(stack).toHaveLength(3);
+    expect(stack).toHaveLength(2);
   });
 
   it('accepts custom throttle options', () => {
     const stack = createMiddlewareStack({
       throttle: { intervalMs: 200 },
     });
-    expect(stack).toHaveLength(3);
+    expect(stack).toHaveLength(2);
   });
 });

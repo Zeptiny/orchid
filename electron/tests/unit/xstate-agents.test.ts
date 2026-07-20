@@ -13,14 +13,18 @@
  * Test scenarios from plan U10.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { createActor } from 'xstate';
-import { agentMachine } from '../../src/main/agents/xstate/agent-machine';
+import {
+  agentMachine,
+  type AgentContext,
+} from '../../src/main/agents/xstate/agent-machine';
 import { interruptMachine } from '../../src/main/agents/xstate/interrupt-machine';
 import { SubagentManager, SubagentState } from '../../src/main/agents/manager';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import type { Agent } from '../../src/shared/types/agent';
 import { AgentType, AgentTier } from '../../src/shared/types/agent';
+import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -32,6 +36,26 @@ const mockAgent: Agent = {
   allowed_tools: ['*'],
   allowed_skills: ['*'],
 };
+
+function successfulToolResult(
+  toolCallId: string,
+  content: string,
+): Extract<StreamEvent, { type: 'tool_result' }> {
+  const canonical = createCanonicalToolResult('generic', {
+    status: 'complete',
+    data: { value: content },
+  });
+  return {
+    type: 'tool_result',
+    toolCallId,
+    content,
+    isError: false,
+    execution: {
+      canonical,
+      agentProjection: { content, completeness: 'complete' },
+    },
+  };
+}
 
 /**
  * Create a mock stream function that yields a sequence of StreamEvents.
@@ -192,6 +216,81 @@ describe('Agent Machine', () => {
     expect(actor.getSnapshot().context.error).toBeNull();
   });
 
+  it('accumulates usage across model steps and keeps the latest context snapshot', async () => {
+    const firstContext = {
+      input_tokens: 100,
+      output_tokens: 20,
+      used_tokens: 120,
+      system_tokens: 20,
+      tools_tokens: 10,
+      tool_use_tokens: 0,
+      user_tokens: 70,
+      assistant_tokens: 20,
+    };
+    const latestContext = {
+      input_tokens: 180,
+      output_tokens: 30,
+      used_tokens: 210,
+      system_tokens: 20,
+      tools_tokens: 10,
+      tool_use_tokens: 50,
+      user_tokens: 70,
+      assistant_tokens: 60,
+    };
+    const streamFn = mockStreamFn([
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          total_tokens: 120,
+          cached_tokens: 25,
+          context: firstContext,
+        },
+      },
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 180,
+          completion_tokens: 30,
+          total_tokens: 210,
+          cached_tokens: 80,
+          context: latestContext,
+        },
+      },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+
+    const actor = createActor(agentMachine, {
+      input: {
+        agent: mockAgent,
+        systemPrompt: 'You are helpful.',
+        streamFn,
+        interruptResetMs: 100,
+      },
+    });
+
+    actor.start();
+    actor.send({ type: 'USER_INPUT', message: 'Inspect the project' });
+    await waitForContext<AgentContext>(
+      actor,
+      (context) => context.usage?.prompt_tokens === 100,
+    );
+
+    expect(actor.getSnapshot().value).toBe('streaming');
+    expect(actor.getSnapshot().context.usage?.context).toEqual(firstContext);
+
+    await waitForState(actor, 'idle');
+
+    expect(actor.getSnapshot().context.usage).toEqual({
+      prompt_tokens: 280,
+      completion_tokens: 50,
+      total_tokens: 330,
+      cached_tokens: 105,
+      context: latestContext,
+    });
+  });
+
   it('streaming tool events → idle', async () => {
     // Simulate a stream that yields content, then tool_call, then more content, then finish.
     // AI SDK handles tool loops internally; the machine only tracks the events
@@ -212,12 +311,7 @@ describe('Agent Machine', () => {
       };
       // After tool call, the stream pauses. Tool executes, result feeds back.
       // In the real flow, AI SDK handles this. For testing, we simulate.
-      yield {
-        type: 'tool_result',
-        toolCallId: 'tc-1',
-        content: 'file contents',
-        isError: false,
-      };
+      yield successfulToolResult('tc-1', 'file contents');
       yield { type: 'content', text: ' Done.' };
       yield { type: 'finish', finishReason: 'stop' };
     };
@@ -250,12 +344,7 @@ describe('Agent Machine', () => {
         toolName: 'read_file',
         args: '{"file_path":"README.md"}',
       },
-      {
-        type: 'tool_result',
-        toolCallId: 'tc-1',
-        content: 'file contents',
-        isError: false,
-      },
+      successfulToolResult('tc-1', 'file contents'),
       { type: 'finish', finishReason: 'stop' },
     ]);
 
@@ -276,8 +365,9 @@ describe('Agent Machine', () => {
     expect(update).toMatchObject({
       toolCallId: 'tc-1',
       toolName: 'read_file',
-      status: 'completed',
-      result: 'file contents',
+      status: 'complete',
+      content: 'file contents',
+      toolResult: expect.objectContaining({ status: 'complete' }),
     });
     expect(actor.getSnapshot().context.toolUpdateSequence).toBe(2);
   });
@@ -310,13 +400,7 @@ describe('Agent Machine', () => {
 
   it('error → USER_INPUT → streaming (recovery)', async () => {
     let callCount = 0;
-    const streamFn = async function* (params: {
-      message: string;
-      agent: Agent;
-      systemPrompt: string;
-      abortSignal: AbortSignal;
-      model?: string | null;
-    }): AsyncGenerator<StreamEvent> {
+    const streamFn = async function* (): AsyncGenerator<StreamEvent> {
       callCount++;
       if (callCount === 1) {
         yield { type: 'error', title: 'Error', detail: 'Rate limit' };
@@ -546,5 +630,32 @@ describe('SubagentManager', () => {
     expect(results.size).toBe(2);
     expect(results.get(a.id)?.result).toBe('result a');
     expect(results.get(b.id)?.result).toBe('result b');
+  });
+
+  it('wait timeout errors without cancelling running subagents', async () => {
+    const record = manager.spawn('hang', 'never ends', mockAgent);
+    manager.markRunning(record.id);
+
+    await expect(
+      manager.wait([record.id], { timeoutMs: 30 }),
+    ).rejects.toMatchObject({
+      name: 'SubagentWaitTimeoutError',
+      message: expect.stringContaining('Only the wait tool stopped waiting'),
+    });
+
+    expect(record.state).toBe(SubagentState.RUNNING);
+    expect(record._resolveWait).toBeNull();
+  });
+
+  it('wait abort signal unblocks without cancelling children', async () => {
+    const record = manager.spawn('hang', 'never ends', mockAgent);
+    manager.markRunning(record.id);
+    const ac = new AbortController();
+
+    const waitPromise = manager.wait([record.id], { signal: ac.signal });
+    setTimeout(() => ac.abort(), 20);
+
+    await expect(waitPromise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(record.state).toBe(SubagentState.RUNNING);
   });
 });

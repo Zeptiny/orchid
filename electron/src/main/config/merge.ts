@@ -62,7 +62,7 @@ export function deepMerge(
 }
 
 /**
- * Deep-merge two named-entry dictionaries (currently MCP servers).
+ * Deep-merge two named-entry dictionaries (MCP servers and similar alias maps).
  *
  * For each alias present in either side:
  * - only in home → keep home entry
@@ -73,7 +73,7 @@ export function deepMerge(
  *
  * Matches Python `config.py:354-387`.
  */
-export function deepMergeProviderDict(
+export function deepMergeNamedEntryDict(
   home: Record<string, unknown>,
   project: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -151,7 +151,7 @@ function mergeTierSelections(
  * Merge partial `updates` into a full config for `config:save`.
  *
  * Same nested semantics as {@link mergeLayers}:
- * - `mcp_servers`: per-alias merge via {@link deepMergeProviderDict}
+ * - `mcp_servers`: per-alias merge via {@link deepMergeNamedEntryDict}
  * - `tier_models`: per-tier merge with atomic typed selections
  * - other nested plain objects (`rag`, …): {@link deepMerge}
  * - scalars / arrays: source replaces target
@@ -195,9 +195,9 @@ export function mergeConfigUpdates(
 
     if (DEEP_MERGE_KEYS.has(key) && isPlainObject(tgtVal) && isPlainObject(srcVal)) {
       // Per-alias merge, then apply null tombstones for deleted aliases.
-      const merged = deepMergeProviderDict(
+      const merged = deepMergeNamedEntryDict(
         tgtVal as Record<string, unknown>,
-        // Strip nulls before provider merge (non-dict values would replace)
+        // Strip nulls before alias merge (non-dict values would replace)
         stripNullEntries(srcVal as Record<string, unknown>),
       );
       for (const [alias, val] of Object.entries(srcVal as Record<string, unknown>)) {
@@ -240,7 +240,7 @@ function stripNullEntries(
  * a project config specifying only `rag.top_k` doesn't wipe out the other
  * rag fields from home/defaults.
  *
- * `mcp_servers` uses the specialised `deepMergeProviderDict`; typed model
+ * `mcp_servers` uses the specialised `deepMergeNamedEntryDict`; typed model
  * selections stay atomic while `tier_models` still merges by tier.
  */
 export function mergeLayers(
@@ -273,7 +273,7 @@ function applyLayerOverrides(
     if (key === 'default_model') {
       merged[key] = layerVal;
     } else if (DEEP_MERGE_KEYS.has(key) && isPlainObject(layerVal) && isPlainObject(mergedVal)) {
-      merged[key] = deepMergeProviderDict(
+      merged[key] = deepMergeNamedEntryDict(
         mergedVal as Record<string, unknown>,
         layerVal as Record<string, unknown>,
       );
@@ -334,13 +334,20 @@ const RAG_ENV_MAP: EnvMapping[] = [
   { envKey: 'ORCHID_RAG_EMBEDDING_BATCH_SIZE', configPath: ['rag', 'embedding_batch_size'], type: 'int' },
 ];
 
-/** Cast a string env value to the target type. */
+/**
+ * Cast a string env value to the target type.
+ * Returns `undefined` for non-finite numeric parses so callers skip the override.
+ */
 function castValue(value: string, type: EnvMapping['type']): unknown {
   switch (type) {
-    case 'int':
-      return parseInt(value, 10);
-    case 'float':
-      return parseFloat(value);
+    case 'int': {
+      const n = Number.parseInt(value, 10);
+      return Number.isFinite(n) ? n : undefined;
+    }
+    case 'float': {
+      const n = Number.parseFloat(value);
+      return Number.isFinite(n) ? n : undefined;
+    }
     case 'list':
       return value.split(',').map((s) => s.trim());
     case 'string':
@@ -371,7 +378,10 @@ export function applyEnvOverrides(cfg: Record<string, unknown>): Record<string, 
   for (const mapping of [...ENV_MAP, ...RAG_ENV_MAP]) {
     const raw = process.env[mapping.envKey];
     if (raw !== undefined && raw !== '') {
-      setAtPath(cfg, mapping.configPath, castValue(raw, mapping.type));
+      const casted = castValue(raw, mapping.type);
+      // Skip non-finite numeric env values (NaN / Infinity) rather than injecting them.
+      if (casted === undefined) continue;
+      setAtPath(cfg, mapping.configPath, casted);
     }
   }
   return cfg;

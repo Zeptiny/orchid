@@ -9,7 +9,10 @@
 import { z } from 'zod';
 import { normalizeAgentScopeId } from '../../../shared/types/agent-scope';
 import { getBackgroundStore } from './background-store';
+import { backgroundCommandNotFound } from './not-found';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -39,18 +42,14 @@ export async function executeReadOutput(
   waitMs?: number,
   sessionId?: string | null,
   agentScopeId?: string | null,
-): Promise<{ display: string; content: string; isError?: boolean }> {
+): Promise<GenericBuiltInToolOutcome> {
   const store = getBackgroundStore();
   const scopeSessionId = sessionId ?? null;
   const scopeAgent = normalizeAgentScopeId(agentScopeId);
   // Visibility is session + agent scoped (peer agents cannot read each other).
   const entry = store.getVisible(id, scopeSessionId, scopeAgent);
   if (!entry) {
-    return {
-      display: `Background command ${id} not found`,
-      content: `Error: No background command with id ${id}.`,
-      isError: true,
-    };
+    return backgroundCommandNotFound('read_output', id);
   }
 
   // Long-poll: wait for new output or exit before snapshotting.
@@ -61,25 +60,15 @@ export async function executeReadOutput(
 
   const result = store.snapshotVisible(id, lastN, scopeSessionId, scopeAgent);
   if (!result) {
-    return {
-      display: `Background command ${id} not found`,
-      content: `Error: No background command with id ${id}.`,
-      isError: true,
-    };
+    return backgroundCommandNotFound('read_output', id);
   }
 
   const { tail, exitCode } = result;
-  const status = exitCode !== null ? 'exited' : 'running';
-  const cmdPreview = entry.command.length > 80
-    ? entry.command.substring(0, 79) + '...'
-    : entry.command;
-
-  const exitLine = exitCode !== null ? `\nExit code: ${exitCode}` : '';
-
-  return {
-    display: `$ ${cmdPreview} (${status})`,
-    content: tail + exitLine,
-  };
+  return genericBuiltInToolOutcome('read_output', {
+    commandId: id,
+    output: tail,
+    ...(exitCode === null ? {} : { exitCode }),
+  }, 'complete');
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +76,7 @@ export async function executeReadOutput(
 // ---------------------------------------------------------------------------
 
 export const readOutputToolDefinition: ToolDefinition = {
+  ...genericToolResultMetadata,
   name: 'read_output',
   description:
     'Read output from a background command. Returns a snapshot of recent ' +
@@ -95,6 +85,8 @@ export const readOutputToolDefinition: ToolDefinition = {
   inputSchema: readOutputInputSchema,
   actionLabel: 'Reading output...',
   category: 'process',
+  /** Long-poll wait_ms can approach 60s; skip outer dispatch timeout. */
+  noTimeout: true,
 };
 
 export const readOutputHandler: ToolHandler = async (input: unknown, ctx) => {

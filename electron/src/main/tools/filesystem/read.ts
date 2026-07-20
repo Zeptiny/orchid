@@ -1,24 +1,16 @@
 /**
- * read tool — read file contents with line numbers.
- *
- * Params: file_path (required), offset (optional), limit (optional).
- * Returns lines in `num | content` format.
- * Default limit from config (read_line_limit, default 1000).
- * Binary detection: skips files that contain null bytes.
- *
- * Ported from Python `src/orchid/tools/file_manipulation.py` lines 18-81.
- *
- * Security note (P1-2):
- * This tool operates on arbitrary absolute paths with no restriction to the
- * project directory. A malicious agent could read sensitive files outside the
- * workspace (e.g., /etc/passwd, ~/.ssh/id_rsa). Path sandboxing is deferred
- * to R20 — the permission system will enforce directory restrictions.
+ * read tool — return a requested, numbered source range as structured data.
  */
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { z } from 'zod';
-import type { ToolDefinition, ToolHandler } from '../types';
+import type { ToolDefinition, ToolHandler, ToolHandlerOutcome } from '../types';
 import { getToolConfig, resolveToolPath } from '../types';
 import { isBinaryFileSync } from '../ast/utils';
+import {
+  fileContentDataSchema,
+  type FileContentData,
+} from '../../../shared/types/tool-result-filesystem';
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 
@@ -38,68 +30,143 @@ export const readDefinition: ToolDefinition = {
     'Read the content of a file. Returns lines with line numbers. ' +
     'Use offset/limit to read specific sections of large files rather than reading the entire file.',
   inputSchema: readInputSchema,
+  resultFamily: 'file-content',
+  outputDataSchema: fileContentDataSchema,
   actionLabel: 'Reading...',
   category: 'filesystem',
 };
+function languageHint(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  const languages: Record<string, string> = {
+    '.c': 'c',
+    '.cc': 'cpp',
+    '.cpp': 'cpp',
+    '.css': 'css',
+    '.go': 'go',
+    '.html': 'html',
+    '.java': 'java',
+    '.js': 'javascript',
+    '.json': 'json',
+    '.jsx': 'javascript',
+    '.md': 'markdown',
+    '.py': 'python',
+    '.rb': 'ruby',
+    '.rs': 'rust',
+    '.sh': 'shell',
+    '.sql': 'sql',
+    '.ts': 'typescript',
+    '.tsx': 'typescript',
+    '.xml': 'xml',
+    '.yaml': 'yaml',
+    '.yml': 'yaml',
+  };
+  return languages[extension] ?? 'text';
+}
+
+function contentData(
+  filePath: string,
+  requestedRange: FileContentData['requestedRange'],
+  lines: FileContentData['lines'],
+  returnedRange: FileContentData['returnedRange'],
+  totalLineCount: number,
+): FileContentData {
+  return fileContentDataSchema.parse({
+    path: filePath,
+    lines,
+    requestedRange,
+    returnedRange,
+    totalLineCount,
+    language: languageHint(filePath),
+  });
+}
+
+function errorOutcome(
+  filePath: string,
+  requestedRange: FileContentData['requestedRange'],
+  message: string,
+  code: string,
+  totalLineCount = 0,
+  lines: FileContentData['lines'] = [],
+): ToolHandlerOutcome<FileContentData> {
+  return {
+    status: 'error',
+    data: contentData(filePath, requestedRange, lines, null, totalLineCount),
+    error: { code, message },
+  };
+}
+
+function splitSourceLines(content: string): string[] {
+  if (content.length === 0) return [];
+  const lines = content.split('\n');
+  // A terminal newline terminates the last line; it does not introduce an
+  // additional empty source line.
+  if (lines.at(-1) === '') lines.pop();
+  return lines.map((line) => line.endsWith('\r') ? line.slice(0, -1) : line);
+}
 
 // ── Handler ────────────────────────────────────────────────────────────────
 
 export const readHandler: ToolHandler = async (input: unknown, ctx) => {
   const { file_path: rawPath, offset = 1, limit } = input as ReadInput;
-  const file_path = resolveToolPath(ctx.cwd, rawPath);
-  const effectiveLimit = limit ?? getToolConfig(ctx).read_line_limit;
+  const filePath = resolveToolPath(ctx.cwd, rawPath);
+  const configuredLimit = getToolConfig(ctx).read_line_limit;
+  const effectiveLimit = limit ?? configuredLimit ?? 1000;
+  const requestedEnd = offset + effectiveLimit - 1;
+  const requestedRange = { start: offset, end: requestedEnd };
 
   try {
-    // Binary check
-    if (isBinaryFileSync(file_path)) {
-      return {
-        display: `Read error ${file_path}`,
-        content: `Error reading file ${file_path}: file appears to be binary.`,
-      isError: true
-    };
+    if (isBinaryFileSync(filePath)) {
+      return errorOutcome(
+        filePath,
+        requestedRange,
+        `Error reading file ${filePath}: file appears to be binary.`,
+        'binary_file',
+      );
     }
 
-    const content = fs.readFileSync(file_path, 'utf-8');
-    const allLines = content.split('\n');
-
-    // Empty file (split gives [''] for empty string, so check actual content)
-    if (content.length === 0 || (allLines.length === 1 && allLines[0] === '')) {
-      return {
-        display: `Read ${file_path} is empty`,
-        content: `File ${file_path} is empty (0 lines)`,
-      };
-    }
-
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const allLines = splitSourceLines(content);
     const lineCount = allLines.length;
 
-    if (offset > lineCount) {
-      return {
-        display: `Read ${file_path}, offset ${offset} out of range`,
-        content: `Offset of ${offset} is greater than the file line count ${lineCount}`,
-        isError: true,
-      };
+    if (lineCount === 0) {
+      const data = contentData(filePath, requestedRange, [], null, 0);
+      return { status: 'empty', data };
     }
 
-    // Slice lines: offset is 1-indexed, array is 0-indexed
-    const startIdx = offset - 1;
-    const endIdx = Math.min(startIdx + effectiveLimit, lineCount);
-    const selectedLines = allLines.slice(startIdx, endIdx);
+    if (offset > lineCount) {
+      return errorOutcome(
+        filePath,
+        requestedRange,
+        `Offset of ${offset} is greater than the file line count ${lineCount}`,
+        'offset_out_of_range',
+        lineCount,
+      );
+    }
 
-    const formatted = selectedLines
-      .map((line, i) => `${startIdx + i + 1} | ${line}`)
-      .join('\n');
+    const startIndex = offset - 1;
+    const endIndex = Math.min(startIndex + effectiveLimit, lineCount);
+    const selectedLines = allLines.slice(startIndex, endIndex).map((line, index) => ({
+      number: startIndex + index + 1,
+      content: line,
+    }));
+    const returnedRange = { start: offset, end: endIndex };
+    const data = contentData(filePath, requestedRange, selectedLines, returnedRange, lineCount);
 
-    const displayEnd = Math.min(offset + effectiveLimit - 1, lineCount);
-    return {
-      display: `Read ${file_path} lines ${offset}-${displayEnd}`,
-      content: `Showing lines ${offset}-${displayEnd} of ${lineCount}\n${formatted}`,
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return {
-      display: `Read error ${file_path}`,
-      content: `Error reading file ${file_path}: ${msg}`,
-      isError: true
-    };
+    if (endIndex < lineCount) {
+      return {
+        status: 'partial',
+        data,
+        retrieval: { kind: 'read', path: filePath, offset: endIndex + 1, limit: effectiveLimit },
+      };
+    }
+    return { status: 'complete', data };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return errorOutcome(
+      filePath,
+      requestedRange,
+      `Error reading file ${filePath}: ${message}`,
+      'read_failed',
+    );
   }
 };

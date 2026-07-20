@@ -5,9 +5,7 @@
  * Wraps SessionManager from U5 with zod-validated payloads.
  */
 import { BrowserWindow, dialog, ipcMain } from 'electron';
-import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import { modelSelectionSchema } from '../../shared/types/provider';
 import { flattenSessionMessages } from '../../shared/types/session';
 import { SessionManager } from '../session/manager';
 import { getConfig } from '../config/loader';
@@ -29,38 +27,14 @@ import {
   workingSetOpenOrFocus,
   workingSetRemove,
 } from './session-working-set';
-
-// ── Zod validation schemas ───────────────────────────────────────────────────
-
-const sessionLoadSchema = z.object({
-  id: z.string().uuid(),
-  /** When false, peek from disk without activating or seeding chat history. */
-  activate: z.boolean().optional().default(true),
-});
-
-const sessionDeleteSchema = z.object({
-  id: z.string().uuid(),
-});
-
-const sessionRenameSchema = z.object({
-  id: z.string().uuid(),
-  name: z.string().min(1),
-});
-
-const sessionChangeModelSchema = z.object({
-  id: z.string().uuid(),
-  selection: modelSelectionSchema.nullable(),
-  modelLabel: z.string().nullable().optional(),
-});
-
-const sessionChangeCwdSchema = z.object({
-  id: z.string().uuid(),
-  cwd: z.string().min(1),
-});
-
-const sessionSetWorkspaceSchema = z.object({
-  cwd: z.string().min(1),
-});
+import {
+  sessionChangeCwdSchema,
+  sessionChangeModelSchema,
+  sessionDeleteSchema,
+  sessionLoadSchema,
+  sessionRenameSchema,
+  sessionSetWorkspaceSchema,
+} from './payload-schemas';
 
 // ── Singleton session manager ────────────────────────────────────────────────
 
@@ -289,7 +263,19 @@ export function registerSessionIPC(): void {
     }
 
     const manager = getSessionManager();
+    const existing = manager.getSession(parsed.data.id);
+    if (!existing) {
+      return { status: 'not_found' };
+    }
+    if (existing.name === parsed.data.name) {
+      return { status: 'unchanged', name: existing.name };
+    }
+
     manager.rename(parsed.data.id, parsed.data.name);
+    const after = manager.getSession(parsed.data.id);
+    if (!after || after.name !== parsed.data.name) {
+      return { status: 'not_active' };
+    }
 
     // Push rename event to renderer so sidebar/list updates reactively
     event.sender.send(IPC_CHANNELS.SESSION_RENAMED, {
@@ -308,19 +294,44 @@ export function registerSessionIPC(): void {
     }
 
     const manager = getSessionManager();
-    manager.changeModel(
-      parsed.data.id,
-      parsed.data.selection,
-      parsed.data.modelLabel ?? parsed.data.selection?.modelId ?? null,
-    );
-    const active = manager.getSession(parsed.data.id);
-    if (!active || active.id !== parsed.data.id) {
+    const existing = manager.getSession(parsed.data.id);
+    if (!existing) {
+      return { status: 'not_found' };
+    }
+
+    const nextLabel = parsed.data.modelLabel ?? parsed.data.selection?.modelId ?? null;
+    const sameSelection =
+      (existing.selection === null && parsed.data.selection === null) ||
+      (existing.selection !== null &&
+        parsed.data.selection !== null &&
+        existing.selection.connectionId === parsed.data.selection.connectionId &&
+        existing.selection.modelId === parsed.data.selection.modelId);
+    if (sameSelection && existing.modelLabel === nextLabel) {
+      return {
+        status: 'unchanged',
+        selection: existing.selection,
+        modelLabel: existing.modelLabel,
+      };
+    }
+
+    manager.changeModel(parsed.data.id, parsed.data.selection, nextLabel);
+    const after = manager.getSession(parsed.data.id);
+    if (!after) {
+      return { status: 'not_found' };
+    }
+    const afterSame =
+      (after.selection === null && parsed.data.selection === null) ||
+      (after.selection !== null &&
+        parsed.data.selection !== null &&
+        after.selection.connectionId === parsed.data.selection.connectionId &&
+        after.selection.modelId === parsed.data.selection.modelId);
+    if (!afterSame || after.modelLabel !== nextLabel) {
       return { status: 'not_active' };
     }
     return {
       status: 'changed',
-      selection: active.selection,
-      modelLabel: active.modelLabel,
+      selection: after.selection,
+      modelLabel: after.modelLabel,
     };
   });
 

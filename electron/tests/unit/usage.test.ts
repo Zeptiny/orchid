@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addStepUsage,
   addUsage,
   contextUsedTokens,
   hasUsage,
@@ -25,7 +26,6 @@ function msg(usage: Message['usage']): Message {
     timestamp: new Date().toISOString(),
     usage,
     hidden: false,
-    is_error: false,
   };
 }
 
@@ -53,6 +53,36 @@ describe('usage helpers', () => {
       completion_tokens: 5,
       total_tokens: 20,
       cached_tokens: 5,
+    });
+  });
+
+  it('keeps the newest context while summing message usages', () => {
+    const context = {
+      input_tokens: 20,
+      output_tokens: 3,
+      used_tokens: 23,
+      system_tokens: 2,
+      tools_tokens: 4,
+      tool_use_tokens: 6,
+      user_tokens: 5,
+      assistant_tokens: 6,
+    };
+
+    expect(sumMessageUsages([
+      msg({ prompt_tokens: 10, completion_tokens: 2, total_tokens: 12, cached_tokens: 1 }),
+      msg({
+        prompt_tokens: 20,
+        completion_tokens: 3,
+        total_tokens: 23,
+        cached_tokens: 4,
+        context,
+      }),
+    ])).toEqual({
+      prompt_tokens: 30,
+      completion_tokens: 5,
+      total_tokens: 35,
+      cached_tokens: 5,
+      context,
     });
   });
 
@@ -134,6 +164,54 @@ describe('usage helpers', () => {
       completion_tokens: 0,
       total_tokens: 3,
       cached_tokens: 0,
+    });
+  });
+
+  it('addStepUsage sums counters and retains the newest context snapshot', () => {
+    const firstContext = {
+      input_tokens: 10,
+      output_tokens: 2,
+      used_tokens: 12,
+      system_tokens: 1,
+      tools_tokens: 2,
+      tool_use_tokens: 3,
+      user_tokens: 4,
+      assistant_tokens: 2,
+    };
+    const secondContext = {
+      input_tokens: 20,
+      output_tokens: 3,
+      used_tokens: 23,
+      system_tokens: 2,
+      tools_tokens: 4,
+      tool_use_tokens: 6,
+      user_tokens: 5,
+      assistant_tokens: 6,
+    };
+
+    const accumulated = addStepUsage(
+      {
+        prompt_tokens: 10,
+        completion_tokens: 2,
+        total_tokens: 12,
+        cached_tokens: 1,
+        context: firstContext,
+      },
+      {
+        prompt_tokens: 20,
+        completion_tokens: 3,
+        total_tokens: 23,
+        cached_tokens: 4,
+        context: secondContext,
+      },
+    );
+
+    expect(accumulated).toEqual({
+      prompt_tokens: 30,
+      completion_tokens: 5,
+      total_tokens: 35,
+      cached_tokens: 5,
+      context: secondContext,
     });
   });
 

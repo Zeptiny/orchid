@@ -6,7 +6,8 @@
  *
  * Features:
  * - 60s timeout (configurable via `command_timeout` config)
- * - Certain tools exempt from timeout (e.g., `wait_for_subagent`, AST tools)
+ * - Certain tools exempt from timeout (e.g., AST tools, `read_output`)
+ * - `wait_for_subagent` uses a longer dedicated outer timeout (300s)
  * - Output offloading: outputs >20KB written to cache files, replaced with
  *   pointer message
  * - Certain tools exempt from offloading (read, grep, glob, etc.)
@@ -14,46 +15,70 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { Message } from '../../shared/types/message';
-import type { ToolCall } from '../../shared/types/tool';
 import type { ToolRegistry } from '../tools/registry';
 import {
   TOOL_OUTPUT_INLINE_THRESHOLD,
   TOOLS_WITHOUT_OUTPUT_OFFLOAD,
 } from './middleware/provider-quirks';
-import { makeToolResultMessage } from './message-factories';
-import { normalizeToolHandlerResult } from '../tools/result';
+import {
+  escapeXmlAttribute,
+  escapeXmlText,
+  finalizeToolExecutionResult,
+  genericAgentProjector,
+  renderRetrieval,
+} from '../tools/result';
 import type { ToolExecutionContext } from '../tools/types';
 import type { ProjectRuntime } from '../project/runtime';
+import { DEFAULT_WAIT_TIMEOUT_MS } from '../agents/manager';
+import {
+  createCanonicalToolResult,
+  toolExecutionResultSchema,
+  type JsonValue,
+  type ToolResultRetrieval,
+  type ToolExecutionResult,
+  type ToolHandlerOutcome,
+} from '../../shared/types/tool-result';
+import { materializeCanonicalResultRetrieval } from '../tools/result-retrieval';
+import { withTimeout as sharedWithTimeout } from '../utils/async';
 
 // ---------------------------------------------------------------------------
-// Constants — match Python client.py:44, 48-56
+// Constants
 // ---------------------------------------------------------------------------
 
 /** Default tool execution timeout in seconds. */
 const DEFAULT_TOOL_TIMEOUT_S = 60;
 
 /**
- * Tools exempt from timeout.
- * Matches Python `_TOOLS_WITHOUT_TIMEOUT` (client.py:48-56).
+ * Outer dispatch timeout for `wait_for_subagent` (seconds).
+ * Slightly longer than the wait tool's internal DEFAULT_WAIT_TIMEOUT_MS so
+ * the structured "still running" tool result wins; this is a backstop.
  */
-const TOOLS_WITHOUT_TIMEOUT = new Set([
-  'wait_for_subagent',
-  'get_file_skeleton',
-  'get_function',
-  'find_symbol_references',
-  'replace_symbol',
-  'rename_symbol',
-  'read_output',
-]);
+const WAIT_TOOL_OUTER_TIMEOUT_S = Math.ceil(DEFAULT_WAIT_TIMEOUT_MS / 1000) + 5;
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * Tool invocation for dispatch. Prefer pre-parsed `args` objects from the
+ * AI SDK / IPC layer; a JSON string is still accepted for wire-form callers.
+ */
+export interface ToolDispatchRequest {
+  id: string;
+  name: string;
+  /** Pre-parsed args object, or a JSON string to parse once. */
+  args: unknown;
+}
+
 export interface ToolDispatchOptions {
   /** Tool timeout in seconds. Defaults to 60. */
   timeoutSeconds?: number;
+  /**
+   * Outer timeout for `wait_for_subagent` only (seconds).
+   * Defaults to DEFAULT_WAIT_TIMEOUT_MS / 1000 (300). Independent of
+   * `timeoutSeconds` / command_timeout so waits are not cut short by 30–60s.
+   */
+  waitTimeoutSeconds?: number;
   /** Session ID for output offloading cache. */
   sessionId?: string;
   /**
@@ -65,6 +90,8 @@ export interface ToolDispatchOptions {
   agentScopeId?: string;
   /** Immutable project definitions captured when this turn began. */
   projectRuntime?: ProjectRuntime;
+  /** Parent-turn abort signal (unblocks wait without cancelling children). */
+  abortSignal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------
@@ -72,40 +99,56 @@ export interface ToolDispatchOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * Execute a single tool call and return a TOOL_RESULT message.
+ * Execute a single tool call and return canonical facts plus the exact agent
+ * projection that the provider will receive.
  *
- * @param toolCall - The tool call to execute
+ * @param request - Tool id, name, and pre-parsed (or JSON-string) args
  * @param registry - The tool registry to look up the handler
  * @param options - Optional timeout, session ID, and frozen turn cwd
- * @returns A TOOL_RESULT message with the tool's output
+ * @returns A validated raw execution result for AI SDK streaming
  */
 export async function executeToolCall(
-  toolCall: ToolCall,
+  request: ToolDispatchRequest,
   registry: ToolRegistry,
   options: ToolDispatchOptions = {},
-): Promise<Message> {
-  const name = toolCall.function.name;
+): Promise<ToolExecutionResult> {
+  const name = request.name;
+  const toolCallId = request.id;
   const timeoutSeconds = options.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_S;
 
-  // Parse arguments
-  let args: unknown;
-  try {
-    args = JSON.parse(toolCall.function.arguments);
-  } catch {
-    return makeToolResultMessage(
-      toolCall.id,
+  if (options.abortSignal?.aborted) {
+    return genericTerminalExecution(
+      toolCallId,
       name,
-      `Could not parse arguments for tool '${name}': invalid JSON.`,
-      true,
+      'cancelled',
+      `Tool '${name}' was cancelled.`,
+      'parent_cancelled',
     );
   }
 
+  // Accept pre-parsed objects from AI SDK / IPC; parse JSON strings once.
+  let args: unknown = request.args;
+  if (typeof args === 'string') {
+    try {
+      args = JSON.parse(args);
+    } catch {
+      return genericTerminalExecution(
+        toolCallId,
+        name,
+        'error',
+        `Could not parse arguments for tool '${name}': invalid JSON.`,
+        'invalid_arguments_json',
+      );
+    }
+  }
+
   if (typeof args !== 'object' || args === null || Array.isArray(args)) {
-    return makeToolResultMessage(
-      toolCall.id,
+    return genericTerminalExecution(
+      toolCallId,
       name,
+      'error',
       `Arguments for tool '${name}' must be a JSON object, got ${typeof args}.`,
-      true,
+      'invalid_arguments_type',
     );
   }
 
@@ -113,60 +156,324 @@ export async function executeToolCall(
   const registered = registry.get(name);
   if (!registered) {
     const available = registry.listAll().map((t) => t.definition.name);
-    return makeToolResultMessage(
-      toolCall.id,
+    return genericTerminalExecution(
+      toolCallId,
       name,
+      'error',
       `Tool '${name}' does not exist. Available tools: ${available.join(', ')}`,
-      true,
+      'unknown_tool',
+    );
+  }
+
+  // Validate arguments against the tool's Zod schema (agent path)
+  const validation = registry.validate(name, args);
+  if (!validation.ok) {
+    return genericTerminalExecution(
+      toolCallId,
+      name,
+      'error',
+      validation.error,
+      'invalid_arguments',
     );
   }
 
   if (!options.cwd || options.cwd.trim() === '') {
-    return makeToolResultMessage(
-      toolCall.id,
+    return genericTerminalExecution(
+      toolCallId,
       name,
+      'error',
       `Tool '${name}' cannot run: no workspace cwd in tool execution context.`,
-      true,
+      'missing_workspace',
     );
   }
+
+  // Timeout AbortController — aborted by runWithToolTimeout so foreground
+  // process tools can kill the live ChildProcess handle (not only reject).
+  const timeoutAbort = new AbortController();
+  const parentAbort = options.abortSignal;
+  const combinedAbort =
+    parentAbort !== undefined
+      ? AbortSignal.any([parentAbort, timeoutAbort.signal])
+      : timeoutAbort.signal;
 
   const toolCtx: ToolExecutionContext = {
     cwd: options.cwd,
     sessionId: options.sessionId,
     projectRuntime: options.projectRuntime,
     agentScopeId: options.agentScopeId,
+    abortSignal: combinedAbort,
   };
 
-  // Execute with optional timeout (shared policy with MCP wrappers)
+  // wait_for_subagent uses a dedicated outer budget (default 300s), not
+  // command_timeout, so the tool can return its structured timeout message
+  // (subagents stay running) before the dispatch race fires.
+  const effectiveTimeoutSeconds =
+    name === 'wait_for_subagent'
+      ? (options.waitTimeoutSeconds ?? WAIT_TOOL_OUTER_TIMEOUT_S)
+      : timeoutSeconds;
+
+  // Execute with optional timeout (shared policy with MCP wrappers).
+  // Timeout exemption is definition.noTimeout only (no parallel name set).
+  // Prefer Zod-parsed data so defaults/coercions reach the handler.
+  const handlerArgs = validation.data;
   let result: unknown;
   try {
     result = await runWithToolTimeout(
-      () => registered.handler(args, toolCtx),
+      () => registered.handler(handlerArgs, toolCtx),
       name,
       {
-        timeoutSeconds,
+        timeoutSeconds: effectiveTimeoutSeconds,
         noTimeout: Boolean(registered.definition.noTimeout),
+        abortController: timeoutAbort,
       },
     );
   } catch (err) {
     if (err instanceof ToolTimeoutError) {
-      return makeToolResultMessage(toolCall.id, name, err.message, true);
+      return genericTerminalExecution(
+        toolCallId,
+        name,
+        'error',
+        err.message,
+        'timeout',
+      );
     }
-    console.error(`Tool '${name}' raised an exception:`, err);
-    return makeToolResultMessage(
-      toolCall.id,
+    if (parentAbort?.aborted) {
+      return genericTerminalExecution(
+        toolCallId,
+        name,
+        'cancelled',
+        `Tool '${name}' was cancelled.`,
+        'parent_cancelled',
+      );
+    }
+    console.error('[tool-dispatch] Tool handler failed', {
+      toolCallId,
+      toolName: name,
+      exceptionClass: err instanceof Error ? err.constructor.name : 'Unknown',
+    });
+    return genericTerminalExecution(
+      toolCallId,
       name,
+      'error',
       `Tool '${name}' failed with an internal error.`,
-      true,
+      'handler_exception',
     );
   }
 
-  const { content, isError } = normalizeToolHandlerResult(result);
+  if (parentAbort?.aborted) {
+    return genericTerminalExecution(
+      toolCallId,
+      name,
+      'cancelled',
+      `Tool '${name}' was cancelled.`,
+      'parent_cancelled',
+    );
+  }
 
-  // Maybe offload large output (preserves isError)
-  const trimmed = maybeOffloadToolOutput(name, content, toolCall.id, options.sessionId);
+  let execution: ToolExecutionResult;
+  try {
+    execution = finalizeHandlerResult(result, request, registry);
+    execution = ensureProjectionRecovery(execution, request, options);
+    execution = maybeOffloadAgentProjection(execution, request, options);
+    const executionSchema = registry.getToolExecutionResultSchema(name);
+    if (!executionSchema) {
+      throw new TypeError(`No execution schema registered for tool '${name}'`);
+    }
+    return executionSchema.parse(execution) as ToolExecutionResult;
+  } catch (error) {
+    console.warn('[tool-dispatch] Tool result finalization failed', {
+      toolCallId,
+      toolName: name,
+      family: registered.definition.resultFamily ?? 'generic',
+      stage: 'schema',
+      exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
+    });
+    return genericTerminalExecution(
+      toolCallId,
+      name,
+      'error',
+      `Tool '${name}' returned an invalid result.`,
+      'invalid_tool_result',
+    );
+  }
+}
 
-  return makeToolResultMessage(toolCall.id, name, trimmed, isError);
+function isToolHandlerOutcome(value: unknown): value is ToolHandlerOutcome<JsonValue> {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    ['complete', 'partial', 'empty', 'error', 'cancelled'].includes(
+      String(candidate.status),
+    ) && Object.hasOwn(candidate, 'data')
+  );
+}
+
+export function genericTerminalExecution(
+  toolCallId: string,
+  toolName: string,
+  status: 'error' | 'cancelled',
+  message: string,
+  code: string,
+): ToolExecutionResult {
+  const canonical = status === 'error'
+    ? createCanonicalToolResult('generic', {
+        status,
+        data: {
+          value: message,
+          origin: { kind: 'built-in', name: toolName },
+        },
+        error: { code, message },
+      })
+    : createCanonicalToolResult('generic', {
+        status,
+        data: {
+          value: message,
+          origin: { kind: 'built-in', name: toolName },
+        },
+      });
+  const execution = finalizeToolExecutionResult({
+    canonical,
+    toolName,
+    toolCallId,
+    expectedFamily: 'generic',
+    projector: genericAgentProjector,
+  });
+  return toolExecutionResultSchema.parse(execution) as ToolExecutionResult;
+}
+
+function finalizeHandlerResult(
+  result: unknown,
+  request: ToolDispatchRequest,
+  registry: ToolRegistry,
+): ToolExecutionResult {
+  const registered = registry.get(request.name);
+  if (!registered) {
+    throw new TypeError(`Tool '${request.name}' is no longer registered`);
+  }
+
+  if (!isToolHandlerOutcome(result)) {
+    throw new TypeError(`Tool '${request.name}' returned a non-canonical result`);
+  }
+
+  const canonical = createCanonicalToolResult(registered.definition.resultFamily, result);
+  return finalizeToolExecutionResult({
+    canonical,
+    toolName: request.name,
+    toolCallId: request.id,
+    outputDataSchema: registered.definition.outputDataSchema,
+    expectedFamily: registered.definition.resultFamily,
+    projector: registry.resolveAgentProjector(request.name).projector,
+  });
+}
+
+function ensureProjectionRecovery(
+  execution: ToolExecutionResult,
+  request: ToolDispatchRequest,
+  options: ToolDispatchOptions,
+): ToolExecutionResult {
+  if (execution.agentProjection.completeness !== 'partial') {
+    return execution;
+  }
+
+  if (!options.sessionId) {
+    return execution;
+  }
+
+  if (
+    execution.canonical.status === 'partial' &&
+    execution.agentProjection.retrieval.kind !== 'cache'
+  ) {
+    return execution;
+  }
+
+  try {
+    const retrieval = materializeCanonicalResultRetrieval({
+      sessionId: options.sessionId,
+      toolCallId: request.id,
+      canonical: execution.canonical,
+    });
+    return {
+      canonical: execution.canonical,
+      agentProjection: {
+        content: appendXmlRetrieval(
+          execution.agentProjection.content,
+          retrieval,
+          request.name,
+        ),
+        completeness: 'partial',
+        retrieval,
+      },
+    };
+  } catch (error) {
+    console.warn('[tool-dispatch] Recovery cache materialization failed', {
+      toolCallId: request.id,
+      toolName: request.name,
+      family: execution.canonical.family,
+      stage: 'projection',
+      exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
+    });
+    return {
+      canonical: execution.canonical,
+      agentProjection: genericAgentProjector(execution.canonical, request.name),
+    };
+  }
+}
+
+function appendXmlRetrieval(
+  content: string,
+  retrieval: ToolResultRetrieval,
+  toolName: string,
+): string {
+  const retrievalXml = renderRetrieval(retrieval);
+  const closingTag = '</tool_result>';
+  const closingIndex = content.lastIndexOf(closingTag);
+  const startsWithEnvelope = content.startsWith('<tool_result');
+  const hasClosingTag = closingIndex >= 0;
+  if (startsWithEnvelope && hasClosingTag) {
+    return content.slice(0, closingIndex).trimEnd() + '\n' +
+      retrievalXml + '\n' + content.slice(closingIndex);
+  }
+  console.warn('[tool-dispatch] Projection content is not a well-formed tool_result envelope; wrapping in fallback envelope', {
+    toolName,
+    startsWithEnvelope,
+    hasClosingTag,
+  });
+  return '<tool_result name="' + escapeXmlAttribute(toolName) + '" status="partial">\n' +
+    '<payload>' + escapeXmlText(content) + '</payload>\n' +
+    retrievalXml + '\n</tool_result>';
+}
+
+function maybeOffloadAgentProjection(
+  execution: ToolExecutionResult,
+  request: ToolDispatchRequest,
+  options: ToolDispatchOptions,
+): ToolExecutionResult {
+  if (!options.sessionId) return execution;
+  const offload = maybeOffloadToolOutputDetailed(
+    request.name,
+    execution.agentProjection.content,
+    request.id,
+    options.sessionId,
+  );
+  if (!offload.cachePath) return execution;
+
+  return {
+    canonical: execution.canonical,
+    agentProjection: {
+      content: offload.content,
+      completeness: 'partial',
+      retrieval: {
+        kind: 'cache',
+        path: offload.cachePath,
+        instructions: [
+          `Use read with file_path=${JSON.stringify(offload.cachePath)} to inspect the complete agent projection.`,
+          `Use grep against ${JSON.stringify(offload.cachePath)} to search the complete agent projection.`,
+        ],
+      },
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -191,23 +498,44 @@ export function maybeOffloadToolOutput(
   toolCallId: string,
   sessionId?: string,
 ): string {
+  return maybeOffloadToolOutputDetailed(
+    toolName,
+    content,
+    toolCallId,
+    sessionId,
+  ).content;
+}
+
+interface ToolOutputOffloadResult {
+  content: string;
+  cachePath?: string;
+}
+
+function maybeOffloadToolOutputDetailed(
+  toolName: string,
+  content: string,
+  toolCallId: string,
+  sessionId?: string,
+): ToolOutputOffloadResult {
   if (
     content.length <= TOOL_OUTPUT_INLINE_THRESHOLD ||
     TOOLS_WITHOUT_OUTPUT_OFFLOAD.has(toolName)
   ) {
-    return content;
+    return { content };
   }
 
   if (!sessionId) {
     // No session — hard-truncate
     const truncated = content.slice(0, TOOL_OUTPUT_INLINE_THRESHOLD);
-    return (
-      `<${toolName}_result length=${content.length}>\n` +
+    return { content: (
+      `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}">\n` +
       `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters ` +
       `and was truncated because no active session is available for cache ` +
       `storage. Use the tool again with narrower scope (offset/limit) to ` +
-      `inspect the full result.</warning>\n${truncated}\n</${toolName}_result>`
-    );
+      `inspect the full result.</warning>\n` +
+      `<payload>${escapeXmlText(truncated)}</payload>\n` +
+      `</tool_result>`
+    ) };
   }
 
   const cacheDir = getToolOutputCacheDir(sessionId);
@@ -227,25 +555,31 @@ export function maybeOffloadToolOutput(
     } catch {
       // ignore chmod errors
     }
+    if (fs.readFileSync(filePath, 'utf-8') !== content) {
+      throw new Error('Tool output cache verification failed');
+    }
 
-    const escapedPath = escapeHtmlAttr(filePath);
-    return (
-      `<${toolName}_result length=${content.length} file="${escapedPath}">\n` +
+    const escapedPath = escapeXmlAttribute(filePath);
+    return { content: (
+      `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}" file="${escapedPath}">\n` +
       `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters and ` +
-      `was written to ${escapedPath}. Use read (with offset/limit) or grep to inspect ` +
-      `it.</warning>\n</${toolName}_result>`
-    );
+      `was written to ${escapeXmlText(filePath)}. Use read (with offset/limit) or grep to inspect ` +
+      `it.</warning>\n` +
+      `<retrieve tool="read" path="${escapedPath}" />\n` +
+      `</tool_result>`
+    ), cachePath: filePath };
   } catch (err) {
     // Cache write failed — truncate inline
     console.warn(`Failed to offload tool output for ${toolName}:`, err);
     const truncated = content.slice(0, TOOL_OUTPUT_INLINE_THRESHOLD);
-    return (
-      `<${toolName}_result length=${content.length}>\n` +
+    return { content: (
+      `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}">\n` +
       `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters ` +
-      `and cache write failed (${err instanceof Error ? err.message : err}). Truncated below; re-run the tool with ` +
+      `and cache write failed (${escapeXmlText(err instanceof Error ? err.message : String(err))}). Truncated below; re-run the tool with ` +
       `narrower scope to inspect the full result.</warning>\n` +
-      `${truncated}\n</${toolName}_result>`
-    );
+      `<payload>${escapeXmlText(truncated)}</payload>\n` +
+      `</tool_result>`
+    ) };
   }
 }
 
@@ -266,52 +600,19 @@ export class ToolTimeoutError extends Error {
  * Rejects with `ToolTimeoutError` if the timeout fires first.
  * Clears the timer on settle and swallows late rejections from the work
  * promise so a timed-out tool does not surface as an unhandled rejection.
+ *
+ * When `abortController` is provided, it is aborted on timeout so tools that
+ * hold live ChildProcess handles can kill them (not only reject the Promise).
  */
 export function withTimeout<T>(
   work: () => Promise<T>,
   ms: number,
   message: string,
+  abortController?: AbortController,
 ): Promise<T> {
-  if (!Number.isFinite(ms) || ms <= 0) {
-    return Promise.reject(new ToolTimeoutError(message));
-  }
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  const promise = work();
-
-  const timeoutPromise = new Promise<T>((_, reject) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      reject(new ToolTimeoutError(message));
-    }, ms);
-    // Unref so the timer doesn't keep the process alive in tests/CLI
-    if (typeof timer === 'object' && timer && 'unref' in timer) {
-      (timer as NodeJS.Timeout).unref();
-    }
-  });
-
-  return Promise.race([
-    promise.then(
-      (value) => {
-        if (timer !== undefined) clearTimeout(timer);
-        return value;
-      },
-      (err: unknown) => {
-        if (timer !== undefined) clearTimeout(timer);
-        throw err;
-      },
-    ),
-    timeoutPromise,
-  ]).finally(() => {
-    if (timer !== undefined) clearTimeout(timer);
-    // If we already timed out, ignore a late failure/success from work().
-    if (timedOut) {
-      promise.then(
-        () => undefined,
-        () => undefined,
-      );
-    }
+  return sharedWithTimeout(work, ms, message, {
+    abortController,
+    createError: (m) => new ToolTimeoutError(m),
   });
 }
 
@@ -322,9 +623,14 @@ export function withTimeout<T>(
 export async function runWithToolTimeout<T>(
   work: () => Promise<T>,
   toolName: string,
-  options: { timeoutSeconds?: number; noTimeout?: boolean } = {},
+  options: {
+    timeoutSeconds?: number;
+    /** When true, skip the outer timeout (from ToolDefinition.noTimeout). */
+    noTimeout?: boolean;
+    abortController?: AbortController;
+  } = {},
 ): Promise<T> {
-  if (options.noTimeout || TOOLS_WITHOUT_TIMEOUT.has(toolName)) {
+  if (options.noTimeout) {
     return work();
   }
   const timeoutSeconds = options.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_S;
@@ -332,6 +638,7 @@ export async function runWithToolTimeout<T>(
     work,
     timeoutSeconds * 1000,
     `Tool '${toolName}' timed out after ${timeoutSeconds}s.`,
+    options.abortController,
   );
 }
 
@@ -359,13 +666,4 @@ function toolOutputSlug(toolName: string, toolCallId: string): string {
   // Use first 8 chars of tool_call_id for uniqueness
   const shortId = toolCallId.slice(0, 8);
   return `${toolName}-${shortId}.txt`;
-}
-
-/** Escape a string for use as an HTML attribute value. */
-function escapeHtmlAttr(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }

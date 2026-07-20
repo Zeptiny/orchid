@@ -23,6 +23,7 @@ import type {
   ChatToolCallDeltaEvent,
   ChatToolCallStartEvent,
   ChatToolCallUpdateEvent,
+  ChatToolCallSnapshot,
   ChatSnapshot,
   ChatSessionSnapshot,
 } from '../../shared/types/ipc';
@@ -30,7 +31,13 @@ import {
   type ContextBreakdown,
   computeContextBreakdown,
 } from '../components/ContextGrid';
-import { latestUsageFromMessages } from '../../shared/usage';
+import {
+  addUsage,
+  hasUsage,
+  latestUsageFromMessages,
+  sumMessageUsages,
+} from '../../shared/usage';
+import type { CanonicalToolResult } from '../../shared/types/tool-result';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,7 +45,16 @@ export type ChatStatus = 'idle' | 'streaming' | 'error';
 
 export type InterruptState = 'idle' | 'confirmAgent' | 'confirmSubagents';
 
-export type ToolBlockStatus = 'generating' | 'running' | 'completed' | 'failed';
+export type ToolBlockStatus =
+  | 'generating'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'complete'
+  | 'partial'
+  | 'empty'
+  | 'error'
+  | 'cancelled';
 
 export interface ToolBlock {
   id: string;
@@ -46,10 +62,27 @@ export interface ToolBlock {
   status: ToolBlockStatus;
   partialArgs: string;
   args: string;
-  result: string | null;
-  error: string | null;
+  /** Exact finalized agent projection for terminal tool calls. */
+  agentProjection: string | null;
+  /** Canonical terminal facts; null while generating/running. */
+  toolResult: CanonicalToolResult | null;
   startedAt: string;
   finishedAt: string | null;
+}
+
+/** Preserve canonical facts while adapting a main-process live snapshot. */
+export function chatToolSnapshotToBlock(tool: ChatToolCallSnapshot): ToolBlock {
+  return {
+    id: tool.toolCallId,
+    toolName: tool.toolName,
+    status: tool.status,
+    partialArgs: tool.partialArgs,
+    args: tool.args,
+    agentProjection: tool.content,
+    toolResult: tool.toolResult,
+    startedAt: tool.startedAt,
+    finishedAt: tool.finishedAt,
+  };
 }
 
 /**
@@ -81,12 +114,18 @@ export interface ChatState {
   error: string | null;
   /** Latest usage data from the stream. */
   usage: Usage | null;
+  /**
+   * In-flight turn usage only (cleared on send/done). Use for live chain-footer
+   * token lines so a new turn does not flash the previous turn's counters.
+   */
+  currentTurnUsage: Usage | null;
   /** Context token breakdown by category (computed from messages + usage). */
   contextBreakdown: ContextBreakdown | null;
-  /** Stream start time (ms epoch) for elapsed tracking. */
+  /**
+   * Stream start time (ms epoch) for elapsed tracking.
+   * Footers tick locally from this; history memos must not depend on a ticker.
+   */
   streamStartTime: number | null;
-  /** Stream elapsed time in seconds. */
-  elapsedSeconds: number;
   /** Current interrupt confirmation phase. */
   interruptState: InterruptState;
   /** Whether the last completed chain was interrupted by the user. */
@@ -176,6 +215,166 @@ export function shouldBufferChatEvent(
   return hydratingSessionId != null && event.sessionId === hydratingSessionId;
 }
 
+/** Prefer a live turn snapshot, but keep persisted usage for idle sessions. */
+export function resolveHydratedUsage(
+  messages: readonly Message[],
+  liveUsage: Usage | null | undefined,
+): Usage | null {
+  return liveUsage && hasUsage(liveUsage)
+    ? liveUsage
+    : latestUsageFromMessages(messages);
+}
+
+/** Add the authoritative in-flight turn snapshot to persisted session usage. */
+export function cumulativeUsageFromMessages(
+  messages: readonly Message[],
+  currentTurnUsage: Usage | null = null,
+): Usage {
+  return addUsage(sumMessageUsages(messages), currentTurnUsage);
+}
+
+/**
+ * Seed stream affinity from a live snapshot so replayed buffered events are
+ * sequence-gated against the snapshot high-water mark.
+ */
+export function seedAffinityFromLive(
+  affinity: ChatEventAffinity,
+  live: Pick<ChatSnapshot, 'sessionId' | 'turnId' | 'sequence'>,
+): void {
+  affinity.streamSessionId = live.sessionId;
+  affinity.streamTurnId = live.turnId;
+  affinity.lastSequence = live.sequence;
+}
+
+export type BufferedHydrationEvent = {
+  event: { sessionId: string; turnId: string; sequence: number };
+  apply: () => void;
+};
+
+/**
+ * Replay buffered hydration applies through the same sequence-affinity gate
+ * used by live IPC delivery. Mutates affinity as each event is accepted so
+ * stale sequences / wrong-session / wrong-turn events are discarded.
+ */
+export function drainBufferedHydrationEvents(
+  affinity: ChatEventAffinity,
+  events: ReadonlyArray<BufferedHydrationEvent>,
+  isSending: boolean,
+): number {
+  let applied = 0;
+  for (const item of events) {
+    if (!acceptChatEvent(affinity, item.event, isSending)) continue;
+    item.apply();
+    applied += 1;
+  }
+  return applied;
+}
+
+// ── Cancel queue (multi-phase Esc) ────────────────────────────────────────────
+
+/**
+ * Serialize chat.cancel IPC while still allowing a second Esc to stage the next
+ * interrupt phase. Concurrent cancel invokes are unsafe (phase races); a single
+ * pending flag coalesces rapid Esc into one follow-up after the in-flight RTT.
+ */
+export type CancelQueueState = {
+  inFlight: boolean;
+  pending: boolean;
+};
+
+/** Start a cancel IPC, or stage one if another cancel is already awaiting. */
+export function beginCancelRequest(state: CancelQueueState): 'run' | 'queued' {
+  if (state.inFlight) {
+    state.pending = true;
+    return 'queued';
+  }
+  state.inFlight = true;
+  state.pending = false;
+  return 'run';
+}
+
+/**
+ * After one cancel IPC settles: clear in-flight, or keep ownership and signal
+ * that a staged Esc should run the next phase immediately.
+ */
+export function consumePendingCancel(state: CancelQueueState): boolean {
+  if (!state.pending) {
+    state.inFlight = false;
+    return false;
+  }
+  state.pending = false;
+  return true;
+}
+
+export function resetCancelQueue(state: CancelQueueState): void {
+  state.inFlight = false;
+  state.pending = false;
+}
+
+// ── Send failure residual cleanup ────────────────────────────────────────────
+
+/**
+ * Residual stream fields after a pre-stream send failure (structured error or
+ * throw). Shared so every failure path leaves the composer ready to send again.
+ */
+export type ResidualStreamAfterSendFailure = {
+  isSending: false;
+  status: 'error';
+  streamStartTime: null;
+  streamingContent: '';
+  streamingThinking: '';
+  accumulatedContent: '';
+  accumulatedThinking: '';
+};
+
+export function residualStateAfterSendFailure(): ResidualStreamAfterSendFailure {
+  return {
+    isSending: false,
+    status: 'error',
+    streamStartTime: null,
+    streamingContent: '',
+    streamingThinking: '',
+    accumulatedContent: '',
+    accumulatedThinking: '',
+  };
+}
+
+/** Drop the optimistic user bubble when send never started on the main side. */
+export function dropOptimisticUserMessageIfLast<T extends { id: string }>(
+  messages: ReadonlyArray<T>,
+  optimisticId: string,
+): T[] {
+  const last = messages[messages.length - 1];
+  if (last && last.id === optimisticId) {
+    return messages.slice(0, -1);
+  }
+  return messages.slice();
+}
+
+// ── Elapsed display (footer-local; never feed history memos) ─────────────────
+
+/**
+ * 1s-resolution elapsed seconds from a stream start timestamp.
+ * Kept out of chat history memos so a ticker cannot rebuild O(n) stream items.
+ */
+export function useElapsedSeconds(
+  streamStartTime: number | null | undefined,
+  active: boolean,
+): number {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!active || streamStartTime == null) {
+      setElapsed(0);
+      return;
+    }
+    const tick = () => setElapsed((Date.now() - streamStartTime) / 1000);
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [active, streamStartTime]);
+  return elapsed;
+}
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useChat(activeSessionId: string | null = null): UseChatReturn {
@@ -189,8 +388,8 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   // Live stream usage; also rehydrated from the last message with usage
   // when replacing messages (session switch / load).
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [currentTurnUsage, setCurrentTurnUsage] = useState<Usage | null>(null);
   const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [interruptState, setInterruptState] = useState<InterruptState>('idle');
   const [interrupted, setInterrupted] = useState(false);
   const [cwd, setCwd] = useState('');
@@ -203,24 +402,12 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     [messages, usage],
   );
 
-  // Cumulative usage summed across all messages that carry usage data
-  const cumulativeUsage: Usage = useMemo(() => {
-    let prompt = 0;
-    let completion = 0;
-    let total = 0;
-    let cached = 0;
-    for (const msg of messages) {
-      if (msg.usage) {
-        prompt += msg.usage.prompt_tokens;
-        completion += msg.usage.completion_tokens;
-        total += msg.usage.total_tokens;
-        cached += msg.usage.cached_tokens;
-      }
-    }
-    return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: total, cached_tokens: cached };
-  }, [messages]);
+  // Persisted session totals plus the authoritative in-flight turn snapshot.
+  const cumulativeUsage: Usage = useMemo(
+    () => cumulativeUsageFromMessages(messages, currentTurnUsage),
+    [messages, currentTurnUsage],
+  );
 
-  const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const accumulatedContentRef = useRef('');
   const accumulatedThinkingRef = useRef('');
   const usageRef = useRef<Usage | null>(null);
@@ -228,6 +415,11 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const streamSegmentsRef = useRef<StreamSegment[]>([]);
   /** Sync guard against double-send before status re-render (P1-35). */
   const isSendingRef = useRef(false);
+  /**
+   * Serialize staged Esc/cancel so overlapping IPC cannot race phases.
+   * A second Esc while in-flight is staged via `pending` and runs after RTT.
+   */
+  const cancelQueueRef = useRef<CancelQueueState>({ inFlight: false, pending: false });
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
   const streamSessionIdRef = useRef<string | null>(activeSessionId);
   const streamTurnIdRef = useRef<string | null>(null);
@@ -235,7 +427,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const priorActiveSessionIdRef = useRef<string | null>(activeSessionId);
   const hydrationRef = useRef<{
     sessionId: string;
-    events: Array<() => void>;
+    events: BufferedHydrationEvent[];
   } | null>(null);
 
   useEffect(() => {
@@ -273,16 +465,17 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   }, []);
 
   const deliverEvent = useCallback((
-    event: { sessionId: string },
+    event: { sessionId: string; turnId: string; sequence: number },
     apply: () => void,
   ) => {
     const hydration = hydrationRef.current;
     if (shouldBufferChatEvent(hydration?.sessionId ?? null, event)) {
-      hydration?.events.push(apply);
+      hydration?.events.push({ event, apply });
       return;
     }
+    if (!acceptsEvent(event)) return;
     apply();
-  }, []);
+  }, [acceptsEvent]);
 
   /**
    * Update toolBlocksRef synchronously, then mirror into React state.
@@ -313,25 +506,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     [],
   );
 
-  // Elapsed time ticker
-  useEffect(() => {
-    if (status === 'streaming' && streamStartTime) {
-      elapsedIntervalRef.current = setInterval(() => {
-        setElapsedSeconds((Date.now() - streamStartTime) / 1000);
-      }, 100);
-    } else {
-      if (elapsedIntervalRef.current) {
-        clearInterval(elapsedIntervalRef.current);
-        elapsedIntervalRef.current = null;
-      }
-    }
-    return () => {
-      if (elapsedIntervalRef.current) {
-        clearInterval(elapsedIntervalRef.current);
-      }
-    };
-  }, [status, streamStartTime]);
-
   // Subscribe to IPC events
   useEffect(() => {
     if (!window.orchid?.chat) {
@@ -341,7 +515,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubChunk = window.orchid.chat.onChunk((event: ChatChunkEvent) => {
       deliverEvent(event, () => {
-        if (!acceptsEvent(event)) return;
         accumulatedContentRef.current += event.data;
         setStreamingContent(accumulatedContentRef.current);
         // Append to last text segment, or open a new one (preserves tool→text→tool order).
@@ -364,7 +537,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     const unsubThinking =
       window.orchid.chat.onThinking?.((event: ChatThinkingEvent) => {
         deliverEvent(event, () => {
-          if (!acceptsEvent(event)) return;
           accumulatedThinkingRef.current += event.data;
           setStreamingThinking(accumulatedThinkingRef.current);
           // Chronological thinking segments → Thought widgets in ChatStream
@@ -386,7 +558,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubState = window.orchid.chat.onState((event: ChatStateEvent) => {
       deliverEvent(event, () => {
-        if (!acceptsEvent(event)) return;
         if (event.state === 'streaming') {
           setStatus('streaming');
         } else if (event.state === 'error') {
@@ -411,11 +582,11 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubDone = window.orchid.chat.onDone((event: ChatDoneEvent) => {
       deliverEvent(event, () => {
-      if (!acceptsEvent(event)) return;
       if (event.usage) {
         setUsage(event.usage);
         usageRef.current = event.usage;
       }
+      setCurrentTurnUsage(null);
 
       // toolBlocksRef / streamSegmentsRef are updated synchronously with state
       // so a CHAT_DONE right after the last tool event still sees final tools.
@@ -491,7 +662,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubError = window.orchid.chat.onError((event: ChatErrorEvent) => {
       deliverEvent(event, () => {
-      if (!acceptsEvent(event)) return;
       // Prefer title + detail for banner classification when available
       const display =
         event.title && event.error && !event.error.startsWith(event.title)
@@ -528,6 +698,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
       setStatus('idle');
       isSendingRef.current = false;
+      setCurrentTurnUsage(null);
       setStreamingContent('');
       setStreamingThinking('');
       applyStreamSegments([]);
@@ -539,23 +710,22 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubUsage = window.orchid.chat.onUsage((event: ChatUsageEvent) => {
       deliverEvent(event, () => {
-        if (!acceptsEvent(event)) return;
         setUsage(event.usage);
         usageRef.current = event.usage;
+        setCurrentTurnUsage(event.usage);
       });
     });
 
     const unsubToolStart = window.orchid.chat.onToolCallStart?.((event: ChatToolCallStartEvent) => {
       deliverEvent(event, () => {
-      if (!acceptsEvent(event)) return;
       applyToolBlocks((prev) => upsertToolBlock(prev, {
         id: event.toolCallId,
         toolName: event.toolName,
         status: 'generating',
         partialArgs: '',
         args: '',
-        result: null,
-        error: null,
+        agentProjection: null,
+        toolResult: null,
         startedAt: new Date().toISOString(),
         finishedAt: null,
       }));
@@ -574,13 +744,12 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubToolDelta = window.orchid.chat.onToolCallDelta?.((event: ChatToolCallDeltaEvent) => {
       deliverEvent(event, () => {
-      if (!acceptsEvent(event)) return;
       applyToolBlocks((prev) => prev.map((block) => {
         if (block.id !== event.toolCallId) return block;
         return {
           ...block,
           partialArgs: block.partialArgs + event.argsDelta,
-          status: block.status === 'completed' || block.status === 'failed'
+          status: block.status !== 'generating' && block.status !== 'running'
             ? block.status
             : 'generating',
         };
@@ -590,23 +759,18 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubToolUpdate = window.orchid.chat.onToolCallUpdate?.((event: ChatToolCallUpdateEvent) => {
       deliverEvent(event, () => {
-      if (!acceptsEvent(event)) return;
       applyToolBlocks((prev) => upsertToolBlock(prev, {
         id: event.toolCallId,
         toolName: event.toolName ?? 'unknown',
-        status: event.status === 'failed'
-          ? 'failed'
-          : event.status === 'completed'
-            ? 'completed'
-            : 'running',
+        status: event.status === 'running'
+          ? 'running'
+          : event.status,
         partialArgs: '',
         args: event.args ?? '',
-        result: event.result ?? null,
-        error: event.error ?? null,
+        agentProjection: event.content ?? null,
+        toolResult: event.toolResult ?? null,
         startedAt: new Date().toISOString(),
-        finishedAt: event.status === 'completed' || event.status === 'failed'
-          ? new Date().toISOString()
-          : null,
+        finishedAt: event.status === 'running' ? null : new Date().toISOString(),
       }, true));
       // Ensure tools that skip start events still appear in order.
       applyStreamSegments((prev) => {
@@ -663,7 +827,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         timestamp: new Date().toISOString(),
         usage: null,
         hidden: false,
-    is_error: false,
+        tool_result: null,
   };
 
       // On retry after error, the last user message is already in the list —
@@ -689,8 +853,8 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       // Keep the last completed snapshot visible while this turn streams, but
       // do not let it attach to the new assistant message if no usage arrives.
       usageRef.current = null;
+      setCurrentTurnUsage(null);
       setStreamStartTime(Date.now());
-      setElapsedSeconds(0);
       setInterruptState('idle');
       accumulatedContentRef.current = '';
       accumulatedThinkingRef.current = '';
@@ -705,18 +869,38 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
             ? { draftGeneration: options.draftGeneration }
             : {}),
         });
+        // Structured gate failures (e.g. unbound workspace) — no stream starts.
+        if (result.status === 'error') {
+          const residual = residualStateAfterSendFailure();
+          isSendingRef.current = residual.isSending;
+          setError(
+            result.error ||
+              (result.kind === 'unbound_workspace'
+                ? 'No project folder selected. Choose a folder before sending a message.'
+                : 'Failed to send message'),
+          );
+          setStatus(residual.status);
+          // Drop the optimistic user bubble when send never started.
+          setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
+          setStreamStartTime(residual.streamStartTime);
+          setStreamingContent(residual.streamingContent);
+          setStreamingThinking(residual.streamingThinking);
+          applyToolBlocks([]);
+          applyStreamSegments([]);
+          accumulatedContentRef.current = residual.accumulatedContent;
+          accumulatedThinkingRef.current = residual.accumulatedThinking;
+          return;
+        }
+
         // Only adopt send resolution when the user is still viewing this turn's
         // session (or still in draft). Navigation mid-send must not retarget
         // stream filters to the previous session.
         const stillViewingSendTarget =
           !activeSessionIdRef.current ||
-          !result?.sessionId ||
           activeSessionIdRef.current === result.sessionId ||
           streamSessionIdRef.current === result.sessionId;
-        if (result?.sessionId && stillViewingSendTarget) {
+        if (stillViewingSendTarget) {
           streamSessionIdRef.current = result.sessionId;
-        }
-        if (result?.turnId && stillViewingSendTarget) {
           // Preserve any already-observed sequence for this same turn. Main
           // may emit its first state event before the invoke promise resolves.
           if (streamTurnIdRef.current !== result.turnId) {
@@ -724,31 +908,20 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
             lastSequenceRef.current = -1;
           }
         }
-        // Structured gate failures (e.g. unbound workspace) — no stream starts.
-        if (result && result.status === 'error') {
-          isSendingRef.current = false;
-          setError(
-            result.error ??
-              (result.kind === 'unbound_workspace'
-                ? 'No project folder selected. Choose a folder before sending a message.'
-                : 'Failed to send message'),
-          );
-          setStatus('error');
-          // Drop the optimistic user bubble when send never started.
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && last.id === userMessage.id) {
-              return prev.slice(0, -1);
-            }
-            return prev;
-          });
-          setStreamStartTime(null);
-          setElapsedSeconds(0);
-        }
       } catch (err) {
-        isSendingRef.current = false;
+        // Drop the optimistic user bubble when send never started (throw path).
+        const residual = residualStateAfterSendFailure();
+        isSendingRef.current = residual.isSending;
         setError(err instanceof Error ? err.message : String(err));
-        setStatus('error');
+        setStatus(residual.status);
+        setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
+        setStreamStartTime(residual.streamStartTime);
+        setStreamingContent(residual.streamingContent);
+        setStreamingThinking(residual.streamingThinking);
+        applyToolBlocks([]);
+        applyStreamSegments([]);
+        accumulatedContentRef.current = residual.accumulatedContent;
+        accumulatedThinkingRef.current = residual.accumulatedThinking;
       }
     },
     [status, error, isSwitchingSession, applyToolBlocks, applyStreamSegments],
@@ -758,69 +931,79 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     if (!window.orchid?.chat) return;
     // Do not cancel the target session while still painting the previous one.
     if (isSwitchingSession) return;
+    // One cancel IPC at a time; a second Esc stages the next phase.
+    if (beginCancelRequest(cancelQueueRef.current) === 'queued') return;
+
+    // Loop so a staged second Esc runs immediately after the first RTT
+    // without requiring another keypress after the guard drops.
+    // consumePendingCancel releases inFlight when nothing is staged; do not
+    // reset in a finally that races a concurrent cancel() that already began.
     try {
-      const sessionId = activeSessionIdRef.current ?? streamSessionIdRef.current;
-      const result = await window.orchid.chat.cancel(
-        sessionId ? { sessionId } : undefined,
-      );
-      const status = result && (result as { status: string }).status;
+      let runCancelPhase = true;
+      while (runCancelPhase) {
+        try {
+          const sessionId = activeSessionIdRef.current ?? streamSessionIdRef.current;
+          const result = await window.orchid.chat.cancel(
+            sessionId ? { sessionId } : undefined,
+          );
+          const status = result && (result as { status: string }).status;
 
-      // First Esc only shows confirmAgent hint
-      if (status === 'confirming') {
-        setInterruptState('confirmAgent');
-        return;
-      }
+          // First Esc only shows confirmAgent hint
+          if (status === 'confirming') {
+            setInterruptState('confirmAgent');
+          } else if (status === 'confirming_subagents') {
+            // Second Esc cancels the agent. Main process emits CHAT_DONE with
+            // interrupted=true (partial content, no suffix). Stay in subagent phase
+            // if applicable; mark in-flight tool blocks as failed.
+            // Don't set status='idle' here — let onDone handle finalization to
+            // avoid double-committing segments. interruptState is confirmSubagents
+            // here and from onState; onDone must not reset it to idle (P1-34).
+            setInterruptState('confirmSubagents');
+            setInterrupted(true);
+            applyToolBlocks((prev) =>
+              prev.map((block) =>
+                block.status === 'generating' || block.status === 'running'
+                  ? {
+                      ...block,
+                      status: 'failed' as const,
+                      error: 'Interrupted by user',
+                      finishedAt: new Date().toISOString(),
+                    }
+                  : block,
+              ),
+            );
+          } else if (status === 'cancelled') {
+            // Third Esc (or full cancel with no subagents)
+            setInterruptState('idle');
+            setInterrupted(true);
+            isSendingRef.current = false;
+            applyToolBlocks((prev) =>
+              prev.map((block) =>
+                block.status === 'generating' || block.status === 'running'
+                  ? {
+                      ...block,
+                      status: 'failed' as const,
+                      error: 'Interrupted by user',
+                      finishedAt: new Date().toISOString(),
+                    }
+                  : block,
+              ),
+            );
+            setStreamingContent('');
+            setStreamingThinking('');
+            accumulatedContentRef.current = '';
+            accumulatedThinkingRef.current = '';
+            setStatus('idle');
+          }
+        } catch {
+          // Ignore cancel errors — still release / drain the queue below.
+        }
 
-      // Second Esc cancels the agent. Main process emits CHAT_DONE with
-      // interrupted=true (partial content, no suffix). Stay in subagent phase
-      // if applicable; mark in-flight tool blocks as failed.
-      // Don't set status='idle' here — let onDone handle finalization to
-      // avoid double-committing segments. interruptState is confirmSubagents
-      // here and from onState; onDone must not reset it to idle (P1-34).
-      if (status === 'confirming_subagents') {
-        setInterruptState('confirmSubagents');
-        setInterrupted(true);
-        applyToolBlocks((prev) =>
-          prev.map((block) =>
-            block.status === 'generating' || block.status === 'running'
-              ? {
-                  ...block,
-                  status: 'failed' as const,
-                  error: 'Interrupted by user',
-                  finishedAt: new Date().toISOString(),
-                }
-              : block,
-          ),
-        );
-        return;
-      }
-
-      // Third Esc (or full cancel with no subagents)
-      if (status === 'cancelled') {
-        setInterruptState('idle');
-        setInterrupted(true);
-        isSendingRef.current = false;
-        applyToolBlocks((prev) =>
-          prev.map((block) =>
-            block.status === 'generating' || block.status === 'running'
-              ? {
-                  ...block,
-                  status: 'failed' as const,
-                  error: 'Interrupted by user',
-                  finishedAt: new Date().toISOString(),
-                }
-              : block,
-          ),
-        );
-        setStreamingContent('');
-        setStreamingThinking('');
-        accumulatedContentRef.current = '';
-        accumulatedThinkingRef.current = '';
-        setStatus('idle');
-        return;
+        runCancelPhase = consumePendingCancel(cancelQueueRef.current);
       }
     } catch {
-      // Ignore cancel errors
+      // Unexpected throw outside the per-IPC try — never leave the mutex stuck.
+      resetCancelQueue(cancelQueueRef.current);
     }
   }, [applyToolBlocks, isSwitchingSession]);
 
@@ -850,14 +1033,15 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     setInterrupted(false);
     setInterruptState('idle');
     isSendingRef.current = false;
+    resetCancelQueue(cancelQueueRef.current);
     setStatus('idle');
     // Rehydrate last-turn context usage from persisted messages; empty/new
     // sessions correctly get null → 0% context until the next stream.
     const restored = latestUsageFromMessages(next);
     setUsage(restored);
     usageRef.current = restored;
+    setCurrentTurnUsage(null);
     setStreamStartTime(null);
-    setElapsedSeconds(0);
     accumulatedContentRef.current = '';
     accumulatedThinkingRef.current = '';
     streamTurnIdRef.current = null;
@@ -881,6 +1065,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     // Do not clear messages/tools/usage here — keep painting the previous
     // session until hydrate/replaceMessages commits the next view in one shot.
     isSendingRef.current = false;
+    resetCancelQueue(cancelQueueRef.current);
     setIsSwitchingSession(true);
   }, []);
 
@@ -895,14 +1080,34 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     }
   }, []);
 
+  const replayHydrationBuffer = useCallback((
+    buffered: BufferedHydrationEvent[],
+    seedLive: Pick<ChatSnapshot, 'sessionId' | 'turnId' | 'sequence'> | null,
+  ) => {
+    const affinity: ChatEventAffinity = {
+      selectedSessionId: activeSessionIdRef.current,
+      streamSessionId: streamSessionIdRef.current,
+      streamTurnId: streamTurnIdRef.current,
+      lastSequence: lastSequenceRef.current,
+    };
+    if (seedLive) {
+      seedAffinityFromLive(affinity, seedLive);
+    }
+    drainBufferedHydrationEvents(affinity, buffered, isSendingRef.current);
+    streamSessionIdRef.current = affinity.streamSessionId;
+    streamTurnIdRef.current = affinity.streamTurnId;
+    lastSequenceRef.current = affinity.lastSequence;
+  }, []);
+
   const hydrateSnapshot = useCallback((snapshot: ChatSessionSnapshot | null) => {
     const hydration = hydrationRef.current;
     if (!snapshot) {
       hydrationRef.current = null;
       // Snapshot IPC failed after navigation. Keep the loaded history and let
-      // target-session events observed during the request advance the view.
+      // target-session events observed during the request advance the view —
+      // still sequence-affinity gated so a previous generation cannot land.
       setIsSwitchingSession(false);
-      for (const apply of hydration?.events ?? []) apply();
+      replayHydrationBuffer(hydration?.events ?? [], null);
       return;
     }
     if (snapshot.sessionId !== activeSessionIdRef.current) {
@@ -912,37 +1117,37 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       return;
     }
     hydrationRef.current = null;
+    const bufferedEvents =
+      hydration?.sessionId === snapshot.sessionId ? hydration.events : [];
 
     replaceMessages(snapshot.messages);
     const live: ChatSnapshot | null = snapshot.live;
     if (!live) {
-      // With no live actor, the coherent history is authoritative. Any queued
-      // terminal events were emitted before that history snapshot and are stale.
+      // No live actor: history is the base. Drain only events that pass
+      // sequence affinity for the selected session so stale turn/sequence
+      // leftovers from a prior generation are discarded (not blindly applied).
+      replayHydrationBuffer(bufferedEvents, null);
       return;
     }
 
     streamSessionIdRef.current = live.sessionId;
     streamTurnIdRef.current = live.turnId;
     lastSequenceRef.current = live.sequence;
-    const liveTools: ToolBlock[] = live.toolCalls.map((tool) => ({
-      id: tool.toolCallId,
-      toolName: tool.toolName,
-      status: tool.status,
-      partialArgs: tool.partialArgs,
-      args: tool.args,
-      result: tool.result,
-      error: tool.error,
-      startedAt: tool.startedAt,
-      finishedAt: tool.finishedAt,
-    }));
+    const liveTools: ToolBlock[] = live.toolCalls.map(chatToolSnapshotToBlock);
     applyToolBlocks(liveTools);
     applyStreamSegments(live.streamSegments.map((segment) => ({ ...segment })));
     accumulatedContentRef.current = live.response;
     accumulatedThinkingRef.current = live.thinking;
     setStreamingContent(live.response);
     setStreamingThinking(live.thinking);
-    setUsage(live.usage);
-    usageRef.current = live.usage;
+    const hydratedUsage = resolveHydratedUsage(snapshot.messages, live.usage);
+    setUsage(hydratedUsage);
+    usageRef.current = hydratedUsage;
+    setCurrentTurnUsage(
+      live.state === 'streaming' && live.usage && hasUsage(live.usage)
+        ? live.usage
+        : null,
+    );
     setError(live.error);
     setInterruptState(live.interruptState);
     setInterrupted(live.interrupted);
@@ -951,18 +1156,10 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     isSendingRef.current = isLive;
     setStatus(live.state);
     setStreamStartTime(isLive ? live.startedAt ?? Date.now() : null);
-    setElapsedSeconds(
-      isLive && live.startedAt != null
-        ? (Date.now() - live.startedAt) / 1000
-        : 0,
-    );
 
-    // The snapshot is the base state. Replaying through acceptsEvent drops
-    // queued events already covered by its sequence and applies only newer ones.
-    if (hydration?.sessionId === snapshot.sessionId) {
-      for (const apply of hydration.events) apply();
-    }
-  }, [applyToolBlocks, applyStreamSegments, replaceMessages]);
+    // Snapshot is the sequence high-water mark; drain only newer events.
+    replayHydrationBuffer(bufferedEvents, live);
+  }, [applyToolBlocks, applyStreamSegments, replaceMessages, replayHydrationBuffer]);
 
   const clearError = useCallback(() => {
     setError(null);
@@ -977,10 +1174,10 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     streamSegments,
     error,
     usage,
+    currentTurnUsage,
     cumulativeUsage,
     contextBreakdown,
     streamStartTime,
-    elapsedSeconds,
     interruptState,
     interrupted,
     cwd,
@@ -1000,7 +1197,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
  * Convert chronological stream segments into persisted messages.
  * Order matches call order: tool pair(s) and text segments interleaved.
  */
-function commitSegmentsToMessages(opts: {
+export function commitSegmentsToMessages(opts: {
   segments: readonly StreamSegment[];
   liveTools: readonly ToolBlock[];
   fallbackResponse: string;
@@ -1046,7 +1243,7 @@ function commitSegmentsToMessages(opts: {
           timestamp: new Date().toISOString(),
           usage: index === lastTextIndex ? usage : null,
           hidden: false,
-    is_error: false,
+          tool_result: null,
   });
         return;
       }
@@ -1063,7 +1260,7 @@ function commitSegmentsToMessages(opts: {
           timestamp: new Date().toISOString(),
           usage: null,
           hidden: false,
-    is_error: false,
+          tool_result: null,
   });
       }
     });
@@ -1074,6 +1271,22 @@ function commitSegmentsToMessages(opts: {
         out.push(...toolBlockToMessages(block));
       }
     }
+    if (usage && lastTextIndex < 0) {
+      out.push({
+        id: crypto.randomUUID(),
+        role: MessageRole.ASSISTANT,
+        content: '',
+        type: MessageType.TEXT,
+        tool_calls: null,
+        tool_call_id: null,
+        name: null,
+        thinking,
+        timestamp: new Date().toISOString(),
+        usage,
+        hidden: true,
+        tool_result: null,
+      });
+    }
     return out;
   }
 
@@ -1081,7 +1294,7 @@ function commitSegmentsToMessages(opts: {
   for (const block of liveTools) {
     out.push(...toolBlockToMessages(block));
   }
-  if (fallbackResponse || interrupted) {
+  if (fallbackResponse || interrupted || usage) {
     out.push({
       id: crypto.randomUUID(),
       role: MessageRole.ASSISTANT,
@@ -1093,8 +1306,8 @@ function commitSegmentsToMessages(opts: {
       thinking,
       timestamp: new Date().toISOString(),
       usage,
-      hidden: false,
-    is_error: false,
+      hidden: !fallbackResponse && !interrupted && usage != null,
+      tool_result: null,
   });
   }
   return out;
@@ -1123,18 +1336,14 @@ function toolBlockToMessages(block: ToolBlock): Message[] {
     timestamp: block.startedAt,
     usage: null,
     hidden: false,
-    is_error: false,
+    tool_result: null,
   };
 
-  const resultContent =
-    block.status === 'failed'
-      ? block.error ?? 'Tool failed'
-      : block.result ?? '';
-
+  if (!block.toolResult) return [call];
   const result: Message = {
     id: crypto.randomUUID(),
     role: MessageRole.TOOL,
-    content: resultContent,
+    content: block.agentProjection ?? '',
     type: MessageType.TOOL_RESULT,
     tool_calls: null,
     tool_call_id: callId,
@@ -1143,7 +1352,7 @@ function toolBlockToMessages(block: ToolBlock): Message[] {
     timestamp: block.finishedAt ?? block.startedAt,
     usage: null,
     hidden: false,
-    is_error: block.status === 'failed',
+    tool_result: block.toolResult,
   };
 
   return [call, result];
@@ -1162,8 +1371,8 @@ function upsertToolBlock(blocks: ToolBlock[], next: ToolBlock, merge = false): T
           status: next.status,
           partialArgs: next.partialArgs || block.partialArgs,
           args: next.args || block.args || block.partialArgs,
-          result: next.result ?? block.result,
-          error: next.error ?? block.error,
+          agentProjection: next.agentProjection ?? block.agentProjection,
+          toolResult: next.toolResult ?? block.toolResult,
           finishedAt: next.finishedAt ?? block.finishedAt,
         }
       : { ...block, ...next };

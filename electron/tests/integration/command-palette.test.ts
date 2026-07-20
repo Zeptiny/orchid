@@ -17,6 +17,10 @@ import {
   buildPersonalityResults,
   fuzzyMatch,
 } from '../../src/renderer/commands/registry';
+import {
+  eventMatchesChord,
+  getShortcut,
+} from '../../src/renderer/keyboard';
 
 const findCommand = (name: string) =>
   COMMANDS.find((command) => command.name === name);
@@ -470,39 +474,59 @@ describe('Command Execution', () => {
 
 // ─── Keyboard Shortcuts ──────────────────────────────────────────────────────
 
+function fakeKeyEvent(
+  partial: Partial<KeyboardEvent> & { key: string },
+): KeyboardEvent {
+  return {
+    key: partial.key,
+    code: partial.code ?? '',
+    ctrlKey: partial.ctrlKey ?? false,
+    metaKey: partial.metaKey ?? false,
+    shiftKey: partial.shiftKey ?? false,
+    altKey: partial.altKey ?? false,
+    defaultPrevented: false,
+    preventDefault() {
+      (this as { defaultPrevented: boolean }).defaultPrevented = true;
+    },
+    target: partial.target ?? null,
+  } as KeyboardEvent;
+}
+
 describe('Command Palette Keyboard Shortcuts', () => {
-  it('Cmd+K / Ctrl+K opens palette', () => {
-    const key = 'k';
-    const metaKey = true;
-    const shouldOpen = (metaKey || false) && key === 'k';
-    expect(shouldOpen).toBe(true);
+  it('Cmd+K / Ctrl+K opens palette via registry', () => {
+    const def = getShortcut('palette.toggle');
+    expect(def).toBeDefined();
+    expect(def!.chord).toEqual({ key: 'k', mod: true });
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'k', metaKey: true }), def!.chord)).toBe(true);
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'k', ctrlKey: true }), def!.chord)).toBe(true);
   });
 
-  it('Ctrl+K opens palette on Windows/Linux', () => {
-    const key = 'k';
-    const ctrlKey = true;
-    const shouldOpen = ctrlKey && key === 'k';
-    expect(shouldOpen).toBe(true);
+  it('Ctrl+K opens palette on Windows/Linux via registry', () => {
+    const def = getShortcut('palette.toggle');
+    expect(def).toBeDefined();
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'k', ctrlKey: true }), def!.chord)).toBe(true);
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'k' }), def!.chord)).toBe(false);
   });
 
-  it('ArrowDown moves selection down', () => {
-    const key = 'ArrowDown';
-    expect(key).toBe('ArrowDown');
+  it('ArrowDown navigates palette via registry', () => {
+    const def = getShortcut('palette.navigate');
+    expect(def).toBeDefined();
+    expect(def!.chord).toEqual({ key: 'ArrowDown' });
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'ArrowDown' }), def!.chord)).toBe(true);
   });
 
-  it('ArrowUp moves selection up', () => {
-    const key = 'ArrowUp';
-    expect(key).toBe('ArrowUp');
+  it('Enter selects palette result via registry', () => {
+    const def = getShortcut('palette.select');
+    expect(def).toBeDefined();
+    expect(def!.chord).toEqual({ key: 'Enter' });
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'Enter' }), def!.chord)).toBe(true);
   });
 
-  it('Enter executes selected command', () => {
-    const key = 'Enter';
-    expect(key).toBe('Enter');
-  });
-
-  it('Escape closes palette', () => {
-    const key = 'Escape';
-    expect(key).toBe('Escape');
+  it('Escape closes palette via registry', () => {
+    const def = getShortcut('palette.close');
+    expect(def).toBeDefined();
+    expect(def!.chord).toEqual({ key: 'Escape' });
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'Escape' }), def!.chord)).toBe(true);
   });
 });
 
@@ -554,16 +578,57 @@ describe('Command Palette File Structure', () => {
     expect(fs.existsSync(path.join(commandsDir, 'registry.ts'))).toBe(true);
   });
 
-  it('chat.css contains command palette styles', () => {
-    const cssPath = path.resolve(__dirname, '../../src/renderer/styles/chat.css');
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    expect(css).toContain('.command-palette-overlay');
-    expect(css).toContain('.command-palette');
-    expect(css).toContain('.command-palette-input');
-    expect(css).toContain('.command-palette-results');
-    expect(css).toContain('.command-palette-item');
-    expect(css).toContain('.command-palette-group');
-    expect(css).toContain('.command-palette-footer');
-    expect(css).toContain('.command-palette-highlight');
+  it('chat.css or components.css contain command palette styles', () => {
+    const chatCss = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/styles/chat.css'),
+      'utf-8',
+    );
+    const componentsCss = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/styles/components.css'),
+      'utf-8',
+    );
+    const css = `${chatCss}\n${componentsCss}`;
+    expect(css).toContain('.orchid-command-palette-overlay');
+    expect(css).toContain('.orchid-command-palette');
+    expect(css).toContain('.orchid-command-palette-results');
+    expect(css).toContain('.orchid-command-palette-item');
+    expect(css).toContain('.orchid-command-palette-group');
+    expect(css).toContain('.orchid-command-palette-footer');
+  });
+
+  it('wires orchid:navigate from palette to ChatView/Sidebar', () => {
+    const palette = fs.readFileSync(
+      path.join(componentsDir, 'CommandPalette.tsx'),
+      'utf-8',
+    );
+    const chatView = fs.readFileSync(
+      path.join(componentsDir, 'ChatView.tsx'),
+      'utf-8',
+    );
+    expect(palette).toContain("orchid:navigate");
+    expect(chatView).toContain("orchid:navigate");
+    expect(chatView).toContain('setInspectorFocusSection');
+  });
+
+  it('Sidebar re-opens collapsed inspector section on same-section re-nav', () => {
+    const sidebar = fs.readFileSync(
+      path.join(componentsDir, 'Sidebar.tsx'),
+      'utf-8',
+    );
+    expect(sidebar).toContain('forceOpenEpoch');
+    expect(sidebar).toContain('forceOpenToken');
+    expect(sidebar).toMatch(/shouldOpenCollapseFromToken\(forceOpenToken\)/);
+  });
+
+  it('CommandPalette ignores re-entrant selection while async select is in flight', () => {
+    const palette = fs.readFileSync(
+      path.join(componentsDir, 'CommandPalette.tsx'),
+      'utf-8',
+    );
+    expect(palette).toContain('selectingRef');
+    expect(palette).toMatch(/if \(selectingRef\.current\) return/);
+    expect(palette).toMatch(/selectingRef\.current = true/);
+    expect(palette).toMatch(/finally \{[\s\S]*selectingRef\.current = false/);
+    expect(palette).toMatch(/disabled=\{isSelecting\}/);
   });
 });

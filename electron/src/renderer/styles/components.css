@@ -1,0 +1,1962 @@
+/**
+ * Shared product composites (namespaced orchid-*).
+ *
+ * Prefer DaisyUI classes in JSX for recognizable controls. Use orchid-* only
+ * for repeated product geometry/state. Compose with @apply + semantic tokens
+ * when utilities express the contract; keep custom declarations for theme-var
+ * surfaces that utilities cannot yet express cleanly.
+ */
+
+@layer orchid {
+  .orchid-chat-content-preserved {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+  }
+
+  .orchid-chat-content-hidden {
+    display: none;
+  }
+
+  .orchid-subagent-view {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+    padding: 16px;
+    container-type: inline-size;
+  }
+
+  .orchid-subagent-view-container {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+    min-height: 0;
+    flex: 1 1 auto;
+    gap: 12px;
+    overflow: hidden;
+  }
+
+  .orchid-subagent-view-container > div,
+  .orchid-subagent-view-list,
+  .orchid-subagent-view-detail {
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .orchid-subagent-view-list,
+  .orchid-subagent-view-detail {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .orchid-subagent-view-detail-header {
+    flex: 0 0 auto;
+    padding: 12px;
+  }
+
+  .orchid-subagent-view-groups {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .orchid-subagent-view-group + .orchid-subagent-view-group {
+    border-top: 1px solid var(--color-base-300);
+  }
+
+  .orchid-subagent-view-group .orchid-section-header {
+    padding: 10px 12px 6px;
+  }
+
+  .orchid-subagent-view-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0 8px 10px;
+  }
+
+  .orchid-subagent-view-row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-field);
+    padding: 9px 8px;
+    color: var(--color-base-content);
+    text-align: left;
+  }
+
+  .orchid-subagent-view-row:hover,
+  .orchid-subagent-view-row:focus-visible,
+  .orchid-subagent-view-row-selected {
+    border-color: var(--color-base-300);
+    background: var(--color-base-200);
+  }
+
+  .orchid-subagent-view-narrow-back {
+    display: none;
+  }
+
+  .orchid-subagent-view-metadata {
+    display: flex;
+    flex-wrap: wrap;
+    flex: 0 0 auto;
+    gap: 8px 16px;
+    border-top: 1px solid var(--color-base-300);
+    padding: 10px 12px;
+    color: color-mix(in srgb, var(--color-base-content) 70%, transparent);
+    font-size: 0.75rem;
+  }
+
+  .orchid-subagent-view-transcript {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+
+  @container (min-width: 720px) {
+    .orchid-subagent-view-container {
+      grid-template-columns: minmax(220px, 0.28fr) minmax(0, 0.72fr);
+    }
+
+    .orchid-subagent-view-container > div {
+      display: flex;
+    }
+  }
+
+  @container (max-width: 719px) {
+    .orchid-subagent-view-container > div {
+      display: flex;
+    }
+
+    .orchid-subagent-view-narrow-hidden {
+      display: none !important;
+    }
+
+    .orchid-subagent-view-narrow-back {
+      display: inline-flex;
+    }
+  }
+
+  .orchid-subagent-view-container-single {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* ── Shared keycaps (shortcut chords) ─────────────────────────────────── */
+
+  .orchid-keycaps {
+    @apply inline-flex items-center shrink-0 select-none;
+    gap: 0;
+  }
+
+  .orchid-keycaps-unit {
+    @apply inline-flex items-center;
+    gap: 0;
+  }
+
+  .orchid-keycaps-sep {
+    @apply inline-flex items-center justify-center font-semibold leading-none;
+    width: 0.7em;
+    margin: 0 1px;
+    font-size: 0.72em;
+    color: color-mix(in srgb, currentColor 38%, transparent);
+    opacity: 0.85;
+  }
+
+  /* Theme-var key surface — flat fill, no gradient. */
+  .orchid-keycap {
+    @apply inline-flex items-center justify-center m-0 font-mono leading-none whitespace-nowrap;
+    min-width: 1.35em;
+    border: 1px solid color-mix(in srgb, var(--border-default) 92%, var(--accent-primary));
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--bg-secondary, var(--color-base-200)) 96%, var(--overlay-color));
+    color: color-mix(in srgb, var(--text-muted, var(--color-base-content)) 94%, var(--accent-primary, var(--color-primary)));
+    font-weight: 550;
+    letter-spacing: 0.02em;
+  }
+
+  .orchid-keycap-xs .orchid-keycap {
+    min-height: 15px;
+    padding: 1px 4px;
+    font-size: 9px;
+    border-radius: 3px;
+  }
+
+  .orchid-keycap-sm .orchid-keycap {
+    min-height: 20px;
+    padding: 3px 7px;
+    font-size: 11px;
+    border-radius: 4px;
+  }
+
+  .orchid-keycap-md .orchid-keycap {
+    min-height: 24px;
+    padding: 4px 9px;
+    font-size: 12px;
+    border-radius: 5px;
+  }
+
+  /* DaisyUI badges — keep label off the border (scoped via :where so we do not
+     redefine reserved DaisyUI component selectors at the top level). */
+  :where(.badge) {
+    padding-inline: 0.5rem;
+    padding-block: 0.2rem;
+    gap: 0.25rem;
+    line-height: 1.25;
+  }
+
+  :where(.badge-xs) {
+    padding-inline: 0.4rem;
+    padding-block: 0.15rem;
+  }
+
+  :where(.badge-sm) {
+    padding-inline: 0.5rem;
+    padding-block: 0.2rem;
+  }
+
+  /* Compact shortcut hint bars (palette footer,
+  config footer) */
+  .orchid-shortcut-bar {
+    @apply flex flex-wrap items-center;
+    gap: 10px 14px;
+    min-height: 34px;
+    padding: 8px 16px;
+    border-top: 1px solid color-mix(in srgb, var(--border-default) 90%, transparent);
+    background: color-mix(in srgb, var(--bg-primary) 88%, var(--bg-secondary));
+    color: color-mix(in srgb, var(--text-secondary) 92%, transparent);
+    font-size: 10px;
+  }
+
+  .orchid-shortcut-bar-item {
+    @apply inline-flex items-center;
+    gap: 6px;
+  }
+
+  .orchid-shortcut-bar-item > span:last-child {
+    letter-spacing: 0.01em;
+  }
+
+  /* Config footer chrome (pairs with orchid-shortcut-bar) */
+  .config-footer-bar {
+    @apply shrink-0;
+  }
+
+  .config-footer-meta {
+    @apply ml-auto;
+    opacity: 0.55;
+    font-size: 9px;
+    letter-spacing: 0.02em;
+  }
+
+  /* ── Shared panel / section / form / state composites ───────────────────── */
+
+  /* Intentional hook markers (layout lives in JSX Tailwind); keep for product surface IDs. */
+  .orchid-panel {
+    @apply min-w-0;
+  }
+
+  .orchid-section-header {
+    @apply min-w-0;
+  }
+
+  .orchid-section-title,
+  .orchid-section-description,
+  .orchid-section-actions,
+  .orchid-form-field,
+  .orchid-form-field-control,
+  .orchid-state-message {
+    @apply min-w-0;
+  }
+
+  /* Command palette shell hooks — geometry/chrome mostly Tailwind on the element. */
+  .orchid-command-palette-overlay,
+  .orchid-command-palette,
+  .orchid-command-palette-results,
+  .orchid-command-palette-group,
+  .orchid-command-palette-item,
+  .orchid-command-palette-highlight,
+  .orchid-command-palette-footer,
+  .orchid-model-picker {
+    @apply min-w-0;
+  }
+
+  .orchid-command-palette-input {
+    @apply min-w-0 flex-1 bg-transparent outline-none;
+  }
+
+  .orchid-chat-footer-main {
+    @apply flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden;
+  }
+
+  /* Flat chat stream surfaces (U5) — orchid-* only (legacy dual aliases removed). */
+
+  .orchid-chat-scroll {
+    @apply flex min-h-0 flex-1 flex-col gap-3 overflow-auto;
+    /* Padding enforced in exceptions.css (unlayered) + JSX utilities. */
+    scroll-behavior: smooth;
+  }
+
+  .orchid-chat-scroll > * {
+    flex-shrink: 0;
+  }
+
+  .orchid-chat-empty {
+    @apply flex flex-1 flex-col items-center justify-center text-center;
+    padding: 40px 24px;
+  }
+
+  .orchid-chat-empty-icon {
+    @apply mb-4 flex items-center justify-center leading-none;
+  }
+
+  .orchid-chat-empty-icon img {
+    @apply block opacity-90;
+    width: 96px;
+    height: 96px;
+    object-fit: contain;
+  }
+
+  .orchid-chat-empty-title {
+    @apply mb-2 font-bold text-base-content;
+    font-size: 20px;
+  }
+
+  .orchid-chat-empty-desc {
+    @apply text-sm leading-normal text-base-content/70;
+    max-width: 360px;
+  }
+
+  /* Flat message rows — not DaisyUI chat/chat-bubble.
+     Padding is enforced unlayered in exceptions.css + Tailwind on JSX. */
+  .orchid-msg {
+    /* text-md ≈ Tailwind text-base (1rem); no text-md token in Tailwind 4. */
+    @apply break-words text-base leading-snug;
+    width: 100%;
+    max-width: 100%;
+    border-radius: 0.375rem;
+    font-size: 1rem;
+  }
+
+  .orchid-msg-user {
+    @apply self-end;
+    /* Extra air after assistant/tool turns. */
+    margin-top: 0.5rem;
+  }
+
+  .orchid-msg-assistant {
+    @apply self-start bg-transparent text-base-content;
+    max-width: 100%;
+    /* Extra air after the previous user turn. */
+    margin-top: 0.5rem;
+  }
+
+  .orchid-msg-system {
+    @apply self-center my-1 text-center text-xs text-base-content/60;
+  }
+
+  .orchid-code-token {
+    @apply inline font-mono font-medium;
+    padding: 1px 3px;
+    border-radius: 3px;
+    font-size: 11px;
+    background: color-mix(in srgb, var(--color-warning) 15%, transparent);
+    color: var(--color-warning);
+  }
+
+  /* Thought disclosure */
+  .orchid-thought {
+    @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
+    border-radius: 5px;
+  }
+
+  .orchid-thought-title {
+    @apply flex w-full items-center justify-between gap-1.5 border-none bg-transparent text-left font-medium text-base-content/70;
+    min-height: 28px;
+    padding: 7px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    border-left: 2px solid color-mix(in srgb, var(--msg-thinking-text, var(--color-info)) 55%, transparent);
+    border-radius: 0 4px 4px 0;
+    font-family: inherit;
+    line-height: 1.35;
+  }
+
+  .orchid-thought-title:hover {
+    color: var(--msg-thinking-text, var(--color-info));
+    background: color-mix(in srgb, var(--msg-thinking-text, var(--color-info)) 5%, transparent);
+  }
+
+  .orchid-thought-content {
+    @apply leading-snug text-base-content/70;
+    font-size: 1rem;
+    padding: 8px 14px 10px;
+    border-left: 2px solid color-mix(in srgb, var(--msg-thinking-text, var(--color-info)) 55%, transparent);
+    cursor: pointer;
+  }
+
+  .orchid-thought-content:hover {
+    background: color-mix(in srgb, var(--color-base-content) 2%, transparent);
+  }
+
+  /* Tool activity group */
+  .orchid-tool-activity {
+    @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
+    border-radius: 5px;
+  }
+
+  .orchid-tool-activity-title {
+    @apply flex w-full items-center justify-between gap-1.5 border-none bg-transparent text-left text-base-content/70;
+    min-height: 28px;
+    padding: 7px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    border-left: 2px solid color-mix(in srgb, var(--color-secondary) 55%, transparent);
+    border-radius: 0 4px 4px 0;
+    font-family: inherit;
+    line-height: 1.35;
+  }
+
+  .orchid-tool-activity-title:hover {
+    color: var(--color-secondary);
+    background: color-mix(in srgb, var(--color-secondary) 5%, transparent);
+  }
+
+  .orchid-tool-activity-title-left {
+    @apply inline-flex min-w-0 flex-1 items-center gap-1;
+  }
+
+  .orchid-tool-activity-title-text {
+    @apply min-w-0 truncate font-medium;
+  }
+
+  .orchid-tool-activity-title-right {
+    @apply inline-flex shrink-0 items-center gap-1 opacity-75;
+  }
+
+  .orchid-tool-activity.running > .orchid-tool-activity-title {
+    color: var(--color-warning);
+    border-left-color: var(--color-warning);
+  }
+
+  .orchid-tool-activity.failed > .orchid-tool-activity-title {
+    color: var(--color-error);
+    border-left-color: var(--color-error);
+  }
+
+  .orchid-tool-activity-body {
+    padding: 2px 10px 4px 12px;
+  }
+
+  .orchid-tool-activity-children {
+    @apply flex flex-col gap-0.5;
+  }
+
+  .orchid-tool-activity-children .orchid-tool-block,
+  .orchid-tool-activity-children .orchid-thought {
+    margin-bottom: 0;
+  }
+
+  /* Tool call block */
+  .orchid-tool-block {
+    @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
+    border-radius: 5px;
+  }
+
+  .orchid-tool-block-title {
+    @apply flex w-full items-center justify-between gap-1.5 border-none bg-transparent text-left font-medium text-base-content/70;
+    min-height: 28px;
+    padding: 7px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    border-left: 2px solid color-mix(in srgb, var(--color-secondary) 55%, transparent);
+    border-radius: 0 4px 4px 0;
+    font-family: inherit;
+    line-height: 1.35;
+  }
+
+  .orchid-tool-block-title:hover {
+    color: var(--color-secondary);
+    background: color-mix(in srgb, var(--color-secondary) 5%, transparent);
+  }
+
+  .orchid-tool-block-title-left {
+    @apply inline-flex min-w-0 flex-1 items-center gap-1;
+  }
+
+  .orchid-tool-block-title-text {
+    @apply min-w-0 truncate font-normal;
+  }
+
+  .orchid-tool-block-title-text .font-semibold {
+    @apply font-semibold;
+  }
+
+  .orchid-tool-block-title-right {
+    @apply inline-flex shrink-0 items-center gap-1.5;
+  }
+
+  .orchid-tool-block-content {
+    @apply text-base-content/70;
+    font-size: 1rem;
+    padding: 8px 14px 10px;
+    border-left: 2px solid color-mix(in srgb, var(--color-secondary) 55%, transparent);
+    cursor: pointer;
+  }
+
+  .orchid-tool-block-content:hover {
+    background: color-mix(in srgb, var(--color-base-content) 2%, transparent);
+  }
+
+  .orchid-tool-block-content:focus-visible {
+    outline: 1px solid color-mix(in srgb, var(--color-secondary) 50%, transparent);
+    outline-offset: -1px;
+  }
+
+  .orchid-tool-block.running > .orchid-tool-block-title {
+    color: var(--color-warning);
+    border-left-color: color-mix(in srgb, var(--color-warning) 55%, transparent);
+  }
+
+  .orchid-tool-block.running > .orchid-tool-block-content {
+    border-left-color: color-mix(in srgb, var(--color-warning) 55%, transparent);
+  }
+
+  .orchid-tool-block.generating > .orchid-tool-block-title {
+    color: var(--color-info);
+    border-left-color: color-mix(in srgb, var(--color-info) 55%, transparent);
+  }
+
+  .orchid-tool-block.generating > .orchid-tool-block-content {
+    border-left-color: color-mix(in srgb, var(--color-info) 55%, transparent);
+  }
+
+  .orchid-tool-block.failed > .orchid-tool-block-title,
+  .orchid-tool-block.error > .orchid-tool-block-title {
+    border-left-color: color-mix(in srgb, var(--color-error) 55%, transparent);
+  }
+
+  .orchid-tool-block.failed > .orchid-tool-block-title:hover,
+  .orchid-tool-block.error > .orchid-tool-block-title:hover {
+    color: var(--color-error);
+    background: color-mix(in srgb, var(--color-error) 5%, transparent);
+  }
+
+  .orchid-tool-block.failed > .orchid-tool-block-content,
+  .orchid-tool-block.error > .orchid-tool-block-content {
+    border-left-color: color-mix(in srgb, var(--color-error) 55%, transparent);
+  }
+
+  .orchid-tool-args-stream {
+    @apply font-mono text-info;
+    font-size: 1rem;
+  }
+
+  .orchid-tool-running-hint {
+    @apply font-mono text-base-content/70;
+    font-size: 1rem;
+  }
+
+  .orchid-tool-result-body {
+    @apply m-0 font-mono break-words whitespace-pre-wrap text-base-content/70;
+    font-size: 1rem;
+    line-height: 1.5;
+  }
+
+  .orchid-tool-result-error {
+    color: var(--color-error);
+  }
+
+  .orchid-tool-result-toolbar {
+    min-height: 1.75rem;
+  }
+
+  .orchid-tool-result-selectable {
+    user-select: text;
+  }
+
+  .orchid-tool-block,
+  .orchid-tool-block-title,
+  .orchid-tool-block-content {
+    min-width: 0;
+  }
+
+  .orchid-tool-block-content {
+    overflow-wrap: anywhere;
+  }
+
+  .orchid-tool-block-content pre {
+    max-width: 100%;
+  }
+
+  .orchid-tool-block-content.error > * {
+    color: var(--color-error);
+  }
+
+  /* Stream error / inline message error */
+  .orchid-error-slot {
+    @apply self-center mb-1 w-full;
+    max-width: min(90%, 600px);
+  }
+
+  .orchid-error-banner {
+    @apply flex items-start gap-2.5 self-center text-xs;
+    max-width: min(90%, 600px);
+    padding: 10px 14px;
+  }
+
+  .orchid-error-title {
+    @apply mb-0.5 font-bold;
+  }
+
+  .orchid-error-message {
+    @apply break-words text-xs leading-snug opacity-90;
+  }
+
+  .orchid-error-body {
+    @apply min-w-0 flex-1;
+  }
+
+  .orchid-error-actions {
+    @apply mt-2 flex flex-wrap items-center gap-1.5;
+  }
+
+  /* Chain footer + collapsed stub */
+  .orchid-chain-footer {
+    @apply flex w-full flex-wrap items-center gap-3 self-start text-base-content/60;
+    padding: 4px 0 2px;
+    margin-top: 4px;
+    font-size: 10px;
+    border-top: 1px solid color-mix(in srgb, var(--color-base-content) 6%, transparent);
+  }
+.orchid-chain-footer-model {
+    @apply font-medium text-base-content/75;
+  }
+
+  .orchid-collapsed-chain {
+    @apply flex w-full cursor-pointer items-center gap-1.5 text-left text-xs text-base-content/70;
+    margin: 6px 0;
+    padding: 6px 10px;
+    border: 1px dashed color-mix(in srgb, var(--color-base-content) 14%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--color-base-content) 3%, transparent);
+  }
+
+  .orchid-collapsed-chain:hover {
+    @apply text-base-content;
+    background: color-mix(in srgb, var(--color-base-content) 6%, transparent);
+  }
+
+  /* Live command terminal chrome */
+  .orchid-live-command {
+    @apply my-1 overflow-hidden rounded-md border border-base-300 bg-base-200 text-sm;
+  }
+
+  .orchid-live-command-title {
+    @apply flex w-full cursor-pointer items-center justify-between gap-2 border-none bg-transparent px-2 py-1.5 text-left text-xs font-medium;
+    font-family: inherit;
+    min-height: 30px;
+  }
+
+  .orchid-live-command-title:hover {
+    background: color-mix(in srgb, var(--color-base-content) 4%, transparent);
+  }
+
+  .orchid-live-command-body {
+    @apply border-t border-base-300;
+  }
+
+  .orchid-live-command-pre {
+    @apply m-0 overflow-x-auto whitespace-pre-wrap p-3 font-mono bg-base-300;
+    font-size: 1rem;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+
+  .orchid-live-command-exit {
+    @apply border-t border-base-content/10 px-3 py-1 opacity-60;
+    font-size: 1rem;
+  }
+
+  /* Context bar geometry (dynamic segment colors stay inline exceptions). */
+  .context-stacked-bar {
+    @apply flex w-full overflow-hidden rounded-sm bg-base-300;
+    height: 10px;
+    margin: 4px 0 8px;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-base-content) 10%, transparent);
+  }
+
+  .context-stacked-bar-segment {
+    @apply block h-full min-w-0;
+    transition: width 180ms ease;
+  }
+
+  .context-stacked-bar-segment + .context-stacked-bar-segment {
+    border-left: 1px solid color-mix(in srgb, var(--color-base-100) 45%, transparent);
+  }
+
+  /* ── Composer / footer / discovery (U6) ─────────────────────────────────── */
+
+  .orchid-composer-area {
+    @apply relative flex flex-col shrink-0 bg-base-100;
+    /* No top border — continuous with chat; footer has no divider either. */
+    border-top: none;
+    padding-inline: 16px;
+    padding-top: 8px;
+  }
+
+  .orchid-composer-gate {
+    @apply mb-1.5 flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-xs;
+  }
+
+  .orchid-composer {
+    @apply flex min-w-0 flex-col py-1;
+    padding-inline: 0;
+  }
+
+  /* Single field shell: textarea + send button share one border/background. */
+  .orchid-composer-shell {
+    @apply flex min-w-0 items-center gap-1.5;
+    border: 1px solid var(--border-default, var(--color-base-300));
+    border-radius: 0.5rem;
+    background: var(--input-bg, var(--color-base-200));
+    padding: 4px;
+    min-height: 44px;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  }
+
+  .orchid-composer-shell:focus-within {
+    border-color: color-mix(in srgb, var(--color-primary) 55%, var(--color-base-300));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 25%, transparent);
+  }
+
+  .orchid-composer.streaming .orchid-composer-shell {
+    border-color: color-mix(in srgb, var(--color-base-content) 14%, var(--color-base-300));
+  }
+
+  .orchid-composer .orchid-composer-textarea {
+    @apply min-w-0 flex-1 border-0 bg-transparent shadow-none outline-none;
+    resize: none;
+    align-self: center;
+  }
+
+  .orchid-composer-controls {
+    @apply flex shrink-0 items-center self-center;
+  }
+
+  .orchid-composer-action {
+    @apply shrink-0 rounded-md;
+    min-height: 32px !important;
+    min-width: 32px !important;
+    width: 32px;
+    height: 32px;
+    padding: 0 !important;
+    border-radius: 0.375rem !important;
+  }
+
+  .orchid-composer-model-picker {
+    flex: 0 1 auto;
+    width: auto;
+    max-width: 200px;
+    min-width: 0;
+  }
+
+  .orchid-composer-model-picker .orchid-model-picker-trigger {
+    @apply h-8 min-h-8 w-auto max-w-full border-transparent bg-transparent text-base-content/70;
+    border-radius: 0.375rem; /* rounded-md */
+    padding: 5px 10px;
+  }
+
+  .orchid-composer-model-picker .orchid-model-picker-trigger:hover:not(:disabled),
+  .orchid-composer-model-picker .orchid-model-picker-trigger:focus-visible {
+    @apply text-base-content;
+    border-color: color-mix(in srgb, var(--color-primary) 25%, var(--color-base-300));
+    background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  }
+
+  .orchid-slash-menu {
+    @apply z-40 flex max-h-64 flex-col overflow-hidden rounded-lg border border-base-300 bg-base-200 shadow-xl;
+    margin-inline: 0;
+  }
+
+  .orchid-slash-menu-header {
+    @apply flex shrink-0 items-center gap-1.5 border-b border-base-content/10 px-2.5 py-1.5 text-xs uppercase tracking-wide text-base-content/60;
+  }
+
+  .orchid-chat-footer {
+    @apply flex shrink-0 items-center justify-between gap-2.5 bg-base-100 text-xs text-base-content/70;
+    min-height: 34px;
+    /* No top border — continuous surface under the unified composer. */
+    border-top: none;
+    margin-inline: 0;
+    padding: 4px 16px 10px;
+  }
+
+  .orchid-chat-footer-hint {
+    @apply inline-flex min-w-0 shrink-0 items-center gap-1.5;
+  }
+
+  .orchid-footer-context-btn {
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center;
+    border: 1px solid transparent;
+    color: color-mix(in srgb, var(--color-base-content) 55%, transparent);
+  }
+
+  .orchid-footer-context-btn:hover,
+  .orchid-footer-context-btn:focus-visible {
+    border-color: color-mix(in srgb, var(--color-base-content) 12%, transparent);
+    background: color-mix(in srgb, var(--color-base-content) 5%, transparent);
+    color: var(--color-base-content);
+  }
+
+  .footer-context-value {
+    @apply tabular-nums tracking-tight;
+    font-size: 7px;
+  }
+
+  .orchid-footer-context-radial {
+    @apply font-semibold leading-none;
+    font-size: 7px !important;
+  }
+
+  /* Soften DaisyUI radial track (default can read as bright white at 0%). */
+  .orchid-footer-context-radial.radial-progress {
+    --fallback-b3: color-mix(in srgb, var(--color-base-content) 14%, transparent);
+    opacity: 0.92;
+  }
+
+  .orchid-footer-context-panel {
+    @apply flex flex-col overflow-hidden rounded-lg border border-base-300 bg-base-200 text-base-content shadow-xl;
+    width: min(300px, 80vw);
+    padding: 0;
+  }
+
+  .footer-context-panel-header {
+    @apply flex shrink-0 flex-col gap-1.5 border-b border-base-content/10;
+    padding: 12px 14px 10px;
+  }
+
+  .footer-context-panel-title {
+    @apply flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-base-content/60;
+  }
+
+  .footer-context-panel-meta {
+    @apply flex items-center justify-between gap-2 text-xs;
+  }
+
+  .footer-context-panel-window {
+    @apply text-xs text-base-content/60 opacity-90;
+  }
+
+  .footer-context-panel-body {
+    padding: 10px 12px 12px;
+  }
+
+  .orchid-footer-model-picker {
+    max-width: 180px;
+    min-width: 0;
+  }
+
+  .orchid-footer-model-picker .orchid-model-picker-trigger {
+    @apply h-7 min-h-7 border-transparent bg-transparent text-base-content/70;
+    border-radius: 0.375rem;
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  .orchid-footer-model-picker .orchid-model-picker-trigger:hover:not(:disabled),
+  .orchid-footer-model-picker .orchid-model-picker-trigger:focus-visible {
+    @apply text-base-content;
+    border-color: color-mix(in srgb, var(--color-primary) 25%, var(--color-base-300));
+    background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  }
+
+  .orchid-command-palette-search-row {
+    @apply flex min-h-14 shrink-0 items-center gap-2 border-b border-base-300 px-3.5 py-3;
+    background: color-mix(in srgb, var(--color-base-200) 62%, transparent);
+  }
+
+  .orchid-command-palette-search-field {
+    @apply h-8 min-h-8 min-w-0 flex-1;
+  }
+
+  .orchid-model-picker-menu {
+    @apply flex flex-col overflow-hidden p-0 text-base-content;
+    width: min(620px, calc(100vw - 32px));
+    max-height: min(430px, 72vh);
+    border-radius: 9px;
+    border: 1px solid var(--border-default, var(--color-base-300));
+    background: var(--bg-secondary, var(--color-base-200));
+    color: var(--text-primary, var(--color-base-content));
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color) 55%, transparent);
+  }
+
+  .dropdown-content.orchid-model-picker-menu,
+  .orchid-model-picker > .dropdown-content {
+    border: 1px solid var(--border-default, var(--color-base-300));
+    background: var(--bg-secondary, var(--color-base-200));
+    color: var(--text-primary, var(--color-base-content));
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color) 55%, transparent);
+    border-radius: 9px;
+  }
+
+  .orchid-model-picker-trigger {
+    @apply flex h-8 min-h-8 w-full min-w-0 items-center justify-start gap-1.5 border border-base-300 bg-base-100 px-2.5 text-left text-xs font-medium text-base-content;
+    border-radius: 5px;
+  }
+
+  .orchid-model-picker-trigger:hover:not(:disabled),
+  .orchid-model-picker-trigger:focus-visible {
+    border-color: color-mix(in srgb, var(--color-primary) 50%, var(--color-base-300));
+    background: color-mix(in srgb, var(--color-primary) 8%, var(--color-base-100));
+  }
+
+  .model-picker-trigger-label {
+    @apply min-w-0 flex-1 truncate leading-tight text-base-content;
+  }
+
+  .model-picker-empty {
+    @apply px-3 py-4 text-center text-xs text-base-content/60;
+  }
+
+  /* ── Keyboard shortcuts help modal ────────────────────────────────────────── */
+
+  .orchid-shortcuts-help-overlay {
+    @apply fixed inset-0 z-[1100] flex items-start justify-center;
+    padding: 10vh 16px 24px;
+    background: color-mix(in srgb, var(--overlay-color) 62%, transparent);
+    backdrop-filter: blur(3px);
+  }
+  .orchid-shortcuts-help-dialog {
+    @apply flex flex-col overflow-hidden rounded-xl;
+    width: min(520px, 100%);
+    max-height: min(640px, 82vh);
+    border: 1px solid color-mix(in srgb, var(--border-default) 85%, var(--accent-primary));
+    background:
+      linear-gradient(
+        165deg,
+        color-mix(in srgb, var(--bg-secondary) 92%, var(--accent-primary)) 0%,
+        var(--bg-surface-deep) 42%,
+        var(--bg-surface-deep) 100%
+      );
+    box-shadow:
+      0 24px 64px color-mix(in srgb, var(--overlay-color) 55%, transparent),
+      0 0 0 1px color-mix(in srgb, var(--text-primary) 3%, transparent) inset;
+    color: var(--text-primary);
+  }
+  .orchid-shortcuts-help-dialog :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent-primary) 80%, transparent);
+    outline-offset: 2px;
+  }
+  .orchid-shortcuts-help-header {
+    @apply flex items-start justify-between gap-3;
+    padding: 16px 16px 14px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-default) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-secondary) 70%, transparent);
+  }
+  .shortcuts-help-title-block {
+    @apply flex items-start gap-3 min-w-0;
+  }
+  .shortcuts-help-icon-wrap {
+    @apply inline-flex items-center justify-center w-8 h-8 rounded-lg shrink-0;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, var(--border-default));
+    background: color-mix(in srgb, var(--accent-primary) 12%, var(--bg-secondary));
+    color: color-mix(in srgb, var(--accent-primary-hover) 90%, var(--text-primary));
+  }
+  .shortcuts-help-title-text {
+    @apply min-w-0;
+    padding-top: 1px;
+  }
+  .shortcuts-help-title-text h2 {
+    @apply m-0 font-semibold leading-tight;
+    font-size: 14px;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+  }
+  .shortcuts-help-title-text p {
+    margin: 4px 0 0;
+    font-size: 11px;
+    line-height: 1.35;
+    color: color-mix(in srgb, var(--text-secondary) 95%, transparent);
+  }
+  .shortcuts-help-close {
+    margin-top: -2px;
+    margin-right: -4px;
+    color: var(--text-secondary);
+  }
+  .orchid-shortcuts-help-body {
+    @apply flex flex-col min-h-0 overflow-y-auto;
+    flex: 1 1 auto;
+    padding: 14px 14px 10px;
+    gap: 14px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-default) transparent;
+  }
+  .orchid-shortcuts-help-body::-webkit-scrollbar {
+    width: 6px;
+  }
+  .orchid-shortcuts-help-body::-webkit-scrollbar-thumb {
+    @apply rounded-full;
+    background: var(--border-default);
+  }
+  .orchid-shortcuts-help-section {
+    @apply m-0;
+    padding: 10px 10px 8px;
+    border: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  }
+  .orchid-shortcuts-help-section-title {
+    @apply uppercase;
+    margin: 0 0 8px;
+    padding: 0 4px 6px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    color: color-mix(in srgb, var(--text-secondary) 78%, var(--accent-primary));
+  }
+  .shortcuts-help-list {
+    @apply list-none m-0 p-0 flex flex-col gap-0.5;
+  }
+  .shortcuts-help-row {
+    @apply flex items-center justify-between gap-4 min-h-8 rounded-md;
+    padding: 6px 8px;
+    transition: background 120ms ease;
+  }
+  .shortcuts-help-row:hover {
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+  }
+  .shortcuts-help-label {
+    @apply min-w-0;
+    font-size: 12px;
+    line-height: 1.35;
+    color: color-mix(in srgb, var(--text-primary) 88%, transparent);
+  }
+  .orchid-shortcuts-help-footer {
+    @apply flex flex-wrap items-center;
+    gap: 8px 10px;
+    padding: 10px 16px 12px;
+    border-top: 1px solid color-mix(in srgb, var(--border-default) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-primary) 80%, var(--bg-secondary));
+    color: color-mix(in srgb, var(--text-secondary) 90%, transparent);
+    font-size: 10px;
+  }
+  .orchid-shortcuts-help-footer-hint {
+    @apply inline-flex items-center gap-1.5;
+  }
+  .orchid-shortcuts-help-footer-dot {
+    @apply opacity-35 select-none;
+  }
+
+  /* ════════════════════════════════════════════════════════════════════════════
+     Onboarding Screen — Fullscreen overlay for first-run setup.
+     ════════════════════════════════════════════════════════════════════════════ */
+
+  /* ── Overlay ──────────────────────────────────────────────────────────────── */
+
+  .onb-overlay {
+    @apply fixed inset-0 flex items-start justify-center overflow-x-hidden overflow-y-auto;
+    z-index: 4000;
+    padding: var(--space-6) 0;
+    background: var(--bg-primary);
+  }
+
+  /* Provider connection wizard — app dialog surface above onboarding (4000). */
+  .provider-connection-wizard.modal {
+    z-index: 5000;
+    padding: 6vh 20px 28px;
+    background: color-mix(in srgb, var(--overlay-color) 55%, transparent);
+    backdrop-filter: blur(3px);
+  }
+
+  .provider-connection-wizard .modal-box {
+    @apply m-0 p-0 overflow-clip flex flex-col;
+    width: min(860px, 100%);
+    max-width: min(860px, 100%);
+    max-height: min(900px, 92vh);
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    background: var(--bg-surface-deep);
+    box-shadow: 0 24px 64px color-mix(in srgb, var(--overlay-color) 55%, transparent);
+    color: var(--text-primary);
+    scale: 1;
+    opacity: 1;
+    translate: 0 0;
+  }
+
+  .provider-connection-wizard .select,
+  .provider-connection-wizard .input {
+    padding-inline: 0.875rem;
+  }
+
+  .provider-connection-wizard .provider-wizard-header {
+    @apply flex items-start justify-between shrink-0;
+    gap: 12px;
+    padding: 18px 20px 16px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-default) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-secondary) 70%, transparent);
+  }
+
+  .provider-connection-wizard .provider-wizard-body {
+    @apply flex flex-col;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    gap: 1.25rem;
+    padding: 24px 20px 16px;
+  }
+
+  .provider-connection-wizard .provider-wizard-body .grid {
+    gap: 1.25rem;
+  }
+
+  .provider-connection-wizard .provider-wizard-actions {
+    @apply shrink-0 flex justify-end m-0;
+    gap: 8px;
+    padding: 14px 20px 18px;
+    border-top: 1px solid color-mix(in srgb, var(--border-default) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
+  }
+
+  .provider-connection-wizard .provider-wizard-body :focus-visible,
+  .provider-connection-wizard .provider-wizard-header :focus-visible,
+  .provider-connection-wizard .provider-wizard-actions :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent-primary) 80%, transparent);
+    outline-offset: 2px;
+  }
+
+  /* ── Container ────────────────────────────────────────────────────────────── */
+
+  .onb-container {
+    @apply flex flex-col overflow-visible;
+    width: min(720px, 92vw);
+    max-width: 92vw;
+    /* Scroll on the overlay, not here — overflow clips ModelPicker menus. */
+    max-height: none;
+    gap: var(--space-6);
+    margin-block: auto;
+    padding: var(--space-8);
+  }
+
+  /* ── Content ──────────────────────────────────────────────────────────────── */
+
+  .onb-step {
+    @apply flex flex-col text-center overflow-visible;
+    gap: var(--space-4);
+  }
+
+  /* Keep icons/copy off alert edges and badges from sitting flush. */
+  .onb-step .alert {
+    @apply items-center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .onb-step .alert > :where(svg, .icon, [data-icon]) {
+    @apply shrink-0;
+  }
+
+  .onb-step .alert > span {
+    @apply min-w-0;
+    padding-inline: 0.125rem;
+  }
+
+  .onb-step .badge {
+    @apply shrink-0;
+    margin-inline-start: 0.35rem;
+  }
+
+  .onb-step h1,
+  .onb-step h2 {
+    @apply m-0;
+    color: var(--text-primary);
+  }
+
+  .onb-step h1 {
+    font-size: var(--font-size-xl);
+  }
+
+  .onb-step h2 {
+    font-size: var(--font-size-lg);
+  }
+
+  .onb-step-description {
+    @apply m-0;
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+  }
+
+  .onb-step-actions {
+    @apply flex justify-center;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+  }
+
+  /* ── Iteration 012 mock-aligned components ─────────────────────────────── */
+  /* Colors mirror screens/012-tool-states-interrupt-flow-feather-icons.html  */
+
+  .tool-activity-group-count {
+    opacity: 0.7;
+    font-weight: 500;
+  }
+
+  /* Compact mock-style collapse (inspector panels) */
+  .mock-collapse {
+    margin-bottom: 4px;
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--bg-secondary) 84%, var(--overlay-color));
+    overflow: hidden;
+  }
+  .mock-collapse .mock-collapse-title {
+    min-height: 30px;
+    padding: 6px 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-weight: 600;
+    font-size: 12px;
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+  }
+  .mock-collapse .mock-collapse-title:hover {
+    filter: brightness(1.06);
+  }
+  .mock-collapse > .mock-collapse-content {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  /* Keep the nested subagent menu in the parent collapse's layout. */
+  .orchid-subagent-dropdown-flow {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .orchid-subagent-dropdown-flow > .dropdown-content {
+    position: static;
+    inset: auto;
+    translate: none;
+    transform: none;
+    scale: 1;
+    opacity: 1;
+    margin-top: 4px;
+  }
+
+  /* Command toast (slash / palette feedback) */
+  .command-toast {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: min(520px, calc(100% - 24px));
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-secondary);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--overlay-color) 40%, transparent);
+    font-size: 12px;
+    color: var(--text-primary);
+    pointer-events: auto;
+  }
+  .command-toast-info {
+    border-color: color-mix(in srgb, var(--accent-info) 45%, var(--border-default));
+  }
+  .command-toast-warning {
+    border-color: color-mix(in srgb, var(--accent-warning) 45%, var(--border-default));
+  }
+  .command-toast-error {
+    border-color: color-mix(in srgb, var(--accent-error) 45%, var(--border-default));
+  }
+  .command-toast-message {
+    min-width: 0;
+    flex: 1;
+    line-height: 1.35;
+  }
+
+  .slash-menu-hint {
+    margin-left: auto;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 9px;
+    opacity: 0.75;
+  }
+  .slash-menu-item-icon {
+    flex-shrink: 0;
+    color: var(--text-secondary);
+    opacity: 0.8;
+  }
+  .slash-menu-item-body {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .slash-menu-item-label {
+    flex-shrink: 0;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .slash-menu-item-desc {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+  }
+
+  .orchid-composer.streaming .orchid-composer-textarea {
+    color: var(--text-secondary);
+  }
+
+  /* ── Chat footer residual overrides ────────────────────────────────────── */
+
+  .orchid-chat-footer-main {
+    gap: 6px;
+  }
+  .chat-footer-hint-label {
+    color: color-mix(in srgb, var(--text-secondary) 92%, transparent);
+    letter-spacing: 0.01em;
+  }
+  .chat-footer-hint-sep {
+    opacity: 0.45;
+    font-size: 9px;
+  }
+  .chat-footer-divider {
+    opacity: 0.28;
+    margin: 0 2px;
+    flex-shrink: 0;
+    user-select: none;
+  }
+  /* Legacy daisy kbd inside footer (streaming status may still use raw kbd) */
+  .orchid-chat-footer .kbd:not(.orchid-keycap) {
+    min-width: 16px;
+    padding: 1px 3px;
+    border: 1px solid var(--border-default);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    color: var(--text-secondary);
+    font: 9px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: transparent;
+  }
+
+  /* ── Panel-variant context legend rows ─────────────────────────────────── */
+
+  .context-panel-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+  }
+  .context-panel-row {
+    @apply flex items-center justify-between gap-3;
+    padding: 8px 10px;
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--text-primary) 2%, transparent);
+    border: 1px solid color-mix(in srgb, var(--text-primary) 4%, transparent);
+  }
+  .context-panel-row:hover {
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+  }
+  .context-panel-row-left {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .context-panel-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--overlay-color) 25%, transparent);
+  }
+  .context-panel-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.2;
+  }
+  .context-panel-row-right {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-shrink: 0;
+    font-size: 11px;
+    line-height: 1.2;
+  }
+  .context-panel-tokens {
+    color: var(--text-primary);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .context-panel-pct {
+    color: var(--text-secondary);
+    min-width: 2.4em;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  /* ── Compact badge overrides ───────────────────────────────────────────── */
+
+  /* Compact badges in dense chrome (still keep horizontal padding). */
+  .session-item .badge,
+  .session-project-toggle .badge,
+  .inspector-row .badge,
+  .mock-collapse .badge,
+  .orchid-tool-block .badge {
+    min-height: 16px;
+    padding: 2px 7px;
+    font-size: 9px;
+    line-height: 1.2;
+  }
+
+  /* ── Responsive ────────────────────────────────────────────────────────── */
+
+  /* Responsive: only shrink columns — components own collapse UI via props */
+  @media (max-width: 980px) {
+    .app-frame {
+      min-width: 0;
+    }
+  }
+
+  /* ── Configuration / Settings form spacing ────────────────────────────────── */
+  /* Roomier than mock’s 8px fieldsets so titles, labels, and inputs breathe.   */
+
+  .config-main-header {
+    min-height: 56px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    border-bottom: 1px solid var(--border-default);
+    background: var(--bg-secondary);
+    flex: 0 0 auto;
+  }
+  .config-main-header-text {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .config-main-header-text h1 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.3;
+  }
+  .config-main-header-text p {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+  }
+  .config-main-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .config-main-header-actions .btn {
+    min-height: 2rem;
+    padding-inline: 0.875rem;
+    padding-block: 0.375rem;
+    gap: 0.375rem;
+  }
+
+  .config-tabs {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-default);
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    background: var(--bg-secondary);
+    flex: 0 0 auto;
+  }
+  .config-tab {
+    padding: 6px 12px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .config-tab:hover {
+    color: var(--text-primary);
+  }
+  .config-tab-active {
+    background: color-mix(in srgb, var(--accent-primary, var(--color-primary)) 14%, transparent);
+    color: var(--accent-primary, var(--color-primary));
+    border-color: color-mix(in srgb, var(--accent-primary, var(--color-primary)) 28%, transparent);
+  }
+
+  .config-body {
+    min-height: 0;
+    flex: 1 1 0;
+    overflow: auto;
+    padding: 16px 20px 24px;
+    background: var(--bg-primary);
+  }
+
+  .config-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-width: 1040px;
+    /* Stable top edge across tabs (no first-child margin collapse). */
+    padding-top: 0;
+    margin-top: 0;
+  }
+
+  /*
+   * Panel shell for every Preferences tab.
+   * Uses <section> (not <fieldset>/<legend>) so top spacing is identical
+   * whether the header is plain text or text + action buttons.
+   */
+  .config-fieldset {
+    margin: 0;
+    padding: 16px 16px 18px;
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--text-primary) 2%, transparent);
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  /* Scope filter row under section headers (Skills / Agents / Personalities). */
+  .config-scope-bar {
+    margin: 0 0 16px;
+    flex: 0 0 auto;
+  }
+
+  .config-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 18px;
+  }
+
+  @media (max-width: 720px) {
+    .config-form-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .config-form-grid-full {
+    grid-column: 1 / -1;
+  }
+
+  .config-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+  .config-field > label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    line-height: 1.35;
+  }
+
+  .config-field .input,
+  .config-field .select {
+    width: 100%;
+    min-height: 34px;
+    height: 34px;
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    background: var(--input-bg);
+    color: var(--text-primary);
+    padding: 6px 10px;
+    font: inherit;
+    font-size: 12px;
+    outline: none;
+  }
+  .config-field .textarea {
+    width: 100%;
+    min-height: 72px;
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    background: var(--input-bg);
+    color: var(--text-primary);
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.45;
+    resize: vertical;
+    outline: none;
+  }
+  .config-field .input:focus,
+  .config-field .select:focus,
+  .config-field .textarea:focus {
+    border-color: color-mix(in srgb, var(--accent-primary) 50%, var(--border-default));
+  }
+  .orchid-model-picker-trigger-copy {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    overflow: hidden;
+  }
+  .orchid-model-picker-trigger-copy .model-picker-trigger-label {
+    width: 100%;
+    flex: 0 1 auto;
+  }
+  .model-picker-trigger-sub-label {
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 400;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-picker-trigger-with-sub-label {
+    min-height: 40px;
+    height: 40px;
+  }
+
+  /* Agent tier picker (description list, model-picker family) */
+  .tier-picker-menu {
+    width: min(360px, calc(100vw - 32px));
+    max-height: min(320px, 60vh);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+    border: 1px solid var(--border-default, var(--color-base-300));
+    border-radius: 9px;
+    background: var(--bg-secondary, var(--color-base-200));
+    color: var(--text-primary, var(--color-base-content));
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color) 55%, transparent);
+  }
+
+  .orchid-model-picker-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid color-mix(in srgb, var(--text-primary) 6%, transparent);
+  }
+  .model-picker-title {
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1.3;
+  }
+  .model-picker-current {
+    max-width: 45%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+    overflow: hidden;
+    color: var(--accent-primary);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-picker-current-name {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-picker-current-sub-label {
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-family: inherit;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .orchid-model-picker-search {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: auto;
+    min-height: 32px;
+    height: 32px;
+    margin: 10px 12px 8px;
+    padding: 0 9px;
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    background: var(--input-bg);
+    color: var(--text-primary);
+  }
+  .orchid-model-picker-search:focus-within {
+    border-color: color-mix(in srgb, var(--accent-primary) 50%, var(--border-default));
+  }
+  .orchid-model-picker-search input {
+    min-width: 0;
+    width: 100%;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+  }
+  .orchid-model-picker-search input::placeholder {
+    color: var(--text-secondary);
+  }
+  .searchable-picker-menu {
+    width: min(420px, calc(100vw - 32px));
+    max-height: min(360px, 62vh);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+    border: 1px solid var(--border-default, var(--color-base-300));
+    border-radius: 9px;
+    background: var(--bg-secondary, var(--color-base-200));
+    color: var(--text-primary, var(--color-base-content));
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color) 55%, transparent);
+  }
+
+  /* DaisyUI dropdown-content can neutralize inherited surfaces — reassert chrome. */
+  .dropdown-content.searchable-picker-menu,
+  .dropdown-content.tier-picker-menu,
+  .dropdown-content.orchid-model-picker-menu {
+    border: 1px solid var(--border-default, var(--color-base-300));
+    background: var(--bg-secondary, var(--color-base-200));
+    color: var(--text-primary, var(--color-base-content));
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color) 55%, transparent);
+  }
+  .searchable-picker-list {
+    list-style: none;
+    min-height: 0;
+    margin: 0;
+    padding: 6px;
+    overflow: auto;
+  }
+  .searchable-picker-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+  }
+  .searchable-picker-option:hover:not(:disabled),
+  .searchable-picker-option:focus-visible,
+  .searchable-picker-option.is-active,
+  .searchable-picker-option.is-selected {
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  }
+  .searchable-picker-option:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+  .searchable-picker-option-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .searchable-picker-option-name {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .searchable-picker-option-desc {
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-picker-table-wrap {
+    min-height: 0;
+    overflow: auto;
+    padding: 0 8px 8px;
+  }
+  .model-picker-table {
+    width: 100%;
+    min-width: 500px;
+    table-layout: fixed;
+    font-size: 13px;
+  }
+  .model-picker-table th {
+    padding: 7px 8px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .model-picker-table th:first-child,
+  .model-picker-table td:first-child {
+    width: 52%;
+    text-align: left;
+  }
+  .model-picker-table th:not(:first-child),
+  .model-picker-table td:not(:first-child) {
+    width: 16%;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .model-picker-table td {
+    padding: 9px 8px;
+    border-top: 1px solid color-mix(in srgb, var(--text-primary) 4.5%, transparent);
+    color: var(--text-muted);
+    font-size: 13px;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  .model-picker-row {
+    cursor: pointer;
+    outline: none;
+    transition: background 120ms ease;
+  }
+  .model-picker-row:hover,
+  .model-picker-row:focus-visible,
+  .model-picker-row.is-active {
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  }
+  .model-picker-row.is-selected {
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  }
+  .model-picker-model-name {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .config-model-picker {
+    width: 240px;
+    flex-shrink: 0;
+  }
+  .config-model-picker .orchid-model-picker-menu {
+    z-index: 200;
+    width: min(620px, calc(100vw - 292px));
+    max-width: calc(100vw - 292px);
+  }
+  .config-model-picker.model-picker-align-start .orchid-model-picker-menu {
+    right: auto;
+    left: 0;
+  }
+  .tier-model-picker {
+    width: min(320px, 100%);
+    flex-shrink: 0;
+  }
+
+  /* Onboarding model menus must paint above step chrome and not inherit clip. */
+  .onb-step .orchid-model-picker-menu,
+  .onb-step .tier-model-picker .orchid-model-picker-menu,
+  .onb-step .config-model-picker .orchid-model-picker-menu {
+    z-index: 4500;
+    width: min(620px, calc(100vw - 48px));
+    max-width: min(620px, calc(100vw - 48px));
+  }
+  .orchid-composer-model-picker .model-picker-trigger-with-sub-label {
+    min-height: 40px;
+    height: 40px;
+  }
+
+  @media (max-width: 720px) {
+    .config-model-picker {
+      width: 100%;
+    }
+  }
+
+  .config-card-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+  .config-card {
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--input-bg) 55%, transparent);
+    padding: 12px 14px;
+  }
+  .config-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.35;
+    margin: 0 0 3px;
+  }
+  .config-card-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+    margin: 0;
+  }
+  .config-card-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  /* Tags / scope badges on definition cards — readable size */
+  .config-card .badge {
+    min-height: 18px;
+    padding: 2px 7px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.25;
+  }
+  .config-note {
+    padding: 8px 2px 0;
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--accent-warning);
+    opacity: 0.9;
+  }
+
+}

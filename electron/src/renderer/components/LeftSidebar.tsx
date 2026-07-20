@@ -23,6 +23,11 @@ import {
   truncatePathDisplay,
 } from '../utils/session-workspace';
 import { Icon } from './Icon';
+import { Button } from './ui/Button';
+import { IconButton } from './ui/IconButton';
+import { SectionHeader } from './ui/SectionHeader';
+import { StateMessage } from './ui/StateMessage';
+import { StatusBadge } from './ui/StatusBadge';
 import { SessionActivitySection } from './session-activity-section';
 import { SessionNameEditor } from './SessionNameEditor';
 
@@ -111,83 +116,80 @@ export function LeftSidebar({
 
   if (isCollapsed) {
     return (
-      <aside className="left-panel left-panel-collapsed">
-        <button
-          className="btn btn-ghost btn-sm btn-circle"
+      <aside
+        className="left-panel left-panel-collapsed bg-base-200"
+        aria-label="Sessions"
+      >
+        <IconButton
+          label={`Expand sessions rail (${formatShortcut('sessionsRail.toggle')})`}
+          icon="chevronRight"
+          size="sm"
           onClick={onToggle}
-          title={`Expand sessions rail (${formatShortcut('sessionsRail.toggle')})`}
-          type="button"
-        >
-          <Icon name="chevronRight" size={14} />
-        </button>
-        <button
-          className="btn btn-ghost btn-sm btn-circle"
+          aria-expanded={false}
+          aria-controls="left-sidebar-body"
+        />
+        <IconButton
+          label={`New session (${formatShortcut('session.new')})`}
+          icon="plus"
+          size="sm"
+          iconSize={16}
           onClick={onSessionCreate}
-          title={`New session (${formatShortcut('session.new')})`}
-          type="button"
-        >
-          <Icon name="plus" size={16} />
-        </button>
+        />
         {onPickProjectDir && (
-          <button
-            className="btn btn-ghost btn-sm btn-circle"
-            onClick={onPickProjectDir}
-            title={
+          <IconButton
+            label={
               currentWorkspace
                 ? `Workspace: ${currentWorkspace}`
                 : 'Open project folder'
             }
-            type="button"
-          >
-            <Icon name="folder" size={14} />
-          </button>
+            icon="folder"
+            size="sm"
+            onClick={onPickProjectDir}
+          />
         )}
         {activities.length > 0 && (
-          <button
-            className="btn btn-ghost btn-sm btn-circle left-panel-activity-count"
+          <Button
+            variant="ghost"
+            size="sm"
+            shape="circle"
+            className="left-panel-activity-count"
             onClick={onToggle}
             title={`${activities.length} session${activities.length === 1 ? '' : 's'} need attention or are running`}
-            type="button"
+            aria-label={`${activities.length} session${activities.length === 1 ? '' : 's'} need attention or are running`}
           >
-            <span className="status status-xs status-warning" />
-          </button>
+            <span className="status status-xs status-warning" aria-hidden />
+          </Button>
         )}
         <div className="left-panel-collapsed-spacer" />
-        <button
-          className="btn btn-ghost btn-sm btn-circle"
+        <IconButton
+          label="Settings"
+          icon="settings"
+          size="sm"
+          iconSize={18}
           onClick={onOpenSettings}
-          title="Settings"
-          type="button"
-        >
-          <Icon name="settings" size={18} />
-        </button>
+        />
       </aside>
     );
   }
 
   return (
-    <aside className="left-panel">
-      <div className="panel-header">
-        <h1 className="title truncate">Orchid</h1>
-        <div className="panel-header-actions">
-          <button
-            className="btn btn-ghost btn-sm btn-circle"
-            onClick={onSessionCreate}
-            title={`New session (${formatShortcut('session.new')})`}
-            type="button"
-          >
-            <Icon name="plus" size={14} />
-          </button>
-          <button
-            className="btn btn-ghost btn-sm btn-circle"
-            onClick={onToggle}
-            title={`Collapse sessions rail (${formatShortcut('sessionsRail.toggle')})`}
-            type="button"
-          >
-            <Icon name="chevronLeft" size={14} />
-          </button>
-        </div>
-      </div>
+    <aside className="left-panel bg-base-200" aria-label="Sessions">
+      <SectionHeader
+        className="panel-header"
+        title={<h1 className="title truncate">Orchid</h1>}
+        actions={
+          <div className="panel-header-actions">
+            <IconButton
+              label={`Collapse sessions rail (${formatShortcut('sessionsRail.toggle')})`}
+              icon="chevronLeft"
+              size="sm"
+              onClick={onToggle}
+              aria-expanded
+              aria-controls="left-sidebar-body"
+            />
+          </div>
+        }
+      />
 
       <SessionActivitySection
         activities={activities}
@@ -196,7 +198,7 @@ export function LeftSidebar({
         onStop={onStopSession ?? (() => {})}
       />
 
-      <div className="panel-body">
+      <div id="left-sidebar-body" className="panel-body">
         <WorkspaceChip
           workspace={workspace}
           isUnbound={isUnbound}
@@ -205,14 +207,26 @@ export function LeftSidebar({
           projectPickerCreatesDraft={projectPickerCreatesDraft}
         />
 
+        <Button
+          variant="ghost"
+          size="sm"
+          className="session-new-btn"
+          onClick={onSessionCreate}
+          title={`New session (${formatShortcut('session.new')})`}
+        >
+          <Icon name="plus" size={14} />
+          <span>New Session</span>
+        </Button>
+
         <div className="session-search">
           <Icon name="search" size={12} className="session-search-icon" />
           <input
-            className="input input-sm session-search-input"
+            className="session-search-input w-full"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search sessions..."
-            type="text"
+            type="search"
+            aria-label="Search sessions"
           />
         </div>
 
@@ -239,14 +253,15 @@ export function LeftSidebar({
       </div>
 
       <div className="panel-footer">
-        <button
-          className="btn btn-ghost session-settings-btn"
+        <Button
+          variant="ghost"
+          size="md"
+          className="session-settings-btn"
           onClick={onOpenSettings}
-          type="button"
         >
           <Icon name="settings" size={18} />
           <span>Settings</span>
-        </button>
+        </Button>
       </div>
     </aside>
   );
@@ -285,28 +300,30 @@ function WorkspaceChip({
   const showPick = Boolean(onPickProjectDir) && !showNewChat;
 
   return (
-    <div className="workspace-chip" title={title}>
-      <Icon name="folder" size={12} className="workspace-chip-icon" />
+    <div className="workspace-chip border border-base-300 bg-base-100" title={title}>
+      <Icon name="folder" size={12} className="workspace-chip-icon shrink-0 opacity-70" />
       <span className="workspace-chip-path mono truncate">{label}</span>
       {showNewChat && (
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs workspace-chip-change"
+        <Button
+          variant="ghost"
+          size="xs"
+          className="workspace-chip-change"
           onClick={onNewChatInProject}
           title="Start a new chat in this project"
         >
           New chat
-        </button>
+        </Button>
       )}
       {showPick && (
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs workspace-chip-change"
+        <Button
+          variant="ghost"
+          size="xs"
+          className="workspace-chip-change"
           onClick={onPickProjectDir}
           title={isUnbound ? 'Open folder' : 'Choose project folder'}
         >
           {isUnbound ? 'Open' : 'Choose'}
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -319,19 +336,23 @@ function UnboundEmptyState({
 }) {
   return (
     <div className="session-list">
-      <div className="session-list-empty workspace-unbound-empty">
-        <p>Choose a project folder to start chatting.</p>
-        {onPickProjectDir && (
-          <button
-            type="button"
-            className="btn btn-primary btn-xs mt-2"
-            onClick={onPickProjectDir}
-          >
-            <Icon name="folder" size={12} />
-            Open folder
-          </button>
-        )}
-      </div>
+      <StateMessage
+        kind="empty"
+        className="workspace-unbound-empty py-6"
+        title="Choose a project folder to start chatting."
+        action={
+          onPickProjectDir ? (
+            <Button
+              variant="primary"
+              size="xs"
+              onClick={onPickProjectDir}
+            >
+              <Icon name="folder" size={12} />
+              Open folder
+            </Button>
+          ) : undefined
+        }
+      />
     </div>
   );
 }
@@ -437,33 +458,41 @@ function ProjectSessionList({
   }, [activeIndex, keyboardSessionActive]);
 
   if (state.status === 'loading') {
-    return <div className="session-list-state"><span className="loading loading-spinner loading-sm" /></div>;
+    return (
+      <StateMessage kind="loading" className="session-list-state py-6" title="Loading sessions…" />
+    );
   }
   if (state.status === 'error') {
     return (
-      <div className="session-list-error">
-        <div>{state.error}</div>
-        <button className="btn btn-error btn-xs" onClick={onRefresh} type="button">Retry</button>
-      </div>
+      <StateMessage
+        kind="error"
+        className="session-list-error py-4"
+        title={state.error}
+        action={
+          <Button variant="error" size="xs" onClick={onRefresh}>
+            Retry
+          </Button>
+        }
+      />
     );
   }
   if (projectGroups.length === 0) {
     return (
       <div className="session-list">
         <div className="session-group-title">Projects</div>
-        <div className="session-list-empty">
-          {isUnbound ? (
-            <>
-              <p>No sessions yet. Open a folder to begin.</p>
-              {onPickProjectDir && (
-                <button type="button" className="btn btn-primary btn-xs mt-2" onClick={onPickProjectDir}>
-                  <Icon name="folder" size={12} />
-                  Open folder
-                </button>
-              )}
-            </>
-          ) : 'No sessions yet'}
-        </div>
+        <StateMessage
+          kind="empty"
+          className="session-list-empty py-6"
+          title={isUnbound ? 'No sessions yet. Open a folder to begin.' : 'No sessions yet'}
+          action={
+            isUnbound && onPickProjectDir ? (
+              <Button variant="primary" size="xs" onClick={onPickProjectDir}>
+                <Icon name="folder" size={12} />
+                Open folder
+              </Button>
+            ) : undefined
+          }
+        />
       </div>
     );
   }
@@ -518,14 +547,15 @@ function ProjectSessionList({
             aria-label={project.label}
           >
             <div className="session-project-header">
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="xs"
                 id={
                   projectKey != null
                     ? `${listId}-project-${projectKey}`
                     : undefined
                 }
-                className={`btn btn-ghost btn-xs session-project-toggle ${
+                className={`session-project-toggle ${
                   isProjectSelected ? 'session-project-toggle-selected' : ''
                 }`}
                 onClick={() => {
@@ -541,6 +571,7 @@ function ProjectSessionList({
                   });
                 }}
                 aria-expanded={!project.isCollapsed}
+                aria-controls={`${listId}-sessions-${project.key}`}
                 aria-selected={isProjectSelected}
                 title={
                   project.path && onProjectSelect
@@ -568,70 +599,84 @@ function ProjectSessionList({
                 </span>
                 <Icon name="folder" size={12} className="session-project-folder" />
                 <span className="session-project-label truncate">{project.label}</span>
-                {counts.working > 0 && <span className="badge badge-xs badge-warning">{counts.working} working</span>}
-                {counts.attention > 0 && <span className="badge badge-xs badge-error">{counts.attention}</span>}
-                {counts.unread > 0 && <span className="badge badge-xs badge-success">{counts.unread}</span>}
-                {isProjectSelected && (
-                  <span className="badge badge-xs badge-ghost">project</span>
+                {counts.working > 0 && (
+                  <StatusBadge tone="warning" size="xs">{counts.working} working</StatusBadge>
                 )}
-              </button>
+                {counts.attention > 0 && (
+                  <StatusBadge tone="error" size="xs">{counts.attention}</StatusBadge>
+                )}
+                {counts.unread > 0 && (
+                  <StatusBadge tone="success" size="xs">{counts.unread}</StatusBadge>
+                )}
+              </Button>
               {project.path && onProjectSessionCreate && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs btn-square session-project-create"
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  shape="square"
+                  className="session-project-create"
                   onClick={() => onProjectSessionCreate(project.path!)}
                   title={`New chat in ${project.label}`}
                   aria-label={`New chat in ${project.label}`}
                 >
                   <Icon name="plus" size={13} />
-                </button>
+                </Button>
               )}
             </div>
-            {!project.isCollapsed && project.visibleSessions.map((session) => {
-              const index = sessionIndex++;
-              return (
-                <SessionRow
-                  key={session.id}
-                  optionId={`${listId}-opt-${session.id}`}
-                  sessionIndex={index}
-                  session={session}
-                  activity={activityBySession.get(session.id)}
-                  isActive={session.id === activeSessionId}
-                  isKeyboardActive={
-                    keyboardSessionActive && index === activeIndex
-                  }
-                  showPathHint={false}
-                  onSelect={(id) => {
-                    setActiveIndex(index);
-                    onSelect(id);
+            <div
+              id={`${listId}-sessions-${project.key}`}
+              className="session-project-sessions"
+              role="group"
+              hidden={project.isCollapsed}
+            >
+              {!project.isCollapsed && project.visibleSessions.map((session) => {
+                const index = sessionIndex++;
+                return (
+                  <SessionRow
+                    key={session.id}
+                    optionId={`${listId}-opt-${session.id}`}
+                    sessionIndex={index}
+                    session={session}
+                    activity={activityBySession.get(session.id)}
+                    isActive={session.id === activeSessionId}
+                    isKeyboardActive={
+                      keyboardSessionActive && index === activeIndex
+                    }
+                    showPathHint={false}
+                    onSelect={(id) => {
+                      setActiveIndex(index);
+                      onSelect(id);
+                    }}
+                    onDelete={onDelete}
+                    onRename={onRename}
+                  />
+                );
+              })}
+              {!project.isCollapsed && !isSearching && project.sessions.length > PROJECT_SESSION_PREVIEW_LIMIT && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="session-project-expand"
+                  aria-expanded={project.isExpanded}
+                  onClick={() => {
+                    setExpandedProjects((previous) => {
+                      const next = new Set(previous);
+                      if (next.has(project.key)) next.delete(project.key);
+                      else next.add(project.key);
+                      return next;
+                    });
                   }}
-                  onDelete={onDelete}
-                  onRename={onRename}
-                />
-              );
-            })}
-            {!project.isCollapsed && !isSearching && project.sessions.length > PROJECT_SESSION_PREVIEW_LIMIT && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs session-project-expand"
-                onClick={() => {
-                  setExpandedProjects((previous) => {
-                    const next = new Set(previous);
-                    if (next.has(project.key)) next.delete(project.key);
-                    else next.add(project.key);
-                    return next;
-                  });
-                }}
-              >
-                <Icon
-                  name={project.isExpanded ? 'chevronUp' : 'chevronDown'}
-                  size={12}
-                />
-                {project.isExpanded
-                  ? `Show recent ${PROJECT_SESSION_PREVIEW_LIMIT}`
-                  : `View ${hiddenCount} more`}
-              </button>
-            )}
+                >
+                  <Icon
+                    name={project.isExpanded ? 'chevronUp' : 'chevronDown'}
+                    size={12}
+                  />
+                  {project.isExpanded
+                    ? `Show recent ${PROJECT_SESSION_PREVIEW_LIMIT}`
+                    : `View ${hiddenCount} more`}
+                </Button>
+              )}
+            </div>
           </div>
         );
       })}
@@ -727,20 +772,22 @@ function SessionRow({
             <span className="session-item-path mono truncate">{pathHint}</span>
           )}
         </span>
-        {isActive && <span className="badge badge-xs badge-ghost">selected</span>}
       </div>
-      <button
-        className="btn btn-ghost btn-xs btn-square session-item-delete"
+      <Button
+        variant="ghost"
+        size="xs"
+        shape="square"
+        className="session-item-delete"
         tabIndex={-1}
         onClick={(event) => {
           event.stopPropagation();
           onDelete(session.id);
         }}
         title="Delete session"
-        type="button"
+        aria-label="Delete session"
       >
         <Icon name="trash" size={12} />
-      </button>
+      </Button>
     </div>
   );
 }

@@ -6,17 +6,17 @@
  *
  * Middleware order (outermost first):
  * 1. Retry — catches transient errors, retries with backoff
- * 2. Provider quirks — handles provider-specific edge cases
- * 3. Throttle — rate-limits thinking-content yields
+ * 2. Throttle — rate-limits thinking-content yields
  *
- * This matches the Python behavior where retry wraps the outermost layer,
- * provider-specific handling is in the middle, and yield throttling is
- * closest to the stream consumer.
+ * (Optional) Attempt accounting sits between retry and throttle when a
+ * ledger context is provided.
+ *
+ * Provider-specific empty-choices handling is owned by the AI SDK. Tool
+ * output offload thresholds live in `provider-quirks.ts` (constants only).
  */
 import type { LanguageModelMiddleware } from 'ai';
 import { createRetryMiddleware, type RetryMiddlewareOptions } from './retry';
 import { createThrottleMiddleware, type ThrottleMiddlewareOptions } from './throttle';
-import { createProviderQuirksMiddleware } from './provider-quirks';
 import {
   createAttemptAccountingMiddleware,
   type ProviderAttemptAccountingContext,
@@ -27,7 +27,6 @@ export { createRetryMiddleware, type RetryMiddlewareOptions } from './retry';
 export { createThrottleMiddleware, type ThrottleMiddlewareOptions } from './throttle';
 export { isTransientError } from './error-classification';
 export {
-  createProviderQuirksMiddleware,
   TOOL_OUTPUT_INLINE_THRESHOLD,
   TOOLS_WITHOUT_OUTPUT_OFFLOAD,
 } from './provider-quirks';
@@ -75,10 +74,7 @@ export function createMiddlewareStack(
     // Insert a durable pending row for every inner retry/tool-loop call.
     ...(options.accounting ? [createAttemptAccountingMiddleware(options.accounting)] : []),
 
-    // 2. Provider quirks — handles empty-choices, mid-stream errors
-    createProviderQuirksMiddleware(),
-
-    // 3. Throttle — rate-limits thinking yields
+    // 2. Throttle — rate-limits thinking yields
     createThrottleMiddleware(options.throttle),
   ];
 }

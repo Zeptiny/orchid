@@ -89,11 +89,17 @@ describe('formatLogLine', () => {
   });
 
   it('redacts credential values from strings, URLs, and structured metadata', () => {
+    const longHex = 'a'.repeat(64);
+    const paddedB64 = `${'A'.repeat(40)}==`;
     const line = formatLogLine('ERROR', [
       'Authorization: Bearer access-token-123456789012345',
+      'xai-key xai-abcdefghijklmnopqrstuvwxyz012345',
+      `hex=${longHex}`,
+      `b64=${paddedB64}`,
       {
         refreshToken: 'refresh-token-123456789012345',
         nested: { apiKey: 'sk-secret-api-key-123456' },
+        github: 'ghp_abcdefghijklmnopqrstuvwxyz012345',
         url: 'https://example.test/callback?api_key=sk-secret-api-key-123456',
       },
     ]);
@@ -101,7 +107,13 @@ describe('formatLogLine', () => {
     expect(line).not.toContain('access-token-123456789012345');
     expect(line).not.toContain('refresh-token-123456789012345');
     expect(line).not.toContain('sk-secret-api-key-123456');
+    expect(line).not.toContain('xai-abcdefghijklmnopqrstuvwxyz012345');
+    expect(line).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz012345');
+    expect(line).not.toContain(longHex);
+    expect(line).not.toContain(paddedB64);
     expect(line).toContain('[REDACTED]');
+    // Short identifiers and normal prose should survive
+    expect(line).toContain('hex=');
   });
 });
 
@@ -271,6 +283,30 @@ describe('FileLogger', () => {
     const logFile = path.join(tmpDir, 'orchid.log');
     const logger = new FileLogger({ logDir: tmpDir, logFile });
     await logger.close();
+    expect(logger.isActive).toBe(false);
+  });
+
+  it('close() resolves within timeout when stream end hangs', async () => {
+    const logFile = path.join(tmpDir, 'orchid.log');
+    const logger = new FileLogger({ logDir: tmpDir, logFile });
+
+    // Replace stream with one whose end() never invokes its callback
+    const hanging = {
+      end: (_cb?: () => void) => hanging,
+      destroy: () => {
+        /* no-op */
+      },
+      once: () => hanging,
+      on: () => hanging,
+      write: () => true,
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (logger as any).stream = hanging;
+
+    const started = Date.now();
+    await logger.close(50);
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeLessThan(500);
     expect(logger.isActive).toBe(false);
   });
 

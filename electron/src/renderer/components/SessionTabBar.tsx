@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { SessionActivity, SessionSummary } from '../../shared/types/ipc-boundary';
 import { Icon } from './Icon';
+import { Button } from './ui/Button';
 import { SessionNameEditor } from './SessionNameEditor';
 
 export interface SessionTabBarProps {
@@ -73,7 +74,11 @@ export function SessionTabBar({
   }, [focusedSessionId, showDraft, openSessionIds]);
 
   return (
-    <div className="session-tab-bar" aria-label="Open sessions">
+    <div
+      className="session-tab-bar border-b border-base-300 bg-base-200/55"
+      role="tablist"
+      aria-label="Open sessions"
+    >
       <div className="session-tab-bar-scroll" ref={scrollRef}>
         {openSessionIds.map((id) => {
           const session = sessionsById.get(id);
@@ -94,6 +99,9 @@ export function SessionTabBar({
             <div
               key={id}
               className={`session-tab ${active ? 'session-tab-active' : ''}`}
+              role="tab"
+              aria-selected={active}
+              id={`session-tab-${id}`}
               data-tab-active={active ? 'true' : 'false'}
               onAuxClick={(e) => {
                 if (e.button === 1) {
@@ -105,7 +113,7 @@ export function SessionTabBar({
               <div
                 className="session-tab-select"
                 role="button"
-                tabIndex={-1}
+                tabIndex={active ? 0 : -1}
                 onClick={() => onSelect(id)}
                 title={
                   multiProject && project
@@ -134,9 +142,11 @@ export function SessionTabBar({
                   <span className="session-tab-label truncate">{title}</span>
                 )}
               </div>
-              <button
-                type="button"
-                className="session-tab-close btn btn-ghost btn-xs btn-square"
+              <Button
+                variant="ghost"
+                size="xs"
+                shape="square"
+                className="session-tab-close"
                 aria-label={`Close ${title}`}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -144,7 +154,7 @@ export function SessionTabBar({
                 }}
               >
                 <Icon name="x" size={12} />
-              </button>
+              </Button>
             </div>
           );
         })}
@@ -152,6 +162,9 @@ export function SessionTabBar({
         {showDraft ? (
           <div
             className="session-tab session-tab-active session-tab-draft"
+            role="tab"
+            aria-selected
+            id="session-tab-draft"
             data-tab-active="true"
           >
             <button
@@ -166,9 +179,11 @@ export function SessionTabBar({
                   : draftLabel}
               </span>
             </button>
-            <button
-              type="button"
-              className="session-tab-close btn btn-ghost btn-xs btn-square"
+            <Button
+              variant="ghost"
+              size="xs"
+              shape="square"
+              className="session-tab-close"
               aria-label="Close draft"
               onClick={(e) => {
                 e.stopPropagation();
@@ -176,7 +191,7 @@ export function SessionTabBar({
               }}
             >
               <Icon name="x" size={12} />
-            </button>
+            </Button>
           </div>
         ) : null}
       </div>

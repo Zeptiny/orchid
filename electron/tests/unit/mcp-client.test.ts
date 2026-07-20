@@ -96,7 +96,6 @@ vi.mock('@modelcontextprotocol/sdk/client/sse.js', () => ({
 }));
 
 // Import mocked modules for assertions
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 
@@ -206,11 +205,15 @@ describe('MCPManager', () => {
         libraryName: 'react',
         query: 'hooks',
       });
-      expect(mockInstances[0].callTool).toHaveBeenCalledWith({
-        name: 'resolve-library-id',
-        arguments: { libraryName: 'react', query: 'hooks' },
-      });
-      expect(result).toBe('library-id-123');
+      expect(mockInstances[0].callTool).toHaveBeenCalledWith(
+        {
+          name: 'resolve-library-id',
+          arguments: { libraryName: 'react', query: 'hooks' },
+        },
+        undefined,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      expect(result).toEqual(callToolResult('library-id-123'));
 
       // Shutdown clears all state
       await manager.shutdown();
@@ -246,7 +249,7 @@ describe('MCPManager', () => {
 
       mockInstances[0].callTool.mockResolvedValueOnce(callToolResult('search results here'));
       const result = await manager.callTool('mcp::tavily::search', { query: 'MCP protocol' });
-      expect(result).toBe('search results here');
+      expect(result).toEqual(callToolResult('search results here'));
 
       await manager.shutdown();
     });
@@ -355,6 +358,32 @@ describe('MCPManager', () => {
       expect(manager.getTools()).toHaveLength(0);
       await manager.shutdown();
     });
+
+    it('should clear all clients/tools and not leave connected ghosts after overall timeout', async () => {
+      // Fast server connects and registers tools, then overall budget expires
+      // while a second server is still connecting — must not leave tools on closed clients.
+      enqueueMock({
+        listToolsResult: toolsResult([{ name: 'early-tool', description: 'Early' }]),
+        listResourcesResult: { resources: [{ uri: 'res://early', name: 'early' }] },
+      });
+      enqueueMock({ connectDelayMs: 5000 });
+
+      await manager.startAll(
+        { early: makeStdioConfig(), late: makeStdioConfig() },
+        { perServerTimeout: 10000, startupTimeout: 150 },
+      );
+
+      const statuses = manager.getStatus();
+      expect(statuses.every((s) => s.status === 'failed' || s.status === 'unavailable')).toBe(true);
+      expect(statuses.every((s) => s.status !== 'connected')).toBe(true);
+      expect(statuses.every((s) => s.toolCount === 0)).toBe(true);
+
+      expect(manager.getTools()).toHaveLength(0);
+      const callResult = await manager.callTool('mcp::early::early-tool', {});
+      expect(String(callResult)).toContain('not connected');
+
+      await manager.shutdown();
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -430,7 +459,20 @@ describe('MCPManager', () => {
 
       const content = await manager.readResource('docs-server', 'docs://api/reference');
       expect(content).toBe('# API Reference\n\nThis is the API reference.');
-      expect(mockInstances[0].readResource).toHaveBeenCalledWith({ uri: 'docs://api/reference' });
+      expect(mockInstances[0].readResource).toHaveBeenCalledWith(
+        { uri: 'docs://api/reference' },
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+
+      const listed = manager.listResources();
+      expect(listed).toEqual([
+        expect.objectContaining({
+          uri: 'docs://api/reference',
+          server: 'docs-server',
+          name: 'API Reference',
+        }),
+      ]);
+      expect(manager.getResourceServer('docs://api/reference')).toBe('docs-server');
 
       await manager.shutdown();
     });
@@ -479,7 +521,51 @@ describe('MCPManager', () => {
   // ---------------------------------------------------------------------------
 
   describe('callTool content handling', () => {
-    it('should concatenate multiple text blocks', async () => {
+    it('should pass abort signal into the MCP SDK callTool options', async () => {
+      enqueueMock({
+        listToolsResult: toolsResult([{ name: 'slow', description: 'Slow tool' }]),
+        listResourcesResult: [],
+      });
+
+      await manager.startAll({ server: makeStdioConfig() });
+
+      mockInstances[0].callTool.mockResolvedValueOnce(callToolResult('ok'));
+      const ac = new AbortController();
+      await manager.callTool('mcp::server::slow', { q: 1 }, { signal: ac.signal });
+
+      expect(mockInstances[0].callTool).toHaveBeenCalledWith(
+        { name: 'slow', arguments: { q: 1 } },
+        undefined,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+
+      // Outer abort is combined into the SDK signal
+      const sdkSignal = mockInstances[0].callTool.mock.calls[0][2].signal as AbortSignal;
+      expect(sdkSignal.aborted).toBe(false);
+      ac.abort();
+      expect(sdkSignal.aborted).toBe(true);
+
+      await manager.shutdown();
+    });
+
+    it('should return cancelled when already aborted before call', async () => {
+      enqueueMock({
+        listToolsResult: toolsResult([{ name: 'slow', description: 'Slow tool' }]),
+        listResourcesResult: [],
+      });
+
+      await manager.startAll({ server: makeStdioConfig() });
+
+      const ac = new AbortController();
+      ac.abort();
+      const result = await manager.callTool('mcp::server::slow', {}, { signal: ac.signal });
+      expect(result).toBe("Error: MCP tool 'slow' was cancelled.");
+      expect(mockInstances[0].callTool).not.toHaveBeenCalled();
+
+      await manager.shutdown();
+    });
+
+    it('should preserve multiple text content blocks exactly', async () => {
       enqueueMock({
         listToolsResult: toolsResult([{ name: 'multi-text', description: 'Multi text' }]),
         listResourcesResult: [],
@@ -487,20 +573,21 @@ describe('MCPManager', () => {
 
       await manager.startAll({ server: makeStdioConfig() });
 
-      mockInstances[0].callTool.mockResolvedValueOnce({
+      const rawResult = {
         content: [
           { type: 'text', text: 'Line 1' },
           { type: 'text', text: 'Line 2' },
         ],
-      });
+      };
+      mockInstances[0].callTool.mockResolvedValueOnce(rawResult);
 
       const result = await manager.callTool('mcp::server::multi-text', {});
-      expect(result).toBe('Line 1\nLine 2');
+      expect(result).toEqual(rawResult);
 
       await manager.shutdown();
     });
 
-    it('should convert non-text blocks to placeholders', async () => {
+    it('should preserve mixed content blocks exactly', async () => {
       enqueueMock({
         listToolsResult: toolsResult([{ name: 'mixed', description: 'Mixed content' }]),
         listResourcesResult: [],
@@ -508,16 +595,16 @@ describe('MCPManager', () => {
 
       await manager.startAll({ server: makeStdioConfig() });
 
-      mockInstances[0].callTool.mockResolvedValueOnce({
+      const rawResult = {
         content: [
           { type: 'text', text: 'Here is the result:' },
           { type: 'image', mimeType: 'image/png', data: 'base64...' },
         ],
-      });
+      };
+      mockInstances[0].callTool.mockResolvedValueOnce(rawResult);
 
       const result = await manager.callTool('mcp::server::mixed', {});
-      expect(result).toContain('Here is the result:');
-      expect(result).toContain('[image: image/png]');
+      expect(result).toEqual(rawResult);
 
       await manager.shutdown();
     });
@@ -658,17 +745,25 @@ describe('MCPManager', () => {
       // Each tool routes to the correct server
       mockInstances[0].callTool.mockResolvedValueOnce(callToolResult('library-123'));
       await manager.callTool('mcp::context7::resolve-library-id', { libraryName: 'react' });
-      expect(mockInstances[0].callTool).toHaveBeenCalledWith({
-        name: 'resolve-library-id',
-        arguments: { libraryName: 'react' },
-      });
+      expect(mockInstances[0].callTool).toHaveBeenCalledWith(
+        {
+          name: 'resolve-library-id',
+          arguments: { libraryName: 'react' },
+        },
+        undefined,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
 
       mockInstances[1].callTool.mockResolvedValueOnce(callToolResult('search results'));
       await manager.callTool('mcp::tavily::search', { query: 'MCP' });
-      expect(mockInstances[1].callTool).toHaveBeenCalledWith({
-        name: 'search',
-        arguments: { query: 'MCP' },
-      });
+      expect(mockInstances[1].callTool).toHaveBeenCalledWith(
+        {
+          name: 'search',
+          arguments: { query: 'MCP' },
+        },
+        undefined,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
 
       await manager.shutdown();
     });
@@ -692,13 +787,24 @@ describe('MCPManager', () => {
 
       mockInstances[0].callTool.mockResolvedValueOnce(callToolResult('echoed: hello'));
 
+      const rawResult = callToolResult('echoed: hello');
       const result = await tools[0].handler({ message: 'hello' });
-      expect(result).toBe('echoed: hello');
-
-      expect(mockInstances[0].callTool).toHaveBeenCalledWith({
-        name: 'echo',
-        arguments: { message: 'hello' },
+      expect(result).toEqual({
+        status: 'complete',
+        data: {
+          value: rawResult,
+          origin: { kind: 'mcp', name: 'mcp::server::echo' },
+        },
       });
+
+      expect(mockInstances[0].callTool).toHaveBeenCalledWith(
+        {
+          name: 'echo',
+          arguments: { message: 'hello' },
+        },
+        undefined,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
 
       await manager.shutdown();
     });

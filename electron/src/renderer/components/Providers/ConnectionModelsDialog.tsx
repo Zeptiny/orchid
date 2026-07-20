@@ -12,6 +12,12 @@ import {
   type ConnectionModelModality,
 } from '../../utils/models';
 import { Icon } from '../Icon';
+import { Alert } from '../ui/Alert';
+import { Button } from '../ui/Button';
+import { Panel } from '../ui/Panel';
+import { SectionHeader } from '../ui/SectionHeader';
+import { StatusBadge } from '../ui/StatusBadge';
+import { TextInput } from '../ui/TextInput';
 
 const NEW_CUSTOM_MODEL = '__new_custom_model__';
 
@@ -285,33 +291,34 @@ export function ConnectionModelsEditor({
 
   return (
     <>
-            <fieldset className="fieldset">
-              <legend className="fieldset-legend flex w-full flex-wrap items-center justify-between gap-3">
-                <span>Catalog models</span>
-                <span className="flex flex-wrap items-center justify-end gap-2">
-                  <span className="badge badge-sm badge-ghost whitespace-nowrap">
-                    {selectedModelIds.length} selected
-                  </span>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={toggleAllModels}
-                    disabled={disabled || editingCustomModelId !== null || selectableModelIds.length === 0}
-                    aria-pressed={allModelsSelected}
-                  >
-                    {allModelsSelected ? 'Deselect all models' : 'Select all models'}
-                  </button>
-                </span>
-              </legend>
+            <Panel as="section" className="config-fieldset flex flex-col gap-3">
+              <SectionHeader
+                title="Catalog models"
+                actions={
+                  <>
+                    <StatusBadge tone="ghost" size="sm" className="whitespace-nowrap">
+                      {selectedModelIds.length} selected
+                    </StatusBadge>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={toggleAllModels}
+                      disabled={disabled || editingCustomModelId !== null || selectableModelIds.length === 0}
+                      aria-pressed={allModelsSelected}
+                    >
+                      {allModelsSelected ? 'Deselect all models' : 'Select all models'}
+                    </Button>
+                  </>
+                }
+              />
               <p className="label">
                 Selected models become available to chat, tier assignment, or RAG according to
                 their declared capabilities.
               </p>
               {catalogModels.length === 0 ? (
-                <div role="status" className="alert alert-info">
-                  <Icon name="cpu" size={16} />
-                  <span>No catalog models match this connection protocol.</span>
-                </div>
+                <Alert tone="info" role="status" icon="cpu">
+                  No catalog models match this connection protocol.
+                </Alert>
               ) : (
                 <ul className="list max-h-96 overflow-y-auto rounded-box border border-base-300 bg-base-100">
                   {catalogModels.map((model) => {
@@ -322,12 +329,12 @@ export function ConnectionModelsEditor({
                       <li
                         key={model.id}
                         className={[
-                          'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2',
+                          'flex min-w-0 items-start justify-between gap-x-4 gap-y-2',
                           'rounded-md border-b border-base-300 p-3 !pl-6 transition-colors last:border-b-0',
                           selected ? 'bg-primary/10' : 'hover:bg-base-200/80',
                         ].join(' ')}
                       >
-                        <label className="min-w-0 cursor-pointer">
+                        <label className="min-w-0 flex-1 cursor-pointer">
                           <input
                             type="checkbox"
                             className="sr-only"
@@ -339,42 +346,43 @@ export function ConnectionModelsEditor({
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="text-sm font-medium break-words">{effective.displayName}</span>
-                              {override && <span className="badge badge-sm">Customized</span>}
+                              {override && <StatusBadge size="sm">Customized</StatusBadge>}
                             </div>
                             <div className="mt-1 break-all font-mono text-xs text-base-content/60">{model.id}</div>
                             <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                              <span className="badge badge-sm badge-ghost">
+                              <StatusBadge tone="ghost" size="sm">
                                 {modelCapabilityLabel('Input', effective.capabilities.inputModalities)}
-                              </span>
-                              <span className="badge badge-sm badge-ghost">
+                              </StatusBadge>
+                              <StatusBadge tone="ghost" size="sm">
                                 {modelCapabilityLabel('Output', effective.capabilities.outputModalities)}
-                              </span>
-                              {effective.capabilities.tools && <span className="badge badge-sm badge-ghost">Tools</span>}
-                              {effective.capabilities.reasoning && <span className="badge badge-sm badge-ghost">Reasoning</span>}
+                              </StatusBadge>
+                              {effective.capabilities.tools && <StatusBadge tone="ghost" size="sm">Tools</StatusBadge>}
+                              {effective.capabilities.reasoning && <StatusBadge tone="ghost" size="sm">Reasoning</StatusBadge>}
                             </div>
                           </div>
                         </label>
                         <div className="flex shrink-0 flex-wrap items-start justify-end gap-1">
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm btn-square"
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            shape="square"
                             onClick={() => startEditingCatalogModel(model)}
                             aria-label={`Edit ${effective.displayName}`}
                             title={`Edit ${effective.displayName}`}
                             disabled={disabled || editingCustomModelId !== null}
                           >
                             <Icon name="edit" size={14} />
-                          </button>
+                          </Button>
                           {override && (
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
+                            <Button
+                              variant="ghost"
+                              size="sm"
                               onClick={() => resetCatalogModel(model.id)}
                               title="Reset catalog metadata"
                               disabled={disabled || editingCustomModelId !== null}
                             >
                               Reset
-                            </button>
+                            </Button>
                           )}
                         </div>
                       </li>
@@ -382,23 +390,24 @@ export function ConnectionModelsEditor({
                   })}
                 </ul>
               )}
-            </fieldset>
+            </Panel>
 
-            <fieldset className="fieldset">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <legend className="fieldset-legend">Custom models</legend>
-                {definition.allowsCustomModels && editingCustomModelId === null && (
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={startAddingCustomModel}
-                    disabled={disabled}
-                  >
-                    <Icon name="plus" size={14} />
-                    Add custom model
-                  </button>
-                )}
-              </div>
+            <Panel as="section" className="config-fieldset flex flex-col gap-3">
+              <SectionHeader
+                title="Custom models"
+                actions={
+                  definition.allowsCustomModels && editingCustomModelId === null ? (
+                    <Button
+                      size="sm"
+                      onClick={startAddingCustomModel}
+                      disabled={disabled}
+                    >
+                      <Icon name="plus" size={14} />
+                      Add custom model
+                    </Button>
+                  ) : undefined
+                }
+              />
               <p className="label">
                 Custom metadata is explicit connection configuration; Orchid does not infer it
                 from the model ID.
@@ -416,12 +425,12 @@ export function ConnectionModelsEditor({
                     <li
                       key={model.id}
                       className={[
-                        'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2',
+                        'flex min-w-0 items-start justify-between gap-x-4 gap-y-2',
                         'rounded-md border-b border-base-300 p-3 !pl-6 transition-colors last:border-b-0',
                         selectedModelIds.includes(model.id) ? 'bg-primary/10' : 'hover:bg-base-200/80',
                       ].join(' ')}
                     >
-                      <label className="min-w-0 cursor-pointer">
+                      <label className="min-w-0 flex-1 cursor-pointer">
                         <input
                           type="checkbox"
                           className="sr-only"
@@ -434,38 +443,41 @@ export function ConnectionModelsEditor({
                           <div className="text-sm font-medium break-words">{model.displayName}</div>
                           <div className="mt-1 break-all font-mono text-xs text-base-content/60">{model.id}</div>
                           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                            <span className="badge badge-sm badge-ghost">
+                            <StatusBadge tone="ghost" size="sm">
                               {modelCapabilityLabel('Input', model.capabilities.inputModalities)}
-                            </span>
-                            <span className="badge badge-sm badge-ghost">
+                            </StatusBadge>
+                            <StatusBadge tone="ghost" size="sm">
                               {modelCapabilityLabel('Output', model.capabilities.outputModalities)}
-                            </span>
-                            {model.capabilities.tools && <span className="badge badge-sm badge-ghost">Tools</span>}
-                            {model.capabilities.reasoning && <span className="badge badge-sm badge-ghost">Reasoning</span>}
+                            </StatusBadge>
+                            {model.capabilities.tools && <StatusBadge tone="ghost" size="sm">Tools</StatusBadge>}
+                            {model.capabilities.reasoning && <StatusBadge tone="ghost" size="sm">Reasoning</StatusBadge>}
                           </div>
                         </div>
                       </label>
                       <div className="flex shrink-0 gap-1">
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm btn-square"
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          shape="square"
                           onClick={() => startEditingCustomModel(model)}
                           aria-label={`Edit ${model.displayName}`}
                           title={`Edit ${model.displayName}`}
                           disabled={disabled || editingCustomModelId !== null}
                         >
                           <Icon name="edit" size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm btn-square text-error"
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          shape="square"
+                          className="text-error"
                           onClick={() => removeCustomModel(model.id)}
                           aria-label={`Remove ${model.displayName}`}
                           title={`Remove ${model.displayName}`}
                           disabled={disabled || editingCustomModelId !== null}
                         >
                           <Icon name="trash" size={14} />
-                        </button>
+                        </Button>
                       </div>
                     </li>
                   ))}
@@ -484,9 +496,10 @@ export function ConnectionModelsEditor({
                   <div className="mt-3 grid gap-3 md:grid-cols-2">
                     <div>
                       <label className="label" htmlFor="connection-model-editor-id">Model ID</label>
-                      <input
+                      <TextInput
                         id="connection-model-editor-id"
-                        className="input w-full"
+                        bordered={false}
+                        className="w-full"
                         value={customForm.id}
                         onChange={(event) => setCustomForm({ ...customForm, id: event.target.value })}
                         placeholder="provider/model-id"
@@ -498,9 +511,10 @@ export function ConnectionModelsEditor({
                       <label className="label" htmlFor="connection-model-editor-name">
                         Display name
                       </label>
-                      <input
+                      <TextInput
                         id="connection-model-editor-name"
-                        className="input w-full"
+                        bordered={false}
+                        className="w-full"
                         value={customForm.displayName}
                         onChange={(event) => setCustomForm({ ...customForm, displayName: event.target.value })}
                         placeholder="Optional friendly name"
@@ -511,9 +525,10 @@ export function ConnectionModelsEditor({
                       <label className="label" htmlFor="connection-model-editor-context">
                         Context limit
                       </label>
-                      <input
+                      <TextInput
                         id="connection-model-editor-context"
-                        className="input w-full"
+                        bordered={false}
+                        className="w-full"
                         inputMode="numeric"
                         value={customForm.contextTokens}
                         onChange={(event) => setCustomForm({ ...customForm, contextTokens: event.target.value })}
@@ -525,9 +540,10 @@ export function ConnectionModelsEditor({
                       <label className="label" htmlFor="connection-model-editor-output">
                         Output limit
                       </label>
-                      <input
+                      <TextInput
                         id="connection-model-editor-output"
-                        className="input w-full"
+                        bordered={false}
+                        className="w-full"
                         inputMode="numeric"
                         value={customForm.outputTokens}
                         onChange={(event) => setCustomForm({ ...customForm, outputTokens: event.target.value })}
@@ -614,48 +630,40 @@ export function ConnectionModelsEditor({
                     </label>
                   </div>
                   <div className="mt-4 flex justify-end gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={cancelCustomModel}
                       disabled={disabled}
                     >
                       Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
+                    </Button>
+                    <Button
+                      size="sm"
                       onClick={saveCustomModel}
                       disabled={disabled}
                     >
                       {editingCustomModelId === NEW_CUSTOM_MODEL ? 'Add model' : 'Save model'}
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
-            </fieldset>
+            </Panel>
 
             {orphanModelIds.length > 0 && (
-              <div role="alert" className="alert alert-warning">
-                <Icon name="alert" size={16} />
-                <span>
-                  These saved model IDs no longer have catalog or custom metadata: {' '}
-                  {orphanModelIds.join(', ')}. Saving preserves them until you remove them.
-                </span>
-              </div>
+              <Alert tone="warning" icon="alert">
+                These saved model IDs no longer have catalog or custom metadata: {' '}
+                {orphanModelIds.join(', ')}. Saving preserves them until you remove them.
+              </Alert>
             )}
 
             {selectedModelIds.length === 0 && (
-              <div role="status" className="alert alert-warning">
-                <Icon name="alert" size={16} />
-                <span>This connection will have no selectable models.</span>
-              </div>
+              <Alert tone="warning" role="status" icon="alert">
+                This connection will have no selectable models.
+              </Alert>
             )}
             {error && (
-              <div role="alert" aria-live="assertive" className="alert alert-error">
-                <Icon name="alertCircle" size={16} />
-                <span>{error}</span>
-              </div>
+              <Alert tone="error" icon="alertCircle" aria-live="assertive">{error}</Alert>
             )}
     </>
   );

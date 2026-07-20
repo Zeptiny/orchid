@@ -26,6 +26,7 @@ import {
   HOME_AGENTS_DIR,
 } from '../config/loader';
 import { RESERVED_INTERNAL_AGENT_NAMES } from '../defs/paths';
+import { seedDefaultSubdirs } from '../utils/seed-defaults';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -107,36 +108,8 @@ function loadAgentsFromDir(agentsDir: string): Map<string, Agent> {
   return agents;
 }
 
-/**
- * Copy default agent directories from the source (bundled defaults) to a
- * target directory, only if the target subdirectory doesn't already exist.
- *
- * Matches Python `seed_defaults()` in `src/orchid/utils.py`.
- */
-function seedDefaults(sourceDir: string, targetDir: string): void {
-  if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
-    return;
-  }
-
-  fs.mkdirSync(targetDir, { recursive: true });
-
-  const entries = fs.readdirSync(sourceDir).sort();
-  for (const entry of entries) {
-    const sourceSubdir = path.join(sourceDir, entry);
-    if (!fs.statSync(sourceSubdir).isDirectory()) continue;
-
-    const sourceFile = path.join(sourceSubdir, AGENT_FILENAME);
-    if (!fs.existsSync(sourceFile)) continue;
-
-    const targetSubdir = path.join(targetDir, entry);
-    const targetFile = path.join(targetSubdir, AGENT_FILENAME);
-
-    if (!fs.existsSync(targetFile)) {
-      fs.mkdirSync(targetSubdir, { recursive: true });
-      fs.copyFileSync(sourceFile, targetFile);
-    }
-  }
-}
+/** Optional resource subtrees that may ship with default agents. */
+const AGENT_RESOURCE_DIRS = ['scripts', 'references', 'assets'] as const;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -215,12 +188,16 @@ export function listAgents(): Agent[] {
 }
 
 /**
- * Seed default agent files into the given home directory.
- * Copies bundled defaults if the target agent subdirectory doesn't exist.
+ * Seed default agent trees into the given home directory.
+ * Missing agents are copied recursively (AGENT.md + any resource subtrees).
+ * Existing AGENT.md is preserved; missing resource subtrees are filled in.
  */
 export function seedAgentsDir(homeDir: string): void {
   const defaultsDir = path.join(__dirname, 'defaults');
-  seedDefaults(defaultsDir, homeDir);
+  seedDefaultSubdirs(defaultsDir, homeDir, {
+    markerFilename: AGENT_FILENAME,
+    resourceDirs: AGENT_RESOURCE_DIRS,
+  });
 }
 
 /**

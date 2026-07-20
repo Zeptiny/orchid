@@ -299,23 +299,19 @@ describe('AST indexing concurrency guard', () => {
     expect(astIsIndexing()).toBe(false);
   });
 
-  it('second call while first is running returns zeroed result', async () => {
+  it('second call while first is running shares the single-flight result', async () => {
     writeFile(tmpDir, 'test.ts', 'const x = 1;\n');
     writeFile(tmpDir, 'test2.ts', 'const y = 2;\n');
 
     // Start first indexing
     const firstPromise = astIndexProject({ projectPath: tmpDir, inline: true });
 
-    // Immediately try a second call — should be rejected by the internal guard
+    // Immediately try a second call — shares the in-flight promise (no busy-poll / no empty error)
     const secondResult = await astIndexProject({ projectPath: tmpDir, inline: true });
-    expect(secondResult.filesScanned).toBe(0);
-    expect(secondResult.filesIndexed).toBe(0);
-    expect(secondResult.symbolsExtracted).toBe(0);
-    expect(secondResult.durationSeconds).toBe(0);
-
-    // First call completes normally
     const firstResult = await firstPromise;
+    expect(secondResult).toBe(firstResult);
     expect(firstResult.filesScanned).toBeGreaterThanOrEqual(0);
+    expect(firstResult.errors).not.toContain('Indexing already in progress');
   });
 
   it('allows a different project to index while this project is indexing', async () => {

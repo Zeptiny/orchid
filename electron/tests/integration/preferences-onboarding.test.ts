@@ -10,6 +10,10 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { defaults } from '../../src/main/config/schema';
+import {
+  eventMatchesChord,
+  getShortcut,
+} from '../../src/renderer/keyboard';
 
 // ─── Mock Setup ──────────────────────────────────────────────────────────────
 
@@ -74,6 +78,8 @@ describe('Config Defaults for Onboarding', () => {
     expect(config).toHaveProperty('theme');
     expect(config).toHaveProperty('personality');
     expect(config).toHaveProperty('command_timeout');
+    expect(config).toHaveProperty('mcp_startup_timeout');
+    expect(config).toHaveProperty('mcp_per_server_timeout');
     expect(config).toHaveProperty('has_completed_onboarding');
     expect(config.has_completed_onboarding).toBe(false);
     expect(config.mcp_servers).toEqual({});
@@ -226,6 +232,19 @@ describe('Preferences & Onboarding File Structure', () => {
     ).toBe(true);
   });
 
+  it('GeneralTab exposes MCP timeout fields', () => {
+    const generalTab = fs.readFileSync(
+      path.join(componentsDir, 'Preferences', 'GeneralTab.tsx'),
+      'utf8',
+    );
+    expect(generalTab).toContain('mcpStartupTimeout');
+    expect(generalTab).toContain('mcpPerServerTimeout');
+    expect(generalTab).toContain('mcp_startup_timeout');
+    expect(generalTab).toContain('mcp_per_server_timeout');
+    expect(generalTab).toContain('MCP Startup Timeout (s)');
+    expect(generalTab).toContain('MCP Per-Server Timeout (s)');
+  });
+
   it('Onboarding directory exists', () => {
     expect(fs.existsSync(path.join(componentsDir, 'Onboarding'))).toBe(true);
   });
@@ -236,8 +255,8 @@ describe('Preferences & Onboarding File Structure', () => {
     ).toBe(true);
   });
 
-  it('chat.css contains configuration styles', () => {
-    const cssPath = path.resolve(__dirname, '../../src/renderer/styles/chat.css');
+  it('components.css contains configuration styles', () => {
+    const cssPath = path.resolve(__dirname, '../../src/renderer/styles/components.css');
     const css = fs.readFileSync(cssPath, 'utf-8');
     expect(css).toContain('.config-main-header');
     expect(css).toContain('.config-tabs');
@@ -246,38 +265,69 @@ describe('Preferences & Onboarding File Structure', () => {
     expect(css).toContain('.config-form');
   });
 
-  it('chat.css contains onboarding styles', () => {
-    const cssPath = path.resolve(__dirname, '../../src/renderer/styles/chat.css');
+  it('components.css contains onboarding styles', () => {
+    const cssPath = path.resolve(__dirname, '../../src/renderer/styles/components.css');
     const css = fs.readFileSync(cssPath, 'utf-8');
     expect(css).toContain('.onb-overlay');
     expect(css).toContain('.onb-container');
-    expect(css).toContain('.onb-progress');
     expect(css).toContain('.onb-step');
-    expect(css).toContain('.onb-welcome');
-    expect(css).toContain('.onb-done');
+    expect(css).toContain('.onb-step-description');
+    expect(css).toContain('.onb-step-actions');
   });
 });
 
 // ─── Keyboard Shortcuts ──────────────────────────────────────────────────────
 
+function fakeKeyEvent(
+  partial: Partial<KeyboardEvent> & { key: string },
+): KeyboardEvent {
+  return {
+    key: partial.key,
+    code: partial.code ?? '',
+    ctrlKey: partial.ctrlKey ?? false,
+    metaKey: partial.metaKey ?? false,
+    shiftKey: partial.shiftKey ?? false,
+    altKey: partial.altKey ?? false,
+    defaultPrevented: false,
+    preventDefault() {
+      (this as { defaultPrevented: boolean }).defaultPrevented = true;
+    },
+    target: partial.target ?? null,
+  } as KeyboardEvent;
+}
+
 describe('Preferences Keyboard Shortcuts', () => {
-  it('Ctrl+S triggers save', () => {
-    const key = 's';
-    const ctrlKey = true;
-    const shouldSave = ctrlKey && key === 's';
-    expect(shouldSave).toBe(true);
+  it('Ctrl+S triggers save via registry', () => {
+    const def = getShortcut('config.save');
+    expect(def).toBeDefined();
+    expect(def!.chord).toEqual({ key: 's', mod: true });
+    expect(eventMatchesChord(fakeKeyEvent({ key: 's', ctrlKey: true }), def!.chord)).toBe(true);
   });
 
-  it('Cmd+S triggers save on macOS', () => {
-    const key = 's';
-    const metaKey = true;
-    const shouldSave = metaKey && key === 's';
-    expect(shouldSave).toBe(true);
+  it('Cmd+S triggers save on macOS via registry', () => {
+    const def = getShortcut('config.save');
+    expect(def).toBeDefined();
+    expect(eventMatchesChord(fakeKeyEvent({ key: 's', metaKey: true }), def!.chord)).toBe(true);
+    expect(eventMatchesChord(fakeKeyEvent({ key: 's' }), def!.chord)).toBe(false);
   });
 
-  it('Escape triggers close check', () => {
-    const key = 'Escape';
-    expect(key).toBe('Escape');
+  it('Escape closes settings via registry', () => {
+    const def = getShortcut('config.close');
+    expect(def).toBeDefined();
+    expect(def!.chord).toEqual({ key: 'Escape' });
+    expect(eventMatchesChord(fakeKeyEvent({ key: 'Escape' }), def!.chord)).toBe(true);
+  });
+
+  it('settings overlay owns Escape while open (ChatView cancel gated)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const rendererRoot = path.resolve(__dirname, '../../src/renderer');
+    const appSrc = fs.readFileSync(path.join(rendererRoot, 'App.tsx'), 'utf8');
+    const inputArea = fs.readFileSync(path.join(rendererRoot, 'components/InputArea.tsx'), 'utf8');
+
+    expect(appSrc).toMatch(/dataset\.orchidSettingsOpen/);
+    expect(inputArea).toMatch(/dataset\.orchidSettingsOpen/);
+    expect(inputArea).toMatch(/if \(document\.documentElement\.dataset\.orchidSettingsOpen === '1'\) return/);
   });
 });
 

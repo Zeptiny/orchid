@@ -69,6 +69,20 @@ describe('compatible provider adapters', () => {
     });
     expect(validateGenericEndpoint('http://127.0.0.1:8080/v1')).toMatchObject({
       origin: 'http://127.0.0.1:8080',
+      insecureNonLoopback: false,
+    });
+    expect(validateGenericEndpoint('http://localhost:8080/v1')).toMatchObject({
+      origin: 'http://localhost:8080',
+      insecureNonLoopback: false,
+    });
+    // Hostnames that merely start with "127." are not loopback.
+    expect(() => validateGenericEndpoint('http://127.evil.com/v1')).toThrow(/confirmation/i);
+    expect(() => validateGenericEndpoint('http://127.0.0.2/v1')).toThrow(/confirmation/i);
+    expect(validateGenericEndpoint('http://127.evil.com/v1', {
+      allowInsecureNonLoopbackHttp: true,
+    })).toMatchObject({
+      origin: 'http://127.evil.com',
+      insecureNonLoopback: true,
     });
   });
 });

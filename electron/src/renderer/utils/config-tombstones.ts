@@ -1,4 +1,5 @@
 import type { Config } from '../../shared/types/ipc-boundary';
+import type { ConfigPatch } from '../../shared/types/ipc';
 
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -17,11 +18,11 @@ function isUnsafeKey(key: string): boolean {
  *  - prototype pollution via __proto__/constructor/prototype aliases
  */
 export function withMapDeletionTombstones(
-  draft: Record<string, unknown>,
+  draft: ConfigPatch,
   original: Config | null,
-): Record<string, unknown> {
+): ConfigPatch {
   if (!original) return draft;
-  const updates: Record<string, unknown> = { ...draft };
+  const updates: ConfigPatch = { ...draft };
 
   for (const key of ['providers', 'mcp_servers'] as const) {
     if (!(key in draft)) continue;
@@ -29,10 +30,10 @@ export function withMapDeletionTombstones(
     if (!next || typeof next !== 'object' || Array.isArray(next)) continue;
     const prev = original[key] as Record<string, unknown> | undefined;
     if (!prev || typeof prev !== 'object') continue;
-    const withTombstones: Record<string, unknown> = {};
+    const withTombstones: { [alias: string]: Record<string, unknown> | null } = {};
     for (const [k, v] of Object.entries(next as Record<string, unknown>)) {
       if (isUnsafeKey(k)) continue;
-      withTombstones[k] = v;
+      withTombstones[k] = v as Record<string, unknown> | null;
     }
     for (const alias of Object.keys(prev)) {
       if (isUnsafeKey(alias)) continue;

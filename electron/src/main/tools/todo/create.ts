@@ -6,6 +6,8 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolExecutionContext, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import type { TodoStore } from './store';
 import {
   isMainAgentScope,
@@ -16,14 +18,7 @@ import {
 /**
  * Result returned by all todo tool handlers.
  */
-export interface TodoToolResult {
-  /** Brief summary for UI display */
-  display: string;
-  /** Full content (may include structured data) */
-  content: string;
-  /** Explicit failure flag for UI/status (never inferred from content). */
-  isError?: boolean;
-}
+export type TodoToolResult = GenericBuiltInToolOutcome;
 
 /** Callback type for notifying the UI of todo changes. */
 export type NotifyTodoChanged = (ctx: ToolExecutionContext) => void | Promise<void>;
@@ -69,6 +64,7 @@ export function buildCreateTool(
   notifyChanged?: NotifyTodoChanged,
 ): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
+    ...genericToolResultMetadata,
     name: 'todo_create',
     description:
       'Create a new task in the session todo list. Tasks are scoped to the ' +
@@ -101,15 +97,12 @@ export function buildCreateTool(
       await notifyChanged(ctx);
     }
 
-    return {
-      display: `Created task: ${todo.title}`,
-      content:
-        `Task created successfully.\n\n` +
-        `ID: ${todo.id}\n` +
-        `Title: ${todo.title}\n` +
-        `Status: ${todo.status}` +
-        (todo.subagent_id ? `\nOwner: ${todo.subagent_id}` : `\nOwner: ${MAIN_AGENT_SCOPE_ID}`),
-    };
+    return genericBuiltInToolOutcome('todo_create', {
+      id: todo.id,
+      title: todo.title,
+      status: todo.status,
+      owner: todo.subagent_id ?? MAIN_AGENT_SCOPE_ID,
+    }, 'complete');
   };
 
   return { definition, handler };

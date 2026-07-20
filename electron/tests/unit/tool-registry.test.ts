@@ -7,7 +7,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { ToolRegistry } from '../../src/main/tools/registry';
+import { createBuiltinToolRegistry } from '../../src/main/tools';
+import { finalizeToolExecutionResult } from '../../src/main/tools/result';
 import type { ToolDefinition, ToolHandler } from '../../src/main/tools/types';
+import {
+  createCanonicalToolResult,
+  genericToolResultDataSchema,
+  type AgentProjector,
+} from '../../src/shared/types/tool-result';
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -51,6 +58,11 @@ function makeReadTool(): ToolDefinition {
     category: 'filesystem',
   };
 }
+
+const fileContentDataSchema = z.object({
+  path: z.string(),
+  lines: z.array(z.object({ number: z.number(), content: z.string() })),
+}).strict();
 
 function makeGrepTool(): ToolDefinition {
   return {
@@ -369,8 +381,9 @@ describe('ToolRegistry', () => {
   // -- Edge cases ------------------------------------------------------------
 
   describe('edge cases', () => {
-    it('should handle empty filter array', () => {
+    it('should return zero tools for empty allowlist (empty means none, not all)', () => {
       registry.register(makeReadTool(), dummyHandler);
+      registry.register(makeGrepTool(), dummyHandler);
       const result = registry.filter([]);
       expect(result).toHaveLength(0);
     });
@@ -390,21 +403,130 @@ describe('ToolRegistry', () => {
       expect(result).toEqual({ processed: true, data: { file_path: '/test' } });
     });
 
-    it('should support tools with outputSchema', () => {
-      const outputSchema = z.object({
-        content: z.string(),
-        lineCount: z.number(),
-      });
+    it('generates a tool execution output schema from result metadata', () => {
       registry.register(
         {
           ...makeReadTool(),
-          outputSchema,
+          resultFamily: 'file-content',
+          outputDataSchema: fileContentDataSchema,
         },
         dummyHandler,
       );
 
-      const tool = registry.get('read')!;
-      expect(tool.definition.outputSchema).toBeDefined();
+      const outputSchema = registry.getToolExecutionResultSchema('read');
+      expect(outputSchema).toBeDefined();
+      expect(outputSchema!.safeParse({
+        canonical: {
+          schemaVersion: 1,
+          family: 'file-content',
+          status: 'complete',
+          completeness: 'complete',
+          data: { path: '/repo/a.ts', lines: [{ number: 1, content: 'a' }] },
+        },
+        agentProjection: { content: '1 | a', completeness: 'complete' },
+      }).success).toBe(true);
+      expect(outputSchema!.safeParse({
+        canonical: {
+          schemaVersion: 1,
+          family: 'file-content',
+          status: 'complete',
+          completeness: 'complete',
+          data: { path: '/repo/a.ts', lines: 'invalid' },
+        },
+        agentProjection: { content: 'invalid', completeness: 'complete' },
+      }).success).toBe(false);
     });
+
+    it('resolves tool override, family default, then generic fallback', () => {
+      const toolProjector: AgentProjector = () => ({
+        content: 'tool', completeness: 'complete',
+      });
+      const familyProjector: AgentProjector = () => ({
+        content: 'family', completeness: 'complete',
+      });
+      const genericProjector: AgentProjector = () => ({
+        content: 'generic', completeness: 'complete',
+      });
+      registry.setGenericAgentProjector(genericProjector);
+      registry.registerFamilyAgentProjector('file-content', familyProjector);
+      registry.register({
+        ...makeReadTool(),
+        resultFamily: 'file-content',
+        agentProjector: toolProjector,
+      }, dummyHandler);
+      registry.register({
+        ...makeGrepTool(),
+        resultFamily: 'file-content',
+      }, dummyHandler);
+      registry.register({
+        ...makeEditTool(),
+      }, dummyHandler);
+
+      expect(registry.resolveAgentProjector('read').source).toBe('tool');
+      expect(registry.resolveAgentProjector('grep').source).toBe('family');
+      expect(registry.resolveAgentProjector('edit').source).toBe('generic');
+    });
+
+    it('uses the resolved family projector through canonical finalization', () => {
+      const familyProjector: AgentProjector = () => ({
+        content: 'family integration', completeness: 'complete',
+      });
+      registry.registerFamilyAgentProjector('generic', familyProjector);
+      registry.register({
+        ...makeReadTool(),
+        resultFamily: 'generic',
+        outputDataSchema: z.object({ value: z.string() }).strict(),
+      }, dummyHandler);
+      const resolved = registry.resolveAgentProjector('read');
+
+      const execution = finalizeToolExecutionResult({
+        toolName: 'read',
+        canonical: createCanonicalToolResult('generic', {
+          status: 'complete', data: { value: 'exact' },
+        }),
+        outputDataSchema: z.object({ value: z.string() }).strict(),
+        expectedFamily: 'generic',
+        projector: resolved.projector,
+      });
+
+      expect(resolved.source).toBe('family');
+      expect(execution.agentProjection.content).toBe('family integration');
+      expect(execution.canonical.data).toEqual({ value: 'exact' });
+    });
+  });
+});
+
+describe('U4 generic built-in result metadata', () => {
+  const genericBuiltins = new Set([
+    'ast_index', 'get_file_skeleton', 'get_function',
+    'find_symbol_references', 'rename_symbol', 'replace_symbol',
+    'list_mcp_resources', 'read_mcp_resource',
+    'execute_command', 'read_output', 'send_input', 'terminate_command',
+    'rag_index', 'rag_search', 'skill',
+    'delegate_to_subagent', 'interrupt_subagents', 'wait_for_subagent',
+    'todo_create', 'todo_delete', 'todo_list', 'todo_update', 'web_fetch',
+  ]);
+
+  it('declares a JSON-safe generic contract for every non-filesystem built-in', () => {
+    const registry = createBuiltinToolRegistry();
+    const scoped = registry.listAll().filter(({ definition }) =>
+      genericBuiltins.has(definition.name),
+    );
+
+    expect(scoped.map(({ definition }) => definition.name).sort()).toEqual(
+      [...genericBuiltins].sort(),
+    );
+    for (const { definition } of scoped) {
+      expect(definition.resultFamily, definition.name).toBe('generic');
+      expect(definition.outputDataSchema, definition.name).toBeDefined();
+      expect(
+        definition.outputDataSchema!.safeParse({
+          value: null,
+          origin: { kind: 'built-in', name: definition.name },
+        }).success,
+        definition.name,
+      ).toBe(true);
+      expect(definition.outputDataSchema).toBe(genericToolResultDataSchema);
+    }
   });
 });

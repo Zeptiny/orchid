@@ -19,6 +19,7 @@ import { editDefinition, editHandler } from '../../src/main/tools/filesystem/edi
 import { writeDefinition, writeHandler } from '../../src/main/tools/filesystem/write';
 import { readDirectoryDefinition, readDirectoryHandler } from '../../src/main/tools/filesystem/read-directory';
 import { globDefinition, globHandler } from '../../src/main/tools/filesystem/glob';
+import { applyPatchDefinition, applyPatchHandler } from '../../src/main/tools/filesystem/apply-patch';
 import { grepToolDefinition, grepHandler } from '../../src/main/tools/search/grep';
 import { ragSearchDefinition, ragSearchHandler } from '../../src/main/tools/rag/search';
 import { ragIndexDefinition, ragIndexHandler } from '../../src/main/tools/rag/index';
@@ -46,6 +47,10 @@ import {
   renameSymbolDefinition,
   renameSymbolHandler,
 } from '../../src/main/tools/ast/rename-symbol';
+import {
+  astIndexDefinition,
+  astIndexHandler,
+} from '../../src/main/tools/ast/index-tool';
 
 // ── Dynamic tool builders ───────────────────────────────────────────────────
 
@@ -56,15 +61,17 @@ import { buildDeleteTool } from '../../src/main/tools/todo/delete';
 import { buildWebFetchTool } from '../../src/main/tools/web/fetch';
 import { buildSkillTool } from '../../src/main/tools/skill/skill';
 import { buildMcpResourceTool } from '../../src/main/tools/mcp/resource';
+import { buildListMcpResourcesTool } from '../../src/main/tools/mcp/list-resources';
 import { buildDelegateTool } from '../../src/main/tools/subagent/delegate';
 import { buildWaitTool } from '../../src/main/tools/subagent/wait';
 import { buildInterruptTool } from '../../src/main/tools/subagent/interrupt';
 import { registerBuiltinTools, toolRegistry } from '../../src/main/tools';
 
-// ── Expected tool names (27 total) ─────────────────────────────────────────
+// ── Expected tool names (30 total) ─────────────────────────────────────────
 
 const EXPECTED_TOOL_NAMES = [
-  // Filesystem (5)
+  // Filesystem (6)
+  'apply_patch',
   'read',
   'edit',
   'write',
@@ -93,14 +100,16 @@ const EXPECTED_TOOL_NAMES = [
   'interrupt_subagents',
   // Skill (1)
   'skill',
-  // MCP (1)
+  // MCP (2)
   'read_mcp_resource',
-  // AST (5)
+  'list_mcp_resources',
+  // AST (6)
   'get_file_skeleton',
   'get_function',
   'find_symbol_references',
   'replace_symbol',
   'rename_symbol',
+  'ast_index',
 ];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -132,7 +141,14 @@ function expectValidHandler(handler: unknown): void {
 // ── Static Tool Tests ───────────────────────────────────────────────────────
 
 describe('Static Tool Definitions', () => {
-  describe('filesystem tools (5)', () => {
+  describe('filesystem tools (6)', () => {
+    it('apply_patch has valid definition, schema, and handler', () => {
+      expectValidDefinition(applyPatchDefinition, 'apply_patch');
+      expectValidJsonSchema(applyPatchDefinition.inputSchema, 'apply_patch');
+      expectValidHandler(applyPatchHandler);
+      expect(applyPatchDefinition.category).toBe('filesystem');
+    });
+
     it('read has valid definition, schema, and handler', () => {
       expectValidDefinition(readDefinition, 'read');
       expectValidJsonSchema(readDefinition.inputSchema, 'read');
@@ -224,7 +240,7 @@ describe('Static Tool Definitions', () => {
     });
   });
 
-  describe('AST tools (5)', () => {
+  describe('AST tools (6)', () => {
     it('get_file_skeleton has valid definition, schema, and handler', () => {
       expectValidDefinition(getFileSkeletonDefinition, 'get_file_skeleton');
       expectValidJsonSchema(getFileSkeletonDefinition.inputSchema, 'get_file_skeleton');
@@ -259,7 +275,15 @@ describe('Static Tool Definitions', () => {
       expectValidHandler(renameSymbolHandler);
       expect(renameSymbolDefinition.category).toBe('ast');
     });
+
+    it('ast_index has valid definition, schema, and handler', () => {
+      expectValidDefinition(astIndexDefinition, 'ast_index');
+      expectValidJsonSchema(astIndexDefinition.inputSchema, 'ast_index');
+      expectValidHandler(astIndexHandler);
+      expect(astIndexDefinition.category).toBe('ast');
+    });
   });
+
 });
 
 // ── Dynamic Tool Builder Tests ──────────────────────────────────────────────
@@ -345,11 +369,19 @@ describe('Dynamic Tool Builders', () => {
     });
   });
 
-  describe('MCP tools (1)', () => {
+  describe('MCP tools (2)', () => {
     it('read_mcp_resource builder produces valid definition and handler', () => {
       const { definition, handler } = buildMcpResourceTool({} as any);
       expectValidDefinition(definition, 'read_mcp_resource');
       expectValidJsonSchema(definition.inputSchema, 'read_mcp_resource');
+      expectValidHandler(handler);
+      expect(definition.category).toBe('mcp');
+    });
+
+    it('list_mcp_resources builder produces valid definition and handler', () => {
+      const { definition, handler } = buildListMcpResourcesTool({} as any);
+      expectValidDefinition(definition, 'list_mcp_resources');
+      expectValidJsonSchema(definition.inputSchema, 'list_mcp_resources');
       expectValidHandler(handler);
       expect(definition.category).toBe('mcp');
     });
@@ -359,15 +391,16 @@ describe('Dynamic Tool Builders', () => {
 // ── Completeness Check ─────────────────────────────────────────────────────
 
 describe('Tool Completeness', () => {
-  it('all 27 expected tool names are defined in this test file', () => {
+  it('all 30 expected tool names are defined in this test file', () => {
     // This test ensures we haven't accidentally removed a tool from our list.
     // If a new tool is added to the codebase, this list must be updated.
-    expect(EXPECTED_TOOL_NAMES).toHaveLength(27);
+    expect(EXPECTED_TOOL_NAMES).toHaveLength(30);
   });
 
   it('static tool count matches expected', () => {
-    // 5 filesystem + 1 search + 2 rag + 4 process + 5 ast = 17 static tools
+    // 6 filesystem + 1 search + 2 rag + 4 process + 6 ast = 19 static tools
     const staticDefinitions = [
+      applyPatchDefinition,
       readDefinition,
       editDefinition,
       writeDefinition,
@@ -385,15 +418,17 @@ describe('Tool Completeness', () => {
       findSymbolReferencesDefinition,
       replaceSymbolDefinition,
       renameSymbolDefinition,
+      astIndexDefinition,
     ];
-    expect(staticDefinitions).toHaveLength(17);
+    expect(staticDefinitions).toHaveLength(19);
     // All names should be unique
     const names = staticDefinitions.map((d) => d.name);
-    expect(new Set(names).size).toBe(17);
+    expect(new Set(names).size).toBe(19);
   });
 
   it('all tool names are unique across static and dynamic tools', () => {
     const allNames = [
+      applyPatchDefinition.name,
       readDefinition.name,
       editDefinition.name,
       writeDefinition.name,
@@ -411,6 +446,7 @@ describe('Tool Completeness', () => {
       findSymbolReferencesDefinition.name,
       replaceSymbolDefinition.name,
       renameSymbolDefinition.name,
+      astIndexDefinition.name,
       // Dynamic tool names (from builder output)
       buildCreateTool({} as any).definition.name,
       buildUpdateTool({} as any).definition.name,
@@ -419,12 +455,13 @@ describe('Tool Completeness', () => {
       buildWebFetchTool().definition.name,
       buildSkillTool(new Map()).definition.name,
       buildMcpResourceTool({} as any).definition.name,
+      buildListMcpResourcesTool({} as any).definition.name,
       buildDelegateTool(new Map(), {} as any).definition.name,
       buildWaitTool({} as any).definition.name,
       buildInterruptTool({} as any).definition.name,
     ];
-    expect(allNames).toHaveLength(27);
-    expect(new Set(allNames).size).toBe(27);
+    expect(allNames).toHaveLength(30);
+    expect(new Set(allNames).size).toBe(30);
   });
 
   it('registerBuiltinTools populates the singleton registry with all tools', () => {

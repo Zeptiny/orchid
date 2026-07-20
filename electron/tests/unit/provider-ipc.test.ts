@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('electron', () => ({ ipcMain: mocks.ipcMain }));
-vi.mock('../../src/main/index', () => ({
+vi.mock('../../src/main/providers/runtime-context', () => ({
   getProviderCatalogStore: vi.fn(),
   getProviderConnectionStore: vi.fn(),
   getProviderCredentialVault: vi.fn(),
@@ -154,11 +154,13 @@ beforeEach(async () => {
   mocks.stopActiveProviderConnectionTurns.mockReturnValue([]);
   providersIpc = await import('../../src/main/ipc/providers');
   providersIpc._setProviderIPCServicesForTests(null);
+  providersIpc._clearConnectionMutationLocksForTests();
 });
 
 afterEach(() => {
   providersIpc.unregisterProviderIPC();
   providersIpc._setProviderIPCServicesForTests(null);
+  providersIpc._clearConnectionMutationLocksForTests();
 });
 
 describe('provider IPC', () => {
@@ -680,5 +682,168 @@ describe('provider IPC', () => {
     expect(memory.connections.update).not.toHaveBeenCalledWith(id, expect.objectContaining({
       health: 'disconnected',
     }));
+  });
+
+  it('serializes submit_api_key against concurrent disconnect so no live key remains', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000071';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Race fixture',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: '00000000-0000-4000-8000-000000000072' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+
+    let releaseVaultWrite: (() => void) | undefined;
+    const vaultWriteGate = new Promise<void>((resolve) => {
+      releaseVaultWrite = resolve;
+    });
+    let submitEnteredVault = false;
+    memory.vault.replaceConnectionApiKey.mockImplementation(async () => {
+      submitEnteredVault = true;
+      await vaultWriteGate;
+      return '00000000-0000-4000-8000-000000000099';
+    });
+
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const submitPromise = handler(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY)(null, {
+      connectionId: id,
+      apiKey: 'sk-concurrent-submit',
+    });
+    await vi.waitFor(() => expect(submitEnteredVault).toBe(true));
+
+    const disconnectPromise = handler(IPC_CHANNELS.PROVIDERS_DISCONNECT)(null, {
+      connectionId: id,
+      confirm: true,
+    });
+
+    // Disconnect must wait on the per-connection lock while submit holds it.
+    await Promise.resolve();
+    expect(memory.vault.deleteConnectionCredentials).not.toHaveBeenCalled();
+
+    releaseVaultWrite!();
+    const [submitResult, disconnectResult] = await Promise.all([submitPromise, disconnectPromise]);
+
+    expect(submitResult).toMatchObject({
+      connection: { health: 'ready', credentialKind: 'stored' },
+    });
+    expect(disconnectResult).toMatchObject({
+      connection: { health: 'disconnected', credentialKind: 'none' },
+    });
+    expect(memory.records.get(id)).toMatchObject({
+      health: 'disconnected',
+      credential: { kind: 'none' },
+    });
+    expect(memory.vault.deleteConnectionCredentials).toHaveBeenCalledWith(id);
+    // Final vault state after disconnect must not retain a post-disconnect key.
+    const deleteOrder = memory.vault.deleteConnectionCredentials.mock.invocationCallOrder[0]!;
+    const replaceOrder = memory.vault.replaceConnectionApiKey.mock.invocationCallOrder[0]!;
+    expect(deleteOrder).toBeGreaterThan(replaceOrder);
+  });
+
+  it('does not re-enable a connection disabled while validate is in flight', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000081';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Validate race',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: '00000000-0000-4000-8000-000000000082' },
+      modelIds: ['gpt-5/test'],
+      health: 'draft',
+    });
+
+    let releaseReadSecret: (() => void) | undefined;
+    const readSecretGate = new Promise<void>((resolve) => {
+      releaseReadSecret = resolve;
+    });
+    let validateEnteredReadiness = false;
+    memory.vault.readSecret.mockImplementation(async () => {
+      validateEnteredReadiness = true;
+      await readSecretGate;
+      return { kind: 'api-key' as const, apiKey: 'never-return-this' };
+    });
+
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const validatePromise = handler(IPC_CHANNELS.PROVIDERS_VALIDATE)(null, { connectionId: id });
+    await vi.waitFor(() => expect(validateEnteredReadiness).toBe(true));
+
+    // Without the connection mutation lock, disable would finish while validate
+    // still holds the readiness snapshot and then validate would write ready.
+    // With the lock, disable queues until validate completes its health write.
+    const disablePromise = handler(IPC_CHANNELS.PROVIDERS_DISABLE)(null, { connectionId: id });
+    await Promise.resolve();
+    expect(memory.records.get(id)?.health).toBe('draft');
+
+    releaseReadSecret!();
+    const [validateResult, disableResult] = await Promise.all([validatePromise, disablePromise]);
+
+    expect(validateResult).toMatchObject({
+      connection: { health: 'ready' },
+    });
+    expect(disableResult).toMatchObject({
+      connection: { health: 'disabled' },
+    });
+    expect(memory.records.get(id)?.health).toBe('disabled');
+  });
+
+  it('validate leaves an already-disabled connection disabled', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000083';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Already disabled',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: '00000000-0000-4000-8000-000000000084' },
+      modelIds: ['gpt-5/test'],
+      health: 'disabled',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const result = await handler(IPC_CHANNELS.PROVIDERS_VALIDATE)(null, { connectionId: id });
+
+    expect(result).toMatchObject({
+      connection: { health: 'disabled' },
+      message: expect.stringMatching(/disabled/i),
+    });
+    expect(memory.connections.update).not.toHaveBeenCalled();
+    expect(memory.vault.readSecret).not.toHaveBeenCalled();
+  });
+
+  it('rejects submit_api_key while the connection is disabled', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000085';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Disabled submit',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'none' },
+      modelIds: ['gpt-5/test'],
+      health: 'disabled',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY)(null, {
+      connectionId: id,
+      apiKey: 'sk-should-not-store',
+    })).rejects.toThrow(/disabled/i);
+
+    expect(memory.vault.replaceConnectionApiKey).not.toHaveBeenCalled();
   });
 });

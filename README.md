@@ -442,7 +442,7 @@ npm run package      # Package for current platform (AppImage/deb/dmg/nsis)
 
 ### Requirements
 
-- **Node.js 20+**
+- **Node.js 24 LTS**
 - **Ollama** (optional, for local models) — [ollama.com](https://ollama.com/)
 
 ---

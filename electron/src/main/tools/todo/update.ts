@@ -6,14 +6,22 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome } from '../result';
 import type { TodoToolResult, NotifyTodoChanged, TodoStoreSource } from './create';
 import { resolveTodoStore } from './create';
-import { TodoStatus, parseTodoStatus } from '../../../shared/types/todo';
+import { TodoStatus } from '../../../shared/types/todo';
 import {
   isMainAgentScope,
   normalizeAgentScopeId,
   todoBelongsToScope,
 } from '../../../shared/types/agent-scope';
+
+/** Accept exact enum values or common lowercase LLM forms (open → OPEN). */
+const todoStatusSchema = z.preprocess(
+  (v) => (typeof v === 'string' ? v.toUpperCase() : v),
+  z.nativeEnum(TodoStatus),
+);
 
 /**
  * Build the todo_update tool.
@@ -26,6 +34,7 @@ export function buildUpdateTool(
   notifyChanged?: NotifyTodoChanged,
 ): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
+    ...genericToolResultMetadata,
     name: 'todo_update',
     description:
       'Update an existing task owned by the current agent.\n\n' +
@@ -36,8 +45,7 @@ export function buildUpdateTool(
     inputSchema: z.object({
       id: z.string().describe('The ID of the task to update.'),
       title: z.string().optional().describe('New title (optional).'),
-      status: z
-        .string()
+      status: todoStatusSchema
         .optional()
         .describe(
           `New status. Must be one of: ${Object.values(TodoStatus).join(', ')}.`,
@@ -57,7 +65,7 @@ export function buildUpdateTool(
     const { id, title, status, subagent_id } = input as {
       id: string;
       title?: string;
-      status?: string;
+      status?: TodoStatus;
       subagent_id?: string;
     };
 
@@ -65,37 +73,16 @@ export function buildUpdateTool(
     const todoStore = resolveTodoStore(store, ctx);
     const existing = todoStore.get(id);
     if (!existing) {
-      return {
-        display: 'Update failed',
-        content: `Error: No task found with ID '${id}'.`,
-        isError: true,
-      };
+      return genericBuiltInToolOutcome('todo_update', `Error: No task found with ID '${id}'.`, 'error');
     }
     if (!todoBelongsToScope(existing, scope)) {
-      return {
-        display: 'Update failed',
-        content: `Error: Task '${id}' is not owned by agent scope '${scope}'.`,
-        isError: true,
-      };
-    }
-
-    let parsedStatus: TodoStatus | undefined;
-    if (status !== undefined) {
-      const parsed = parseTodoStatus(status);
-      if (parsed === null) {
-        return {
-          display: 'Invalid status',
-          content: `Error: Invalid status '${status}'. Valid statuses: ${Object.values(TodoStatus).join(', ')}`,
-          isError: true,
-        };
-      }
-      parsedStatus = parsed;
+      return genericBuiltInToolOutcome('todo_update', `Error: Task '${id}' is not owned by agent scope '${scope}'.`, 'error');
     }
 
     // Ownership reassignment: main only; subagents cannot reassign.
     const updates: { title?: string; status?: TodoStatus; subagent_id?: string } = {
       title,
-      status: parsedStatus,
+      status,
     };
     if (isMainAgentScope(scope) && subagent_id !== undefined) {
       updates.subagent_id = subagent_id;
@@ -104,25 +91,24 @@ export function buildUpdateTool(
     const [task, error] = todoStore.update(id, updates);
 
     if (error) {
-      return { display: 'Update failed', content: `Error: ${error}`, isError: true };
+      return genericBuiltInToolOutcome('todo_update', `Error: ${error}`, 'error');
     }
 
     if (notifyChanged) {
       await notifyChanged(ctx);
     }
 
-    // Build change summary
-    const changes: string[] = [];
-    if (title !== undefined) changes.push(`Title: ${task!.title}`);
-    if (status !== undefined) changes.push(`Status: ${task!.status}`);
+    const changes: { title?: string; status?: string; owner?: string } = {};
+    if (title !== undefined) changes.title = task!.title;
+    if (status !== undefined) changes.status = task!.status;
     if (isMainAgentScope(scope) && subagent_id !== undefined) {
-      changes.push(`Owner: ${task!.subagent_id || 'main'}`);
+      changes.owner = task!.subagent_id || 'main';
     }
 
-    return {
-      display: `Updated task ${task!.id}`,
-      content: 'Task updated successfully.\n\n' + (changes.join('\n') || 'No fields changed.'),
-    };
+    return genericBuiltInToolOutcome('todo_update', {
+      taskId: task!.id,
+      changes,
+    }, 'complete');
   };
 
   return { definition, handler };

@@ -9,7 +9,7 @@
  * - delete(id): Delete session file and caches
  * - rename(id, name): Update name, save
  * - changeModel(id, model): Update model, save
- * - load(id): Load session from disk
+ * - load(id): Load session from disk or return its live in-memory copy
  * - listSaved(): List all saved sessions (mtime order, newest first)
  * - getActive(): Get current active session
  * - Auto-naming: After first exchange, if name starts with "Session ",
@@ -374,13 +374,15 @@ export class SessionManager {
   }
 
   /**
-   * Load a session from disk into memory (does NOT set as active).
+   * Load a session without setting it as active.
    *
-   * Use switchTo() to load and set as active.
+   * A session already loaded by this process is authoritative: returning its
+   * in-memory copy preserves live chain and subagent states. Otherwise, read
+   * from disk without caching or changing selection.
    * Returns null if the session file doesn't exist or fails to parse.
    */
   load(id: string): Session | null {
-    return storageLoadSession(id, this._storageOpts);
+    return this._sessions.get(id) ?? storageLoadSession(id, this._storageOpts);
   }
 
   /**

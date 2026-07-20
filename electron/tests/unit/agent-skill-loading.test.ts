@@ -267,6 +267,7 @@ describe('Agent Loading — Defaults', () => {
     expect(general!.allowed_tools).toContain('grep');
     expect(general!.allowed_tools).toContain('edit');
     expect(general!.allowed_tools).toContain('write');
+    expect(general!.allowed_tools).toContain('apply_patch');
     expect(general!.allowed_tools).toContain('delegate_to_subagent');
     expect(general!.allowed_skills).toEqual(['*']);
   });
@@ -341,6 +342,7 @@ describe('Agent Loading — Defaults', () => {
     expect(impl!.allowed_tools).toContain('read');
     expect(impl!.allowed_tools).toContain('edit');
     expect(impl!.allowed_tools).toContain('write');
+    expect(impl!.allowed_tools).toContain('apply_patch');
     expect(impl!.allowed_tools).toContain('execute_command');
     expect(impl!.allowed_skills).toContain('work');
     expect(impl!.allowed_skills).toContain('commit');
@@ -718,6 +720,20 @@ describe('Seeding', () => {
     }
   });
 
+  it('should seed skill resource subtrees (scripts/references/assets)', () => {
+    const targetDir = path.join(tmpDir, 'skills-resources');
+    seedSkillsDir(targetDir);
+
+    // work ships with references/; compound ships with scripts/, references/, assets/
+    expect(fs.existsSync(path.join(targetDir, 'work', 'references'))).toBe(true);
+    expect(fs.existsSync(path.join(targetDir, 'compound', 'scripts'))).toBe(true);
+    expect(fs.existsSync(path.join(targetDir, 'compound', 'references'))).toBe(true);
+    expect(fs.existsSync(path.join(targetDir, 'compound', 'assets'))).toBe(true);
+    expect(
+      fs.existsSync(path.join(targetDir, 'resolve-pr-feedback', 'scripts')),
+    ).toBe(true);
+  });
+
   it('should not overwrite existing skill files during seeding', () => {
     const targetDir = path.join(tmpDir, 'skills-target');
     const workDir = path.join(targetDir, 'work');
@@ -733,6 +749,23 @@ describe('Seeding', () => {
     const content = fs.readFileSync(path.join(workDir, 'SKILL.md'), 'utf-8');
     expect(content).toContain('Custom work');
     expect(content).toContain('Custom body');
+  });
+
+  it('should fill missing skill resource subtrees without clobbering SKILL.md', () => {
+    const targetDir = path.join(tmpDir, 'skills-fill');
+    const workDir = path.join(targetDir, 'work');
+    fs.mkdirSync(workDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(workDir, 'SKILL.md'),
+      '---\nname: work\ndescription: Custom work\n---\nCustom body',
+      'utf-8',
+    );
+
+    seedSkillsDir(targetDir);
+
+    const content = fs.readFileSync(path.join(workDir, 'SKILL.md'), 'utf-8');
+    expect(content).toContain('Custom work');
+    expect(fs.existsSync(path.join(workDir, 'references'))).toBe(true);
   });
 });
 

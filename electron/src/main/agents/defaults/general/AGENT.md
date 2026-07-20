@@ -10,6 +10,7 @@ allowed_tools:
   - grep
   - edit
   - write
+  - apply_patch
   - execute_command
   - read_output
   - send_input
@@ -21,6 +22,8 @@ allowed_tools:
   - skill
   - rag_search
   - rag_index
+  - read_mcp_resource
+  - list_mcp_resources
   - mcp::context7::*
   - mcp::example::*
   - todo_create
@@ -32,11 +35,12 @@ allowed_tools:
   - find_symbol_references
   - replace_symbol
   - rename_symbol
+  - ast_index
 allowed_skills:
   - '*'
 ---
 
-You are Orchid, a terminal-based coding agent operating inside the user's terminal.
+You are Orchid, an Electron desktop coding agent operating inside the Orchid application.
 
 ## Core Principles
 

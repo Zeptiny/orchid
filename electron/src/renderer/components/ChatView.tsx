@@ -18,6 +18,7 @@ import {
   selectionMatchesOption,
 } from '../utils/provider-selection';
 import { isTextGenerationModel } from '../utils/models';
+import { resolveOrchidNavigate } from '../utils/navigate-shell';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import type { ModelSelection } from '../../shared/types/provider';
 import { flattenSessionMessages, type Session } from '../../shared/types/session';
@@ -32,6 +33,9 @@ import { CommandPalette } from './CommandPalette';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { SessionHeader } from './session-header';
 import { SessionTabBar } from './SessionTabBar';
+import { Alert, type AlertTone } from './ui/Alert';
+import { Button } from './ui/Button';
+import { SubagentView, type SubagentOpenRequest } from './SubagentView';
 
 type ToastSeverity = 'info' | 'warning' | 'error';
 interface Toast {
@@ -51,6 +55,8 @@ export function ChatView() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  /** One-shot inspector section focus from command-palette navigation. */
+  const [inspectorFocusSection, setInspectorFocusSection] = useState<string | null>(null);
   const [closeConfirmId, setCloseConfirmId] = useState<string | null>(null);
   const closeConfirmRef = useRef<HTMLDivElement>(null);
   const closeConfirmCancelRef = useRef<HTMLButtonElement>(null);
@@ -70,7 +76,22 @@ export function ChatView() {
   const [alwaysExpandToolGroups, setAlwaysExpandToolGroups] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [contentMode, setContentMode] = useState<'chat' | 'subagents'>('chat');
+  const [subagentOpenRequest, setSubagentOpenRequest] = useState<SubagentOpenRequest>({ generation: 0, id: null });
+  const chatContentRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const element = chatContentRef.current;
+    if (!element) return;
+    if (contentMode === 'subagents') element.setAttribute('inert', '');
+    else element.removeAttribute('inert');
+  }, [contentMode]);
+
+  const openSubagentView = useCallback((id?: string) => {
+    setSubagentOpenRequest((previous) => ({ generation: previous.generation + 1, id: id ?? null }));
+    setContentMode('subagents');
+  }, []);
 
   // Guards against out-of-order session:load responses overwriting a newer pick.
   const sessionSwitchGen = useRef(0);
@@ -139,6 +160,23 @@ export function ChatView() {
 
   const toggleLeftSidebar = useCallback(() => {
     setLeftSidebarCollapsed((prev) => !prev);
+  }, []);
+
+  // Wire dead command-palette `orchid:navigate` events to shell panels.
+  useEffect(() => {
+    const onNavigate = (event: Event) => {
+      const detail = (event as CustomEvent<{ section?: string }>).detail;
+      const action = resolveOrchidNavigate(detail?.section);
+      if (action.kind === 'noop') return;
+      if (action.kind === 'sessions') {
+        setLeftSidebarCollapsed(false);
+        return;
+      }
+      setSidebarOpen(true);
+      setInspectorFocusSection(action.section);
+    };
+    window.addEventListener('orchid:navigate', onNavigate);
+    return () => window.removeEventListener('orchid:navigate', onNavigate);
   }, []);
 
   const togglePalette = useCallback(() => {
@@ -297,6 +335,17 @@ export function ChatView() {
     },
     [session, chat, commitSessionView, draftTabVisible],
   );
+
+  // ConfigView left-rail pick: same hydrate path as sidebar (not store-only load).
+  useEffect(() => {
+    const onSelectSession = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+      if (!id) return;
+      void handleSessionSelect(id);
+    };
+    window.addEventListener('orchid:select-session', onSelectSession);
+    return () => window.removeEventListener('orchid:select-session', onSelectSession);
+  }, [handleSessionSelect]);
 
   const enterDraftMode = useCallback(async (opts?: { clearComposer?: boolean }) => {
     const gen = ++sessionSwitchGen.current;
@@ -875,13 +924,16 @@ export function ChatView() {
       ? session.listState.sessions
       : [];
 
-  const leftCol = leftSidebarCollapsed ? '56px' : '260px';
-  const rightCol = sidebarOpen ? '300px' : '48px';
+  // Runtime shell tracks — CSS custom properties (exceptions.css .app-frame).
+  const shellStyle = {
+    ['--orchid-shell-left' as string]: leftSidebarCollapsed ? '56px' : '260px',
+    ['--orchid-shell-right' as string]: sidebarOpen ? '300px' : '48px',
+  };
 
   return (
     <div
       className="app-frame grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
-      style={{ gridTemplateColumns: `${leftCol} minmax(460px, 1fr) ${rightCol}` }}
+      style={shellStyle}
     >
       <LeftSidebar
         activeSessionId={session.activeSession?.id ?? null}
@@ -919,21 +971,20 @@ export function ChatView() {
 
       <main className="main-pane min-h-0 min-w-0 overflow-hidden">
         {toast && (
-          <div
-            className={`command-toast command-toast-${toast.severity}`}
+          <Alert
+            tone={toast.severity as AlertTone}
+            variant="soft"
+            className={`command-toast command-toast-${toast.severity} py-2 text-sm`}
             role="status"
             aria-live="polite"
+            action={
+              <Button variant="ghost" size="xs" shape="circle" onClick={() => setToast(null)} aria-label="Dismiss">
+                ×
+              </Button>
+            }
           >
-            <span className="command-toast-message">{toast.message}</span>
-            <button
-              type="button"
-              className="command-toast-dismiss"
-              onClick={() => setToast(null)}
-              aria-label="Dismiss"
-            >
-              ×
-            </button>
-          </div>
+            <span className="command-toast-message min-w-0 flex-1">{toast.message}</span>
+          </Alert>
         )}
         <SessionTabBar
           openSessionIds={tabs.snapshot.openSessionIds}
@@ -977,25 +1028,25 @@ export function ChatView() {
             aria-labelledby="session-tab-confirm-title"
             aria-describedby="session-tab-confirm-desc"
           >
-            <div className="session-tab-confirm-card">
-              <p id="session-tab-confirm-title" className="session-tab-confirm-text">
+            <div className="session-tab-confirm-card border border-base-300 bg-base-100 shadow-lg">
+              <p id="session-tab-confirm-title" className="session-tab-confirm-text font-semibold">
                 Close running session tab?
               </p>
-              <p id="session-tab-confirm-desc" className="session-tab-confirm-text session-tab-confirm-desc">
+              <p id="session-tab-confirm-desc" className="session-tab-confirm-text session-tab-confirm-desc text-base-content/80">
                 This session is still running. Close the tab and keep the agent working in the background?
               </p>
               <div className="session-tab-confirm-actions">
-                <button
+                <Button
                   ref={closeConfirmCancelRef}
-                  type="button"
-                  className="btn btn-ghost btn-sm"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setCloseConfirmId(null)}
                 >
                   Cancel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
                   onClick={() => {
                     const id = closeConfirmId;
                     setCloseConfirmId(null);
@@ -1003,11 +1054,16 @@ export function ChatView() {
                   }}
                 >
                   Close tab
-                </button>
+                </Button>
               </div>
             </div>
           </div>
         ) : null}
+        <div
+          ref={chatContentRef}
+          className={contentMode === 'subagents' ? 'orchid-chat-content-preserved orchid-chat-content-hidden' : 'orchid-chat-content-preserved'}
+          aria-hidden={contentMode === 'subagents' ? true : undefined}
+        >
         <ChatStream
           messages={chat.messages}
           streamingContent={chat.streamingContent}
@@ -1016,6 +1072,7 @@ export function ChatView() {
           status={chat.status}
           error={chat.error}
           usage={chat.usage}
+          currentTurnUsage={chat.currentTurnUsage}
           subagents={subagents.subagents}
           sessionChains={session.activeSession?.chains ?? []}
           sessionId={session.activeSession?.id ?? null}
@@ -1030,7 +1087,7 @@ export function ChatView() {
           }
           workspaceUnbound={!workspaceBound}
           onRetry={handleRetry}
-          elapsedSeconds={chat.elapsedSeconds}
+          streamStartTime={chat.streamStartTime}
           interrupted={chat.interrupted}
           alwaysExpandToolGroups={alwaysExpandToolGroups}
         />
@@ -1057,26 +1114,35 @@ export function ChatView() {
           onPickProjectDir={() => {
             void handlePickProjectDir();
           }}
+          isViewActive={contentMode === 'subagents'}
         />
         <Footer
-          elapsedSeconds={chat.elapsedSeconds}
+          streamStartTime={chat.streamStartTime}
           isStreaming={chat.status === 'streaming'}
           interruptState={chat.interruptState}
           usage={chat.usage}
           maxContext={maxContext}
           messages={chat.messages}
+          model={providerPickerValue}
+          modelLabels={providerModelLabels}
+          modelDetails={providerModelDetails}
+          commandContext={commandContext}
         />
+        </div>
+        {contentMode === 'subagents' ? (
+          <SubagentView subagents={subagents} openRequest={subagentOpenRequest} onBackToChat={() => setContentMode('chat')} />
+        ) : null}
       </main>
 
       <Sidebar
         isOpen={sidebarOpen}
         onToggle={toggleSidebar}
-        title={session.activeSession?.name ?? 'Orchid'}
         subagentState={subagents.state}
         onRefreshSubagents={subagents.refresh}
         selectedSubagentId={subagents.selectedId}
         onSelectSubagent={subagents.select}
         getSubagentDetail={subagents.getDetail}
+        onOpenSubagentView={openSubagentView}
         todoState={todos.state}
         onRefreshTodos={todos.refresh}
         mcpServers={mcpServers}
@@ -1089,7 +1155,8 @@ export function ChatView() {
         cumulativeUsage={chat.cumulativeUsage}
         maxContext={maxContext}
         messages={chat.messages}
-        cwd={session.workspace?.cwd ?? chat.cwd}
+        focusSection={inspectorFocusSection}
+        onFocusSectionConsumed={() => setInspectorFocusSection(null)}
       />
 
       <CommandPalette
