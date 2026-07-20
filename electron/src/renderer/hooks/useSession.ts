@@ -14,7 +14,7 @@ import { useCallback, useSyncExternalStore } from 'react';
 import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { SessionSummary } from '../../shared/types/ipc-boundary';
-import type { WorkspaceInfo } from '../../shared/types/ipc';
+import type { WorkspaceInfo, SessionOpenResult } from '../../shared/types/ipc';
 import { ChainStatus } from '../../shared/types/chain';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -35,6 +35,11 @@ export interface UseSessionReturn {
   workspace: WorkspaceInfo | null;
   /** Load a session by ID. Returns the loaded session (or null on failure). */
   load: (id: string) => Promise<Session | null>;
+  /**
+   * Activate a session and return its full view payload (session, flattened
+   * messages, live snapshot, workspace) in one round-trip. Used by switching.
+   */
+  open: (id: string) => Promise<SessionOpenResult | null>;
   /**
    * Eagerly create a session file (legacy / tests). Prefer `enterDraft` for
    * the New Chat button — session is created on first message instead.
@@ -294,6 +299,35 @@ async function loadShared(id: string): Promise<Session | null> {
   }
 }
 
+async function openShared(id: string): Promise<SessionOpenResult | null> {
+  if (!window.orchid?.session?.open) {
+    return null;
+  }
+
+  const generation = ++loadGeneration;
+  advanceDraftGeneration();
+  setIsLoading(true);
+  try {
+    const result = await window.orchid.session.open({ id });
+    // Drop stale responses when a newer load (or draft) superseded this one.
+    if (generation !== loadGeneration) {
+      return result;
+    }
+    setActiveSession(result.session);
+    // session:open resolves the workspace itself; adopt it directly instead of
+    // a second get_workspace round-trip.
+    setWorkspaceState(result.workspace);
+    return result;
+  } catch (err) {
+    console.error('Failed to open session:', err);
+    return null;
+  } finally {
+    if (generation === loadGeneration) {
+      setIsLoading(false);
+    }
+  }
+}
+
 async function createShared(): Promise<Session> {
   if (!window.orchid?.session?.create) {
     const session = makeLocalSession();
@@ -514,9 +548,10 @@ export const __sessionCacheTest = {
   getWorkspace: () => workspace,
   getDraftGeneration: () => draftGeneration,
   getLoadGeneration: () => loadGeneration,
-  refresh: refreshShared,
-  load: loadShared,
-  enterDraft: enterDraftShared,
+    refresh: refreshShared,
+    load: loadShared,
+    open: openShared,
+    enterDraft: enterDraftShared,
   create: createShared,
   deleteSession: deleteSessionShared,
   rename: renameShared,
@@ -536,6 +571,7 @@ export function useSession(): UseSessionReturn {
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   const load = useCallback((id: string) => loadShared(id), []);
+  const open = useCallback((id: string) => openShared(id), []);
   const create = useCallback(() => createShared(), []);
   const enterDraft = useCallback(() => enterDraftShared(), []);
   const deleteSession = useCallback((id: string) => deleteSessionShared(id), []);
@@ -556,6 +592,7 @@ export function useSession(): UseSessionReturn {
     listState: snapshot.listState,
     workspace: snapshot.workspace,
     load,
+    open,
     create,
     enterDraft,
     deleteSession,

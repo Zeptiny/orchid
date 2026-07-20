@@ -321,6 +321,18 @@ function snapshotForAgent(active: ActiveAgent): ChatSnapshot {
   };
 }
 
+/**
+ * In-flight turn snapshot for a session, or null when idle/finalized.
+ *
+ * Shared by chat:snapshot and session:open so both hydrate the renderer from
+ * one source. Finalization and persistence share one synchronous callback, so
+ * a finalized actor is already represented by history when IPC observes it.
+ */
+export function getLiveChatSnapshot(sessionId: string): ChatSnapshot | null {
+  const active = activeAgents.get(sessionId);
+  return active && !active.finalized ? snapshotForAgent(active) : null;
+}
+
 function attachUsageToLatestAssistant(messages: Message[], usage: Usage): boolean {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
@@ -1652,13 +1664,10 @@ export function registerChatIPC(): void {
       if (!sessionId) return null;
       const session = getSessionManager().getSession(sessionId);
       if (!session) return null;
-      const active = activeAgents.get(sessionId);
       return {
         sessionId,
         messages: flattenSessionMessages(session),
-        // Finalization and persistence share one synchronous callback, so a
-        // finalized actor is already represented by history when IPC observes it.
-        live: active && !active.finalized ? snapshotForAgent(active) : null,
+        live: getLiveChatSnapshot(sessionId),
       };
     },
   );

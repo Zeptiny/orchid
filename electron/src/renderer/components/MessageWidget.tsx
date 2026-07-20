@@ -5,7 +5,7 @@
  * chrome; tool call/result messages fall back to ToolCallBlock for edge cases.
  * ChatStream normally converts them into ToolBlocks for consistent ordering.
  */
-import { useState, useCallback, useMemo, useEffect, useId } from 'react';
+import { memo, useState, useCallback, useMemo, useEffect, useId } from 'react';
 import type { Message } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import {
@@ -24,7 +24,7 @@ interface MessageWidgetProps {
   isStreaming?: boolean;
 }
 
-export function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
+export const MessageWidget = memo(function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
   if (message.hidden) return null;
 
   switch (message.type) {
@@ -50,7 +50,7 @@ export function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
     default:
       return <DefaultMessage message={message} />;
   }
-}
+});
 
 function UserMessage({ message }: { message: Message }) {
   return (

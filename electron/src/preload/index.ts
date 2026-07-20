@@ -40,6 +40,8 @@ import type {
   ProviderDisconnectMessage,
   ProviderStatusRefreshMessage,
   SessionLoadMessage,
+  SessionOpenMessage,
+  SessionOpenResult,
   SessionDeleteMessage,
   SessionRenamedEvent,
   SessionCreatedEvent,
@@ -277,6 +279,9 @@ const orchidAPI: OrchidAPI = {
 
     load: (id: SessionLoadMessage) =>
       invoke(IPC_CHANNELS.SESSION_LOAD, id),
+
+    open: (message: SessionOpenMessage) =>
+      invoke<SessionOpenResult>(IPC_CHANNELS.SESSION_OPEN, message),
 
     create: () =>
       invoke(IPC_CHANNELS.SESSION_CREATE),

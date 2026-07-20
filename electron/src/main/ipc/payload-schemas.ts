@@ -80,6 +80,10 @@ export const sessionLoadSchema = z.object({
   activate: z.boolean().optional().default(true),
 });
 
+export const sessionOpenSchema = z.object({
+  id: z.string().uuid(),
+});
+
 export const sessionDeleteSchema = z.object({
   id: z.string().uuid(),
 });

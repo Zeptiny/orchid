@@ -32,6 +32,7 @@ import {
   sessionChangeModelSchema,
   sessionDeleteSchema,
   sessionLoadSchema,
+  sessionOpenSchema,
   sessionRenameSchema,
   sessionSetWorkspaceSchema,
 } from './payload-schemas';
@@ -183,6 +184,55 @@ export function registerSessionIPC(): void {
 
     emitWorkspaceChanged(event.sender, workspace);
     return session;
+  });
+
+  // session:open — activate a session and return its full view payload in one
+  // round-trip (session + flattened messages + live snapshot + workspace).
+  // Replaces the prior peek + chat:snapshot + activate sequence so a switch
+  // reads/parses the session file once and serializes it across IPC once.
+  ipcMain.handle(IPC_CHANNELS.SESSION_OPEN, async (event, payload: unknown) => {
+    const parsed = sessionOpenSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid session:open payload: ${parsed.error.message}`);
+    }
+
+    const manager = getSessionManager();
+    const { id } = parsed.data;
+    const windowId = String(event.sender.id);
+
+    // Selecting a session is view navigation. Work in the previously selected
+    // session continues and remains addressed by its own session id.
+    const session = manager.switchTo(id, windowId);
+
+    if (session) {
+      workingSetOpenOrFocus(session.id, windowId);
+    } else {
+      // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
+      workingSetRemove(id, windowId);
+    }
+
+    // Session owns workspace now — clear draft so it doesn't shadow session.cwd.
+    // Sticky default is intentionally NOT updated on open (matches session:load).
+    clearDraftCwd(windowId);
+
+    // Flatten once and reuse for both the seeded chat history (so the next
+    // chat:send continues the full conversation) and the renderer payload.
+    const messages = session ? flattenSessionMessages(session) : [];
+    if (session) {
+      seedChatHistory(session.id, messages);
+    } else {
+      clearChatHistory(id);
+    }
+
+    const workspace = resolveWindowWorkspace(windowId);
+    emitWorkspaceChanged(event.sender, workspace);
+
+    // Live in-flight snapshot (chat.ts owns the active-agent registry). Dynamic
+    // import avoids the session.ts <-> chat.ts circular dependency.
+    const { getLiveChatSnapshot } = await import('./chat');
+    const live = getLiveChatSnapshot(id);
+
+    return { session, messages, live, workspace };
   });
 
   // session:create — eagerly create + activate a session (writes to disk).
@@ -405,6 +455,7 @@ export function registerSessionIPC(): void {
 export function unregisterSessionIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_LIST);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_LOAD);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_OPEN);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CREATE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CLEAR_ACTIVE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_DELETE);

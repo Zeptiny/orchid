@@ -161,6 +161,23 @@ export interface ChatSessionSnapshot {
   live: ChatSnapshot | null;
 }
 
+/**
+ * Full view payload for activating a session in one round-trip.
+ *
+ * Replaces the prior peek + chat:snapshot + activate sequence so a session
+ * switch reads/parses the session file once and serializes it across IPC once.
+ */
+export interface SessionOpenResult {
+  /** The activated session, or null when missing/corrupt. */
+  session: Session | null;
+  /** Flattened chain messages for the chat pane (empty when no session). */
+  messages: Message[];
+  /** In-flight turn snapshot when the session is currently running. */
+  live: ChatSnapshot | null;
+  /** Resolved workspace after activation (session → sticky → unbound). */
+  workspace: WorkspaceInfo;
+}
+
 export interface SubagentSnapshotRequest { sessionId: string; }
 export interface SubagentSnapshot {
   sessionId: string;
@@ -490,6 +507,11 @@ export interface SessionLoadMessage {
   activate?: boolean;
 }
 
+/** Activate a session and return its full view payload in one round-trip. */
+export interface SessionOpenMessage {
+  id: string;
+}
+
 export interface SessionDeleteMessage {
   id: string;
 }
@@ -704,6 +726,12 @@ export interface OrchidAPI {
   session: {
     list: () => Promise<SessionSummary[]>;
     load: (id: SessionLoadMessage) => Promise<Session | null>;
+    /**
+     * Activate a session and return its full view payload (session, flattened
+     * messages, live snapshot, workspace) in one round-trip. Replaces the prior
+     * peek + chat:snapshot + activate sequence for session switching.
+     */
+    open: (message: SessionOpenMessage) => Promise<SessionOpenResult>;
     create: () => Promise<Session>;
     /**
      * Enter draft mode: clear active session, abort in-flight chat, clear
@@ -862,6 +890,8 @@ export const IPC_CHANNELS = {
   // Session
   SESSION_LIST: 'session:list',
   SESSION_LOAD: 'session:load',
+  /** Activate a session and return its full view payload in one round-trip. */
+  SESSION_OPEN: 'session:open',
   SESSION_CREATE: 'session:create',
   /** Clear active session without creating a file (draft / new chat). */
   SESSION_CLEAR_ACTIVE: 'session:clear_active',
@@ -966,6 +996,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.PROVIDERS_STATUS_REFRESH,
   IPC_CHANNELS.SESSION_LIST,
   IPC_CHANNELS.SESSION_LOAD,
+  IPC_CHANNELS.SESSION_OPEN,
   IPC_CHANNELS.SESSION_CREATE,
   IPC_CHANNELS.SESSION_CLEAR_ACTIVE,
   IPC_CHANNELS.SESSION_DELETE,
