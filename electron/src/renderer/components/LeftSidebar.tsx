@@ -68,7 +68,7 @@ interface LeftSidebarProps {
  * Left sessions rail — paddings match mock 012:
  * header 7px 10px / body 8px / footer 6px 8px
  * session rows min-height 30px, pad 5px 7px, gap 1px
- * No daisyUI menu (avoids horizontal dividers between items).
+ * No menu component (avoids horizontal dividers between items).
  *
  * Project groups are always visible, show recent work first, and expand
  * independently; search remains global and session titles never scroll.

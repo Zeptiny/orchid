@@ -209,7 +209,7 @@ export function ModelPicker({
           <label className="input input-sm orchid-model-picker-search mx-2 my-2">
             <Icon name="search" size={14} className="shrink-0 opacity-50" />
             {/* NOTE (known deferred case): raw <input> instead of <TextInput> because the
-                parent <label> already uses the DaisyUI "input" compound class; adding
+                parent <label> already uses the "input" compound class; adding
                 TextInput would double-up the "input" class. */}
             <input
               ref={searchRef}

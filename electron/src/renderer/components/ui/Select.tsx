@@ -14,7 +14,7 @@ const SIZE_CLASS: Record<SelectSize, string> = {
   md: '',
 };
 
-/** DaisyUI select with size, border, and validation support. */
+/** Orchid select with size, border, and validation support. */
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select(
   { size = 'md', bordered = true, invalid = false, className = '', children, ...props },
   ref,

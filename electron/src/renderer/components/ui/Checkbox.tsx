@@ -6,7 +6,7 @@ export type CheckboxTone = 'primary' | 'secondary' | 'accent' | 'neutral' | 'err
 export interface CheckboxProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'type' | 'size'> {
   size?: CheckboxSize;
   tone?: CheckboxTone;
-  /** When provided, wraps the checkbox in a DaisyUI label with this text. */
+  /** When provided, wraps the checkbox in a label row with this text. */
   label?: ReactNode;
   /** Controlled indeterminate state. */
   indeterminate?: boolean;
@@ -28,7 +28,7 @@ const TONE_CLASS: Record<CheckboxTone, string> = {
   warning: 'checkbox-warning',
 };
 
-/** DaisyUI checkbox with size, tone, optional label, and indeterminate support. */
+/** Orchid checkbox with size, tone, optional label, and indeterminate support. */
 export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(function Checkbox(
   { size = 'md', tone = 'neutral', label, indeterminate = false, className = '', ...props },
   ref,

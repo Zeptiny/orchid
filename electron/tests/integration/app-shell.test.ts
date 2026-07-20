@@ -421,7 +421,8 @@ describe('Theme CSS Custom Properties', () => {
     expect(indexCss).toMatch(/@import\s+["']\.\/markdown\.css["']/);
     expect(indexCss).toMatch(/@import\s+["']\.\/exceptions\.css["']/);
     expect(indexCss).toMatch(/@import\s+["']\.\/chat\.css["']/);
-    expect(indexCss).toContain('@plugin "daisyui"');
+    expect(indexCss).toMatch(/@import\s+["']\.\/primitives\.css["']/);
+    expect(indexCss.toLowerCase()).not.toContain('daisyui');
   });
 
   it('preserves existing shell topology entry points', () => {

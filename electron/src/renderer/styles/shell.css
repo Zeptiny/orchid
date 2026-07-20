@@ -85,9 +85,10 @@
   .panel-header .title,
   .title {
     margin: 0;
+    font-family: var(--font-display, inherit);
     font-size: 13px;
     font-weight: 700;
-    letter-spacing: 0;
+    letter-spacing: -0.01em;
     color: var(--text-primary);
   }
 
@@ -155,6 +156,7 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
+    transition: background-color var(--transition-fast, 150ms ease);
   }
 
   .session-activity-select:hover {
@@ -234,6 +236,9 @@
     background: transparent;
     box-sizing: border-box;
     cursor: pointer;
+    transition:
+      background-color var(--transition-fast, 150ms ease),
+      border-color var(--transition-fast, 150ms ease);
   }
 
   .session-tab-active {
@@ -769,6 +774,9 @@
     cursor: pointer;
     overflow: hidden;
     box-sizing: border-box;
+    transition:
+      background-color var(--transition-fast, 150ms ease),
+      border-color var(--transition-fast, 150ms ease);
   }
 
   .session-item:hover {

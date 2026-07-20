@@ -1,7 +1,7 @@
 /**
  * Composer / discovery contract — U6.
  *
- * Wiring + DaisyUI source contracts. Behavioral lock/navigate/popover
+ * Wiring + control-primitive source contracts. Behavioral lock/navigate/popover
  * coverage lives in composer-send-lock, navigate-shell, and popover-listbox tests.
  */
 import { describe, expect, it } from 'vitest';
@@ -115,7 +115,7 @@ describe('composer contract (U6)', () => {
     });
   });
 
-  describe('DaisyUI controls', () => {
+  describe('control primitives', () => {
     it('composer uses textarea/btn primitives and IconButton', () => {
       const src = read('components/InputArea.tsx');
       expect(src).toMatch(/textarea textarea-bordered|className=.*textarea/);

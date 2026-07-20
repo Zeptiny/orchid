@@ -254,7 +254,7 @@ describe('ShortcutBar', () => {
 
 describe('Button', () => {
   it('produces variant class strings', () => {
-    // A plain daisyUI button has the default (md) size and no size modifier.
+    // A plain button has the default (md) size and no size modifier.
     expect(markup(createElement(Button, { variant: 'primary' }, 'Go'))).toMatch(/btn btn-primary/);
     expect(markup(createElement(Button, { variant: 'ghost' }, 'Go'))).toMatch(/btn btn-ghost/);
     expect(markup(createElement(Button, { variant: 'error' }, 'Go'))).toMatch(/btn btn-error/);

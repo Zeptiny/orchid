@@ -23,8 +23,8 @@ export const THEME_NAMES = Object.keys(THEMES) as ThemeName[];
  * static renderer asset via the Vite theme-assets plugin.
  */
 export function applyTheme(name: ThemeName): void {
-  // Keep the document-level attribute in sync so daisyUI and browser-native
-  // controls inherit the selected theme outside the React root as well.
+  // Keep the document-level attribute in sync so browser-native controls
+  // inherit the selected theme outside the React root as well.
   document.documentElement.dataset.theme = name;
 
   // Remove any existing theme link

@@ -80,8 +80,9 @@
   --shadow-lg: 0 0 16px rgba(0, 255, 65, 0.2);
 
   /* Typography */
-  --font-family: 'IBM Plex Mono', 'Fira Code', monospace;
-  --font-mono: 'IBM Plex Mono', 'Fira Code', monospace;
+  --font-family: 'IBM Plex Mono', 'Fira Code', ui-monospace, monospace;
+  --font-display: 'IBM Plex Mono', 'Fira Code', ui-monospace, monospace;
+  --font-mono: 'IBM Plex Mono', 'Fira Code', ui-monospace, monospace;
   --font-size-xs: 0.75rem;
   --font-size-sm: 0.8125rem;
   --font-size-base: 0.9375rem;
@@ -111,7 +112,7 @@
   --crt-scanline-opacity: 0.03;
   --crt-glow-color: rgba(0, 255, 65, 0.15);
 
-  /* daisyUI semantic token bridge */
+  /* Semantic token bridge — consumed by Tailwind utilities + primitives.css */
   --color-primary: var(--accent-primary);
   --color-primary-content: var(--btn-primary-text);
   --color-secondary: var(--accent-secondary);
@@ -135,11 +136,6 @@
   --radius-selector: var(--radius-sm);
   --radius-field: var(--radius-md);
   --radius-box: var(--radius-lg);
-  --size-selector: 0.25rem;
-  --size-field: 0.25rem;
-  --border: 1px;
-  --depth: 0;
-  --noise: 0;
   --text-muted: #00cc33;
   --bg-surface-deep: #050505;
   --overlay-color: #000000;

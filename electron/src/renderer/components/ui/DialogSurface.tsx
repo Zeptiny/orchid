@@ -37,7 +37,7 @@ export interface DialogSurfaceProps extends Omit<HTMLAttributes<HTMLDivElement>,
    * Pass a full product class (e.g. shortcuts-help-dialog) to own layout/chrome.
    */
   panelClassName?: string;
-  /** Prefer DaisyUI modal-box chrome when using default classes. */
+  /** Prefer modal-box chrome when using default classes. */
   variant?: 'overlay' | 'modal';
 }
 

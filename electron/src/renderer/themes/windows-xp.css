@@ -80,7 +80,8 @@
   --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.15);
 
   /* Typography */
-  --font-family: 'Segoe UI', 'Tahoma', sans-serif;
+  --font-family: 'Segoe UI', 'Tahoma', ui-sans-serif, sans-serif;
+  --font-display: 'Segoe UI', 'Tahoma', ui-sans-serif, sans-serif;
   --font-mono: 'Consolas', 'Courier New', monospace;
   --font-size-xs: 0.75rem;
   --font-size-sm: 0.8125rem;
@@ -107,7 +108,7 @@
   --transition-normal: 150ms ease;
   --transition-slow: 200ms ease;
 
-  /* daisyUI semantic token bridge */
+  /* Semantic token bridge — consumed by Tailwind utilities + primitives.css */
   --color-primary: var(--accent-primary);
   --color-primary-content: var(--btn-primary-text);
   --color-secondary: var(--accent-secondary);
@@ -131,11 +132,6 @@
   --radius-selector: var(--radius-sm);
   --radius-field: var(--radius-md);
   --radius-box: var(--radius-lg);
-  --size-selector: 0.25rem;
-  --size-field: 0.25rem;
-  --border: 1px;
-  --depth: 0;
-  --noise: 0;
   --text-muted: #4a4a4a;
   --bg-surface-deep: #e0ddd0;
   --overlay-color: #000000;

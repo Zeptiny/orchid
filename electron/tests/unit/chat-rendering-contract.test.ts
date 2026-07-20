@@ -40,7 +40,7 @@ describe('chat rendering contract (U5)', () => {
       expect(src).toMatch(/buildLiveTailItems|liveGroupedItems|liveItems/);
     });
 
-    it('activity widgets use DaisyUI surrounding states (badge/loading/alert)', () => {
+    it('activity widgets use surrounding state primitives (badge/loading/alert)', () => {
       const tool = read('components/ToolCallBlock.tsx');
       const toolShell = read('components/ToolResults/ToolResultShell.tsx');
       const thought = read('components/MessageWidget.tsx');

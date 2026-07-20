@@ -1,10 +1,10 @@
 /**
  * Shared product composites (namespaced orchid-*).
  *
- * Prefer DaisyUI classes in JSX for recognizable controls. Use orchid-* only
- * for repeated product geometry/state. Compose with @apply + semantic tokens
- * when utilities express the contract; keep custom declarations for theme-var
- * surfaces that utilities cannot yet express cleanly.
+ * Recognizable controls come from the ui/ primitives (engine: primitives.css).
+ * Use orchid-* only for repeated product geometry/state. Compose with @apply +
+ * semantic tokens when utilities express the contract; keep custom
+ * declarations for theme-var surfaces that utilities cannot yet express cleanly.
  */
 
 @layer orchid {
@@ -208,8 +208,8 @@
     border-radius: 5px;
   }
 
-  /* DaisyUI badges — keep label off the border (scoped via :where so we do not
-     redefine reserved DaisyUI component selectors at the top level). */
+  /* Badges — keep label off the border (scoped via :where so the primitive
+     engine stays the sole owner of the reserved `.badge` root). */
   :where(.badge) {
     padding-inline: 0.5rem;
     padding-block: 0.2rem;
@@ -331,7 +331,9 @@
 
   .orchid-chat-empty-title {
     @apply mb-2 font-bold text-base-content;
-    font-size: 20px;
+    font-family: var(--font-display, inherit);
+    font-size: 22px;
+    letter-spacing: -0.015em;
   }
 
   .orchid-chat-empty-desc {
@@ -339,7 +341,7 @@
     max-width: 360px;
   }
 
-  /* Flat message rows — not DaisyUI chat/chat-bubble.
+  /* Flat message rows — not a chat-bubble component.
      Padding is enforced unlayered in exceptions.css + Tailwind on JSX. */
   .orchid-msg {
     /* text-md ≈ Tailwind text-base (1rem); no text-md token in Tailwind 4. */
@@ -348,6 +350,7 @@
     max-width: 100%;
     border-radius: 0.375rem;
     font-size: 1rem;
+    animation: orchid-rise 240ms ease-out;
   }
 
   .orchid-msg-user {
@@ -380,6 +383,7 @@
   .orchid-thought {
     @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
     border-radius: 5px;
+    animation: orchid-rise 220ms ease-out;
   }
 
   .orchid-thought-title {
@@ -415,6 +419,7 @@
   .orchid-tool-activity {
     @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
     border-radius: 5px;
+    animation: orchid-rise 220ms ease-out;
   }
 
   .orchid-tool-activity-title {
@@ -473,6 +478,7 @@
   .orchid-tool-block {
     @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
     border-radius: 5px;
+    animation: orchid-rise 220ms ease-out;
   }
 
   .orchid-tool-block-title {
@@ -831,9 +837,8 @@
     font-size: 7px !important;
   }
 
-  /* Soften DaisyUI radial track (default can read as bright white at 0%). */
+  /* Soften the radial track slightly inside the dense footer chrome. */
   .orchid-footer-context-radial.radial-progress {
-    --fallback-b3: color-mix(in srgb, var(--color-base-content) 14%, transparent);
     opacity: 0.92;
   }
 
@@ -981,7 +986,8 @@
   }
   .shortcuts-help-title-text h2 {
     @apply m-0 font-semibold leading-tight;
-    font-size: 14px;
+    font-family: var(--font-display, inherit);
+    font-size: 15px;
     letter-spacing: -0.01em;
     color: var(--text-primary);
   }
@@ -1182,11 +1188,14 @@
   .onb-step h1,
   .onb-step h2 {
     @apply m-0;
+    font-family: var(--font-display, inherit);
+    letter-spacing: -0.02em;
     color: var(--text-primary);
   }
 
   .onb-step h1 {
-    font-size: var(--font-size-xl);
+    font-size: calc(var(--font-size-xl) * 1.35);
+    font-weight: 700;
   }
 
   .onb-step h2 {
@@ -1237,6 +1246,7 @@
     background: transparent;
     color: inherit;
     font-family: inherit;
+    transition: background-color var(--transition-fast, 150ms ease);
   }
   .mock-collapse .mock-collapse-title:hover {
     filter: brightness(1.06);
@@ -1356,7 +1366,7 @@
     flex-shrink: 0;
     user-select: none;
   }
-  /* Legacy daisy kbd inside footer (streaming status may still use raw kbd) */
+  /* Legacy kbd inside footer (streaming status may still use raw kbd) */
   .orchid-chat-footer .kbd:not(.orchid-keycap) {
     min-width: 16px;
     padding: 1px 3px;
@@ -1471,8 +1481,10 @@
   }
   .config-main-header-text h1 {
     margin: 0;
-    font-size: 14px;
+    font-family: var(--font-display, inherit);
+    font-size: 15px;
     font-weight: 700;
+    letter-spacing: -0.01em;
     line-height: 1.3;
   }
   .config-main-header-text p {
@@ -1513,6 +1525,10 @@
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
+    transition:
+      background-color var(--transition-fast, 150ms ease),
+      color var(--transition-fast, 150ms ease),
+      border-color var(--transition-fast, 150ms ease);
   }
   .config-tab:hover {
     color: var(--text-primary);
@@ -1753,7 +1769,7 @@
     box-shadow: 0 12px 36px color-mix(in srgb, var(--overlay-color) 55%, transparent);
   }
 
-  /* DaisyUI dropdown-content can neutralize inherited surfaces — reassert chrome. */
+  /* dropdown-content can neutralize inherited surfaces — reassert chrome. */
   .dropdown-content.searchable-picker-menu,
   .dropdown-content.tier-picker-menu,
   .dropdown-content.orchid-model-picker-menu {

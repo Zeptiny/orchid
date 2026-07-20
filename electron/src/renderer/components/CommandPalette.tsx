@@ -1,7 +1,7 @@
 /**
  * CommandPalette — modal overlay with fuzzy search.
  *
- * Uses DaisyUI modal and list components.
+ * Uses the modal and list primitives.
  */
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {

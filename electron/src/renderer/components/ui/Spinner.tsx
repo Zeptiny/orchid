@@ -15,7 +15,7 @@ const SIZE_CLASS: Record<SpinnerSize, string> = {
   lg: 'loading-lg',
 };
 
-/** DaisyUI loading spinner with configurable size and animation variant. */
+/** Orchid loading spinner with configurable size and animation variant. */
 export function Spinner({
   size = 'sm',
   variant = 'spinner',

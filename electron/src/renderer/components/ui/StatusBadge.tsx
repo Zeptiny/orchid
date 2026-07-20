@@ -8,7 +8,7 @@ export interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
   tone?: StatusBadgeTone;
   size?: StatusBadgeSize;
   outline?: boolean;
-  /** Soft status dot before the label (DaisyUI status). */
+  /** Soft status dot before the label. */
   withDot?: boolean;
 }
 
@@ -38,7 +38,7 @@ const DOT_TONE_CLASS: Record<StatusBadgeTone, string> = {
   primary: 'status-primary',
 };
 
-/** Compact status label using DaisyUI badge (+ optional status dot). */
+/** Compact status label using the badge primitive (+ optional status dot). */
 export function StatusBadge({
   children,
   tone = 'neutral',

@@ -27,7 +27,7 @@
   background-color: var(--accent-primary-hover, var(--color-primary));
 }
 
-/* Status/loading indicators use the shared DaisyUI spinner primitive. */
+/* Status/loading indicators use the shared loading spinner primitive. */
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
@@ -35,6 +35,52 @@
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* ── Shared motion vocabulary (primitives.css + components.css) ───────────
+ * Entrance/feedback animations for the primitive engine. Keep durations
+ * short; everything is disabled under prefers-reduced-motion below.
+ */
+@keyframes orchid-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes orchid-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes orchid-pop {
+  from { opacity: 0; transform: translateY(-2px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes orchid-dots {
+  0%, 100% { background-size: 26% 26%, 14% 14%, 14% 14%; }
+  33% { background-size: 14% 14%, 26% 26%, 14% 14%; }
+  66% { background-size: 14% 14%, 14% 14%, 26% 26%; }
+}
+
+@keyframes orchid-bars {
+  0%, 100% { background-size: 18% 45%, 18% 90%, 18% 45%; }
+  50% { background-size: 18% 90%, 18% 45%, 18% 90%; }
+}
+
+@keyframes orchid-ball {
+  0%, 100% { transform: scale(0.75); opacity: 0.55; }
+  50% { transform: scale(1); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ── Shell grid column tracks (ChatView) ──────────────────────────────────
@@ -114,7 +160,7 @@
 
 /*
  * Chat message padding lives here (unlayered) so it cannot lose to @layer
- * components / DaisyUI preflight. JSX also carries Tailwind px/py utilities.
+ * components / the primitive engine. JSX also carries Tailwind px/py utilities.
  */
 .orchid-chat-scroll {
   padding: 20px 24px !important;
@@ -197,7 +243,7 @@
   padding: 10px 12px 12px !important;
 }
 
-/* DaisyUI radial-progress size/value CSS vars set from Footer at runtime. */
+/* Radial-progress size/value CSS vars set from Footer at runtime. */
 .orchid-footer-context-radial {
   --size: 1.4rem;
   --thickness: 2px;

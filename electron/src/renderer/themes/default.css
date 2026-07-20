@@ -80,8 +80,9 @@
   --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.4);
 
   /* Typography */
-  --font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-family: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: 'Bricolage Grotesque', 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --font-size-xs: 0.69rem;    /* ~9px */
   --font-size-sm: 0.77rem;    /* ~10px */
   --font-size-base: 0.8125rem;/* ~13px */
@@ -107,7 +108,7 @@
   --transition-normal: 200ms ease;
   --transition-slow: 300ms ease;
 
-  /* daisyUI semantic token bridge */
+  /* Semantic token bridge — consumed by Tailwind utilities + primitives.css */
   --color-primary: var(--accent-primary);
   --color-primary-content: var(--btn-primary-text);
   --color-secondary: var(--accent-secondary);
@@ -131,11 +132,6 @@
   --radius-selector: var(--radius-sm);
   --radius-field: var(--radius-md);
   --radius-box: var(--radius-lg);
-  --size-selector: 0.25rem;
-  --size-field: 0.25rem;
-  --border: 1px;
-  --depth: 0;
-  --noise: 0;
   --text-muted: #c5d0dc;
   --bg-surface-deep: #0c1016;
   --overlay-color: #000000;
