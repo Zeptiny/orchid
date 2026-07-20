@@ -267,6 +267,7 @@ describe('Agent Loading — Defaults', () => {
     expect(general!.allowed_tools).toContain('grep');
     expect(general!.allowed_tools).toContain('edit');
     expect(general!.allowed_tools).toContain('write');
+    expect(general!.allowed_tools).toContain('apply_patch');
     expect(general!.allowed_tools).toContain('delegate_to_subagent');
     expect(general!.allowed_skills).toEqual(['*']);
   });
@@ -341,6 +342,7 @@ describe('Agent Loading — Defaults', () => {
     expect(impl!.allowed_tools).toContain('read');
     expect(impl!.allowed_tools).toContain('edit');
     expect(impl!.allowed_tools).toContain('write');
+    expect(impl!.allowed_tools).toContain('apply_patch');
     expect(impl!.allowed_tools).toContain('execute_command');
     expect(impl!.allowed_skills).toContain('work');
     expect(impl!.allowed_skills).toContain('commit');

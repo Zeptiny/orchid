@@ -479,6 +479,23 @@ describe('missing *** End Patch', () => {
       "The last line of the patch must be '*** End Patch'",
     );
   });
+
+  it('should reject an End Patch marker before the final line', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Add File: first.txt',
+      '+first',
+      '*** End Patch',
+      '*** Add File: second.txt',
+      '+second',
+      '*** End Patch',
+    ].join('\n');
+
+    expect(() => parsePatch(patch)).toThrow(ParseError);
+    expect(() => parsePatch(patch)).toThrow(
+      "'*** End Patch' must only appear as the last line of the patch",
+    );
+  });
 });
 
 // ── Error: empty update hunk ───────────────────────────────────────────────
@@ -505,6 +522,18 @@ describe('empty update hunk', () => {
 
   it('should throw ParseError for @@ with no lines before End Patch', () => {
     const patch = '*** Begin Patch\n*** Update File: file.txt\n@@\n*** End Patch';
+    expect(() => parsePatch(patch)).toThrow(ParseError);
+    expect(() => parsePatch(patch)).toThrow('Update hunk does not contain any lines');
+  });
+
+  it('should throw ParseError for a dangling context hint', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: file.txt',
+      '@@ functionName',
+      '*** End Patch',
+    ].join('\n');
+
     expect(() => parsePatch(patch)).toThrow(ParseError);
     expect(() => parsePatch(patch)).toThrow('Update hunk does not contain any lines');
   });

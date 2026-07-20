@@ -227,6 +227,10 @@ function isPathContainedIn(resolved: string, cwd: string): boolean {
   return resolved === cwd || resolved.startsWith(cwd + path.sep);
 }
 
+function isAbsolutePatchPath(filePath: string): boolean {
+  return path.isAbsolute(filePath) || path.win32.isAbsolute(filePath);
+}
+
 /**
  * F3: If `filePath` is a symlink, write `content` to the symlink's resolved
  * target instead of replacing the symlink with a regular file. Returns true
@@ -278,7 +282,7 @@ export const applyPatchHandler: ToolHandler = async (input: unknown, ctx) => {
   for (const hunk of parsed.hunks) {
     const resolved = resolveToolPath(ctx.cwd, hunk.path);
 
-    if (hunk.path.startsWith('/') || !isPathContainedIn(resolved, ctx.cwd)) {
+    if (isAbsolutePatchPath(hunk.path) || !isPathContainedIn(resolved, ctx.cwd)) {
       files.push(fileError(hunk.path, hunk.type === 'add' ? 'create' : hunk.type === 'delete' ? 'delete' : 'update', 'path_traversal', `Path '${hunk.path}' escapes the working directory.`));
       failed++;
       continue;
@@ -358,7 +362,7 @@ export const applyPatchHandler: ToolHandler = async (input: unknown, ctx) => {
 
         if (hunk.movePath) {
           const moveResolved = resolveToolPath(ctx.cwd, hunk.movePath);
-          if (hunk.movePath.startsWith('/') || !isPathContainedIn(moveResolved, ctx.cwd)) {
+          if (isAbsolutePatchPath(hunk.movePath) || !isPathContainedIn(moveResolved, ctx.cwd)) {
             files.push(fileError(hunk.path, 'update', 'path_traversal', `Move path '${hunk.movePath}' escapes the working directory.`));
             failed++;
             continue;

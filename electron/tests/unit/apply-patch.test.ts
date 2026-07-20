@@ -251,6 +251,43 @@ describe('apply_patch handler', () => {
     }
   });
 
+  it('rejects a premature End Patch marker before creating any files', async () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Add File: first.txt',
+      '+first',
+      '*** End Patch',
+      '*** Add File: second.txt',
+      '+second',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('error');
+    if (result.status === 'error') {
+      expect(result.error.code).toBe('parse_error');
+    }
+    expect(fs.existsSync(path.join(tmpDir, 'first.txt'))).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, 'second.txt'))).toBe(false);
+  });
+
+  it('rejects Windows absolute paths with path_traversal error', async () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Add File: C:\\repo\\evil.conf',
+      '+malicious',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.failed).toBe(1);
+    expect(data.files[0].error?.code).toBe('path_traversal');
+  });
+
   it('move-path traversal leaves source unchanged', async () => {
     writeFile('source.ts', 'const x = 1;\n');
 
@@ -281,6 +318,28 @@ describe('apply_patch handler', () => {
       '*** Begin Patch',
       '*** Update File: source.ts',
       '*** Move to: /tmp/evil.ts',
+      '@@',
+      '-const x = 1;',
+      '+const x = 2;',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.failed).toBe(1);
+    expect(data.files[0].error?.code).toBe('path_traversal');
+    expect(readFile('source.ts')).toBe('const x = 1;\n');
+  });
+
+  it('Windows absolute move path leaves source unchanged', async () => {
+    writeFile('source.ts', 'const x = 1;\n');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: source.ts',
+      '*** Move to: C:\\repo\\evil.ts',
       '@@',
       '-const x = 1;',
       '+const x = 2;',

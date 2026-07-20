@@ -131,7 +131,7 @@ export function parsePatch(input: string): ParseResult {
       );
     }
     const lastChunk = hunk.chunks[hunk.chunks.length - 1];
-    if (lastChunk.changeContext === null && lastChunk.oldLines.length === 0 && lastChunk.newLines.length === 0) {
+    if (lastChunk.oldLines.length === 0 && lastChunk.newLines.length === 0) {
       throw new ParseError('Update hunk does not contain any lines', lineNum);
     }
     updateState = null;
@@ -144,8 +144,10 @@ export function parsePatch(input: string): ParseResult {
     const headerLine = mode === 'update' ? line.replace(/\s+$/, '') : trimmed;
 
     if (headerLine === END_PATCH_MARKER) {
-      finalizeUpdateHunk(lineNum);
-      break;
+      throw new ParseError(
+        `'${END_PATCH_MARKER}' must only appear as the last line of the patch`,
+        lineNum,
+      );
     }
 
     if (headerLine.startsWith(ADD_FILE_MARKER)) {
