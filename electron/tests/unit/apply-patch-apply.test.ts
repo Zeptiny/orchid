@@ -3,18 +3,88 @@ import {
   applyChunksToContent,
   ApplyPatchApplyError,
 } from '../../src/main/tools/filesystem/apply-patch-apply';
-import type { UpdateFileChunk } from '../../src/main/tools/filesystem/apply-patch-parser';
+import type { UpdateFileChunk, HunkLineOp } from '../../src/main/tools/filesystem/apply-patch-parser';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+/**
+ * Reconstruct ordered lineOps from parallel oldLines/newLines arrays.
+ * Used by the chunk() helper so tests can stay ergonomic. O(n²) is fine
+ * for the small arrays in unit tests.
+ */
+function deriveLineOps(oldLines: string[], newLines: string[]): HunkLineOp[] {
+  const ops: HunkLineOp[] = [];
+  let o = 0;
+  let n = 0;
+  while (o < oldLines.length && n < newLines.length) {
+    if (oldLines[o] === newLines[n]) {
+      ops.push({ kind: 'context', content: oldLines[o] });
+      o++;
+      n++;
+    } else {
+      // Find the next alignment point — a line that appears in both arrays
+      // at or after the current positions. Lines before it are removes (old)
+      // or adds (new).
+      let nextO = -1;
+      let nextN = -1;
+      for (let i = o + 1; i < oldLines.length; i++) {
+        for (let j = n; j < newLines.length; j++) {
+          if (oldLines[i] === newLines[j]) {
+            nextO = i;
+            nextN = j;
+            break;
+          }
+        }
+        if (nextO !== -1) break;
+      }
+      if (nextO === -1) {
+        while (o < oldLines.length) {
+          ops.push({ kind: 'remove', content: oldLines[o] });
+          o++;
+        }
+        while (n < newLines.length) {
+          ops.push({ kind: 'add', content: newLines[n] });
+          n++;
+        }
+      } else {
+        while (o < nextO) {
+          ops.push({ kind: 'remove', content: oldLines[o] });
+          o++;
+        }
+        while (n < nextN) {
+          ops.push({ kind: 'add', content: newLines[n] });
+          n++;
+        }
+      }
+    }
+  }
+  while (o < oldLines.length) {
+    ops.push({ kind: 'remove', content: oldLines[o] });
+    o++;
+  }
+  while (n < newLines.length) {
+    ops.push({ kind: 'add', content: newLines[n] });
+    n++;
+  }
+  return ops;
+}
+
 function chunk(overrides: Partial<UpdateFileChunk> = {}): UpdateFileChunk {
-  return {
+  const base: UpdateFileChunk = {
     changeContext: null,
+    lineOps: [],
     oldLines: [],
     newLines: [],
     isEndOfFile: false,
     ...overrides,
   };
+  // Test convenience: if the test sets oldLines/newLines directly (bypassing
+  // the parser), derive lineOps so the apply engine has the ordered ops it
+  // needs to preserve context-line whitespace.
+  if (base.lineOps.length === 0 && (base.oldLines.length > 0 || base.newLines.length > 0)) {
+    base.lineOps = deriveLineOps(base.oldLines, base.newLines);
+  }
+  return base;
 }
 
 // ── Happy path ─────────────────────────────────────────────────────────────
@@ -157,13 +227,107 @@ describe('applyChunksToContent', () => {
     );
   });
 
-  it('adds trailing newline to content without one', () => {
+  it('preserves absence of trailing newline (F7)', () => {
     const content = 'no\ntrailing\nnewline';
     const chunks = [
       chunk({ oldLines: ['trailing'], newLines: ['TRAILING'] }),
     ];
     expect(applyChunksToContent(content, chunks, 'test.txt')).toBe(
+      'no\nTRAILING\nnewline',
+    );
+  });
+
+  it('preserves presence of trailing newline (F7)', () => {
+    const content = 'no\ntrailing\nnewline\n';
+    const chunks = [
+      chunk({ oldLines: ['trailing'], newLines: ['TRAILING'] }),
+    ];
+    expect(applyChunksToContent(content, chunks, 'test.txt')).toBe(
       'no\nTRAILING\nnewline\n',
+    );
+  });
+
+  it('preserves CRLF line endings across the whole file (F4)', () => {
+    const content = 'line1\r\nline2\r\nline3\r\n';
+    const chunks = [
+      chunk({ oldLines: ['line2'], newLines: ['LINE2'] }),
+    ];
+    expect(applyChunksToContent(content, chunks, 'test.txt')).toBe(
+      'line1\r\nLINE2\r\nline3\r\n',
+    );
+  });
+
+  it('preserves file whitespace on context lines (F1)', () => {
+    // File has trailing spaces on a context line; the patch's context line
+    // lacks them. The file's version must be preserved in the output.
+    // lineOps must be set explicitly — deriveLineOps can't infer a context
+    // line when the patch's version differs from the file's in whitespace.
+    const content = 'hello   \nold\nworld\n';
+    const chunks = [
+      {
+        changeContext: null,
+        isEndOfFile: false,
+        lineOps: [
+          { kind: 'context', content: 'hello' },
+          { kind: 'remove', content: 'old' },
+          { kind: 'add', content: 'new' },
+          { kind: 'context', content: 'world' },
+        ],
+        oldLines: ['hello', 'old', 'world'],
+        newLines: ['hello', 'new', 'world'],
+      } as UpdateFileChunk,
+    ];
+    expect(applyChunksToContent(content, chunks, 'test.txt')).toBe(
+      'hello   \nnew\nworld\n',
+    );
+  });
+
+  it('fails when *** End of File anchor does not match EOF (F2)', () => {
+    const content = 'aaa\nbbb\nccc\nddd\neee\n';
+    const chunks = [
+      chunk({ oldLines: ['bbb', 'ccc'], newLines: ['BBB', 'CCC'], isEndOfFile: true }),
+    ];
+    expect(() => applyChunksToContent(content, chunks, 'test.txt')).toThrow(
+      ApplyPatchApplyError,
+    );
+    expect(() => applyChunksToContent(content, chunks, 'test.txt')).toThrow(
+      'End of File anchor failed',
+    );
+  });
+
+  it('succeeds when *** End of File anchor matches EOF (F2)', () => {
+    const content = 'aaa\nbbb\nccc\nddd\neee\n';
+    const chunks = [
+      chunk({ oldLines: ['ddd', 'eee'], newLines: ['DDD', 'EEE'], isEndOfFile: true }),
+    ];
+    expect(applyChunksToContent(content, chunks, 'test.txt')).toBe(
+      'aaa\nbbb\nccc\nDDD\nEEE\n',
+    );
+  });
+
+  it('errors on ambiguous match without @@ context header (F6)', () => {
+    const content = 'foo\nbar\nfoo\nbar\n';
+    const chunks = [
+      chunk({ oldLines: ['foo', 'bar'], newLines: ['FOO', 'BAR'] }),
+    ];
+    expect(() => applyChunksToContent(content, chunks, 'test.txt')).toThrow(
+      ApplyPatchApplyError,
+    );
+    expect(() => applyChunksToContent(content, chunks, 'test.txt')).toThrow(
+      'matches multiple locations',
+    );
+  });
+
+  it('does not error on ambiguous match when @@ context header is present (F6)', () => {
+    // With a @@ header, the context hint narrows the search position past
+    // the first 'foo', so the pattern matches only the second 'foo\nbar'
+    // unambiguously. The user attempted disambiguation; we honor the match.
+    const content = 'foo\nbar\nfoo\nbar\n';
+    const chunks = [
+      chunk({ changeContext: 'foo', oldLines: ['foo', 'bar'], newLines: ['FOO', 'BAR'] }),
+    ];
+    expect(applyChunksToContent(content, chunks, 'test.txt')).toBe(
+      'foo\nbar\nFOO\nBAR\n',
     );
   });
 

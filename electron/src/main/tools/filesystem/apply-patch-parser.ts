@@ -19,9 +19,23 @@ export const EMPTY_CHANGE_CONTEXT_MARKER = '@@';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
+/**
+ * Ordered hunk line operation. Context lines are matched fuzzily against the
+ * file but the file's version is preserved in the output; add/remove lines
+ * alter content.
+ */
+export type HunkLineOp =
+  | { kind: 'context'; content: string }
+  | { kind: 'add'; content: string }
+  | { kind: 'remove'; content: string };
+
 export interface UpdateFileChunk {
   changeContext: string | null;
+  /** Ordered list of context/add/remove operations. Source of truth for output. */
+  lineOps: HunkLineOp[];
+  /** Derived: context + remove contents, in order. Used for matching. */
   oldLines: string[];
+  /** Derived: context + add contents, in order. Used for tests/projection. */
   newLines: string[];
   isEndOfFile: boolean;
 }
@@ -78,7 +92,7 @@ function validateBoundaries(lines: string[]): void {
 // ── Chunk helpers ──────────────────────────────────────────────────────────
 
 function newChunk(changeContext: string | null): UpdateFileChunk {
-  return { changeContext, oldLines: [], newLines: [], isEndOfFile: false };
+  return { changeContext, lineOps: [], oldLines: [], newLines: [], isEndOfFile: false };
 }
 
 function ensureChunk(chunks: UpdateFileChunk[]): UpdateFileChunk {
@@ -251,6 +265,7 @@ export function parsePatch(input: string): ParseResult {
 
       if (line === '') {
         const chunk = ensureChunk(hunk.chunks);
+        chunk.lineOps.push({ kind: 'context', content: '' });
         chunk.oldLines.push('');
         chunk.newLines.push('');
         continue;
@@ -259,6 +274,7 @@ export function parsePatch(input: string): ParseResult {
       if (line.startsWith(' ')) {
         const chunk = ensureChunk(hunk.chunks);
         const content = line.slice(1);
+        chunk.lineOps.push({ kind: 'context', content });
         chunk.oldLines.push(content);
         chunk.newLines.push(content);
         continue;
@@ -266,13 +282,17 @@ export function parsePatch(input: string): ParseResult {
 
       if (line.startsWith('+')) {
         const chunk = ensureChunk(hunk.chunks);
-        chunk.newLines.push(line.slice(1));
+        const content = line.slice(1);
+        chunk.lineOps.push({ kind: 'add', content });
+        chunk.newLines.push(content);
         continue;
       }
 
       if (line.startsWith('-')) {
         const chunk = ensureChunk(hunk.chunks);
-        chunk.oldLines.push(line.slice(1));
+        const content = line.slice(1);
+        chunk.lineOps.push({ kind: 'remove', content });
+        chunk.oldLines.push(content);
         continue;
       }
 
@@ -280,14 +300,15 @@ export function parsePatch(input: string): ParseResult {
         lastChunk &&
         (lastChunk.oldLines.length > 0 || lastChunk.newLines.length > 0)
       ) {
+        const prefix = line.length > 0 ? line[0] : '';
         throw new ParseError(
-          `Expected update hunk to start with a @@ context marker, got: '${line}'`,
+          `Invalid hunk line prefix '${prefix}' in '${line}'. Lines must start with ' ' (context), '+' (add), or '-' (remove). Use @@ to start a new hunk.`,
           lineNum,
         );
       }
 
       throw new ParseError(
-        `Unexpected line found in update hunk: '${line}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)`,
+        `Invalid hunk line prefix '${line.length > 0 ? line[0] : ''}' in '${line}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)`,
         lineNum,
       );
     }

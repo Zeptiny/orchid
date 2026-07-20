@@ -558,7 +558,7 @@ describe('invalid line in update hunk', () => {
     ].join('\n');
     expect(() => parsePatch(patch)).toThrow(ParseError);
     expect(() => parsePatch(patch)).toThrow(
-      "Expected update hunk to start with a @@ context marker, got: 'bad'",
+      "Invalid hunk line prefix 'b' in 'bad'",
     );
   });
 

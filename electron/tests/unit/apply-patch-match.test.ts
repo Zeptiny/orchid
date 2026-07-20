@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   seekSequence,
+  seekSequenceWithMeta,
   findContextHint,
   normalizeUnicode,
 } from '../../src/main/tools/filesystem/apply-patch-match';
@@ -48,6 +49,27 @@ describe('seekSequence', () => {
     expect(seekSequence(lines, ['foo', 'bar'], 0, true)).toBe(2);
   });
 
+  it('returns null when eof anchor misses (no fallback)', () => {
+    const lines = ['target', 'a', 'b', 'c'];
+    expect(seekSequence(lines, ['target'], 0, true)).toBeNull();
+  });
+
+  it('reports ambiguity when multiple matches exist at winning tier', () => {
+    const lines = ['foo', 'bar', 'foo', 'bar'];
+    const result = seekSequenceWithMeta(lines, ['foo', 'bar'], 0, false);
+    expect(result).not.toBeNull();
+    expect(result!.index).toBe(0);
+    expect(result!.ambiguous).toBe(true);
+  });
+
+  it('reports no ambiguity when exactly one match at winning tier', () => {
+    const lines = ['a', 'b', 'c', 'd'];
+    const result = seekSequenceWithMeta(lines, ['b', 'c'], 0, false);
+    expect(result).not.toBeNull();
+    expect(result!.index).toBe(1);
+    expect(result!.ambiguous).toBe(false);
+  });
+
   it('matches a multi-line pattern correctly', () => {
     const lines = ['a', 'b', 'c', 'd', 'e'];
     expect(seekSequence(lines, ['b', 'c', 'd'], 0, false)).toBe(1);
@@ -74,11 +96,6 @@ describe('seekSequence', () => {
   it('skips earlier occurrences when start offset is set', () => {
     const lines = ['x', 'x', 'x'];
     expect(seekSequence(lines, ['x'], 1, false)).toBe(1);
-  });
-
-  it('falls back to searching from start when eof anchor misses', () => {
-    const lines = ['target', 'a', 'b', 'c'];
-    expect(seekSequence(lines, ['target'], 0, true)).toBe(0);
   });
 });
 

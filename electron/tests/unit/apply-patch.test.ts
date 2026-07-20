@@ -314,6 +314,210 @@ describe('apply_patch handler', () => {
     expect(data.files[0].error?.code).toBe('already_exists');
     expect(readFile('target.ts')).toBe('original content\n');
   });
+
+  // ── F-tests from the comprehensive test report ─────────────────────────
+
+  it('F3: updating a symlink patches the target, preserves the symlink', async () => {
+    // Create a real target file and a symlink pointing to it.
+    const targetPath = path.join(tmpDir, 'real.txt');
+    const linkPath = path.join(tmpDir, 'link.txt');
+    fs.writeFileSync(targetPath, 'line1\nold\nline3\n', 'utf-8');
+    fs.symlinkSync(targetPath, linkPath);
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: link.txt',
+      '@@',
+      '-old',
+      '+new',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.modified).toBe(1);
+    // Symlink is preserved.
+    expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    // Target file has the patched content.
+    expect(fs.readFileSync(targetPath, 'utf-8')).toBe('line1\nnew\nline3\n');
+  });
+
+  it('F5: Move to existing destination fails with move_target_exists', async () => {
+    writeFile('source.ts', 'const x = 1;\n');
+    writeFile('dest.ts', 'existing content\n');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: source.ts',
+      '*** Move to: dest.ts',
+      '@@',
+      '-const x = 1;',
+      '+const x = 2;',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.failed).toBe(1);
+    expect(data.files[0].error?.code).toBe('move_target_exists');
+    // Both files are unchanged.
+    expect(readFile('source.ts')).toBe('const x = 1;\n');
+    expect(readFile('dest.ts')).toBe('existing content\n');
+  });
+
+  it('F9: no-op hunk (context only) does not increment modified', async () => {
+    writeFile('ctx.txt', 'aaa\nbbb\nccc\n');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: ctx.txt',
+      '@@',
+      ' aaa',
+      ' bbb',
+      ' ccc',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.modified).toBe(0);
+    expect(data.failed).toBe(0);
+    expect(data.files[0].status).toBe('complete');
+    // File content is unchanged.
+    expect(readFile('ctx.txt')).toBe('aaa\nbbb\nccc\n');
+  });
+
+  it('F10: Add File with trailing slash fails with invalid_path', async () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Add File: dir/',
+      '+content',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.failed).toBe(1);
+    expect(data.files[0].error?.code).toBe('invalid_path');
+  });
+
+  it('F2: *** End of File anchor enforced — fails when match is not at EOF', async () => {
+    writeFile('f.txt', 'aaa\nbbb\nccc\nddd\neee\n');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: f.txt',
+      '@@',
+      '-bbb',
+      '-ccc',
+      '+BBB',
+      '+CCC',
+      '*** End of File',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.failed).toBe(1);
+    expect(data.files[0].error?.code).toBe('match_failed');
+    expect(data.files[0].error?.message).toContain('End of File anchor failed');
+  });
+
+  it('F6: ambiguous hunk without @@ fails with match_failed', async () => {
+    writeFile('amb.txt', 'foo\nbar\nfoo\nbar\n');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: amb.txt',
+      '-foo',
+      '-bar',
+      '+FOO',
+      '+BAR',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.failed).toBe(1);
+    expect(data.files[0].error?.code).toBe('match_failed');
+    expect(data.files[0].error?.message).toContain('matches multiple locations');
+  });
+
+  it('F4: CRLF line endings preserved across the whole file', async () => {
+    writeFile('crlf.txt', 'line1\r\nline2\r\nline3\r\n');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: crlf.txt',
+      '@@',
+      '-line2',
+      '+LINE2',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.modified).toBe(1);
+    expect(readFile('crlf.txt')).toBe('line1\r\nLINE2\r\nline3\r\n');
+  });
+
+  it('F7: file without trailing newline stays without one', async () => {
+    writeFile('nonl.txt', 'first\nsecond\nthird');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: nonl.txt',
+      '@@',
+      '-second',
+      '+SECOND',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.modified).toBe(1);
+    expect(readFile('nonl.txt')).toBe('first\nSECOND\nthird');
+  });
+
+  it('F1: context line whitespace preserved from file, not patch', async () => {
+    // File has trailing spaces on a context line; the patch's context line
+    // lacks them. The file's version must be preserved.
+    writeFile('ws.txt', 'hello   \nold\nworld\n');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: ws.txt',
+      ' hello',
+      '-old',
+      '+new',
+      ' world',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.modified).toBe(1);
+    // The trailing spaces on 'hello   ' are preserved (file's version).
+    expect(readFile('ws.txt')).toBe('hello   \nnew\nworld\n');
+  });
 });
 
 describe('apply_patch agentProjector', () => {
@@ -528,5 +732,60 @@ describe('apply_patch agentProjector', () => {
     expect(result.content).toContain('function greet() {\n  return "hi";\n}');
     expect(result.content).toContain('<new_string>');
     expect(result.content).toContain('function greet() {\n  return "hello";\n}');
+  });
+
+  it('F11: counts unique file paths in summary (not operations)', () => {
+    // Two operations on the same file — the summary should say "1 file", not "2 files".
+    const data: ApplyPatchResultData = {
+      files: [
+        {
+          path: 'same.ts',
+          operation: 'update',
+          status: 'complete',
+          fileChange: fileChange({
+            path: 'same.ts',
+            operation: 'update',
+            addedLines: 1,
+            removedLines: 1,
+            hunks: [{
+              oldStart: 1, oldLines: 1, newStart: 1, newLines: 1,
+              lines: [
+                { kind: 'remove', content: 'old', oldLineNumber: 1 },
+                { kind: 'add', content: 'new1', newLineNumber: 1 },
+              ],
+            }],
+            resultingContent: '',
+          }),
+        },
+        {
+          path: 'same.ts',
+          operation: 'update',
+          status: 'complete',
+          fileChange: fileChange({
+            path: 'same.ts',
+            operation: 'update',
+            addedLines: 1,
+            removedLines: 1,
+            hunks: [{
+              oldStart: 5, oldLines: 1, newStart: 5, newLines: 1,
+              lines: [
+                { kind: 'remove', content: 'x', oldLineNumber: 5 },
+                { kind: 'add', content: 'y', newLineNumber: 5 },
+              ],
+            }],
+            resultingContent: '',
+          }),
+        },
+      ],
+      added: 0,
+      modified: 2,
+      deleted: 0,
+      failed: 0,
+    };
+
+    const result = projector(canonical(data));
+
+    expect(result.content).toContain('1 file:');
+    expect(result.content).not.toContain('2 files');
   });
 });

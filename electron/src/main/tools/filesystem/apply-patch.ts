@@ -40,7 +40,10 @@ export const applyPatchInputSchema = z.object({
     'or *** Delete File: <path> (remove). ' +
     'Within an update, each hunk starts with @@ (optionally followed by a class/function name for disambiguation). ' +
     'Hunk lines use " " (context), "-" (remove), "+" (add) prefixes. ' +
-    'File paths must be relative, NEVER absolute.',
+    'File paths must be relative, NEVER absolute. ' +
+    'A hunk with only "+" lines and no context appends to the end of the file. ' +
+    '*** End of File after a hunk anchors the match to the file\'s last line — the patch fails if the pattern is not at EOF. ' +
+    'Control characters (null, bell, escape) cannot be embedded in patch content.',
   ),
 });
 
@@ -57,7 +60,10 @@ const applyPatchAgentProjector: AgentProjector = (canonical, toolName = 'apply_p
   if (modified > 0) summaryParts.push(`${modified} modified`);
   if (deleted > 0) summaryParts.push(`${deleted} deleted`);
   if (failed > 0) summaryParts.push(`${failed} failed`);
-  const summary = `${files.length} file${files.length === 1 ? '' : 's'}: ${summaryParts.join(', ')}`;
+  // F11: count unique file paths so multi-operation patches on the same file
+  // don't inflate the file count in the summary.
+  const uniquePaths = new Set(files.map((f) => f.path));
+  const summary = `${uniquePaths.size} file${uniquePaths.size === 1 ? '' : 's'}: ${summaryParts.join(', ')}`;
 
   const fileSections = files.map((file) => {
     const attrs: Record<string, string | number | undefined> = {
@@ -155,7 +161,14 @@ export const applyPatchDefinition: ToolDefinition = {
     '  [3 lines pre-context]\n' +
     '  - [old_code]\n' +
     '  + [new_code]\n\n' +
-    'Use *** End of File after the last hunk line to anchor changes to the end of the file.\n\n' +
+    'Use *** End of File after the last hunk line to anchor changes to the end of the file. ' +
+    'The patch fails if the anchored pattern is not at EOF — use this to disambiguate hunks that could match near the end.\n\n' +
+    'A hunk with only "+" lines and no context appends to the end of the file.\n\n' +
+    'If a hunk could match multiple locations, you MUST use @@ with the enclosing class/function name. ' +
+    'Without it, the patch fails with an ambiguity error.\n\n' +
+    'Limitations:\n' +
+    '- Control characters (null, bell, escape) cannot be embedded in patch content.\n' +
+    '- Do NOT patch symlinks directly — the tool follows symlinks and patches the target.\n\n' +
     'Grammar:\n' +
     'Patch := Begin { FileOp } End\n' +
     'Begin := "*** Begin Patch" NEWLINE\n' +
@@ -214,6 +227,28 @@ function isPathContainedIn(resolved: string, cwd: string): boolean {
   return resolved === cwd || resolved.startsWith(cwd + path.sep);
 }
 
+/**
+ * F3: If `filePath` is a symlink, write `content` to the symlink's resolved
+ * target instead of replacing the symlink with a regular file. Returns true
+ * if the write was performed through the symlink, false if the caller should
+ * perform a normal atomic write (file doesn't exist or isn't a symlink).
+ *
+ * For move destinations that don't yet exist, this is a no-op (returns false).
+ */
+function symlinkSafeWrite(filePath: string, content: string): boolean {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink()) {
+      const target = fs.realpathSync(filePath);
+      atomicWrite(target, content);
+      return true;
+    }
+  } catch {
+    // File doesn't exist (move destination) or lstat failed — not a symlink.
+  }
+  return false;
+}
+
 // ── Handler ────────────────────────────────────────────────────────────────
 
 export const applyPatchHandler: ToolHandler = async (input: unknown, ctx) => {
@@ -245,6 +280,15 @@ export const applyPatchHandler: ToolHandler = async (input: unknown, ctx) => {
 
     if (hunk.path.startsWith('/') || !isPathContainedIn(resolved, ctx.cwd)) {
       files.push(fileError(hunk.path, hunk.type === 'add' ? 'create' : hunk.type === 'delete' ? 'delete' : 'update', 'path_traversal', `Path '${hunk.path}' escapes the working directory.`));
+      failed++;
+      continue;
+    }
+
+    // F10: reject trailing slash on Add File paths — a trailing slash implies
+    // a directory, not a file.
+    if (hunk.type === 'add' && hunk.path.endsWith('/')) {
+      files.push(fileError(hunk.path, 'create', 'invalid_path',
+        `Add File path '${hunk.path}' must not end with '/'. To create a directory, add a file inside it.`));
       failed++;
       continue;
     }
@@ -319,16 +363,42 @@ export const applyPatchHandler: ToolHandler = async (input: unknown, ctx) => {
             failed++;
             continue;
           }
+          // F5: refuse to overwrite an existing file at the move destination.
+          if (fs.existsSync(moveResolved)) {
+            files.push(fileError(hunk.path, 'update', 'move_target_exists',
+              `Move target '${hunk.movePath}' already exists. Delete it first or choose a different target.`));
+            failed++;
+            continue;
+          }
           fs.mkdirSync(path.dirname(moveResolved), { recursive: true });
-          atomicWrite(moveResolved, newContent);
-          fs.chmodSync(moveResolved, 0o644);
+          // F3: if the source is a symlink, write the patched content to the
+          // symlink's target (preserving the symlink itself) rather than
+          // replacing the symlink with a regular file at the new path.
+          const moveSourceIsSymlink = symlinkSafeWrite(moveResolved, newContent);
+          if (!moveSourceIsSymlink) {
+            atomicWrite(moveResolved, newContent);
+            fs.chmodSync(moveResolved, 0o644);
+          }
           fs.unlinkSync(resolved);
           files.push({ path: hunk.path, operation: 'update', status: 'complete', fileChange: validated, movePath: hunk.movePath });
+          modified++;
         } else {
-          atomicWrite(resolved, newContent);
-          files.push({ path: hunk.path, operation: 'update', status: 'complete', fileChange: validated });
+          // F3: if the target is a symlink, write to the resolved target
+          // path (preserving the symlink) rather than replacing the symlink
+          // with a regular file.
+          const wroteThroughSymlink = symlinkSafeWrite(resolved, newContent);
+          if (!wroteThroughSymlink) {
+            atomicWrite(resolved, newContent);
+          }
+          // F9: if the new content is identical to the original (no-op hunk),
+          // report success but do not increment the modified counter.
+          if (newContent === content) {
+            files.push({ path: hunk.path, operation: 'update', status: 'complete', fileChange: validated });
+          } else {
+            files.push({ path: hunk.path, operation: 'update', status: 'complete', fileChange: validated });
+            modified++;
+          }
         }
-        modified++;
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

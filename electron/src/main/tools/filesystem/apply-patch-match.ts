@@ -65,6 +65,12 @@ function matchNormalized(lines: string[], pattern: string[], i: number): boolean
 
 // ── Core algorithm ─────────────────────────────────────────────────────────
 
+export interface SeekResult {
+  index: number;
+  /** True if the winning tier matched more than one position. */
+  ambiguous: boolean;
+}
+
 /**
  * Attempt to find a sequence of pattern lines within source lines, starting at or after `start`.
  * Returns the starting index of the match, or null if not found.
@@ -74,6 +80,10 @@ function matchNormalized(lines: string[], pattern: string[], i: number): boolean
  * 2. Trailing whitespace ignored (trimEnd per line)
  * 3. Both leading and trailing whitespace ignored (trim per line)
  * 4. Unicode punctuation normalization + trim
+ *
+ * When `eof` is true, the search is anchored to the end of the file: only the
+ * final position where the pattern could fit is considered. There is NO
+ * fallback to earlier positions — a non-EOF match returns null.
  */
 export function seekSequence(
   lines: string[],
@@ -81,28 +91,47 @@ export function seekSequence(
   start: number,
   eof: boolean,
 ): number | null {
-  if (pattern.length === 0) return start;
+  const result = seekSequenceWithMeta(lines, pattern, start, eof);
+  return result ? result.index : null;
+}
+
+/**
+ * Same as seekSequence, but also reports whether the winning tier matched
+ * multiple positions (ambiguous). The first match is returned.
+ */
+export function seekSequenceWithMeta(
+  lines: string[],
+  pattern: string[],
+  start: number,
+  eof: boolean,
+): SeekResult | null {
+  if (pattern.length === 0) return { index: start, ambiguous: false };
   if (pattern.length > lines.length) return null;
 
+  // When eof is true, only consider the single position where the pattern
+  // would end at the file's last line. No fallback to earlier positions.
   const searchStart = eof && lines.length >= pattern.length
     ? lines.length - pattern.length
     : start;
 
   const lastStart = lines.length - pattern.length;
+  if (searchStart > lastStart) return null;
 
   const tiers = [matchExact, matchTrimEnd, matchTrim, matchNormalized];
 
   for (const tier of tiers) {
+    let firstMatch: number | null = null;
     for (let i = searchStart; i <= lastStart; i++) {
-      if (tier(lines, pattern, i)) return i;
-    }
-  }
-
-  if (eof && searchStart !== start) {
-    for (const tier of tiers) {
-      for (let i = start; i <= lastStart; i++) {
-        if (tier(lines, pattern, i)) return i;
+      if (tier(lines, pattern, i)) {
+        if (firstMatch === null) {
+          firstMatch = i;
+        } else {
+          return { index: firstMatch, ambiguous: true };
+        }
       }
+    }
+    if (firstMatch !== null) {
+      return { index: firstMatch, ambiguous: false };
     }
   }
 
