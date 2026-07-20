@@ -12,15 +12,15 @@
  * - Filters tool registry by agent's `allowed_tools`
  * - Includes MCP tools from MCPManager
  * - Composes middleware from U8 (retry, throttle, provider-quirks)
- * - Token usage tracking across all steps
+ * - Token usage updates after every completed model step
  *
  * AI SDK stream event flow (fullStream):
- * - `step-start` → new step begins
+ * - `start-step` → new step begins
  * - `reasoning` → model is thinking (yields as "thinking")
  * - `text-delta` → model is producing text (yields as "content")
  * - `tool-input-available` / `tool-call` → model wants to call a tool
  * - `tool-output-available` / `tool-result` → tool finished
- * - `step-finish` → step completed (tool executed, or text finished)
+ * - `finish-step` → step completed (tool executed, or text finished)
  * - `finish` → entire stream completed
  * - `error` → error occurred
  *
@@ -55,7 +55,7 @@ import {
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
 import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
-import { buildContextSnapshot } from './context-snapshot';
+import { createContextSnapshotBuilder } from './context-snapshot';
 import { importESM } from '../utils/esm-import';
 import { buildSkillTool } from '../tools/skill/skill';
 import { getSkillsRegistry } from '../tools';
@@ -152,10 +152,31 @@ export interface StreamChatParams {
   accounting?: ProviderAttemptAccountingContext;
 }
 
-interface LatestContextUsage {
-  messages: readonly ModelMessage[];
-  inputTokens: number | undefined;
-  outputTokens: number | undefined;
+interface ProviderStepUsage {
+  inputTokens?: number;
+  inputTokenDetails?: { cacheReadTokens?: number };
+  outputTokens?: number;
+  totalTokens?: number;
+}
+
+function buildStepUsage(
+  usage: ProviderStepUsage,
+  messages: readonly ModelMessage[],
+  buildContextSnapshot: ReturnType<typeof createContextSnapshotBuilder>,
+): Usage {
+  const inputTokens = usage.inputTokens ?? 0;
+  const outputTokens = usage.outputTokens ?? 0;
+  return {
+    prompt_tokens: inputTokens,
+    completion_tokens: outputTokens,
+    total_tokens: usage.totalTokens ?? inputTokens + outputTokens,
+    cached_tokens: usage.inputTokenDetails?.cacheReadTokens ?? 0,
+    context: buildContextSnapshot({
+      messages,
+      inputTokens,
+      outputTokens,
+    }),
+  };
 }
 
 /** Pending tool call captured from onStepFinish (textStream fallback / safety net). */
@@ -436,6 +457,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       : getSkillsRegistry(),
     allowedSkills: agent.allowed_skills,
   });
+  const buildUsageContext = createContextSnapshotBuilder(fullSystemPrompt, tools);
 
   // ── Compose middleware ──
   const middleware = createMiddlewareStack({
@@ -459,15 +481,6 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   // Min 1ms so a zero/negative config cannot arm a no-op timer.
   const idleTimeoutMs = Math.max(1, config.llm_stream_idle_timeout * 1000);
   const maxIdleAttempts = Math.max(1, (config.llm_stream_retries ?? 0) + 1);
-
-  // ── Track usage across steps (shared across idle retries) ──
-  let totalUsage: Usage = {
-    prompt_tokens: 0,
-    completion_tokens: 0,
-    total_tokens: 0,
-    cached_tokens: 0,
-  };
-  let latestContextUsage: LatestContextUsage | null = null;
 
   for (let idleAttempt = 0; idleAttempt < maxIdleAttempts; idleAttempt++) {
     const idleController = new AbortController();
@@ -513,30 +526,48 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     const pendingToolResults: PendingToolResult[] = [];
     const seenToolCallIds = new Set<string>();
     const seenToolResultIds = new Set<string>();
+    const pendingUsageEvents: Usage[] = [];
+    let currentStepMessages: readonly ModelMessage[] = coreMessages;
+    let usedFullStream = false;
+    let pendingStepEventsSignaled = false;
+    let resolvePendingStepEvents: (() => void) | null = null;
+
+    const notifyPendingStepEvents = (): void => {
+      if (pendingStepEventsSignaled) return;
+      pendingStepEventsSignaled = true;
+      resolvePendingStepEvents?.();
+      resolvePendingStepEvents = null;
+    };
+    const waitForPendingStepEvents = (): Promise<void> => {
+      if (pendingStepEventsSignaled) {
+        pendingStepEventsSignaled = false;
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        resolvePendingStepEvents = () => {
+          pendingStepEventsSignaled = false;
+          resolve();
+        };
+      });
+    };
 
     const result = streamText({
       model: wrappedModel,
       system: fullSystemPrompt,
       messages: coreMessages,
+      include: { requestMessages: true },
       tools: Object.keys(tools).length > 0 ? tools : undefined,
       stopWhen: isStepCount(maxSteps),
       abortSignal: combinedAbort,
       // Retry ownership belongs to Orchid's accounting-aware middleware.
       maxRetries: 0,
       onStepFinish: async ({ usage, request, toolCalls, toolResults, content }) => {
-        if (usage) {
-          const cachedTokens = usage.inputTokenDetails?.cacheReadTokens ?? 0;
-          totalUsage = {
-            prompt_tokens: totalUsage.prompt_tokens + (usage.inputTokens ?? 0),
-            completion_tokens: totalUsage.completion_tokens + (usage.outputTokens ?? 0),
-            total_tokens: totalUsage.total_tokens + (usage.totalTokens ?? 0),
-            cached_tokens: totalUsage.cached_tokens + cachedTokens,
-          };
-          latestContextUsage = {
-            messages: request?.messages ?? coreMessages,
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens,
-          };
+        if (usage && !usedFullStream) {
+          pendingUsageEvents.push(buildStepUsage(
+            usage,
+            request?.messages ?? coreMessages,
+            buildUsageContext,
+          ));
         }
         if (toolCalls) {
           for (const tc of toolCalls as Array<{ toolCallId: string; toolName: string; input?: unknown }>) {
@@ -583,18 +614,46 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             });
           }
         }
+        if (
+          !usedFullStream &&
+          (pendingUsageEvents.length > 0 ||
+            pendingToolCalls.length > 0 ||
+            pendingToolResults.length > 0)
+        ) {
+          notifyPendingStepEvents();
+        }
       },
     });
 
     try {
-      let usedFullStream = false;
       try {
         for await (const chunk of result.fullStream) {
-          usedFullStream = true;
+          if (!usedFullStream) {
+            usedFullStream = true;
+            pendingUsageEvents.length = 0;
+          }
           const part = chunk as Record<string, unknown>;
           const partType = String(part.type ?? '');
 
           switch (partType) {
+            case 'start-step': {
+              const request = part.request as { messages?: readonly ModelMessage[] } | undefined;
+              currentStepMessages = request?.messages ?? coreMessages;
+              break;
+            }
+
+            case 'finish-step': {
+              yield {
+                type: 'usage',
+                usage: buildStepUsage(
+                  (part.usage ?? {}) as ProviderStepUsage,
+                  currentStepMessages,
+                  buildUsageContext,
+                ),
+              };
+              break;
+            }
+
             case 'text-delta': {
               armIdleTimer();
               const text =
@@ -771,23 +830,50 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         }
         if (!usedFullStream) {
           console.warn('[orchestrator] fullStream failed, falling back to textStream:', fullStreamErr);
-          for await (const textDelta of result.textStream) {
-            armIdleTimer();
-            if (textDelta) {
-              deliveredAny = true;
-              yield { type: 'content', text: textDelta };
+          const textIterator = result.textStream[Symbol.asyncIterator]();
+          let nextText = textIterator.next().then((value) => ({
+            kind: 'text' as const,
+            value,
+          }));
+          let nextStepEvents = waitForPendingStepEvents().then(() => ({
+            kind: 'step-events' as const,
+          }));
+
+          while (true) {
+            const next = await Promise.race([nextText, nextStepEvents]);
+            if (next.kind === 'step-events') {
+              yield* drainPendingToolEvents(
+                pendingToolCalls,
+                pendingToolResults,
+                seenToolCallIds,
+                seenToolResultIds,
+              );
+              while (pendingUsageEvents.length > 0) {
+                yield { type: 'usage', usage: pendingUsageEvents.shift()! };
+              }
+              nextStepEvents = waitForPendingStepEvents().then(() => ({
+                kind: 'step-events' as const,
+              }));
+              continue;
             }
-            yield* drainPendingToolEvents(
-              pendingToolCalls,
-              pendingToolResults,
-              seenToolCallIds,
-              seenToolResultIds,
-            );
+
+            if (next.value.done) break;
+            armIdleTimer();
+            if (next.value.value) {
+              deliveredAny = true;
+              yield { type: 'content', text: next.value.value };
+            }
+            nextText = textIterator.next().then((value) => ({
+              kind: 'text' as const,
+              value,
+            }));
           }
         } else {
           throw fullStreamErr;
         }
       }
+
+      const finishReason = await result.finishReason;
 
       yield* drainPendingToolEvents(
         pendingToolCalls,
@@ -795,22 +881,12 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         seenToolCallIds,
         seenToolResultIds,
       );
+      if (!usedFullStream) {
+        while (pendingUsageEvents.length > 0) {
+          yield { type: 'usage', usage: pendingUsageEvents.shift()! };
+        }
+      }
 
-      const finishReason = await result.finishReason;
-      const contextUsage = latestContextUsage as LatestContextUsage | null;
-      const usageContext = contextUsage
-        ? buildContextSnapshot({
-            systemPrompt: fullSystemPrompt,
-            tools,
-            messages: contextUsage.messages,
-            inputTokens: contextUsage.inputTokens,
-            outputTokens: contextUsage.outputTokens,
-          })
-        : undefined;
-      yield {
-        type: 'usage',
-        usage: usageContext ? { ...totalUsage, context: usageContext } : totalUsage,
-      };
       yield { type: 'finish', finishReason: finishReason ?? 'stop' };
 
       if (finishReason === 'length') {
@@ -825,23 +901,29 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         !abortSignal?.aborted &&
         !deliveredAny &&
         idleAttempt + 1 < maxIdleAttempts;
+
       if (canRetryIdle) {
         console.warn(
-          `[orchestrator] Stream idle before any content (attempt ${idleAttempt + 1}/${maxIdleAttempts}); retrying`,
+          `[orchestrator] Stream idle timed out before output; retrying (${idleAttempt + 1}/${maxIdleAttempts - 1})`,
         );
         continue;
       }
+
       if (idleTimedOut && !abortSignal?.aborted) {
         yield {
           type: 'error',
           title: 'Stream idle timeout',
-          detail:
-            `LLM stream was idle for more than ${config.llm_stream_idle_timeout}s with no deltas.`,
+          detail: `No LLM data received for ${config.llm_stream_idle_timeout}s`,
         };
-      } else {
-        const { title, detail } = classifyStreamError(err);
-        yield { type: 'error', title, detail };
+        return;
       }
+
+      if (abortSignal?.aborted) {
+        return;
+      }
+
+      const { title, detail } = classifyStreamError(err);
+      yield { type: 'error', title, detail };
       return;
     } finally {
       clearIdleTimer();

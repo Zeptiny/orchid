@@ -24,6 +24,7 @@ import type { StreamEvent } from '../../llm/orchestrator';
 import type { AgentEvent } from './events';
 import type { Agent } from '../../../shared/types/agent';
 import type { Usage } from '../../../shared/types/message';
+import { addStepUsage } from '../../../shared/usage';
 import type {
   CanonicalToolResult,
   TerminalToolResultStatus,
@@ -289,7 +290,7 @@ export const agentMachine = setup({
         },
         USAGE: {
           actions: assign({
-            usage: ({ event }) => event.usage,
+            usage: ({ context, event }) => addStepUsage(context.usage, event.usage),
           }),
         },
       },
@@ -395,7 +396,7 @@ export const agentMachine = setup({
         },
         USAGE: {
           actions: assign({
-            usage: ({ event }) => event.usage,
+            usage: ({ context, event }) => addStepUsage(context.usage, event.usage),
           }),
         },
         ERROR: {
@@ -460,6 +461,7 @@ export const agentMachine = setup({
             toolCallNames: () => ({}),
             toolLifecycleUpdate: () => null,
             toolUpdateSequence: () => 0,
+            usage: () => null,
             abortController: () => new AbortController(),
           }),
         },
@@ -481,6 +483,7 @@ export const agentMachine = setup({
             toolCallNames: () => ({}),
             toolLifecycleUpdate: () => null,
             toolUpdateSequence: () => 0,
+            usage: () => null,
             abortController: () => new AbortController(),
           }),
         },

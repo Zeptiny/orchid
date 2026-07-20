@@ -4,7 +4,9 @@ import {
   beginCancelRequest,
   bindChatSession,
   chatToolSnapshotToBlock,
+  commitSegmentsToMessages,
   consumePendingCancel,
+  cumulativeUsageFromMessages,
   dropOptimisticUserMessageIfLast,
   drainBufferedHydrationEvents,
   residualStateAfterSendFailure,
@@ -16,6 +18,7 @@ import {
   type ChatEventAffinity,
 } from '../../src/renderer/hooks/useChat';
 import type { Message, Usage } from '../../src/shared/types/message';
+import { MessageType } from '../../src/shared/types/message';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 function affinity(selectedSessionId: string | null): ChatEventAffinity {
@@ -77,6 +80,70 @@ describe('useChat event affinity', () => {
     expect(resolveHydratedUsage(messages, null)).toBe(persisted);
     expect(resolveHydratedUsage(messages, emptyLiveUsage)).toBe(persisted);
     expect(resolveHydratedUsage(messages, liveUsage)).toBe(liveUsage);
+  });
+
+  it('includes authoritative in-flight usage in session totals', () => {
+    const persisted: Usage = {
+      prompt_tokens: 900,
+      completion_tokens: 100,
+      total_tokens: 1_000,
+      cached_tokens: 300,
+    };
+    const live: Usage = {
+      prompt_tokens: 180,
+      completion_tokens: 30,
+      total_tokens: 210,
+      cached_tokens: 80,
+    };
+
+    expect(cumulativeUsageFromMessages(
+      [{ usage: persisted }] as Message[],
+      live,
+    )).toEqual({
+      prompt_tokens: 1_080,
+      completion_tokens: 130,
+      total_tokens: 1_210,
+      cached_tokens: 380,
+    });
+  });
+
+  it('keeps usage on a tool-only terminal turn', () => {
+    const usage: Usage = {
+      prompt_tokens: 100,
+      completion_tokens: 20,
+      total_tokens: 120,
+      cached_tokens: 10,
+    };
+    const toolResult = createCanonicalToolResult('generic', {
+      status: 'complete',
+      data: { value: 'done' },
+    });
+
+    const committed = commitSegmentsToMessages({
+      segments: [{ kind: 'tool', toolCallId: 'tool-1' }],
+      liveTools: [{
+        id: 'tool-1',
+        toolName: 'read',
+        status: 'complete',
+        partialArgs: '{}',
+        args: '{}',
+        agentProjection: 'done',
+        toolResult,
+        startedAt: '2026-07-19T00:00:00.000Z',
+        finishedAt: '2026-07-19T00:00:01.000Z',
+      }],
+      fallbackResponse: '',
+      interrupted: false,
+      usage,
+      thinking: null,
+    });
+
+    expect(committed.map((message) => message.type)).toEqual([
+      MessageType.TOOL_CALL,
+      MessageType.TOOL_RESULT,
+      MessageType.TEXT,
+    ]);
+    expect(committed.at(-1)).toMatchObject({ content: '', usage, hidden: true });
   });
 
   it('rejects events from a non-selected session', () => {

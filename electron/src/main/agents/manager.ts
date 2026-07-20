@@ -24,7 +24,7 @@ import type { Message, Usage } from '../../shared/types/message';
 import { MessageType } from '../../shared/types/message';
 import type { StreamEvent } from '../llm/orchestrator';
 import type { ProjectRuntime } from '../project/runtime';
-import { addUsage, hasUsage } from '../../shared/usage';
+import { addStepUsage } from '../../shared/usage';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
 import {
   SubagentStatus,
@@ -629,9 +629,7 @@ export class SubagentManager {
             break;
           }
           case 'usage': {
-            accumulatedUsage = hasUsage(accumulatedUsage)
-              ? addUsage(accumulatedUsage, event.usage)
-              : { ...event.usage };
+            accumulatedUsage = addStepUsage(accumulatedUsage, event.usage);
             record.usage = accumulatedUsage;
             this._updateLive(record, { usage: accumulatedUsage });
             break;

@@ -322,6 +322,17 @@ function snapshotForAgent(active: ActiveAgent): ChatSnapshot {
   };
 }
 
+function attachUsageToLatestAssistant(messages: Message[], usage: Usage): boolean {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message?.role === MessageRole.ASSISTANT && message.type === MessageType.TEXT) {
+      messages[index] = { ...message, usage };
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Flush partial stream content into turnMessages (thinking + uncommitted
  * assistant text). Shared by forceAbort, replace-on-send, and error paths.
@@ -343,17 +354,12 @@ function flushPartialTurnContent(agent: ActiveAgent, context: AgentContext | und
   if (remaining) {
     agent.turnMessages.push(makeAssistantMessage(remaining, usage));
     agent.responseCommittedLength = partialResponse.length;
-  } else if (usage && agent.turnMessages.length > 0) {
-    const last = agent.turnMessages[agent.turnMessages.length - 1];
-    if (
-      last &&
-      last.role === MessageRole.ASSISTANT &&
-      last.type === MessageType.TEXT
-    ) {
-      agent.turnMessages[agent.turnMessages.length - 1] = {
-        ...last,
-        usage,
-      };
+  } else if (usage) {
+    if (!attachUsageToLatestAssistant(agent.turnMessages, usage)) {
+      agent.turnMessages.push({
+        ...makeAssistantMessage('', usage),
+        hidden: true,
+      });
     }
   }
 }
@@ -1251,15 +1257,12 @@ export function registerChatIPC(): void {
           activeAgent.responseCommittedLength = opts.response.length;
         }
       } else if (opts.usage) {
-        // No remaining text — attach usage to the last assistant message if any.
-        const last = activeAgent.turnMessages[activeAgent.turnMessages.length - 1];
-        if (last && last.role === MessageRole.ASSISTANT && last.type === MessageType.TEXT) {
-          activeAgent.turnMessages[activeAgent.turnMessages.length - 1] = {
-            ...last,
-            usage: opts.usage,
-          };
-        } else if (opts.interrupted) {
-          activeAgent.turnMessages.push(makeAssistantMessage('', opts.usage));
+        // No remaining text — attach usage to prior text, or persist a hidden carrier.
+        if (!attachUsageToLatestAssistant(activeAgent.turnMessages, opts.usage)) {
+          activeAgent.turnMessages.push({
+            ...makeAssistantMessage('', opts.usage),
+            hidden: true,
+          });
         }
       }
 

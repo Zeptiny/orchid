@@ -31,7 +31,12 @@ import {
   type ContextBreakdown,
   computeContextBreakdown,
 } from '../components/ContextGrid';
-import { hasUsage, latestUsageFromMessages } from '../../shared/usage';
+import {
+  addUsage,
+  hasUsage,
+  latestUsageFromMessages,
+  sumMessageUsages,
+} from '../../shared/usage';
 import type { CanonicalToolResult } from '../../shared/types/tool-result';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -214,6 +219,14 @@ export function resolveHydratedUsage(
     : latestUsageFromMessages(messages);
 }
 
+/** Add the authoritative in-flight turn snapshot to persisted session usage. */
+export function cumulativeUsageFromMessages(
+  messages: readonly Message[],
+  currentTurnUsage: Usage | null = null,
+): Usage {
+  return addUsage(sumMessageUsages(messages), currentTurnUsage);
+}
+
 /**
  * Seed stream affinity from a live snapshot so replayed buffered events are
  * sequence-gated against the snapshot high-water mark.
@@ -347,6 +360,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   // Live stream usage; also rehydrated from the last message with usage
   // when replacing messages (session switch / load).
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [currentTurnUsage, setCurrentTurnUsage] = useState<Usage | null>(null);
   const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [interruptState, setInterruptState] = useState<InterruptState>('idle');
@@ -361,22 +375,11 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     [messages, usage],
   );
 
-  // Cumulative usage summed across all messages that carry usage data
-  const cumulativeUsage: Usage = useMemo(() => {
-    let prompt = 0;
-    let completion = 0;
-    let total = 0;
-    let cached = 0;
-    for (const msg of messages) {
-      if (msg.usage) {
-        prompt += msg.usage.prompt_tokens;
-        completion += msg.usage.completion_tokens;
-        total += msg.usage.total_tokens;
-        cached += msg.usage.cached_tokens;
-      }
-    }
-    return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: total, cached_tokens: cached };
-  }, [messages]);
+  // Persisted session totals plus the authoritative in-flight turn snapshot.
+  const cumulativeUsage: Usage = useMemo(
+    () => cumulativeUsageFromMessages(messages, currentTurnUsage),
+    [messages, currentTurnUsage],
+  );
 
   const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const accumulatedContentRef = useRef('');
@@ -576,6 +579,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         setUsage(event.usage);
         usageRef.current = event.usage;
       }
+      setCurrentTurnUsage(null);
 
       // toolBlocksRef / streamSegmentsRef are updated synchronously with state
       // so a CHAT_DONE right after the last tool event still sees final tools.
@@ -687,6 +691,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
       setStatus('idle');
       isSendingRef.current = false;
+      setCurrentTurnUsage(null);
       setStreamingContent('');
       setStreamingThinking('');
       applyStreamSegments([]);
@@ -700,6 +705,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       deliverEvent(event, () => {
         setUsage(event.usage);
         usageRef.current = event.usage;
+        setCurrentTurnUsage(event.usage);
       });
     });
 
@@ -840,6 +846,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       // Keep the last completed snapshot visible while this turn streams, but
       // do not let it attach to the new assistant message if no usage arrives.
       usageRef.current = null;
+      setCurrentTurnUsage(null);
       setStreamStartTime(Date.now());
       setElapsedSeconds(0);
       setInterruptState('idle');
@@ -1029,6 +1036,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     const restored = latestUsageFromMessages(next);
     setUsage(restored);
     usageRef.current = restored;
+    setCurrentTurnUsage(null);
     setStreamStartTime(null);
     setElapsedSeconds(0);
     accumulatedContentRef.current = '';
@@ -1132,6 +1140,11 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     const hydratedUsage = resolveHydratedUsage(snapshot.messages, live.usage);
     setUsage(hydratedUsage);
     usageRef.current = hydratedUsage;
+    setCurrentTurnUsage(
+      live.state === 'streaming' && live.usage && hasUsage(live.usage)
+        ? live.usage
+        : null,
+    );
     setError(live.error);
     setInterruptState(live.interruptState);
     setInterrupted(live.interrupted);
@@ -1186,7 +1199,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
  * Convert chronological stream segments into persisted messages.
  * Order matches call order: tool pair(s) and text segments interleaved.
  */
-function commitSegmentsToMessages(opts: {
+export function commitSegmentsToMessages(opts: {
   segments: readonly StreamSegment[];
   liveTools: readonly ToolBlock[];
   fallbackResponse: string;
@@ -1260,6 +1273,22 @@ function commitSegmentsToMessages(opts: {
         out.push(...toolBlockToMessages(block));
       }
     }
+    if (usage && lastTextIndex < 0) {
+      out.push({
+        id: crypto.randomUUID(),
+        role: MessageRole.ASSISTANT,
+        content: '',
+        type: MessageType.TEXT,
+        tool_calls: null,
+        tool_call_id: null,
+        name: null,
+        thinking,
+        timestamp: new Date().toISOString(),
+        usage,
+        hidden: true,
+        tool_result: null,
+      });
+    }
     return out;
   }
 
@@ -1267,7 +1296,7 @@ function commitSegmentsToMessages(opts: {
   for (const block of liveTools) {
     out.push(...toolBlockToMessages(block));
   }
-  if (fallbackResponse || interrupted) {
+  if (fallbackResponse || interrupted || usage) {
     out.push({
       id: crypto.randomUUID(),
       role: MessageRole.ASSISTANT,
@@ -1279,7 +1308,7 @@ function commitSegmentsToMessages(opts: {
       thinking,
       timestamp: new Date().toISOString(),
       usage,
-      hidden: false,
+      hidden: !fallbackResponse && !interrupted && usage != null,
       tool_result: null,
   });
   }

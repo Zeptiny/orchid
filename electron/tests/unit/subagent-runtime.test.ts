@@ -227,6 +227,16 @@ describe('SubagentManager runtime', () => {
           completion_tokens: 20,
           total_tokens: 120,
           cached_tokens: 50,
+          context: {
+            input_tokens: 100,
+            output_tokens: 20,
+            used_tokens: 120,
+            system_tokens: 10,
+            tools_tokens: 20,
+            tool_use_tokens: 30,
+            user_tokens: 40,
+            assistant_tokens: 20,
+          },
         },
       };
       yield { type: 'content', text: 'world' };
@@ -237,6 +247,16 @@ describe('SubagentManager runtime', () => {
           completion_tokens: 5,
           total_tokens: 15,
           cached_tokens: 0,
+          context: {
+            input_tokens: 10,
+            output_tokens: 5,
+            used_tokens: 15,
+            system_tokens: 1,
+            tools_tokens: 2,
+            tool_use_tokens: 3,
+            user_tokens: 4,
+            assistant_tokens: 5,
+          },
         },
       };
       yield { type: 'finish', finishReason: 'stop' };
@@ -255,6 +275,11 @@ describe('SubagentManager runtime', () => {
     expect(record.usage?.prompt_tokens).toBe(110);
     expect(record.usage?.completion_tokens).toBe(25);
     expect(record.usage?.cached_tokens).toBe(50);
+    expect(record.usage?.context).toMatchObject({
+      input_tokens: 10,
+      output_tokens: 5,
+      used_tokens: 15,
+    });
 
     const domain = runtimeToDomain(record);
     expect(domain.parentChainIndex).toBe(2);
@@ -262,6 +287,16 @@ describe('SubagentManager runtime', () => {
     const summed = sumSubagentUsage(domain);
     expect(summed?.prompt_tokens).toBe(110);
     expect(summed?.completion_tokens).toBe(25);
+    expect(summed?.context).toMatchObject({
+      input_tokens: 10,
+      output_tokens: 5,
+      used_tokens: 15,
+    });
+    expect(domain.chain?.messages.at(-1)?.usage?.context).toMatchObject({
+      input_tokens: 10,
+      output_tokens: 5,
+      used_tokens: 15,
+    });
   });
 
   it('records tools interleaved with text', async () => {

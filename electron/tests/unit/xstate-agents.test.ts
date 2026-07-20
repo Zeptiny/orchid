@@ -15,7 +15,10 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createActor } from 'xstate';
-import { agentMachine } from '../../src/main/agents/xstate/agent-machine';
+import {
+  agentMachine,
+  type AgentContext,
+} from '../../src/main/agents/xstate/agent-machine';
 import { interruptMachine } from '../../src/main/agents/xstate/interrupt-machine';
 import { SubagentManager, SubagentState } from '../../src/main/agents/manager';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
@@ -211,6 +214,81 @@ describe('Agent Machine', () => {
     await waitForState(actor, 'idle');
     expect(actor.getSnapshot().context.response).toBe('Hello!');
     expect(actor.getSnapshot().context.error).toBeNull();
+  });
+
+  it('accumulates usage across model steps and keeps the latest context snapshot', async () => {
+    const firstContext = {
+      input_tokens: 100,
+      output_tokens: 20,
+      used_tokens: 120,
+      system_tokens: 20,
+      tools_tokens: 10,
+      tool_use_tokens: 0,
+      user_tokens: 70,
+      assistant_tokens: 20,
+    };
+    const latestContext = {
+      input_tokens: 180,
+      output_tokens: 30,
+      used_tokens: 210,
+      system_tokens: 20,
+      tools_tokens: 10,
+      tool_use_tokens: 50,
+      user_tokens: 70,
+      assistant_tokens: 60,
+    };
+    const streamFn = mockStreamFn([
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          total_tokens: 120,
+          cached_tokens: 25,
+          context: firstContext,
+        },
+      },
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 180,
+          completion_tokens: 30,
+          total_tokens: 210,
+          cached_tokens: 80,
+          context: latestContext,
+        },
+      },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+
+    const actor = createActor(agentMachine, {
+      input: {
+        agent: mockAgent,
+        systemPrompt: 'You are helpful.',
+        streamFn,
+        interruptResetMs: 100,
+      },
+    });
+
+    actor.start();
+    actor.send({ type: 'USER_INPUT', message: 'Inspect the project' });
+    await waitForContext<AgentContext>(
+      actor,
+      (context) => context.usage?.prompt_tokens === 100,
+    );
+
+    expect(actor.getSnapshot().value).toBe('streaming');
+    expect(actor.getSnapshot().context.usage?.context).toEqual(firstContext);
+
+    await waitForState(actor, 'idle');
+
+    expect(actor.getSnapshot().context.usage).toEqual({
+      prompt_tokens: 280,
+      completion_tokens: 50,
+      total_tokens: 330,
+      cached_tokens: 105,
+      context: latestContext,
+    });
   });
 
   it('streaming tool events → idle', async () => {

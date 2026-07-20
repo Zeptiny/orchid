@@ -1432,15 +1432,7 @@ describe('streamChat', () => {
       { type: 'content', text: 'Hello' },
       { type: 'content', text: ' world' },
     ]);
-    expect(events[events.length - 2]).toEqual({
-      type: 'usage',
-      usage: {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-        cached_tokens: 0,
-      },
-    });
+    expect(events.filter((event) => event.type === 'usage')).toEqual([]);
     expect(events[events.length - 1]).toEqual({ type: 'finish', finishReason: 'stop' });
   });
 
@@ -1737,7 +1729,8 @@ describe('streamChat', () => {
 
   it('tracks usage from onStepFinish and yields finish reason', async () => {
     setupStreamText({
-      fullStreamParts: [{ type: 'text-delta', text: 'ok' }],
+      fullStreamError: new Error('fullStream unavailable'),
+      textStreamParts: ['ok'],
       finishReason: 'length',
       stepFinish: {
         usage: { inputTokens: 100, outputTokens: 40, totalTokens: 140 },
@@ -1773,9 +1766,159 @@ describe('streamChat', () => {
     warnSpy.mockRestore();
   });
 
+  it('does not duplicate usage when both fullStream and onStepFinish report a step', async () => {
+    setupStreamText({
+      stepFinish: {
+        usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+      },
+      fullStreamParts: [
+        {
+          type: 'start-step',
+          request: { messages: [{ role: 'user', content: 'question' }] },
+        },
+        {
+          type: 'finish-step',
+          usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+        },
+      ],
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+
+    expect(events.filter((event) => event.type === 'usage')).toHaveLength(1);
+  });
+
+  it('yields fallback tool-step usage before the next model text', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    aiSdkMocks.streamText.mockImplementation((params: {
+      onStepFinish?: (step: MockStepFinish) => void | Promise<void>;
+    }) => ({
+      fullStream: createAsyncIterable([], new Error('fullStream unavailable')),
+      textStream: {
+        async *[Symbol.asyncIterator]() {
+          await params.onStepFinish?.({
+            usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+            toolCalls: [{ toolCallId: 'tc-fallback', toolName: 'read', input: {} }],
+            toolResults: [{
+              toolCallId: 'tc-fallback',
+              output: canonicalStreamOutput('done'),
+            }],
+          });
+          yield 'next step text';
+          await params.onStepFinish?.({
+            usage: { inputTokens: 180, outputTokens: 30 },
+          });
+        },
+      },
+      finishReason: Promise.resolve('stop'),
+    }));
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+    const firstUsageIndex = events.findIndex((event) => event.type === 'usage');
+    const nextTextIndex = events.findIndex(
+      (event) => event.type === 'content' && event.text === 'next step text',
+    );
+
+    expect(events.filter((event) => event.type === 'usage')).toHaveLength(2);
+    expect(events.filter((event) => event.type === 'usage').at(-1)).toMatchObject({
+      usage: { total_tokens: 210 },
+    });
+    expect(firstUsageIndex).toBeGreaterThanOrEqual(0);
+    expect(firstUsageIndex).toBeLessThan(nextTextIndex);
+    expect(events.slice(0, nextTextIndex).map((event) => event.type)).toEqual([
+      'tool_call',
+      'tool_result',
+      'usage',
+    ]);
+    warnSpy.mockRestore();
+  });
+
+  it('yields usage after each completed model step', async () => {
+    setupStreamText({
+      fullStreamParts: [
+        {
+          type: 'start-step',
+          request: { messages: [{ role: 'user', content: 'Inspect the project' }] },
+          warnings: [],
+        },
+        { type: 'text-delta', text: 'I will inspect it.' },
+        {
+          type: 'finish-step',
+          finishReason: 'tool-calls',
+          usage: {
+            inputTokens: 100,
+            inputTokenDetails: { cacheReadTokens: 25 },
+            outputTokens: 20,
+            totalTokens: 120,
+          },
+        },
+        {
+          type: 'start-step',
+          request: {
+            messages: [
+              { role: 'user', content: 'Inspect the project' },
+              { role: 'assistant', content: 'I will inspect it.' },
+            ],
+          },
+          warnings: [],
+        },
+        { type: 'text-delta', text: 'Inspection complete.' },
+        {
+          type: 'finish-step',
+          finishReason: 'stop',
+          usage: {
+            inputTokens: 180,
+            inputTokenDetails: { cacheReadTokens: 80 },
+            outputTokens: 30,
+            totalTokens: 210,
+          },
+        },
+      ],
+      finishReason: 'stop',
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+    const usageEvents = events.filter((event) => event.type === 'usage');
+
+    expect(usageEvents).toMatchObject([
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          total_tokens: 120,
+          cached_tokens: 25,
+          context: { input_tokens: 100, output_tokens: 20, used_tokens: 120 },
+        },
+      },
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 180,
+          completion_tokens: 30,
+          total_tokens: 210,
+          cached_tokens: 80,
+          context: { input_tokens: 180, output_tokens: 30, used_tokens: 210 },
+        },
+      },
+    ]);
+    expect(events.indexOf(usageEvents[0]!)).toBeLessThan(
+      events.findIndex(
+        (event) => event.type === 'content' && event.text === 'Inspection complete.',
+      ),
+    );
+    expect(events.indexOf(usageEvents[1]!)).toBeLessThan(
+      events.findIndex((event) => event.type === 'finish'),
+    );
+    expect(aiSdkMocks.streamText).toHaveBeenCalledWith(expect.objectContaining({
+      include: { requestMessages: true },
+    }));
+  });
+
   it('captures provider cache reads and the latest request context snapshot', async () => {
     setupStreamText({
-      fullStreamParts: [{ type: 'text-delta', text: 'answer' }],
+      fullStreamError: new Error('fullStream unavailable'),
+      textStreamParts: ['answer'],
       stepFinish: [
         {
           usage: {
@@ -1806,23 +1949,40 @@ describe('streamChat', () => {
     });
 
     const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
-    const usageEvent = events.find((event) => event.type === 'usage');
+    const usageEvents = events.filter((event) => event.type === 'usage');
 
-    expect(usageEvent).toMatchObject({
-      type: 'usage',
-      usage: {
-        prompt_tokens: 280,
-        completion_tokens: 50,
-        total_tokens: 330,
-        cached_tokens: 115,
-        context: {
-          input_tokens: 180,
-          output_tokens: 30,
-          used_tokens: 210,
+    expect(usageEvents).toMatchObject([
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          total_tokens: 120,
+          cached_tokens: 35,
+          context: {
+            input_tokens: 100,
+            output_tokens: 20,
+            used_tokens: 120,
+          },
         },
       },
-    });
+      {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 180,
+          completion_tokens: 30,
+          total_tokens: 210,
+          cached_tokens: 80,
+          context: {
+            input_tokens: 180,
+            output_tokens: 30,
+            used_tokens: 210,
+          },
+        },
+      },
+    ]);
 
+    const usageEvent = usageEvents.at(-1);
     if (usageEvent?.type !== 'usage' || !usageEvent.usage.context) {
       throw new Error('Expected a context snapshot');
     }

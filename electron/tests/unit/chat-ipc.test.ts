@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 import type { Agent } from '../../src/shared/types/agent';
+import { MessageRole, MessageType } from '../../src/shared/types/message';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 function successfulToolResult(toolCallId: string, content: string): Record<string, unknown> {
@@ -765,6 +766,62 @@ describe('chat IPC driver streaming', () => {
       status: 'complete',
       content: 'src/index.ts',
       toolResult: expect.objectContaining({ status: 'complete' }),
+    });
+  });
+
+  it('persists usage when a turn completes with tools but no assistant text', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession('cccccccc-cccc-4ccc-8ccc-cccccccccccc'),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield {
+        type: 'tool_call',
+        toolCallId: 'tc-usage-only',
+        toolName: 'read',
+        args: '{"path":"README.md"}',
+      };
+      yield successfulToolResult('tc-usage-only', 'Orchid');
+      yield {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          total_tokens: 120,
+          cached_tokens: 10,
+        },
+      };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend(
+      { sender: { id: 601, send } },
+      { message: 'Read without a final response' },
+    );
+    await waitForDoneCount(send, 1);
+
+    const persisted = mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0] as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(persisted.messages.at(-1)).toMatchObject({
+      role: MessageRole.ASSISTANT,
+      type: MessageType.TEXT,
+      content: '',
+      hidden: true,
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 20,
+        total_tokens: 120,
+        cached_tokens: 10,
+      },
     });
   });
 });

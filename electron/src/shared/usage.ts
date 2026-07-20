@@ -37,6 +37,16 @@ export function addUsage(a: Usage | null | undefined, b: Usage | null | undefine
   };
 }
 
+/** Add one model-step delta while retaining the newest context snapshot. */
+export function addStepUsage(
+  current: Usage | null | undefined,
+  step: Usage,
+): Usage {
+  const context = step.context ?? current?.context;
+  const accumulated = addUsage(current, step);
+  return context ? { ...accumulated, context } : accumulated;
+}
+
 /** Sum usage across many records. Returns null if nothing non-zero. */
 export function sumUsages(usages: ReadonlyArray<Usage | null | undefined>): Usage | null {
   let acc = EMPTY_USAGE;
@@ -52,7 +62,13 @@ export function sumUsages(usages: ReadonlyArray<Usage | null | undefined>): Usag
 
 /** Sum `message.usage` over a message list. */
 export function sumMessageUsages(messages: readonly Message[]): Usage | null {
-  return sumUsages(messages.map((m) => m.usage));
+  const total = sumUsages(messages.map((message) => message.usage));
+  if (!total) return null;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const context = messages[index]?.usage?.context;
+    if (context) return { ...total, context };
+  }
+  return total;
 }
 
 /**
