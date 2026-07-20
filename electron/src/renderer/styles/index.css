@@ -28,30 +28,30 @@
  * stylesheet re-declares these on :root and wins by document order.
  */
 @theme {
-  --color-primary: #7e88ff;
+  --color-primary: #818cf8;
   --color-primary-content: #ffffff;
-  --color-secondary: #72a8be;
-  --color-secondary-content: #0b0f14;
-  --color-accent: #f2c665;
-  --color-accent-content: #0b0f14;
-  --color-neutral: #26303d;
-  --color-neutral-content: #eef3f8;
-  --color-base-100: #0b0f14;
-  --color-base-200: #151a21;
-  --color-base-300: #26303d;
-  --color-base-content: #eef3f8;
-  --color-info: #76baff;
-  --color-info-content: #0b0f14;
-  --color-success: #68d38f;
-  --color-success-content: #0b0f14;
-  --color-warning: #f2c665;
-  --color-warning-content: #0b0f14;
-  --color-error: #ef8383;
-  --color-error-content: #0b0f14;
+  --color-secondary: #67e8f9;
+  --color-secondary-content: #09090b;
+  --color-accent: #fbbf24;
+  --color-accent-content: #09090b;
+  --color-neutral: #1c1c1f;
+  --color-neutral-content: #fafafa;
+  --color-base-100: #09090b;
+  --color-base-200: #111113;
+  --color-base-300: #1c1c1f;
+  --color-base-content: #fafafa;
+  --color-info: #60a5fa;
+  --color-info-content: #09090b;
+  --color-success: #4ade80;
+  --color-success-content: #09090b;
+  --color-warning: #fbbf24;
+  --color-warning-content: #09090b;
+  --color-error: #f87171;
+  --color-error-content: #09090b;
 
-  --radius-selector: 0.25rem;
-  --radius-field: 0.5rem;
-  --radius-box: 0.75rem;
+  --radius-selector: 0.375rem;
+  --radius-field: 0.625rem;
+  --radius-box: 0.875rem;
 
   --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-display: 'Bricolage Grotesque', 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
@@ -65,16 +65,16 @@ html, body {
   height: 100%;
   overflow: hidden;
   background-color: var(--bg-primary, var(--color-base-100));
-  /* Layered ambient wash — faint theme-accent glows over the base surface. */
+  /* Refined ambient wash — subtle top glow, no busy gradients. */
   background-image:
-    radial-gradient(1000px 520px at 16% -10%, color-mix(in srgb, var(--accent-primary, var(--color-primary)) 6%, transparent), transparent 62%),
-    radial-gradient(760px 460px at 104% 112%, color-mix(in srgb, var(--accent-secondary, var(--color-secondary)) 5%, transparent), transparent 60%);
+    radial-gradient(1200px 600px at 50% -20%, color-mix(in srgb, var(--accent-primary, var(--color-primary)) 4%, transparent), transparent 70%);
   color: var(--color-base-content);
   font-family: var(--font-family, var(--font-sans));
   font-size: 13px;
-  line-height: 1.42;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }
 
 #root {
