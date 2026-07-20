@@ -15,12 +15,6 @@ export interface SeedDefaultSubdirsOptions {
   resourceDirs: readonly string[];
 }
 
-/**
- * Copy default definition subdirectories from `sourceDir` into `targetDir`.
- *
- * - Missing marker at target: recursive copy of the entire source subtree.
- * - Existing marker: leave user content alone; only copy missing resource dirs.
- */
 function isDirectory(p: string): boolean {
   try {
     return fs.statSync(p).isDirectory();
@@ -29,6 +23,12 @@ function isDirectory(p: string): boolean {
   }
 }
 
+/**
+ * Copy default definition subdirectories from `sourceDir` into `targetDir`.
+ *
+ * - Missing marker at target: recursive copy of the entire source subtree.
+ * - Existing marker: leave user content alone; only copy missing resource dirs.
+ */
 export function seedDefaultSubdirs(
   sourceDir: string,
   targetDir: string,
