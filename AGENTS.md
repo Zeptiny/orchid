@@ -58,7 +58,7 @@ src/
 │   │       ├── index.ts     # createMiddlewareStack() — retry + quirks + throttle
 │   │       ├── retry.ts     # Exponential backoff retry
 │   │       ├── throttle.ts  # Yield rate-limiting
-│   │       ├── provider-quirks.ts  # Provider-specific edge case handling
+│   │       ├── provider-quirks.ts  # Tool-output offload thresholds (constants)
 │   │       └── error-classification.ts  # Error types and classification
 │   ├── providers/           # Typed provider connections, drivers, and accounting
 │   │   ├── index.ts         # ProviderRuntime — resolve typed selection + freeze request snapshot
@@ -302,8 +302,8 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 ### Middleware Stack
 Applied via `wrapLanguageModel()`:
 1. **Retry** (outermost) — exponential backoff for transient errors
-2. **Provider quirks** — handles empty choices, mid-stream errors
-3. **Throttle** — rate-limits thinking content yields
+2. **Throttle** — rate-limits thinking content yields
+(Empty-choices handling is owned by the AI SDK; tool-output offload thresholds live in `provider-quirks.ts` as constants only.)
 
 ### RAG Pipeline
 - ONNX-based local embeddings (`fastembed/BAAI/bge-small-en-v1.5`)

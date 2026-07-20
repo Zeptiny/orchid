@@ -46,16 +46,26 @@ export const globDefinition: ToolDefinition = {
   category: 'filesystem',
 };
 
+// ── Walk records ───────────────────────────────────────────────────────────
+
+/** Matched file with mtime/size captured once during walk. */
+interface GlobWalkMatch {
+  absolutePath: string;
+  size: number;
+  modifiedAt: number;
+  modifiedAtIso: string;
+}
+
 // ── Glob implementation ────────────────────────────────────────────────────
 
 /**
  * Recursive glob implementation that supports ** and * patterns.
- * Returns absolute paths of matching files.
+ * Returns walk records (path + mtime/size) for matching files.
  */
-function globSync(baseDir: string, pattern: string): string[] {
+function globSync(baseDir: string, pattern: string): GlobWalkMatch[] {
   const fullPattern = path.join(baseDir, pattern);
   const segments = fullPattern.split(path.sep).filter((segment) => segment !== '');
-  const results: string[] = [];
+  const results: GlobWalkMatch[] = [];
   walkGlob(segments, 0, path.sep, results);
   return results;
 }
@@ -65,11 +75,19 @@ function walkGlob(
   segments: string[],
   index: number,
   currentPath: string,
-  results: string[],
+  results: GlobWalkMatch[],
 ): void {
   if (index >= segments.length) {
     try {
-      if (fs.statSync(currentPath).isFile()) results.push(currentPath);
+      const stat = fs.statSync(currentPath);
+      if (stat.isFile()) {
+        results.push({
+          absolutePath: currentPath,
+          size: stat.size,
+          modifiedAt: stat.mtimeMs,
+          modifiedAtIso: stat.mtime.toISOString(),
+        });
+      }
     } catch {
       // Doesn't exist or became unreadable.
     }
@@ -139,26 +157,18 @@ function globOutcome(
     const filtered = includeHidden
       ? matches
       : matches.filter((match) => {
-          const relativePath = path.relative(directoryPath, match);
+          const relativePath = path.relative(directoryPath, match.absolutePath);
           return !relativePath.split(path.sep).some((part) => part.startsWith('.'));
         });
 
+    // Reuse mtime/size captured during walk — no second stat per path.
     const ordered = filtered
-      .map((absolutePath) => {
-        try {
-          const stat = fs.statSync(absolutePath);
-          return {
-            absolutePath,
-            modifiedAt: stat.mtimeMs,
-            path: path.relative(directoryPath, absolutePath),
-            size: stat.size,
-            modifiedAtIso: stat.mtime.toISOString(),
-          };
-        } catch {
-          return null;
-        }
-      })
-      .filter((match): match is NonNullable<typeof match> => match !== null)
+      .map((match) => ({
+        path: path.relative(directoryPath, match.absolutePath),
+        size: match.size,
+        modifiedAt: match.modifiedAt,
+        modifiedAtIso: match.modifiedAtIso,
+      }))
       .sort((left, right) =>
         // Files created during one scan often differ by filesystem
         // sub-second noise.  Use the timestamp precision exposed by the
@@ -205,8 +215,8 @@ export const globHandler: ToolHandler = async (
   const {
     directory_path: rawDir,
     pattern,
-    include_hidden = false,
+    include_hidden: includeHidden = false,
   } = input as GlobInput;
   const directoryPath = resolveToolPath(ctx.cwd, rawDir);
-  return globOutcome(directoryPath, pattern, include_hidden);
+  return globOutcome(directoryPath, pattern, includeHidden);
 };

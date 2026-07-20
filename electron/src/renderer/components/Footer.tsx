@@ -9,7 +9,7 @@ import { useCallback, useEffect, useId, useState, type CSSProperties } from 'rea
 import type { Message, Usage } from '../../shared/types/message';
 import type { CommandContext } from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption } from '../../shared/types/ipc';
-import type { InterruptState } from '../hooks/useChat';
+import { useElapsedSeconds, type InterruptState } from '../hooks/useChat';
 import { FOOTER_SHORTCUT_IDS, getShortcut } from '../keyboard';
 import { resolveModelNotifyLabel } from '../utils/provider-selection';
 import { ContextLegend, ContextStackedBar, contextPercent as getContextPercent } from './ContextGrid';
@@ -22,7 +22,8 @@ import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
 
 interface FooterProps {
-  elapsedSeconds: number;
+  /** Stream start (ms epoch); footer ticks elapsed locally at 1s while streaming. */
+  streamStartTime?: number | null;
   isStreaming: boolean;
   /** Current interrupt confirmation phase (from staged Esc / cancel flow). */
   interruptState?: InterruptState;
@@ -36,7 +37,7 @@ interface FooterProps {
 }
 
 export function Footer({
-  elapsedSeconds,
+  streamStartTime = null,
   isStreaming,
   interruptState,
   usage,
@@ -48,6 +49,7 @@ export function Footer({
   commandContext,
 }: FooterProps) {
   const confirming = interruptState && interruptState !== 'idle';
+  const elapsedSeconds = useElapsedSeconds(streamStartTime, isStreaming || Boolean(confirming));
   const [contextOpen, setContextOpen] = useState(false);
   const contextMenuId = useId();
 

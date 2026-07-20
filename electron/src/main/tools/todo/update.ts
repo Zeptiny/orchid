@@ -10,12 +10,18 @@ import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import type { TodoToolResult, NotifyTodoChanged, TodoStoreSource } from './create';
 import { resolveTodoStore } from './create';
-import { TodoStatus, parseTodoStatus } from '../../../shared/types/todo';
+import { TodoStatus } from '../../../shared/types/todo';
 import {
   isMainAgentScope,
   normalizeAgentScopeId,
   todoBelongsToScope,
 } from '../../../shared/types/agent-scope';
+
+/** Accept exact enum values or common lowercase LLM forms (open → OPEN). */
+const todoStatusSchema = z.preprocess(
+  (v) => (typeof v === 'string' ? v.toUpperCase() : v),
+  z.nativeEnum(TodoStatus),
+);
 
 /**
  * Build the todo_update tool.
@@ -39,8 +45,7 @@ export function buildUpdateTool(
     inputSchema: z.object({
       id: z.string().describe('The ID of the task to update.'),
       title: z.string().optional().describe('New title (optional).'),
-      status: z
-        .string()
+      status: todoStatusSchema
         .optional()
         .describe(
           `New status. Must be one of: ${Object.values(TodoStatus).join(', ')}.`,
@@ -60,7 +65,7 @@ export function buildUpdateTool(
     const { id, title, status, subagent_id } = input as {
       id: string;
       title?: string;
-      status?: string;
+      status?: TodoStatus;
       subagent_id?: string;
     };
 
@@ -74,19 +79,10 @@ export function buildUpdateTool(
       return genericBuiltInToolOutcome('todo_update', `Error: Task '${id}' is not owned by agent scope '${scope}'.`, 'error');
     }
 
-    let parsedStatus: TodoStatus | undefined;
-    if (status !== undefined) {
-      const parsed = parseTodoStatus(status);
-      if (parsed === null) {
-        return genericBuiltInToolOutcome('todo_update', `Error: Invalid status '${status}'. Valid statuses: ${Object.values(TodoStatus).join(', ')}`, 'error');
-      }
-      parsedStatus = parsed;
-    }
-
     // Ownership reassignment: main only; subagents cannot reassign.
     const updates: { title?: string; status?: TodoStatus; subagent_id?: string } = {
       title,
-      status: parsedStatus,
+      status,
     };
     if (isMainAgentScope(scope) && subagent_id !== undefined) {
       updates.subagent_id = subagent_id;

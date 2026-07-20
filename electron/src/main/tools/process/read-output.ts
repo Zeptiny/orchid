@@ -85,6 +85,8 @@ export const readOutputToolDefinition: ToolDefinition = {
   inputSchema: readOutputInputSchema,
   actionLabel: 'Reading output...',
   category: 'process',
+  /** Long-poll wait_ms can approach 60s; skip outer dispatch timeout. */
+  noTimeout: true,
 };
 
 export const readOutputHandler: ToolHandler = async (input: unknown, ctx) => {

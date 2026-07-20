@@ -21,13 +21,6 @@ export const TodoStatus = {
 
 export type TodoStatus = (typeof TodoStatus)[keyof typeof TodoStatus];
 
-/** Parse a free-form status string into TodoStatus, or null if invalid. */
-export function parseTodoStatus(status: string): TodoStatus | null {
-  const upper = status.toUpperCase();
-  if (!Object.values(TodoStatus).includes(upper as TodoStatus)) return null;
-  return upper as TodoStatus;
-}
-
 // ── Valid transitions ───────────────────────────────────────────────────────
 
 export const VALID_TRANSITIONS: Record<TodoStatus, ReadonlySet<TodoStatus>> = {

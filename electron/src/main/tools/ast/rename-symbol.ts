@@ -42,6 +42,7 @@ export const renameSymbolDefinition: ToolDefinition = {
   inputSchema: renameSymbolSchema,
   actionLabel: 'Renaming symbol...',
   category: 'ast',
+  noTimeout: true,
 };
 
 // ---------------------------------------------------------------------------

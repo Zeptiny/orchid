@@ -68,9 +68,6 @@ import type {
   SubagentSnapshotRequest,
   SubagentSnapshot,
   SubagentEvent,
-  UpdaterState,
-  UpdaterProgressEvent,
-  UpdaterErrorEvent,
 } from '../shared/types/ipc';
 import {
   chatChunkEventSchema,
@@ -90,9 +87,6 @@ import {
   workingSetChangedEventSchema,
   ragIndexProgressSchema,
   astIndexProgressSchema,
-  updaterStateSchema,
-  updaterProgressEventSchema,
-  updaterErrorEventSchema,
   chatSendResultSchema,
   toolExecuteResultSchema,
   bgCommandSnapshotResultSchema,
@@ -440,17 +434,6 @@ const orchidAPI: OrchidAPI = {
   bgCmd: {
     snapshot: (request: BgCommandSnapshotRequest) =>
       invoke(IPC_CHANNELS.BG_CMD_SNAPSHOT, request),
-  },
-
-  updater: {
-    onStatus: (callback: (state: UpdaterState) => void) =>
-      onParsed(IPC_CHANNELS.UPDATER_STATUS_UPDATE, updaterStateSchema, callback),
-
-    onProgress: (callback: (event: UpdaterProgressEvent) => void) =>
-      onParsed(IPC_CHANNELS.UPDATER_PROGRESS, updaterProgressEventSchema, callback),
-
-    onError: (callback: (event: UpdaterErrorEvent) => void) =>
-      onParsed(IPC_CHANNELS.UPDATER_ERROR, updaterErrorEventSchema, callback),
   },
 };
 

@@ -160,11 +160,10 @@ ${escapeXml(context.directoryTree)}
     content += `\n<todos>\n${lines.join('\n')}\n</todos>`;
   }
 
-  // Background commands
+  // Background commands — status is set by the context builder (single source of truth)
   if (context.backgroundCommands && context.backgroundCommands.length > 0) {
     const lines = context.backgroundCommands.map((cmd) => {
-      const status = cmd.exitCode !== undefined ? 'exited' : 'running';
-      let attrs = `id="${escapeXml(cmd.id)}" command="${escapeXmlAttr(cmd.command)}" runtime="${cmd.runtime}" last_output_age="${cmd.lastOutputAge}" owner="${escapeXml(cmd.owner)}" interactive="${cmd.interactive}" status="${status}"`;
+      let attrs = `id="${escapeXml(cmd.id)}" command="${escapeXmlAttr(cmd.command)}" runtime="${cmd.runtime}" last_output_age="${cmd.lastOutputAge}" owner="${escapeXml(cmd.owner)}" interactive="${cmd.interactive}" status="${escapeXml(cmd.status)}"`;
       if (cmd.exitCode !== undefined) {
         attrs += ` exit_code="${cmd.exitCode}"`;
       }

@@ -11,7 +11,7 @@
  *   tool_result, usage, error)
  * - Filters tool registry by agent's `allowed_tools`
  * - Includes MCP tools from MCPManager
- * - Composes middleware from U8 (retry, throttle, provider-quirks)
+ * - Composes middleware (retry, throttle; optional attempt accounting)
  * - Token usage updates after every completed model step
  *
  * AI SDK stream event flow (fullStream):
@@ -36,7 +36,6 @@ import { jsonSchema } from '@ai-sdk/provider-utils';
 import type { Message, Usage } from '../../shared/types/message';
 import type { Agent } from '../../shared/types/agent';
 import type { Skill } from '../../shared/types/skill';
-import type { ToolCall } from '../../shared/types/tool';
 import type { Config } from '../config/schema';
 import type { ToolRegistry } from '../tools/registry';
 import { ToolRegistry as ToolRegistryClass } from '../tools/registry';
@@ -983,17 +982,12 @@ export function buildToolMap(
         args: unknown,
         executionOptions: { toolCallId: string; abortSignal?: AbortSignal },
       ) => {
-        const toolCall: ToolCall = {
-          id: executionOptions.toolCallId,
-          type: 'function',
-          function: {
-            name: definition.name,
-            arguments: JSON.stringify(args),
-          },
-        };
-
         return executeToolCall(
-          toolCall,
+          {
+            id: executionOptions.toolCallId,
+            name: definition.name,
+            args,
+          },
           registry,
           withSdkAbortSignal(dispatchOptions, executionOptions.abortSignal),
         );
@@ -1030,16 +1024,12 @@ export function buildToolMap(
         args: unknown,
         executionOptions: { toolCallId: string; abortSignal?: AbortSignal },
       ) => {
-        const toolCall: ToolCall = {
-          id: executionOptions.toolCallId,
-          type: 'function',
-          function: {
-            name: definition.name,
-            arguments: JSON.stringify(args),
-          },
-        };
         return executeToolCall(
-          toolCall,
+          {
+            id: executionOptions.toolCallId,
+            name: definition.name,
+            args,
+          },
           skillRegistry,
           withSdkAbortSignal(dispatchOptions, executionOptions.abortSignal),
         );
@@ -1095,13 +1085,12 @@ export function buildToolMap(
             toolCallId: crypto.randomUUID(),
           },
         ) => {
-          const toolCall: ToolCall = {
-            id: executionOptions.toolCallId,
-            type: 'function',
-            function: { name: internalName, arguments: JSON.stringify(args) },
-          };
           return executeToolCall(
-            toolCall,
+            {
+              id: executionOptions.toolCallId,
+              name: internalName,
+              args,
+            },
             dynamicRegistry,
             withSdkAbortSignal(dispatchOptions, executionOptions.abortSignal),
           );

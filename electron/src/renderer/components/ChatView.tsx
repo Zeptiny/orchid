@@ -1086,7 +1086,7 @@ export function ChatView() {
           }
           workspaceUnbound={!workspaceBound}
           onRetry={handleRetry}
-          elapsedSeconds={chat.elapsedSeconds}
+          streamStartTime={chat.streamStartTime}
           interrupted={chat.interrupted}
           alwaysExpandToolGroups={alwaysExpandToolGroups}
         />
@@ -1116,7 +1116,7 @@ export function ChatView() {
           isViewActive={contentMode === 'subagents'}
         />
         <Footer
-          elapsedSeconds={chat.elapsedSeconds}
+          streamStartTime={chat.streamStartTime}
           isStreaming={chat.status === 'streaming'}
           interruptState={chat.interruptState}
           usage={chat.usage}

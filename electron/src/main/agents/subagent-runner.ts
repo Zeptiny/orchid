@@ -11,7 +11,6 @@ import { getConfig } from '../config/loader';
 import { getSessionManager } from '../ipc/session';
 import {
   getProjectRuntimeRegistry,
-  hydrateProjectRuntime,
   type ProjectRuntime,
 } from '../project/runtime';
 import type { SubagentStreamRunner } from './manager';
@@ -102,9 +101,8 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       return;
     }
 
-    const baseRuntime =
+    const runtime =
       params.projectRuntime ?? getProjectRuntimeRegistry().get(parentCwd);
-    const runtime = await hydrateProjectRuntime(baseRuntime);
     const config = runtime.config;
     // Resolve selection: explicit override → tier selection → nullable default.
     const selection =

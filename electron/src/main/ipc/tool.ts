@@ -95,8 +95,8 @@ export function registerToolIPC(): void {
     return executeToolCall(
       {
         id: crypto.randomUUID(),
-        type: 'function',
-        function: { name, arguments: JSON.stringify(args) },
+        name,
+        args,
       },
       toolRegistry,
       {

@@ -42,6 +42,7 @@ export const findSymbolReferencesDefinition: ToolDefinition = {
   inputSchema: findSymbolReferencesSchema,
   actionLabel: 'Finding references...',
   category: 'ast',
+  noTimeout: true,
 };
 
 // ---------------------------------------------------------------------------

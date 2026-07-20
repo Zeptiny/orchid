@@ -203,8 +203,8 @@ describe('tool:execute registry validation', () => {
     const viaAgent = await executeToolCall(
       {
         id: 'direct-equivalence',
-        type: 'function',
-        function: { name: 'read', arguments: JSON.stringify({ path: 'x' }) },
+        name: 'read',
+        args: { path: 'x' },
       },
       mocks.toolRegistry as unknown as ToolRegistry,
       { cwd: PROJECT_DIR, sessionId: SESSION_UUID, agentScopeId: 'main' },

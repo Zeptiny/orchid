@@ -216,14 +216,15 @@ export function loadSession(sessionId: string, opts?: StorageOptions): Session |
   }
   const { sessionsDir } = resolveOptions(opts);
   const filePath = path.join(sessionsDir, `${sessionId}.json`);
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
     const data = JSON.parse(raw) as SessionStorageDict;
     return sessionFromStorageDict(data);
   } catch (err) {
+    // Missing file is a normal not-found path — avoid existsSync-then-open TOCTOU.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
+    }
     // Log but don't throw — error isolation matching Python
     console.warn(`Failed to load session ${sessionId}:`, err);
     return null;

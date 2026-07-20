@@ -170,6 +170,14 @@ describe('HeadTailBuffer', () => {
 
     expect(buf.totalWritten).toBe(3000);
   });
+
+  it('should own appended buffers so stream-pool mutation cannot corrupt snapshots', () => {
+    const buf = new HeadTailBuffer();
+    const chunk = Buffer.from('stable-output');
+    buf.append(chunk);
+    chunk.fill(0x58); // simulate Node reusing the stream buffer
+    expect(buf.getTail()).toBe('stable-output');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -289,27 +297,27 @@ describe('grep tool', () => {
 
 describe('execute_command foreground', () => {
   it('should run echo hello and return stdout with exit code 0', async () => {
-    const result = await executeCommand('echo hello');
+    const result = await executeCommand({ command: 'echo hello' });
 
     expect(result.canonical.status).toBe('complete');
     expect(result.agentProjection.content).toContain('hello');
   });
 
   it('should capture stderr', async () => {
-    const result = await executeCommand('echo error >&2');
+    const result = await executeCommand({ command: 'echo error >&2' });
 
     expect(result.canonical.status).toBe('complete');
     expect(result.agentProjection.content).toContain('error');
   });
 
   it('should report non-zero exit code', async () => {
-    const result = await executeCommand('exit 42');
+    const result = await executeCommand({ command: 'exit 42' });
 
     expect(result.canonical.status).toBe('error');
   });
 
   it('should timeout long-running commands', async () => {
-    const result = await executeCommand('sleep 30', undefined, undefined, 1);
+    const result = await executeCommand({ command: 'sleep 30', timeout: 1 });
 
     expect(result.canonical.status).toBe('error');
     expect(result.agentProjection.content).toContain('timed out');
@@ -320,16 +328,15 @@ describe('execute_command foreground', () => {
     const markerDir = createTmpDir();
     const marker = path.join(markerDir, 'still-alive');
     const ac = new AbortController();
-    const runPromise = executeCommand(
-      `sleep 30; touch "${marker}"`,
-      'long sleep',
-      undefined,
-      60,
-      true,
-      false,
-      false,
-      { abortSignal: ac.signal },
-    );
+    const runPromise = executeCommand({
+      command: `sleep 30; touch "${marker}"`,
+      description: 'long sleep',
+      timeout: 60,
+      shell: true,
+      background: false,
+      interactive: false,
+      abortSignal: ac.signal,
+    });
 
     await new Promise((r) => setTimeout(r, 200));
     ac.abort();
@@ -347,7 +354,10 @@ describe('execute_command foreground', () => {
   it('should use custom working directory', async () => {
     const dir = createTmpDir();
     fs.writeFileSync(path.join(dir, 'test.txt'), 'hello');
-    const result = await executeCommand('cat test.txt', undefined, dir);
+    const result = await executeCommand({
+      command: 'cat test.txt',
+      workingDirectory: dir,
+    });
 
     expect(result.agentProjection.content).toContain('hello');
     fs.rmSync(dir, { recursive: true, force: true });
@@ -403,16 +413,11 @@ describe('execute_command background', () => {
   });
 
   it('should return ID for background sleep command', async () => {
-    const result = await executeCommand(
-      'sleep 10',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      true,
-      undefined,
-      { sessionId: 'sess-bg-1' },
-    );
+    const result = await executeCommand({
+      command: 'sleep 10',
+      background: true,
+      sessionId: 'sess-bg-1',
+    });
 
     expect(result.canonical.status).toBe('complete');
     expect(result.canonical.status).toBe('complete');

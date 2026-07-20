@@ -39,6 +39,7 @@ export const getFileSkeletonDefinition: ToolDefinition = {
   inputSchema: getFileSkeletonSchema,
   actionLabel: 'Getting skeleton...',
   category: 'ast',
+  noTimeout: true,
 };
 
 // ---------------------------------------------------------------------------

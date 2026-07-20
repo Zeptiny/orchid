@@ -331,11 +331,8 @@ describe('bounded family projections', () => {
     registry.register(globDefinition, globHandler);
     const execution = await executeToolCall({
       id: 'large-glob-call',
-      type: 'function',
-      function: {
-        name: 'glob',
-        arguments: JSON.stringify({ directory_path: tmpDir, pattern: '**/*.ts' }),
-      },
+      name: 'glob',
+      args: { directory_path: tmpDir, pattern: '**/*.ts' },
     }, registry, { cwd: tmpDir, sessionId: 'filesystem-results-session' });
 
     const canonical = searchResultsDataSchema.parse(execution.canonical.data);
@@ -362,11 +359,8 @@ describe('XML agent projections', () => {
 
     const execution = await executeToolCall({
       id: 'read-exact',
-      type: 'function',
-      function: {
-        name: 'read',
-        arguments: JSON.stringify({ file_path: filePath }),
-      },
+      name: 'read',
+      args: { file_path: filePath },
     }, registry, { cwd: tmpDir });
 
     expect(execution.agentProjection.content).toContain(
@@ -394,15 +388,12 @@ describe('XML agent projections', () => {
 
     const edit = await executeToolCall({
       id: 'edit-xml',
-      type: 'function',
-      function: {
-        name: 'edit',
-        arguments: JSON.stringify({
+      name: 'edit',
+      args: {
           file_path: first,
           old_string: 'needle',
           new_string: 'changed',
-        }),
-      },
+        },
     }, registry, context);
     expect(edit.agentProjection.content).toContain('<old_string>needle first</old_string>');
     expect(edit.agentProjection.content).toContain('<new_string>changed first</new_string>');
@@ -410,11 +401,8 @@ describe('XML agent projections', () => {
 
     const glob = await executeToolCall({
       id: 'glob-xml',
-      type: 'function',
-      function: {
-        name: 'glob',
-        arguments: JSON.stringify({ directory_path: tmpDir, pattern: '**/*.ts' }),
-      },
+      name: 'glob',
+      args: { directory_path: tmpDir, pattern: '**/*.ts' },
     }, registry, context);
     expect(glob.agentProjection.content).toContain('<query ');
     expect(glob.agentProjection.content).toContain('<files format="path-per-line">');
@@ -423,11 +411,8 @@ describe('XML agent projections', () => {
 
     const grep = await executeToolCall({
       id: 'grep-xml',
-      type: 'function',
-      function: {
-        name: 'grep',
-        arguments: JSON.stringify({ directory_path: tmpDir, pattern: 'needle' }),
-      },
+      name: 'grep',
+      args: { directory_path: tmpDir, pattern: 'needle' },
     }, registry, context);
     expect(grep.agentProjection.content).toContain(
       '<matches format="path | line | content">',
@@ -437,15 +422,79 @@ describe('XML agent projections', () => {
 
     const directory = await executeToolCall({
       id: 'directory-xml',
-      type: 'function',
-      function: {
-        name: 'read_directory',
-        arguments: JSON.stringify({ directory_path: tmpDir, max_depth: 2 }),
-      },
+      name: 'read_directory',
+      args: { directory_path: tmpDir, max_depth: 2 },
     }, registry, context);
     expect(directory.agentProjection.content).toContain('<tree>\n');
     expect(directory.agentProjection.content).toContain('└── src/');
     expect(directory.agentProjection.content).not.toContain('format="dynamic-system-prompt"');
+  });
+
+  it('write projection: empty body has no preview payload', async () => {
+    const registry = new ToolRegistry();
+    registry.register(writeDefinition, writeHandler);
+    const execution = await executeToolCall(
+      {
+        id: 'write-empty',
+        name: 'write',
+        args: { file_path: 'empty.txt', content: '' },
+      },
+      registry,
+      { cwd: tmpDir },
+    );
+    expect(execution.canonical.status).toBe('complete');
+    expect(fileWriteDataSchema.parse(execution.canonical.data).content).toBe('');
+    expect(execution.agentProjection.content).toContain('name="write"');
+    expect(execution.agentProjection.content).not.toContain('<preview>');
+    expect(execution.agentProjection.content).not.toContain('<head>');
+    expect(execution.agentProjection.content).not.toContain('<tail>');
+  });
+
+  it('write projection: short files use a full <preview>', async () => {
+    const registry = new ToolRegistry();
+    registry.register(writeDefinition, writeHandler);
+    const content = Array.from({ length: 8 }, (_, i) => `line-${i + 1}`).join('\n') + '\n';
+    const execution = await executeToolCall(
+      {
+        id: 'write-short',
+        name: 'write',
+        args: { file_path: 'short.txt', content },
+      },
+      registry,
+      { cwd: tmpDir },
+    );
+    expect(fileWriteDataSchema.parse(execution.canonical.data).content).toBe(content);
+    expect(execution.agentProjection.content).toContain('<preview>');
+    expect(execution.agentProjection.content).toContain('line-1');
+    expect(execution.agentProjection.content).toContain('line-8');
+    expect(execution.agentProjection.content).not.toContain('<head>');
+    expect(execution.agentProjection.content).not.toContain('<tail>');
+  });
+
+  it('write projection: long files use head/tail only (middle omitted)', async () => {
+    const registry = new ToolRegistry();
+    registry.register(writeDefinition, writeHandler);
+    const lines = Array.from({ length: 20 }, (_, i) => `line-${i + 1}`);
+    const content = lines.join('\n') + '\n';
+    const execution = await executeToolCall(
+      {
+        id: 'write-long',
+        name: 'write',
+        args: { file_path: 'long.txt', content },
+      },
+      registry,
+      { cwd: tmpDir },
+    );
+    const proj = execution.agentProjection.content;
+    expect(fileWriteDataSchema.parse(execution.canonical.data).content).toContain('line-10');
+    expect(proj).toContain('<head>');
+    expect(proj).toContain('<tail>');
+    expect(proj).toContain('line-1');
+    expect(proj).toContain('line-5');
+    expect(proj).toContain('line-16');
+    expect(proj).toContain('line-20');
+    expect(proj).not.toContain('line-10');
+    expect(proj).not.toContain('<preview>');
   });
 });
 

@@ -24,7 +24,7 @@ import { loadAgents, seedAgentsDir } from './agents/registry';
 import { loadSkills, seedSkillsDir } from './skills/registry';
 import { loadPersonalities, seedPersonalitiesDir } from './personality/registry';
 import { shutdownProjectMCPManagers } from './mcp/project-registry';
-import { initUpdater, destroyUpdater, checkForUpdates, setUpdaterWindow } from './updater';
+import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
 import { initFileLogging, closeFileLogging } from './logging';
 import { registerBuiltinTools } from './tools';
 import { getBackgroundStore } from './tools/process/background-store';
@@ -273,23 +273,20 @@ app.whenReady().then(async () => {
     // 7. Create the main window
     createWindow();
 
-    // 8. Initialize auto-updater (after window is created)
-    if (mainWindow) {
-      // Auto-update is gated to signed releases (runtime detection on macOS)
-      // For unsigned beta builds, auto-download is disabled but manual check is allowed
-      initUpdater({
-        window: mainWindow,
-        signed: detectReleaseSigned(),
-        flushBeforeInstall: flushSubagentPersistence,
-      });
+    // 8. Initialize auto-updater (headless — no renderer bridge yet)
+    // Auto-update is gated to signed releases (runtime detection on macOS)
+    // For unsigned beta builds, auto-download is disabled but manual check is allowed
+    initUpdater({
+      signed: detectReleaseSigned(),
+      flushBeforeInstall: flushSubagentPersistence,
+    });
 
-      // Check for updates on startup (non-blocking)
-      // Only in packaged mode — dev mode has no update server
-      if (app.isPackaged) {
-        checkForUpdates().catch((err) => {
-          console.warn('Startup update check failed (non-fatal):', err);
-        });
-      }
+    // Check for updates on startup (non-blocking)
+    // Only in packaged mode — dev mode has no update server
+    if (app.isPackaged) {
+      checkForUpdates().catch((err) => {
+        console.warn('Startup update check failed (non-fatal):', err);
+      });
     }
   } catch (err) {
     console.error('Failed to initialize app:', err);
@@ -306,10 +303,6 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (mainWindow === null) {
     createWindow();
-    // Rebind updater IPC target — initUpdater only captured the first window.
-    if (mainWindow) {
-      setUpdaterWindow(mainWindow);
-    }
   }
 });
 

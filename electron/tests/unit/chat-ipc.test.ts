@@ -535,7 +535,6 @@ vi.mock('../../src/main/ipc/session', () => ({
 
 vi.mock('../../src/main/project/runtime', () => ({
   getProjectRuntimeRegistry: () => mocks.runtimeRegistry,
-  hydrateProjectRuntime: async <T>(runtime: T) => runtime,
 }));
 
 vi.mock('../../src/main/tools/process/background-store', () => ({

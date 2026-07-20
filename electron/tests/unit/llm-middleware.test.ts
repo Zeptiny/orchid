@@ -5,7 +5,6 @@
  * - Retry middleware: transient error → retried with backoff, second attempt succeeds
  * - Retry guard: first token delivered → transient error → NOT retried
  * - Transient error detection: class, status, and message paths covered
- * - Provider quirks: mid-stream empty-choices chunk → stream continues
  * - Throttle: thinking yields are rate-limited
  * - Middleware stack composition
  */
@@ -14,7 +13,6 @@ import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import {
   createRetryMiddleware,
   createThrottleMiddleware,
-  createProviderQuirksMiddleware,
   createMiddlewareStack,
 } from '../../src/main/llm/middleware/index';
 import {
@@ -397,118 +395,6 @@ describe('Transient error detection', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Provider quirks middleware tests
-// ---------------------------------------------------------------------------
-
-describe('Provider quirks middleware', () => {
-  it('passes through normal chunks unchanged', async () => {
-    const middleware = createProviderQuirksMiddleware();
-    const chunks: LanguageModelV4StreamPart[] = [
-      { type: 'text-delta', id: 'txt-0', delta: 'Hello' },
-      { type: 'text-delta', id: 'txt-0', delta: ' world' },
-      { type: 'finish', finishReason: 'stop', usage: { inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 5, textTokens: 5, reasoningTokens: undefined }, totalTokens: 15 } },
-    ];
-
-    const result = await middleware.wrapStream!({
-      doStream: createMockDoStream(chunks),
-      doGenerate: mockDoGenerate,
-      params: mockParams(),
-      model: mockModel(),
-    });
-
-    const collected = await collectStream(result.stream);
-    expect(collected).toEqual(chunks);
-  });
-
-  it('handles mid-stream benign error after content delivery', async () => {
-    const middleware = createProviderQuirksMiddleware();
-
-    // Simulate: doStream itself throws a benign error (as AI SDK would
-    // when it encounters a parsing error during stream setup/first read).
-    // The middleware should suppress it if content was already delivered.
-    // Note: In practice, AI SDK surfaces these as errors thrown from doStream(),
-    // not from the stream itself, because the stream pipeline processes eagerly.
-    let doStreamCalls = 0;
-    const doStream = async () => {
-      doStreamCalls++;
-      // First call: throw benign error (simulating AI SDK internal parsing)
-      throw new Error('list index out of range');
-    };
-
-    // Since no content was delivered yet (the error is pre-first-chunk),
-    // the middleware should propagate it. For post-content benign errors,
-    // the stream TransformStream handles it — but AI SDK surfaces these
-    // as doStream() throws, so we test that path.
-    await expect(
-      middleware.wrapStream!({
-        doStream,
-        doGenerate: mockDoGenerate,
-        params: mockParams(),
-        model: mockModel(),
-      }),
-    ).rejects.toThrow('list index out of range');
-    expect(doStreamCalls).toBe(1);
-  });
-
-  it('propagates non-benign errors', async () => {
-    const middleware = createProviderQuirksMiddleware();
-
-    const doStream = async () => {
-      throw createHttpError('Invalid request', 400);
-    };
-
-    await expect(
-      middleware.wrapStream!({
-        doStream,
-        doGenerate: mockDoGenerate,
-        params: mockParams(),
-        model: mockModel(),
-      }),
-    ).rejects.toThrow('Invalid request');
-  });
-
-  it('suppresses benign errors after content was delivered in stream', async () => {
-    const middleware = createProviderQuirksMiddleware();
-
-    // Simulate: stream delivers content, then a benign error occurs.
-    // We use a deferred error (via queueMicrotask) so the stream is created
-    // first, and the error occurs during the first read.
-    let errorFn: (() => void) | null = null;
-    const stream = new ReadableStream<LanguageModelV4StreamPart>({
-      start(controller) {
-        controller.enqueue({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
-        // Defer the error so it happens during read, not during construction
-        errorFn = () => controller.error(new Error('list index out of range'));
-      },
-    });
-
-    const doStream = async () => ({
-      stream,
-      rawCall: { rawPrompt: '', rawSettings: {} },
-      rawResponse: {},
-      request: { body: '{}' },
-      response: {},
-    });
-
-    const result = await middleware.wrapStream!({
-      doStream,
-      doGenerate: mockDoGenerate,
-      params: mockParams(),
-      model: mockModel(),
-    });
-
-    const reader = result.stream.getReader();
-    // First read succeeds (the content chunk)
-    const first = await reader.read();
-    expect(first.value).toEqual({ type: 'text-delta', id: 'txt-0', delta: 'Hello' });
-
-    // Trigger the deferred error, then try to read — the error should propagate
-    if (errorFn) errorFn();
-    await expect(reader.read()).rejects.toThrow('list index out of range');
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Throttle middleware tests
 // ---------------------------------------------------------------------------
 
@@ -603,22 +489,22 @@ describe('Throttle middleware', () => {
 // ---------------------------------------------------------------------------
 
 describe('Middleware stack composition', () => {
-  it('creates a stack with all middleware', () => {
+  it('creates a stack with retry + throttle', () => {
     const stack = createMiddlewareStack();
-    expect(stack).toHaveLength(3);
+    expect(stack).toHaveLength(2);
   });
 
   it('accepts custom retry options', () => {
     const stack = createMiddlewareStack({
       retry: { maxRetries: 5 },
     });
-    expect(stack).toHaveLength(3);
+    expect(stack).toHaveLength(2);
   });
 
   it('accepts custom throttle options', () => {
     const stack = createMiddlewareStack({
       throttle: { intervalMs: 200 },
     });
-    expect(stack).toHaveLength(3);
+    expect(stack).toHaveLength(2);
   });
 });

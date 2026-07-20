@@ -71,7 +71,7 @@ export function buildDelegateTool(
         .string()
         .describe(`The agent type to delegate to. Available agents:\n${agentLines}`),
       tier: z
-        .string()
+        .nativeEnum(AgentTier)
         .optional()
         .describe(
           `Override the agent's default model tier. ` +
@@ -89,7 +89,7 @@ export function buildDelegateTool(
       name: string;
       task: string;
       type: string;
-      tier?: string;
+      tier?: AgentTier;
     };
 
     // Look up agent from registry
@@ -100,17 +100,7 @@ export function buildDelegateTool(
     }
 
     // Resolve tier — use override if provided, otherwise agent's default
-    let resolvedTier: AgentTier;
-    if (tier !== undefined) {
-      const validTiers = new Set<string>(Object.values(AgentTier));
-      if (!validTiers.has(tier)) {
-        const valid = Object.values(AgentTier).join(', ');
-        return genericBuiltInToolOutcome('delegate_to_subagent', `Error: tier '${tier}' is not valid. Available tiers: ${valid}`, 'error');
-      }
-      resolvedTier = tier as AgentTier;
-    } else {
-      resolvedTier = agent.tier;
-    }
+    const resolvedTier: AgentTier = tier ?? agent.tier;
 
     // Resolve model from tier via config
     if (!ctx?.projectRuntime || !ctx.sessionId) {

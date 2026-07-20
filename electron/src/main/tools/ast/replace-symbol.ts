@@ -42,6 +42,7 @@ export const replaceSymbolDefinition: ToolDefinition = {
   inputSchema: replaceSymbolSchema,
   actionLabel: 'Replacing symbol...',
   category: 'ast',
+  noTimeout: true,
 };
 
 // ---------------------------------------------------------------------------

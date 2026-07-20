@@ -817,13 +817,6 @@ export interface OrchidAPI {
   bgCmd: {
     snapshot: (request: BgCommandSnapshotRequest) => Promise<BgCommandSnapshotResult>;
   };
-
-  /** Auto-update lifecycle events from electron-updater (main → renderer). */
-  updater: {
-    onStatus: (callback: (state: UpdaterState) => void) => () => void;
-    onProgress: (callback: (event: UpdaterProgressEvent) => void) => () => void;
-    onError: (callback: (event: UpdaterErrorEvent) => void) => () => void;
-  };
 }
 
 // ── IPC Channel names ────────────────────────────────────────────────────────
@@ -1033,9 +1026,6 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.SESSION_WORKING_SET_CHANGED,
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
-  IPC_CHANNELS.UPDATER_STATUS_UPDATE,
-  IPC_CHANNELS.UPDATER_PROGRESS,
-  IPC_CHANNELS.UPDATER_ERROR,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Window type augmentation (renderer-side) ─────────────────────────────────

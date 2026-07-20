@@ -174,7 +174,7 @@ describe('Todo Tools', () => {
       const updateHandler = buildUpdateTool(store).handler;
       const result = (await callTool(updateHandler, {
         id,
-        status: 'in_progress',
+        status: TodoStatus.IN_PROGRESS,
       })) as ToolExecutionResult;
 
       expect(result.agentProjection.content).toContain('<status>IN_PROGRESS</status>');
@@ -191,12 +191,12 @@ describe('Todo Tools', () => {
       const updateHandler = buildUpdateTool(store).handler;
 
       // First: OPEN → IN_PROGRESS
-      await callTool(updateHandler, { id, status: 'in_progress' });
+      await callTool(updateHandler, { id, status: TodoStatus.IN_PROGRESS });
 
       // Then: IN_PROGRESS → DONE
       const result = (await callTool(updateHandler, {
         id,
-        status: 'done',
+        status: TodoStatus.DONE,
       })) as ToolExecutionResult;
 
       expect(result.agentProjection.content).toContain('<status>DONE</status>');
@@ -213,13 +213,13 @@ describe('Todo Tools', () => {
       const updateHandler = buildUpdateTool(store).handler;
 
       // Move to DONE
-      await callTool(updateHandler, { id, status: 'in_progress' });
-      await callTool(updateHandler, { id, status: 'done' });
+      await callTool(updateHandler, { id, status: TodoStatus.IN_PROGRESS });
+      await callTool(updateHandler, { id, status: TodoStatus.DONE });
 
       // Try to go back to IN_PROGRESS
       const result = (await callTool(updateHandler, {
         id,
-        status: 'in_progress',
+        status: TodoStatus.IN_PROGRESS,
       })) as ToolExecutionResult;
 
       expect(result.canonical.status).toBe('error');
@@ -237,28 +237,20 @@ describe('Todo Tools', () => {
       const updateHandler = buildUpdateTool(store).handler;
       const result = (await callTool(updateHandler, {
         id,
-        status: 'done',
+        status: TodoStatus.DONE,
       })) as ToolExecutionResult;
 
       expect(result.canonical.status).toBe('error');
       expect(result.agentProjection.content).toContain('Cannot transition');
     });
 
-    it('should reject invalid status values', async () => {
-      const createHandler = buildCreateTool(store).handler;
-      const createResult = (await callTool(createHandler, {
-        title: 'Test',
-      })) as ToolExecutionResult;
-      const id = createResult.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
-
-      const updateHandler = buildUpdateTool(store).handler;
-      const result = (await callTool(updateHandler, {
-        id,
+    it('should reject invalid status values at schema boundary', async () => {
+      const { definition } = buildUpdateToolRaw(store);
+      const parsed = definition.inputSchema.safeParse({
+        id: 'any',
         status: 'bogus',
-      })) as ToolExecutionResult;
-
-      expect(result.canonical.status).toBe('error');
-      expect(result.agentProjection.content).toContain('Invalid status');
+      });
+      expect(parsed.success).toBe(false);
     });
 
     it('should return error for non-existent task', async () => {
@@ -305,12 +297,12 @@ describe('Todo Tools', () => {
       const id2 = r2.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
 
       const updateHandler = buildUpdateTool(store).handler;
-      await callTool(updateHandler, { id: id2, status: 'in_progress' });
+      await callTool(updateHandler, { id: id2, status: TodoStatus.IN_PROGRESS });
 
       const listHandler = buildListTool(store).handler;
 
       // Filter by OPEN
-      const openResult = (await callTool(listHandler, { status: 'open' })) as {
+      const openResult = (await callTool(listHandler, { status: TodoStatus.OPEN })) as {
         display: string;
         content: string;
       };
@@ -319,7 +311,7 @@ describe('Todo Tools', () => {
 
       // Filter by IN_PROGRESS
       const progressResult = (await callTool(listHandler, {
-        status: 'in_progress',
+        status: TodoStatus.IN_PROGRESS,
       })) as ToolExecutionResult;
       expect(progressResult.canonical.status).toBe('complete');
       expect(progressResult.agentProjection.content).toContain('Progress task');
@@ -358,14 +350,10 @@ describe('Todo Tools', () => {
       expect(result.agentProjection.content).toContain('<tasks scope="main" count="0"');
     });
 
-    it('should reject invalid status filter', async () => {
-      const listHandler = buildListTool(store).handler;
-      const result = (await callTool(listHandler, { status: 'bogus' })) as {
-        display: string;
-        content: string;
-      };
-
-      expect(result.canonical.status).toBe('error');
+    it('should reject invalid status filter at schema boundary', async () => {
+      const { definition } = buildListToolRaw(store);
+      const parsed = definition.inputSchema.safeParse({ status: 'bogus' });
+      expect(parsed.success).toBe(false);
     });
   });
 
@@ -417,17 +405,17 @@ describe('Todo Tools', () => {
       // Update: OPEN → IN_PROGRESS
       await callTool(buildUpdateTool(store).handler, {
         id,
-        status: 'in_progress',
+        status: TodoStatus.IN_PROGRESS,
       });
       expect(store.get(id)!.status).toBe(TodoStatus.IN_PROGRESS);
 
       // Update: IN_PROGRESS → DONE
-      await callTool(buildUpdateTool(store).handler, { id, status: 'done' });
+      await callTool(buildUpdateTool(store).handler, { id, status: TodoStatus.DONE });
       expect(store.get(id)!.status).toBe(TodoStatus.DONE);
 
       // List (should show DONE task)
       const listResult = (await callTool(buildListTool(store).handler, {
-        status: 'done',
+        status: TodoStatus.DONE,
       })) as ToolExecutionResult;
       expect(listResult.canonical.status).toBe('complete');
       expect(listResult.agentProjection.content).toContain('Lifecycle task');

@@ -15,7 +15,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { ToolCall } from '../../shared/types/tool';
 import type { ToolRegistry } from '../tools/registry';
 import {
   TOOL_OUTPUT_INLINE_THRESHOLD,
@@ -43,7 +42,7 @@ import { materializeCanonicalResultRetrieval } from '../tools/result-retrieval';
 import { withTimeout as sharedWithTimeout } from '../utils/async';
 
 // ---------------------------------------------------------------------------
-// Constants — match Python client.py:44, 48-56
+// Constants
 // ---------------------------------------------------------------------------
 
 /** Default tool execution timeout in seconds. */
@@ -56,23 +55,20 @@ const DEFAULT_TOOL_TIMEOUT_S = 60;
  */
 const WAIT_TOOL_OUTER_TIMEOUT_S = Math.ceil(DEFAULT_WAIT_TIMEOUT_MS / 1000) + 5;
 
-/**
- * Tools exempt from timeout.
- * Matches Python `_TOOLS_WITHOUT_TIMEOUT` (client.py:48-56) except
- * `wait_for_subagent`, which must observe an outer timeout (M-P0-011).
- */
-const TOOLS_WITHOUT_TIMEOUT = new Set([
-  'get_file_skeleton',
-  'get_function',
-  'find_symbol_references',
-  'replace_symbol',
-  'rename_symbol',
-  'read_output',
-]);
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/**
+ * Tool invocation for dispatch. Prefer pre-parsed `args` objects from the
+ * AI SDK / IPC layer; a JSON string is still accepted for wire-form callers.
+ */
+export interface ToolDispatchRequest {
+  id: string;
+  name: string;
+  /** Pre-parsed args object, or a JSON string to parse once. */
+  args: unknown;
+}
 
 export interface ToolDispatchOptions {
   /** Tool timeout in seconds. Defaults to 60. */
@@ -106,22 +102,23 @@ export interface ToolDispatchOptions {
  * Execute a single tool call and return canonical facts plus the exact agent
  * projection that the provider will receive.
  *
- * @param toolCall - The tool call to execute
+ * @param request - Tool id, name, and pre-parsed (or JSON-string) args
  * @param registry - The tool registry to look up the handler
  * @param options - Optional timeout, session ID, and frozen turn cwd
  * @returns A validated raw execution result for AI SDK streaming
  */
 export async function executeToolCall(
-  toolCall: ToolCall,
+  request: ToolDispatchRequest,
   registry: ToolRegistry,
   options: ToolDispatchOptions = {},
 ): Promise<ToolExecutionResult> {
-  const name = toolCall.function.name;
+  const name = request.name;
+  const toolCallId = request.id;
   const timeoutSeconds = options.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_S;
 
   if (options.abortSignal?.aborted) {
     return genericTerminalExecution(
-      toolCall.id,
+      toolCallId,
       name,
       'cancelled',
       `Tool '${name}' was cancelled.`,
@@ -129,23 +126,25 @@ export async function executeToolCall(
     );
   }
 
-  // Parse arguments
-  let args: unknown;
-  try {
-    args = JSON.parse(toolCall.function.arguments);
-  } catch {
-    return genericTerminalExecution(
-      toolCall.id,
-      name,
-      'error',
-      `Could not parse arguments for tool '${name}': invalid JSON.`,
-      'invalid_arguments_json',
-    );
+  // Accept pre-parsed objects from AI SDK / IPC; parse JSON strings once.
+  let args: unknown = request.args;
+  if (typeof args === 'string') {
+    try {
+      args = JSON.parse(args);
+    } catch {
+      return genericTerminalExecution(
+        toolCallId,
+        name,
+        'error',
+        `Could not parse arguments for tool '${name}': invalid JSON.`,
+        'invalid_arguments_json',
+      );
+    }
   }
 
   if (typeof args !== 'object' || args === null || Array.isArray(args)) {
     return genericTerminalExecution(
-      toolCall.id,
+      toolCallId,
       name,
       'error',
       `Arguments for tool '${name}' must be a JSON object, got ${typeof args}.`,
@@ -158,7 +157,7 @@ export async function executeToolCall(
   if (!registered) {
     const available = registry.listAll().map((t) => t.definition.name);
     return genericTerminalExecution(
-      toolCall.id,
+      toolCallId,
       name,
       'error',
       `Tool '${name}' does not exist. Available tools: ${available.join(', ')}`,
@@ -170,7 +169,7 @@ export async function executeToolCall(
   const validation = registry.validate(name, args);
   if (!validation.ok) {
     return genericTerminalExecution(
-      toolCall.id,
+      toolCallId,
       name,
       'error',
       validation.error,
@@ -180,7 +179,7 @@ export async function executeToolCall(
 
   if (!options.cwd || options.cwd.trim() === '') {
     return genericTerminalExecution(
-      toolCall.id,
+      toolCallId,
       name,
       'error',
       `Tool '${name}' cannot run: no workspace cwd in tool execution context.`,
@@ -213,7 +212,8 @@ export async function executeToolCall(
       ? (options.waitTimeoutSeconds ?? WAIT_TOOL_OUTER_TIMEOUT_S)
       : timeoutSeconds;
 
-  // Execute with optional timeout (shared policy with MCP wrappers)
+  // Execute with optional timeout (shared policy with MCP wrappers).
+  // Timeout exemption is definition.noTimeout only (no parallel name set).
   // Prefer Zod-parsed data so defaults/coercions reach the handler.
   const handlerArgs = validation.data;
   let result: unknown;
@@ -230,7 +230,7 @@ export async function executeToolCall(
   } catch (err) {
     if (err instanceof ToolTimeoutError) {
       return genericTerminalExecution(
-        toolCall.id,
+        toolCallId,
         name,
         'error',
         err.message,
@@ -239,7 +239,7 @@ export async function executeToolCall(
     }
     if (parentAbort?.aborted) {
       return genericTerminalExecution(
-        toolCall.id,
+        toolCallId,
         name,
         'cancelled',
         `Tool '${name}' was cancelled.`,
@@ -247,12 +247,12 @@ export async function executeToolCall(
       );
     }
     console.error('[tool-dispatch] Tool handler failed', {
-      toolCallId: toolCall.id,
+      toolCallId,
       toolName: name,
       exceptionClass: err instanceof Error ? err.constructor.name : 'Unknown',
     });
     return genericTerminalExecution(
-      toolCall.id,
+      toolCallId,
       name,
       'error',
       `Tool '${name}' failed with an internal error.`,
@@ -262,7 +262,7 @@ export async function executeToolCall(
 
   if (parentAbort?.aborted) {
     return genericTerminalExecution(
-      toolCall.id,
+      toolCallId,
       name,
       'cancelled',
       `Tool '${name}' was cancelled.`,
@@ -272,9 +272,9 @@ export async function executeToolCall(
 
   let execution: ToolExecutionResult;
   try {
-    execution = finalizeHandlerResult(result, toolCall, registry);
-    execution = ensureProjectionRecovery(execution, toolCall, options);
-    execution = maybeOffloadAgentProjection(execution, toolCall, options);
+    execution = finalizeHandlerResult(result, request, registry);
+    execution = ensureProjectionRecovery(execution, request, options);
+    execution = maybeOffloadAgentProjection(execution, request, options);
     const executionSchema = registry.getToolExecutionResultSchema(name);
     if (!executionSchema) {
       throw new TypeError(`No execution schema registered for tool '${name}'`);
@@ -282,14 +282,14 @@ export async function executeToolCall(
     return executionSchema.parse(execution) as ToolExecutionResult;
   } catch (error) {
     console.warn('[tool-dispatch] Tool result finalization failed', {
-      toolCallId: toolCall.id,
+      toolCallId,
       toolName: name,
       family: registered.definition.resultFamily ?? 'generic',
       stage: 'schema',
       exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
     });
     return genericTerminalExecution(
-      toolCall.id,
+      toolCallId,
       name,
       'error',
       `Tool '${name}' returned an invalid result.`,
@@ -345,32 +345,32 @@ export function genericTerminalExecution(
 
 function finalizeHandlerResult(
   result: unknown,
-  toolCall: ToolCall,
+  request: ToolDispatchRequest,
   registry: ToolRegistry,
 ): ToolExecutionResult {
-  const registered = registry.get(toolCall.function.name);
+  const registered = registry.get(request.name);
   if (!registered) {
-    throw new TypeError(`Tool '${toolCall.function.name}' is no longer registered`);
+    throw new TypeError(`Tool '${request.name}' is no longer registered`);
   }
 
   if (!isToolHandlerOutcome(result)) {
-    throw new TypeError(`Tool '${toolCall.function.name}' returned a non-canonical result`);
+    throw new TypeError(`Tool '${request.name}' returned a non-canonical result`);
   }
 
   const canonical = createCanonicalToolResult(registered.definition.resultFamily, result);
   return finalizeToolExecutionResult({
     canonical,
-    toolName: toolCall.function.name,
-    toolCallId: toolCall.id,
+    toolName: request.name,
+    toolCallId: request.id,
     outputDataSchema: registered.definition.outputDataSchema,
     expectedFamily: registered.definition.resultFamily,
-    projector: registry.resolveAgentProjector(toolCall.function.name).projector,
+    projector: registry.resolveAgentProjector(request.name).projector,
   });
 }
 
 function ensureProjectionRecovery(
   execution: ToolExecutionResult,
-  toolCall: ToolCall,
+  request: ToolDispatchRequest,
   options: ToolDispatchOptions,
 ): ToolExecutionResult {
   if (execution.agentProjection.completeness !== 'partial') {
@@ -391,7 +391,7 @@ function ensureProjectionRecovery(
   try {
     const retrieval = materializeCanonicalResultRetrieval({
       sessionId: options.sessionId,
-      toolCallId: toolCall.id,
+      toolCallId: request.id,
       canonical: execution.canonical,
     });
     return {
@@ -400,7 +400,7 @@ function ensureProjectionRecovery(
         content: appendXmlRetrieval(
           execution.agentProjection.content,
           retrieval,
-          toolCall.function.name,
+          request.name,
         ),
         completeness: 'partial',
         retrieval,
@@ -408,15 +408,15 @@ function ensureProjectionRecovery(
     };
   } catch (error) {
     console.warn('[tool-dispatch] Recovery cache materialization failed', {
-      toolCallId: toolCall.id,
-      toolName: toolCall.function.name,
+      toolCallId: request.id,
+      toolName: request.name,
       family: execution.canonical.family,
       stage: 'projection',
       exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
     });
     return {
       canonical: execution.canonical,
-      agentProjection: genericAgentProjector(execution.canonical, toolCall.function.name),
+      agentProjection: genericAgentProjector(execution.canonical, request.name),
     };
   }
 }
@@ -447,14 +447,14 @@ function appendXmlRetrieval(
 
 function maybeOffloadAgentProjection(
   execution: ToolExecutionResult,
-  toolCall: ToolCall,
+  request: ToolDispatchRequest,
   options: ToolDispatchOptions,
 ): ToolExecutionResult {
   if (!options.sessionId) return execution;
   const offload = maybeOffloadToolOutputDetailed(
-    toolCall.function.name,
+    request.name,
     execution.agentProjection.content,
-    toolCall.id,
+    request.id,
     options.sessionId,
   );
   if (!offload.cachePath) return execution;
@@ -625,11 +625,12 @@ export async function runWithToolTimeout<T>(
   toolName: string,
   options: {
     timeoutSeconds?: number;
+    /** When true, skip the outer timeout (from ToolDefinition.noTimeout). */
     noTimeout?: boolean;
     abortController?: AbortController;
   } = {},
 ): Promise<T> {
-  if (options.noTimeout || TOOLS_WITHOUT_TIMEOUT.has(toolName)) {
+  if (options.noTimeout) {
     return work();
   }
   const timeoutSeconds = options.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_S;

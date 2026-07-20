@@ -31,6 +31,7 @@ export const writeDefinition: ToolDefinition = {
   description:
     'Create a new file or completely rewrite an existing file. ' +
     'Parent directories are created automatically. ' +
+    'The tool result is a compact head/tail preview (not the full body); use read to verify content. ' +
     'WARNING: This overwrites the entire file — use edit for partial changes to existing files.',
   inputSchema: writeInputSchema,
   resultFamily: 'file-write',

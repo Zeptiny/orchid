@@ -54,7 +54,6 @@ import { clearDraftCwd } from '../project/workspace';
 import type { ToolExecutionContext } from '../tools/types';
 import {
   getProjectRuntimeRegistry,
-  hydrateProjectRuntime,
   type ProjectRuntime,
 } from '../project/runtime';
 import {
@@ -1006,18 +1005,7 @@ export function registerChatIPC(): void {
 
     // Freeze all project-bound definitions for the turn. Other windows may
     // navigate to different projects while this actor is still streaming.
-    let runtime: ProjectRuntime;
-    try {
-      runtime = await hydrateProjectRuntime(sessionGate.runtime);
-    } catch (error) {
-      sessionsStarting.delete(sessionId);
-      completeSessionActivity(sessionId, false);
-      return {
-        status: 'error',
-        error: error instanceof Error ? error.message : String(error),
-        kind: 'runtime_hydration_failed',
-      };
-    }
+    const runtime = sessionGate.runtime;
     if (existing) {
       forceAbortSession(sessionId);
     }

@@ -1,20 +1,17 @@
 /**
  * Auto-updater — electron-updater integration, gated to signed releases.
  *
+ * Headless main-process lifecycle only. No renderer IPC until a consumer UI
+ * exists (`getUpdaterState()` is the in-process status surface).
+ *
  * Responsibilities:
  * - Check for updates via GitHub releases (electron-builder publish config)
- * - Notify UI of update lifecycle events (available, progress, downloaded, error)
+ * - Track in-process updater state (available, progress, downloaded, error)
  * - Gate auto-update to signed releases (macOS Gatekeeper blocks unsigned)
  * - For unsigned beta builds: disable auto-download, allow manual check only
- *
- * Events emitted to renderer via IPC (`IPC_CHANNELS`):
- * - updater:status_update — current update status object
- * - updater:progress — download progress percentage
- * - updater:error — error message
  */
 import { autoUpdater, UpdateInfo } from 'electron-updater';
-import { app, BrowserWindow } from 'electron';
-import { IPC_CHANNELS } from '../shared/types/ipc';
+import { app } from 'electron';
 import type { UpdaterState } from '../shared/types/ipc-boundary';
 import { getBackgroundStore } from './tools/process/background-store';
 
@@ -33,22 +30,7 @@ const state: UpdaterState = {
 /** Whether the current build is signed (determines auto-update behavior). */
 let isSigned = false;
 
-/** Cached reference to the main window for sending IPC events. */
-let mainWindowRef: BrowserWindow | null = null;
 let flushBeforeInstall: (() => void) | null = null;
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function sendToRenderer(channel: string, ...args: unknown[]): void {
-  const win = mainWindowRef;
-  if (win && !win.isDestroyed()) {
-    win.webContents.send(channel, ...args);
-  }
-}
-
-function emitStatus(): void {
-  sendToRenderer(IPC_CHANNELS.UPDATER_STATUS_UPDATE, { ...state });
-}
 
 // ── Updater configuration ────────────────────────────────────────────────────
 
@@ -80,7 +62,6 @@ function attachEventHandlers(): void {
   autoUpdater.on('checking-for-update', () => {
     state.status = 'checking';
     state.error = null;
-    emitStatus();
   });
 
   autoUpdater.on('update-available', (info: UpdateInfo) => {
@@ -88,7 +69,6 @@ function attachEventHandlers(): void {
     state.version = info.version;
     state.releaseNotes = (typeof info.releaseNotes === 'string' ? info.releaseNotes : null) ?? null;
     state.error = null;
-    emitStatus();
 
     // Auto-download only for signed releases
     if (isSigned) {
@@ -96,7 +76,6 @@ function attachEventHandlers(): void {
         const message = err instanceof Error ? err.message : String(err);
         state.status = 'error';
         state.error = `Download failed: ${message}`;
-        emitStatus();
       });
     }
   });
@@ -107,7 +86,6 @@ function attachEventHandlers(): void {
     state.releaseNotes = null;
     state.progress = null;
     state.error = null;
-    emitStatus();
   });
 
   autoUpdater.on(
@@ -115,14 +93,6 @@ function attachEventHandlers(): void {
     (progress: { percent: number; bytesPerSecond: number; transferred: number; total: number }) => {
       state.status = 'downloading';
       state.progress = Math.round(progress.percent);
-      emitStatus();
-      // Also send detailed progress for UI progress bar
-      sendToRenderer(IPC_CHANNELS.UPDATER_PROGRESS, {
-        percent: Math.round(progress.percent),
-        bytesPerSecond: progress.bytesPerSecond,
-        transferred: progress.transferred,
-        total: progress.total,
-      });
     },
   );
 
@@ -130,14 +100,11 @@ function attachEventHandlers(): void {
     state.status = 'downloaded';
     state.progress = 100;
     state.error = null;
-    emitStatus();
   });
 
   autoUpdater.on('error', (error: Error) => {
     state.status = 'error';
     state.error = error.message || 'Unknown update error';
-    emitStatus();
-    sendToRenderer(IPC_CHANNELS.UPDATER_ERROR, { error: state.error });
   });
 }
 
@@ -145,26 +112,20 @@ function attachEventHandlers(): void {
 
 /**
  * Initialize the auto-updater.
- * Call once during app startup, after BrowserWindow is created.
+ * Call once during app startup after the app is ready.
  *
- * @param options.window — The main BrowserWindow for sending IPC events.
  * @param options.signed — Whether the build is code-signed.
+ * @param options.flushBeforeInstall — Optional flush before quit-and-install.
  */
-export function initUpdater(options: { window: BrowserWindow; signed?: boolean; flushBeforeInstall?: () => void }): void {
-  mainWindowRef = options.window;
+export function initUpdater(options: {
+  signed?: boolean;
+  flushBeforeInstall?: () => void;
+} = {}): void {
   isSigned = options.signed ?? false;
   flushBeforeInstall = options.flushBeforeInstall ?? null;
 
   configureUpdater();
   attachEventHandlers();
-}
-
-/**
- * Rebind the window used for updater IPC after recreation (e.g. macOS activate).
- * Does not re-attach autoUpdater listeners.
- */
-export function setUpdaterWindow(window: BrowserWindow): void {
-  mainWindowRef = window;
 }
 
 /**
@@ -177,7 +138,6 @@ export async function checkForUpdates(): Promise<void> {
   if (!app.isPackaged) {
     state.status = 'not-available';
     state.error = 'Updates not available in development mode';
-    emitStatus();
     return;
   }
 
@@ -187,7 +147,6 @@ export async function checkForUpdates(): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     state.status = 'error';
     state.error = `Check failed: ${message}`;
-    emitStatus();
   }
 }
 
@@ -202,7 +161,6 @@ export async function downloadUpdate(): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     state.status = 'error';
     state.error = `Download failed: ${message}`;
-    emitStatus();
   }
 }
 
@@ -242,7 +200,6 @@ export function getUpdaterState(): UpdaterState {
  */
 export function destroyUpdater(): void {
   autoUpdater.removeAllListeners();
-  mainWindowRef = null;
   flushBeforeInstall = null;
   state.status = 'idle';
   state.version = null;
@@ -259,6 +216,5 @@ export function _resetState(): void {
   state.progress = null;
   state.error = null;
   isSigned = false;
-  mainWindowRef = null;
   flushBeforeInstall = null;
 }

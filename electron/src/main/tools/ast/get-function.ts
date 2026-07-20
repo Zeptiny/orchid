@@ -41,6 +41,7 @@ export const getFunctionDefinition: ToolDefinition = {
   inputSchema: getFunctionSchema,
   actionLabel: 'Extracting function...',
   category: 'ast',
+  noTimeout: true,
 };
 
 // ---------------------------------------------------------------------------

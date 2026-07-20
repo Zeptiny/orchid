@@ -116,10 +116,11 @@ export interface ChatState {
   usage: Usage | null;
   /** Context token breakdown by category (computed from messages + usage). */
   contextBreakdown: ContextBreakdown | null;
-  /** Stream start time (ms epoch) for elapsed tracking. */
+  /**
+   * Stream start time (ms epoch) for elapsed tracking.
+   * Footers tick locally from this; history memos must not depend on a ticker.
+   */
   streamStartTime: number | null;
-  /** Stream elapsed time in seconds. */
-  elapsedSeconds: number;
   /** Current interrupt confirmation phase. */
   interruptState: InterruptState;
   /** Whether the last completed chain was interrupted by the user. */
@@ -315,7 +316,6 @@ export type ResidualStreamAfterSendFailure = {
   isSending: false;
   status: 'error';
   streamStartTime: null;
-  elapsedSeconds: 0;
   streamingContent: '';
   streamingThinking: '';
   accumulatedContent: '';
@@ -327,7 +327,6 @@ export function residualStateAfterSendFailure(): ResidualStreamAfterSendFailure 
     isSending: false,
     status: 'error',
     streamStartTime: null,
-    elapsedSeconds: 0,
     streamingContent: '',
     streamingThinking: '',
     accumulatedContent: '',
@@ -347,6 +346,30 @@ export function dropOptimisticUserMessageIfLast<T extends { id: string }>(
   return messages.slice();
 }
 
+// ── Elapsed display (footer-local; never feed history memos) ─────────────────
+
+/**
+ * 1s-resolution elapsed seconds from a stream start timestamp.
+ * Kept out of chat history memos so a ticker cannot rebuild O(n) stream items.
+ */
+export function useElapsedSeconds(
+  streamStartTime: number | null | undefined,
+  active: boolean,
+): number {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!active || streamStartTime == null) {
+      setElapsed(0);
+      return;
+    }
+    const tick = () => setElapsed((Date.now() - streamStartTime) / 1000);
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [active, streamStartTime]);
+  return elapsed;
+}
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useChat(activeSessionId: string | null = null): UseChatReturn {
@@ -362,7 +385,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const [usage, setUsage] = useState<Usage | null>(null);
   const [currentTurnUsage, setCurrentTurnUsage] = useState<Usage | null>(null);
   const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [interruptState, setInterruptState] = useState<InterruptState>('idle');
   const [interrupted, setInterrupted] = useState(false);
   const [cwd, setCwd] = useState('');
@@ -381,7 +403,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     [messages, currentTurnUsage],
   );
 
-  const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const accumulatedContentRef = useRef('');
   const accumulatedThinkingRef = useRef('');
   const usageRef = useRef<Usage | null>(null);
@@ -479,25 +500,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     },
     [],
   );
-
-  // Elapsed time ticker
-  useEffect(() => {
-    if (status === 'streaming' && streamStartTime) {
-      elapsedIntervalRef.current = setInterval(() => {
-        setElapsedSeconds((Date.now() - streamStartTime) / 1000);
-      }, 100);
-    } else {
-      if (elapsedIntervalRef.current) {
-        clearInterval(elapsedIntervalRef.current);
-        elapsedIntervalRef.current = null;
-      }
-    }
-    return () => {
-      if (elapsedIntervalRef.current) {
-        clearInterval(elapsedIntervalRef.current);
-      }
-    };
-  }, [status, streamStartTime]);
 
   // Subscribe to IPC events
   useEffect(() => {
@@ -848,7 +850,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       usageRef.current = null;
       setCurrentTurnUsage(null);
       setStreamStartTime(Date.now());
-      setElapsedSeconds(0);
       setInterruptState('idle');
       accumulatedContentRef.current = '';
       accumulatedThinkingRef.current = '';
@@ -877,7 +878,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           // Drop the optimistic user bubble when send never started.
           setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
           setStreamStartTime(residual.streamStartTime);
-          setElapsedSeconds(residual.elapsedSeconds);
           setStreamingContent(residual.streamingContent);
           setStreamingThinking(residual.streamingThinking);
           applyToolBlocks([]);
@@ -911,7 +911,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         setStatus(residual.status);
         setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
         setStreamStartTime(residual.streamStartTime);
-        setElapsedSeconds(residual.elapsedSeconds);
         setStreamingContent(residual.streamingContent);
         setStreamingThinking(residual.streamingThinking);
         applyToolBlocks([]);
@@ -1038,7 +1037,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     usageRef.current = restored;
     setCurrentTurnUsage(null);
     setStreamStartTime(null);
-    setElapsedSeconds(0);
     accumulatedContentRef.current = '';
     accumulatedThinkingRef.current = '';
     streamTurnIdRef.current = null;
@@ -1153,11 +1151,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     isSendingRef.current = isLive;
     setStatus(live.state);
     setStreamStartTime(isLive ? live.startedAt ?? Date.now() : null);
-    setElapsedSeconds(
-      isLive && live.startedAt != null
-        ? (Date.now() - live.startedAt) / 1000
-        : 0,
-    );
 
     // Snapshot is the sequence high-water mark; drain only newer events.
     replayHydrationBuffer(bufferedEvents, live);
@@ -1179,7 +1172,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     cumulativeUsage,
     contextBreakdown,
     streamStartTime,
-    elapsedSeconds,
     interruptState,
     interrupted,
     cwd,

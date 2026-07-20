@@ -10,7 +10,6 @@ const mocks = vi.hoisted(() => ({
     getActive: vi.fn(() => ({ cwd: null })),
   })),
   runtimeRegistry: { get: vi.fn() },
-  hydrateProjectRuntime: vi.fn(async <T>(runtime: T) => runtime),
   modelInstance: { provider: 'trusted-test-driver' },
   providerRuntime: {
     resolveLanguageModel: vi.fn(async () => ({ provider: 'trusted-test-driver' })),
@@ -72,7 +71,6 @@ vi.mock('../../src/main/ipc/session', () => ({
 
 vi.mock('../../src/main/project/runtime', () => ({
   getProjectRuntimeRegistry: () => mocks.runtimeRegistry,
-  hydrateProjectRuntime: mocks.hydrateProjectRuntime,
 }));
 
 vi.mock('../../src/main/providers', () => ({
@@ -165,7 +163,7 @@ describe('createSubagentStreamRunner', () => {
       title: 'Missing session',
       detail: expect.stringContaining('explicit parent session id'),
     }]);
-    expect(mocks.hydrateProjectRuntime).not.toHaveBeenCalled();
+    expect(mocks.runtimeRegistry.get).not.toHaveBeenCalled();
   });
 
   it('rejects a subagent with no frozen or parent workspace', async () => {
@@ -183,7 +181,7 @@ describe('createSubagentStreamRunner', () => {
       title: 'No workspace',
       detail: expect.stringContaining('project working directory'),
     }]);
-    expect(mocks.hydrateProjectRuntime).not.toHaveBeenCalled();
+    expect(mocks.runtimeRegistry.get).not.toHaveBeenCalled();
   });
 
   it('requires a typed selection before attempting driver execution', async () => {

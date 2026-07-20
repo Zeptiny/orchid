@@ -11,12 +11,18 @@ import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import type { TodoToolResult, TodoStoreSource } from './create';
 import { resolveTodoStore } from './create';
-import { TodoStatus, parseTodoStatus } from '../../../shared/types/todo';
+import { TodoStatus } from '../../../shared/types/todo';
 import {
   filterTodosForScope,
   MAIN_AGENT_SCOPE_ID,
   normalizeAgentScopeId,
 } from '../../../shared/types/agent-scope';
+
+/** Accept exact enum values or common lowercase LLM forms (open → OPEN). */
+const todoStatusSchema = z.preprocess(
+  (v) => (typeof v === 'string' ? v.toUpperCase() : v),
+  z.nativeEnum(TodoStatus),
+);
 
 /**
  * Build the todo_list tool.
@@ -33,8 +39,7 @@ export function buildListTool(
       'List tasks owned by the current agent (main or this subagent). ' +
       'Optionally filter by status. Peer agents\' tasks are never returned.',
     inputSchema: z.object({
-      status: z
-        .string()
+      status: todoStatusSchema
         .optional()
         .describe(
           `Filter by status. Must be one of: ${Object.values(TodoStatus).join(', ')}.`,
@@ -51,20 +56,11 @@ export function buildListTool(
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<TodoToolResult> => {
     const { status } = input as {
-      status?: string;
+      status?: TodoStatus;
     };
 
-    let parsedStatus: TodoStatus | undefined;
-    if (status !== undefined) {
-      const parsed = parseTodoStatus(status);
-      if (parsed === null) {
-        return genericBuiltInToolOutcome('todo_list', `Error: Invalid status '${status}'. Valid statuses: ${Object.values(TodoStatus).join(', ')}`, 'error');
-      }
-      parsedStatus = parsed;
-    }
-
     const scope = normalizeAgentScopeId(ctx.agentScopeId);
-    const all = resolveTodoStore(store, ctx).list(parsedStatus);
+    const all = resolveTodoStore(store, ctx).list(status);
     const tasks = filterTodosForScope(all, scope);
 
     if (tasks.length === 0) {

@@ -337,7 +337,6 @@ describe('useChat event affinity', () => {
       isSending: false,
       status: 'error',
       streamStartTime: null,
-      elapsedSeconds: 0,
       streamingContent: '',
       streamingThinking: '',
       accumulatedContent: '',

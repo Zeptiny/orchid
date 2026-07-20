@@ -1,12 +1,12 @@
 /**
- * Auto-update tests — U27.
+ * Auto-update tests — headless main-process lifecycle.
  *
  * Covers:
- * - Mock server returns new version → notification
- * - Download → progress
- * - Restart → new version
- * - Unsigned → disabled → manual download
- * - Same version → no notification
+ * - Mock server returns new version → in-process state
+ * - Download → progress state
+ * - Restart → quitAndInstall
+ * - Unsigned → disabled auto-download
+ * - Same version → not-available
  * - Error handling
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -35,20 +35,12 @@ const mockApp = {
   exit: vi.fn(),
 };
 
-const mockBrowserWindow = {
-  isDestroyed: vi.fn(() => false),
-  webContents: {
-    send: vi.fn(),
-  },
-};
-
 vi.mock('electron-updater', () => ({
   autoUpdater: mockAutoUpdater,
 }));
 
 vi.mock('electron', () => ({
   app: mockApp,
-  BrowserWindow: vi.fn(() => mockBrowserWindow),
 }));
 
 const mockTerminateAll = vi.fn();
@@ -69,7 +61,6 @@ beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
 
-  // Reset mock state
   mockAutoUpdater.autoDownload = true;
   mockAutoUpdater.autoInstallOnAppQuit = true;
   mockAutoUpdater.allowDowngrade = false;
@@ -77,18 +68,15 @@ beforeEach(async () => {
   mockApp.isPackaged = true;
   mockTerminateAll.mockClear();
 
-  // Set up default mock behavior for downloadUpdate
   mockAutoUpdater.downloadUpdate.mockResolvedValue(undefined);
   mockAutoUpdater.checkForUpdates.mockResolvedValue(undefined);
 
-  // Re-setup mocks
   vi.doMock('electron-updater', () => ({
     autoUpdater: mockAutoUpdater,
   }));
 
   vi.doMock('electron', () => ({
     app: mockApp,
-    BrowserWindow: vi.fn(() => mockBrowserWindow),
   }));
 
   updater = await import('../../src/main/updater');
@@ -105,21 +93,20 @@ afterEach(() => {
 
 describe('initUpdater', () => {
   it('configures autoDownload to false', () => {
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+    updater.initUpdater();
 
     expect(mockAutoUpdater.autoDownload).toBe(false);
   });
 
   it('configures autoInstallOnAppQuit to false', () => {
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+    updater.initUpdater();
 
     expect(mockAutoUpdater.autoInstallOnAppQuit).toBe(false);
   });
 
   it('attaches event handlers', () => {
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+    updater.initUpdater();
 
-    // Should register handlers for all lifecycle events
     const registeredEvents = mockAutoUpdater.on.mock.calls.map(
       (call: unknown[]) => call[0],
     );
@@ -130,31 +117,6 @@ describe('initUpdater', () => {
     expect(registeredEvents).toContain('update-downloaded');
     expect(registeredEvents).toContain('error');
   });
-
-  it('setUpdaterWindow rebinds IPC target without re-attaching handlers', () => {
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
-    const handlerCount = mockAutoUpdater.on.mock.calls.length;
-
-    const nextWindow = {
-      isDestroyed: vi.fn(() => false),
-      webContents: { send: vi.fn() },
-    };
-
-    updater.setUpdaterWindow(nextWindow as unknown as Electron.BrowserWindow);
-    expect(mockAutoUpdater.on.mock.calls.length).toBe(handlerCount);
-
-    const updateAvailableHandler = mockAutoUpdater.on.mock.calls.find(
-      (call: unknown[]) => call[0] === 'update-available',
-    )?.[1] as ((info: unknown) => void) | undefined;
-
-    updateAvailableHandler!({ version: '2.0.0', releaseNotes: null });
-
-    expect(nextWindow.webContents.send).toHaveBeenCalledWith(
-      'updater:status_update',
-      expect.objectContaining({ status: 'available', version: '2.0.0' }),
-    );
-    expect(mockBrowserWindow.webContents.send).not.toHaveBeenCalled();
-  });
 });
 
 // ===========================================================================
@@ -162,45 +124,32 @@ describe('initUpdater', () => {
 // ===========================================================================
 
 describe('checkForUpdates — new version available', () => {
-  it('emits status with version when update is available', async () => {
-    updater.initUpdater({
-      window: mockBrowserWindow as unknown as Electron.BrowserWindow,
-      signed: true,
-    });
+  it('records status with version when update is available', async () => {
+    updater.initUpdater({ signed: true });
 
-    // Simulate update-available event
     const updateAvailableHandler = mockAutoUpdater.on.mock.calls.find(
       (call: unknown[]) => call[0] === 'update-available',
     )?.[1] as ((info: unknown) => void) | undefined;
 
     expect(updateAvailableHandler).toBeDefined();
 
-    // Trigger the handler
     updateAvailableHandler!({
       version: '2.0.0',
       releaseNotes: 'New features',
     });
 
-    // Should have sent status to renderer
-    expect(mockBrowserWindow.webContents.send).toHaveBeenCalledWith(
-      'updater:status_update',
-      expect.objectContaining({
-        status: 'available',
-        version: '2.0.0',
-        releaseNotes: 'New features',
-      }),
-    );
+    expect(updater.getUpdaterState()).toMatchObject({
+      status: 'available',
+      version: '2.0.0',
+      releaseNotes: 'New features',
+    });
   });
 
   it('auto-downloads for signed releases', async () => {
-    updater.initUpdater({
-      window: mockBrowserWindow as unknown as Electron.BrowserWindow,
-      signed: true,
-    });
+    updater.initUpdater({ signed: true });
 
     mockAutoUpdater.downloadUpdate.mockResolvedValue(undefined);
 
-    // Simulate update-available event
     const updateAvailableHandler = mockAutoUpdater.on.mock.calls.find(
       (call: unknown[]) => call[0] === 'update-available',
     )?.[1] as ((info: unknown) => void) | undefined;
@@ -210,17 +159,12 @@ describe('checkForUpdates — new version available', () => {
       releaseNotes: null,
     });
 
-    // Should have called downloadUpdate for signed releases
     expect(mockAutoUpdater.downloadUpdate).toHaveBeenCalled();
   });
 
   it('does not auto-download for unsigned releases', async () => {
-    updater.initUpdater({
-      window: mockBrowserWindow as unknown as Electron.BrowserWindow,
-      signed: false,
-    });
+    updater.initUpdater({ signed: false });
 
-    // Simulate update-available event
     const updateAvailableHandler = mockAutoUpdater.on.mock.calls.find(
       (call: unknown[]) => call[0] === 'update-available',
     )?.[1] as ((info: unknown) => void) | undefined;
@@ -230,7 +174,6 @@ describe('checkForUpdates — new version available', () => {
       releaseNotes: null,
     });
 
-    // Should NOT have called downloadUpdate for unsigned releases
     expect(mockAutoUpdater.downloadUpdate).not.toHaveBeenCalled();
   });
 });
@@ -240,10 +183,9 @@ describe('checkForUpdates — new version available', () => {
 // ===========================================================================
 
 describe('checkForUpdates — same version', () => {
-  it('emits not-available status when no update', () => {
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+  it('records not-available status when no update', () => {
+    updater.initUpdater();
 
-    // Simulate update-not-available event
     const handler = mockAutoUpdater.on.mock.calls.find(
       (call: unknown[]) => call[0] === 'update-not-available',
     )?.[1] as ((info: unknown) => void) | undefined;
@@ -254,13 +196,10 @@ describe('checkForUpdates — same version', () => {
       version: '1.0.0',
     });
 
-    expect(mockBrowserWindow.webContents.send).toHaveBeenCalledWith(
-      'updater:status_update',
-      expect.objectContaining({
-        status: 'not-available',
-        version: null,
-      }),
-    );
+    expect(updater.getUpdaterState()).toMatchObject({
+      status: 'not-available',
+      version: null,
+    });
   });
 });
 
@@ -269,10 +208,9 @@ describe('checkForUpdates — same version', () => {
 // ===========================================================================
 
 describe('download progress', () => {
-  it('emits progress events during download', () => {
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+  it('records progress during download', () => {
+    updater.initUpdater();
 
-    // Simulate download-progress event
     const handler = mockAutoUpdater.on.mock.calls.find(
       (call: unknown[]) => call[0] === 'download-progress',
     )?.[1] as ((progress: unknown) => void) | undefined;
@@ -286,29 +224,14 @@ describe('download progress', () => {
       total: 10000000,
     });
 
-    // Should emit status update
-    expect(mockBrowserWindow.webContents.send).toHaveBeenCalledWith(
-      'updater:status_update',
-      expect.objectContaining({
-        status: 'downloading',
-        progress: 50,
-      }),
-    );
-
-    // Should emit detailed progress
-    expect(mockBrowserWindow.webContents.send).toHaveBeenCalledWith(
-      'updater:progress',
-      expect.objectContaining({
-        percent: 50,
-        bytesPerSecond: 1000000,
-        transferred: 5000000,
-        total: 10000000,
-      }),
-    );
+    expect(updater.getUpdaterState()).toMatchObject({
+      status: 'downloading',
+      progress: 50,
+    });
   });
 
   it('rounds progress percentage', () => {
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+    updater.initUpdater();
 
     const handler = mockAutoUpdater.on.mock.calls.find(
       (call: unknown[]) => call[0] === 'download-progress',
@@ -321,12 +244,7 @@ describe('download progress', () => {
       total: 10000000,
     });
 
-    expect(mockBrowserWindow.webContents.send).toHaveBeenCalledWith(
-      'updater:status_update',
-      expect.objectContaining({
-        progress: 33,
-      }),
-    );
+    expect(updater.getUpdaterState().progress).toBe(33);
   });
 });
 
@@ -335,10 +253,9 @@ describe('download progress', () => {
 // ===========================================================================
 
 describe('update downloaded', () => {
-  it('emits downloaded status when update is ready', () => {
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+  it('records downloaded status when update is ready', () => {
+    updater.initUpdater();
 
-    // Simulate update-downloaded event
     const handler = mockAutoUpdater.on.mock.calls.find(
       (call: unknown[]) => call[0] === 'update-downloaded',
     )?.[1] as ((info: unknown) => void) | undefined;
@@ -349,13 +266,10 @@ describe('update downloaded', () => {
       version: '2.0.0',
     });
 
-    expect(mockBrowserWindow.webContents.send).toHaveBeenCalledWith(
-      'updater:status_update',
-      expect.objectContaining({
-        status: 'downloaded',
-        progress: 100,
-      }),
-    );
+    expect(updater.getUpdaterState()).toMatchObject({
+      status: 'downloaded',
+      progress: 100,
+    });
   });
 });
 
@@ -388,7 +302,6 @@ describe('quitAndInstall', () => {
     const order: string[] = [];
     mockApp.removeAllListeners.mockImplementationOnce(() => order.push('remove'));
     updater.initUpdater({
-      window: mockBrowserWindow as unknown as Electron.BrowserWindow,
       flushBeforeInstall: () => order.push('flush'),
     });
     updater.quitAndInstall();
@@ -401,10 +314,9 @@ describe('quitAndInstall', () => {
 // ===========================================================================
 
 describe('error handling', () => {
-  it('emits error status when update check fails', () => {
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+  it('records error status when update check fails', () => {
+    updater.initUpdater();
 
-    // Simulate error event
     const handler = mockAutoUpdater.on.mock.calls.find(
       (call: unknown[]) => call[0] === 'error',
     )?.[1] as ((error: Error) => void) | undefined;
@@ -413,31 +325,17 @@ describe('error handling', () => {
 
     handler!(new Error('Network error'));
 
-    expect(mockBrowserWindow.webContents.send).toHaveBeenCalledWith(
-      'updater:status_update',
-      expect.objectContaining({
-        status: 'error',
-        error: 'Network error',
-      }),
-    );
-
-    expect(mockBrowserWindow.webContents.send).toHaveBeenCalledWith(
-      'updater:error',
-      expect.objectContaining({
-        error: 'Network error',
-      }),
-    );
+    expect(updater.getUpdaterState()).toMatchObject({
+      status: 'error',
+      error: 'Network error',
+    });
   });
 
   it('handles download failure for signed releases', async () => {
-    updater.initUpdater({
-      window: mockBrowserWindow as unknown as Electron.BrowserWindow,
-      signed: true,
-    });
+    updater.initUpdater({ signed: true });
 
     mockAutoUpdater.downloadUpdate.mockRejectedValue(new Error('Download failed'));
 
-    // Simulate update-available event
     const updateAvailableHandler = mockAutoUpdater.on.mock.calls.find(
       (call: unknown[]) => call[0] === 'update-available',
     )?.[1] as ((info: unknown) => void) | undefined;
@@ -447,15 +345,11 @@ describe('error handling', () => {
       releaseNotes: null,
     });
 
-    // Wait for the async download to fail
     await vi.waitFor(() => {
-      expect(mockBrowserWindow.webContents.send).toHaveBeenCalledWith(
-        'updater:status_update',
-        expect.objectContaining({
-          status: 'error',
-          error: expect.stringContaining('Download failed'),
-        }),
-      );
+      expect(updater.getUpdaterState()).toMatchObject({
+        status: 'error',
+        error: expect.stringContaining('Download failed'),
+      });
     });
   });
 });
@@ -468,25 +362,22 @@ describe('checkForUpdates', () => {
   it('skips update check in development mode', async () => {
     mockApp.isPackaged = false;
 
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+    updater.initUpdater();
 
     await updater.checkForUpdates();
 
     expect(mockAutoUpdater.checkForUpdates).not.toHaveBeenCalled();
-    expect(mockBrowserWindow.webContents.send).toHaveBeenCalledWith(
-      'updater:status_update',
-      expect.objectContaining({
-        status: 'not-available',
-        error: 'Updates not available in development mode',
-      }),
-    );
+    expect(updater.getUpdaterState()).toMatchObject({
+      status: 'not-available',
+      error: 'Updates not available in development mode',
+    });
   });
 
   it('calls autoUpdater.checkForUpdates in packaged mode', async () => {
     mockApp.isPackaged = true;
     mockAutoUpdater.checkForUpdates.mockResolvedValue(undefined);
 
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+    updater.initUpdater();
 
     await updater.checkForUpdates();
 
@@ -497,17 +388,14 @@ describe('checkForUpdates', () => {
     mockApp.isPackaged = true;
     mockAutoUpdater.checkForUpdates.mockRejectedValue(new Error('Check failed'));
 
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+    updater.initUpdater();
 
     await updater.checkForUpdates();
 
-    expect(mockBrowserWindow.webContents.send).toHaveBeenCalledWith(
-      'updater:status_update',
-      expect.objectContaining({
-        status: 'error',
-        error: expect.stringContaining('Check failed'),
-      }),
-    );
+    expect(updater.getUpdaterState()).toMatchObject({
+      status: 'error',
+      error: expect.stringContaining('Check failed'),
+    });
   });
 });
 
@@ -519,7 +407,7 @@ describe('downloadUpdate', () => {
   it('calls autoUpdater.downloadUpdate', async () => {
     mockAutoUpdater.downloadUpdate.mockResolvedValue(undefined);
 
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+    updater.initUpdater();
 
     await updater.downloadUpdate();
 
@@ -529,17 +417,14 @@ describe('downloadUpdate', () => {
   it('handles download failure', async () => {
     mockAutoUpdater.downloadUpdate.mockRejectedValue(new Error('Download failed'));
 
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+    updater.initUpdater();
 
     await updater.downloadUpdate();
 
-    expect(mockBrowserWindow.webContents.send).toHaveBeenCalledWith(
-      'updater:status_update',
-      expect.objectContaining({
-        status: 'error',
-        error: expect.stringContaining('Download failed'),
-      }),
-    );
+    expect(updater.getUpdaterState()).toMatchObject({
+      status: 'error',
+      error: expect.stringContaining('Download failed'),
+    });
   });
 });
 
@@ -561,9 +446,8 @@ describe('getUpdaterState', () => {
   });
 
   it('returns current state after update available', () => {
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+    updater.initUpdater();
 
-    // Simulate update-available event
     const handler = mockAutoUpdater.on.mock.calls.find(
       (call: unknown[]) => call[0] === 'update-available',
     )?.[1] as ((info: unknown) => void) | undefined;
@@ -586,7 +470,7 @@ describe('getUpdaterState', () => {
 
 describe('destroyUpdater', () => {
   it('removes all listeners from autoUpdater', () => {
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+    updater.initUpdater();
 
     updater.destroyUpdater();
 
@@ -594,9 +478,8 @@ describe('destroyUpdater', () => {
   });
 
   it('resets state to idle', () => {
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
+    updater.initUpdater();
 
-    // Simulate update-available event to change state
     const handler = mockAutoUpdater.on.mock.calls.find(
       (call: unknown[]) => call[0] === 'update-available',
     )?.[1] as ((info: unknown) => void) | undefined;
@@ -611,30 +494,5 @@ describe('destroyUpdater', () => {
     const state = updater.getUpdaterState();
     expect(state.status).toBe('idle');
     expect(state.version).toBeNull();
-  });
-});
-
-// ===========================================================================
-// Renderer window destroyed
-// ===========================================================================
-
-describe('renderer window destroyed', () => {
-  it('does not send events to destroyed window', () => {
-    mockBrowserWindow.isDestroyed.mockReturnValue(true);
-
-    updater.initUpdater({ window: mockBrowserWindow as unknown as Electron.BrowserWindow });
-
-    // Simulate update-available event
-    const handler = mockAutoUpdater.on.mock.calls.find(
-      (call: unknown[]) => call[0] === 'update-available',
-    )?.[1] as ((info: unknown) => void) | undefined;
-
-    handler!({
-      version: '2.0.0',
-      releaseNotes: null,
-    });
-
-    // Should not have tried to send to destroyed window
-    expect(mockBrowserWindow.webContents.send).not.toHaveBeenCalled();
   });
 });

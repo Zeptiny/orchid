@@ -163,31 +163,36 @@ export const executeCommandInputSchema = z.object({
 
 export type ExecuteCommandInput = z.infer<typeof executeCommandInputSchema>;
 
+/** Options for the internal `executeCommand` executor. */
+export interface ExecuteCommandOptions {
+  command: string;
+  description?: string;
+  workingDirectory?: string;
+  timeout?: number;
+  shell?: boolean;
+  background?: boolean;
+  interactive?: boolean;
+  sessionId?: string;
+  agentScopeId?: string;
+  config?: Pick<Config, 'command_timeout'>;
+  abortSignal?: AbortSignal;
+}
+
 // ---------------------------------------------------------------------------
 // Executor
 // ---------------------------------------------------------------------------
 
 export async function executeCommand(
-  command: string,
-  description?: string,
-  workingDirectory?: string,
-  timeout?: number,
-  shell?: boolean,
-  background?: boolean,
-  interactive?: boolean,
-  options?: {
-    sessionId?: string;
-    agentScopeId?: string;
-    config?: Pick<Config, 'command_timeout'>;
-    abortSignal?: AbortSignal;
-  },
+  options: ExecuteCommandOptions,
 ): Promise<GenericBuiltInToolOutcome> {
-  if (description === undefined) description = command;
+  const command = options.command;
+  const description = options.description ?? command;
   // Caller (handler) should pass an absolute cwd; '.' remains for direct unit tests.
-  if (workingDirectory === undefined) workingDirectory = '.';
-  if (shell === undefined) shell = true;
-  if (background === undefined) background = false;
-  if (interactive === undefined) interactive = false;
+  const workingDirectory = options.workingDirectory ?? '.';
+  const shell = options.shell ?? true;
+  const background = options.background ?? false;
+  const interactive = options.interactive ?? false;
+  let timeout = options.timeout;
 
   // interactive requires background
   if (interactive && !background) {
@@ -207,8 +212,8 @@ export async function executeCommand(
         cwd: workingDirectory,
         interactive,
         description,
-        sessionId: options?.sessionId ?? null,
-        agentScopeId: options?.agentScopeId ?? 'main',
+        sessionId: options.sessionId ?? null,
+        agentScopeId: options.agentScopeId ?? 'main',
       });
       // Keep the command start facts structured so the renderer can present an
       // active background command without recovering metadata from a string.
@@ -233,7 +238,7 @@ export async function executeCommand(
 
   // -- foreground path ------------------------------------------------------
   if (timeout === undefined) {
-    timeout = options?.config?.command_timeout ?? getConfig().command_timeout;
+    timeout = options.config?.command_timeout ?? getConfig().command_timeout;
   }
   const timeoutMs = timeout * 1000;
 
@@ -273,7 +278,7 @@ export async function executeCommand(
 
     // Outer tool-dispatch timeout aborts this signal — kill the live handle only
     // (never bare PID after delay; PID reuse risk).
-    const abortSignal = options?.abortSignal;
+    const abortSignal = options.abortSignal;
     const onAbort = () => {
       if (proc.exitCode === null) {
         killProcessGroup(proc, 'SIGKILL');
@@ -375,19 +380,17 @@ export const executeCommandHandler: ToolHandler = async (input: unknown, ctx) =>
   const resolvedCwd = working_directory
     ? resolveToolPath(ctx.cwd, working_directory)
     : ctx.cwd;
-  return executeCommand(
+  return executeCommand({
     command,
     description,
-    resolvedCwd,
+    workingDirectory: resolvedCwd,
     timeout,
     shell,
     background,
     interactive,
-    {
-      sessionId: ctx.sessionId,
-      agentScopeId: ctx.agentScopeId ?? 'main',
-      config: getToolConfig(ctx),
-      abortSignal: ctx.abortSignal,
-    },
-  );
+    sessionId: ctx.sessionId,
+    agentScopeId: ctx.agentScopeId ?? 'main',
+    config: getToolConfig(ctx),
+    abortSignal: ctx.abortSignal,
+  });
 };

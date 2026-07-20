@@ -13,7 +13,6 @@ import { Worker } from 'node:worker_threads';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from './parser';
 import { ASTStore, type Symbol } from './store';
 import { getConfig } from '../config';
-import { sleep } from '../utils/async';
 import type { ASTIndexResult, ASTIndexProgress } from '../../shared/types/ipc-boundary';
 
 export type { ASTIndexResult, ASTIndexProgress } from '../../shared/types/ipc-boundary';
@@ -55,6 +54,11 @@ const SKIP_DIRS = new Set([
 const initializedProjects = new Set<string>();
 /** In-flight runs keyed by project. Independent projects may index concurrently. */
 const activeIndexes = new Map<string, ASTIndexProgress>();
+/**
+ * Single-flight promises per project so concurrent ensureIndexed / indexProject
+ * callers share one run instead of busy-polling activeIndexes.
+ */
+const activeIndexPromises = new Map<string, Promise<ASTIndexResult>>();
 
 function projectKey(projectPath: string): string {
   return path.resolve(projectPath);
@@ -121,10 +125,9 @@ export async function ensureIndexed(projectPath?: string): Promise<void> {
   }
   const key = projectKey(projectPath);
   if (initializedProjects.has(key)) return;
-  if (activeIndexes.has(key)) {
-    while (activeIndexes.has(key) && !initializedProjects.has(key)) {
-      await sleep(100);
-    }
+  const inFlight = activeIndexPromises.get(key);
+  if (inFlight) {
+    await inFlight;
     return;
   }
   await indexProject({ projectPath });
@@ -154,51 +157,57 @@ export async function indexProject(
     throw new Error('projectPath is required; pass the active workspace cwd');
   }
   const key = projectKey(opts.projectPath);
-  if (activeIndexes.has(key)) {
-    console.warn('AST indexing already in progress, skipping');
-    const empty = makeIndexResult();
-    empty.errors = ['Indexing already in progress'];
-    return empty;
+  const existing = activeIndexPromises.get(key);
+  if (existing) {
+    // Share the in-flight run (single-flight) rather than returning an empty error.
+    return existing;
   }
-  activeIndexes.set(key, {
-    phase: 'discovering',
-    done: 0,
-    total: 0,
-    filesIndexed: 0,
-    filesSkipped: 0,
-    symbolsExtracted: 0,
-    filesDeleted: 0,
-    elapsedSeconds: 0,
-  });
-  const trackProgress: ASTIndexProgressCallback = (progress) => {
-    noteProgress(opts.projectPath!, progress);
+
+  const run = (async (): Promise<ASTIndexResult> => {
+    activeIndexes.set(key, {
+      phase: 'discovering',
+      done: 0,
+      total: 0,
+      filesIndexed: 0,
+      filesSkipped: 0,
+      symbolsExtracted: 0,
+      filesDeleted: 0,
+      elapsedSeconds: 0,
+    });
+    const trackProgress: ASTIndexProgressCallback = (progress) => {
+      noteProgress(opts.projectPath!, progress);
+      try {
+        opts.progressCallback?.(progress);
+      } catch {
+        // ignore
+      }
+    };
     try {
-      opts.progressCallback?.(progress);
-    } catch {
-      // ignore
-    }
-  };
-  try {
-    if (opts.inline) {
-      const result = await runIndexProjectImpl({
-        ...opts,
-        progressCallback: trackProgress,
-      });
+      if (opts.inline) {
+        const result = await runIndexProjectImpl({
+          ...opts,
+          progressCallback: trackProgress,
+        });
+        initializedProjects.add(key);
+        return result;
+      }
+      const result = await runIndexInWorker(
+        opts.projectPath!,
+        opts.force === true,
+        trackProgress,
+      );
+      // Worker set its own session flag; mark main-process session as ready too
+      // so ensureIndexed() short-circuits after a successful run.
       initializedProjects.add(key);
       return result;
+    } finally {
+      activeIndexes.delete(key);
+      activeIndexPromises.delete(key);
     }
-    const result = await runIndexInWorker(
-      opts.projectPath,
-      opts.force === true,
-      trackProgress,
-    );
-    // Worker set its own session flag; mark main-process session as ready too
-    // so ensureIndexed() short-circuits after a successful run.
-    initializedProjects.add(key);
-    return result;
-  } finally {
-    activeIndexes.delete(key);
-  }
+  })();
+
+  activeIndexPromises.set(key, run);
+  return run;
 }
 
 /**
@@ -581,4 +590,5 @@ async function extractSymbols(filePath: string, content: string): Promise<Symbol
 export function resetSession(): void {
   initializedProjects.clear();
   activeIndexes.clear();
+  activeIndexPromises.clear();
 }

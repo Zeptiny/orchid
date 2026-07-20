@@ -28,6 +28,7 @@ import {
   _setToolOutputCacheRootForTests,
   executeToolCall,
   maybeOffloadToolOutput,
+  type ToolDispatchRequest,
 } from '../../src/main/llm/tool-dispatch';
 import {
   _setResultRetrievalCacheRootForTests,
@@ -121,6 +122,15 @@ function makeToolCall(id: string, name: string, args: string = '{}'): ToolCall {
     type: 'function',
     function: { name, arguments: args },
   };
+}
+
+/** Dispatch request for executeToolCall (pre-parsed args or raw JSON string). */
+function makeDispatchCall(
+  id: string,
+  name: string,
+  args: unknown = {},
+): ToolDispatchRequest {
+  return { id, name, args };
 }
 
 function makeAssistantToolCallMessage(toolCalls: ToolCall[], content: string = ''): Message {
@@ -456,7 +466,7 @@ describe('executeToolCall', () => {
       },
     );
 
-    const toolCall = makeToolCall('tc-1', 'echo', '{"text":"hello"}');
+    const toolCall = makeDispatchCall('tc-1', 'echo', { text: 'hello' });
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.canonical).toMatchObject({
@@ -484,7 +494,7 @@ describe('executeToolCall', () => {
     );
 
     const result = await executeToolCall(
-      makeToolCall('typed-call', 'typed'),
+      makeDispatchCall('typed-call', 'typed'),
       registry,
       { cwd: TEST_TOOL_CWD },
     );
@@ -513,7 +523,7 @@ describe('executeToolCall', () => {
     );
 
     const pending = executeToolCall(
-      makeToolCall('cancel-call', 'abortable'),
+      makeDispatchCall('cancel-call', 'abortable'),
       registry,
       { cwd: TEST_TOOL_CWD, abortSignal: parentAbort.signal },
     );
@@ -552,7 +562,7 @@ describe('executeToolCall', () => {
     );
 
     try {
-      const call = makeToolCall('stable-provider-call-id', 'bounded');
+      const call = makeDispatchCall('stable-provider-call-id', 'bounded');
       const first = await executeToolCall(call, registry, {
         cwd: TEST_TOOL_CWD,
         sessionId: 'session-1',
@@ -613,7 +623,7 @@ describe('executeToolCall', () => {
     try {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       const result = await executeToolCall(
-        makeToolCall('cache-fail-call', 'partial_with_cache'),
+        makeDispatchCall('cache-fail-call', 'partial_with_cache'),
         registry,
         { cwd: TEST_TOOL_CWD, sessionId: 'session-cache-fail' },
       );
@@ -660,7 +670,7 @@ describe('executeToolCall', () => {
 
     try {
       const result = await executeToolCall(
-        makeToolCall('provider-offload-call', 'large_projected'),
+        makeDispatchCall('provider-offload-call', 'large_projected'),
         registry,
         { cwd: TEST_TOOL_CWD, sessionId: 'session-offload' },
       );
@@ -691,21 +701,21 @@ describe('executeToolCall', () => {
   });
 
   it('handles invalid JSON arguments', async () => {
-    const toolCall = makeToolCall('tc-1', 'echo', 'not-json');
+    const toolCall = makeDispatchCall('tc-1', 'echo', 'not-json');
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.agentProjection.content).toContain('invalid JSON');
   });
 
   it('handles non-object arguments', async () => {
-    const toolCall = makeToolCall('tc-1', 'echo', '"just a string"');
+    const toolCall = makeDispatchCall('tc-1', 'echo', '"just a string"');
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.agentProjection.content).toContain('must be a JSON object');
   });
 
   it('handles unknown tool', async () => {
-    const toolCall = makeToolCall('tc-1', 'nonexistent', '{}');
+    const toolCall = makeDispatchCall('tc-1', 'nonexistent', {});
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.agentProjection.content).toContain("does not exist");
@@ -725,7 +735,7 @@ describe('executeToolCall', () => {
       handler,
     );
 
-    const toolCall = makeToolCall('tc-1', 'echo', '{}');
+    const toolCall = makeDispatchCall('tc-1', 'echo', {});
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.canonical.status).toBe('error');
@@ -753,7 +763,7 @@ describe('executeToolCall', () => {
       handler,
     );
 
-    const toolCall = makeToolCall('tc-1', 'echo', '{"text":"hi"}');
+    const toolCall = makeDispatchCall('tc-1', 'echo', { text: 'hi' });
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.canonical.status).toBe('complete');
@@ -777,7 +787,7 @@ describe('executeToolCall', () => {
       },
     );
 
-    const toolCall = makeToolCall('tc-1', 'fail', '{}');
+    const toolCall = makeDispatchCall('tc-1', 'fail', {});
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.agentProjection.content).toContain('internal error');
@@ -799,7 +809,7 @@ describe('executeToolCall', () => {
         },
       );
 
-      const toolCall = makeToolCall('tc-1', 'slow', '{}');
+      const toolCall = makeDispatchCall('tc-1', 'slow', {});
       const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD, 
         timeoutSeconds: 0.1, // 100ms timeout
       });
@@ -820,7 +830,7 @@ describe('executeToolCall', () => {
         async () => 'done',
       );
 
-      const toolCall = makeToolCall('tc-1', 'instant', '{}');
+      const toolCall = makeDispatchCall('tc-1', 'instant', {});
       const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD, 
         timeoutSeconds: 0,
       });
@@ -843,7 +853,7 @@ describe('executeToolCall', () => {
         async () => ({ status: 'complete', data: { value: 'ok' } }),
       );
 
-      const toolCall = makeToolCall('tc-1', 'custom_long', '{}');
+      const toolCall = makeDispatchCall('tc-1', 'custom_long', {});
       const result = await executeToolCall(toolCall, registry, {
         cwd: TEST_TOOL_CWD,
         timeoutSeconds: 0.001,
@@ -852,7 +862,7 @@ describe('executeToolCall', () => {
       expect(result.agentProjection.content).toContain('<data>ok</data>');
     });
 
-    it('applies outer timeout to wait_for_subagent (not in TOOLS_WITHOUT_TIMEOUT)', async () => {
+    it('applies outer timeout to wait_for_subagent (no noTimeout on definition)', async () => {
       registry.register(
         {
           name: 'wait_for_subagent',
@@ -866,7 +876,7 @@ describe('executeToolCall', () => {
         },
       );
 
-      const toolCall = makeToolCall('tc-1', 'wait_for_subagent', '{}');
+      const toolCall = makeDispatchCall('tc-1', 'wait_for_subagent', {});
       const result = await executeToolCall(toolCall, registry, {
         cwd: TEST_TOOL_CWD,
         waitTimeoutSeconds: 0.05,
@@ -877,24 +887,48 @@ describe('executeToolCall', () => {
       expect(result.agentProjection.content).toContain('wait_for_subagent');
     }, 10000);
 
-    it('skips timeout for tools in TOOLS_WITHOUT_TIMEOUT set', async () => {
+    it('skips timeout only when definition.noTimeout is set (no name-based set)', async () => {
       registry.register(
         {
           name: 'read_output',
-          description: 'Read output tool',
+          description: 'Read output tool without noTimeout flag',
           inputSchema: z.object({}),
           resultFamily: 'generic',
           outputDataSchema: genericToolResultDataSchema,
           category: 'test',
         },
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          return { status: 'complete', data: { value: 'output' } };
+        },
+      );
+
+      // Name alone no longer exempts — without noTimeout the short budget fires.
+      const timed = await executeToolCall(
+        makeDispatchCall('tc-1', 'read_output', {}),
+        registry,
+        { cwd: TEST_TOOL_CWD, timeoutSeconds: 0.001 },
+      );
+      expect(timed.agentProjection.content).toContain('timed out');
+
+      registry.register(
+        {
+          name: 'read_output_exempt',
+          description: 'Read output with definition flag',
+          inputSchema: z.object({}),
+          resultFamily: 'generic',
+          outputDataSchema: genericToolResultDataSchema,
+          category: 'test',
+          noTimeout: true,
+        },
         async () => ({ status: 'complete', data: { value: 'output' } }),
       );
 
-      const toolCall = makeToolCall('tc-1', 'read_output', '{}');
-      const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD, 
-        timeoutSeconds: 0.001,
-      });
-
+      const result = await executeToolCall(
+        makeDispatchCall('tc-2', 'read_output_exempt', {}),
+        registry,
+        { cwd: TEST_TOOL_CWD, timeoutSeconds: 0.001 },
+      );
       expect(result.agentProjection.content).toContain('<data>output</data>');
     });
 
@@ -928,7 +962,7 @@ describe('executeToolCall', () => {
         },
       );
 
-      const toolCall = makeToolCall('tc-1', 'slow_abortable', '{}');
+      const toolCall = makeDispatchCall('tc-1', 'slow_abortable', {});
       const result = await executeToolCall(toolCall, registry, {
         cwd: TEST_TOOL_CWD,
         timeoutSeconds: 0.1,
@@ -1040,7 +1074,7 @@ describe('ToolRegistry integration with dispatch', () => {
       handler,
     );
 
-    const toolCall = makeToolCall('tc-1', 'test_tool', '{"query":"hello"}');
+    const toolCall = makeDispatchCall('tc-1', 'test_tool', { query: 'hello' });
     await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(handler).toHaveBeenCalledWith({ query: 'hello' }, expect.objectContaining({ cwd: TEST_TOOL_CWD }));
@@ -1057,7 +1091,7 @@ describe('ToolRegistry integration with dispatch', () => {
       async () => 'ok',
     );
 
-    const toolCall = makeToolCall('tc-1', 'nonexistent', '{}');
+    const toolCall = makeDispatchCall('tc-1', 'nonexistent', {});
     const result = await executeToolCall(toolCall, registry, { cwd: TEST_TOOL_CWD });
 
     expect(result.agentProjection.content).toContain('does not exist');

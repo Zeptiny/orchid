@@ -22,7 +22,12 @@ import type { Message, Usage } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import type { SubagentRecord } from '../../shared/types/subagent';
 import { sumSubagentsUsage, subUsageByParentChain } from '../../shared/usage';
-import type { ChatStatus, StreamSegment, ToolBlock } from '../hooks/useChat';
+import {
+  useElapsedSeconds,
+  type ChatStatus,
+  type StreamSegment,
+  type ToolBlock,
+} from '../hooks/useChat';
 import {
   foldActivityRuns,
   isActiveToolStatus,
@@ -72,7 +77,11 @@ interface ChatStreamProps {
   workspaceUnbound?: boolean;
   onPickProjectDir?: () => void;
   onRetry?: () => void;
-  elapsedSeconds?: number;
+  /**
+   * Stream start (ms epoch). Active-chain footer ticks elapsed locally at 1s
+   * so history memos are not invalidated by a wall-clock ticker.
+   */
+  streamStartTime?: number | null;
   interrupted?: boolean;
   /**
    * When true, tool-activity groups start expanded (Settings → Always expand
@@ -131,7 +140,7 @@ export function ChatStream({
   subagents = [],
   sessionChains = [],
   sessionId = null,
-  elapsedSeconds,
+  streamStartTime = null,
   interrupted,
   alwaysExpandToolGroups = false,
 }: ChatStreamProps) {
@@ -147,6 +156,11 @@ export function ChatStream({
   /** Chain indexes the user expanded from a collapsed stub. */
   const [expandedChainIndexes, setExpandedChainIndexes] = useState<Set<number>>(
     () => new Set(),
+  );
+  // Active footer only — never a history-memo dependency.
+  const liveElapsedSeconds = useElapsedSeconds(
+    streamStartTime,
+    status === 'streaming',
   );
 
   const expandChain = useCallback((chainIndex: number) => {
@@ -176,8 +190,8 @@ export function ChatStream({
     setExpandedChainIndexes(new Set());
   }, [sessionId]);
 
-  // Committed history is independent of per-token stream text. Keep it stable
-  // so long sessions do not rebuild O(n) lists on every chunk.
+  // Committed history is independent of per-token stream text and wall-clock
+  // elapsed ticks. Keep it stable so long sessions do not rebuild O(n) lists.
   const history = useMemo(
     () =>
       buildHistoryStreamItems({
@@ -187,7 +201,6 @@ export function ChatStream({
         liveUsage: usage,
         subagents,
         sessionChains,
-        elapsedSeconds,
         interrupted: Boolean(interrupted),
         expandedChainIndexes,
       }),
@@ -198,7 +211,6 @@ export function ChatStream({
       usage,
       subagents,
       sessionChains,
-      elapsedSeconds,
       interrupted,
       expandedChainIndexes,
     ],
@@ -296,7 +308,18 @@ export function ChatStream({
           renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
         )}
         {history.activeFooter &&
-          renderStreamItem(history.activeFooter, alwaysExpandToolGroups, expandChain, subagents)}
+          renderStreamItem(
+            {
+              ...history.activeFooter,
+              elapsedSeconds:
+                status === 'streaming' && streamStartTime != null
+                  ? liveElapsedSeconds
+                  : undefined,
+            },
+            alwaysExpandToolGroups,
+            expandChain,
+            subagents,
+          )}
       </div>
       {isUserScrolledUp ? (
         <Button
@@ -440,7 +463,6 @@ function buildHistoryStreamItems(opts: {
   liveUsage: Usage | null;
   subagents: readonly SubagentRecord[];
   sessionChains: readonly Chain[];
-  elapsedSeconds?: number;
   interrupted: boolean;
   expandedChainIndexes: ReadonlySet<number>;
 }): HistoryBuildResult {
@@ -466,7 +488,6 @@ function buildMultiChainHistoryStreamItems(opts: {
   liveUsage: Usage | null;
   subagents: readonly SubagentRecord[];
   sessionChains: readonly Chain[];
-  elapsedSeconds?: number;
   interrupted: boolean;
   expandedChainIndexes: ReadonlySet<number>;
 }): HistoryBuildResult {
@@ -476,7 +497,6 @@ function buildMultiChainHistoryStreamItems(opts: {
     liveUsage,
     subagents,
     sessionChains,
-    elapsedSeconds,
     interrupted,
     expandedChainIndexes,
   } = opts;
@@ -542,14 +562,14 @@ function buildMultiChainHistoryStreamItems(opts: {
       subUsage = subByParent.get(-1) ?? (subByParent.size === 0 ? subTotal : null);
     }
 
+    // Live elapsed is injected at render for the active footer so the 1s
+    // ticker cannot invalidate this history memo. Completed chains use storage.
     const elapsed =
       isLastChain && liveStreaming
-        ? elapsedSeconds
+        ? undefined
         : chain.startTime
           ? chainElapsedSeconds(chain)
-          : isLastChain
-            ? elapsedSeconds
-            : undefined;
+          : undefined;
 
     const hasBody = chainItems.items.some(
       (it) =>
@@ -719,7 +739,6 @@ function buildLegacyPerUserTurnHistory(opts: {
   liveUsage: Usage | null;
   subagents: readonly SubagentRecord[];
   sessionChains: readonly Chain[];
-  elapsedSeconds?: number;
   interrupted: boolean;
   expandedChainIndexes?: ReadonlySet<number>;
 }): HistoryBuildResult {
@@ -730,7 +749,6 @@ function buildLegacyPerUserTurnHistory(opts: {
     liveUsage,
     subagents,
     sessionChains,
-    elapsedSeconds,
     interrupted,
   } = opts;
 
@@ -843,12 +861,21 @@ function buildLegacyPerUserTurnHistory(opts: {
       subUsageShownForChain.add(turnChainIndex);
     }
 
+    // Live elapsed is injected at render for the active footer only.
+    // Completed turns use the matched chain's stored start/end times.
+    const matchedChain =
+      turnChainIndex != null ? sessionChains[turnChainIndex] : undefined;
+    const elapsedSeconds =
+      isActive || !matchedChain?.startTime
+        ? undefined
+        : chainElapsedSeconds(matchedChain);
+
     const footer: FooterStreamItem = {
       kind: 'footer',
       key: `footer-${turnUserId || turnIndex}`,
       usage: turnUsage,
       subUsage,
-      elapsedSeconds: isLastTurn ? elapsedSeconds : undefined,
+      elapsedSeconds,
       interrupted: isLastTurn ? interrupted : false,
     };
     if (isActive) {

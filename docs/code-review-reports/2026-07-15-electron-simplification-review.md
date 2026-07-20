@@ -4,11 +4,11 @@
 
 | Field | Value |
 |-------|--------|
-| **Date** | 2026-07-15 (audit + partial fix) · **re-verified 2026-07-20** · **P1 batch fixed 2026-07-20** |
+| **Date** | 2026-07-15 (audit + partial fix) · **re-verified 2026-07-20** · **P1 batch fixed 2026-07-20** · **trivial batch fixed 2026-07-20** |
 | **Branch (audit)** | `feat/provider-system-refactor` @ `1a46edd` (+ uncommitted simplification fixes) |
 | **Re-verify / fix branch** | `fix/full-audit-2026-07-16` (current tree under `electron/src/**`) |
 | **Scope** | `electron/src/**` (maintained Electron app) |
-| **Mode** | Audit → partial fix (2026-07-15) → prune + re-verify (2026-07-20) → **P1 reuse batch fixed (2026-07-20)** |
+| **Mode** | Audit → partial fix (2026-07-15) → prune + re-verify (2026-07-20) → P1 reuse batch (2026-07-20) → **trivial P0/P2/P3 batch fixed (2026-07-20)** |
 | **Method** | Adapted `ce-simplify-code` 3-lens pass (reuse / quality / efficiency) per unit |
 | **Agents** | Pattern recognition (reuse), maintainability (quality), performance (efficiency); 2026-07-20 explore re-verify + general-purpose fix subagents |
 | **Related** | Complements [2026-07-13-dead-code-report.md](./2026-07-13-dead-code-report.md) (dead-code cleanup); this report focuses on **simplification** (dedupe, structure, efficiency) of live code |
@@ -20,6 +20,7 @@
 | **2026-07-15** | P0/P1 partial fix: net ~−280 lines in `electron/src` (24 files). `npm run typecheck`, `npm run lint`, focused unit suites (~372 tests) passed. |
 | **2026-07-20** | Re-verified remaining open/partial/P2/P3/Hold findings against current tree. **Removed** findings confirmed fixed (including four that closed after the original fix pass). Updated partials with current evidence. |
 | **2026-07-20 (later)** | P1 reuse batch: U6-012, U3-016, U4-011, U6-011, U9-010, U3-013 via shared helpers. Focused unit suites + ESLint on touched files passed. |
+| **2026-07-20 (trivial batch)** | Five parallel fix subagents closed P0 + remaining trivial P1/P2/P3 items (hydrate, updater bridge, validateConfig, listManaged*, definitions IPC helper, todo/tier enums, executeCommand bag, quirks dead path, timeout flag, cmd.status, tool-dispatch args, agent-machine parts, glob single-stat, write projector head/tail, HeadTailBuffer chunks, session ENOENT open, catalog definitions cache, AST single-flight, elapsed footer tick). Typecheck + ~608 focused unit tests passed. |
 
 #### Closed (removed from backlog)
 
@@ -28,13 +29,14 @@
 | **Fixed 2026-07-15** | SIMP-U3-001, U3-002, U3-003, U9-002, U3-010, U3-011, U3-012, U3-014, U3-015, U2-010, U2-011, U7-010, U7-012; U3-016 scope half (`normalizeAgentScopeId`) |
 | **Fixed by 2026-07-20 re-verify** | SIMP-U7-013 (preload `on`/`onParsed`), SIMP-U7-020 (chat-history session-keyed naming), SIMP-U7-022 (cached driver registry), SIMP-U8-021 (shared `useSession` store) |
 | **Fixed 2026-07-20 P1 batch** | SIMP-U6-012 (`sleep` in `utils/async`), U3-016 (`backgroundCommandNotFound`), U4-011 (`withSerializedWrite`), U6-011 (`withTimeout` / `withTimeoutPromise`), U9-010 (`seedDefaultSubdirs`), U3-013 (`tools/glob-pattern` `globToRegex`) |
+| **Fixed 2026-07-20 trivial batch** | SIMP-U2-001 (removed `hydrateProjectRuntime`), U9-001 (dropped unused `orchid.updater` bridge; main auto-update kept), U2-012 (`listDefinitionEntries`), U2-020 (validateConfig cross-field only), U2-031 (ENOENT open), U3-020 (`z.nativeEnum` todo/tier), U3-021 (`ExecuteCommandOptions` bag), U3-033 (glob single-stat walk records), U3-034 (write agent projector head/tail), U3-035 (`HeadTailBuffer` chunk list), U4-031 (cached `getProviderDefinitions`), U5-020 (deleted dead quirks mid-stream path), U5-021 (`definition.noTimeout` only), U5-022 (system prompt uses `cmd.status`), U5-030 (`ToolDispatchRequest` parsed args), U5-032 (`responseParts`/`thinkingParts`), U6-032 (AST single-flight Promise), U7-021 (`withDefinitionMutation`), U8-031 (1s footer-local elapsed; history memo independent) |
 
 #### Still open
 
 | Status | IDs |
 |--------|-----|
-| **Open** | U2-001, U9-001, U2-012, U4-010, U4-012, U4-013, U6-010, U7-011 (partial shell), U8-010 (partial maps), remaining P2/P3/Hold (see below) |
-| **Partial (remaining work)** | U7-011 progress shells, U5-020 quirks mid-stream flag, U8-010/022 picker & IndexSection, U3-033/034, U5-031, U8-032, HOLD-003 |
+| **Open** | U4-010, U4-012, U4-013, U6-010, U1-020, U2-021, U5-023, U5-024, U8-020, U3-030, U3-031, U3-032, U2-030, U4-030, U5-033, U6-030, U6-031, U7-030, U8-030, U8-033, U8-034, U8-035, HOLD-001, HOLD-002, HOLD-004, HOLD-005 |
+| **Partial (remaining work)** | U7-011 progress shells, U8-010 picker maps, U8-022 IndexSection, U5-031 schema cache, U8-032 todos load, HOLD-003 getConfig fallbacks |
 
 ### Exclusions
 
@@ -72,22 +74,22 @@
 
 | Lens | Open findings (approx.) | Dominant themes | Notes |
 |------|-------------------------|-----------------|-------|
-| **Reuse** | ~9 open | RAG↔AST twin stacks, remaining driver helpers, IPC shells | sleep/timeout/write-lock/seedDefaults/glob-regex/process not-found **done** |
-| **Quality** | ~14 open | Dual config sources, god modules, stringly types, middleware flags | Grep prototype + dead locals/wrapper + chat-history naming + driver registry cache **done** |
-| **Efficiency** | ~22 open (several partial) | Full-file tool I/O, session JSON rewrite, stream IPC fan-out, React stream re-renders, RAG vector write | Mostly **untouched**; small partials on glob stats, write projection, subagent snapshot, per-turn schema build |
+| **Reuse** | ~5 open + partials | RAG↔AST twin stacks, remaining driver helpers, IPC shells | sleep/timeout/write-lock/seedDefaults/glob-regex/process not-found/listManaged/definitions mutation **done** |
+| **Quality** | ~6 open + partials | Dual config sources, god modules, stringly types | hydrate identity, updater bridge, validateConfig dupes, enums, quirks dead path, timeout flag, cmd.status **done** |
+| **Efficiency** | ~16 open (several partial) | Full-file tool I/O, session JSON rewrite, stream IPC fan-out, React stream re-renders, RAG vector write | glob single-stat, write projector, HeadTailBuffer, catalog defs cache, AST single-flight, elapsed ticker, tool-args roundtrip, agent-machine parts **done** |
 
 **Highest-value remaining clusters:**
 
 1. **RAG/AST twin architecture** — shared walk/hash/worker/index-run controller  
 2. **Provider driver boilerplate** — `apiKeyFor*`, OpenAI-compatible model factory, status JSON parsers, redact (~~write locks~~ **done**)  
 3. **RAG/AST IPC shells** — progress broadcast still twin; path resolve **done** via `resolveBoundProjectPath`  
-4. **Stream hot path** — stop full `CHAT_STATE` per token; cache webContents; coalesce renderer updates  
+4. **Stream hot path** — stop full `CHAT_STATE` per token; cache webContents; coalesce renderer updates (~~elapsed history memo~~ **done**)  
 5. **Session load amplification** — todos still full-disk reloads; session select multi-load  
 
 **Clean areas (no high-confidence simplification needed):**  
 `shared/usage.ts`, `agent-scope.ts`, `provider.ts` contracts, `resolver.ts`, `catalog/trust.ts`, `accounting/cost.ts`, `message-factories.ts`, `interrupt-machine.ts`, `mcp/transport.ts`, `rag/chunker.ts`, `logging.ts`, `esm-import.ts`, session-activity push pattern, ToolRegistry WeakMap cache for builtins.
 
-**Also cleaner after fix passes:** `tools/filesystem/edit.ts` / `write.ts` (thin handlers), `tools/search/grep.ts` (no prototype pollution; shared `globToRegex`), `ipc/{rag,ast,tool,defs,mcp}` bound-path path, preload event parsing, provider IPC driver registry cache, shared `useSession` store, `utils/async` + `write-lock` + `seed-defaults`, process `not-found` helper.
+**Also cleaner after fix passes:** `tools/filesystem/edit.ts` / `write.ts` (thin handlers; agent write projector compact), `tools/search/grep.ts` (no prototype pollution; shared `globToRegex`), `tools/filesystem/glob.ts` (single-stat walk records), `ipc/{rag,ast,tool,defs,mcp}` bound-path path, definitions mutation helper, preload event parsing, provider IPC driver registry cache + catalog definitions cache, shared `useSession` store, `utils/async` + `write-lock` + `seed-defaults`, process `not-found` helper, footer-local elapsed tick, no-op hydrate + updater renderer bridge removed.
 
 ---
 
@@ -95,16 +97,12 @@
 
 ### P0 — safe clarity wins
 
-| ID | Status | Summary | Paths | Lens |
-|----|--------|---------|-------|------|
-| [SIMP-U2-001](#simp-u2-001) | Open | `hydrateProjectRuntime` is async identity | `project/runtime.ts` | quality |
-| [SIMP-U9-001](#simp-u9-001) | Open | Updater IPC/UI surface unused (bridge dead) | `updater.ts`, preload, ipc types | quality |
+_None remaining._
 
 ### P1 — reuse existing helpers / extract once
 
 | ID | Status | Summary | Paths | Lens |
 |----|--------|---------|-------|------|
-| [SIMP-U2-012](#simp-u2-012) | Open | Definition listManaged* generic | `defs/manage.ts` | reuse |
 | [SIMP-U4-010](#simp-u4-010) | Open | Shared `apiKeyForDriver` / embedding | all drivers | reuse |
 | [SIMP-U4-012](#simp-u4-012) | Open | Shared status JSON coerce + redact | lilac, neuralwatt, cache, accounting | reuse |
 | [SIMP-U4-013](#simp-u4-013) | Open | OpenAI-compatible model factory | compatible drivers | quality |
@@ -117,16 +115,9 @@
 | ID | Status | Summary | Paths | Lens |
 |----|--------|---------|-------|------|
 | [SIMP-U1-020](#simp-u1-020) | Open | Tighten stringly IPC/theme/chain types | shared types, commands | quality |
-| [SIMP-U2-020](#simp-u2-020) | Open | Drop Zod-duplicate checks in validateConfig | validation + schema | quality |
 | [SIMP-U2-021](#simp-u2-021) | Open | Stop mutating live config for sticky default | workspace.ts | quality |
-| [SIMP-U3-020](#simp-u3-020) | Open | Enum schemas for todo status / agent tier | todo, delegate | quality |
-| [SIMP-U3-021](#simp-u3-021) | Open | Options bag for `executeCommand` | execute-command.ts | quality |
-| [SIMP-U5-020](#simp-u5-020) | Partial | Dead mid-stream flags in quirks (retry improved) | middleware | quality |
-| [SIMP-U5-021](#simp-u5-021) | Open | Dual timeout exemption sources | tool-dispatch | quality |
-| [SIMP-U5-022](#simp-u5-022) | Open | BackgroundCommand.status ignored | build-prompt-context / system-prompt | quality |
 | [SIMP-U5-023](#simp-u5-023) | Open | MCP allowlist via ToolRegistry/minimatch | orchestrator | quality |
 | [SIMP-U5-024](#simp-u5-024) | Open | Prefer catalog over KNOWN_MODELS | model-metadata | quality |
-| [SIMP-U7-021](#simp-u7-021) | Open | definitions IPC mutation helper | definitions.ts | quality |
 | [SIMP-U8-020](#simp-u8-020) | Open | Dual theme/config ownership App vs ChatView | App, ChatView | quality |
 | [SIMP-U8-022](#simp-u8-022) | Partial | IndexSection RAG/AST branch twin | Sidebar | reuse |
 
@@ -137,23 +128,14 @@
 | [SIMP-U3-030](#simp-u3-030) | Open | read: full-file + double open for binary check | read.ts | efficiency |
 | [SIMP-U3-031](#simp-u3-031) | Open | grep: unbounded path list; sync read; serial walk | grep.ts | efficiency |
 | [SIMP-U3-032](#simp-u3-032) | Open | edit: full-file patch/diff every edit | edit.ts | efficiency |
-| [SIMP-U3-033](#simp-u3-033) | Partial | glob: ~2× stat per path (was ~3×) | glob.ts | efficiency |
-| [SIMP-U3-034](#simp-u3-034) | Partial | write still echoes full body (no line numbers) | write.ts | efficiency |
-| [SIMP-U3-035](#simp-u3-035) | Open | HeadTailBuffer concat-on-append | head-tail-buffer.ts | efficiency |
 | [SIMP-U2-030](#simp-u2-030) | Open | Full session JSON rewrite every chain update | session manager/storage | efficiency |
-| [SIMP-U2-031](#simp-u2-031) | Open | existsSync then open TOCTOU | session storage | efficiency |
 | [SIMP-U4-030](#simp-u4-030) | Open | Re-read providers.json every resolve | connection-store | efficiency |
-| [SIMP-U4-031](#simp-u4-031) | Open | Rebuild provider definitions every get | catalog store | efficiency |
-| [SIMP-U5-030](#simp-u5-030) | Open | Tool args stringify→parse roundtrip | orchestrator + tool-dispatch | efficiency |
 | [SIMP-U5-031](#simp-u5-031) | Partial | zodToJsonSchema once per turn (not durable cache) | context-snapshot | efficiency |
-| [SIMP-U5-032](#simp-u5-032) | Open | Agent machine string concat per chunk | agent-machine.ts | efficiency |
 | [SIMP-U5-033](#simp-u5-033) | Open | sendTurnEvent scans all WebContents | chat.ts IPC | efficiency |
 | [SIMP-U6-030](#simp-u6-030) | Open | MCP servers start sequentially | mcp/manager.ts | efficiency |
 | [SIMP-U6-031](#simp-u6-031) | Open | RAG vector write path materializes number[][] | rag store/indexer | efficiency |
-| [SIMP-U6-032](#simp-u6-032) | Open | AST ensureIndexed busy-poll sleep(100) | ast/indexer.ts | efficiency |
 | [SIMP-U7-030](#simp-u7-030) | Open | CHAT_STATE every snapshot tick with full response | chat.ts | efficiency |
 | [SIMP-U8-030](#simp-u8-030) | Open | Stream: dual setState per chunk; no rAF coalesce | useChat.ts | efficiency |
-| [SIMP-U8-031](#simp-u8-031) | Open | 100ms elapsed ticker invalidates history memo | useChat, ChatStream | efficiency |
 | [SIMP-U8-032](#simp-u8-032) | Partial | Todos full load; subagents use snapshot IPC | useTodos, useSubagents | efficiency |
 | [SIMP-U8-033](#simp-u8-033) | Open | Triple main-process loads on session select | ChatView + hooks | efficiency |
 | [SIMP-U8-034](#simp-u8-034) | Open | Live markdown reparse every token | MessageWidget | efficiency |
@@ -172,36 +154,6 @@
 ---
 
 ## Findings (canonical)
-
-### SIMP-U2-001
-
-- **Status:** Open (deferred — call sites/tests still treat as compatibility hook)  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** quality / dead-code / low / 90  
-- **Paths:** `electron/src/main/project/runtime.ts`  
-- **Summary:** `hydrateProjectRuntime` is `async (runtime) => runtime`.  
-- **Suggestion:** Remove helper and call sites, or implement real hydration when needed.  
-- **Unit:** U2  
-
-### SIMP-U9-001
-
-- **Status:** Open (product choice: wire UI vs drop bridge)  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** quality / dead-code / low / 94  
-- **Paths:** `electron/src/main/updater.ts`, `electron/src/preload/index.ts`, `electron/src/shared/types/ipc.ts`  
-- **Summary:** Updater emits status/progress/error and exports `downloadUpdate` / `quitAndInstall`; preload only exposes event listeners; no renderer consumer of `orchid.updater`.  
-- **Suggestion:** Wire UI **or** drop unused public bridge until a consumer exists; keep headless check if desired.  
-- **Unit:** U9  
-
-### SIMP-U2-012
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** reuse / near-duplicate / low / 80  
-- **Paths:** `defs/manage.ts`  
-- **Summary:** `listManagedSkills` / `listManagedAgents` / `listManagedPersonalities` each implement global+project merge + per-type scanners.  
-- **Suggestion:** Generic `listScopedEntries` / `listDefinitionEntries`.  
-- **Unit:** U2  
 
 ### SIMP-U4-010
 
@@ -273,16 +225,6 @@
 - **Suggestion:** Tighten types at boundaries without changing runtime wire format first.  
 - **Unit:** U1  
 
-### SIMP-U2-020
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** quality / copy-paste / low / 82  
-- **Paths:** `config/validation.ts`, `config/schema.ts`  
-- **Summary:** `validateConfig` still re-runs range checks for fields Zod already constrains.  
-- **Suggestion:** Keep cross-field rules only.  
-- **Unit:** U2  
-
 ### SIMP-U2-021
 
 - **Status:** Open  
@@ -292,56 +234,6 @@
 - **Summary:** `updateStickyDefaultProjectDir` still mutates live `getConfig()` object in place.  
 - **Suggestion:** Write home file + reload/reset; treat config as immutable.  
 - **Unit:** U2  
-
-### SIMP-U3-020
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** quality / stringly-typed / low / 85–90  
-- **Paths:** todo tools, `subagent/delegate.ts`  
-- **Summary:** Todo tools use `z.string()` + `parseTodoStatus`; delegate uses `tier: z.string()` then manual `AgentTier` set check.  
-- **Suggestion:** `z.nativeEnum` / `z.enum` at schema boundary.  
-- **Unit:** U3  
-
-### SIMP-U3-021
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** quality / parameter-sprawl / low / 88  
-- **Paths:** `tools/process/execute-command.ts`  
-- **Summary:** Seven positional args + options bag; handler still spreads positionally.  
-- **Suggestion:** Single options object.  
-- **Unit:** U3  
-
-### SIMP-U5-020
-
-- **Status:** **Partial** — retry mid-stream path improved; quirks mid-stream flag still dead  
-- **Verified:** 2026-07-20 — **PARTIALLY_FIXED**  
-- **Lens / class / risk / confidence:** quality / dead-code / medium / 90–92  
-- **Paths:** `llm/middleware/provider-quirks.ts`, `retry.ts`  
-- **Summary:** `retry.ts` now tracks `contentDelivered` while reading. `provider-quirks.ts` still only catches around `doStream()` setup while setting `hasReceivedContent` inside the returned TransformStream, so the mid-stream benign-error suppress path remains structurally dead.  
-- **Suggestion:** Fix quirks stream error path or delete misleading flag; document open-only quirks.  
-- **Unit:** U5  
-
-### SIMP-U5-021
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** quality / redundant-state / low / 85  
-- **Paths:** `llm/tool-dispatch.ts`  
-- **Summary:** `runWithToolTimeout` still ORs `options.noTimeout` with hard-coded `TOOLS_WITHOUT_TIMEOUT`.  
-- **Suggestion:** Prefer definition flag only.  
-- **Unit:** U5  
-
-### SIMP-U5-022
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** quality / redundant-state / low / 90  
-- **Paths:** `llm/build-prompt-context.ts`, `system-prompt.ts`  
-- **Summary:** Background command `status` set from `exitCode` in context builder; system-prompt ignores `cmd.status` and re-derives from `exitCode`.  
-- **Suggestion:** Single source of truth for status field.  
-- **Unit:** U5  
 
 ### SIMP-U5-023
 
@@ -362,16 +254,6 @@
 - **Summary:** Hard-coded `KNOWN_MODELS` still independent of signed provider catalog.  
 - **Suggestion:** Prefer catalog EffectiveModel; KNOWN_MODELS last resort only.  
 - **Unit:** U5  
-
-### SIMP-U7-021
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** quality / copy-paste / low / 90  
-- **Paths:** `ipc/definitions.ts`  
-- **Summary:** Six near-identical save/delete handlers: `safeParse` → `projectDirFromEvent` → mutate → `reloadDefinitionRegistries`.  
-- **Suggestion:** `withDefinitionMutation` helper.  
-- **Unit:** U7  
 
 ### SIMP-U8-020
 
@@ -423,36 +305,6 @@
 - **Suggestion:** Local hunks / cheaper display path for large files.  
 - **Unit:** U3  
 
-### SIMP-U3-033
-
-- **Status:** **Partial** — format no longer re-stats; walk + sort still ~2 stats/match  
-- **Verified:** 2026-07-20 — **PARTIALLY_FIXED**  
-- **Lens / class / risk / confidence:** efficiency / unnecessary-work / low / 86  
-- **Paths:** `tools/filesystem/glob.ts`  
-- **Summary:** Walk `statSync`s leaves/dirs; sort re-`statSync`s for mtime/size; format reuses that data.  
-- **Suggestion:** Capture mtime/type once in walk records.  
-- **Unit:** U3  
-
-### SIMP-U3-034
-
-- **Status:** **Partial** — agent projection no longer numbers lines; still embeds full content  
-- **Verified:** 2026-07-20 — **PARTIALLY_FIXED**  
-- **Lens / class / risk / confidence:** efficiency / overly-broad / low / 84  
-- **Paths:** `tools/filesystem/write.ts`, `tools/result.ts`  
-- **Summary:** `fileWriteAgentProjector` still embeds full `parsed.content` in XML.  
-- **Suggestion:** Path + line count (+ optional head/tail).  
-- **Unit:** U3  
-
-### SIMP-U3-035
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** efficiency / memory / low / 88  
-- **Paths:** `tools/process/head-tail-buffer.ts`  
-- **Summary:** `append` always does `Buffer.concat` under high output.  
-- **Suggestion:** Chunk list / circular buffers; concat on snapshot.  
-- **Unit:** U3  
-
 ### SIMP-U2-030
 
 - **Status:** Open  
@@ -461,16 +313,6 @@
 - **Paths:** `session/manager.ts`, `session/storage.ts`  
 - **Summary:** Chain updates call `replaceSession` + atomic full session JSON write every time.  
 - **Suggestion:** Debounce mid-turn; or segmented/append-friendly storage.  
-- **Unit:** U2  
-
-### SIMP-U2-031
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** efficiency / toctou / low / 80  
-- **Paths:** `session/storage.ts`  
-- **Summary:** `loadSession` still `existsSync` then `readFileSync`.  
-- **Suggestion:** Operate and treat ENOENT as not-found.  
 - **Unit:** U2  
 
 ### SIMP-U4-030
@@ -483,26 +325,6 @@
 - **Suggestion:** In-memory snapshot invalidated on write.  
 - **Unit:** U4  
 
-### SIMP-U4-031
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** efficiency / unnecessary-work / low / 90  
-- **Paths:** `providers/catalog/store.ts`  
-- **Summary:** Catalog snapshot cached; `getProviderDefinitions` still rebuilds via Zod map every call.  
-- **Suggestion:** Cache derived view with catalog snapshot.  
-- **Unit:** U4  
-
-### SIMP-U5-030
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** efficiency / unnecessary-work / low / 88  
-- **Paths:** `llm/orchestrator.ts`, `tool-dispatch.ts`  
-- **Summary:** Tool execute still `JSON.stringify(args)` then `JSON.parse` in dispatch.  
-- **Suggestion:** Pass parsed args through dispatch API.  
-- **Unit:** U5  
-
 ### SIMP-U5-031
 
 - **Status:** **Partial** — amortized once per streamChat tool map, not every dynamic snapshot  
@@ -511,16 +333,6 @@
 - **Paths:** `llm/context-snapshot.ts`, `tools/registry.ts`  
 - **Summary:** `createContextSnapshotBuilder` runs `zodToJsonSchema` once per builder (per turn tool map). Still no durable schema cache; `ToolRegistry.toJsonSchema()` converts all tools on each call.  
 - **Suggestion:** Cache schema lengths at tool-map build / durable WeakMap.  
-- **Unit:** U5  
-
-### SIMP-U5-032
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** efficiency / hot-path / low / 86  
-- **Paths:** `agents/xstate/agent-machine.ts`  
-- **Summary:** CHUNK/THINKING still assign with `context.response + event.data` / `context.thinking + event.data`.  
-- **Suggestion:** Chunk array + join on end; or mutate accumulator.  
 - **Unit:** U5  
 
 ### SIMP-U5-033
@@ -553,16 +365,6 @@
 - **Suggestion:** Float32 matrix / compact once at flush.  
 - **Unit:** U6  
 
-### SIMP-U6-032
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** efficiency / other / low / 81  
-- **Paths:** `ast/indexer.ts`  
-- **Summary:** `ensureIndexed` still busy-waits with `while (...) { await sleep(100); }`.  
-- **Suggestion:** Single-flight Promise per project key.  
-- **Unit:** U6  
-
 ### SIMP-U7-030
 
 - **Status:** Open  
@@ -581,16 +383,6 @@
 - **Paths:** `renderer/hooks/useChat.ts`  
 - **Summary:** Per CHAT_CHUNK: `setStreamingContent` + `applyStreamSegments` → dual React updates; no rAF batching.  
 - **Suggestion:** Ref accumulate; flush ≤1/frame.  
-- **Unit:** U8  
-
-### SIMP-U8-031
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** efficiency / hot-path+no-op / low / 90–91  
-- **Paths:** `useChat.ts`, `ChatStream.tsx`  
-- **Summary:** 100ms elapsed ticker while streaming; `elapsedSeconds` still in history `useMemo` deps.  
-- **Suggestion:** 1s footer-local tick; drop elapsed from history deps.  
 - **Unit:** U8  
 
 ### SIMP-U8-032
@@ -688,10 +480,10 @@
 1. **Twin systems** — RAG vs AST (indexers, workers, IPC, Sidebar UI) still the largest open structural win. ~~Edit vs AST atomic write/diff~~ **consolidated**.  
 2. **Provider stack boilerplate** — credential helpers, OpenAI-compatible construction, status parse, redact (**open**); ~~write locks~~ **shared via `withSerializedWrite`**.  
 3. **Config / tool context dual sources** — turn path uses `getToolConfig`; low-level APIs may still mix `getConfig()` fallbacks.  
-4. **Stream amplification** — main accumulates full response, emits full CHAT_STATE, scans all windows; renderer dual-writes state and re-markdowns every token (**open**).  
-5. **Session I/O amplification** — full JSON rewrite on chain updates; todos still full loads; session select multi-round-trip (**open**; subagents improved via snapshot IPC).  
-6. **Stringly boundaries** — `parseTodoStatus` added; many schemas/types still free strings.  
-7. **Dead / no-op residue** — hydrate identity + updater UI bridge remain; ~~registerBuiltTool, unused edit locals, isAppSigned, grep prototype, preload cast wrappers, chat-history naming, fresh driver registry, second useSession store, local sleep/timeout/seedDefaults/glob converters, process not-found copy-paste~~ **cleared**.  
+4. **Stream amplification** — full `CHAT_STATE` per tick, all-windows scan, dual React setState, live markdown every token (**open**); ~~100ms elapsed→history memo~~ **fixed** (footer-local 1s tick).  
+5. **Session I/O amplification** — full JSON rewrite on chain updates; todos still full loads; session select multi-round-trip (**open**; subagents improved via snapshot IPC; ~~existsSync TOCTOU~~ **fixed**).  
+6. **Stringly boundaries** — todo/tier tool schemas now use `z.nativeEnum`; many shared types still free strings.  
+7. **Dead / no-op residue** — ~~hydrate identity + updater UI bridge~~ **cleared**; ~~registerBuiltTool, unused edit locals, isAppSigned, grep prototype, preload cast wrappers, chat-history naming, fresh driver registry, second useSession store, local sleep/timeout/seedDefaults/glob converters, process not-found copy-paste~~ **cleared**.  
 
 ---
 
@@ -701,6 +493,7 @@
 |------|------|
 | `shared/usage.ts`, `agent-scope.ts`, `provider.ts` | Focused contracts/helpers |
 | `providers/resolver.ts`, `catalog/trust.ts`, `accounting/cost.ts` | Clear, non-duplicative |
+| `providers/catalog/store.ts` definitions view | Cached with catalog snapshot |
 | `llm/message-factories.ts`, `history.ts`, `response-unwrap.ts` | Intentional complexity, already shared |
 | `agents/xstate/interrupt-machine.ts` | Small Esc machine |
 | `mcp/transport.ts`, `mcp/project-registry.ts` lease model | Thin / intentional |
@@ -718,9 +511,15 @@
 | `utils/seed-defaults.ts` | Shared `seedDefaultSubdirs` (skills + agents) |
 | `tools/glob-pattern.ts` | Shared `globToRegex` (grep include + glob segments) |
 | `tools/process/not-found.ts` | Shared background-command not-found outcome |
-| `tools/filesystem/edit.ts`, `write.ts` (post-fix) | Thin handlers over shared helpers |
+| `tools/process/head-tail-buffer.ts` | Chunk-list accumulate; concat on snapshot |
+| `tools/filesystem/edit.ts`, `write.ts` (post-fix) | Thin handlers; compact write agent projection |
+| `tools/filesystem/glob.ts` | Single-stat walk records for sort/format |
+| `defs/manage.ts` `listDefinitionEntries` | Generic scoped list |
+| `ipc/definitions.ts` `withDefinitionMutation` | Shared save/delete shell |
 | `shared/types/session.ts` `flattenSessionMessages` | Shared main + renderer history flatten |
 | Provider IPC cached driver registry | Process-lifetime cache |
+| Main-only auto-updater | Bridge dropped until UI consumer exists |
+| Footer-local elapsed seconds | History memo no longer ticks |
 
 ---
 
@@ -730,6 +529,7 @@
 - **Fix phase (2026-07-15):** Selected P0/P1 applied with typecheck + lint + focused unit tests.  
 - **Re-verify phase (2026-07-20):** Four explore subagents re-checked all open/partial/P2/P3/Hold findings against `fix/full-audit-2026-07-16`. Fixed items removed from this document; partials annotated.  
 - **P1 reuse batch (2026-07-20):** Four general-purpose subagents implemented U6-012, U3-016, U4-011, U6-011, U9-010, U3-013; findings removed from this document.  
+- **Trivial batch (2026-07-20):** Five general-purpose subagents closed remaining P0 + trivial P1/P2/P3 items listed under “Fixed 2026-07-20 trivial batch”; findings removed from this document. Partials with residual work kept with notes.  
 - **Subagent mapping:** Reuse → `ce-pattern-recognition-specialist`; Quality → `ce-maintainability-reviewer`; Efficiency → `ce-performance-reviewer`.  
 - Raw agent IDs were unit-local (`temp-reuse-NNN` etc.); this document renumbers to stable `SIMP-*` IDs.  
 - Findings overlapping the 2026-07-13 dead-code report are cross-referenced rather than re-litigated as new dead code.  
@@ -740,13 +540,12 @@
 
 | Batch | Scope | Suggested skill | Notes |
 |-------|--------|-----------------|-------|
-| A′ | Remaining P0: hydrate identity + updater bridge product decision | `ce-work` | Small |
-| B′ | todo `z.nativeEnum` / enum schemas (U3-020) | `ce-simplify-code` / `ce-work` | glob→regex + process notFound **done** |
-| C′ | RAG/AST IPC progress shell | `ce-work` | Bound-path + preload events **done** |
+| C′ | RAG/AST IPC progress shell (U7-011 remainder) | `ce-work` | Bound-path + preload events **done** |
 | D | Provider driver/auth/status/redact helpers | `ce-work` | Write-lock **done**; U4-010/012/013 remain |
 | E | RAG/AST shared indexer infrastructure | plan first — medium risk | Open |
-| F | Stream path (CHAT_STATE, webContents cache, useChat rAF, elapsed deps, markdown defer) | `ce-work` + browser feel checks | Open |
+| F | Stream path (CHAT_STATE, webContents cache, useChat rAF, markdown defer) | `ce-work` + browser feel checks | Elapsed deps **done** |
 | G | Session peek APIs for todos + reduce multi-load on select | `ce-work` | Subagents snapshot **done** |
+| H | Local quality: sticky config immutability, stringly types, MCP allowlist, IndexSection twin | `ce-work` | U2-021, U1-020, U5-023/024, U8-020/022 |
 
 ---
 
@@ -767,4 +566,4 @@
 
 ---
 
-*Report pruned 2026-07-20 (re-verify) and again after the P1 reuse batch (U6-012, U3-016, U4-011, U6-011, U9-010, U3-013). Remaining sections list open/partial findings only.*
+*Report pruned 2026-07-20 (re-verify), after the P1 reuse batch, and after the trivial fix batch. Remaining sections list open/partial findings only; partials retain residual-work notes.*

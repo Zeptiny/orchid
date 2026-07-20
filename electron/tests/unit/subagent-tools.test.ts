@@ -191,19 +191,16 @@ describe('delegate_to_subagent', () => {
     expect(manager.allRecords()).toHaveLength(0);
   });
 
-  it('should return error for invalid tier', async () => {
-    const { handler } = buildDelegateTool(agents, manager);
+  it('should reject invalid tier at schema boundary', async () => {
+    const { definition } = buildDelegateToolRaw(agents, manager);
 
-    const result = (await handler({
+    const parsed = definition.inputSchema.safeParse({
       name: 'test',
       task: 'Do something',
       type: 'code-reviewer',
       tier: 'invalid-tier',
-    })) as ToolExecutionResult;
-
-    expect(result.canonical.status).toBe('error');
-    expect(result.agentProjection.content).toContain('invalid-tier');
-    expect(result.agentProjection.content).toContain('Available tiers');
+    });
+    expect(parsed.success).toBe(false);
     // No subagent should be spawned
     expect(manager.allRecords()).toHaveLength(0);
   });

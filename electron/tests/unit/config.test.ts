@@ -601,6 +601,22 @@ describe('applyEnvOverrides', () => {
 // Validation
 // ===========================================================================
 
+describe('configSchema range rejection', () => {
+  it('rejects non-positive command_timeout', () => {
+    expect(configSchema.safeParse({ command_timeout: 0 }).success).toBe(false);
+    expect(configSchema.safeParse({ command_timeout: -1 }).success).toBe(false);
+  });
+
+  it('rejects negative llm_stream_retries', () => {
+    expect(configSchema.safeParse({ llm_stream_retries: -1 }).success).toBe(false);
+  });
+
+  it('rejects empty theme and personality', () => {
+    expect(configSchema.safeParse({ theme: '' }).success).toBe(false);
+    expect(configSchema.safeParse({ personality: '' }).success).toBe(false);
+  });
+});
+
 describe('validateConfig', () => {
   it('valid config returns no errors', () => {
     const cfg = defaults();
@@ -609,20 +625,8 @@ describe('validateConfig', () => {
 
   it('empty default_model is an error', () => {
     const cfg = { ...defaults(), default_model: '' };
-    const errors = validateConfig(cfg);
+    const errors = validateConfig(cfg as unknown as ReturnType<typeof defaults>);
     expect(errors.some((e) => e.includes('default_model'))).toBe(true);
-  });
-
-  it('negative command_timeout is an error', () => {
-    const cfg = { ...defaults(), command_timeout: -1 };
-    const errors = validateConfig(cfg);
-    expect(errors.some((e) => e.includes('command_timeout'))).toBe(true);
-  });
-
-  it('zero command_timeout is an error (must be positive)', () => {
-    const cfg = { ...defaults(), command_timeout: 0 };
-    const errors = validateConfig(cfg);
-    expect(errors.some((e) => e.includes('command_timeout'))).toBe(true);
   });
 
   it('rag.chunk_overlap >= rag.chunk_size is an error', () => {
@@ -634,18 +638,12 @@ describe('validateConfig', () => {
     expect(errors.some((e) => e.includes('chunk_overlap') && e.includes('chunk_size'))).toBe(true);
   });
 
-  it('negative llm_stream_retries is an error', () => {
-    const cfg = { ...defaults(), llm_stream_retries: -1 };
-    const errors = validateConfig(cfg);
-    expect(errors.some((e) => e.includes('llm_stream_retries'))).toBe(true);
-  });
-
   it('legacy provider maps are rejected as deprecated', () => {
     const cfg = {
       ...defaults(),
       providers: { 'bad/alias': { base_url: 'url' } },
     };
-    const errors = validateConfig(cfg);
+    const errors = validateConfig(cfg as unknown as ReturnType<typeof defaults>);
     expect(errors.some((e) => e.includes('providers') && e.includes('deprecated'))).toBe(true);
   });
 
@@ -654,7 +652,7 @@ describe('validateConfig', () => {
       ...defaults(),
       providers: { fastembed: { base_url: 'url' } },
     };
-    const errors = validateConfig(cfg);
+    const errors = validateConfig(cfg as unknown as ReturnType<typeof defaults>);
     expect(errors.some((e) => e.includes('providers') && e.includes('deprecated'))).toBe(true);
   });
 
@@ -665,7 +663,7 @@ describe('validateConfig', () => {
         test: { api_key: 'key', api_key_env: 'ENV_VAR' },
       },
     };
-    const errors = validateConfig(cfg);
+    const errors = validateConfig(cfg as unknown as ReturnType<typeof defaults>);
     expect(errors.some((e) => e.includes('providers') && e.includes('deprecated'))).toBe(true);
   });
 
@@ -685,18 +683,6 @@ describe('validateConfig', () => {
     };
     const errors = validateConfig(cfg);
     expect(errors.some((e) => e.includes('command') && e.includes('non-empty'))).toBe(true);
-  });
-
-  it('empty theme is an error', () => {
-    const cfg = { ...defaults(), theme: '' };
-    const errors = validateConfig(cfg);
-    expect(errors.some((e) => e.includes('theme'))).toBe(true);
-  });
-
-  it('empty personality is an error', () => {
-    const cfg = { ...defaults(), personality: '' };
-    const errors = validateConfig(cfg);
-    expect(errors.some((e) => e.includes('personality'))).toBe(true);
   });
 });
 
