@@ -9,6 +9,7 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { resolveToolPath } from '../types';
+import { globToRegex } from '../glob-pattern';
 import {
   searchResultsDataSchema,
   type GlobResultsData,
@@ -99,7 +100,10 @@ function walkGlob(
     return;
   }
 
-  const regex = globSegmentToRegex(segment);
+  const regex = globToRegex(segment, {
+    caseInsensitive: false,
+    characterClasses: false,
+  });
   let entries: string[];
   try {
     entries = fs.readdirSync(currentPath).sort();
@@ -111,21 +115,6 @@ function walkGlob(
       walkGlob(segments, index + 1, path.join(currentPath, entry), results);
     }
   }
-}
-
-/** Convert a single glob segment (without path separators) to a regex. */
-function globSegmentToRegex(segment: string): RegExp {
-  let regex = '^';
-  for (const character of segment) {
-    if (character === '*') regex += '.*';
-    else if (character === '?') regex += '.';
-    else regex += escapeRegex(character);
-  }
-  return new RegExp(`${regex}$`);
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function emptyData(root: string, pattern: string): GlobResultsData {

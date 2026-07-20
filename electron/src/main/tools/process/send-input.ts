@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import { normalizeAgentScopeId } from '../../../shared/types/agent-scope';
 import { getBackgroundStore } from './background-store';
+import { backgroundCommandNotFound } from './not-found';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
@@ -37,7 +38,7 @@ export async function executeSendInput(
   const store = getBackgroundStore();
   const entry = store.getVisible(id, sessionId ?? null, normalizeAgentScopeId(agentScopeId));
   if (!entry) {
-    return genericBuiltInToolOutcome('send_input', `Error: No background command with id ${id}.`, 'error');
+    return backgroundCommandNotFound('send_input', id);
   }
 
   // Not interactive

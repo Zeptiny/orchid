@@ -26,6 +26,7 @@ import type {
   LanguageModelV4StreamResult,
 } from '@ai-sdk/provider';
 import { isTransientError } from './error-classification';
+import { sleep } from '../../utils/async';
 
 // ---------------------------------------------------------------------------
 // Constants — match Python client.py:43, 478
@@ -47,10 +48,6 @@ function backoffDelayMs(attempt: number): number {
   const exponential = BACKOFF_BASE * Math.pow(2, attempt);
   const jitter = Math.random() * BACKOFF_BASE;
   return Math.min(exponential + jitter, MAX_DELAY_SECONDS) * 1000;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Parts that are safe to re-emit after a pre-content retry (metadata only). */

@@ -26,6 +26,7 @@ import {
   HOME_AGENTS_DIR,
 } from '../config/loader';
 import { RESERVED_INTERNAL_AGENT_NAMES } from '../defs/paths';
+import { seedDefaultSubdirs } from '../utils/seed-defaults';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -110,51 +111,6 @@ function loadAgentsFromDir(agentsDir: string): Map<string, Agent> {
 /** Optional resource subtrees that may ship with default agents. */
 const AGENT_RESOURCE_DIRS = ['scripts', 'references', 'assets'] as const;
 
-/**
- * Copy default agent directories from the source (bundled defaults) to a
- * target directory.
- *
- * - Missing agent (no AGENT.md): recursive copy of the entire default tree.
- * - Existing AGENT.md: leave user content alone; only fill missing resource
- *   subtrees without clobbering AGENT.md.
- */
-function seedDefaults(sourceDir: string, targetDir: string): void {
-  if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
-    return;
-  }
-
-  fs.mkdirSync(targetDir, { recursive: true });
-
-  const entries = fs.readdirSync(sourceDir).sort();
-  for (const entry of entries) {
-    const sourceSubdir = path.join(sourceDir, entry);
-    if (!fs.statSync(sourceSubdir).isDirectory()) continue;
-
-    const sourceFile = path.join(sourceSubdir, AGENT_FILENAME);
-    if (!fs.existsSync(sourceFile)) continue;
-
-    const targetSubdir = path.join(targetDir, entry);
-    const targetFile = path.join(targetSubdir, AGENT_FILENAME);
-
-    if (!fs.existsSync(targetFile)) {
-      fs.cpSync(sourceSubdir, targetSubdir, { recursive: true });
-      continue;
-    }
-
-    for (const resource of AGENT_RESOURCE_DIRS) {
-      const sourceResource = path.join(sourceSubdir, resource);
-      const targetResource = path.join(targetSubdir, resource);
-      if (
-        fs.existsSync(sourceResource) &&
-        fs.statSync(sourceResource).isDirectory() &&
-        !fs.existsSync(targetResource)
-      ) {
-        fs.cpSync(sourceResource, targetResource, { recursive: true });
-      }
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -238,7 +194,10 @@ export function listAgents(): Agent[] {
  */
 export function seedAgentsDir(homeDir: string): void {
   const defaultsDir = path.join(__dirname, 'defaults');
-  seedDefaults(defaultsDir, homeDir);
+  seedDefaultSubdirs(defaultsDir, homeDir, {
+    markerFilename: AGENT_FILENAME,
+    resourceDirs: AGENT_RESOURCE_DIRS,
+  });
 }
 
 /**

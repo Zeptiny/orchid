@@ -21,6 +21,7 @@ import {
 } from '../../shared/utils/frontmatter';
 import { registerBuiltinTools } from '../tools';
 import { HOME_SKILLS_DIR } from '../config/loader';
+import { seedDefaultSubdirs } from '../utils/seed-defaults';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -186,51 +187,6 @@ function loadSkillsFromDir(skillsDir: string): Map<string, Skill> {
 /** Resource subtrees that ship with default skills (scripts, refs, assets). */
 const SKILL_RESOURCE_DIRS = ['scripts', 'references', 'assets'] as const;
 
-/**
- * Copy default skill directories from the source (bundled defaults) to a
- * target directory.
- *
- * - Missing skill (no SKILL.md): recursive copy of the entire default tree.
- * - Existing SKILL.md: leave user content alone; only fill missing resource
- *   subtrees (scripts/references/assets) without clobbering SKILL.md.
- */
-function seedDefaults(sourceDir: string, targetDir: string): void {
-  if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
-    return;
-  }
-
-  fs.mkdirSync(targetDir, { recursive: true });
-
-  const entries = fs.readdirSync(sourceDir).sort();
-  for (const entry of entries) {
-    const sourceSubdir = path.join(sourceDir, entry);
-    if (!fs.statSync(sourceSubdir).isDirectory()) continue;
-
-    const sourceFile = path.join(sourceSubdir, SKILL_FILENAME);
-    if (!fs.existsSync(sourceFile)) continue;
-
-    const targetSubdir = path.join(targetDir, entry);
-    const targetFile = path.join(targetSubdir, SKILL_FILENAME);
-
-    if (!fs.existsSync(targetFile)) {
-      fs.cpSync(sourceSubdir, targetSubdir, { recursive: true });
-      continue;
-    }
-
-    for (const resource of SKILL_RESOURCE_DIRS) {
-      const sourceResource = path.join(sourceSubdir, resource);
-      const targetResource = path.join(targetSubdir, resource);
-      if (
-        fs.existsSync(sourceResource) &&
-        fs.statSync(sourceResource).isDirectory() &&
-        !fs.existsSync(targetResource)
-      ) {
-        fs.cpSync(sourceResource, targetResource, { recursive: true });
-      }
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -305,7 +261,10 @@ export function listSkills(): Skill[] {
  */
 export function seedSkillsDir(homeDir: string): void {
   const defaultsDir = path.join(__dirname, 'defaults');
-  seedDefaults(defaultsDir, homeDir);
+  seedDefaultSubdirs(defaultsDir, homeDir, {
+    markerFilename: SKILL_FILENAME,
+    resourceDirs: SKILL_RESOURCE_DIRS,
+  });
 }
 
 /**

@@ -13,6 +13,7 @@ import { Worker } from 'node:worker_threads';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from './parser';
 import { ASTStore, type Symbol } from './store';
 import { getConfig } from '../config';
+import { sleep } from '../utils/async';
 import type { ASTIndexResult, ASTIndexProgress } from '../../shared/types/ipc-boundary';
 
 export type { ASTIndexResult, ASTIndexProgress } from '../../shared/types/ipc-boundary';
@@ -445,10 +446,6 @@ async function runIndexInWorker(
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /**
  * Discover all supported source files in the project directory.

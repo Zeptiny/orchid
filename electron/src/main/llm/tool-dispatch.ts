@@ -40,6 +40,7 @@ import {
   type ToolHandlerOutcome,
 } from '../../shared/types/tool-result';
 import { materializeCanonicalResultRetrieval } from '../tools/result-retrieval';
+import { withTimeout as sharedWithTimeout } from '../utils/async';
 
 // ---------------------------------------------------------------------------
 // Constants — match Python client.py:44, 48-56
@@ -609,48 +610,9 @@ export function withTimeout<T>(
   message: string,
   abortController?: AbortController,
 ): Promise<T> {
-  if (!Number.isFinite(ms) || ms <= 0) {
-    abortController?.abort();
-    return Promise.reject(new ToolTimeoutError(message));
-  }
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  const promise = work();
-
-  const timeoutPromise = new Promise<T>((_, reject) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      abortController?.abort();
-      reject(new ToolTimeoutError(message));
-    }, ms);
-    // Unref so the timer doesn't keep the process alive in tests/CLI
-    if (typeof timer === 'object' && timer && 'unref' in timer) {
-      (timer as NodeJS.Timeout).unref();
-    }
-  });
-
-  return Promise.race([
-    promise.then(
-      (value) => {
-        if (timer !== undefined) clearTimeout(timer);
-        return value;
-      },
-      (err: unknown) => {
-        if (timer !== undefined) clearTimeout(timer);
-        throw err;
-      },
-    ),
-    timeoutPromise,
-  ]).finally(() => {
-    if (timer !== undefined) clearTimeout(timer);
-    // If we already timed out, ignore a late failure/success from work().
-    if (timedOut) {
-      promise.then(
-        () => undefined,
-        () => undefined,
-      );
-    }
+  return sharedWithTimeout(work, ms, message, {
+    abortController,
+    createError: (m) => new ToolTimeoutError(m),
   });
 }
 

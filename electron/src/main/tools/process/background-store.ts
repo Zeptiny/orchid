@@ -9,6 +9,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { sleep } from '../../utils/async';
 import { HeadTailBuffer } from './head-tail-buffer';
 
 // ---------------------------------------------------------------------------
@@ -445,9 +446,5 @@ export function setBackgroundStore(store: BackgroundProcessStore): void {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 export { ENV_SUPPRESSION, PTY_ENV_SUPPRESSION };

@@ -4,9 +4,16 @@ import { randomUUID } from 'node:crypto';
 import { safeStorage } from 'electron';
 import { z } from 'zod';
 import { HOME_CONFIG_DIR, atomicWriteJson } from '../../config/loader';
+import {
+  withSerializedWrite,
+  _clearSerializedWriteChains,
+} from '../../utils/write-lock';
 import { environmentVariableSchema } from '../../../shared/types/provider';
 
 export const PROVIDER_CREDENTIALS_PATH = path.join(HOME_CONFIG_DIR, 'credentials.json');
+
+/** Paths that have used vault serialization (for scoped test resets). */
+const credentialVaultPaths = new Set<string>([PROVIDER_CREDENTIALS_PATH]);
 
 const timestampSchema = z.string().datetime({ offset: true });
 const storedAuthMethodSchema = z.enum(['api-key']);
@@ -121,30 +128,9 @@ export interface CredentialVaultOptions {
   readonly now?: () => Date;
 }
 
-const vaultWriteChains = new Map<string, Promise<void>>();
-
-function withVaultWriteLock<T>(filePath: string, task: () => T | Promise<T>): Promise<T> {
-  const previous = vaultWriteChains.get(filePath) ?? Promise.resolve();
-  const run = previous.catch(() => undefined).then(task);
-  const chain = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  vaultWriteChains.set(filePath, chain);
-  chain.then(
-    () => {
-      if (vaultWriteChains.get(filePath) === chain) vaultWriteChains.delete(filePath);
-    },
-    () => {
-      if (vaultWriteChains.get(filePath) === chain) vaultWriteChains.delete(filePath);
-    },
-  );
-  return run;
-}
-
-/** @internal Test-only cleanup for temporary vault paths. */
+/** @internal Test-only cleanup for credential-vault paths only. */
 export function _clearCredentialVaultWriteChains(): void {
-  vaultWriteChains.clear();
+  _clearSerializedWriteChains([...credentialVaultPaths]);
 }
 
 export function getSecureStorageAvailability(
@@ -245,6 +231,7 @@ export class CredentialVault {
     this.storage = options.safeStorage ?? safeStorage;
     this.idFactory = options.idFactory ?? randomUUID;
     this.now = options.now ?? (() => new Date());
+    credentialVaultPaths.add(this.credentialsPath);
   }
 
   getAvailability(): SecureStorageAvailability {
@@ -273,7 +260,7 @@ export class CredentialVault {
     }
     this.assertSecureStorage();
     const encryptedPayload = this.encryptSecret({ kind: 'api-key', apiKey: trimmed });
-    return withVaultWriteLock(this.credentialsPath, () => {
+    return withSerializedWrite(this.credentialsPath, () => {
       const document = readDocument(this.credentialsPath);
       const now = this.now().toISOString();
       const record = credentialRecordSchema.parse({
@@ -319,7 +306,7 @@ export class CredentialVault {
   }
 
   async deleteConnectionCredentials(connectionId: string): Promise<number> {
-    return withVaultWriteLock(this.credentialsPath, () => {
+    return withSerializedWrite(this.credentialsPath, () => {
       const document = readDocument(this.credentialsPath);
       const entries = document.entries.filter((entry) => entry.binding.connectionId !== connectionId);
       const deleted = document.entries.length - entries.length;
@@ -340,7 +327,7 @@ export class CredentialVault {
       );
     }
     this.assertSecureStorage();
-    return withVaultWriteLock(this.credentialsPath, () => {
+    return withSerializedWrite(this.credentialsPath, () => {
       const document = readDocument(this.credentialsPath);
       const now = this.now().toISOString();
       const record = credentialRecordSchema.parse({

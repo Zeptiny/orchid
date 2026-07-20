@@ -4,13 +4,13 @@
 
 | Field | Value |
 |-------|--------|
-| **Date** | 2026-07-15 (audit + partial fix) · **re-verified 2026-07-20** |
+| **Date** | 2026-07-15 (audit + partial fix) · **re-verified 2026-07-20** · **P1 batch fixed 2026-07-20** |
 | **Branch (audit)** | `feat/provider-system-refactor` @ `1a46edd` (+ uncommitted simplification fixes) |
-| **Re-verify branch** | `fix/full-audit-2026-07-16` (current tree under `electron/src/**`) |
+| **Re-verify / fix branch** | `fix/full-audit-2026-07-16` (current tree under `electron/src/**`) |
 | **Scope** | `electron/src/**` (maintained Electron app) |
-| **Mode** | Audit → partial fix (2026-07-15) → **prune + re-verify open items (2026-07-20)** |
+| **Mode** | Audit → partial fix (2026-07-15) → prune + re-verify (2026-07-20) → **P1 reuse batch fixed (2026-07-20)** |
 | **Method** | Adapted `ce-simplify-code` 3-lens pass (reuse / quality / efficiency) per unit |
-| **Agents** | Pattern recognition (reuse), maintainability (quality), performance (efficiency); 2026-07-20 explore subagents re-checked open findings |
+| **Agents** | Pattern recognition (reuse), maintainability (quality), performance (efficiency); 2026-07-20 explore re-verify + general-purpose fix subagents |
 | **Related** | Complements [2026-07-13-dead-code-report.md](./2026-07-13-dead-code-report.md) (dead-code cleanup); this report focuses on **simplification** (dedupe, structure, efficiency) of live code |
 
 ### Fix / verify log
@@ -19,6 +19,7 @@
 |------|------|
 | **2026-07-15** | P0/P1 partial fix: net ~−280 lines in `electron/src` (24 files). `npm run typecheck`, `npm run lint`, focused unit suites (~372 tests) passed. |
 | **2026-07-20** | Re-verified remaining open/partial/P2/P3/Hold findings against current tree. **Removed** findings confirmed fixed (including four that closed after the original fix pass). Updated partials with current evidence. |
+| **2026-07-20 (later)** | P1 reuse batch: U6-012, U3-016, U4-011, U6-011, U9-010, U3-013 via shared helpers. Focused unit suites + ESLint on touched files passed. |
 
 #### Closed (removed from backlog)
 
@@ -26,13 +27,14 @@
 |--------|-----|
 | **Fixed 2026-07-15** | SIMP-U3-001, U3-002, U3-003, U9-002, U3-010, U3-011, U3-012, U3-014, U3-015, U2-010, U2-011, U7-010, U7-012; U3-016 scope half (`normalizeAgentScopeId`) |
 | **Fixed by 2026-07-20 re-verify** | SIMP-U7-013 (preload `on`/`onParsed`), SIMP-U7-020 (chat-history session-keyed naming), SIMP-U7-022 (cached driver registry), SIMP-U8-021 (shared `useSession` store) |
+| **Fixed 2026-07-20 P1 batch** | SIMP-U6-012 (`sleep` in `utils/async`), U3-016 (`backgroundCommandNotFound`), U4-011 (`withSerializedWrite`), U6-011 (`withTimeout` / `withTimeoutPromise`), U9-010 (`seedDefaultSubdirs`), U3-013 (`tools/glob-pattern` `globToRegex`) |
 
-#### Still open after re-verify
+#### Still open
 
 | Status | IDs |
 |--------|-----|
-| **Open** | U2-001, U9-001, U3-013, U2-012, U4-010…013, U6-010…012, U7-011 (partial shell), U8-010 (partial maps), U9-010, remaining P2/P3/Hold (see below) |
-| **Partial (remaining work)** | U3-016 not-found helper, U7-011 progress shells, U5-020 quirks mid-stream flag, U8-010/022 picker & IndexSection, U3-033/034, U5-031, U8-032, HOLD-003 |
+| **Open** | U2-001, U9-001, U2-012, U4-010, U4-012, U4-013, U6-010, U7-011 (partial shell), U8-010 (partial maps), remaining P2/P3/Hold (see below) |
+| **Partial (remaining work)** | U7-011 progress shells, U5-020 quirks mid-stream flag, U8-010/022 picker & IndexSection, U3-033/034, U5-031, U8-032, HOLD-003 |
 
 ### Exclusions
 
@@ -70,14 +72,14 @@
 
 | Lens | Open findings (approx.) | Dominant themes | Notes |
 |------|-------------------------|-----------------|-------|
-| **Reuse** | ~15 open | RAG↔AST twin stacks, driver credential helpers, IPC shells, seedDefaults | Filesystem helpers + bound-path + flattenSessionMessages + preload event helpers **done** |
+| **Reuse** | ~9 open | RAG↔AST twin stacks, remaining driver helpers, IPC shells | sleep/timeout/write-lock/seedDefaults/glob-regex/process not-found **done** |
 | **Quality** | ~14 open | Dual config sources, god modules, stringly types, middleware flags | Grep prototype + dead locals/wrapper + chat-history naming + driver registry cache **done** |
 | **Efficiency** | ~22 open (several partial) | Full-file tool I/O, session JSON rewrite, stream IPC fan-out, React stream re-renders, RAG vector write | Mostly **untouched**; small partials on glob stats, write projection, subagent snapshot, per-turn schema build |
 
 **Highest-value remaining clusters:**
 
 1. **RAG/AST twin architecture** — shared walk/hash/worker/index-run controller  
-2. **Provider driver boilerplate** — `apiKeyFor*`, OpenAI-compatible model factory, status JSON parsers, write locks, redact  
+2. **Provider driver boilerplate** — `apiKeyFor*`, OpenAI-compatible model factory, status JSON parsers, redact (~~write locks~~ **done**)  
 3. **RAG/AST IPC shells** — progress broadcast still twin; path resolve **done** via `resolveBoundProjectPath`  
 4. **Stream hot path** — stop full `CHAT_STATE` per token; cache webContents; coalesce renderer updates  
 5. **Session load amplification** — todos still full-disk reloads; session select multi-load  
@@ -85,7 +87,7 @@
 **Clean areas (no high-confidence simplification needed):**  
 `shared/usage.ts`, `agent-scope.ts`, `provider.ts` contracts, `resolver.ts`, `catalog/trust.ts`, `accounting/cost.ts`, `message-factories.ts`, `interrupt-machine.ts`, `mcp/transport.ts`, `rag/chunker.ts`, `logging.ts`, `esm-import.ts`, session-activity push pattern, ToolRegistry WeakMap cache for builtins.
 
-**Also cleaner after fix passes:** `tools/filesystem/edit.ts` / `write.ts` (thin handlers), `tools/search/grep.ts` (no prototype pollution), `ipc/{rag,ast,tool,defs,mcp}` bound-path path, preload event parsing, provider IPC driver registry cache, shared `useSession` store.
+**Also cleaner after fix passes:** `tools/filesystem/edit.ts` / `write.ts` (thin handlers), `tools/search/grep.ts` (no prototype pollution; shared `globToRegex`), `ipc/{rag,ast,tool,defs,mcp}` bound-path path, preload event parsing, provider IPC driver registry cache, shared `useSession` store, `utils/async` + `write-lock` + `seed-defaults`, process `not-found` helper.
 
 ---
 
@@ -102,19 +104,13 @@
 
 | ID | Status | Summary | Paths | Lens |
 |----|--------|---------|-------|------|
-| [SIMP-U3-013](#simp-u3-013) | Open | Shared glob→regex | `glob.ts`, `grep.ts` | reuse |
-| [SIMP-U3-016](#simp-u3-016) | Partial | Background cmd not-found helper | process tools | reuse |
 | [SIMP-U2-012](#simp-u2-012) | Open | Definition listManaged* generic | `defs/manage.ts` | reuse |
 | [SIMP-U4-010](#simp-u4-010) | Open | Shared `apiKeyForDriver` / embedding | all drivers | reuse |
-| [SIMP-U4-011](#simp-u4-011) | Open | Shared write-lock utility | connection-store, vault | reuse |
 | [SIMP-U4-012](#simp-u4-012) | Open | Shared status JSON coerce + redact | lilac, neuralwatt, cache, accounting | reuse |
 | [SIMP-U4-013](#simp-u4-013) | Open | OpenAI-compatible model factory | compatible drivers | quality |
 | [SIMP-U6-010](#simp-u6-010) | Open | RAG↔AST: walk, hash, worker, run tracker | rag + ast indexers | reuse |
-| [SIMP-U6-011](#simp-u6-011) | Open | Shared `withTimeout` | mcp manager, tool-dispatch | reuse |
-| [SIMP-U6-012](#simp-u6-012) | Open | Shared `sleep` | ast indexer, retry, background-store | reuse |
 | [SIMP-U7-011](#simp-u7-011) | Partial | RAG/AST IPC shell extract | `ipc/rag.ts`, `ipc/ast.ts` | reuse |
 | [SIMP-U8-010](#simp-u8-010) | Partial | Provider model picker maps hook | ChatView, TierModels, RAGTab | reuse |
-| [SIMP-U9-010](#simp-u9-010) | Open | Shared seedDefaults for skills/agents | skills + agents registry | reuse |
 
 ### P2 — local quality
 
@@ -197,26 +193,6 @@
 - **Suggestion:** Wire UI **or** drop unused public bridge until a consumer exists; keep headless check if desired.  
 - **Unit:** U9  
 
-### SIMP-U3-013
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** reuse / near-duplicate / medium / 85  
-- **Paths:** `tools/filesystem/glob.ts`, `tools/search/grep.ts`  
-- **Summary:** Separate converters: `globToRegex` (grep) vs `globSegmentToRegex` (glob); not shared.  
-- **Suggestion:** One helper or use existing `minimatch` dependency.  
-- **Unit:** U3  
-
-### SIMP-U3-016
-
-- **Status:** **Partial** — `normalizeAgentScopeId` applied; not-found error blocks still duplicated  
-- **Verified:** 2026-07-20 — **STILL_TRUE** (as partial)  
-- **Lens / class / risk / confidence:** reuse / near-duplicate / low / 88  
-- **Paths:** `tools/process/read-output.ts`, `send-input.ts`, `terminate-command.ts`, `shared/types/agent-scope.ts`  
-- **Summary:** Identical not-found error blocks remain (`Error: No background command with id ${id}.`).  
-- **Suggestion:** Shared `notFoundResult(id)`.  
-- **Unit:** U3  
-
 ### SIMP-U2-012
 
 - **Status:** Open  
@@ -235,16 +211,6 @@
 - **Paths:** `providers/drivers/{native,compatible,opencode-go,neuralwatt,lilac}.ts`  
 - **Summary:** Local `apiKeyForDriver` / embedding / `apiKeyForLilac` variants still copy-pasted with inconsistent empty-key behavior.  
 - **Suggestion:** Shared `requireApiKey` / `optionalApiKey` on `DriverCredential`.  
-- **Unit:** U4  
-
-### SIMP-U4-011
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** reuse / near-duplicate / medium / 94  
-- **Paths:** `providers/connection-store.ts`, `providers/credentials/vault.ts`  
-- **Summary:** Promise-chain write locks still duplicated (`withWriteLock` / `withVaultWriteLock`).  
-- **Suggestion:** `withSerializedWrite(filePath, task)`.  
 - **Unit:** U4  
 
 ### SIMP-U4-012
@@ -277,26 +243,6 @@
 - **Suggestion:** Shared walk/hash/worker-run-controller; domain filters stay local.  
 - **Unit:** U6  
 
-### SIMP-U6-011
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** reuse / inline-could-use-util / medium / 93  
-- **Paths:** `mcp/manager.ts`, `llm/tool-dispatch.ts`  
-- **Summary:** Private `_withTimeout` reimplements exported `withTimeout` race/timer pattern.  
-- **Suggestion:** Share one timeout helper under `main/utils` or import tool-dispatch export.  
-- **Unit:** U6  
-
-### SIMP-U6-012
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** reuse / duplicate-helper / low / 85  
-- **Paths:** `ast/indexer.ts`, `llm/middleware/retry.ts`, `tools/process/background-store.ts`  
-- **Summary:** Local `sleep(ms)` wrappers.  
-- **Suggestion:** Single `main/utils/async.ts` `sleep`.  
-- **Unit:** U6  
-
 ### SIMP-U7-011
 
 - **Status:** **Partial** — path resolve shared; progress broadcast + empty shells still twin modules  
@@ -316,16 +262,6 @@
 - **Summary:** ChatView / TierModels / RAGTab each copy/filter options in local state/memos (full list vs text-gen vs embedding).  
 - **Suggestion:** Hook/builder using existing `providerModelOptionKey` / modality filters.  
 - **Unit:** U8  
-
-### SIMP-U9-010
-
-- **Status:** Open  
-- **Verified:** 2026-07-20 — **STILL_TRUE**  
-- **Lens / class / risk / confidence:** reuse / duplicate-helper / low / 90  
-- **Paths:** `skills/registry.ts`, `agents/registry.ts`  
-- **Summary:** `seedDefaults` subdir copy-if-missing still duplicated (SKILL.md vs AGENT.md).  
-- **Suggestion:** Shared `seedDefaultSubdirs(source, target, filename)`.  
-- **Unit:** U9  
 
 ### SIMP-U1-020
 
@@ -750,12 +686,12 @@
 ## Cross-cutting themes
 
 1. **Twin systems** — RAG vs AST (indexers, workers, IPC, Sidebar UI) still the largest open structural win. ~~Edit vs AST atomic write/diff~~ **consolidated**.  
-2. **Provider stack boilerplate** — credential helpers, OpenAI-compatible construction, status parse, redact, write locks (**open**).  
+2. **Provider stack boilerplate** — credential helpers, OpenAI-compatible construction, status parse, redact (**open**); ~~write locks~~ **shared via `withSerializedWrite`**.  
 3. **Config / tool context dual sources** — turn path uses `getToolConfig`; low-level APIs may still mix `getConfig()` fallbacks.  
 4. **Stream amplification** — main accumulates full response, emits full CHAT_STATE, scans all windows; renderer dual-writes state and re-markdowns every token (**open**).  
 5. **Session I/O amplification** — full JSON rewrite on chain updates; todos still full loads; session select multi-round-trip (**open**; subagents improved via snapshot IPC).  
 6. **Stringly boundaries** — `parseTodoStatus` added; many schemas/types still free strings.  
-7. **Dead / no-op residue** — hydrate identity + updater UI bridge remain; ~~registerBuiltTool, unused edit locals, isAppSigned, grep prototype, preload cast wrappers, chat-history naming, fresh driver registry, second useSession store~~ **cleared**.  
+7. **Dead / no-op residue** — hydrate identity + updater UI bridge remain; ~~registerBuiltTool, unused edit locals, isAppSigned, grep prototype, preload cast wrappers, chat-history naming, fresh driver registry, second useSession store, local sleep/timeout/seedDefaults/glob converters, process not-found copy-paste~~ **cleared**.  
 
 ---
 
@@ -777,6 +713,11 @@
 | Shared `useSession` external store | ChatView + ConfigView share one store |
 | Preload `on` / `onParsed` | Event subscription helpers done |
 | `logging.ts`, `esm-import.ts` | Minimal |
+| `utils/async.ts` | Shared `sleep` + `withTimeout` / `withTimeoutPromise` |
+| `utils/write-lock.ts` | Shared `withSerializedWrite` (connection-store + vault) |
+| `utils/seed-defaults.ts` | Shared `seedDefaultSubdirs` (skills + agents) |
+| `tools/glob-pattern.ts` | Shared `globToRegex` (grep include + glob segments) |
+| `tools/process/not-found.ts` | Shared background-command not-found outcome |
 | `tools/filesystem/edit.ts`, `write.ts` (post-fix) | Thin handlers over shared helpers |
 | `shared/types/session.ts` `flattenSessionMessages` | Shared main + renderer history flatten |
 | Provider IPC cached driver registry | Process-lifetime cache |
@@ -788,6 +729,7 @@
 - **Audit phase:** 3-lens parallel review, report-only (no patches).  
 - **Fix phase (2026-07-15):** Selected P0/P1 applied with typecheck + lint + focused unit tests.  
 - **Re-verify phase (2026-07-20):** Four explore subagents re-checked all open/partial/P2/P3/Hold findings against `fix/full-audit-2026-07-16`. Fixed items removed from this document; partials annotated.  
+- **P1 reuse batch (2026-07-20):** Four general-purpose subagents implemented U6-012, U3-016, U4-011, U6-011, U9-010, U3-013; findings removed from this document.  
 - **Subagent mapping:** Reuse → `ce-pattern-recognition-specialist`; Quality → `ce-maintainability-reviewer`; Efficiency → `ce-performance-reviewer`.  
 - Raw agent IDs were unit-local (`temp-reuse-NNN` etc.); this document renumbers to stable `SIMP-*` IDs.  
 - Findings overlapping the 2026-07-13 dead-code report are cross-referenced rather than re-litigated as new dead code.  
@@ -799,9 +741,9 @@
 | Batch | Scope | Suggested skill | Notes |
 |-------|--------|-----------------|-------|
 | A′ | Remaining P0: hydrate identity + updater bridge product decision | `ce-work` | Small |
-| B′ | glob→regex share; process notFound helper; todo `z.nativeEnum` | `ce-simplify-code` / `ce-work` | Finish partials |
+| B′ | todo `z.nativeEnum` / enum schemas (U3-020) | `ce-simplify-code` / `ce-work` | glob→regex + process notFound **done** |
 | C′ | RAG/AST IPC progress shell | `ce-work` | Bound-path + preload events **done** |
-| D | Provider driver/auth/status/redact/write-lock helpers | `ce-work` | Open |
+| D | Provider driver/auth/status/redact helpers | `ce-work` | Write-lock **done**; U4-010/012/013 remain |
 | E | RAG/AST shared indexer infrastructure | plan first — medium risk | Open |
 | F | Stream path (CHAT_STATE, webContents cache, useChat rAF, elapsed deps, markdown defer) | `ce-work` + browser feel checks | Open |
 | G | Session peek APIs for todos + reduce multi-load on select | `ce-work` | Subagents snapshot **done** |
@@ -825,4 +767,4 @@
 
 ---
 
-*Report pruned 2026-07-20: fixed findings removed; open items re-verified against current codebase. No application code was modified by this re-verify pass.*
+*Report pruned 2026-07-20 (re-verify) and again after the P1 reuse batch (U6-012, U3-016, U4-011, U6-011, U9-010, U3-013). Remaining sections list open/partial findings only.*

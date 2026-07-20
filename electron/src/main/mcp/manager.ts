@@ -35,6 +35,7 @@ import type { ToolDefinition, ToolHandler, RegisteredTool } from '../tools/types
 import type { MCPServerConfig, MCPServerStatus, MCPServerStatusValue } from './schema';
 import { isValidServerName } from './schema';
 import { createTransport } from './transport';
+import { withTimeoutPromise } from '../utils/async';
 import {
   createDynamicToolOutcome,
   genericToolResultDataSchema,
@@ -253,7 +254,7 @@ export class MCPManager {
 
     let result: Awaited<ReturnType<typeof client.callTool>>;
     try {
-      result = await this._withTimeout(
+      result = await withTimeoutPromise(
         client.callTool(
           { name: toolName, arguments: args as Record<string, unknown> },
           undefined,
@@ -261,7 +262,7 @@ export class MCPManager {
         ),
         this._perServerTimeout,
         timeoutMessage,
-        timeoutAbort,
+        { abortController: timeoutAbort },
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -314,11 +315,11 @@ export class MCPManager {
 
     let result: Awaited<ReturnType<typeof client.readResource>>;
     try {
-      result = await this._withTimeout(
+      result = await withTimeoutPromise(
         client.readResource({ uri }, { signal: combinedSignal }),
         this._perServerTimeout,
         timeoutMessage,
-        timeoutAbort,
+        { abortController: timeoutAbort },
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -657,47 +658,6 @@ export class MCPManager {
       serverName: rest.slice(0, separatorIdx),
       toolName: rest.slice(separatorIdx + 2),
     };
-  }
-
-  private _withTimeout<T>(
-    promise: Promise<T>,
-    ms: number,
-    message: string,
-    abortController?: AbortController,
-  ): Promise<T> {
-    if (!Number.isFinite(ms) || ms <= 0) {
-      abortController?.abort();
-      promise.then(() => undefined, () => undefined);
-      return Promise.reject(new Error(message));
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let timedOut = false;
-    const timeoutPromise = new Promise<T>((_, reject) => {
-      timer = setTimeout(() => {
-        timedOut = true;
-        abortController?.abort();
-        reject(new Error(message));
-      }, ms);
-      if (typeof timer === 'object' && timer && 'unref' in timer) {
-        (timer as NodeJS.Timeout).unref();
-      }
-    });
-    return Promise.race([
-      promise.then(
-        (v) => {
-          if (timer !== undefined) clearTimeout(timer);
-          return v;
-        },
-        (err: unknown) => {
-          if (timer !== undefined) clearTimeout(timer);
-          throw err;
-        },
-      ),
-      timeoutPromise,
-    ]).finally(() => {
-      if (timer !== undefined) clearTimeout(timer);
-      if (timedOut) promise.then(() => undefined, () => undefined);
-    });
   }
 
   private _raceWithSignal<T>(

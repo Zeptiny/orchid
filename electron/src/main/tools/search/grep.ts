@@ -14,6 +14,7 @@ import type { Config } from '../../config/schema';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { getToolConfig, resolveToolPath } from '../types';
 import { isBinaryFile } from '../ast/utils';
+import { globToRegex } from '../glob-pattern';
 import {
   grepMatchSchema,
   searchResultsDataSchema,
@@ -60,34 +61,6 @@ class Semaphore {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Convert a glob pattern (like *.ts, *.py) to a fnmatch-style regex. */
-function globToRegex(pattern: string): RegExp {
-  let regex = '';
-  let index = 0;
-  while (index < pattern.length) {
-    const character = pattern[index];
-    if (character === '*') {
-      regex += '.*';
-    } else if (character === '?') {
-      regex += '.';
-    } else if (character === '[') {
-      const end = pattern.indexOf(']', index + 1);
-      if (end !== -1) {
-        regex += `[${pattern.substring(index + 1, end).replace(/\\/g, '\\\\')}]`;
-        index = end;
-      } else {
-        regex += '\\[';
-      }
-    } else if (character === '.') {
-      regex += '\\.';
-    } else {
-      regex += character.replace(/[\\^$+{}()|]/g, '\\$&');
-    }
-    index++;
-  }
-  return new RegExp(`^${regex}$`, 'i');
-}
 
 function shouldSkipDir(dirname: string, ignored: Set<string>): boolean {
   return dirname.startsWith('.') || ignored.has(dirname);
@@ -253,7 +226,7 @@ export async function executeGrepOutcome(
 
   const ignored = new Set(config?.ignored_dirs ?? getConfig().ignored_dirs);
   let fileRegex: RegExp | null = null;
-  if (includePattern) fileRegex = globToRegex(includePattern);
+  if (includePattern) fileRegex = globToRegex(includePattern, { caseInsensitive: true });
   const filePaths = await collectFiles(basePath, fileRegex, ignored);
   const semaphore = new Semaphore(SEMAPHORE_LIMIT);
   const perFile = new Map<string, GrepMatch[]>();

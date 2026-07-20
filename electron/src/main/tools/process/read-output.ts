@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import { normalizeAgentScopeId } from '../../../shared/types/agent-scope';
 import { getBackgroundStore } from './background-store';
+import { backgroundCommandNotFound } from './not-found';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
@@ -48,7 +49,7 @@ export async function executeReadOutput(
   // Visibility is session + agent scoped (peer agents cannot read each other).
   const entry = store.getVisible(id, scopeSessionId, scopeAgent);
   if (!entry) {
-    return genericBuiltInToolOutcome('read_output', `Error: No background command with id ${id}.`, 'error');
+    return backgroundCommandNotFound('read_output', id);
   }
 
   // Long-poll: wait for new output or exit before snapshotting.
@@ -59,7 +60,7 @@ export async function executeReadOutput(
 
   const result = store.snapshotVisible(id, lastN, scopeSessionId, scopeAgent);
   if (!result) {
-    return genericBuiltInToolOutcome('read_output', `Error: No background command with id ${id}.`, 'error');
+    return backgroundCommandNotFound('read_output', id);
   }
 
   const { tail, exitCode } = result;
