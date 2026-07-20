@@ -10,7 +10,6 @@ import {
 import { ConnectionList } from '../Providers/ConnectionList';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
-import { Icon } from '../Icon';
 import { StateMessage } from '../ui/StateMessage';
 
 export function ProvidersTab() {

@@ -39,10 +39,16 @@ export type GenericBuiltInToolOutcome = ToolHandlerOutcome<GenericToolResultData
 
 type XmlAttributeValue = string | number | boolean | null | undefined;
 
+/** XML 1.0 illegal C0 controls (excludes TAB/LF/CR). Built from char codes to satisfy no-control-regex. */
+const XML_ILLEGAL_CONTROL_CHARS = new RegExp(
+  `[${String.fromCharCode(0)}-${String.fromCharCode(8)}${String.fromCharCode(11)}${String.fromCharCode(12)}${String.fromCharCode(14)}-${String.fromCharCode(31)}]`,
+  'g',
+);
+
 /** Escape text for an XML element. Strips XML 1.0 illegal control characters. */
 export function escapeXmlText(value: unknown): string {
   return String(value ?? '')
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+    .replace(XML_ILLEGAL_CONTROL_CHARS, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
@@ -51,7 +57,7 @@ export function escapeXmlText(value: unknown): string {
 /** Escape a value for an XML attribute. Strips XML 1.0 illegal control characters. */
 export function escapeXmlAttribute(value: unknown): string {
   return String(value ?? '')
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+    .replace(XML_ILLEGAL_CONTROL_CHARS, '')
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')

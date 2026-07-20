@@ -24,7 +24,6 @@ import type {
   ProviderProtocol,
 } from '../../../shared/types/provider';
 import { isTextGenerationModel } from '../../utils/models';
-import { Icon } from '../Icon';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
 import { Checkbox } from '../ui/Checkbox';

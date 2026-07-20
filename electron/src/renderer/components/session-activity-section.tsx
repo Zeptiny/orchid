@@ -4,7 +4,6 @@ import type {
   SessionSummary,
 } from '../../shared/types/ipc-boundary';
 import { truncatePathDisplay } from '../utils/session-workspace';
-import { Icon } from './Icon';
 import { IconButton } from './ui/IconButton';
 import { StatusBadge } from './ui/StatusBadge';
 
