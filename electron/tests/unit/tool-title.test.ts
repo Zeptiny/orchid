@@ -153,4 +153,34 @@ describe('tool widget titles', () => {
       }),
     ).toBe('Preparing custom tool name');
   });
+
+  it('uses lifecycle titles for apply_patch', () => {
+    expect(titleText({
+      toolName: 'apply_patch',
+      status: 'generating',
+      args: '',
+      partialArgs: '{"patch":"*** Begin Patch",',
+    })).toBe('Preparing to apply patch');
+
+    expect(titleText({
+      toolName: 'apply_patch',
+      status: 'running',
+      args: JSON.stringify({ patch: '*** Begin Patch\n*** End Patch' }),
+      partialArgs: '',
+    })).toBe('Applying patch');
+
+    expect(titleText({
+      toolName: 'apply_patch',
+      status: 'completed',
+      args: JSON.stringify({ patch: '*** Begin Patch\n*** End Patch' }),
+      partialArgs: '',
+    })).toBe('Applied patch');
+
+    expect(titleText({
+      toolName: 'apply_patch',
+      status: 'failed',
+      args: JSON.stringify({ patch: '*** Begin Patch\n*** End Patch' }),
+      partialArgs: '',
+    })).toBe('Couldn’t apply patch');
+  });
 });

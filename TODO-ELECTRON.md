@@ -27,7 +27,10 @@
   - MCP: `read_mcp_resource`, `list_mcp_resources`, and dynamically registered MCP tools
 
 ### TODOs geral
-- apply_patch tool
+- ~~apply_patch tool~~ (done — feat/apply-patch-tool)
+- **P0: Realpath-based path sandboxing for all filesystem tools** — `resolveToolPath` is lexical-only; symlinks inside the project can escape the working directory. apply_patch has a lexical containment check but it's bypassable via directory symlinks. `write`/`edit` have no containment at all. Reuse `assertPathInScopeRoot` from `defs/paths.ts:116` (realpaths root + parent + leaf). Apply uniformly to all mutating filesystem tools. (code review 2026-07-19, P0)
+- **P1: apply_patch sync matching can block event loop** — `seekSequence` is O(n×m×4) synchronous. Large file + non-matching pattern blocks the main process indefinitely; `Promise.race` timeout can't fire. Add a line-count guard in `applyChunksToContent` and `.max()` on the patch Zod schema. (code review 2026-07-19, P1)
+- **P1: apply_patch agent projector emits redundant full diffs** — full `<old_string>`/`<new_string>` per file can exceed 20KB offload threshold, stripping per-file error info the agent needs. Make projector compact: per-file status + errors only, omit diffs (UI renderer keeps them). (code review 2026-07-19, P1)
 - Change session storage to SQLite
 - Tools should start the execution as son as the generation is complete, even if the model is still generating output for other commands
 - RAG/AST Post Write Callback + automatic updating if changes are detected (Can be changed via commands / manually / etc that post write callback does not detect)

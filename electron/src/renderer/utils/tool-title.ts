@@ -345,6 +345,10 @@ export function buildToolTitle(input: ToolTitleInput): ToolTitle {
     preparing: 'Preparing to list', running: 'Listing', completed: 'Listed', failed: 'list',
   }, pathValue ?? undefined);
 
+  if (tool === 'apply_patch') return withLifecycle(input.status, {
+    preparing: 'Preparing to apply patch', running: 'Applying patch', completed: 'Applied patch', failed: 'apply patch',
+  });
+
   if (tool === 'read_output' || tool === 'send_input' || tool === 'terminate_command') {
     const id = numberForKey(rawArgs, args, ['id']);
     const subject = id !== null ? `command #${id}` : 'background command';

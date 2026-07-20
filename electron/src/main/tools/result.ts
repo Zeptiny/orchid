@@ -65,7 +65,7 @@ function renderXmlAttributes(attributes: Record<string, XmlAttributeValue>): str
     .join('');
 }
 
-function renderXmlToolResult(
+export function renderXmlToolResult(
   toolName: string,
   canonical: CanonicalToolResult,
   body: string,
@@ -90,7 +90,7 @@ function renderXmlToolResult(
     line.length > 0 || index === 0 || index === lines.length - 1).join('\n');
 }
 
-function xmlTextElement(name: string, value: string): string {
+export function xmlTextElement(name: string, value: string): string {
   return '<' + name + '>' + escapeXmlText(value) + '</' + name + '>';
 }
 
@@ -120,7 +120,7 @@ export function parseToolExecutionResult(raw: unknown): ToolExecutionResult {
   return toolExecutionResultSchema.parse(raw) as ToolExecutionResult;
 }
 
-function projectionWithCanonicalCompleteness(
+export function projectionWithCanonicalCompleteness(
   canonical: CanonicalToolResult,
   content: string,
 ): AgentProjection {

@@ -19,6 +19,7 @@ import { editDefinition, editHandler } from '../../src/main/tools/filesystem/edi
 import { writeDefinition, writeHandler } from '../../src/main/tools/filesystem/write';
 import { readDirectoryDefinition, readDirectoryHandler } from '../../src/main/tools/filesystem/read-directory';
 import { globDefinition, globHandler } from '../../src/main/tools/filesystem/glob';
+import { applyPatchDefinition, applyPatchHandler } from '../../src/main/tools/filesystem/apply-patch';
 import { grepToolDefinition, grepHandler } from '../../src/main/tools/search/grep';
 import { ragSearchDefinition, ragSearchHandler } from '../../src/main/tools/rag/search';
 import { ragIndexDefinition, ragIndexHandler } from '../../src/main/tools/rag/index';
@@ -66,10 +67,11 @@ import { buildWaitTool } from '../../src/main/tools/subagent/wait';
 import { buildInterruptTool } from '../../src/main/tools/subagent/interrupt';
 import { registerBuiltinTools, toolRegistry } from '../../src/main/tools';
 
-// ── Expected tool names (29 total) ─────────────────────────────────────────
+// ── Expected tool names (30 total) ─────────────────────────────────────────
 
 const EXPECTED_TOOL_NAMES = [
-  // Filesystem (5)
+  // Filesystem (6)
+  'apply_patch',
   'read',
   'edit',
   'write',
@@ -139,7 +141,14 @@ function expectValidHandler(handler: unknown): void {
 // ── Static Tool Tests ───────────────────────────────────────────────────────
 
 describe('Static Tool Definitions', () => {
-  describe('filesystem tools (5)', () => {
+  describe('filesystem tools (6)', () => {
+    it('apply_patch has valid definition, schema, and handler', () => {
+      expectValidDefinition(applyPatchDefinition, 'apply_patch');
+      expectValidJsonSchema(applyPatchDefinition.inputSchema, 'apply_patch');
+      expectValidHandler(applyPatchHandler);
+      expect(applyPatchDefinition.category).toBe('filesystem');
+    });
+
     it('read has valid definition, schema, and handler', () => {
       expectValidDefinition(readDefinition, 'read');
       expectValidJsonSchema(readDefinition.inputSchema, 'read');
@@ -382,15 +391,16 @@ describe('Dynamic Tool Builders', () => {
 // ── Completeness Check ─────────────────────────────────────────────────────
 
 describe('Tool Completeness', () => {
-  it('all 29 expected tool names are defined in this test file', () => {
+  it('all 30 expected tool names are defined in this test file', () => {
     // This test ensures we haven't accidentally removed a tool from our list.
     // If a new tool is added to the codebase, this list must be updated.
-    expect(EXPECTED_TOOL_NAMES).toHaveLength(29);
+    expect(EXPECTED_TOOL_NAMES).toHaveLength(30);
   });
 
   it('static tool count matches expected', () => {
-    // 5 filesystem + 1 search + 2 rag + 4 process + 6 ast = 18 static tools
+    // 6 filesystem + 1 search + 2 rag + 4 process + 6 ast = 19 static tools
     const staticDefinitions = [
+      applyPatchDefinition,
       readDefinition,
       editDefinition,
       writeDefinition,
@@ -410,14 +420,15 @@ describe('Tool Completeness', () => {
       renameSymbolDefinition,
       astIndexDefinition,
     ];
-    expect(staticDefinitions).toHaveLength(18);
+    expect(staticDefinitions).toHaveLength(19);
     // All names should be unique
     const names = staticDefinitions.map((d) => d.name);
-    expect(new Set(names).size).toBe(18);
+    expect(new Set(names).size).toBe(19);
   });
 
   it('all tool names are unique across static and dynamic tools', () => {
     const allNames = [
+      applyPatchDefinition.name,
       readDefinition.name,
       editDefinition.name,
       writeDefinition.name,
@@ -449,8 +460,8 @@ describe('Tool Completeness', () => {
       buildWaitTool({} as any).definition.name,
       buildInterruptTool({} as any).definition.name,
     ];
-    expect(allNames).toHaveLength(29);
-    expect(new Set(allNames).size).toBe(29);
+    expect(allNames).toHaveLength(30);
+    expect(new Set(allNames).size).toBe(30);
   });
 
   it('registerBuiltinTools populates the singleton registry with all tools', () => {

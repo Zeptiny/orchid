@@ -10,6 +10,7 @@ allowed_tools:
   - grep
   - edit
   - write
+  - apply_patch
   - execute_command
   - read_output
   - send_input
