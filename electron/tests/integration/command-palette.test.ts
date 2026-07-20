@@ -269,9 +269,9 @@ describe('Recent Commands', () => {
 // ─── Theme Results ───────────────────────────────────────────────────────────
 
 describe('Theme Results', () => {
-  it('buildThemeResults returns all 5 themes', () => {
+  it('buildThemeResults returns all 6 themes', () => {
     const results = buildThemeResults('default');
-    expect(results).toHaveLength(5);
+    expect(results).toHaveLength(6);
   });
 
   it('buildThemeResults marks current theme with filled circle', () => {
@@ -295,6 +295,7 @@ describe('Theme Results', () => {
     const results = buildThemeResults('default');
     const values = results.map((r) => r.value);
     expect(values).toContain('default');
+    expect(values).toContain('light');
     expect(values).toContain('solarized-light');
     expect(values).toContain('bluey');
     expect(values).toContain('windows-xp');

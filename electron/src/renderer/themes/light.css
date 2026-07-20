@@ -1,0 +1,150 @@
+/**
+ * Light theme.
+ *
+ * Bright companion to the default dark theme. Cool paper-white surfaces,
+ * ink text, and an indigo accent tuned for contrast on light backgrounds.
+ * Shares the modern token set (radii, motion) with the dark default.
+ */
+:root {
+  /* Background colors — airy paper white; panels barely tinted so raised
+     components read as lifted white rather than gray slabs. */
+  --bg-primary: #f9f9fa;
+  --bg-secondary: #f3f3f5;
+  --bg-tertiary: #eaeaec;
+  --bg-surface: #f9f9fa;
+  --bg-surface-raised: #ffffff;
+  --bg-surface-overlay: #ececee;
+
+  /* Text colors — ink on paper */
+  --text-primary: #18181b;
+  --text-secondary: #52525b;
+  --text-tertiary: #a1a1aa;
+  --text-inverse: #fafafa;
+
+  /* Accent colors — indigo primary, darkened for light-surface contrast */
+  --accent-primary: #4f46e5;
+  --accent-primary-hover: #6366f1;
+  --accent-secondary: #0891b2;
+  --accent-success: #16a34a;
+  --accent-warning: #d97706;
+  --accent-error: #dc2626;
+  --accent-info: #2563eb;
+
+  /* Border colors — quiet zinc lines */
+  --border-default: #e5e5e8;
+  --border-subtle: rgba(24, 24, 27, 0.05);
+  --border-strong: #d9d9de;
+  --border-focus: #4f46e5;
+
+  /* Message colors */
+  --msg-user-bg: rgba(79, 70, 229, 0.08);
+  --msg-user-text: #18181b;
+  --msg-assistant-bg: transparent;
+  --msg-assistant-text: #18181b;
+  --msg-system-bg: #f3f3f5;
+  --msg-system-text: #52525b;
+  --msg-error-bg: rgba(220, 38, 38, 0.07);
+  --msg-error-text: #dc2626;
+  --msg-thinking-bg: rgba(217, 119, 6, 0.06);
+  --msg-thinking-text: #b45309;
+
+  /* Input colors — white fields recessed into the gray shell */
+  --input-bg: #ffffff;
+  --input-border: #e5e5e8;
+  --input-focus-border: #4f46e5;
+  --input-text: #18181b;
+  --input-placeholder: #a1a1aa;
+
+  /* Button colors */
+  --btn-primary-bg: #4f46e5;
+  --btn-primary-text: #ffffff;
+  --btn-primary-hover: #6366f1;
+  --btn-secondary-bg: #eaeaec;
+  --btn-secondary-text: #18181b;
+  --btn-secondary-hover: #e0e0e4;
+  --btn-danger-bg: #dc2626;
+  --btn-danger-text: #ffffff;
+  --btn-danger-hover: #ef4444;
+
+  /* Sidebar colors */
+  --sidebar-bg: #f3f3f5;
+  --sidebar-border: #e5e5e8;
+  --sidebar-item-hover: rgba(79, 70, 229, 0.07);
+  --sidebar-item-active: rgba(79, 70, 229, 0.12);
+
+  /* Scrollbar */
+  --scrollbar-thumb: #dadade;
+  --scrollbar-track: transparent;
+
+  /* Shadows — soft, low-opacity for light surfaces */
+  --shadow-sm: 0 1px 2px rgba(24, 24, 27, 0.06), 0 1px 3px rgba(24, 24, 27, 0.04);
+  --shadow-md: 0 4px 6px -1px rgba(24, 24, 27, 0.08), 0 2px 4px -2px rgba(24, 24, 27, 0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(24, 24, 27, 0.1), 0 4px 6px -4px rgba(24, 24, 27, 0.06);
+
+  /* Typography */
+  --font-family: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: 'Bricolage Grotesque', 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-size-xs: 0.69rem;
+  --font-size-sm: 0.77rem;
+  --font-size-base: 0.8125rem;
+  --font-size-lg: 0.875rem;
+  --font-size-xl: 1rem;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  /* Border radius — matches the modernized dark default */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-full: 9999px;
+
+  /* Transitions — snappier, same curve as the dark default */
+  --transition-fast: 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 280ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Semantic token bridge — consumed by Tailwind utilities + primitives.css */
+  --color-primary: var(--accent-primary);
+  --color-primary-content: var(--btn-primary-text);
+  --color-secondary: var(--accent-secondary);
+  --color-secondary-content: #ffffff;
+  --color-accent: var(--accent-warning);
+  --color-accent-content: #ffffff;
+  --color-neutral: var(--bg-tertiary);
+  --color-neutral-content: var(--text-primary);
+  --color-base-100: var(--bg-primary);
+  --color-base-200: var(--bg-secondary);
+  --color-base-300: var(--bg-tertiary);
+  --color-base-content: var(--text-primary);
+  --color-info: var(--accent-info);
+  --color-info-content: #ffffff;
+  --color-success: var(--accent-success);
+  --color-success-content: #ffffff;
+  --color-warning: var(--accent-warning);
+  --color-warning-content: #ffffff;
+  --color-error: var(--accent-error);
+  --color-error-content: #ffffff;
+  --radius-selector: var(--radius-sm);
+  --radius-field: var(--radius-md);
+  --radius-box: var(--radius-lg);
+  --text-muted: #3f3f46;
+  --bg-surface-deep: #ffffff;
+  /* Slate overlay — popover shadows (mixed ~55%) stay soft on light
+     surfaces instead of inking the edges; modal veils dim gently. */
+  --overlay-color: #3b3b42;
+  --syntax-comment: #78716c;
+  --syntax-string: #b45309;
+  --context-free: #eaeaec;
+  --context-system: #2563eb;
+  --context-tool: #d97706;
+  --context-user: #4f46e5;
+  --context-assistant: #16a34a;
+  color-scheme: light;
+}

@@ -181,7 +181,7 @@
     min-width: 1.35em;
     border: 1px solid color-mix(in srgb, var(--border-default) 92%, var(--accent-primary));
     border-radius: 4px;
-    background: color-mix(in srgb, var(--bg-secondary, var(--color-base-200)) 96%, var(--overlay-color));
+    background: color-mix(in srgb, var(--bg-secondary, var(--color-base-200)) 96%, var(--bg-primary, var(--color-base-100)));
     color: color-mix(in srgb, var(--text-muted, var(--color-base-content)) 94%, var(--accent-primary, var(--color-primary)));
     font-weight: 550;
     letter-spacing: 0.02em;
@@ -1230,12 +1230,15 @@
     font-weight: 500;
   }
 
-  /* Compact mock-style collapse (inspector panels) */
+  /* Compact mock-style collapse (inspector panels).
+     Surface steps toward the base surface — recessed in dark themes,
+     lifted toward white in light themes. Overlay color is reserved for
+     shadows and veils, never used as a surface tint. */
   .mock-collapse {
     margin-bottom: 4px;
     border: 1px solid var(--border-default);
     border-radius: 5px;
-    background: color-mix(in srgb, var(--bg-secondary) 84%, var(--overlay-color));
+    background: color-mix(in srgb, var(--bg-secondary) 84%, var(--bg-primary));
     overflow: hidden;
   }
   .mock-collapse .mock-collapse-title {

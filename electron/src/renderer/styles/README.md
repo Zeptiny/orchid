@@ -121,9 +121,10 @@ Static `className` strings in those files still must not introduce arbitrary uti
 
 ## Themes
 
-These five themes must remain selectable, loadable, and coherent via the existing runtime stylesheet swap (`applyTheme()` / `data-theme`):
+These six themes must remain selectable, loadable, and coherent via the existing runtime stylesheet swap (`applyTheme()` / `data-theme`):
 
 - `default`
+- `light`
 - `solarized-light`
 - `bluey`
 - `windows-xp`

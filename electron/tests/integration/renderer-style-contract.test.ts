@@ -21,6 +21,7 @@ const PACKAGE_JSON = path.resolve(__dirname, '../../package.json');
 /** Required theme names (R7 / plan compatibility). */
 export const REQUIRED_THEMES = [
   'default',
+  'light',
   'solarized-light',
   'bluey',
   'windows-xp',
@@ -627,7 +628,7 @@ const CHAT_CSS_BASELINE_LINES = 10;
 
 describe('Renderer style contract', () => {
   describe('theme registry', () => {
-    it('registers all five required theme names', () => {
+    it('registers all required theme names', () => {
       const indexSource = fs.readFileSync(THEMES_INDEX, 'utf8');
       for (const name of REQUIRED_THEMES) {
         expect(indexSource, `themes/index.ts missing ${name}`).toMatch(

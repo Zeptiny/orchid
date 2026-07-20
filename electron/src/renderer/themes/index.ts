@@ -5,10 +5,11 @@
  * Theme switching is done by swapping the stylesheet link.
  */
 
-export type ThemeName = 'default' | 'solarized-light' | 'bluey' | 'windows-xp' | 'green-terminal';
+export type ThemeName = 'default' | 'light' | 'solarized-light' | 'bluey' | 'windows-xp' | 'green-terminal';
 
 export const THEMES: Record<ThemeName, string> = {
   default: 'Default (Dark)',
+  light: 'Light',
   'solarized-light': 'Solarized Light',
   bluey: 'Bluey',
   'windows-xp': 'Windows XP',

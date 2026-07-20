@@ -643,6 +643,7 @@ function HighlightedText({ query, text }: { query: string; text: string }) {
 
 const THEME_SWATCHES: Record<string, string> = {
   default: '#1a1b26',
+  light: '#f9f9fa',
   'solarized-light': '#fdf6e3',
   bluey: '#2e3440',
   'windows-xp': '#3a6ea5',

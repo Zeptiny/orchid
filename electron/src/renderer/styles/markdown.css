@@ -264,7 +264,7 @@
 
 .orchid-msg-assistant .markdown-content pre,
 .orchid-msg-assistant .markdown-content pre {
-  background: color-mix(in srgb, var(--bg-secondary) 84%, var(--overlay-color));
+  background: color-mix(in srgb, var(--bg-secondary) 84%, var(--bg-primary));
   border: 1px solid var(--border-default);
   border-radius: 5px;
   padding: 8px;
@@ -301,7 +301,7 @@
   border-radius: 3px;
 }
 .orchid-msg-assistant .markdown-content pre {
-  background: color-mix(in srgb, var(--bg-secondary) 84%, var(--overlay-color));
+  background: color-mix(in srgb, var(--bg-secondary) 84%, var(--bg-primary));
   border: 1px solid var(--border-default);
   border-radius: 5px;
   padding: 8px;

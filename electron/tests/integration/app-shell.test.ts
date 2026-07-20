@@ -346,6 +346,13 @@ describe('Theme CSS Custom Properties', () => {
     }
   });
 
+  it('light theme defines all required CSS variables', () => {
+    const css = readThemeCSS('light');
+    for (const varName of requiredVars) {
+      expect(css).toContain(varName);
+    }
+  });
+
   it('solarized-light theme defines all required CSS variables', () => {
     const css = readThemeCSS('solarized-light');
     for (const varName of requiredVars) {
@@ -375,7 +382,7 @@ describe('Theme CSS Custom Properties', () => {
   });
 
   it('all themes set :root selector', () => {
-    const themeFiles = ['default', 'solarized-light', 'bluey', 'windows-xp', 'green-terminal'];
+    const themeFiles = ['default', 'light', 'solarized-light', 'bluey', 'windows-xp', 'green-terminal'];
     for (const name of themeFiles) {
       const css = readThemeCSS(name);
       expect(css).toContain(':root');
@@ -383,7 +390,7 @@ describe('Theme CSS Custom Properties', () => {
   });
 
   it('each theme has unique bg-primary value', () => {
-    const themeFiles = ['default', 'solarized-light', 'bluey', 'windows-xp', 'green-terminal'];
+    const themeFiles = ['default', 'light', 'solarized-light', 'bluey', 'windows-xp', 'green-terminal'];
     const bgValues = new Set<string>();
 
     for (const name of themeFiles) {
@@ -515,10 +522,11 @@ describe('IPC Handler Module Structure', () => {
 // ─── Theme Loader ────────────────────────────────────────────────────────────
 
 describe('Theme Loader', () => {
-  it('THEMES map has all 5 themes', async () => {
+  it('THEMES map has all 6 themes', async () => {
     const { THEMES, THEME_NAMES } = await import('../../src/renderer/themes/index');
-    expect(Object.keys(THEMES)).toHaveLength(5);
+    expect(Object.keys(THEMES)).toHaveLength(6);
     expect(THEME_NAMES).toContain('default');
+    expect(THEME_NAMES).toContain('light');
     expect(THEME_NAMES).toContain('solarized-light');
     expect(THEME_NAMES).toContain('bluey');
     expect(THEME_NAMES).toContain('windows-xp');
