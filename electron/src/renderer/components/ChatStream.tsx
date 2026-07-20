@@ -129,6 +129,52 @@ export function shouldRenderChainFooter(input: {
   return input.isActive || input.isTerminal || input.hasBody || input.hasUser;
 }
 
+/**
+ * Drop live assistant text/thinking that is already in committed history.
+ *
+ * On turn complete main emits SESSION_UPDATED (chain.messages gains the
+ * assistant bubble) before CHAT_DONE (clears streamSegments). Multi-chain
+ * history is driven by session chains, so both layers briefly hold the same
+ * content. Tools are already deduped via emittedToolIds; this covers text.
+ *
+ * Uses a multiset so two identical bubbles in history only suppress two live
+ * matches — a third live copy (rare) would still render.
+ */
+export function suppressLiveMessagesAlreadyInHistory(
+  liveItems: readonly StreamItem[],
+  historyItems: readonly StreamItem[],
+): StreamItem[] {
+  const remaining = new Map<string, number>();
+  for (const item of historyItems) {
+    if (item.kind !== 'message') continue;
+    const key = assistantMessageDedupeKey(item.message);
+    if (!key) continue;
+    remaining.set(key, (remaining.get(key) ?? 0) + 1);
+  }
+  if (remaining.size === 0) return liveItems as StreamItem[];
+
+  return liveItems.filter((item) => {
+    if (item.kind !== 'message') return true;
+    const key = assistantMessageDedupeKey(item.message);
+    if (!key) return true;
+    const count = remaining.get(key) ?? 0;
+    if (count <= 0) return true;
+    remaining.set(key, count - 1);
+    return false;
+  });
+}
+
+/** Stable key for assistant text/thinking content used in live/history dedupe. */
+function assistantMessageDedupeKey(message: Message): string | null {
+  if (message.role !== MessageRole.ASSISTANT) return null;
+  if (message.type !== MessageType.TEXT && message.type !== MessageType.THINKING) {
+    return null;
+  }
+  const content = message.content ?? '';
+  if (!content) return null;
+  return `${message.type}\0${content}`;
+}
+
 
 export function ChatStream({
   messages,
@@ -227,16 +273,21 @@ export function ChatStream({
   );
 
   // Live tail only — recomputed per token / segment / tool status change.
+  // Suppress text/thinking already present in history so SESSION_UPDATED
+  // (chain commit) cannot flash a second bubble before CHAT_DONE clears segments.
   const liveItems = useMemo(
     () =>
-      buildLiveTailItems({
-        toolBlocks,
-        streamSegments,
-        streamingContent: status === 'streaming' ? streamingContent : '',
-        status,
-        emittedToolIds: history.emittedToolIds,
-      }),
-    [toolBlocks, streamSegments, streamingContent, status, history.emittedToolIds],
+      suppressLiveMessagesAlreadyInHistory(
+        buildLiveTailItems({
+          toolBlocks,
+          streamSegments,
+          streamingContent: status === 'streaming' ? streamingContent : '',
+          status,
+          emittedToolIds: history.emittedToolIds,
+        }),
+        history.items,
+      ),
+    [toolBlocks, streamSegments, streamingContent, status, history.emittedToolIds, history.items],
   );
 
   // Fold consecutive thoughts + explore tools into tool-only-titled activity groups.

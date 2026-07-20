@@ -78,6 +78,8 @@ describe('chat rendering contract (U5)', () => {
       expect(src).toMatch(/const liveItems = useMemo|buildLiveTailItems/);
       // Live path is gated by streaming status
       expect(src).toMatch(/status === 'streaming' \? streamingContent/);
+      // SESSION_UPDATED can land before CHAT_DONE — suppress live text already in history
+      expect(src).toMatch(/suppressLiveMessagesAlreadyInHistory/);
     });
   });
 
