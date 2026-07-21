@@ -14,6 +14,7 @@ import type { ConfigDiagnostic } from '../../shared/types/ipc-boundary';
 import { configSchema, defaults, type Config } from './schema';
 import { mergeLayers, applyEnvOverrides, isPlainObject } from './merge';
 import { validateConfig } from './validation';
+import { safeFsync } from '../utils/safe-fsync';
 
 // ---------------------------------------------------------------------------
 // Paths — matches Python config.py:15-27
@@ -140,7 +141,7 @@ export function atomicWriteJson(filePath: string, data: unknown): void {
     try {
       const json = JSON.stringify(data, null, 2);
       fs.writeSync(fd, json, undefined, 'utf-8');
-      fs.fsyncSync(fd);
+      safeFsync(fd);
     } finally {
       fs.closeSync(fd);
     }
@@ -150,7 +151,7 @@ export function atomicWriteJson(filePath: string, data: unknown): void {
     // fsync parent dir to persist the rename
     const dirFd = fs.openSync(dir, 'r');
     try {
-      fs.fsyncSync(dirFd);
+      safeFsync(dirFd);
     } finally {
       fs.closeSync(dirFd);
     }

@@ -6,6 +6,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { escapeXmlAttribute, escapeXmlText } from '../result';
+import { safeFsync } from '../../utils/safe-fsync';
 
 // ---------------------------------------------------------------------------
 // XML helpers
@@ -60,7 +61,7 @@ export function atomicWrite(filePath: string, content: string): void {
     const fd = fs.openSync(tmpPath, 'w');
     try {
       fs.writeSync(fd, content, undefined, 'utf-8');
-      fs.fsyncSync(fd);
+      safeFsync(fd);
     } finally {
       fs.closeSync(fd);
     }
@@ -73,7 +74,7 @@ export function atomicWrite(filePath: string, content: string): void {
 
     const dirFd = fs.openSync(dir, 'r');
     try {
-      fs.fsyncSync(dirFd);
+      safeFsync(dirFd);
     } finally {
       fs.closeSync(dirFd);
     }
