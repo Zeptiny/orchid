@@ -249,8 +249,13 @@ export async function executeCommand(
     let spawnCmd: string;
     let spawnArgs: string[];
     if (shell) {
-      spawnCmd = '/bin/sh';
-      spawnArgs = ['-c', command];
+      if (process.platform === 'win32') {
+        spawnCmd = process.env.ComSpec ?? 'cmd.exe';
+        spawnArgs = ['/c', command];
+      } else {
+        spawnCmd = '/bin/sh';
+        spawnArgs = ['-c', command];
+      }
     } else {
       const parsed = shellParse(command);
       if (parsed.length === 0) {

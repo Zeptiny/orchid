@@ -63,10 +63,9 @@ interface GlobWalkMatch {
  * Returns walk records (path + mtime/size) for matching files.
  */
 function globSync(baseDir: string, pattern: string): GlobWalkMatch[] {
-  const fullPattern = path.join(baseDir, pattern);
-  const segments = fullPattern.split(path.sep).filter((segment) => segment !== '');
+  const segments = pattern.split(/[/\\]/).filter((segment) => segment !== '');
   const results: GlobWalkMatch[] = [];
-  walkGlob(segments, 0, path.sep, results);
+  walkGlob(segments, 0, baseDir, results);
   return results;
 }
 
