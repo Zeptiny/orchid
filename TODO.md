@@ -62,6 +62,7 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
   - Agents/subagents should be able to pin a specific level
     - Possible encoding: `<provider>/<model>/<thinking_level>` (using `:` conflicts with OpenRouter; `-` can collide with model names)
     - Default: per-model vs global — still undecided
+- Analytics dashboard
 
 ## Compound system improvements
 
