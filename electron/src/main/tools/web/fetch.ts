@@ -13,6 +13,7 @@ import TurndownService from 'turndown';
 import { z } from 'zod';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { safeFsync } from '../../utils/safe-fsync';
 import { URL } from 'node:url';
 import type { ToolDefinition, ToolExecutionContext, ToolHandler } from '../types';
 import { genericToolResultMetadata } from '../types';
@@ -177,13 +178,19 @@ function writeCacheFile(
   const filename = slugFromUrl(url);
   const filePath = path.join(cacheDir, filename);
 
-  // Atomic write
-  const fd = fs.openSync(filePath, 'w', 0o600);
+  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
   try {
-    fs.writeSync(fd, content, undefined, 'utf-8');
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
+    const fd = fs.openSync(tmpPath, 'w', 0o600);
+    try {
+      fs.writeSync(fd, content, undefined, 'utf-8');
+      safeFsync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    throw err;
   }
 
   return filePath;

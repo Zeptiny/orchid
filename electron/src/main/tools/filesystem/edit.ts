@@ -85,7 +85,12 @@ export const editHandler: ToolHandler = async (input: unknown, ctx) => {
     );
   }
 
-  if (!content.includes(old_string)) {
+  const hasCrlf = content.includes('\r\n');
+  const normalizedContent = hasCrlf ? content.replace(/\r\n/g, '\n') : content;
+  const normalizedOld = old_string.replace(/\r\n/g, '\n');
+  const normalizedNew = new_string.replace(/\r\n/g, '\n');
+
+  if (!normalizedContent.includes(normalizedOld)) {
     return errorOutcome(
       filePath,
       `String '${old_string}' not found in file '${filePath}'. No changes made.`,
@@ -94,7 +99,7 @@ export const editHandler: ToolHandler = async (input: unknown, ctx) => {
     );
   }
 
-  const matchCount = content.split(old_string).length - 1;
+  const matchCount = normalizedContent.split(normalizedOld).length - 1;
   if (!replace_all && matchCount > 1) {
     return errorOutcome(
       filePath,
@@ -104,9 +109,13 @@ export const editHandler: ToolHandler = async (input: unknown, ctx) => {
     );
   }
 
-  const newContent = replace_all
-    ? content.replaceAll(old_string, new_string)
-    : content.replace(old_string, new_string);
+  let newContent = replace_all
+    ? normalizedContent.replaceAll(normalizedOld, () => normalizedNew)
+    : normalizedContent.replace(normalizedOld, () => normalizedNew);
+
+  if (hasCrlf) {
+    newContent = newContent.replace(/\n/g, '\r\n');
+  }
 
   let validated: FileChangeData | undefined;
   try {

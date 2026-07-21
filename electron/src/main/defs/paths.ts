@@ -9,6 +9,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { safeFsync } from '../utils/safe-fsync';
 import {
   HOME_AGENTS_DIR,
   HOME_PERSONALITIES_DIR,
@@ -185,7 +186,7 @@ export function atomicWriteText(filePath: string, content: string, scopeRoot: st
     const fd = fs.openSync(tmp, 'w', 0o600);
     try {
       fs.writeFileSync(fd, content, 'utf-8');
-      fs.fsyncSync(fd);
+      safeFsync(fd);
     } finally {
       fs.closeSync(fd);
     }

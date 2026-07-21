@@ -324,12 +324,12 @@ describe('execute_command foreground', () => {
   }, 10_000);
 
   it('should kill the process group on outer abort (dispatch timeout)', async () => {
-    // Marker file written only if sleep completes — must not appear after abort kill
+    // Marker file written only if the timer completes — must not appear after abort kill
     const markerDir = createTmpDir();
     const marker = path.join(markerDir, 'still-alive');
     const ac = new AbortController();
     const runPromise = executeCommand({
-      command: `sleep 30; touch "${marker}"`,
+      command: `node -e "setTimeout(() => require('fs').writeFileSync(process.argv[1], ''), 30000)" "${marker}"`,
       description: 'long sleep',
       timeout: 60,
       shell: true,

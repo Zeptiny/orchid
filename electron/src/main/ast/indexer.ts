@@ -401,12 +401,21 @@ async function runIndexInWorker(
     force,
   };
 
-  return new Promise<ASTIndexResult>((resolve, reject) => {
-    let settled = false;
-    const worker = new Worker(workerPath, {
+  let worker: Worker;
+  try {
+    worker = new Worker(workerPath, {
       workerData: startData,
       env: process.env,
     });
+  } catch (err) {
+    console.warn(
+      `AST worker failed to start (${err instanceof Error ? err.message : String(err)}); running index inline on the main thread`,
+    );
+    return runIndexProjectImpl({ projectPath, force, progressCallback });
+  }
+
+  return new Promise<ASTIndexResult>((resolve, reject) => {
+    let settled = false;
 
     const finish = (fn: () => void) => {
       if (settled) return;

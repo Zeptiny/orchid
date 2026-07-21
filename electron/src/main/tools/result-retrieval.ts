@@ -8,6 +8,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { safeFsync } from '../utils/safe-fsync';
 import { TOOL_OUTPUT_CACHE_DIR } from '../session/storage';
 import {
   serializeCanonicalResultForRetrieval,
@@ -55,7 +56,7 @@ function retrievalFileName(
 function fsyncDirectory(directory: string): void {
   const directoryFd = fs.openSync(directory, 'r');
   try {
-    fs.fsyncSync(directoryFd);
+    safeFsync(directoryFd);
   } finally {
     fs.closeSync(directoryFd);
   }
@@ -75,7 +76,7 @@ function atomicWriteAndVerify(filePath: string, content: string): void {
     );
     try {
       fs.writeFileSync(fileDescriptor, content, 'utf-8');
-      fs.fsyncSync(fileDescriptor);
+      safeFsync(fileDescriptor);
     } finally {
       fs.closeSync(fileDescriptor);
     }

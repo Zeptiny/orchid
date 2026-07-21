@@ -15,6 +15,41 @@ export interface SeedDefaultSubdirsOptions {
   resourceDirs: readonly string[];
 }
 
+function isDirectory(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Recursive copy using only asar-safe fs primitives (readdirSync, readFileSync,
+ * writeFileSync, mkdirSync). fs.cpSync internally calls statSync on
+ * subdirectories which fails inside app.asar on Windows.
+ */
+function copyRecursive(src: string, dest: string): void {
+  fs.mkdirSync(dest, { recursive: true });
+
+  let dirents: fs.Dirent[];
+  try {
+    dirents = fs.readdirSync(src, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const dirent of dirents) {
+    const srcPath = path.join(src, dirent.name);
+    const destPath = path.join(dest, dirent.name);
+
+    if (dirent.isDirectory()) {
+      copyRecursive(srcPath, destPath);
+    } else if (dirent.isFile()) {
+      fs.writeFileSync(destPath, fs.readFileSync(srcPath));
+    }
+  }
+}
+
 /**
  * Copy default definition subdirectories from `sourceDir` into `targetDir`.
  *
@@ -26,16 +61,26 @@ export function seedDefaultSubdirs(
   targetDir: string,
   options: SeedDefaultSubdirsOptions,
 ): void {
-  if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
+  if (!isDirectory(sourceDir)) {
     return;
   }
 
   fs.mkdirSync(targetDir, { recursive: true });
 
-  const entries = fs.readdirSync(sourceDir).sort();
+  let dirents: fs.Dirent[];
+  try {
+    dirents = fs.readdirSync(sourceDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  const entries = dirents
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .sort();
+
   for (const entry of entries) {
     const sourceSubdir = path.join(sourceDir, entry);
-    if (!fs.statSync(sourceSubdir).isDirectory()) continue;
 
     const sourceFile = path.join(sourceSubdir, options.markerFilename);
     if (!fs.existsSync(sourceFile)) continue;
@@ -44,19 +89,15 @@ export function seedDefaultSubdirs(
     const targetFile = path.join(targetSubdir, options.markerFilename);
 
     if (!fs.existsSync(targetFile)) {
-      fs.cpSync(sourceSubdir, targetSubdir, { recursive: true });
+      copyRecursive(sourceSubdir, targetSubdir);
       continue;
     }
 
     for (const resource of options.resourceDirs) {
       const sourceResource = path.join(sourceSubdir, resource);
       const targetResource = path.join(targetSubdir, resource);
-      if (
-        fs.existsSync(sourceResource) &&
-        fs.statSync(sourceResource).isDirectory() &&
-        !fs.existsSync(targetResource)
-      ) {
-        fs.cpSync(sourceResource, targetResource, { recursive: true });
+      if (isDirectory(sourceResource) && !fs.existsSync(targetResource)) {
+        copyRecursive(sourceResource, targetResource);
       }
     }
   }
