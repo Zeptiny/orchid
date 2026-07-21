@@ -7,6 +7,7 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 ## Bugs
 
 - Scrolling up in chat is impossible
+- RAG onnxruntime may not be being shipped correctly
 
 ## Agent quality
 
