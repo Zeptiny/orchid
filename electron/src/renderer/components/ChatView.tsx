@@ -23,7 +23,7 @@ import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import type { ModelSelection } from '../../shared/types/provider';
 import { flattenSessionMessages, type Session } from '../../shared/types/session';
 import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus, CommandContext } from '../../shared/types/ipc-boundary';
-import type { ProviderModelOption } from '../../shared/types/ipc';
+import type { ProviderModelOption, SessionOpenResult } from '../../shared/types/ipc';
 import { ChatStream } from './ChatStream';
 import { InputArea } from './InputArea';
 import { Footer } from './Footer';
@@ -271,18 +271,6 @@ export function ChatView() {
     [chat, subagents.applyFromSession, todos.applyFromSession],
   );
 
-  /**
-   * Commit a fully-loaded session in one paint: messages, sidebar lists, and
-   * live snapshot. Call only after peek + snapshot are both ready.
-   */
-  const commitSessionView = useCallback(
-    (loadedSession: Session | null, snapshot: Awaited<ReturnType<typeof chat.getSnapshot>>) => {
-      applySessionMessages(loadedSession);
-      chat.hydrateSnapshot(snapshot);
-    },
-    [applySessionMessages, chat],
-  );
-
   const handleSessionSelect = useCallback(
     async (id: string) => {
       // Already focused this session (not draft) — skip full reload to avoid flicker.
@@ -297,43 +285,36 @@ export function ChatView() {
       // the full target payload is ready (no intermediate empty/zero state).
       chat.beginSessionSwitch(id);
 
-      // Peek without activating so activeSession / left rail stay on the
-      // previous session until we commit.
-      let loadedSession: Session | null = null;
+      // Single round-trip: activate the session and fetch its full view payload
+      // (session + flattened messages + live snapshot + workspace) at once.
+      // Replaces the prior peek + chat:snapshot + activate sequence.
+      let result: SessionOpenResult | null = null;
       try {
-        if (window.orchid?.session?.load) {
-          loadedSession = await window.orchid.session.load({ id, activate: false });
-        }
+        result = await session.open(id);
       } catch {
-        loadedSession = null;
+        // result stays null on failure — handled by the !result guard below.
       }
       if (gen !== sessionSwitchGen.current) return;
 
-      if (!loadedSession) {
-        console.error('Failed to load session:', id);
-        // Fall back to activating load so workspace still updates if possible.
-        const activated = await session.load(id);
-        if (gen !== sessionSwitchGen.current) return;
-        if (!activated) {
-          // Keep previous paint; clear switch hold without blanking the pane.
-          chat.hydrateSnapshot(null);
-          return;
-        }
-        commitSessionView(activated, null);
-        setDraftTabVisible(false);
+      if (!result || !result.session) {
+        // Could not load (missing/corrupt) — keep the previous paint and release
+        // the switch hold without blanking the pane.
+        chat.hydrateSnapshot(null);
         return;
       }
 
-      const snapshot = await chat.getSnapshot(loadedSession.id);
-      if (gen !== sessionSwitchGen.current) return;
-
-      // Activate only after data is ready so UI swaps in one commit.
-      const activated = await session.load(id);
-      if (gen !== sessionSwitchGen.current) return;
       setDraftTabVisible(false);
-      commitSessionView(activated ?? loadedSession, snapshot);
+      // Commit once: sidebar lists from the session, chat (messages + live) via
+      // hydrate. hydrateSnapshot owns the single message replace (no double set).
+      subagents.applyFromSession(result.session.subagentChains);
+      todos.applyFromSession(result.session.todoStore.tasks);
+      chat.hydrateSnapshot({
+        sessionId: result.session.id,
+        messages: result.messages,
+        live: result.live,
+      });
     },
-    [session, chat, commitSessionView, draftTabVisible],
+    [session, chat, subagents.applyFromSession, todos.applyFromSession, draftTabVisible],
   );
 
   // ConfigView left-rail pick: same hydrate path as sidebar (not store-only load).
