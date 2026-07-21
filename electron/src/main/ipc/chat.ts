@@ -27,6 +27,7 @@ import {
   flattenSessionMessages,
   getSessionManager,
   resolveWindowWorkspace,
+  takeDraftReasoningOverride,
 } from './session';
 import { workingSetOpenOrFocus } from './session-working-set';
 import { getBackgroundStore } from '../tools/process/background-store';
@@ -676,12 +677,21 @@ export function ensureActiveSession(
     return { ok: true, cwd: boundCwd, session: active, runtime };
   }
 
-  const session = manager.create(
+  const created = manager.create(
     selection,
     { cwd: boundCwd },
     windowId,
     selection.modelId,
   );
+  // A reasoning effort chosen in draft mode rides into the new session so the
+  // very first turn (which reads the returned session) already honors it.
+  const draftOverride = takeDraftReasoningOverride(windowId);
+  if (draftOverride !== undefined) {
+    manager.setReasoningEffortOverride(created.id, draftOverride);
+  }
+  const session =
+    manager.getSession(created.id) ??
+    { ...created, reasoningEffortOverride: draftOverride ?? created.reasoningEffortOverride };
   // Draft was promoted into the new session.
   clearDraftCwd(windowId);
   workingSetOpenOrFocus(session.id, windowId);

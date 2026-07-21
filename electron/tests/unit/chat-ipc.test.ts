@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => {
     todoStore: { tasks: unknown[] };
     selection?: { connectionId: string; modelId: string } | null;
     modelLabel?: string;
+    reasoningEffortOverride?: string | number | null;
   };
   let activeSession: MockSession | null = null;
   const sessionsById = new Map<string, MockSession>();
@@ -208,6 +209,13 @@ const mocks = vi.hoisted(() => {
       sessionsById.set(id, activeSession);
       return activeSession;
     }),
+    setReasoningEffortOverride: vi.fn((id: string, effort: string | number | null) => {
+      const target = sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null);
+      if (!target) return;
+      const updated = { ...target, reasoningEffortOverride: effort };
+      sessionsById.set(id, updated);
+      if (activeSession?.id === id) activeSession = updated;
+    }),
     getSession: vi.fn((id: string) => sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null)),
     switchTo: vi.fn((id: string) => {
       const session = sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null);
@@ -317,6 +325,7 @@ const mocks = vi.hoisted(() => {
       sessionManager.clearActive.mockClear();
       sessionManager.startChain.mockClear();
       sessionManager.persistTurn.mockClear();
+      sessionManager.setReasoningEffortOverride.mockClear();
       sessionManager.autoNameActive.mockClear();
       sessionManager.autoName.mockClear();
     },
@@ -412,6 +421,9 @@ const mocks = vi.hoisted(() => {
     streamEventSequences,
     sessionManager,
     workspace,
+    takeDraftReasoningOverride: vi.fn(
+      () => undefined as string | number | null | undefined,
+    ),
     ipcMain: {
       handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
         handlers.set(channel, handler);
@@ -533,6 +545,8 @@ vi.mock('../../src/main/ipc/session', () => ({
     session.chains.flatMap((chain) => chain.messages ?? []),
   resolveWindowWorkspace: (windowId: string) =>
     mocks.workspace.resolveWorkspace(windowId),
+  takeDraftReasoningOverride: (windowId: string) =>
+    mocks.takeDraftReasoningOverride(windowId),
 }));
 
 vi.mock('../../src/main/project/runtime', () => ({
@@ -632,6 +646,29 @@ describe('chat session selection gate', () => {
     expect(mocks.sessionManager.switchTo).not.toHaveBeenCalled();
     expect(mocks.sessionManager.getSession).toHaveBeenCalledWith(background.id);
     expect(mocks.sessionManager.getActive()).toMatchObject({ id: viewing.id });
+  });
+
+  it('transfers a draft reasoning override into the session created from a draft', () => {
+    mocks.takeDraftReasoningOverride.mockReturnValueOnce('high');
+    const preferred = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+
+    const result = chatIpc.ensureActiveSession(
+      { id: 908, send: vi.fn() } as never,
+      preferred,
+    );
+
+    expect(mocks.sessionManager.create).toHaveBeenCalledTimes(1);
+    expect(mocks.sessionManager.setReasoningEffortOverride).toHaveBeenCalledWith(
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      'high',
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      session: { reasoningEffortOverride: 'high' },
+    });
   });
 });
 

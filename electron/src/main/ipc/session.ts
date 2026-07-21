@@ -7,6 +7,7 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { flattenSessionMessages } from '../../shared/types/session';
+import type { ModelSelection } from '../../shared/types/provider';
 import { SessionManager } from '../session/manager';
 import { getConfig } from '../config/loader';
 import { clearChatHistory, seedChatHistory } from './chat-history';
@@ -81,6 +82,44 @@ export function resolveBoundProjectPath(windowId?: string): string | null {
     // ignore
   }
   return null;
+}
+
+// ── Draft reasoning overrides (window-scoped, pre-session) ──────────────────
+
+/**
+ * Reasoning effort chosen in draft mode, before a session file exists.
+ * Transferred to the session when one is created for the window.
+ */
+const draftReasoningOverrides = new Map<string, string | number | null>();
+
+/**
+ * Consume the stored draft reasoning override for a window, if any.
+ * Called when a draft promotes into a session so the choice survives.
+ */
+export function takeDraftReasoningOverride(
+  windowId: string,
+): string | number | null | undefined {
+  if (!draftReasoningOverrides.has(windowId)) return undefined;
+  const value = draftReasoningOverrides.get(windowId) ?? null;
+  draftReasoningOverrides.delete(windowId);
+  return value;
+}
+
+/**
+ * Model selection to reason about in draft mode (no active session):
+ * bound project default_model → user default_model → null.
+ */
+function resolveDraftModelSelection(windowId: string): ModelSelection | null {
+  try {
+    const info = resolveWindowWorkspace(windowId);
+    if (info.cwd) {
+      const projectDefault = getProjectRuntimeRegistry().get(info.cwd).config.default_model;
+      if (projectDefault) return projectDefault;
+    }
+  } catch {
+    // Workspace/runtime unresolvable — fall through to the user default.
+  }
+  return getConfig().default_model ?? null;
 }
 
 /**
@@ -252,11 +291,16 @@ export function registerSessionIPC(): void {
     }
 
     const config = getProjectRuntimeRegistry().get(workspace.cwd).config;
-    const session = manager.create(
+    const created = manager.create(
       config.default_model,
       { cwd: workspace.cwd },
       windowId,
     );
+    const draftOverride = takeDraftReasoningOverride(windowId);
+    if (draftOverride !== undefined) {
+      manager.setReasoningEffortOverride(created.id, draftOverride);
+    }
+    const session = manager.getSession(created.id) ?? created;
     // Draft was promoted into the session.
     clearDraftCwd(windowId);
     clearChatHistory(session.id);
@@ -459,7 +503,9 @@ export function registerSessionIPC(): void {
     const manager = getSessionManager();
     const active = manager.getActive(windowId);
     if (!active) {
-      return { status: 'no_active_session' };
+      // Draft mode: no session file yet — park the override until one exists.
+      draftReasoningOverrides.set(windowId, parsed.data.effort);
+      return { status: 'ok' };
     }
 
     manager.setReasoningEffortOverride(active.id, parsed.data.effort);
@@ -470,8 +516,15 @@ export function registerSessionIPC(): void {
     const windowId = String(event.sender.id);
     const manager = getSessionManager();
     const active = manager.getActive(windowId);
-    if (!active || !active.selection) {
-      return { levels: [], default: null, override: active?.reasoningEffortOverride ?? null, supportsReasoning: false };
+    // Draft mode falls back to the draft/default model selection so the
+    // selector is usable before the first message creates a session.
+    const selection = active?.selection ?? resolveDraftModelSelection(windowId);
+    const override = active
+      ? active.reasoningEffortOverride
+      : draftReasoningOverrides.get(windowId) ?? null;
+
+    if (!selection) {
+      return { levels: [], default: null, override, supportsReasoning: false };
     }
 
     const { getProviderConnectionStore, getProviderCatalogStore } = await import('../providers/runtime-context');
@@ -479,20 +532,20 @@ export function registerSessionIPC(): void {
 
     const connections = await getProviderConnectionStore().list();
     const definitions = getProviderCatalogStore().getProviderDefinitions();
-    const resolution = resolveModelSelection(active.selection, connections, definitions);
+    const resolution = resolveModelSelection(selection, connections, definitions);
 
     if (resolution.kind !== 'resolved') {
-      return { levels: [], default: null, override: active.reasoningEffortOverride, supportsReasoning: false };
+      return { levels: [], default: null, override, supportsReasoning: false };
     }
 
     const { connection, model } = resolution;
     const supportsReasoning = model.capabilities?.reasoning ?? false;
-    const modelConfig = connection.reasoningConfig?.[active.selection.modelId];
+    const modelConfig = connection.reasoningConfig?.[selection.modelId];
 
     return {
       levels: modelConfig?.levels ?? [],
       default: modelConfig?.default ?? null,
-      override: active.reasoningEffortOverride,
+      override,
       supportsReasoning,
     };
   });
@@ -516,6 +569,7 @@ export function unregisterSessionIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CHANGE_CWD);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_SET_REASONING_EFFORT);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG);
+  draftReasoningOverrides.clear();
 }
 
 // Re-export draft helper for tests that need to seed draft without IPC.

@@ -213,10 +213,10 @@ describe('ReasoningSelector markup', () => {
     expect(html).toContain('aria-pressed="true"');
   });
 
-  it('renders the free-text combo input and Set action when open', () => {
+  it('renders the free-text combo input without a Set action when open', () => {
     const html = renderSelector({ open: true });
     expect(html).toContain('placeholder="Level or token budget"');
-    expect(html).toContain('Set');
+    expect(html).not.toContain('>Set<');
     expect(html).toContain('Reset to default');
   });
 

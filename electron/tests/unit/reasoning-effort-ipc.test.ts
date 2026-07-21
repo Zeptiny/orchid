@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
+import { getConfig } from '../../src/main/config/loader';
 
 const SESSION_UUID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 const CONNECTION_UUID = '11111111-2222-4333-8444-555555555555';
@@ -146,6 +147,7 @@ beforeEach(async () => {
   mocks.sessionManager._reset();
   mocks.connectionStore.list.mockReturnValue([]);
   mocks.catalogStore.getProviderDefinitions.mockReturnValue([]);
+  vi.mocked(getConfig).mockReturnValue({ default_project_dir: null } as never);
 
   sessionIpc = await import('../../src/main/ipc/session');
   const mgr = sessionIpc.getSessionManager();
@@ -193,12 +195,12 @@ describe('session:set_reasoning_effort', () => {
     expect(mocks.sessionManager.setReasoningEffortOverride).toHaveBeenCalledWith(SESSION_UUID, 8192);
   });
 
-  it('returns no_active_session when no session is active', async () => {
+  it('stores a draft override when no session is active', async () => {
     mocks.sessionManager._setActive(null);
     const handler = mocks.handlers.get(IPC_CHANNELS.SESSION_SET_REASONING_EFFORT);
 
     const result = await handler!({ sender: sender() }, { effort: 'high' });
-    expect(result).toEqual({ status: 'no_active_session' });
+    expect(result).toEqual({ status: 'ok' });
     expect(mocks.sessionManager.setReasoningEffortOverride).not.toHaveBeenCalled();
   });
 
@@ -406,6 +408,86 @@ describe('session:get_reasoning_config', () => {
       levels: [],
       default: null,
       override: null,
+      supportsReasoning: true,
+    });
+  });
+
+  function mockReasoningProvider(): void {
+    mocks.connectionStore.list.mockReturnValue([
+      {
+        id: CONNECTION_UUID,
+        providerId: 'openai',
+        name: 'OpenAI',
+        protocol: 'openai-compatible',
+        authMethod: 'api-key',
+        credential: { kind: 'stored', handle: 'h' },
+        modelIds: ['o3'],
+        health: 'ready',
+        reasoningConfig: {
+          o3: { levels: ['low', 'medium', 'high'], default: 'medium' },
+        },
+      },
+    ]);
+    mocks.catalogStore.getProviderDefinitions.mockReturnValue([
+      {
+        id: 'openai',
+        displayName: 'OpenAI',
+        supportedAuthMethods: ['api-key'],
+        supportedProtocols: ['openai-compatible'],
+        allowsCustomModels: false,
+        models: [
+          {
+            id: 'o3',
+            displayName: 'o3',
+            protocol: 'openai-compatible',
+            capabilities: {
+              inputModalities: ['text'],
+              outputModalities: ['text'],
+              tools: true,
+              reasoning: true,
+            },
+          },
+        ],
+      },
+    ]);
+  }
+
+  function setDefaultModel(): void {
+    vi.mocked(getConfig).mockReturnValue({
+      default_project_dir: null,
+      default_model: { connectionId: CONNECTION_UUID, modelId: 'o3' },
+    } as never);
+  }
+
+  it('resolves reasoning config from the default model in draft mode', async () => {
+    mocks.sessionManager._setActive(null);
+    setDefaultModel();
+    mockReasoningProvider();
+
+    const handler = mocks.handlers.get(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG);
+    const result = await handler!({ sender: sender() });
+    expect(result).toEqual({
+      levels: ['low', 'medium', 'high'],
+      default: 'medium',
+      override: null,
+      supportsReasoning: true,
+    });
+  });
+
+  it('surfaces a draft override set before any session exists', async () => {
+    mocks.sessionManager._setActive(null);
+    setDefaultModel();
+    mockReasoningProvider();
+
+    const setHandler = mocks.handlers.get(IPC_CHANNELS.SESSION_SET_REASONING_EFFORT);
+    await setHandler!({ sender: sender() }, { effort: 'high' });
+
+    const getHandler = mocks.handlers.get(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG);
+    const result = await getHandler!({ sender: sender() });
+    expect(result).toEqual({
+      levels: ['low', 'medium', 'high'],
+      default: 'medium',
+      override: 'high',
       supportsReasoning: true,
     });
   });

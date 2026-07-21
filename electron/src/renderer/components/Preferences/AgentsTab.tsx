@@ -14,6 +14,9 @@ import type {
   DefinitionsListResult,
   ManagedAgent,
 } from '../../../shared/types/definitions';
+import type { ModelSelection } from '../../../shared/types/provider';
+import { useProviders } from '../../hooks/useProviders';
+import { reasoningConfigForSelection } from '../../utils/provider-selection';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
 import { ConfigCard } from '../ui/ConfigCard';
@@ -25,11 +28,14 @@ import { StateMessage } from '../ui/StateMessage';
 import { StatusBadge } from '../ui/StatusBadge';
 import { TextInput } from '../ui/TextInput';
 import { MultiSelectList } from './MultiSelectList';
+import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { ScopeBadge, ScopeToggle, type ScopeFilter } from './ScopeToggle';
 import { TierPicker } from './TierPicker';
 
 export interface AgentsTabProps {
   data: DefinitionsListResult;
+  /** Tier → model assignments used to derive each agent's reasoning levels. */
+  tierModels: Record<string, ModelSelection | null>;
   /** Re-fetch after mutations (parent owns cache). */
   onReload: () => Promise<void>;
 }
@@ -42,6 +48,7 @@ interface AgentForm {
   system_prompt: string;
   allowedTools: string[];
   allowedSkills: string[];
+  reasoning_effort?: string | number;
   scope: DefinitionScope;
   previousName?: string;
 }
@@ -65,6 +72,7 @@ function toForm(a: ManagedAgent): AgentForm {
     system_prompt: a.system_prompt,
     allowedTools: [...a.allowed_tools],
     allowedSkills: [...a.allowed_skills],
+    reasoning_effort: a.reasoning_effort,
     scope: a.scope,
     previousName: a.name,
   };
@@ -80,6 +88,7 @@ function emptyForm(scope: DefinitionScope, availableTools: readonly string[]): A
     system_prompt: 'You are a specialized subagent.\n',
     allowedTools: defaults.length > 0 ? defaults : [...availableTools.slice(0, 8)],
     allowedSkills: ['*'],
+    reasoning_effort: undefined,
     scope,
   };
 }
@@ -94,13 +103,19 @@ function sortAgents(list: readonly ManagedAgent[]): ManagedAgent[] {
   });
 }
 
-export function AgentsTab({ data, onReload }: AgentsTabProps) {
+export function AgentsTab({ data, tierModels, onReload }: AgentsTabProps) {
+  const providers = useProviders();
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<ScopeFilter>('all');
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [form, setForm] = useState<AgentForm | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Warm the shared model catalog so tier reasoning levels can be derived.
+  useEffect(() => {
+    void providers.ensureModelList();
+  }, [providers.ensureModelList]);
 
   // Cancel open forms when workspace rebinds (project path would otherwise drift).
   useEffect(() => {
@@ -172,6 +187,9 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
         system_prompt: form.system_prompt,
         allowed_tools: form.allowedTools,
         allowed_skills: form.allowedSkills,
+        ...(form.reasoning_effort !== undefined
+          ? { reasoning_effort: form.reasoning_effort }
+          : {}),
         previousName: form.previousName,
       });
       cancel();
@@ -214,7 +232,14 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
     }
   }, []);
 
-  const renderForm = (f: AgentForm, title: string) => (
+  const renderForm = (f: AgentForm, title: string) => {
+    const reasoning = reasoningConfigForSelection(
+      tierModels[f.tier] ?? null,
+      providers.overview?.connections ?? [],
+      providers.modelOptions ?? [],
+    );
+    const showReasoning = reasoning.supportsReasoning && reasoning.levels.length > 0;
+    return (
     <div className="flex flex-col gap-4">
       {title && <div className="config-card-title text-primary">{title}</div>}
       <div className="config-form-grid">
@@ -285,6 +310,20 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
             onChange={(tier) => setForm({ ...f, tier })}
           />
         </div>
+        {showReasoning && (
+          <div className="config-field">
+            <label>Reasoning effort</label>
+            <ReasoningEffortPicker
+              levels={reasoning.levels}
+              value={f.reasoning_effort ?? null}
+              onChange={(value) =>
+                setForm({ ...f, reasoning_effort: value ?? undefined })
+              }
+              label="Agent reasoning effort"
+              className="w-full"
+            />
+          </div>
+        )}
         <div className="config-field config-form-grid-full">
           <label>Description</label>
           <TextInput
@@ -347,12 +386,13 @@ export function AgentsTab({ data, onReload }: AgentsTabProps) {
             !f.description.trim() ||
             f.allowedTools.length === 0
           }
-        >
-          Save
-        </Button>
+          >
+            Save
+          </Button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="config-form flex flex-col gap-4">

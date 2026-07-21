@@ -192,26 +192,24 @@ export function ReasoningSelector({
               </Button>
             );
           })}
-          <div className="flex items-center gap-1">
-            <TextInput
-              size="xs"
-              className="w-full min-w-0"
-              type="text"
-              value={text}
-              placeholder="Level or token budget"
-              aria-label="Reasoning effort level or token budget"
-              onChange={(event) => setText(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  commitText();
-                }
-              }}
-            />
-            <Button variant="ghost" size="xs" className="shrink-0" onClick={commitText}>
-              Set
-            </Button>
-          </div>
+          <TextInput
+            size="xs"
+            className="w-full min-w-0"
+            type="text"
+            value={text}
+            placeholder="Level or token budget"
+            aria-label="Reasoning effort level or token budget"
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                commitText();
+              }
+            }}
+            onBlur={() => {
+              if (text.trim() !== '') commitText();
+            }}
+          />
           <Button
             variant="ghost"
             size="xs"

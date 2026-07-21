@@ -41,7 +41,6 @@ import {
   ConnectionModelsEditor,
   connectionCustomModelDrafts,
 } from './ConnectionModelsDialog';
-import { ReasoningConfigEditor, type ReasoningModelEntry } from './ReasoningConfigEditor';
 
 export interface ProviderConnectionCompletion {
   readonly connection: ProviderConnectionView;
@@ -145,24 +144,6 @@ export function ConnectionWizard({
     })),
     [definitions],
   );
-  const reasoningModels = useMemo<readonly ReasoningModelEntry[]>(() => {
-    if (!selectedDefinition) return [];
-    const entries: ReasoningModelEntry[] = [];
-    for (const modelId of connectionModelIds) {
-      const catalogModel = selectedDefinition.models.find((m) => m.id === modelId);
-      const customModel = connectionCustomModels.find((m) => m.id === modelId);
-      const hasReasoning = customModel?.capabilities.reasoning
-        ?? catalogModel?.capabilities?.reasoning
-        ?? false;
-      if (hasReasoning) {
-        entries.push({
-          modelId,
-          displayName: customModel?.displayName ?? catalogModel?.displayName ?? modelId,
-        });
-      }
-    }
-    return entries;
-  }, [selectedDefinition, connectionModelIds, connectionCustomModels]);
   const supportsCustomEndpoint =
     selectedDefinition?.allowsCustomModels === true &&
     (selectedDefinition.id === 'generic-openai-compatible' ||
@@ -696,20 +677,12 @@ export function ConnectionWizard({
                   definition={selectedDefinition}
                   selectedModelIds={connectionModelIds}
                   customModels={connectionCustomModels}
+                  reasoningConfig={reasoningConfig}
                   disabled={metadataLocked}
                   onSelectedModelIdsChange={setConnectionModelIds}
                   onCustomModelsChange={setConnectionCustomModels}
+                  onReasoningConfigChange={setReasoningConfig}
                   onEditingChange={setModelsEditing}
-                />
-              )}
-
-              {reasoningModels.length > 0 && (
-                <ReasoningConfigEditor
-                  key={selectedDefinition?.id ?? 'none'}
-                  models={reasoningModels}
-                  reasoningConfig={reasoningConfig}
-                  disabled={metadataLocked}
-                  onChange={setReasoningConfig}
                 />
               )}
 

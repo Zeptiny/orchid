@@ -5,7 +5,11 @@ import type {
   ProviderDefinitionView,
   ProviderModelView,
 } from '../../../shared/types/ipc';
-import type { CustomConnectionModel, ProviderProtocol } from '../../../shared/types/provider';
+import type {
+  CustomConnectionModel,
+  ProviderProtocol,
+  ReasoningModelConfig,
+} from '../../../shared/types/provider';
 import {
   CONNECTION_MODEL_MODALITIES,
   connectionModelCapabilities,
@@ -18,6 +22,7 @@ import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
 import { StatusBadge } from '../ui/StatusBadge';
 import { TextInput } from '../ui/TextInput';
+import { ReasoningFields } from './ReasoningConfigEditor';
 
 const NEW_CUSTOM_MODEL = '__new_custom_model__';
 
@@ -43,14 +48,18 @@ const EMPTY_CUSTOM_MODEL: CustomModelForm = {
   outputTokens: '',
 };
 
+const EMPTY_REASONING_CONFIG: ReasoningModelConfig = { levels: [], default: null };
+
 export interface ConnectionModelsEditorProps {
   readonly protocol: ProviderProtocol;
   readonly definition: ProviderDefinitionView;
   readonly selectedModelIds: readonly string[];
   readonly customModels: readonly CustomConnectionModel[];
+  readonly reasoningConfig: Record<string, ReasoningModelConfig>;
   readonly disabled?: boolean;
   readonly onSelectedModelIdsChange: (modelIds: readonly string[]) => void;
   readonly onCustomModelsChange: (models: readonly CustomConnectionModel[]) => void;
+  readonly onReasoningConfigChange: (config: Record<string, ReasoningModelConfig>) => void;
   readonly onEditingChange?: (editing: boolean) => void;
 }
 
@@ -131,13 +140,16 @@ export function ConnectionModelsEditor({
   definition,
   selectedModelIds,
   customModels,
+  reasoningConfig,
   disabled = false,
   onSelectedModelIdsChange,
   onCustomModelsChange,
+  onReasoningConfigChange,
   onEditingChange,
 }: ConnectionModelsEditorProps) {
   const [editingCustomModelId, setEditingCustomModelId] = useState<string | null>(null);
   const [customForm, setCustomForm] = useState<CustomModelForm>(EMPTY_CUSTOM_MODEL);
+  const [reasoningDraft, setReasoningDraft] = useState<ReasoningModelConfig>(EMPTY_REASONING_CONFIG);
   const [error, setError] = useState<string | null>(null);
 
   const catalogModels = useMemo(
@@ -182,6 +194,7 @@ export function ConnectionModelsEditor({
   const startAddingCustomModel = () => {
     setEditingCustomModelId(NEW_CUSTOM_MODEL);
     setCustomForm(EMPTY_CUSTOM_MODEL);
+    setReasoningDraft(EMPTY_REASONING_CONFIG);
     setError(null);
   };
 
@@ -190,18 +203,21 @@ export function ConnectionModelsEditor({
     const editable = override ?? editableCustomModel(model, protocol);
     setEditingCustomModelId(model.id);
     setCustomForm(formForCustomModel(editable));
+    setReasoningDraft(reasoningConfig[model.id] ?? EMPTY_REASONING_CONFIG);
     setError(null);
   };
 
   const startEditingCustomModel = (model: CustomConnectionModel) => {
     setEditingCustomModelId(model.id);
     setCustomForm(formForCustomModel(model));
+    setReasoningDraft(reasoningConfig[model.id] ?? EMPTY_REASONING_CONFIG);
     setError(null);
   };
 
   const cancelCustomModel = () => {
     setEditingCustomModelId(null);
     setCustomForm(EMPTY_CUSTOM_MODEL);
+    setReasoningDraft(EMPTY_REASONING_CONFIG);
     setError(null);
   };
 
@@ -246,6 +262,18 @@ export function ConnectionModelsEditor({
       setError('Select at least one input capability and one output capability.');
       return;
     }
+    if (customForm.reasoning && reasoningDraft.levels.length === 0) {
+      setError('Add at least one reasoning level for this reasoning-capable model.');
+      return;
+    }
+    if (
+      customForm.reasoning
+      && typeof reasoningDraft.default === 'number'
+      && !Number.isFinite(reasoningDraft.default)
+    ) {
+      setError('The numeric reasoning default must be a finite whole number.');
+      return;
+    }
 
     const existing = customModels.find((model) => model.id === editingCustomModelId);
     const model: CustomConnectionModel = {
@@ -273,8 +301,19 @@ export function ConnectionModelsEditor({
         selectedModelIds.map((modelId) => modelId === existing.id ? id : modelId),
       );
     }
+
+    const nextReasoningConfig: Record<string, ReasoningModelConfig> = { ...reasoningConfig };
+    if (existing && existing.id !== id) delete nextReasoningConfig[existing.id];
+    if (customForm.reasoning) {
+      nextReasoningConfig[id] = { levels: reasoningDraft.levels, default: reasoningDraft.default };
+    } else {
+      delete nextReasoningConfig[id];
+    }
+    onReasoningConfigChange(nextReasoningConfig);
+
     setEditingCustomModelId(null);
     setCustomForm(EMPTY_CUSTOM_MODEL);
+    setReasoningDraft(EMPTY_REASONING_CONFIG);
     setError(null);
   };
 
@@ -286,6 +325,11 @@ export function ConnectionModelsEditor({
   const removeCustomModel = (modelId: string) => {
     onCustomModelsChange(customModels.filter((model) => model.id !== modelId));
     onSelectedModelIdsChange(selectedModelIds.filter((candidate) => candidate !== modelId));
+    if (reasoningConfig[modelId]) {
+      const nextReasoningConfig = { ...reasoningConfig };
+      delete nextReasoningConfig[modelId];
+      onReasoningConfigChange(nextReasoningConfig);
+    }
     if (editingCustomModelId === modelId) cancelCustomModel();
   };
 
@@ -629,6 +673,23 @@ export function ConnectionModelsEditor({
                       <span>Supports reasoning</span>
                     </label>
                   </div>
+                  {customForm.reasoning && (
+                    <div className="mt-4 rounded-box border border-base-300 bg-base-100/60 p-4">
+                      <h4 className="text-sm font-semibold">Reasoning effort</h4>
+                      <p className="mt-0.5 text-xs text-base-content/60">
+                        Define the effort levels this model accepts and a default effort.
+                      </p>
+                      <ReasoningFields
+                        key={editingCustomModelId}
+                        modelId={editingCustomModelId}
+                        displayName={customForm.displayName.trim() || customForm.id.trim() || 'this model'}
+                        levels={reasoningDraft.levels}
+                        default={reasoningDraft.default}
+                        disabled={disabled}
+                        onChange={(levels, def) => setReasoningDraft({ levels: [...levels], default: def })}
+                      />
+                    </div>
+                  )}
                   <div className="mt-4 flex justify-end gap-2">
                     <Button
                       variant="ghost"
