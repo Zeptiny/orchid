@@ -24,6 +24,33 @@ function isDirectory(p: string): boolean {
 }
 
 /**
+ * Recursive copy using only asar-safe fs primitives (readdirSync, readFileSync,
+ * writeFileSync, mkdirSync). fs.cpSync internally calls statSync on
+ * subdirectories which fails inside app.asar on Windows.
+ */
+function copyRecursive(src: string, dest: string): void {
+  fs.mkdirSync(dest, { recursive: true });
+
+  let dirents: fs.Dirent[];
+  try {
+    dirents = fs.readdirSync(src, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const dirent of dirents) {
+    const srcPath = path.join(src, dirent.name);
+    const destPath = path.join(dest, dirent.name);
+
+    if (dirent.isDirectory()) {
+      copyRecursive(srcPath, destPath);
+    } else if (dirent.isFile()) {
+      fs.writeFileSync(destPath, fs.readFileSync(srcPath));
+    }
+  }
+}
+
+/**
  * Copy default definition subdirectories from `sourceDir` into `targetDir`.
  *
  * - Missing marker at target: recursive copy of the entire source subtree.
@@ -62,7 +89,7 @@ export function seedDefaultSubdirs(
     const targetFile = path.join(targetSubdir, options.markerFilename);
 
     if (!fs.existsSync(targetFile)) {
-      fs.cpSync(sourceSubdir, targetSubdir, { recursive: true });
+      copyRecursive(sourceSubdir, targetSubdir);
       continue;
     }
 
@@ -70,7 +97,7 @@ export function seedDefaultSubdirs(
       const sourceResource = path.join(sourceSubdir, resource);
       const targetResource = path.join(targetSubdir, resource);
       if (isDirectory(sourceResource) && !fs.existsSync(targetResource)) {
-        fs.cpSync(sourceResource, targetResource, { recursive: true });
+        copyRecursive(sourceResource, targetResource);
       }
     }
   }
