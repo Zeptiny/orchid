@@ -313,10 +313,12 @@ async function openShared(id: string): Promise<SessionOpenResult | null> {
     if (generation !== loadGeneration) {
       return result;
     }
-    setActiveSession(result.session);
-    // session:open resolves the workspace itself; adopt it directly instead of
-    // a second get_workspace round-trip.
-    setWorkspaceState(result.workspace);
+    if (result.session) {
+      setActiveSession(result.session);
+      // session:open resolves the workspace itself; adopt it directly instead of
+      // a second get_workspace round-trip.
+      setWorkspaceState(result.workspace);
+    }
     return result;
   } catch (err) {
     console.error('Failed to open session:', err);
