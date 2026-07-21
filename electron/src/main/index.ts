@@ -49,6 +49,7 @@ import {
   initializeProviderAccountingStore,
   resetProviderAccountingStore,
 } from './providers/accounting/store';
+import { closeSessionDb } from './session/storage';
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
@@ -368,6 +369,7 @@ app.on('before-quit', async (event) => {
     // 7. Now actually quit
     // Final safety flush after teardown, immediately before process exit.
     flushSubagentPersistence();
+    closeSessionDb();
     clearTimeout(forceExitTimer);
     app.exit(0);
   } catch (err) {

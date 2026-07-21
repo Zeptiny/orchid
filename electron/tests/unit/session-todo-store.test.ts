@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { SessionManager } from '../../src/main/session/manager';
+import { _clearDbCache } from '../../src/main/session/storage';
 import { buildCreateTool } from '../../src/main/tools/todo/create';
 import { TodoStatus } from '../../src/shared/types/todo';
 
@@ -19,11 +20,12 @@ describe('SessionManager TodoStore isolation', () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-todo-session-'));
     manager = new SessionManager({
-      storage: { sessionsDir: tmpDir },
+      storage: { dbPath: path.join(tmpDir, 'sessions.db') },
     });
   });
 
   afterEach(() => {
+    _clearDbCache();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

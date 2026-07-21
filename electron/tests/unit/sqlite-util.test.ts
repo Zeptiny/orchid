@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   openSqliteDb,
   isSqliteCorruptionError,
+  moveCorruptDbAside,
   SQLITE_CORRUPTION_RE,
 } from '../../src/main/utils/sqlite';
 
@@ -72,6 +73,33 @@ describe('openSqliteDb', () => {
     db.close();
   });
 
+  it('moves the corrupt file aside when rebuilding (no permanent deletion)', () => {
+    const dbPath = path.join(tempDir, 'aside.db');
+    fs.writeFileSync(dbPath, Buffer.alloc(4096, 0xde));
+
+    const db = openSqliteDb(dbPath, {
+      schema: 'CREATE TABLE IF NOT EXISTS recovered (id INTEGER PRIMARY KEY)',
+      corruptionCheck: 'SELECT 1 FROM recovered LIMIT 1',
+    });
+    db.close();
+
+    const backups = fs.readdirSync(tempDir).filter((f) => f.startsWith('aside.db.corrupt-'));
+    expect(backups.length).toBeGreaterThan(0);
+  });
+
+  it('recovers a corrupted DB at open even without a schema', () => {
+    const dbPath = path.join(tempDir, 'corrupt-no-schema.db');
+    fs.writeFileSync(dbPath, Buffer.alloc(4096, 0xde));
+
+    const db = openSqliteDb(dbPath);
+    db.exec('CREATE TABLE t (id INTEGER PRIMARY KEY)');
+    db.prepare('INSERT INTO t (id) VALUES (?)').run(7);
+    const row = db.prepare('SELECT id FROM t').get() as { id: number };
+    expect(row.id).toBe(7);
+
+    db.close();
+  });
+
   it('propagates non-corruption errors from schema execution', () => {
     const dbPath = path.join(tempDir, 'bad-schema.db');
 
@@ -103,5 +131,39 @@ describe('SQLITE_CORRUPTION_RE', () => {
     expect(SQLITE_CORRUPTION_RE.test('disk image')).toBe(true);
     expect(SQLITE_CORRUPTION_RE.test('is encrypted')).toBe(true);
     expect(SQLITE_CORRUPTION_RE.test('healthy database')).toBe(false);
+  });
+});
+
+describe('moveCorruptDbAside', () => {
+  it('renames the DB and its sidecars aside and returns the backup path', () => {
+    const dbPath = path.join(tempDir, 'move.db');
+    fs.writeFileSync(dbPath, 'main');
+    fs.writeFileSync(`${dbPath}-wal`, 'wal');
+    fs.writeFileSync(`${dbPath}-shm`, 'shm');
+
+    const backup = moveCorruptDbAside(dbPath);
+
+    expect(fs.existsSync(dbPath)).toBe(false);
+    expect(backup).toContain('move.db.corrupt-');
+    expect(fs.existsSync(backup)).toBe(true);
+    expect(fs.existsSync(`${backup}-wal`)).toBe(true);
+    expect(fs.existsSync(`${backup}-shm`)).toBe(true);
+  });
+});
+
+describe("recovery: 'preserve'", () => {
+  it('rethrows corruption errors without deleting or moving the file', () => {
+    const dbPath = path.join(tempDir, 'preserve.db');
+    fs.writeFileSync(dbPath, Buffer.alloc(4096, 0xde));
+
+    expect(() =>
+      openSqliteDb(dbPath, {
+        schema: 'CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)',
+        recovery: 'preserve',
+      }),
+    ).toThrow();
+
+    expect(fs.existsSync(dbPath)).toBe(true);
+    expect(fs.readdirSync(tempDir).filter((f) => f.includes('.corrupt-'))).toEqual([]);
   });
 });

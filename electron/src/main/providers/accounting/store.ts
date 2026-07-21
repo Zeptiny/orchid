@@ -334,7 +334,10 @@ export class ProviderAccountingStore {
   private connection(): SqliteDatabase {
     if (this.db) return this.db;
     ensureParentDirectory(this.dbPath);
-    const db = openSqliteDb(this.dbPath, { schema: ACCOUNTING_SCHEMA_SQL });
+    // The cost ledger is irreplaceable: fail closed on corruption rather than
+    // letting recovery delete it (preserve → corruption errors propagate to
+    // initializeProviderAccountingStore's runtimeInitializationError).
+    const db = openSqliteDb(this.dbPath, { schema: ACCOUNTING_SCHEMA_SQL, recovery: 'preserve' });
     try {
       fs.chmodSync(this.dbPath, 0o600);
     } catch {

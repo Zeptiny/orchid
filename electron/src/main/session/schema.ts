@@ -1,6 +1,9 @@
 /** SQLite schema for session storage. */
+
+/** Current session schema version. */
 export const SESSION_SCHEMA_VERSION = 1;
 
+/** Idempotent DDL for the session database. */
 export const SESSION_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY,

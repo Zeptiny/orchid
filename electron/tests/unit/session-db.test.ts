@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SessionDb } from '../../src/main/session/db';
+import { SESSION_SCHEMA_VERSION } from '../../src/main/session/schema';
 
 let tempDir: string;
 let instances: SessionDb[];
@@ -71,6 +72,27 @@ describe('SessionDb', () => {
 
     void db.connection;
     expect(fs.existsSync(dbPath)).toBe(true);
+  });
+
+  it('records the schema version in schema_meta on open', () => {
+    const db = new SessionDb(path.join(tempDir, 'version.db'));
+    instances.push(db);
+
+    const row = db.connection
+      .prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'")
+      .get() as { value: string };
+    expect(row.value).toBe(String(SESSION_SCHEMA_VERSION));
+  });
+
+  it('hardens the DB file to owner-only permissions (0o600)', () => {
+    const dbPath = path.join(tempDir, 'perms.db');
+    const db = new SessionDb(dbPath);
+    instances.push(db);
+    void db.connection;
+
+    // eslint-disable-next-line no-bitwise
+    const mode = fs.statSync(dbPath).mode & 0o777;
+    expect(mode).toBe(0o600);
   });
 
   it('rebuilds a corrupted DB file on next connection access', () => {

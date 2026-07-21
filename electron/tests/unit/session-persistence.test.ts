@@ -15,9 +15,11 @@ import {
   loadSession,
   listSavedSessions,
   deleteSession,
+  updateChain,
   isValidSessionId,
   _clearDbCache,
 } from '../../src/main/session/storage';
+import { openSqliteDb } from '../../src/main/utils/sqlite';
 import { SessionManager } from '../../src/main/session/manager';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
@@ -522,6 +524,18 @@ describe('listSavedSessions', () => {
     const sessions = listSavedSessions(storageOpts);
     expect(sessions).toHaveLength(1);
     expect(sessions[0].chainCount).toBe(2);
+  });
+
+  it('reports chainCount 0 for a session with no chains', () => {
+    const session = makeSession({
+      id: 'bcbc0000-0000-4000-8000-000000000000',
+      chains: [],
+    });
+    saveSession(session, storageOpts);
+
+    const sessions = listSavedSessions(storageOpts);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].chainCount).toBe(0);
   });
 
   it('includes cwd in summary', () => {
@@ -1555,5 +1569,184 @@ describe('SessionManager.syncSubagentChains', () => {
 
     const result = manager.syncSubagentChains([]);
     expect(result!.updatedAt >= before).toBe(true);
+  });
+});
+
+// ===========================================================================
+// updateChain — targeted turn-local write (R3)
+// ===========================================================================
+
+function readChainMessagesJson(dbPath: string, chainId: string): string {
+  const db = openSqliteDb(dbPath);
+  try {
+    const row = db
+      .prepare('SELECT messages_json FROM chains WHERE id = ?')
+      .get(chainId) as { messages_json: string };
+    return row.messages_json;
+  } finally {
+    db.close();
+  }
+}
+
+describe('updateChain (targeted turn-local write, R3)', () => {
+  const SID = 'adadadad-adad-4ada-8ada-adadadadadad';
+
+  it('rewrites only the target chain row, bumps recency, leaves siblings byte-identical', () => {
+    const chainA = makeChain(SID, { id: 'chain-a', messages: [makeMessage({ content: 'A original' })] });
+    const chainB = makeChain(SID, { id: 'chain-b', messages: [makeMessage({ content: 'B original' })] });
+    saveSession(
+      makeSession({
+        id: SID,
+        chains: [chainA, chainB],
+        activeChainId: 'chain-a',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+      storageOpts,
+    );
+
+    const dbPath = storageOpts.dbPath!;
+    const bBefore = readChainMessagesJson(dbPath, 'chain-b');
+
+    const updatedA: Chain = { ...chainA, messages: [makeMessage({ content: 'A updated' })] };
+    expect(updateChain(updatedA, '2026-02-01T00:00:00.000Z', storageOpts)).toBe(true);
+
+    expect(readChainMessagesJson(dbPath, 'chain-b')).toBe(bBefore);
+
+    const loaded = loadSession(SID, storageOpts)!;
+    expect(loaded.chains.find((c) => c.id === 'chain-a')!.messages.map((m) => m.content)).toEqual(['A updated']);
+    expect(loaded.chains.find((c) => c.id === 'chain-b')!.messages.map((m) => m.content)).toEqual(['B original']);
+
+    const summary = listSavedSessions(storageOpts).find((s) => s.id === SID)!;
+    expect(summary.updatedAt).toBe(Date.parse('2026-02-01T00:00:00.000Z'));
+  });
+
+  it('persists per-turn chain metadata (selection/agent) alongside messages', () => {
+    const chain = makeChain(SID, { id: 'chain-m', messages: [makeMessage({ content: 'hi' })] });
+    saveSession(makeSession({ id: SID, chains: [chain], activeChainId: 'chain-m' }), storageOpts);
+
+    const updated: Chain = {
+      ...chain,
+      messages: [makeMessage({ content: 'hi' }), makeMessage({ role: 'assistant', content: 'yo' })],
+      selection: ANTHROPIC_SELECTION,
+      modelLabel: ANTHROPIC_SELECTION.modelId,
+      agentName: 'Coder',
+    };
+    expect(updateChain(updated, new Date().toISOString(), storageOpts)).toBe(true);
+
+    const loaded = loadSession(SID, storageOpts)!;
+    const c = loaded.chains.find((x) => x.id === 'chain-m')!;
+    expect(c.messages.map((m) => m.content)).toEqual(['hi', 'yo']);
+    expect(c.selection).toEqual(ANTHROPIC_SELECTION);
+    expect(c.agentName).toBe('Coder');
+  });
+
+  it('returns false when the chain row is missing (caller falls back to full save)', () => {
+    saveSession(makeSession({ id: SID, chains: [] }), storageOpts);
+    const ghost = makeChain(SID, { id: 'ghost-chain' });
+    expect(updateChain(ghost, new Date().toISOString(), storageOpts)).toBe(false);
+  });
+
+  it('manager per-turn write reaches disk without rewriting the completed sibling chain', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+
+    manager.startChain({ messages: [makeMessage({ id: 'u1', role: 'user', content: 'Q1' })] }, session.id);
+    manager.persistTurn({
+      messages: [
+        makeMessage({ id: 'u1', role: 'user', content: 'Q1' }),
+        makeMessage({ id: 'a1', role: 'assistant', content: 'A1' }),
+      ],
+      status: ChainStatus.COMPLETED,
+    }, session.id);
+
+    manager.startChain({ messages: [makeMessage({ id: 'u2', role: 'user', content: 'Q2' })] }, session.id);
+
+    const dbPath = storageOpts.dbPath!;
+    const completed = manager.getActive()!.chains[0];
+    const completedBefore = readChainMessagesJson(dbPath, completed.id);
+
+    manager.updateActiveChainMessages([
+      makeMessage({ id: 'u2', role: 'user', content: 'Q2' }),
+      makeMessage({ id: 'a2', role: 'assistant', content: 'A2-in-progress' }),
+    ], session.id);
+
+    expect(readChainMessagesJson(dbPath, completed.id)).toBe(completedBefore);
+
+    _clearDbCache();
+    const fresh = new SessionManager({ storage: storageOpts });
+    const loaded = fresh.switchTo(session.id)!;
+    const active = loaded.chains.find((c) => c.id === loaded.activeChainId)!;
+    expect(active.messages.map((m) => m.content)).toEqual(['Q2', 'A2-in-progress']);
+    expect(loaded.chains.find((c) => c.id === completed.id)!.messages.map((m) => m.content)).toEqual(['Q1', 'A1']);
+  });
+});
+
+// ===========================================================================
+// Load resilience — corrupt columns must not throw or silently lose chains
+// ===========================================================================
+
+describe('loadSession resilience to corrupt columns', () => {
+  const SID = 'afafafaf-afaf-4afa-8afa-afafafafafaf';
+
+  it('returns the session with safe defaults instead of throwing', () => {
+    saveSession(
+      makeSession({ id: SID, chains: [makeChain(SID, { id: 'c1', messages: [makeMessage({ content: 'hi' })] })] }),
+      storageOpts,
+    );
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(
+      "UPDATE sessions SET todo_store_json = '{not json', subagent_chains_json = '[[[', selection_json = 'oops' WHERE id = ?",
+    ).run(SID);
+    db.prepare("UPDATE chains SET messages_json = 'garbage' WHERE id = ?").run('c1');
+    db.close();
+    _clearDbCache();
+
+    const loaded = loadSession(SID, storageOpts);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.selection).toBeNull();
+    expect(loaded!.subagentChains).toEqual([]);
+    expect(loaded!.todoStore.tasks).toEqual([]);
+    // The chain survives (with empty messages) rather than being dropped.
+    expect(loaded!.chains).toHaveLength(1);
+    expect(loaded!.chains[0].messages).toEqual([]);
+  });
+
+  it('prunes orphan tool results on load (parity with chainFromStorageDict)', () => {
+    const orphan = makeMessage({ role: 'tool', type: 'tool_result', tool_call_id: 'no-such-call', content: 'orphan' });
+    const user = makeMessage({ role: 'user', content: 'q' });
+    saveSession(
+      makeSession({ id: SID, chains: [makeChain(SID, { id: 'c1', messages: [orphan, user] })] }),
+      storageOpts,
+    );
+
+    const loaded = loadSession(SID, storageOpts)!;
+    expect(loaded.chains[0].messages.map((m) => m.content)).toEqual(['q']);
+  });
+});
+
+// ===========================================================================
+// Corruption recovery through the storage layer (no permanent loss)
+// ===========================================================================
+
+describe('storage-layer corruption recovery', () => {
+  it('recovers a corrupt DB on open, preserving a backup instead of deleting it', () => {
+    const sid = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1';
+    saveSession(makeSession({ id: sid, chains: [] }), storageOpts);
+    _clearDbCache();
+
+    // Corrupt the DB (and drop sidecars) so the next open hits corruption.
+    fs.writeFileSync(storageOpts.dbPath!, Buffer.alloc(4096, 0xde));
+    for (const suffix of ['-wal', '-shm']) {
+      const sidecar = storageOpts.dbPath! + suffix;
+      if (fs.existsSync(sidecar)) fs.rmSync(sidecar);
+    }
+
+    // Storage operations heal (move-aside + rebuild → empty) instead of throwing.
+    expect(loadSession(sid, storageOpts)).toBeNull();
+    expect(listSavedSessions(storageOpts)).toEqual([]);
+
+    const backups = fs.readdirSync(tmpDir).filter((f) => f.includes('.corrupt-'));
+    expect(backups.length).toBeGreaterThan(0);
   });
 });

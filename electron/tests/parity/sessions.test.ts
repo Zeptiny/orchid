@@ -13,7 +13,7 @@ import type { Session } from '../../src/shared/types/session';
 import type { ModelSelection } from '../../src/shared/types/provider';
 import type { StorageOptions } from '../../src/main/session/storage';
 import {
-  ensureSessionsDir,
+  ensureSessionDb,
   saveSession,
   loadSession,
   listSavedSessions,
@@ -383,14 +383,20 @@ describe('Session Parity', () => {
   });
 
   describe('sessions directory', () => {
-    it('ensureSessionsDir creates directory with mode 0o700', () => {
-      const dir = ensureSessionsDir(storageOpts);
+    it('ensureSessionDb hardens the directory (0o700) and DB file (0o600)', () => {
+      const dir = ensureSessionDb(storageOpts);
       expect(fs.existsSync(dir)).toBe(true);
 
-      const stat = fs.statSync(dir);
+      // Relax permissions, then re-open with a fresh connection to prove the
+      // hardening runs on open (not a coincidence of mkdtemp's 0o700).
+      _clearDbCache();
+      fs.chmodSync(dir, 0o755);
+      ensureSessionDb(storageOpts);
+
       // eslint-disable-next-line no-bitwise
-      const mode = stat.mode & 0o777;
-      expect(mode).toBe(0o700);
+      expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+      // eslint-disable-next-line no-bitwise
+      expect(fs.statSync(storageOpts.dbPath!).mode & 0o777).toBe(0o600);
     });
   });
 });
