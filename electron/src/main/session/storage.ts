@@ -46,9 +46,6 @@ export const CACHE_DIR = path.join(os.homedir(), '.orchid', 'cache');
 export const TOOL_OUTPUT_CACHE_DIR = path.join(CACHE_DIR, 'tool-output');
 export const WEB_FETCH_CACHE_DIR = path.join(CACHE_DIR, 'web-fetch');
 
-/** @deprecated Retained for session-working-set compatibility. */
-export const SESSIONS_DIR = path.join(os.homedir(), '.orchid', 'sessions');
-
 // ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------

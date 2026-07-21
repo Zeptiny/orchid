@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import Database from 'better-sqlite3';
 import Decimal from 'decimal.js';
 import { z } from 'zod';
 import {
@@ -13,6 +12,7 @@ import {
 import { HOME_CONFIG_DIR } from '../../config/loader';
 import { redactLogString } from '../../logging';
 import { providerProtocolSchema } from '../../../shared/types/provider';
+import { openSqliteDb, type SqliteDatabase } from '../../utils/sqlite';
 import { ACCOUNTING_SCHEMA_SQL, ACCOUNTING_SCHEMA_VERSION } from './schema';
 import type { AttemptCostResolution } from './cost';
 
@@ -189,7 +189,7 @@ function rowToRecord(row: AttemptRow): ProviderAttemptRecord {
 export class ProviderAccountingStore {
   private readonly dbPath: string;
   private readonly now: () => Date;
-  private db: Database.Database | null = null;
+  private db: SqliteDatabase | null = null;
 
   constructor(options: ProviderAccountingStoreOptions = {}) {
     this.dbPath = options.dbPath ?? PROVIDER_ACCOUNTING_DB_PATH;
@@ -331,19 +331,16 @@ export class ProviderAccountingStore {
     return { currencies, unknownCount };
   }
 
-  private connection(): Database.Database {
+  private connection(): SqliteDatabase {
     if (this.db) return this.db;
     ensureParentDirectory(this.dbPath);
-    const db = new Database(this.dbPath);
+    const db = openSqliteDb(this.dbPath, { schema: ACCOUNTING_SCHEMA_SQL });
     try {
       fs.chmodSync(this.dbPath, 0o600);
     } catch {
       // Best effort on non-POSIX filesystems.
     }
-    db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
-    db.pragma('busy_timeout = 5000');
-    db.exec(ACCOUNTING_SCHEMA_SQL);
     db.prepare('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)')
       .run('schema_version', String(ACCOUNTING_SCHEMA_VERSION));
     this.db = db;

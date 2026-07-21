@@ -8,7 +8,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import Database from 'better-sqlite3';
+import { openSqliteDb, type SqliteDatabase } from '../utils/sqlite';
 import type { ASTStoreStatus } from '../../shared/types/ipc-boundary';
 
 export type { ASTStoreStatus } from '../../shared/types/ipc-boundary';
@@ -21,8 +21,6 @@ export type StoreStatus = ASTStoreStatus;
 
 export const PROJECT_AST_DIR = '.orchid/ast';
 export const AST_INDEX_DB = 'symbols.db';
-
-const CORRUPTION_RE = /malformed|not a database|disk image|header mismatch|is encrypted/i;
 
 const DB_SCHEMA = `
 CREATE TABLE IF NOT EXISTS files (
@@ -85,17 +83,6 @@ export interface SymbolRow {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function isCorruptionError(err: unknown): boolean {
-  if (err instanceof Error) {
-    return CORRUPTION_RE.test(err.message);
-  }
-  return false;
-}
-
-// ---------------------------------------------------------------------------
 // ASTStore
 // ---------------------------------------------------------------------------
 
@@ -105,7 +92,7 @@ export class ASTStore {
   readonly dbPath: string;
 
   /** Cached database connection (lazy-opened, reused). */
-  private _db: Database.Database | null = null;
+  private _db: SqliteDatabase | null = null;
 
   constructor(projectPath: string) {
     this.projectPath = projectPath;
@@ -138,25 +125,8 @@ export class ASTStore {
    */
   initDb(): void {
     this.ensureDir();
-    try {
-      const db = new Database(this.dbPath);
-      db.pragma('journal_mode = WAL');
-      db.pragma('busy_timeout = 5000');
-      db.exec(DB_SCHEMA);
-      db.close();
-    } catch (err) {
-      if (!isCorruptionError(err)) throw err;
-      console.error(`Corrupted symbols.db, rebuilding: ${err}`);
-      if (fs.existsSync(this.dbPath)) {
-        fs.unlinkSync(this.dbPath);
-      }
-      const db = new Database(this.dbPath);
-      db.pragma('journal_mode = WAL');
-      db.pragma('busy_timeout = 5000');
-      db.exec(DB_SCHEMA);
-      db.close();
-    }
-    // Close any cached connection so getConn() picks up the schema
+    const db = openSqliteDb(this.dbPath, { schema: DB_SCHEMA });
+    db.close();
     this.dispose();
   }
 
@@ -164,32 +134,11 @@ export class ASTStore {
    * Get a database connection. Caches the connection for reuse.
    * Handles corruption recovery.
    */
-  private getConn(): Database.Database {
+  private getConn(): SqliteDatabase {
     if (this._db) return this._db;
     this.ensureDir();
-    try {
-      this._db = new Database(this.dbPath);
-      this._db.pragma('journal_mode = WAL');
-      this._db.pragma('busy_timeout = 5000');
-      // Quick corruption check
-      this._db.prepare('SELECT 1 FROM files LIMIT 1').get();
-      return this._db;
-    } catch (err) {
-      if (!isCorruptionError(err)) {
-        if (this._db) { this._db.close(); this._db = null; }
-        throw err;
-      }
-      console.error(`Corrupted symbols.db, rebuilding: ${err}`);
-      if (this._db) { this._db.close(); this._db = null; }
-      if (fs.existsSync(this.dbPath)) {
-        fs.unlinkSync(this.dbPath);
-      }
-      this._db = new Database(this.dbPath);
-      this._db.exec(DB_SCHEMA);
-      this._db.pragma('journal_mode = WAL');
-      this._db.pragma('busy_timeout = 5000');
-      return this._db;
-    }
+    this._db = openSqliteDb(this.dbPath, { schema: DB_SCHEMA, corruptionCheck: 'SELECT 1 FROM files LIMIT 1' });
+    return this._db;
   }
 
   /**
