@@ -110,8 +110,8 @@ export const editHandler: ToolHandler = async (input: unknown, ctx) => {
   }
 
   let newContent = replace_all
-    ? normalizedContent.replaceAll(normalizedOld, normalizedNew)
-    : normalizedContent.replace(normalizedOld, normalizedNew);
+    ? normalizedContent.replaceAll(normalizedOld, () => normalizedNew)
+    : normalizedContent.replace(normalizedOld, () => normalizedNew);
 
   if (hasCrlf) {
     newContent = newContent.replace(/\n/g, '\r\n');

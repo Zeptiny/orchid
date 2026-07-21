@@ -23,9 +23,6 @@ asarUnpack:
   - "**/node_modules/better-sqlite3/**/*"
   - "**/node_modules/node-pty/**/*"
   - "**/node_modules/onnxruntime-node/**/*"
-  - "dist/main/agents/defaults/**/*"
-  - "dist/main/skills/defaults/**/*"
-  - "dist/main/personality/defaults/**/*"
 
 files:
   - dist/**/*
