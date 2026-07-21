@@ -75,6 +75,24 @@ function rate(value: unknown) {
   return amount === undefined ? undefined : { amount, per: 1000000, unit: 'tokens' };
 }
 
+function reasoningFromOptions(options: unknown): { reasoningLevels?: string[]; reasoningDefault?: string } | undefined {
+  if (!Array.isArray(options) || options.length === 0) return undefined;
+  for (const option of options) {
+    if (typeof option !== 'object' || option === null) continue;
+    const { type, values } = option as Record<string, unknown>;
+    if (type === 'effort' && Array.isArray(values)) {
+      const levels = values.filter((v): v is string => typeof v === 'string' && v.length > 0);
+      if (levels.length > 0) {
+        return {
+          reasoningLevels: levels,
+          reasoningDefault: levels.includes('medium') ? 'medium' : levels[Math.floor(levels.length / 2)],
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
 function modelToCatalog(model: any, protocol: string, observedAt: string) {
   const cost = model.cost ?? {};
   const rates: Record<string, unknown> = {};
@@ -93,6 +111,7 @@ function modelToCatalog(model: any, protocol: string, observedAt: string) {
   const modalities = model.modalities ?? {};
   const input = normalizeModalities(modalities.input, ['text']);
   const output = normalizeModalities(modalities.output, ['text']);
+  const reasoning = reasoningFromOptions(model.reasoning_options);
 
   return {
     id: String(model.id),
@@ -104,6 +123,7 @@ function modelToCatalog(model: any, protocol: string, observedAt: string) {
       tools: Boolean(model.tool_call),
       reasoning: Boolean(model.reasoning),
     },
+    ...(reasoning ?? {}),
     limits: {
       contextTokens: Number.isInteger(model.limit?.context) && model.limit.context > 0 ? model.limit.context : null,
       outputTokens: Number.isInteger(model.limit?.output) && model.limit.output > 0 ? model.limit.output : null,
