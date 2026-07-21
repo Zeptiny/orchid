@@ -34,8 +34,15 @@ export function parseReasoningInput(raw: string): ReasoningEffortValue {
   if (!trimmed) return null;
   const num = parseReasoningNumeric(trimmed);
   if (num !== null) return num;
-  if (/^\d+$/.test(trimmed)) return null;
+  // Out-of-range digit strings are preserved verbatim so callers can surface a
+  // validation error instead of silently resetting to the default.
   return trimmed;
+}
+
+/** True when the entry is all digits but outside the valid token-budget range. */
+export function isOutOfRangeNumeric(raw: string): boolean {
+  const trimmed = raw.trim();
+  return /^\d+$/.test(trimmed) && parseReasoningNumeric(trimmed) === null;
 }
 
 /** Effective effort: session override wins, then the connection default. */
@@ -85,6 +92,7 @@ export function ReasoningSelector({
   const rootRef = useRef<HTMLDivElement>(null);
   const [internalOpen, setInternalOpen] = useState(false);
   const [text, setText] = useState('');
+  const [inputError, setInputError] = useState<string | null>(null);
   const menuId = useId();
 
   const isControlled = controlledOpen !== undefined;
@@ -119,17 +127,24 @@ export function ReasoningSelector({
   const effective = effectiveReasoningValue(value, defaultValue);
 
   const selectLevel = (level: string) => {
+    setInputError(null);
     onChange(level);
     setOpen(false);
   };
 
   const commitText = () => {
+    if (isOutOfRangeNumeric(text)) {
+      setInputError('Enter a token budget between 1 and 1,000,000.');
+      return;
+    }
+    setInputError(null);
     commitReasoningText(text, onChange);
     setText('');
     setOpen(false);
   };
 
   const reset = () => {
+    setInputError(null);
     onChange(null);
     setText('');
     setOpen(false);
@@ -192,7 +207,10 @@ export function ReasoningSelector({
             value={text}
             placeholder="Level or token budget"
             aria-label="Reasoning effort level or token budget"
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => {
+              setText(event.target.value);
+              setInputError(null);
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault();
@@ -203,6 +221,9 @@ export function ReasoningSelector({
               if (text.trim() !== '') commitText();
             }}
           />
+          {inputError && (
+            <p className="px-1 text-xs text-error" role="alert">{inputError}</p>
+          )}
           <Button
             variant="ghost"
             size="xs"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReasoningModelConfig } from '../../../shared/types/provider';
 import { parseReasoningNumeric } from '../../utils/reasoning';
 import { Icon } from '../Icon';
@@ -43,13 +43,22 @@ export function ReasoningFields({
     typeof defaultValue === 'number' ? String(defaultValue) : '',
   );
   const [numericError, setNumericError] = useState<string | null>(null);
+  // Numeric mode is tracked independently of the committed default so choosing
+  // "Numeric (token budget)" stays selected while the budget is still empty.
+  const [numericMode, setNumericMode] = useState(() => typeof defaultValue === 'number');
+  const lastCommitted = useRef(defaultValue);
 
   useEffect(() => {
     setNumericDefault(typeof defaultValue === 'number' ? String(defaultValue) : '');
+    // Resync the mode only for external defaultValue changes; self-commits keep
+    // lastCommitted in step so the user's explicit mode selection is preserved.
+    if (defaultValue !== lastCommitted.current) {
+      setNumericMode(typeof defaultValue === 'number');
+      lastCommitted.current = defaultValue;
+    }
   }, [defaultValue]);
 
-  const isNumeric = typeof defaultValue === 'number';
-  const selectValue = isNumeric
+  const selectValue = numericMode
     ? '__numeric__'
     : typeof defaultValue === 'string'
       ? defaultValue
@@ -74,14 +83,21 @@ export function ReasoningFields({
 
   const selectDefault = (value: string) => {
     if (value === '__numeric__') {
-      onChange(levels, parseReasoningNumeric(numericDefault));
+      setNumericMode(true);
+      const parsed = parseReasoningNumeric(numericDefault);
+      lastCommitted.current = parsed;
+      onChange(levels, parsed);
       return;
     }
     if (value === '__none__') {
+      setNumericMode(false);
       setNumericError(null);
+      lastCommitted.current = null;
       onChange(levels, null);
       return;
     }
+    setNumericMode(false);
+    lastCommitted.current = value;
     onChange(levels, value);
   };
 
@@ -91,6 +107,7 @@ export function ReasoningFields({
       ? 'Enter a positive whole number between 1 and 1,000,000.'
       : null);
     setNumericDefault(value);
+    lastCommitted.current = parsed;
     onChange(levels, parsed);
   };
 
@@ -165,7 +182,7 @@ export function ReasoningFields({
             ))}
             <option value="__numeric__">Numeric (token budget)</option>
           </Select>
-          {isNumeric && (
+          {numericMode && (
             <TextInput
               size="sm"
               className="w-28"
@@ -178,7 +195,7 @@ export function ReasoningFields({
             />
           )}
         </div>
-        {numericError && isNumeric && (
+        {numericError && numericMode && (
           <p className="mt-1 text-xs text-error" role="alert">{numericError}</p>
         )}
       </div>

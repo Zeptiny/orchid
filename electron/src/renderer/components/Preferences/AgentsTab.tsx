@@ -307,7 +307,7 @@ export function AgentsTab({ data, tierModels, onReload }: AgentsTabProps) {
           <label>Tier</label>
           <TierPicker
             value={f.tier}
-            onChange={(tier) => setForm({ ...f, tier })}
+            onChange={(tier) => setForm({ ...f, tier, reasoning_effort: undefined })}
           />
         </div>
         {showReasoning && (

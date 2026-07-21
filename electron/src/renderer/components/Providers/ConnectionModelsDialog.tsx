@@ -319,6 +319,11 @@ export function ConnectionModelsEditor({
 
   const resetCatalogModel = (modelId: string) => {
     onCustomModelsChange(customModels.filter((model) => model.id !== modelId));
+    if (reasoningConfig[modelId]) {
+      const nextReasoningConfig = { ...reasoningConfig };
+      delete nextReasoningConfig[modelId];
+      onReasoningConfigChange(nextReasoningConfig);
+    }
     if (editingCustomModelId === modelId) cancelCustomModel();
   };
 

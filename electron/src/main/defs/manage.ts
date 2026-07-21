@@ -331,10 +331,10 @@ function listAgentEntriesInDir(
     const rawEffort = metadata['reasoning_effort'];
     let reasoning_effort: string | number | undefined;
     if (typeof rawEffort === 'number') {
-      reasoning_effort = rawEffort;
+      reasoning_effort = Number.isFinite(rawEffort) ? rawEffort : undefined;
     } else if (typeof rawEffort === 'string' && rawEffort.trim() !== '') {
       const num = Number(rawEffort);
-      reasoning_effort = Number.isNaN(num) ? rawEffort : num;
+      reasoning_effort = Number.isFinite(num) ? num : rawEffort;
     }
 
     out.push({
@@ -553,6 +553,11 @@ export function saveAgent(
     }
   }
 
+  const reasoningEffort =
+    typeof msg.reasoning_effort === 'number' && !Number.isFinite(msg.reasoning_effort)
+      ? undefined
+      : msg.reasoning_effort;
+
   const metadata: Record<string, string | string[]> = {
     name,
     type,
@@ -560,8 +565,8 @@ export function saveAgent(
     description,
     allowed_tools: allowedTools,
     allowed_skills: allowedSkills.length > 0 ? allowedSkills : ['*'],
-    ...(msg.reasoning_effort !== undefined
-      ? { reasoning_effort: String(msg.reasoning_effort) }
+    ...(reasoningEffort !== undefined
+      ? { reasoning_effort: String(reasoningEffort) }
       : {}),
   };
   const markdown = serializeFrontmatter(metadata, msg.system_prompt ?? '');
@@ -575,8 +580,8 @@ export function saveAgent(
     system_prompt: (msg.system_prompt ?? '').trim(),
     allowed_tools: allowedTools,
     allowed_skills: allowedSkills.length > 0 ? allowedSkills : ['*'],
-    ...(msg.reasoning_effort !== undefined
-      ? { reasoning_effort: msg.reasoning_effort }
+    ...(reasoningEffort !== undefined
+      ? { reasoning_effort: reasoningEffort }
       : {}),
     scope: msg.scope,
     path: targetFile,

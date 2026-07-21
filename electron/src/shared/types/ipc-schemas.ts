@@ -242,6 +242,13 @@ export const workspaceInfoSchema = z.object({
   status: z.enum(['unbound', 'valid', 'missing']),
 });
 
+export const sessionReasoningConfigResultSchema = z.object({
+  levels: z.array(z.string()),
+  default: z.union([z.string(), z.number()]).nullable(),
+  override: z.union([z.string(), z.number()]).nullable(),
+  supportsReasoning: z.boolean(),
+});
+
 /** Loose session snapshot: identity + array containers, not full Message graph. */
 export const chatSessionSnapshotSchema = z
   .object({

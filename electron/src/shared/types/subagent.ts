@@ -164,7 +164,8 @@ export function subagentRecordToStorageDict(record: SubagentRecord): SubagentRec
     result: record.result,
     error: record.error,
     parent_chain_index: record.parentChainIndex,
-    ...(record.reasoning_effort !== undefined
+    ...(record.reasoning_effort !== undefined &&
+      (typeof record.reasoning_effort !== 'number' || Number.isFinite(record.reasoning_effort))
       ? { reasoning_effort: record.reasoning_effort }
       : {}),
     chain: chainToStorageDict(record.chain),

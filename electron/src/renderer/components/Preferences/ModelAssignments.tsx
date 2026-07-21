@@ -168,6 +168,12 @@ export function ModelAssignments({
                         const option = byKey.get(value);
                         next[tier.id] = option ? optionSelection(option) : null;
                         onTierModelsChange(next);
+                        if (onTierReasoningEffortChange) {
+                          onTierReasoningEffortChange({
+                            ...(tierReasoningEffort ?? {}),
+                            [tier.id]: null,
+                          });
+                        }
                       }}
                     />
                     {showReasoning && (

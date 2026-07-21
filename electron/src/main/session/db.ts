@@ -27,8 +27,12 @@ export class SessionDb {
       });
       try {
         this._db.exec('ALTER TABLE sessions ADD COLUMN reasoning_effort_override TEXT');
-      } catch {
-        // Column already exists on migrated databases.
+      } catch (error) {
+        // Ignore only the expected duplicate-column error on migrated databases;
+        // surface every other migration failure to the caller.
+        if (!(error instanceof Error && /duplicate column name/i.test(error.message))) {
+          throw error;
+        }
       }
       this._db.pragma('foreign_keys = ON');
       this._db

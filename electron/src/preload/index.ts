@@ -96,6 +96,7 @@ import {
   bgCommandSnapshotResultSchema,
   configSaveResultSchema,
   workspaceInfoSchema,
+  sessionReasoningConfigResultSchema,
   chatSessionSnapshotSchema,
   subagentSnapshotSchema,
   subagentEventSchema,
@@ -131,6 +132,7 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.SESSION_GET_WORKSPACE]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_PICK_PROJECT_DIR]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_SET_WORKSPACE]: workspaceInfoSchema,
+  [IPC_CHANNELS.SESSION_GET_REASONING_CONFIG]: sessionReasoningConfigResultSchema,
 };
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {

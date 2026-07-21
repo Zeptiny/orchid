@@ -7,7 +7,7 @@ export interface ReasoningEffortPickerProps {
   readonly levels: readonly string[];
   /** Current effort; null/undefined inherits the connection default. */
   readonly value: string | number | null | undefined;
-  readonly onChange: (value: string | null) => void;
+  readonly onChange: (value: string | number | null) => void;
   readonly disabled?: boolean;
   readonly label?: string;
   readonly align?: PopoverAlign;
@@ -31,6 +31,10 @@ export function ReasoningEffortPicker({
   className = '',
 }: ReasoningEffortPickerProps) {
   const current = value == null ? INHERIT_VALUE : String(value);
+  // A numeric value that is not one of the configured levels is shown as a
+  // synthesized "Custom token budget" entry; selecting it must forward the
+  // original number, not its display string.
+  const customNumeric = typeof value === 'number' && !levels.includes(current) ? value : null;
 
   const options = useMemo<readonly PopoverListOption[]>(() => {
     const list: PopoverListOption[] = [
@@ -51,7 +55,11 @@ export function ReasoningEffortPicker({
     <PopoverList
       value={current}
       options={options}
-      onChange={(next) => onChange(next === INHERIT_VALUE ? null : next)}
+      onChange={(next) => {
+        if (next === INHERIT_VALUE) onChange(null);
+        else if (next === current && customNumeric !== null) onChange(customNumeric);
+        else onChange(next);
+      }}
       label={label}
       title="Reasoning effort"
       searchPlaceholder="Search levels…"

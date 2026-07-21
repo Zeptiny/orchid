@@ -15,6 +15,7 @@ import {
   commitReasoningText,
   effectiveReasoningValue,
   formatReasoningValue,
+  isOutOfRangeNumeric,
   isReasoningOverridden,
   parseReasoningInput,
   shouldShowReasoningSelector,
@@ -79,6 +80,25 @@ describe('parseReasoningInput', () => {
   it('clearing the input resets to null (falls back to default)', () => {
     expect(parseReasoningInput('')).toBeNull();
     expect(parseReasoningInput('   ')).toBeNull();
+  });
+
+  it('preserves an out-of-range digit string instead of nulling it', () => {
+    expect(parseReasoningInput('99999999')).toBe('99999999');
+    expect(parseReasoningInput('0')).toBe('0');
+  });
+});
+
+describe('isOutOfRangeNumeric', () => {
+  it('flags all-digit entries outside the valid token-budget range', () => {
+    expect(isOutOfRangeNumeric('99999999')).toBe(true);
+    expect(isOutOfRangeNumeric('0')).toBe(true);
+  });
+
+  it('is false for valid budgets, text levels, and empty input', () => {
+    expect(isOutOfRangeNumeric('8192')).toBe(false);
+    expect(isOutOfRangeNumeric('high')).toBe(false);
+    expect(isOutOfRangeNumeric('12abc')).toBe(false);
+    expect(isOutOfRangeNumeric('')).toBe(false);
   });
 });
 

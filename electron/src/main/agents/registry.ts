@@ -90,10 +90,10 @@ function loadAgentsFromDir(agentsDir: string): Map<string, Agent> {
     const rawEffort = metadata['reasoning_effort'];
     let reasoning_effort: string | number | undefined;
     if (typeof rawEffort === 'number') {
-      reasoning_effort = rawEffort;
+      reasoning_effort = Number.isFinite(rawEffort) ? rawEffort : undefined;
     } else if (typeof rawEffort === 'string' && rawEffort.trim() !== '') {
       const num = Number(rawEffort);
-      reasoning_effort = Number.isNaN(num) ? rawEffort : num;
+      reasoning_effort = Number.isFinite(num) ? num : rawEffort;
     }
 
     // Validate required fields
