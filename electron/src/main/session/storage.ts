@@ -32,8 +32,8 @@ import {
   copyModelSelection,
   modelSelectionSchema,
 } from '../../shared/types/provider';
-import { openSqliteDb, type SqliteDatabase } from '../utils/sqlite';
-import { SESSION_SCHEMA_SQL } from './schema';
+import { type SqliteDatabase } from '../utils/sqlite';
+import { SessionDb } from './db';
 
 export type { SessionSummary } from '../../shared/types/ipc-boundary';
 
@@ -81,23 +81,21 @@ export function isValidSessionId(id: string): boolean {
 // Database access
 // ---------------------------------------------------------------------------
 
-const dbCache = new Map<string, SqliteDatabase>();
+const dbCache = new Map<string, SessionDb>();
 
 function getDb(dbPath: string): SqliteDatabase {
-  const cached = dbCache.get(dbPath);
-  if (cached) return cached;
-  const db = openSqliteDb(dbPath, {
-    schema: SESSION_SCHEMA_SQL,
-    corruptionCheck: 'SELECT 1 FROM sessions LIMIT 1',
-  });
-  dbCache.set(dbPath, db);
-  return db;
+  let cached = dbCache.get(dbPath);
+  if (!cached) {
+    cached = new SessionDb(dbPath);
+    dbCache.set(dbPath, cached);
+  }
+  return cached.connection;
 }
 
 /** @internal Test-only: clear cached connections. */
 export function _clearDbCache(): void {
   for (const db of dbCache.values()) {
-    try { db.close(); } catch { /* ignore */ }
+    db.dispose();
   }
   dbCache.clear();
 }
@@ -374,6 +372,23 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
     chainCount: r.chain_count,
     updatedAt: Date.parse(r.updated_at) || 0,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// updateChainMessages — targeted turn-local write
+// ---------------------------------------------------------------------------
+
+export function updateChainMessages(
+  chainId: string,
+  messages: readonly Message[],
+  opts?: StorageOptions,
+): void {
+  const { dbPath } = resolveOptions(opts);
+  const db = getDb(dbPath);
+  db.prepare('UPDATE chains SET messages_json = ? WHERE id = ?').run(
+    serializeMessages(messages),
+    chainId,
+  );
 }
 
 // ---------------------------------------------------------------------------

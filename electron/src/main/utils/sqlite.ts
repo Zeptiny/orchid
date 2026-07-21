@@ -32,6 +32,18 @@ export function isSqliteCorruptionError(err: unknown): boolean {
 }
 
 /**
+ * Safely remove a SQLite database and its WAL/SHM sidecar files.
+ */
+export function deleteSqliteDb(dbPath: string): void {
+  for (const suffix of ['', '-wal', '-shm']) {
+    const file = dbPath + suffix;
+    if (fs.existsSync(file)) {
+      try { fs.unlinkSync(file); } catch { /* best effort */ }
+    }
+  }
+}
+
+/**
  * Open (or create) a SQLite database with WAL mode and busy timeout.
  *
  * When `schema` is provided it is executed on every open (idempotent via
@@ -51,7 +63,7 @@ export function openSqliteDb(
     db = createConnection(dbPath);
   } catch (err) {
     if (!isSqliteCorruptionError(err)) throw err;
-    fs.unlinkSync(dbPath);
+    deleteSqliteDb(dbPath);
     db = createConnection(dbPath);
   }
 
@@ -60,8 +72,8 @@ export function openSqliteDb(
       db.exec(opts.schema);
     } catch (err) {
       if (!isSqliteCorruptionError(err)) throw err;
-      db.close();
-      if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+      try { db.close(); } catch { /* corrupted */ }
+      deleteSqliteDb(dbPath);
       db = createConnection(dbPath);
       db.exec(opts.schema);
     }
@@ -72,8 +84,8 @@ export function openSqliteDb(
       db.prepare(opts.corruptionCheck).get();
     } catch (err) {
       if (!isSqliteCorruptionError(err)) throw err;
-      db.close();
-      if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+      try { db.close(); } catch { /* corrupted */ }
+      deleteSqliteDb(dbPath);
       db = createConnection(dbPath);
       if (opts.schema) {
         db.exec(opts.schema);

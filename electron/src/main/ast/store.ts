@@ -8,7 +8,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { openSqliteDb, type SqliteDatabase } from '../utils/sqlite';
+import { openSqliteDb, deleteSqliteDb, type SqliteDatabase } from '../utils/sqlite';
 import type { ASTStoreStatus } from '../../shared/types/ipc-boundary';
 
 export type { ASTStoreStatus } from '../../shared/types/ipc-boundary';
@@ -259,9 +259,7 @@ export class ASTStore {
    */
   clear(): void {
     this.dispose();
-    if (fs.existsSync(this.dbPath)) {
-      fs.unlinkSync(this.dbPath);
-    }
+    deleteSqliteDb(this.dbPath);
   }
 
   /**

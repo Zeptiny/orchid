@@ -14,7 +14,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getConfig } from '../config/loader';
-import { openSqliteDb, type SqliteDatabase } from '../utils/sqlite';
+import { openSqliteDb, isSqliteCorruptionError, deleteSqliteDb, type SqliteDatabase } from '../utils/sqlite';
 import type { Chunk } from './chunker';
 import type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
 
@@ -294,8 +294,8 @@ export class RAGStore {
       const db = openSqliteDb(this.dbPath);
       db.exec(DB_SCHEMA);
       db.close();
-    } catch {
-      // Corrupted DB — rebuild
+    } catch (err) {
+      if (!isSqliteCorruptionError(err)) throw err;
       this._rebuildDb();
     }
     // Close any cached connection so _getDb() picks up the schema
@@ -308,7 +308,7 @@ export class RAGStore {
 
   private _rebuildDb(): void {
     this.dispose();
-    if (fs.existsSync(this.dbPath)) fs.unlinkSync(this.dbPath);
+    deleteSqliteDb(this.dbPath);
     this._clearVectorsFile();
     const db = openSqliteDb(this.dbPath);
     db.exec(DB_SCHEMA);
@@ -324,7 +324,10 @@ export class RAGStore {
       // Quick corruption check
       this._db.prepare('SELECT 1 FROM chunks LIMIT 1').get();
       return this._db;
-    } catch {
+    } catch (err) {
+      if (!isSqliteCorruptionError(err) && !(err instanceof Error && err.message.includes('no such table'))) {
+        throw err;
+      }
       if (this._db) {
         try { this._db.close(); } catch { /* ignore */ }
         this._db = null;
@@ -908,7 +911,7 @@ export class RAGStore {
 
   clear(): void {
     this.dispose();
-    if (fs.existsSync(this.dbPath)) fs.unlinkSync(this.dbPath);
+    deleteSqliteDb(this.dbPath);
     this._clearVectorsFile();
     this._invalidateCache();
   }

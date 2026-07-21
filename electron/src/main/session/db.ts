@@ -22,6 +22,7 @@ export class SessionDb {
         schema: SESSION_SCHEMA_SQL,
         corruptionCheck: 'SELECT 1 FROM sessions LIMIT 1',
       });
+      this._db.pragma('foreign_keys = ON');
     }
     return this._db;
   }
