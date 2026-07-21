@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   active_chain_id TEXT,
   subagent_chains_json TEXT NOT NULL DEFAULT '[]',
   todo_store_json TEXT NOT NULL DEFAULT '{}',
+  reasoning_effort_override TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

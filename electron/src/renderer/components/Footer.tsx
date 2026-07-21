@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useId, useState, type CSSProperties } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
 import type { CommandContext } from '../../shared/types/ipc-boundary';
-import type { ProviderModelOption } from '../../shared/types/ipc';
+import type { ProviderModelOption, SessionReasoningConfigResult } from '../../shared/types/ipc';
 import { useElapsedSeconds, type InterruptState } from '../hooks/useChat';
 import { FOOTER_SHORTCUT_IDS, getShortcut } from '../keyboard';
 import { resolveModelNotifyLabel } from '../utils/provider-selection';
@@ -17,6 +17,7 @@ import { contextUsedTokens } from '../../shared/usage';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
 import { ModelPicker } from './ModelPicker';
+import { ReasoningSelector, shouldShowReasoningSelector } from './ReasoningSelector';
 import { Button } from './ui/Button';
 import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
@@ -34,6 +35,7 @@ interface FooterProps {
   modelLabels?: Readonly<Record<string, string>>;
   modelDetails?: Readonly<Record<string, ProviderModelOption>>;
   commandContext?: CommandContext;
+  sessionId?: string | null;
 }
 
 export function Footer({
@@ -47,11 +49,13 @@ export function Footer({
   modelLabels,
   modelDetails,
   commandContext,
+  sessionId,
 }: FooterProps) {
   const confirming = interruptState && interruptState !== 'idle';
   const elapsedSeconds = useElapsedSeconds(streamStartTime, isStreaming || Boolean(confirming));
   const [contextOpen, setContextOpen] = useState(false);
   const contextMenuId = useId();
+  const [reasoningConfig, setReasoningConfig] = useState<SessionReasoningConfigResult | null>(null);
 
   const usedContextTokens = contextUsedTokens(usage);
   const contextPercent = getContextPercent(usage, maxContext);
@@ -86,6 +90,26 @@ export function Footer({
     };
   }, [contextOpen]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const session = window.orchid?.session;
+    if (!session?.getReasoningConfig) {
+      setReasoningConfig(null);
+      return;
+    }
+    session
+      .getReasoningConfig()
+      .then((config) => {
+        if (!cancelled) setReasoningConfig(config);
+      })
+      .catch(() => {
+        if (!cancelled) setReasoningConfig(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [model, sessionId]);
+
   const badgeTone =
     contextPercent != null && contextPercent >= 85
       ? 'error'
@@ -111,6 +135,18 @@ export function Footer({
       }
     },
     [commandContext, model, modelDetails, modelLabels],
+  );
+
+  const handleReasoningChange = useCallback(
+    async (next: string | number | null) => {
+      try {
+        await window.orchid?.session?.setReasoningEffort({ effort: next });
+        setReasoningConfig((prev) => (prev ? { ...prev, override: next } : prev));
+      } catch {
+        // Non-fatal — selector keeps the last good value
+      }
+    },
+    [],
   );
 
   return (
@@ -173,6 +209,15 @@ export function Footer({
       </div>
 
       <div className="orchid-chat-footer-end shrink-0 flex items-center gap-1.5">
+        {reasoningConfig && shouldShowReasoningSelector(reasoningConfig) && (
+          <ReasoningSelector
+            levels={reasoningConfig.levels}
+            value={reasoningConfig.override}
+            defaultValue={reasoningConfig.default}
+            onChange={(next) => void handleReasoningChange(next)}
+            disabled={isStreaming || interruptState === 'confirmAgent'}
+          />
+        )}
         {commandContext && (
           <ModelPicker
             value={model}

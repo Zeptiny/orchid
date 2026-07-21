@@ -54,6 +54,41 @@ export function selectionMatchesOption(
     && selection.modelId === option.selection.modelId;
 }
 
+/** Reasoning effort metadata for a selection, derived from renderer provider state. */
+export interface ModelReasoningSummary {
+  readonly levels: readonly string[];
+  readonly default: string | number | null;
+  readonly supportsReasoning: boolean;
+}
+
+const NO_REASONING: ModelReasoningSummary = {
+  levels: [],
+  default: null,
+  supportsReasoning: false,
+};
+
+/**
+ * Derive reasoning effort levels for an arbitrary model selection from the
+ * redacted provider state. Levels come from the selected model's connection
+ * `reasoningConfig`; `supportsReasoning` mirrors the model capability. Nothing
+ * is hardcoded — an unconfigured or non-reasoning model yields no levels.
+ */
+export function reasoningConfigForSelection(
+  selection: ModelSelection | null | undefined,
+  connections: readonly ProviderConnectionView[],
+  modelOptions: readonly ProviderModelOption[],
+): ModelReasoningSummary {
+  if (!selection) return NO_REASONING;
+  const option = modelOptions.find((item) => selectionMatchesOption(selection, item));
+  const connection = connections.find((item) => item.id === selection.connectionId);
+  const modelConfig = connection?.reasoningConfig?.[selection.modelId];
+  return {
+    levels: modelConfig?.levels ?? [],
+    default: modelConfig?.default ?? null,
+    supportsReasoning: option?.model.capabilities?.reasoning ?? false,
+  };
+}
+
 /**
  * Pick one connection card to host provider-scoped status. A ready connection
  * wins because authenticated status refreshes can use it immediately; stable

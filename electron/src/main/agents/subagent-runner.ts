@@ -5,8 +5,10 @@
  * Tests leave the runner unset so spawn/markCompleted stay manual.
  */
 import type { Agent } from '../../shared/types/agent';
+import type { ReasoningProviderOptions } from '../providers/drivers/types';
 import type { ModelSelection } from '../../shared/types/provider';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
+import { resolveSubagentEffort } from '../llm/reasoning-effort';
 import { getConfig } from '../config/loader';
 import { getSessionManager } from '../ipc/session';
 import {
@@ -76,6 +78,8 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     turnId?: string;
     /** Immutable project config/definitions captured by the parent turn. */
     projectRuntime?: ProjectRuntime;
+    /** Reports the resolved reasoning effort once the provider execution is known. */
+    onReasoningEffort?: (effort: string | number | undefined) => void;
   }): AsyncGenerator<StreamEvent> {
     const sessionId = params.sessionId;
     if (!sessionId) {
@@ -119,12 +123,23 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
 
     let modelInstance;
     let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
+    let providerOptions: ReasoningProviderOptions | undefined;
     let accountingStore: ReturnType<typeof getProviderAccountingStore>;
     try {
       accountingStore = getProviderAccountingStore();
       const execution = await getProviderRuntime().resolveExecution(selection);
       modelInstance = execution.modelInstance;
       providerSnapshot = execution.snapshot;
+      const effort = resolveSubagentEffort(
+        params.agent,
+        config,
+        execution.connection,
+        selection.modelId,
+        execution.model.capabilities?.reasoning === true,
+      );
+      params.onReasoningEffort?.(effort);
+      providerOptions =
+        effort === undefined ? undefined : execution.buildReasoningOptions?.(effort);
     } catch (error) {
       yield {
         type: 'error',
@@ -174,6 +189,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         abortSignal: params.abortSignal,
         modelInstance,
         accounting,
+        providerOptions,
       });
     } finally {
       releaseProjectMCPManager(runtime);

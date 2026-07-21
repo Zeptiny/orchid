@@ -12,7 +12,7 @@ const DEFAULT_SELECTION = {
   modelId: 'vendor/models/gpt-4o',
 };
 
-// ── Expected config fields (22 total) ──────────────────────────────────────
+// ── Expected config fields (23 total) ──────────────────────────────────────
 
 interface ConfigFieldExpectation {
   field: string;
@@ -25,6 +25,11 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
   { field: 'default_model', type: 'nullable ModelSelection', defaultValue: null },
   {
     field: 'tier_models',
+    type: 'record',
+    defaultValue: { seed: null, sprout: null, bloom: null, crown: null },
+  },
+  {
+    field: 'tier_reasoning_effort',
     type: 'record',
     defaultValue: { seed: null, sprout: null, bloom: null, crown: null },
   },
@@ -156,6 +161,7 @@ describe('Config Parity', () => {
       // Top-level scalar fields (13)
       expect(cfg).toHaveProperty('default_model');
       expect(cfg).toHaveProperty('tier_models');
+      expect(cfg).toHaveProperty('tier_reasoning_effort');
       expect(cfg).toHaveProperty('ignored_dirs');
       expect(cfg).toHaveProperty('command_timeout');
       expect(cfg).toHaveProperty('read_line_limit');
@@ -185,11 +191,11 @@ describe('Config Parity', () => {
       expect(cfg.rag).toHaveProperty('embedding_model');
     });
 
-    it('top-level field count matches expected (22 top-level + 8 rag nested fields)', () => {
+    it('top-level field count matches expected (23 top-level + 8 rag nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(22); // 22 top-level fields (rag is nested)
+      expect(topLevelKeys).toHaveLength(23); // 23 top-level fields (rag is nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);

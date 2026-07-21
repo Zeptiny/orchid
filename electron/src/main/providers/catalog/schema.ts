@@ -3,6 +3,7 @@ import {
   providerAuthMethodSchema,
   providerDefinitionSchema,
   providerProtocolSchema,
+  reasoningModelConfigSchema,
   type ProviderDefinition,
 } from '../../../shared/types/provider';
 
@@ -95,6 +96,8 @@ export const catalogModelSchema = z.object({
   lifecycle: lifecycleSchema,
   pricing: catalogPricingSchema,
   provenance: catalogFieldProvenanceSchema,
+  reasoningLevels: reasoningModelConfigSchema.shape.levels.optional(),
+  reasoningDefault: reasoningModelConfigSchema.shape.default.optional(),
 }).strict();
 
 export const catalogProviderSchema = z.object({

@@ -77,6 +77,8 @@ export type SubagentStreamRunner = (params: {
   turnId?: string;
   /** Immutable parent project snapshot for config, tools, and definitions. */
   projectRuntime?: ProjectRuntime;
+  /** Reports the resolved reasoning effort once the provider execution is known. */
+  onReasoningEffort?: (effort: string | number | undefined) => void;
 }) => AsyncGenerator<StreamEvent>;
 
 export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
@@ -136,6 +138,8 @@ export interface SubagentRecord {
   readonly selection: ModelSelection | null;
   /** Parent chain index (for attribution). */
   readonly parentChainIndex: number | null;
+  /** Resolved reasoning effort reported by the stream runner (undefined = none). */
+  reasoningEffort?: string | number;
   /**
    * Owning session id for chain persistence.
    * Required so onChange sync writes to the correct session after a switch
@@ -614,6 +618,9 @@ export class SubagentManager {
         chainId: record.chain?.id,
         turnId: record.id,
         projectRuntime: record.projectRuntime,
+        onReasoningEffort: (effort) => {
+          record.reasoningEffort = effort;
+        },
       });
 
       for await (const event of stream) {
@@ -979,6 +986,9 @@ export function runtimeToDomain(
     result: record.result,
     error: record.error,
     parentChainIndex: record.parentChainIndex,
+    ...(record.reasoningEffort !== undefined
+      ? { reasoning_effort: record.reasoningEffort }
+      : {}),
     chain: checkpointChain,
   };
 }

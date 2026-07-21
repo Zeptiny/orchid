@@ -108,6 +108,13 @@ export const sessionSetWorkspaceSchema = z.object({
   cwd: z.string().min(1),
 });
 
+export const sessionSetReasoningEffortSchema = z.object({
+  effort: z.union([
+    z.string().trim().min(1).max(256),
+    z.number().int().min(1).max(1_000_000),
+  ]).nullable(),
+});
+
 // ── Tool ─────────────────────────────────────────────────────────────────────
 
 export const toolExecuteSchema = z.object({

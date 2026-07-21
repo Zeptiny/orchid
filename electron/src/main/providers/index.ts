@@ -1,6 +1,6 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import Decimal from 'decimal.js';
-import type { ModelSelection, ProviderConnection } from '../../shared/types/provider';
+import type { EffectiveModel, ModelSelection, ProviderConnection } from '../../shared/types/provider';
 import type {
   FrozenPricingSnapshot,
   FrozenProviderRequestSnapshot,
@@ -21,6 +21,7 @@ import type {
   DriverModelRequest,
   ProviderDriver,
   ProviderEmbeddingTarget,
+  ReasoningProviderOptions,
 } from './drivers/types';
 import { ProviderResolutionError } from '../llm/middleware/error-classification';
 import type { ProviderStatusService } from './status/service';
@@ -38,6 +39,14 @@ export interface ProviderRuntimeOptions {
 export interface ResolvedProviderExecution {
   readonly modelInstance: LanguageModelV4;
   readonly snapshot: FrozenProviderRequestSnapshot;
+  /** Non-secret connection metadata resolved for this turn. */
+  readonly connection: ProviderConnection;
+  /** Effective model resolved for this turn. */
+  readonly model: EffectiveModel;
+  /** Map a reasoning effort to provider-native options, when the driver supports it. */
+  readonly buildReasoningOptions?: (
+    effort: string | number,
+  ) => ReasoningProviderOptions | undefined;
 }
 
 /**
@@ -66,9 +75,16 @@ export class ProviderRuntime {
   /** Resolve one immutable turn context and its trusted model together. */
   async resolveExecution(selection: ModelSelection): Promise<ResolvedProviderExecution> {
     const resolved = await this.resolveDriverRequest(selection);
+    const { request, driver } = resolved;
+    const buildReasoning = driver.buildReasoningOptions;
     return {
-      modelInstance: await this.registry.createLanguageModel(resolved.request),
+      modelInstance: await this.registry.createLanguageModel(request),
       snapshot: resolved.snapshot,
+      connection: request.connection,
+      model: request.model,
+      buildReasoningOptions: buildReasoning
+        ? (effort: string | number) => buildReasoning(effort, request.model)
+        : undefined,
     };
   }
 
@@ -85,6 +101,7 @@ export class ProviderRuntime {
   private async resolveDriverRequest(selection: ModelSelection): Promise<{
     readonly request: DriverModelRequest;
     readonly snapshot: FrozenProviderRequestSnapshot;
+    readonly driver: ProviderDriver;
   }> {
     const connections = await this.connections.list();
     const catalogSnapshot = this.catalog.load?.();
@@ -105,6 +122,7 @@ export class ProviderRuntime {
         credential,
       },
       snapshot: this.freezeSnapshot(resolution, catalogSnapshot),
+      driver,
     };
   }
 

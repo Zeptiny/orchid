@@ -48,6 +48,8 @@ import type {
   SessionUpdatedEvent,
   SessionChangeCwdMessage,
   SessionSetWorkspaceMessage,
+  SessionSetReasoningEffortMessage,
+  SessionReasoningConfigResult,
   SessionWorkspaceChangedEvent,
   SessionTodosChangedEvent,
   SessionActivityChangedEvent,
@@ -94,6 +96,7 @@ import {
   bgCommandSnapshotResultSchema,
   configSaveResultSchema,
   workspaceInfoSchema,
+  sessionReasoningConfigResultSchema,
   chatSessionSnapshotSchema,
   subagentSnapshotSchema,
   subagentEventSchema,
@@ -129,6 +132,7 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.SESSION_GET_WORKSPACE]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_PICK_PROJECT_DIR]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_SET_WORKSPACE]: workspaceInfoSchema,
+  [IPC_CHANNELS.SESSION_GET_REASONING_CONFIG]: sessionReasoningConfigResultSchema,
 };
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -309,6 +313,12 @@ const orchidAPI: OrchidAPI = {
 
     changeCwd: (message: SessionChangeCwdMessage) =>
       invoke(IPC_CHANNELS.SESSION_CHANGE_CWD, message),
+
+    setReasoningEffort: (message: SessionSetReasoningEffortMessage) =>
+      invoke(IPC_CHANNELS.SESSION_SET_REASONING_EFFORT, message),
+
+    getReasoningConfig: () =>
+      invoke<SessionReasoningConfigResult>(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG),
 
     listActivity: () =>
       invoke(IPC_CHANNELS.SESSION_ACTIVITY_LIST),

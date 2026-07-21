@@ -5,6 +5,7 @@ import type {
   ProviderConnection,
   ProviderDefinition,
 } from '../../src/shared/types/provider';
+import type { ProviderCatalogSnapshot } from '../../src/main/providers/catalog/store';
 import { ProviderDriverRegistry } from '../../src/main/providers/drivers/registry';
 
 const mocks = vi.hoisted(() => {
@@ -95,6 +96,27 @@ function registry(): ProviderDriverRegistry {
   ]);
 }
 
+function emptyCatalogSnapshot(): ProviderCatalogSnapshot {
+  return {
+    source: 'bundled',
+    stale: false,
+    catalog: {
+      schemaVersion: 1,
+      catalogVersion: 1,
+      issuedAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2026-12-31T00:00:00.000Z',
+      compatibleApp: { minimum: '0.1.0' },
+      provenance: {
+        source: 'models.dev',
+        sourceUrl: 'https://example.com/catalog.json',
+        capturedAt: '2026-01-01T00:00:00.000Z',
+        contentHash: `sha256:${'0'.repeat(64)}`,
+      },
+      providers: [],
+    },
+  };
+}
+
 function memoryServices(definitions: readonly ProviderDefinition[] = [OPENAI, GENERIC]) {
   const records = new Map<string, ProviderConnection>();
   let sequence = 1;
@@ -127,7 +149,7 @@ function memoryServices(definitions: readonly ProviderDefinition[] = [OPENAI, GE
   };
   return {
     services: {
-      catalog: { getProviderDefinitions: () => definitions },
+      catalog: { getProviderDefinitions: () => definitions, load: () => emptyCatalogSnapshot() },
       connections,
       vault,
       status,

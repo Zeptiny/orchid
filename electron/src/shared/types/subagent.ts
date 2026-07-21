@@ -91,6 +91,11 @@ export interface SubagentRecord {
    * to the correct chain footer.
    */
   readonly parentChainIndex: number | null;
+  /**
+   * Resolved reasoning effort for this subagent's turn (agent field → tier
+   * config → connection default). Undefined when the model lacks reasoning.
+   */
+  readonly reasoning_effort?: string | number;
   /** The full chain associated with this subagent (persisted). */
   readonly chain: Chain;
 }
@@ -117,6 +122,7 @@ export const subagentRecordSchema = z.object({
   end_time: z.string().nullable().default(null),
   result: z.string().nullable().default(null),
   error: z.string().nullable().default(null),
+  reasoning_effort: z.union([z.string(), z.number()]).optional(),
 });
 
 // ── Storage dict ────────────────────────────────────────────────────────────
@@ -136,6 +142,7 @@ export interface SubagentRecordStorageDict {
   error?: string | null;
   parent_chain_index?: number | null;
   parentChainIndex?: number | null;
+  reasoning_effort?: string | number;
   chain?: unknown;
   // Forward-compat: extra keys tolerated on restore
   [key: string]: unknown;
@@ -157,6 +164,10 @@ export function subagentRecordToStorageDict(record: SubagentRecord): SubagentRec
     result: record.result,
     error: record.error,
     parent_chain_index: record.parentChainIndex,
+    ...(record.reasoning_effort !== undefined &&
+      (typeof record.reasoning_effort !== 'number' || Number.isFinite(record.reasoning_effort))
+      ? { reasoning_effort: record.reasoning_effort }
+      : {}),
     chain: chainToStorageDict(record.chain),
   };
 }
@@ -212,6 +223,15 @@ export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
     parentChainIndex = rawParent;
   }
 
+  let reasoningEffort: string | number | undefined;
+  const rawEffort = raw.reasoning_effort;
+  if (
+    typeof rawEffort === 'string' ||
+    (typeof rawEffort === 'number' && Number.isFinite(rawEffort))
+  ) {
+    reasoningEffort = rawEffort;
+  }
+
   return {
     id: typeof raw.id === 'string' ? raw.id : '',
     agent_name: typeof raw.agent_name === 'string' ? raw.agent_name : '',
@@ -225,6 +245,7 @@ export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
     result: typeof raw.result === 'string' ? raw.result : null,
     error: typeof raw.error === 'string' ? raw.error : null,
     parentChainIndex,
+    ...(reasoningEffort !== undefined ? { reasoning_effort: reasoningEffort } : {}),
     chain,
   };
 }

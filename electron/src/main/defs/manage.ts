@@ -328,6 +328,15 @@ function listAgentEntriesInDir(
       continue;
     }
 
+    const rawEffort = metadata['reasoning_effort'];
+    let reasoning_effort: string | number | undefined;
+    if (typeof rawEffort === 'number') {
+      reasoning_effort = Number.isFinite(rawEffort) ? rawEffort : undefined;
+    } else if (typeof rawEffort === 'string' && rawEffort.trim() !== '') {
+      const num = Number(rawEffort);
+      reasoning_effort = Number.isFinite(num) ? num : rawEffort;
+    }
+
     out.push({
       name,
       type: rawType as AgentType,
@@ -336,6 +345,7 @@ function listAgentEntriesInDir(
       system_prompt: body.trim(),
       allowed_tools: getStringArray(metadata, 'allowed_tools'),
       allowed_skills: getStringArray(metadata, 'allowed_skills', ['*']),
+      ...(reasoning_effort !== undefined ? { reasoning_effort } : {}),
       scope,
       path: agentFile,
       overriddenByProject: scope === 'global' && projectNames.has(name),
@@ -543,6 +553,11 @@ export function saveAgent(
     }
   }
 
+  const reasoningEffort =
+    typeof msg.reasoning_effort === 'number' && !Number.isFinite(msg.reasoning_effort)
+      ? undefined
+      : msg.reasoning_effort;
+
   const metadata: Record<string, string | string[]> = {
     name,
     type,
@@ -550,6 +565,9 @@ export function saveAgent(
     description,
     allowed_tools: allowedTools,
     allowed_skills: allowedSkills.length > 0 ? allowedSkills : ['*'],
+    ...(reasoningEffort !== undefined
+      ? { reasoning_effort: String(reasoningEffort) }
+      : {}),
   };
   const markdown = serializeFrontmatter(metadata, msg.system_prompt ?? '');
   atomicWriteText(targetFile, markdown, scopeRoot);
@@ -562,6 +580,9 @@ export function saveAgent(
     system_prompt: (msg.system_prompt ?? '').trim(),
     allowed_tools: allowedTools,
     allowed_skills: allowedSkills.length > 0 ? allowedSkills : ['*'],
+    ...(reasoningEffort !== undefined
+      ? { reasoning_effort: reasoningEffort }
+      : {}),
     scope: msg.scope,
     path: targetFile,
     overriddenByProject: false,

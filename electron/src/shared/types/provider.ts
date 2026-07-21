@@ -135,6 +135,19 @@ export const customConnectionModelSchema = providerModelDefinitionSchema.extend(
 
 export type CustomConnectionModel = z.infer<typeof customConnectionModelSchema>;
 
+/** Per-model reasoning effort configuration stored on the connection. */
+export const reasoningModelConfigSchema = z.object({
+  levels: z.array(z.string().trim().min(1).max(64)).min(1).max(50),
+  default: z
+    .union([
+      z.string().trim().min(1).max(256),
+      z.number().int().min(1).max(1_000_000),
+    ])
+    .nullable(),
+}).strict();
+
+export type ReasoningModelConfig = z.infer<typeof reasoningModelConfigSchema>;
+
 export const providerDefinitionSchema = z.object({
   id: z.string().trim().min(1),
   displayName: z.string().trim().min(1),
@@ -159,6 +172,8 @@ export const providerConnectionSchema = z.object({
   modelIds: z.array(z.string().trim().min(1)),
   /** Optional richer metadata for user-defined compatible models. */
   customModels: z.array(customConnectionModelSchema).optional(),
+  /** Per-model reasoning effort configuration, keyed by modelId. */
+  reasoningConfig: z.record(z.string(), reasoningModelConfigSchema).optional(),
   health: connectionHealthSchema,
   endpoint: providerEndpointSchema.nullable().optional(),
   /** Explicit user acknowledgement required for a non-loopback HTTP endpoint. */

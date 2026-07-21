@@ -242,6 +242,13 @@ export const workspaceInfoSchema = z.object({
   status: z.enum(['unbound', 'valid', 'missing']),
 });
 
+export const sessionReasoningConfigResultSchema = z.object({
+  levels: z.array(z.string()),
+  default: z.union([z.string(), z.number()]).nullable(),
+  override: z.union([z.string(), z.number()]).nullable(),
+  supportsReasoning: z.boolean(),
+});
+
 /** Loose session snapshot: identity + array containers, not full Message graph. */
 export const chatSessionSnapshotSchema = z
   .object({
@@ -294,6 +301,7 @@ export const subagentRecordSchema = z.object({
   task: z.string(), status: z.enum(['pending', 'running', 'completed', 'failed', 'interrupted']),
   chain_id: z.string(), start_time: z.string(), end_time: z.string().nullable(),
   result: z.string().nullable(), error: z.string().nullable(), parentChainIndex: z.number().int().nullable(),
+  reasoning_effort: z.union([z.string(), z.number()]).optional(),
   chain: z.unknown(),
 });
 export const subagentSnapshotSchema = z.object({

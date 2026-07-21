@@ -47,4 +47,5 @@ export interface Agent {
   readonly system_prompt: string;
   readonly allowed_tools: readonly string[];
   readonly allowed_skills: readonly string[];
+  readonly reasoning_effort?: string | number;
 }

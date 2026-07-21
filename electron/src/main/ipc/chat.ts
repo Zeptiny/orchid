@@ -8,11 +8,13 @@
  * forwards StreamEvents as IPC events to the renderer.
  */
 import { ipcMain, webContents as electronWebContents, type WebContents } from 'electron';
+import type { ReasoningProviderOptions } from '../providers/drivers/types';
 import { createActor, type ActorRefFrom } from 'xstate';
 import { z } from 'zod';
 import { agentMachine, type AgentContext } from '../agents/xstate/agent-machine';
 import { interruptMachine } from '../agents/xstate/interrupt-machine';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
+import { resolveMainAgentEffort } from '../llm/reasoning-effort';
 import { createMiddlewareStack } from '../llm/middleware';
 import { AgentType, type Agent } from '../../shared/types/agent';
 import type { ModelSelection } from '../../shared/types/provider';
@@ -25,6 +27,7 @@ import {
   flattenSessionMessages,
   getSessionManager,
   resolveWindowWorkspace,
+  takeDraftReasoningOverride,
 } from './session';
 import { workingSetOpenOrFocus } from './session-working-set';
 import { getBackgroundStore } from '../tools/process/background-store';
@@ -674,12 +677,21 @@ export function ensureActiveSession(
     return { ok: true, cwd: boundCwd, session: active, runtime };
   }
 
-  const session = manager.create(
+  const created = manager.create(
     selection,
     { cwd: boundCwd },
     windowId,
     selection.modelId,
   );
+  // A reasoning effort chosen in draft mode rides into the new session so the
+  // very first turn (which reads the returned session) already honors it.
+  const draftOverride = takeDraftReasoningOverride(windowId);
+  if (draftOverride !== undefined) {
+    manager.setReasoningEffortOverride(created.id, draftOverride);
+  }
+  const session =
+    manager.getSession(created.id) ??
+    { ...created, reasoningEffortOverride: draftOverride ?? created.reasoningEffortOverride };
   // Draft was promoted into the new session.
   clearDraftCwd(windowId);
   workingSetOpenOrFocus(session.id, windowId);
@@ -853,6 +865,7 @@ function createProviderStreamFn(input: {
   readonly accounting: ProviderAttemptAccountingContext;
   readonly registry: ReturnType<typeof getBuiltinToolRegistryForRuntime>;
   readonly mcpManager: ReturnType<typeof acquireProjectMCPManager>;
+  readonly providerOptions?: ReasoningProviderOptions;
 }) {
   return async function* ({
     agent,
@@ -884,6 +897,7 @@ function createProviderStreamFn(input: {
       abortSignal,
       modelInstance: input.modelInstance,
       accounting: input.accounting,
+      providerOptions: input.providerOptions,
     });
   };
 }
@@ -1043,12 +1057,21 @@ export function registerChatIPC(): void {
     }
     let modelInstance: LanguageModelV4;
     let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
+    let providerOptions: ReasoningProviderOptions | undefined;
     let accountingStore: ReturnType<typeof getProviderAccountingStore>;
     try {
       accountingStore = getProviderAccountingStore();
       const execution = await getProviderRuntime().resolveExecution(turnSelection);
       modelInstance = execution.modelInstance;
       providerSnapshot = execution.snapshot;
+      const effort = resolveMainAgentEffort(
+        sessionGate.session,
+        execution.connection,
+        turnSelection.modelId,
+        execution.model.capabilities?.reasoning === true,
+      );
+      providerOptions =
+        effort === undefined ? undefined : execution.buildReasoningOptions?.(effort);
     } catch (error) {
       sessionsStarting.delete(sessionId);
       completeSessionActivity(sessionId, false);
@@ -1153,6 +1176,7 @@ export function registerChatIPC(): void {
             accounting,
             registry: turnRegistry,
             mcpManager,
+            providerOptions,
           }),
         },
       });

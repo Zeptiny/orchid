@@ -8,15 +8,21 @@ import { ModelAssignments } from './ModelAssignments';
 export interface TierModelsTabProps {
   readonly defaultModel: ModelSelection | null;
   readonly tierModels: Record<string, ModelSelection | null>;
+  readonly tierReasoningEffort: Record<string, string | number | null>;
   readonly onDefaultModelChange: (defaultModel: ModelSelection | null) => void;
   readonly onChange: (tierModels: Record<string, ModelSelection | null>) => void;
+  readonly onTierReasoningEffortChange: (
+    tierReasoningEffort: Record<string, string | number | null>,
+  ) => void;
 }
 
 export function TierModelsTab({
   defaultModel,
   tierModels,
+  tierReasoningEffort,
   onDefaultModelChange,
   onChange,
+  onTierReasoningEffortChange,
 }: TierModelsTabProps) {
   const providers = useProviders();
 
@@ -42,10 +48,13 @@ export function TierModelsTab({
     <div className="config-form">
       <ModelAssignments
         options={options}
+        connections={providers.overview?.connections ?? []}
         defaultModel={defaultModel}
         tierModels={tierModels}
+        tierReasoningEffort={tierReasoningEffort}
         onDefaultModelChange={onDefaultModelChange}
         onTierModelsChange={onChange}
+        onTierReasoningEffortChange={onTierReasoningEffortChange}
       />
     </div>
   );

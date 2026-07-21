@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
     resolveLanguageModel: vi.fn(async () => ({ provider: 'trusted-test-driver' })),
     resolveExecution: vi.fn(async () => ({
       modelInstance: { provider: 'trusted-test-driver' },
+      connection: {},
+      model: { id: 'vendor/path/model', capabilities: { reasoning: false } },
       snapshot: {
         providerId: 'openai',
         providerDisplayName: 'OpenAI',

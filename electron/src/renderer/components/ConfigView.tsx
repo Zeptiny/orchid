@@ -579,8 +579,11 @@ function renderTab(
         <TierModelsTab
           defaultModel={config.default_model}
           tierModels={config.tier_models}
+          tierReasoningEffort={config.tier_reasoning_effort}
           onDefaultModelChange={(default_model) => updateDraft({ default_model })}
           onChange={(tier_models) => updateDraft({ tier_models })}
+          onTierReasoningEffortChange={(tier_reasoning_effort) =>
+            updateDraft({ tier_reasoning_effort })}
         />
       );
     case 'rag':
@@ -600,7 +603,13 @@ function renderTab(
       if (!definitions) {
         return <StateMessage kind="warning" title="Agents could not be loaded." />;
       }
-      return <AgentsTab data={definitions} onReload={reloadDefinitions} />;
+      return (
+        <AgentsTab
+          data={definitions}
+          tierModels={config.tier_models}
+          onReload={reloadDefinitions}
+        />
+      );
     case 'personalities':
       if (!definitions) {
         return <StateMessage kind="warning" title="Personalities could not be loaded." />;

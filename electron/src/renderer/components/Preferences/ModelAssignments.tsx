@@ -1,10 +1,11 @@
 import { useMemo } from 'react';
-import type { ProviderModelOption } from '../../../shared/types/ipc';
+import type { ProviderConnectionView, ProviderModelOption } from '../../../shared/types/ipc';
 import type { ModelSelection } from '../../../shared/types/provider';
 import { ModelPicker } from '../ModelPicker';
 import {
   providerModelOptionDisplayName,
   providerModelOptionKey,
+  reasoningConfigForSelection,
   selectionKey,
 } from '../../utils/provider-selection';
 import { Alert } from '../ui/Alert';
@@ -12,6 +13,7 @@ import { ConfigCard } from '../ui/ConfigCard';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
 import { StateMessage } from '../ui/StateMessage';
+import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 
 export interface ModelAssignmentTier {
   readonly id: string;
@@ -32,6 +34,12 @@ export interface ModelAssignmentsProps {
   readonly tierModels: Record<string, ModelSelection | null>;
   readonly onDefaultModelChange: (selection: ModelSelection | null) => void;
   readonly onTierModelsChange: (tierModels: Record<string, ModelSelection | null>) => void;
+  /** Connections carrying per-model reasoningConfig; needed to derive levels. */
+  readonly connections?: readonly ProviderConnectionView[];
+  readonly tierReasoningEffort?: Record<string, string | number | null>;
+  readonly onTierReasoningEffortChange?: (
+    tierReasoningEffort: Record<string, string | number | null>,
+  ) => void;
   readonly disabled?: boolean;
   readonly className?: string;
 }
@@ -49,6 +57,9 @@ export function ModelAssignments({
   tierModels,
   onDefaultModelChange,
   onTierModelsChange,
+  connections = [],
+  tierReasoningEffort,
+  onTierReasoningEffortChange,
   disabled = false,
   className = '',
 }: ModelAssignmentsProps) {
@@ -124,6 +135,10 @@ export function ModelAssignments({
             const selected = tierModels[tier.id] ?? null;
             const currentKey = selectionKey(selected);
             const currentAvailable = !selected || byKey.has(currentKey);
+            const reasoning = reasoningConfigForSelection(selected, connections, options);
+            const showReasoning = onTierReasoningEffortChange !== undefined
+              && reasoning.supportsReasoning
+              && reasoning.levels.length > 0;
             return (
               <ConfigCard key={tier.id}>
                 <ConfigCard.Body variant="row">
@@ -136,24 +151,47 @@ export function ModelAssignments({
                       </p>
                     )}
                   </div>
-                  <ModelPicker
-                    value={currentAvailable ? currentKey : ''}
-                    options={options.map(providerModelOptionKey)}
-                    optionLabels={optionLabels}
-                    optionDetails={optionDetails}
-                    additionalOptions={[{ value: '', label: 'Use default model' }]}
-                    label={`${tier.label} tier model`}
-                    align="end"
-                    className="tier-model-picker"
-                    disabled={disabled || options.length === 0}
-                    emptyMessage="No ready chat models available"
-                    onChange={(value) => {
-                      const next = { ...tierModels };
-                      const option = byKey.get(value);
-                      next[tier.id] = option ? optionSelection(option) : null;
-                      onTierModelsChange(next);
-                    }}
-                  />
+                  <div className="flex shrink-0 flex-col items-end gap-1.5">
+                    <ModelPicker
+                      value={currentAvailable ? currentKey : ''}
+                      options={options.map(providerModelOptionKey)}
+                      optionLabels={optionLabels}
+                      optionDetails={optionDetails}
+                      additionalOptions={[{ value: '', label: 'Use default model' }]}
+                      label={`${tier.label} tier model`}
+                      align="end"
+                      className="tier-model-picker"
+                      disabled={disabled || options.length === 0}
+                      emptyMessage="No ready chat models available"
+                      onChange={(value) => {
+                        const next = { ...tierModels };
+                        const option = byKey.get(value);
+                        next[tier.id] = option ? optionSelection(option) : null;
+                        onTierModelsChange(next);
+                        if (onTierReasoningEffortChange) {
+                          onTierReasoningEffortChange({
+                            ...(tierReasoningEffort ?? {}),
+                            [tier.id]: null,
+                          });
+                        }
+                      }}
+                    />
+                    {showReasoning && (
+                      <ReasoningEffortPicker
+                        levels={reasoning.levels}
+                        value={tierReasoningEffort?.[tier.id] ?? null}
+                        onChange={(value) => {
+                          const next = { ...(tierReasoningEffort ?? {}) };
+                          next[tier.id] = value;
+                          onTierReasoningEffortChange?.(next);
+                        }}
+                        disabled={disabled}
+                        label={`${tier.label} tier reasoning effort`}
+                        align="end"
+                        className="tier-model-picker"
+                      />
+                    )}
+                  </div>
                 </ConfigCard.Body>
               </ConfigCard>
             );

@@ -78,6 +78,7 @@ function makeSession(overrides: Partial<Session> & { model?: string } = {}): Ses
     updatedAt: overrides.updatedAt ?? now,
     subagentChains: overrides.subagentChains ?? [],
     todoStore: overrides.todoStore ?? { tasks: [] },
+    reasoningEffortOverride: overrides.reasoningEffortOverride ?? null,
   };
 }
 
@@ -1748,5 +1749,127 @@ describe('storage-layer corruption recovery', () => {
 
     const backups = fs.readdirSync(tmpDir).filter((f) => f.includes('.corrupt-'));
     expect(backups.length).toBeGreaterThan(0);
+  });
+});
+
+// ===========================================================================
+// SessionManager.setReasoningEffortOverride
+// ===========================================================================
+
+describe('SessionManager.setReasoningEffortOverride', () => {
+  it('sets the override and advances updatedAt', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+    const before = session.updatedAt;
+
+    const start = Date.now();
+    while (Date.now() - start < 5) { /* tick */ }
+
+    manager.setReasoningEffortOverride(session.id, 'high');
+
+    const active = manager.getActive()!;
+    expect(active.reasoningEffortOverride).toBe('high');
+    expect(active.updatedAt >= before).toBe(true);
+  });
+
+  it('early-returns without mutation when session is not selected by any owner', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session1 = manager.create(DEFAULT_SELECTION);
+    manager.create(ANTHROPIC_SELECTION);
+
+    manager.setReasoningEffortOverride(session1.id, 'high');
+
+    const loaded = loadSession(session1.id, storageOpts)!;
+    expect(loaded.reasoningEffortOverride).toBeNull();
+  });
+
+  it('does not throw for an unknown session id', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    manager.create(DEFAULT_SELECTION);
+
+    expect(() =>
+      manager.setReasoningEffortOverride(randomUUID(), 'high'),
+    ).not.toThrow();
+  });
+
+  it('persists the updated session to storage', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+
+    manager.setReasoningEffortOverride(session.id, 8192);
+
+    _clearDbCache();
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.reasoningEffortOverride).toBe(8192);
+  });
+
+  it('clears the override when set to null', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+
+    manager.setReasoningEffortOverride(session.id, 'high');
+    expect(manager.getActive()!.reasoningEffortOverride).toBe('high');
+
+    manager.setReasoningEffortOverride(session.id, null);
+    expect(manager.getActive()!.reasoningEffortOverride).toBeNull();
+
+    _clearDbCache();
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.reasoningEffortOverride).toBeNull();
+  });
+});
+
+// ===========================================================================
+// reasoningEffortOverride SQLite round-trip
+// ===========================================================================
+
+describe('reasoningEffortOverride SQLite round-trip', () => {
+  it('round-trips a string override', () => {
+    const session = makeSession({
+      id: 'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1',
+      reasoningEffortOverride: 'high',
+    });
+    saveSession(session, storageOpts);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.reasoningEffortOverride).toBe('high');
+  });
+
+  it('round-trips a numeric override', () => {
+    const session = makeSession({
+      id: 'c2c2c2c2-c2c2-4c2c-8c2c-c2c2c2c2c2c2',
+      reasoningEffortOverride: 8192,
+    });
+    saveSession(session, storageOpts);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.reasoningEffortOverride).toBe(8192);
+  });
+
+  it('deserializes a malformed stored value to null', () => {
+    const sid = 'c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3';
+    const session = makeSession({ id: sid, reasoningEffortOverride: 'high' });
+    saveSession(session, storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(
+      'UPDATE sessions SET reasoning_effort_override = ? WHERE id = ?',
+    ).run('{"bad":true}', sid);
+    db.close();
+    _clearDbCache();
+
+    const loaded = loadSession(sid, storageOpts)!;
+    expect(loaded.reasoningEffortOverride).toBeNull();
+  });
+
+  it('round-trips null override as null', () => {
+    const session = makeSession({
+      id: 'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c4c4',
+      reasoningEffortOverride: null,
+    });
+    saveSession(session, storageOpts);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.reasoningEffortOverride).toBeNull();
   });
 });

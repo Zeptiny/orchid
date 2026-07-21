@@ -22,6 +22,7 @@ import type {
   ModelSelection,
   ProviderAuthMethod,
   ProviderProtocol,
+  ReasoningModelConfig,
 } from '../../../shared/types/provider';
 import { isTextGenerationModel } from '../../utils/models';
 import { Alert } from '../ui/Alert';
@@ -116,6 +117,7 @@ export function ConnectionWizard({
   const [authMethod, setAuthMethod] = useState<ProviderAuthMethod>('api-key');
   const [connectionModelIds, setConnectionModelIds] = useState<readonly string[]>([]);
   const [connectionCustomModels, setConnectionCustomModels] = useState<readonly CustomConnectionModel[]>([]);
+  const [reasoningConfig, setReasoningConfig] = useState<Record<string, ReasoningModelConfig>>({});
   const [modelsEditing, setModelsEditing] = useState(false);
   const [endpoint, setEndpoint] = useState('');
   const [allowInsecureHttp, setAllowInsecureHttp] = useState(false);
@@ -167,6 +169,7 @@ export function ConnectionWizard({
     setAuthMethod(defaultAuthMethod(definition));
     setConnectionModelIds(defaultModelIds(definition, nextProtocol));
     setConnectionCustomModels([]);
+    setReasoningConfig({});
     setModelsEditing(false);
     setEndpoint('');
     setAllowInsecureHttp(false);
@@ -184,6 +187,7 @@ export function ConnectionWizard({
     setAuthMethod(connection.authMethod);
     setConnectionModelIds([...connection.modelIds]);
     setConnectionCustomModels(connectionCustomModelDrafts(connection));
+    setReasoningConfig(connection.reasoningConfig ?? {});
     setModelsEditing(false);
     setEndpoint(connection.endpoint ?? '');
     setAllowInsecureHttp(connection.allowInsecureHttp);
@@ -311,6 +315,7 @@ export function ConnectionWizard({
     authMethod: message.authMethod,
     modelIds: message.modelIds,
     customModels: message.customModels ?? [],
+    reasoningConfig,
     ...(message.endpoint === undefined ? {} : { endpoint: message.endpoint }),
     ...(message.allowInsecureHttp === undefined
       ? {}
@@ -672,9 +677,11 @@ export function ConnectionWizard({
                   definition={selectedDefinition}
                   selectedModelIds={connectionModelIds}
                   customModels={connectionCustomModels}
+                  reasoningConfig={reasoningConfig}
                   disabled={metadataLocked}
                   onSelectedModelIdsChange={setConnectionModelIds}
                   onCustomModelsChange={setConnectionCustomModels}
+                  onReasoningConfigChange={setReasoningConfig}
                   onEditingChange={setModelsEditing}
                 />
               )}

@@ -23,6 +23,7 @@ import {
   providerAuthMethodSchema,
   providerEndpointSchema,
   providerProtocolSchema,
+  reasoningModelConfigSchema,
   type ProviderConnection,
   type ProviderDefinition,
   type ProviderModelDefinition,
@@ -34,6 +35,7 @@ import {
   getProviderStatusService,
 } from '../providers/runtime-context';
 import type { ConnectionStore } from '../providers/connection-store';
+import type { ProviderCatalogStore } from '../providers/catalog/store';
 import {
   CredentialVault,
   createEnvironmentCredentialReference,
@@ -93,6 +95,7 @@ const updateConnectionSchema = z.object({
   authMethod: providerAuthMethodSchema.optional(),
   modelIds: modelIdsSchema.optional(),
   customModels: z.array(customConnectionModelSchema).max(500).optional(),
+  reasoningConfig: z.record(z.string(), reasoningModelConfigSchema).optional(),
   endpoint: providerEndpointSchema.nullable().optional(),
   allowInsecureHttp: z.boolean().optional(),
   environmentVariable: environmentVariableSchema.optional(),
@@ -133,9 +136,7 @@ const statusRefreshSchema = z.object({
 // ── Main-process dependency boundary ────────────────────────────────────────
 
 interface ProviderIPCServices {
-  readonly catalog: {
-    getProviderDefinitions(): readonly ProviderDefinition[];
-  };
+  readonly catalog: Pick<ProviderCatalogStore, 'getProviderDefinitions' | 'load'>;
   readonly connections: Pick<ConnectionStore, 'list' | 'get' | 'create' | 'update'>;
   readonly vault: Pick<CredentialVault,
     'getAvailability' | 'replaceConnectionApiKey' | 'readSecret' | 'deleteConnectionCredentials'>;
@@ -302,6 +303,7 @@ function connectionView(
     // intentionally never rendered or accepted as a renderer-editable field.
     endpoint: allowsCustomEndpoint ? connection.endpoint ?? null : null,
     allowInsecureHttp: connection.allowInsecureHttp === true,
+    reasoningConfig: connection.reasoningConfig,
   };
 }
 
@@ -643,8 +645,10 @@ export function registerProviderIPC(): void {
     // selecting a driver/origin outside trusted code.
     requireStaticConnectionSupport(draftConnection, current);
     const { id: _draftId, ...createInput } = draftConnection;
-    // ConnectionStore owns the stable real UUID.
-    const connection = await current.connections.create(createInput);
+    const catalogModels = current.catalog.load().catalog.providers
+      .find((provider) => provider.id === parsed.data.providerId)
+      ?.models;
+    const connection = await current.connections.create(createInput, catalogModels);
     return withConnectionMutationLock(connection.id, () => validateConnection(connection.id));
   });
 
@@ -661,6 +665,7 @@ export function registerProviderIPC(): void {
         ...(parsed.data.authMethod === undefined ? {} : { authMethod: parsed.data.authMethod }),
         ...(parsed.data.modelIds === undefined ? {} : { modelIds: parsed.data.modelIds }),
         ...(parsed.data.customModels === undefined ? {} : { customModels: parsed.data.customModels }),
+        ...(parsed.data.reasoningConfig === undefined ? {} : { reasoningConfig: parsed.data.reasoningConfig }),
         ...(parsed.data.endpoint === undefined ? {} : { endpoint: parsed.data.endpoint }),
         ...(parsed.data.allowInsecureHttp === undefined
           ? {}

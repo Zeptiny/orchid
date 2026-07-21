@@ -1108,6 +1108,7 @@ export function ChatView() {
           modelLabels={providerModelLabels}
           modelDetails={providerModelDetails}
           commandContext={commandContext}
+          sessionId={session.activeSession?.id ?? null}
         />
         </div>
         {contentMode === 'subagents' ? (

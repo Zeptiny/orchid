@@ -54,6 +54,7 @@ import {
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
 import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
+import type { ReasoningProviderOptions } from '../providers/drivers/types';
 import { createContextSnapshotBuilder } from './context-snapshot';
 import { importESM } from '../utils/esm-import';
 import { buildSkillTool } from '../tools/skill/skill';
@@ -149,6 +150,8 @@ export interface StreamChatParams {
   modelInstance: LanguageModelV4;
   /** Frozen durable-attempt context for every provider invocation. */
   accounting?: ProviderAttemptAccountingContext;
+  /** Provider-native reasoning options forwarded to streamText. */
+  providerOptions?: ReasoningProviderOptions;
 }
 
 interface ProviderStepUsage {
@@ -347,6 +350,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     abortSignal,
     modelInstance,
     accounting,
+    providerOptions,
   } = params;
 
   // Dynamic import — `ai` is ESM-only but Electron main compiles to CJS
@@ -560,6 +564,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       abortSignal: combinedAbort,
       // Retry ownership belongs to Orchid's accounting-aware middleware.
       maxRetries: 0,
+      providerOptions,
       onStepFinish: async ({ usage, request, toolCalls, toolResults, content }) => {
         if (usage && !usedFullStream) {
           pendingUsageEvents.push(buildStepUsage(

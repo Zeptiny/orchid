@@ -1,7 +1,7 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { importESM } from '../../utils/esm-import';
 import { createUnwrappingFetch } from '../../llm/response-unwrap';
-import type { ProviderProtocol } from '../../../shared/types/provider';
+import type { EffectiveModel, ProviderProtocol } from '../../../shared/types/provider';
 import type { DriverCredential, ProviderDriver } from './types';
 
 export interface GenericEndpoint {
@@ -115,6 +115,10 @@ export function createCompatibleProviderDrivers(): readonly ProviderDriver[] {
         }
         return { baseURL: endpoint, apiKey: apiKeyForEmbedding(credential) };
       },
+      buildReasoningOptions: (effort: string | number, _model: EffectiveModel) =>
+        typeof effort === 'string'
+          ? { openaiCompatible: { reasoningEffort: effort } }
+          : undefined,
     },
     {
       id: 'generic-anthropic-compatible',
