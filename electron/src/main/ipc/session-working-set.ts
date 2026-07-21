@@ -1,9 +1,7 @@
 import { BrowserWindow, ipcMain } from 'electron';
-import * as fs from 'node:fs';
 import { z } from 'zod';
 import { IPC_CHANNELS, type WorkingSetSnapshot } from '../../shared/types/ipc';
 import { sessionWorkingSet } from '../session/working-set';
-import { SESSIONS_DIR } from '../session/storage';
 import { getSessionManager } from './session';
 
 const sessionIdSchema = z.object({ id: z.string().uuid() });
@@ -59,14 +57,8 @@ export type SessionCatalog =
   | { status: 'ok'; ids: Set<string> }
   | { status: 'io_error'; error: string };
 
-/** Distinguish true empty catalog from sessions-dir I/O failure. */
+/** Distinguish true empty catalog from session store I/O failure. */
 export function tryListSessionCatalog(): SessionCatalog {
-  try {
-    fs.readdirSync(SESSIONS_DIR);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { status: 'io_error', error: message };
-  }
   try {
     const manager = getSessionManager();
     return {
