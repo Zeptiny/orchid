@@ -7,6 +7,7 @@
  * connection default. Rendered by the footer only for reasoning-capable models.
  */
 import { useEffect, useId, useRef, useState } from 'react';
+import { parseReasoningNumeric } from '../utils/reasoning';
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
 import { TextInput } from './ui/TextInput';
@@ -28,11 +29,13 @@ interface ReasoningSelectorProps {
   onOpenChange?: (open: boolean) => void;
 }
 
-/** Parse free-text entry: empty → null, all digits → token budget, else text level. */
+/** Parse free-text entry: empty → null, valid digits → token budget, else text level. */
 export function parseReasoningInput(raw: string): ReasoningEffortValue {
   const trimmed = raw.trim();
   if (!trimmed) return null;
-  if (/^\d+$/.test(trimmed)) return Number(trimmed);
+  const num = parseReasoningNumeric(trimmed);
+  if (num !== null) return num;
+  if (/^\d+$/.test(trimmed)) return null;
   return trimmed;
 }
 

@@ -1,5 +1,6 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ReasoningModelConfig } from '../../../shared/types/provider';
+import { parseReasoningNumeric } from '../../utils/reasoning';
 import { Icon } from '../Icon';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
@@ -25,20 +26,28 @@ interface ModelDraft {
   readonly default: string | number | null;
   readonly newLevel: string;
   readonly numericDefault: string;
-  readonly useNumericDefault: boolean;
 }
 
 function draftFromConfig(config: ReasoningModelConfig | undefined): ModelDraft {
   const levels = config?.levels ?? [];
   const def = config?.default ?? null;
-  const isNumeric = typeof def === 'number';
   return {
     levels: [...levels],
     default: def,
     newLevel: '',
-    numericDefault: isNumeric ? String(def) : '',
-    useNumericDefault: isNumeric,
+    numericDefault: typeof def === 'number' ? String(def) : '',
   };
+}
+
+function buildDraftsFromProps(
+  models: readonly ReasoningModelEntry[],
+  reasoningConfig: Record<string, ReasoningModelConfig>,
+): Record<string, ModelDraft> {
+  const drafts: Record<string, ModelDraft> = {};
+  for (const model of models) {
+    drafts[model.modelId] = draftFromConfig(reasoningConfig[model.modelId]);
+  }
+  return drafts;
 }
 
 export function ReasoningConfigEditor({
@@ -47,14 +56,17 @@ export function ReasoningConfigEditor({
   disabled = false,
   onChange,
 }: ReasoningConfigEditorProps) {
-  const [drafts, setDrafts] = useState<Record<string, ModelDraft>>(() => {
-    const initial: Record<string, ModelDraft> = {};
-    for (const model of models) {
-      initial[model.modelId] = draftFromConfig(reasoningConfig[model.modelId]);
-    }
-    return initial;
-  });
+  const [drafts, setDrafts] = useState<Record<string, ModelDraft>>(() =>
+    buildDraftsFromProps(models, reasoningConfig),
+  );
   const [error, setError] = useState<string | null>(null);
+  const [numericError, setNumericError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDrafts(buildDraftsFromProps(models, reasoningConfig));
+    setError(null);
+    setNumericError(null);
+  }, [models, reasoningConfig]);
 
   const updateDraft = useCallback((modelId: string, updater: (draft: ModelDraft) => ModelDraft) => {
     setDrafts((prev) => ({
@@ -75,28 +87,31 @@ export function ReasoningConfigEditor({
     updateDraft(modelId, (draft) => {
       const levels = draft.levels.filter((l) => l !== level);
       const defaultCleared = draft.default === level ? null : draft.default;
-      return { ...draft, levels, default: defaultCleared, useNumericDefault: defaultCleared === null ? draft.useNumericDefault : false };
+      return { ...draft, levels, default: defaultCleared };
     });
   }, [updateDraft]);
 
   const setDefault = useCallback((modelId: string, value: string) => {
     updateDraft(modelId, (draft) => {
       if (value === '__numeric__') {
-        const num = draft.numericDefault.trim() ? Number(draft.numericDefault) : null;
-        return { ...draft, useNumericDefault: true, default: num };
+        const num = parseReasoningNumeric(draft.numericDefault);
+        return { ...draft, default: num };
       }
       if (value === '__none__') {
-        return { ...draft, useNumericDefault: false, default: null, numericDefault: '' };
+        return { ...draft, default: null, numericDefault: '' };
       }
-      return { ...draft, useNumericDefault: false, default: value };
+      return { ...draft, default: value };
     });
   }, [updateDraft]);
 
   const setNumericDefault = useCallback((modelId: string, value: string) => {
-    updateDraft(modelId, (draft) => {
-      const num = value.trim() ? Number(value) : null;
-      return { ...draft, numericDefault: value, default: num };
-    });
+    const num = parseReasoningNumeric(value);
+    if (value.trim() !== '' && num === null) {
+      setNumericError('Enter a positive whole number between 1 and 1,000,000.');
+    } else {
+      setNumericError(null);
+    }
+    updateDraft(modelId, (draft) => ({ ...draft, numericDefault: value, default: num }));
   }, [updateDraft]);
 
   const save = useCallback(() => {
@@ -106,6 +121,10 @@ export function ReasoningConfigEditor({
       if (!draft) continue;
       if (draft.levels.length === 0) {
         setError(`"${model.displayName}" must have at least one reasoning level.`);
+        return;
+      }
+      if (typeof draft.default === 'number' && !Number.isFinite(draft.default)) {
+        setError(`"${model.displayName}" has an invalid numeric default.`);
         return;
       }
       result[model.modelId] = {
@@ -128,7 +147,8 @@ export function ReasoningConfigEditor({
 
       {models.map((model) => {
         const draft = drafts[model.modelId] ?? draftFromConfig(undefined);
-        const selectValue = draft.useNumericDefault
+        const isNumeric = typeof draft.default === 'number';
+        const selectValue = isNumeric
           ? '__numeric__'
           : draft.default != null && typeof draft.default === 'string'
             ? draft.default
@@ -212,7 +232,7 @@ export function ReasoningConfigEditor({
                   ))}
                   <option value="__numeric__">Numeric (token budget)</option>
                 </Select>
-                {draft.useNumericDefault && (
+                {isNumeric && (
                   <TextInput
                     size="sm"
                     className="w-28"
@@ -225,6 +245,9 @@ export function ReasoningConfigEditor({
                   />
                 )}
               </div>
+              {numericError && isNumeric && (
+                <p className="mt-1 text-xs text-error" role="alert">{numericError}</p>
+              )}
             </div>
           </div>
         );

@@ -87,6 +87,15 @@ function loadAgentsFromDir(agentsDir: string): Map<string, Agent> {
     const allowedTools = getStringArray(metadata, 'allowed_tools');
     const allowedSkills = getStringArray(metadata, 'allowed_skills', ['*']);
 
+    const rawEffort = metadata['reasoning_effort'];
+    let reasoning_effort: string | number | undefined;
+    if (typeof rawEffort === 'number') {
+      reasoning_effort = rawEffort;
+    } else if (typeof rawEffort === 'string' && rawEffort.trim() !== '') {
+      const num = Number(rawEffort);
+      reasoning_effort = Number.isNaN(num) ? rawEffort : num;
+    }
+
     // Validate required fields
     if (!description) continue;
     if (!VALID_TYPES.has(rawType)) continue;
@@ -100,6 +109,7 @@ function loadAgentsFromDir(agentsDir: string): Map<string, Agent> {
       system_prompt: body.trim(),
       allowed_tools: Object.freeze(allowedTools),
       allowed_skills: Object.freeze(allowedSkills),
+      ...(reasoning_effort !== undefined ? { reasoning_effort } : {}),
     };
 
     agents.set(agent.name, agent);

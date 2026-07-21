@@ -30,7 +30,7 @@
  * by toolCallId so the same call/result is never yielded twice.
  */
 import { createHash } from 'node:crypto';
-import type { AssistantContent, JSONValue, ModelMessage, Tool } from 'ai';
+import type { AssistantContent, ModelMessage, Tool } from 'ai';
 import { getErrorMessage, type LanguageModelV4 } from '@ai-sdk/provider';
 import { jsonSchema } from '@ai-sdk/provider-utils';
 import type { Message, Usage } from '../../shared/types/message';
@@ -54,6 +54,7 @@ import {
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
 import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
+import type { ReasoningProviderOptions } from '../providers/drivers/types';
 import { createContextSnapshotBuilder } from './context-snapshot';
 import { importESM } from '../utils/esm-import';
 import { buildSkillTool } from '../tools/skill/skill';
@@ -150,7 +151,7 @@ export interface StreamChatParams {
   /** Frozen durable-attempt context for every provider invocation. */
   accounting?: ProviderAttemptAccountingContext;
   /** Provider-native reasoning options forwarded to streamText. */
-  providerOptions?: Record<string, Record<string, JSONValue>>;
+  providerOptions?: ReasoningProviderOptions;
 }
 
 interface ProviderStepUsage {

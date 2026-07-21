@@ -60,7 +60,15 @@ export const configSchema = z
         crown: null,
       }),
     tier_reasoning_effort: z
-      .record(z.string(), z.union([z.string(), z.number()]).nullable())
+      .record(
+        z.string(),
+        z
+          .union([
+            z.string().trim().min(1).max(256),
+            z.number().int().min(1).max(1_000_000),
+          ])
+          .nullable(),
+      )
       .default({
         seed: null,
         sprout: null,

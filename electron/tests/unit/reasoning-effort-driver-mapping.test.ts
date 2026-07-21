@@ -72,12 +72,8 @@ describe('reasoning effort driver mapping', () => {
   describe('xAI driver', () => {
     const xai = driverById(nativeDrivers, 'xai');
 
-    it('returns undefined for text effort', () => {
-      expect(xai.buildReasoningOptions!('high', model)).toBeUndefined();
-    });
-
-    it('returns undefined for numeric effort', () => {
-      expect(xai.buildReasoningOptions!(8192, model)).toBeUndefined();
+    it('does not define buildReasoningOptions', () => {
+      expect(xai.buildReasoningOptions).toBeUndefined();
     });
   });
 

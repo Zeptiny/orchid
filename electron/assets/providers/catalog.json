@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "catalogVersion": 1,
-  "issuedAt": "2026-07-21T19:14:41.421Z",
+  "issuedAt": "2026-07-13T22:49:29.519Z",
   "expiresAt": "2027-01-01T00:00:00.000Z",
   "compatibleApp": {
     "minimum": "0.1.0"
@@ -9,8 +9,8 @@
   "provenance": {
     "source": "models.dev",
     "sourceUrl": "https://models.dev/api.json",
-    "capturedAt": "2026-07-21T19:14:41.421Z",
-    "contentHash": "sha256:52c41a03409b0e12b8ac0e59b729197275d43a8e0619dde42a806809e31e7178"
+    "capturedAt": "2026-07-13T22:49:29.519Z",
+    "contentHash": "sha256:e79e3f1b9f62a01d9f74f785aa749caf5e712b74d406bc117bb8136b027dd9e4"
   },
   "providers": [
     {
@@ -27,7 +27,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-21T19:14:41.421Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
         {
@@ -51,7 +51,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.5",
@@ -71,12 +71,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -100,7 +100,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "30",
@@ -115,12 +115,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -145,7 +145,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "10",
@@ -160,12 +160,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -191,7 +191,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -211,12 +211,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -242,7 +242,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.4",
@@ -262,12 +262,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -292,7 +292,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.1",
@@ -312,12 +312,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -343,7 +343,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2.5",
@@ -363,12 +363,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -393,7 +393,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -408,12 +408,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -438,7 +438,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2.5",
@@ -458,12 +458,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -488,7 +488,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2.5",
@@ -508,12 +508,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -539,7 +539,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.15",
@@ -559,12 +559,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -582,13 +582,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -596,7 +589,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -616,12 +609,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -646,7 +639,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -666,12 +659,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -689,12 +682,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -702,7 +689,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -722,12 +709,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -745,13 +732,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -759,7 +739,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.25",
@@ -779,12 +759,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -802,13 +782,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -816,7 +789,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.05",
@@ -836,12 +809,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -859,10 +832,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "high"
-          ],
-          "reasoningDefault": "high",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 272000
@@ -870,7 +839,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "15",
@@ -885,12 +854,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -908,13 +877,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -922,7 +884,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -942,12 +904,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -965,10 +927,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "medium"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 128000,
             "outputTokens": 16384
@@ -976,7 +934,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -996,12 +954,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1019,12 +977,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1032,7 +984,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -1052,12 +1004,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1075,13 +1027,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1089,7 +1034,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -1109,12 +1054,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1132,12 +1077,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1145,7 +1084,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.25",
@@ -1165,12 +1104,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1188,14 +1127,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1203,7 +1134,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.75",
@@ -1223,12 +1154,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1246,10 +1177,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "medium"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 128000,
             "outputTokens": 16384
@@ -1257,7 +1184,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.75",
@@ -1277,12 +1204,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1301,13 +1228,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1315,7 +1235,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.75",
@@ -1335,12 +1255,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1358,12 +1278,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1371,7 +1285,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "21",
@@ -1386,12 +1300,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1416,7 +1330,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.75",
@@ -1436,12 +1350,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1460,14 +1374,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1475,7 +1381,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.75",
@@ -1495,12 +1401,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1519,14 +1425,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 128000,
             "outputTokens": 32000
@@ -1534,7 +1432,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.75",
@@ -1554,12 +1452,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1578,14 +1476,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1593,7 +1483,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2.5",
@@ -1613,12 +1503,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1636,14 +1526,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1651,7 +1533,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.75",
@@ -1671,12 +1553,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1694,14 +1576,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1709,7 +1583,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.2",
@@ -1729,12 +1603,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1752,12 +1626,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1765,7 +1633,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "30",
@@ -1780,12 +1648,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1804,14 +1672,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1819,7 +1679,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -1839,12 +1699,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1863,12 +1723,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1876,7 +1730,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "30",
@@ -1891,12 +1745,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1915,15 +1769,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1931,7 +1776,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -1956,12 +1801,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -1980,15 +1825,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1996,7 +1832,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1",
@@ -2021,12 +1857,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2045,15 +1881,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -2061,7 +1888,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -2086,12 +1913,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2110,15 +1937,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -2126,7 +1944,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2.5",
@@ -2151,12 +1969,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2175,12 +1993,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
@@ -2188,7 +2000,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "15",
@@ -2208,12 +2020,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2231,12 +2043,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
@@ -2244,7 +2050,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "150",
@@ -2259,12 +2065,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2283,12 +2089,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
@@ -2296,7 +2096,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -2316,12 +2116,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2339,10 +2139,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "medium"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
@@ -2350,7 +2146,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "10",
@@ -2370,12 +2166,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2392,12 +2188,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
@@ -2405,7 +2195,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.1",
@@ -2425,12 +2215,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2448,12 +2238,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
@@ -2461,7 +2245,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "20",
@@ -2476,12 +2260,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2499,12 +2283,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
@@ -2512,7 +2290,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.1",
@@ -2532,12 +2310,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2555,10 +2333,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "medium"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
@@ -2566,7 +2340,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -2586,12 +2360,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2603,7 +2377,7 @@
               "text"
             ],
             "outputModalities": [
-              "text"
+              "embedding"
             ],
             "tools": false,
             "reasoning": false
@@ -2615,7 +2389,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.13",
@@ -2630,12 +2404,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2647,7 +2421,7 @@
               "text"
             ],
             "outputModalities": [
-              "text"
+              "embedding"
             ],
             "tools": false,
             "reasoning": false
@@ -2659,7 +2433,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.02",
@@ -2674,12 +2448,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2691,7 +2465,7 @@
               "text"
             ],
             "outputModalities": [
-              "text"
+              "embedding"
             ],
             "tools": false,
             "reasoning": false
@@ -2703,7 +2477,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.1",
@@ -2718,12 +2492,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
@@ -2742,7 +2516,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-21T19:14:41.421Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
         {
@@ -2761,14 +2535,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 128000
@@ -2776,7 +2542,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "10",
@@ -2801,12 +2567,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2832,7 +2598,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1",
@@ -2857,12 +2623,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2888,7 +2654,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1",
@@ -2913,12 +2679,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -2944,7 +2710,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "15",
@@ -2969,12 +2735,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3000,7 +2766,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "15",
@@ -3025,12 +2791,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3049,12 +2815,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 64000
@@ -3062,7 +2822,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -3087,12 +2847,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3111,12 +2871,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 64000
@@ -3124,7 +2878,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -3149,12 +2903,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3173,13 +2927,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 128000
@@ -3187,7 +2934,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -3212,12 +2959,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3236,14 +2983,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 128000
@@ -3251,7 +2990,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -3276,12 +3015,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3300,14 +3039,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 128000
@@ -3315,7 +3046,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -3340,12 +3071,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3371,7 +3102,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "3",
@@ -3396,12 +3127,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3427,7 +3158,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "3",
@@ -3452,12 +3183,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3476,13 +3207,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 128000
@@ -3490,7 +3214,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "3",
@@ -3515,12 +3239,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3539,14 +3263,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 128000
@@ -3554,7 +3270,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -3579,12 +3295,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
@@ -3603,7 +3319,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-21T19:14:41.421Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
         {
@@ -3631,7 +3347,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.1",
@@ -3651,12 +3367,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3684,7 +3400,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.075",
@@ -3699,12 +3415,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3732,7 +3448,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.3",
@@ -3752,12 +3468,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3785,7 +3501,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.1",
@@ -3805,12 +3521,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3838,7 +3554,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -3858,12 +3574,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3884,13 +3600,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -3898,7 +3607,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.5",
@@ -3918,12 +3627,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -3944,11 +3653,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "high"
-          ],
-          "reasoningDefault": "high",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -3956,7 +3660,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -3976,12 +3680,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4002,13 +3706,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -4016,7 +3713,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.25",
@@ -4036,12 +3733,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4062,13 +3759,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -4076,7 +3766,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.25",
@@ -4096,12 +3786,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4122,12 +3812,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -4135,7 +3819,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -4155,12 +3839,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4181,12 +3865,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -4194,7 +3872,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -4214,12 +3892,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4240,13 +3918,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -4254,7 +3925,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.5",
@@ -4274,132 +3945,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
-          }
-        },
-        {
-          "id": "gemini-3.5-flash-lite",
-          "displayName": "Gemini 3.5 Flash Lite",
-          "protocol": "google-generative-ai",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image",
-              "video",
-              "audio",
-              "pdf"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "reasoningLevels": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
-          "limits": {
-            "contextTokens": 1048576,
-            "outputTokens": 65536
-          },
-          "lifecycle": "active",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
-            "rates": {
-              "input": {
-                "amount": "0.3",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "2.5",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.03",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
-          }
-        },
-        {
-          "id": "gemini-3.6-flash",
-          "displayName": "Gemini 3.6 Flash",
-          "protocol": "google-generative-ai",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image",
-              "video",
-              "audio",
-              "pdf"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "reasoningLevels": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
-          "limits": {
-            "contextTokens": 1048576,
-            "outputTokens": 65536
-          },
-          "lifecycle": "active",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
-            "rates": {
-              "input": {
-                "amount": "1.5",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "7.5",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.15",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4411,7 +3962,7 @@
               "text"
             ],
             "outputModalities": [
-              "text"
+              "embedding"
             ],
             "tools": false,
             "reasoning": false
@@ -4423,7 +3974,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.15",
@@ -4438,12 +3989,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4454,8 +4005,8 @@
             "inputModalities": [
               "text",
               "image",
-              "video",
               "audio",
+              "video",
               "pdf"
             ],
             "outputModalities": [
@@ -4464,13 +4015,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -4478,32 +4022,32 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
-                "amount": "1.5",
+                "amount": "0.3",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "output": {
-                "amount": "9",
+                "amount": "2.5",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "cacheRead": {
-                "amount": "0.15",
+                "amount": "0.075",
                 "per": 1000000,
                 "unit": "tokens"
               }
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4514,8 +4058,8 @@
             "inputModalities": [
               "text",
               "image",
-              "video",
               "audio",
+              "video",
               "pdf"
             ],
             "outputModalities": [
@@ -4524,13 +4068,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "minimal",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -4538,15 +4075,15 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
-                "amount": "0.25",
+                "amount": "0.1",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "output": {
-                "amount": "1.5",
+                "amount": "0.4",
                 "per": 1000000,
                 "unit": "tokens"
               },
@@ -4558,12 +4095,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4588,16 +4125,16 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {},
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4622,16 +4159,16 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {},
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
@@ -4650,7 +4187,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-21T19:14:41.421Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
         {
@@ -4676,7 +4213,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -4696,12 +4233,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4727,7 +4264,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -4747,12 +4284,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4771,13 +4308,6 @@
             "tools": false,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 30000
@@ -4785,7 +4315,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -4805,12 +4335,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4829,13 +4359,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 30000
@@ -4843,7 +4366,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -4863,12 +4386,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4887,12 +4410,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 500000,
             "outputTokens": 500000
@@ -4900,7 +4417,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -4913,19 +4430,19 @@
                 "unit": "tokens"
               },
               "cacheRead": {
-                "amount": "0.3",
+                "amount": "0.5",
                 "per": 1000000,
                 "unit": "tokens"
               }
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -4951,7 +4468,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1",
@@ -4971,12 +4488,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
@@ -4995,7 +4512,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-21T19:14:41.421Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
         {
@@ -5012,11 +4529,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "high",
-            "max"
-          ],
-          "reasoningDefault": "max",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 384000
@@ -5024,7 +4536,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.14",
@@ -5044,12 +4556,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5066,11 +4578,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "high",
-            "max"
-          ],
-          "reasoningDefault": "max",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 384000
@@ -5078,32 +4585,32 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
-                "amount": "0.435",
+                "amount": "1.74",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "output": {
-                "amount": "0.87",
+                "amount": "3.48",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "cacheRead": {
-                "amount": "0.003625",
+                "amount": "0.0145",
                 "per": 1000000,
                 "unit": "tokens"
               }
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5127,7 +4634,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1",
@@ -5147,12 +4654,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5176,7 +4683,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.4",
@@ -5196,12 +4703,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5218,11 +4725,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "high",
-            "max"
-          ],
-          "reasoningDefault": "max",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 131072
@@ -5230,7 +4732,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.4",
@@ -5250,68 +4752,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
-          }
-        },
-        {
-          "id": "grok-4.5",
-          "displayName": "Grok 4.5",
-          "protocol": "openai-compatible",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "reasoningLevels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoningDefault": "medium",
-          "limits": {
-            "contextTokens": 500000,
-            "outputTokens": 500000
-          },
-          "lifecycle": "active",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
-            "rates": {
-              "input": {
-                "amount": "2",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "6",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.5",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5337,7 +4783,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.6",
@@ -5357,12 +4803,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5388,7 +4834,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.95",
@@ -5408,12 +4854,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5439,7 +4885,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.95",
@@ -5459,67 +4905,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
-          }
-        },
-        {
-          "id": "kimi-k3",
-          "displayName": "Kimi K3 (2x usage)",
-          "protocol": "openai-compatible",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image",
-              "video"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "reasoningLevels": [
-            "max"
-          ],
-          "reasoningDefault": "max",
-          "limits": {
-            "contextTokens": 1048576,
-            "outputTokens": 131072
-          },
-          "lifecycle": "active",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
-            "rates": {
-              "input": {
-                "amount": "3",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "15",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.3",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5546,7 +4937,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.4",
@@ -5566,12 +4957,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5595,7 +4986,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1",
@@ -5615,12 +5006,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5647,7 +5038,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.14",
@@ -5667,12 +5058,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5696,32 +5087,32 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
-                "amount": "0.435",
+                "amount": "1.74",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "output": {
-                "amount": "0.87",
+                "amount": "3.48",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "cacheRead": {
-                "amount": "0.003625",
+                "amount": "0.0145",
                 "per": 1000000,
                 "unit": "tokens"
               }
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5745,7 +5136,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.3",
@@ -5765,12 +5156,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5794,7 +5185,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.3",
@@ -5814,12 +5205,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5845,7 +5236,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.3",
@@ -5865,12 +5256,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5896,7 +5287,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.2",
@@ -5921,12 +5312,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -5952,7 +5343,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.5",
@@ -5977,12 +5368,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6006,7 +5397,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "2.5",
@@ -6031,12 +5422,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6062,7 +5453,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.4",
@@ -6087,12 +5478,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
@@ -6111,7 +5502,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-21T19:14:41.421Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
         {
@@ -6137,7 +5528,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.11",
@@ -6152,12 +5543,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6183,7 +5574,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.28",
@@ -6203,12 +5594,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6233,7 +5624,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.7",
@@ -6253,12 +5644,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6275,11 +5666,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "high",
-            "max"
-          ],
-          "reasoningDefault": "max",
           "limits": {
             "contextTokens": 524288,
             "outputTokens": 524288
@@ -6287,7 +5673,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.9",
@@ -6307,12 +5693,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
@@ -6331,7 +5717,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-21T19:14:41.421Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": [
         {
@@ -6348,16 +5734,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048560,
             "outputTokens": 1048560
@@ -6365,7 +5741,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.45",
@@ -6385,12 +5761,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6414,7 +5790,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.45",
@@ -6434,12 +5810,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6456,16 +5832,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048560,
             "outputTokens": 1048560
@@ -6473,7 +5839,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.725",
@@ -6493,12 +5859,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6515,16 +5881,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 199984,
             "outputTokens": 199984
@@ -6532,7 +5888,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.45",
@@ -6552,12 +5908,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6581,7 +5937,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "1.45",
@@ -6601,12 +5957,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6630,7 +5986,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.725",
@@ -6650,12 +6006,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6672,16 +6028,6 @@
             "tools": true,
             "reasoning": true
           },
-          "reasoningLevels": [
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 199984,
             "outputTokens": 199984
@@ -6689,7 +6035,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.725",
@@ -6709,12 +6055,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6739,7 +6085,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.52",
@@ -6759,12 +6105,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6789,7 +6135,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.69",
@@ -6809,12 +6155,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6839,7 +6185,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.345",
@@ -6859,12 +6205,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6889,7 +6235,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.475",
@@ -6909,12 +6255,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6939,7 +6285,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.52",
@@ -6959,12 +6305,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -6989,7 +6335,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.69",
@@ -7009,12 +6355,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -7039,7 +6385,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.95",
@@ -7059,12 +6405,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -7088,7 +6434,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.69",
@@ -7108,12 +6454,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -7138,7 +6484,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.29",
@@ -7158,12 +6504,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -7187,7 +6533,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.69",
@@ -7207,12 +6553,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         },
         {
@@ -7237,7 +6583,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-21T19:14:41.421Z",
+            "effectiveAt": "2026-07-13T22:49:29.519Z",
             "rates": {
               "input": {
                 "amount": "0.29",
@@ -7257,12 +6603,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-21T19:14:41.421Z"
+              "observedAt": "2026-07-13T22:49:29.519Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-21T19:14:41.421Z"
+            "observedAt": "2026-07-13T22:49:29.519Z"
           }
         }
       ]
@@ -7282,7 +6628,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "catalog",
-        "observedAt": "2026-07-21T19:14:41.421Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": []
     },
@@ -7301,7 +6647,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "catalog",
-        "observedAt": "2026-07-21T19:14:41.421Z"
+        "observedAt": "2026-07-13T22:49:29.519Z"
       },
       "models": []
     }

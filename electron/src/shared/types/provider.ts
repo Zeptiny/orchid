@@ -137,8 +137,13 @@ export type CustomConnectionModel = z.infer<typeof customConnectionModelSchema>;
 
 /** Per-model reasoning effort configuration stored on the connection. */
 export const reasoningModelConfigSchema = z.object({
-  levels: z.array(z.string().trim().min(1)).min(1),
-  default: z.union([z.string(), z.number()]).nullable(),
+  levels: z.array(z.string().trim().min(1).max(64)).min(1).max(50),
+  default: z
+    .union([
+      z.string().trim().min(1).max(256),
+      z.number().int().min(1).max(1_000_000),
+    ])
+    .nullable(),
 }).strict();
 
 export type ReasoningModelConfig = z.infer<typeof reasoningModelConfigSchema>;

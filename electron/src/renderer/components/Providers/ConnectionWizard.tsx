@@ -705,6 +705,7 @@ export function ConnectionWizard({
 
               {reasoningModels.length > 0 && (
                 <ReasoningConfigEditor
+                  key={selectedDefinition?.id ?? 'none'}
                   models={reasoningModels}
                   reasoningConfig={reasoningConfig}
                   disabled={metadataLocked}

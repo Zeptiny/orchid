@@ -1,5 +1,4 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
-import type { JSONValue } from 'ai';
 import Decimal from 'decimal.js';
 import type { EffectiveModel, ModelSelection, ProviderConnection } from '../../shared/types/provider';
 import type {
@@ -22,6 +21,7 @@ import type {
   DriverModelRequest,
   ProviderDriver,
   ProviderEmbeddingTarget,
+  ReasoningProviderOptions,
 } from './drivers/types';
 import { ProviderResolutionError } from '../llm/middleware/error-classification';
 import type { ProviderStatusService } from './status/service';
@@ -46,7 +46,7 @@ export interface ResolvedProviderExecution {
   /** Map a reasoning effort to provider-native options, when the driver supports it. */
   readonly buildReasoningOptions?: (
     effort: string | number,
-  ) => Record<string, Record<string, JSONValue>> | undefined;
+  ) => ReasoningProviderOptions | undefined;
 }
 
 /**

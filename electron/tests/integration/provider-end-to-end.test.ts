@@ -74,7 +74,7 @@ import * as providerIpc from '../../src/main/ipc/providers';
 import { ProviderRuntime } from '../../src/main/providers';
 import { calculateAttemptCost } from '../../src/main/providers/accounting/cost';
 import { ProviderAccountingStore } from '../../src/main/providers/accounting/store';
-import { ProviderCatalogStore } from '../../src/main/providers/catalog/store';
+import { ProviderCatalogStore, type ProviderCatalogSnapshot } from '../../src/main/providers/catalog/store';
 import { ProviderCatalogUpdater } from '../../src/main/providers/catalog/updater';
 import type { CatalogKeyring } from '../../src/main/providers/catalog/trust';
 import {
@@ -142,6 +142,27 @@ function invoke<T>(channel: string, payload?: unknown): Promise<T> {
   return Promise.resolve(handler({ sender: null }, payload) as T);
 }
 
+function emptyCatalogSnapshot(): ProviderCatalogSnapshot {
+  return {
+    source: 'bundled',
+    stale: false,
+    catalog: {
+      schemaVersion: 1,
+      catalogVersion: 1,
+      issuedAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2026-12-31T00:00:00.000Z',
+      compatibleApp: { minimum: '0.1.0' },
+      provenance: {
+        source: 'models.dev',
+        sourceUrl: 'https://example.com/catalog.json',
+        capturedAt: '2026-01-01T00:00:00.000Z',
+        contentHash: `sha256:${'0'.repeat(64)}`,
+      },
+      providers: [],
+    },
+  };
+}
+
 function createServices(root: string) {
   let sequence = 1;
   const connections = new ConnectionStore({
@@ -175,7 +196,7 @@ function createServices(root: string) {
     registry,
     createLanguageModel,
     services: {
-      catalog: { getProviderDefinitions: () => [LILAC_DEFINITION] },
+      catalog: { getProviderDefinitions: () => [LILAC_DEFINITION], load: () => emptyCatalogSnapshot() },
       connections,
       vault,
       status,

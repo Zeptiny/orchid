@@ -35,6 +35,7 @@ const KNOWN_CONFIG_KEYS = [
   'default_project_dir',
   'always_expand_tool_groups',
   'has_completed_onboarding',
+  'tier_reasoning_effort',
 ] as const satisfies ReadonlyArray<keyof Config>;
 
 describe('parseConfigNumber', () => {
@@ -99,6 +100,7 @@ describe('applyConfigDraft', () => {
     const draft: ConfigPatch = {
       default_model: selection,
       tier_models: { seed: selection, bloom: null },
+      tier_reasoning_effort: { seed: 'low', bloom: null },
       ignored_dirs: ['.git', 'node_modules'],
       command_timeout: 0,
       read_line_limit: 1,
@@ -139,6 +141,8 @@ describe('applyConfigDraft', () => {
     expect(next.default_model).toEqual(selection);
     expect(next.tier_models.seed).toEqual(selection);
     expect(next.tier_models.bloom).toBeNull();
+    expect(next.tier_reasoning_effort.seed).toBe('low');
+    expect(next.tier_reasoning_effort.bloom).toBeNull();
     expect(next.ignored_dirs).toEqual(['.git', 'node_modules']);
     expect(next.command_timeout).toBe(0);
     expect(next.read_line_limit).toBe(1);
@@ -209,6 +213,47 @@ describe('applyConfigDraft', () => {
     expect(next.tier_models.seed).toEqual(selection);
     expect(next.tier_models.bloom).toBeNull();
     expect(next.tier_models.sprout).toBe(base.tier_models.sprout);
+  });
+
+  it('applies tier_reasoning_effort null entry as tombstone', () => {
+    const base = {
+      ...defaults(),
+      tier_reasoning_effort: { seed: 'high', bloom: 'low' } as Record<string, string | number | null>,
+    };
+    const next = applyConfigDraft(base, {
+      tier_reasoning_effort: { seed: null },
+    });
+    expect(next.tier_reasoning_effort.seed).toBeNull();
+    expect(next.tier_reasoning_effort.bloom).toBe('low');
+  });
+
+  it('applies tier_reasoning_effort string entry', () => {
+    const base = defaults();
+    const next = applyConfigDraft(base, {
+      tier_reasoning_effort: { bloom: 'medium' },
+    });
+    expect(next.tier_reasoning_effort.bloom).toBe('medium');
+  });
+
+  it('applies tier_reasoning_effort number entry', () => {
+    const base = defaults();
+    const next = applyConfigDraft(base, {
+      tier_reasoning_effort: { seed: 8192 },
+    });
+    expect(next.tier_reasoning_effort.seed).toBe(8192);
+  });
+
+  it('leaves base tier_reasoning_effort untouched for undefined entries', () => {
+    const base = {
+      ...defaults(),
+      tier_reasoning_effort: { seed: 'high', bloom: 'low' } as Record<string, string | number | null>,
+    };
+    const next = applyConfigDraft(base, {
+      tier_reasoning_effort: { sprout: 'medium' },
+    });
+    expect(next.tier_reasoning_effort.seed).toBe('high');
+    expect(next.tier_reasoning_effort.bloom).toBe('low');
+    expect(next.tier_reasoning_effort.sprout).toBe('medium');
   });
 });
 

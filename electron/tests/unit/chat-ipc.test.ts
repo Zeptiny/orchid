@@ -1044,6 +1044,57 @@ describe('chat IPC provider gates', () => {
     expect(mocks.toolRegistry.get).not.toHaveBeenCalled();
   });
 
+  it('passes providerOptions to the stream when the model supports reasoning and a session override is set', async () => {
+    const reasoningSelection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/reasoning-model',
+    };
+    const buildReasoningOptions = vi.fn((effort: string | number) => ({
+      openai: { reasoningEffort: effort },
+    }));
+    mocks.providerRuntime.resolveExecution.mockResolvedValueOnce({
+      modelInstance: mocks.modelInstance,
+      connection: {},
+      model: { id: 'vendor/path/reasoning-model', capabilities: { reasoning: true } },
+      buildReasoningOptions,
+      snapshot: {
+        providerId: 'openai',
+        providerDisplayName: 'OpenAI',
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        connectionName: 'Work',
+        modelId: 'vendor/path/reasoning-model',
+        protocol: 'openai-compatible',
+        modelSource: 'catalog',
+        catalogVersion: 1,
+        catalogSource: 'bundled',
+        catalogObservedAt: null,
+        pricing: null,
+        fieldProvenance: {},
+        statusObservation: null,
+      },
+    });
+    mocks.sessionManager._setActive({
+      ...makeSession('ffffffff-ffff-4fff-8fff-ffffffffffff'),
+      selection: reasoningSelection,
+      modelLabel: reasoningSelection.modelId,
+      reasoningEffortOverride: 'high',
+    } as never);
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+
+    const result = await chatSend!(
+      { sender: { id: 908, send } },
+      { message: 'Reason about this' },
+    );
+
+    expect(result).toMatchObject({ status: 'started' });
+    await waitForDoneCount(send, 1);
+    expect(buildReasoningOptions).toHaveBeenCalledWith('high');
+    expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
+      providerOptions: { openai: { reasoningEffort: 'high' } },
+    }));
+  });
+
   it('auto-names a completed default session through the internal session-namer agent', async () => {
     const turnSelection = {
       connectionId: '11111111-1111-4111-8111-111111111111',

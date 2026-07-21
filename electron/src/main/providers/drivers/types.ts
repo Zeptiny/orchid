@@ -8,6 +8,8 @@ import type {
   ProviderProtocol,
 } from '../../../shared/types/provider';
 
+export type ReasoningProviderOptions = Record<string, Record<string, JSONValue>>;
+
 /** Only the request credential needed by an adapter, never a vault record. */
 export type DriverCredential =
   | { readonly kind: 'api-key'; readonly apiKey: string }
@@ -47,5 +49,5 @@ export interface ProviderDriver {
   /** Present only when the driver supports Orchid's API embedding transport. */
   createEmbeddingTarget?(request: DriverModelRequest): Promise<ProviderEmbeddingTarget>;
   /** Translate a reasoning effort value into provider-native providerOptions. */
-  buildReasoningOptions?(effort: string | number, model: EffectiveModel): Record<string, Record<string, JSONValue>> | undefined;
+  buildReasoningOptions?(effort: string | number, model: EffectiveModel): ReasoningProviderOptions | undefined;
 }

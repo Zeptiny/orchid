@@ -35,6 +35,7 @@ import {
   getProviderStatusService,
 } from '../providers/runtime-context';
 import type { ConnectionStore } from '../providers/connection-store';
+import type { ProviderCatalogStore } from '../providers/catalog/store';
 import {
   CredentialVault,
   createEnvironmentCredentialReference,
@@ -135,9 +136,7 @@ const statusRefreshSchema = z.object({
 // ── Main-process dependency boundary ────────────────────────────────────────
 
 interface ProviderIPCServices {
-  readonly catalog: {
-    getProviderDefinitions(): readonly ProviderDefinition[];
-  };
+  readonly catalog: Pick<ProviderCatalogStore, 'getProviderDefinitions' | 'load'>;
   readonly connections: Pick<ConnectionStore, 'list' | 'get' | 'create' | 'update'>;
   readonly vault: Pick<CredentialVault,
     'getAvailability' | 'replaceConnectionApiKey' | 'readSecret' | 'deleteConnectionCredentials'>;
@@ -646,8 +645,10 @@ export function registerProviderIPC(): void {
     // selecting a driver/origin outside trusted code.
     requireStaticConnectionSupport(draftConnection, current);
     const { id: _draftId, ...createInput } = draftConnection;
-    // ConnectionStore owns the stable real UUID.
-    const connection = await current.connections.create(createInput);
+    const catalogModels = current.catalog.load().catalog.providers
+      .find((provider) => provider.id === parsed.data.providerId)
+      ?.models;
+    const connection = await current.connections.create(createInput, catalogModels);
     return withConnectionMutationLock(connection.id, () => validateConnection(connection.id));
   });
 

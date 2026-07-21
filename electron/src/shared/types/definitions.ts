@@ -32,6 +32,7 @@ export interface ManagedAgent {
   readonly system_prompt: string;
   readonly allowed_tools: readonly string[];
   readonly allowed_skills: readonly string[];
+  readonly reasoning_effort?: string | number;
   readonly scope: DefinitionScope;
   /** Absolute path to AGENT.md */
   readonly path: string;
@@ -70,6 +71,7 @@ export interface AgentSaveMessage {
   system_prompt: string;
   allowed_tools: string[];
   allowed_skills: string[];
+  reasoning_effort?: string | number;
   previousName?: string;
 }
 

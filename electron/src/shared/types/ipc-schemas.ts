@@ -294,6 +294,7 @@ export const subagentRecordSchema = z.object({
   task: z.string(), status: z.enum(['pending', 'running', 'completed', 'failed', 'interrupted']),
   chain_id: z.string(), start_time: z.string(), end_time: z.string().nullable(),
   result: z.string().nullable(), error: z.string().nullable(), parentChainIndex: z.number().int().nullable(),
+  reasoning_effort: z.union([z.string(), z.number()]).optional(),
   chain: z.unknown(),
 });
 export const subagentSnapshotSchema = z.object({

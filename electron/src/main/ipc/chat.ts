@@ -8,7 +8,7 @@
  * forwards StreamEvents as IPC events to the renderer.
  */
 import { ipcMain, webContents as electronWebContents, type WebContents } from 'electron';
-import type { JSONValue } from 'ai';
+import type { ReasoningProviderOptions } from '../providers/drivers/types';
 import { createActor, type ActorRefFrom } from 'xstate';
 import { z } from 'zod';
 import { agentMachine, type AgentContext } from '../agents/xstate/agent-machine';
@@ -855,7 +855,7 @@ function createProviderStreamFn(input: {
   readonly accounting: ProviderAttemptAccountingContext;
   readonly registry: ReturnType<typeof getBuiltinToolRegistryForRuntime>;
   readonly mcpManager: ReturnType<typeof acquireProjectMCPManager>;
-  readonly providerOptions?: Record<string, Record<string, JSONValue>>;
+  readonly providerOptions?: ReasoningProviderOptions;
 }) {
   return async function* ({
     agent,
@@ -1047,7 +1047,7 @@ export function registerChatIPC(): void {
     }
     let modelInstance: LanguageModelV4;
     let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
-    let providerOptions: Record<string, Record<string, JSONValue>> | undefined;
+    let providerOptions: ReasoningProviderOptions | undefined;
     let accountingStore: ReturnType<typeof getProviderAccountingStore>;
     try {
       accountingStore = getProviderAccountingStore();
