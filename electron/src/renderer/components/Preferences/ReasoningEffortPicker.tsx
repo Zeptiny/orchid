@@ -1,4 +1,6 @@
-import { Select } from '../ui/Select';
+import { useMemo } from 'react';
+import { PopoverList, type PopoverListOption } from '../ui/PopoverList';
+import type { PopoverAlign } from '../ui/usePopoverListbox';
 
 export interface ReasoningEffortPickerProps {
   /** Configured reasoning levels for the selected model (never hardcoded). */
@@ -8,13 +10,16 @@ export interface ReasoningEffortPickerProps {
   readonly onChange: (value: string | null) => void;
   readonly disabled?: boolean;
   readonly label?: string;
+  readonly align?: PopoverAlign;
   readonly className?: string;
 }
 
+const INHERIT_VALUE = '';
+
 /**
- * Dropdown of a model's configured reasoning levels. The empty value inherits
- * the connection default; levels are supplied by the caller from the selected
- * model's connection reasoningConfig.
+ * Model-picker style dropdown of a model's configured reasoning levels. The
+ * "Default" entry inherits the connection default; levels are supplied by the
+ * caller from the selected model's connection reasoningConfig.
  */
 export function ReasoningEffortPicker({
   levels,
@@ -22,27 +27,40 @@ export function ReasoningEffortPicker({
   onChange,
   disabled = false,
   label = 'Reasoning effort',
+  align = 'start',
   className = '',
 }: ReasoningEffortPickerProps) {
+  const current = value == null ? INHERIT_VALUE : String(value);
+
+  const options = useMemo<readonly PopoverListOption[]>(() => {
+    const list: PopoverListOption[] = [
+      {
+        value: INHERIT_VALUE,
+        label: 'Default',
+        description: 'Use the connection default effort',
+      },
+      ...levels.map((level) => ({ value: level, label: level })),
+    ];
+    if (current !== INHERIT_VALUE && !levels.includes(current)) {
+      list.push({ value: current, label: current, description: 'Custom token budget' });
+    }
+    return list;
+  }, [current, levels]);
+
   return (
-    <Select
-      aria-label={label}
-      size="sm"
-      bordered
-      className={className}
-      value={value == null ? '' : String(value)}
+    <PopoverList
+      value={current}
+      options={options}
+      onChange={(next) => onChange(next === INHERIT_VALUE ? null : next)}
+      label={label}
+      title="Reasoning effort"
+      searchPlaceholder="Search levels…"
+      emptyMessage="No reasoning levels configured"
       disabled={disabled}
-      onChange={(event) => {
-        const raw = event.target.value;
-        onChange(raw === '' ? null : raw);
-      }}
-    >
-      <option value="">Default</option>
-      {levels.map((level) => (
-        <option key={level} value={level}>
-          {level}
-        </option>
-      ))}
-    </Select>
+      align={align}
+      className={className}
+      menuClassName="tier-picker-menu searchable-picker-menu"
+      triggerIcon="zap"
+    />
   );
 }

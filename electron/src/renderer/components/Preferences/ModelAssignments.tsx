@@ -181,6 +181,7 @@ export function ModelAssignments({
                         }}
                         disabled={disabled}
                         label={`${tier.label} tier reasoning effort`}
+                        align="end"
                         className="tier-model-picker"
                       />
                     )}
