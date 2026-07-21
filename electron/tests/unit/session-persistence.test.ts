@@ -1,14 +1,3 @@
-/**
- * Session persistence tests — U5.
- *
- * Covers:
- * - Save → load → identical content
- * - Atomic write: Simulate crash → no partial file
- * - List: Multiple sessions → mtime order (newest first)
- * - Delete: File removed, caches cleaned
- * - Auto-naming: Default name + first exchange → descriptive title
- * - Switching: In-flight subagents continue running
- */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -22,19 +11,17 @@ import type { SubagentRecord } from '../../src/shared/types/subagent';
 import { SubagentStatus } from '../../src/shared/types/subagent';
 import type { StorageOptions } from '../../src/main/session/storage';
 import {
-  ensureSessionsDir,
   saveSession,
   loadSession,
   listSavedSessions,
   deleteSession,
+  updateChain,
   isValidSessionId,
+  _clearDbCache,
 } from '../../src/main/session/storage';
+import { openSqliteDb } from '../../src/main/utils/sqlite';
 import { SessionManager } from '../../src/main/session/manager';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
-
-// ---------------------------------------------------------------------------
-// Temp dir helpers
-// ---------------------------------------------------------------------------
 
 let tmpDir: string;
 let storageOpts: StorageOptions;
@@ -70,13 +57,12 @@ function makeTmpDir(): string {
 
 function makeStorageOpts(dir: string): StorageOptions {
   return {
-    sessionsDir: path.join(dir, 'sessions'),
+    dbPath: path.join(dir, 'sessions.db'),
     toolOutputCacheDir: path.join(dir, 'cache', 'tool-output'),
     webFetchCacheDir: path.join(dir, 'cache', 'web-fetch'),
   };
 }
 
-/** Create a minimal test session. */
 function makeSession(overrides: Partial<Session> & { model?: string } = {}): Session {
   const now = new Date().toISOString();
   const selection = overrides.selection ?? DEFAULT_SELECTION;
@@ -95,7 +81,6 @@ function makeSession(overrides: Partial<Session> & { model?: string } = {}): Ses
   };
 }
 
-/** Create a minimal test message. */
 function makeMessage(overrides: Partial<Message> = {}): Message {
   return {
     id: overrides.id ?? `msg-${Math.random().toString(36).slice(2, 10)}`,
@@ -113,7 +98,6 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
   };
 }
 
-/** Create a minimal chain for pre-seeding sessions. */
 function makeChain(sessionId: string, overrides: Partial<Chain> & { model?: string } = {}): Chain {
   const now = new Date().toISOString();
   const selection = overrides.selection ?? DEFAULT_SELECTION;
@@ -138,7 +122,6 @@ function makeChain(sessionId: string, overrides: Partial<Chain> & { model?: stri
   };
 }
 
-/** Create a minimal subagent record for syncSubagentChains tests. */
 function makeSubagentRecord(
   sessionId: string,
   overrides: Partial<SubagentRecord> = {},
@@ -176,204 +159,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  _clearDbCache();
   fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-// ===========================================================================
-// V1 → V2 model selection migration
-// ===========================================================================
-
-describe('session selection persistence migration', () => {
-  it('restores v1 model strings as display-only labels and resaves the full session as v2', () => {
-    const sessionId = 'c1111111-1111-4111-8111-111111111111';
-    const now = '2026-07-12T12:00:00.000Z';
-    const sessionsDir = path.join(tmpDir, 'sessions');
-    fs.mkdirSync(sessionsDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(sessionsDir, `${sessionId}.json`),
-      JSON.stringify({
-        version: 1,
-        id: sessionId,
-        name: 'Historical session',
-        model: 'legacy/session-model',
-        cwd: '/historical/project',
-        chains: [
-          {
-            id: 'legacy-chain',
-            sessionId,
-            messages: [],
-            status: 'completed',
-            model: 'legacy/chain-model',
-            agentName: 'General',
-            agentType: 'internal',
-            agentTier: 'bloom',
-          },
-        ],
-        activeChainId: null,
-        createdAt: now,
-        updatedAt: now,
-        subagent_chains: [
-          {
-            id: 'legacy-subagent',
-            agent_name: 'explorer',
-            agent_type: 'subagent',
-            agent_tier: 'seed',
-            task: 'inspect history',
-            status: 'completed',
-            chain_id: 'legacy-subagent-chain',
-            start_time: now,
-            end_time: now,
-            result: null,
-            error: null,
-            parent_chain_index: 0,
-            chain: {
-              id: 'legacy-subagent-chain',
-              sessionId,
-              messages: [],
-              status: 'completed',
-              model: 'legacy/subagent-model',
-              agentName: 'explorer',
-              agentType: 'subagent',
-              agentTier: 'seed',
-            },
-          },
-        ],
-        todo_store: {
-          tasks: [
-            {
-              id: 'historic-task',
-              title: 'Keep this todo',
-              status: 'OPEN',
-              subagent_id: null,
-              created_at: now,
-              updated_at: now,
-            },
-          ],
-        },
-      }),
-      'utf-8',
-    );
-
-    const loaded = loadSession(sessionId, storageOpts)!;
-    expect(loaded.selection).toBeNull();
-    expect(loaded.modelLabel).toBe('legacy/session-model');
-    expect(loaded.cwd).toBe('/historical/project');
-    expect(loaded.chains[0].selection).toBeNull();
-    expect(loaded.chains[0].modelLabel).toBe('legacy/chain-model');
-    expect(loaded.subagentChains[0].chain.selection).toBeNull();
-    expect(loaded.subagentChains[0].chain.modelLabel).toBe('legacy/subagent-model');
-    expect(loaded.todoStore.tasks[0].title).toBe('Keep this todo');
-
-    saveSession(loaded, storageOpts);
-    const resaved = JSON.parse(
-      fs.readFileSync(path.join(sessionsDir, `${sessionId}.json`), 'utf-8'),
-    ) as Record<string, unknown>;
-    expect(resaved.version).toBe(2);
-    expect(resaved).not.toHaveProperty('model');
-    expect(resaved.selection).toBeNull();
-    expect(resaved.modelLabel).toBe('legacy/session-model');
-    expect(resaved.cwd).toBe('/historical/project');
-    expect(resaved.chains).toHaveLength(1);
-    expect((resaved.chains as Array<Record<string, unknown>>)[0]).toMatchObject({
-      selection: null,
-      modelLabel: 'legacy/chain-model',
-    });
-    expect((resaved.subagent_chains as Array<Record<string, unknown>>)[0].chain).toMatchObject({
-      selection: null,
-      modelLabel: 'legacy/subagent-model',
-    });
-    expect(resaved.todo_store).toMatchObject({
-      tasks: [expect.objectContaining({ id: 'historic-task', title: 'Keep this todo' })],
-    });
-  });
-
-  it('round-trips an exact typed selection whose model ID contains slashes', () => {
-    const sessionId = 'c2222222-2222-4222-8222-222222222222';
-    const selection = {
-      connectionId: '11111111-1111-4111-8111-111111111111',
-      modelId: 'vendor/path/model',
-    };
-    const session = {
-      id: sessionId,
-      name: 'Selected session',
-      selection,
-      modelLabel: 'Vendor Path Model',
-      cwd: '/selected/project',
-      chains: [
-        {
-          id: 'typed-chain',
-          sessionId,
-          messages: [],
-          status: ChainStatus.COMPLETED,
-          selection,
-          modelLabel: 'Vendor Path Model',
-          agentName: 'General',
-          agentType: 'internal',
-          agentTier: 'bloom',
-          subagentRecord: null,
-          startTime: '2026-07-12T12:00:00.000Z',
-          endTime: '2026-07-12T12:00:01.000Z',
-        },
-      ],
-      activeChainId: null,
-      createdAt: '2026-07-12T12:00:00.000Z',
-      updatedAt: '2026-07-12T12:00:01.000Z',
-      subagentChains: [],
-      todoStore: { tasks: [] },
-    } as unknown as Session;
-
-    saveSession(session, storageOpts);
-    const loaded = loadSession(sessionId, storageOpts)!;
-    expect(loaded.selection).toEqual(selection);
-    expect(loaded.modelLabel).toBe('Vendor Path Model');
-    expect(loaded.chains[0].selection).toEqual(selection);
-    expect(loaded.chains[0].modelLabel).toBe('Vendor Path Model');
-
-    const persisted = JSON.parse(
-      fs.readFileSync(path.join(tmpDir, 'sessions', `${sessionId}.json`), 'utf-8'),
-    ) as Record<string, unknown>;
-    expect(persisted.version).toBe(2);
-    expect(persisted).not.toHaveProperty('model');
-    expect(persisted.selection).toEqual(selection);
-    expect((persisted.chains as Array<Record<string, unknown>>)[0].selection).toEqual(selection);
-  });
-
-  it('uses modelLabel from v2 metadata in the fast summary without stringifying selection', () => {
-    const sessionId = 'c3333333-3333-4333-8333-333333333333';
-    const metadata = JSON.stringify({
-      version: 2,
-      id: sessionId,
-      name: 'Fast summary session',
-      selection: {
-        connectionId: '22222222-2222-4222-8222-222222222222',
-        modelId: 'vendor/path/model',
-      },
-      modelLabel: 'Vendor Path Model',
-      cwd: null,
-      chains: [],
-      activeChainId: null,
-      createdAt: '2026-07-12T12:00:00.000Z',
-      updatedAt: '2026-07-12T12:00:01.000Z',
-      subagentChains: [],
-      todoStore: { tasks: [] },
-    });
-    const sessionsDir = path.join(tmpDir, 'sessions');
-    fs.mkdirSync(sessionsDir, { recursive: true });
-    // Invalid trailing JSON proves listSavedSessions used the top-level fast
-    // metadata path rather than parsing the complete document.
-    fs.writeFileSync(
-      path.join(sessionsDir, `${sessionId}.json`),
-      `${metadata.slice(0, -1)},"truncated":`,
-      'utf-8',
-    );
-
-    const summary = listSavedSessions(storageOpts)[0] as unknown as {
-      modelLabel: string | null | undefined;
-    };
-
-    expect(summary.modelLabel).toBe('Vendor Path Model');
-    expect(summary.modelLabel).not.toBe('[object Object]');
-  });
 });
 
 // ===========================================================================
@@ -381,7 +168,7 @@ describe('session selection persistence migration', () => {
 // ===========================================================================
 
 describe('saveSession → loadSession round-trip', () => {
-  it('preserves canonical tool facts and the exact agent projection through session JSON', () => {
+  it('preserves canonical tool facts through session storage', () => {
     const sessionId = 'a1010101-1010-4010-8010-101010101010';
     const canonical = createCanonicalToolResult('generic', {
       status: 'complete',
@@ -417,12 +204,6 @@ describe('saveSession → loadSession round-trip', () => {
     });
 
     saveSession(session, storageOpts);
-    const raw = JSON.parse(
-      fs.readFileSync(path.join(storageOpts.sessionsDir!, `${sessionId}.json`), 'utf-8'),
-    ) as { chains: Array<{ messages: Array<{ tool_result?: unknown }> }> };
-    expect(JSON.stringify(raw.chains[0].messages[1].tool_result)).toBe(
-      JSON.stringify(canonical),
-    );
 
     const loaded = loadSession(sessionId, storageOpts)!;
     const restored = loaded.chains[0].messages[1];
@@ -530,16 +311,9 @@ describe('saveSession → loadSession round-trip', () => {
     expect(loaded).toBeNull();
   });
 
-  it('load returns null for corrupted JSON', () => {
-    const corruptedId = 'b0000000-0000-4000-8000-000000000001';
-    fs.mkdirSync(path.join(tmpDir, 'sessions'), { recursive: true });
-    fs.writeFileSync(
-      path.join(tmpDir, 'sessions', `${corruptedId}.json`),
-      'not valid json{{{',
-      'utf-8',
-    );
-    const loaded = loadSession(corruptedId, storageOpts);
-    expect(loaded).toBeNull();
+  it('load returns null for invalid session ID', () => {
+    expect(loadSession('not-a-uuid', storageOpts)).toBeNull();
+    expect(loadSession('', storageOpts)).toBeNull();
   });
 
   it('save overwrites existing session', () => {
@@ -591,69 +365,100 @@ describe('saveSession → loadSession round-trip', () => {
     expect(loaded!.todoStore.tasks[0].title).toBe('Implement feature');
     expect(loaded!.todoStore.tasks[0].status).toBe('IN_PROGRESS');
   });
-});
 
-// ===========================================================================
-// Atomic write — simulate crash → no partial file
-// ===========================================================================
-
-describe('atomic write', () => {
-  it('session file uses .tmp during write (no partial on crash)', () => {
-    const session = makeSession({
+  it('round-trips session with null selection, cwd, and modelLabel', () => {
+    const now = new Date().toISOString();
+    const session: Session = {
       id: 'a5555555-5555-4555-8555-555555555555',
-      name: 'Atomic Test',
+      name: 'Null Fields',
+      selection: null,
+      modelLabel: null,
+      cwd: null,
+      chains: [],
+      activeChainId: null,
+      createdAt: now,
+      updatedAt: now,
+      subagentChains: [],
+      todoStore: { tasks: [] },
+    };
+
+    saveSession(session, storageOpts);
+    const loaded = loadSession('a5555555-5555-4555-8555-555555555555', storageOpts);
+
+    expect(loaded).not.toBeNull();
+    expect(loaded!.selection).toBeNull();
+    expect(loaded!.modelLabel).toBeNull();
+    expect(loaded!.cwd).toBeNull();
+  });
+
+  it('round-trips session with subagentChains and todoStore', () => {
+    const sessionId = 'a6666666-6666-4666-8666-666666666666';
+    const now = new Date().toISOString();
+    const record = makeSubagentRecord(sessionId, {
+      id: 'sub-rt',
+      agent_name: 'tester',
+      task: 'run tests',
+      status: SubagentStatus.COMPLETED,
+      result: 'all passed',
     });
-    const sessionPath = path.join(tmpDir, 'sessions', 'a5555555-5555-4555-8555-555555555555.json');
-    const tmpPath = sessionPath + '.tmp';
+    const session = makeSession({
+      id: sessionId,
+      subagentChains: [record],
+      todoStore: {
+        tasks: [
+          {
+            id: 'todo-rt',
+            title: 'RT task',
+            status: 'OPEN',
+            subagent_id: null,
+            created_at: now,
+            updated_at: now,
+          },
+        ],
+      },
+    });
 
     saveSession(session, storageOpts);
+    const loaded = loadSession(sessionId, storageOpts);
 
-    // After successful save: .json exists, .tmp does not
-    expect(fs.existsSync(sessionPath)).toBe(true);
-    expect(fs.existsSync(tmpPath)).toBe(false);
-
-    // Verify content is valid JSON
-    const content = fs.readFileSync(sessionPath, 'utf-8');
-    const parsed = JSON.parse(content);
-    expect(parsed.id).toBe('a5555555-5555-4555-8555-555555555555');
-    expect(parsed.name).toBe('Atomic Test');
+    expect(loaded).not.toBeNull();
+    expect(loaded!.subagentChains).toHaveLength(1);
+    expect(loaded!.subagentChains[0].id).toBe('sub-rt');
+    expect(loaded!.subagentChains[0].agent_name).toBe('tester');
+    expect(loaded!.subagentChains[0].result).toBe('all passed');
+    expect(loaded!.todoStore.tasks).toHaveLength(1);
+    expect(loaded!.todoStore.tasks[0].title).toBe('RT task');
   });
 
-  it('session file has mode 0o600', () => {
-    const session = makeSession({ id: 'a6666666-6666-4666-8666-666666666666' });
+  it('round-trips typed selection whose model ID contains slashes', () => {
+    const sessionId = 'a7777777-7777-4777-8777-777777777777';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    const session = makeSession({
+      id: sessionId,
+      selection,
+      modelLabel: 'Vendor Path Model',
+      chains: [
+        makeChain(sessionId, {
+          selection,
+          modelLabel: 'Vendor Path Model',
+        }),
+      ],
+    });
+
     saveSession(session, storageOpts);
-
-    const sessionPath = path.join(tmpDir, 'sessions', 'a6666666-6666-4666-8666-666666666666.json');
-    const stat = fs.statSync(sessionPath);
-
-    // Check file permissions (owner read/write only)
-    // eslint-disable-next-line no-bitwise
-    const mode = stat.mode & 0o777;
-    expect(mode).toBe(0o600);
-  });
-
-  it('sessions directory has mode 0o700', () => {
-    ensureSessionsDir(storageOpts);
-    const sessionsDir = path.join(tmpDir, 'sessions');
-    const stat = fs.statSync(sessionsDir);
-    // eslint-disable-next-line no-bitwise
-    const mode = stat.mode & 0o777;
-    expect(mode).toBe(0o700);
-  });
-
-  it('atomic write cleans up .tmp on error', () => {
-    const session = makeSession({ id: 'a7777777-7777-4777-8777-777777777777' });
-    saveSession(session, storageOpts);
-
-    const sessionsDir = path.join(tmpDir, 'sessions');
-    const files = fs.readdirSync(sessionsDir);
-    expect(files).toContain('a7777777-7777-4777-8777-777777777777.json');
-    expect(files.filter((f) => f.endsWith('.tmp'))).toHaveLength(0);
+    const loaded = loadSession(sessionId, storageOpts)!;
+    expect(loaded.selection).toEqual(selection);
+    expect(loaded.modelLabel).toBe('Vendor Path Model');
+    expect(loaded.chains[0].selection).toEqual(selection);
+    expect(loaded.chains[0].modelLabel).toBe('Vendor Path Model');
   });
 });
 
 // ===========================================================================
-// List — multiple sessions → mtime order (newest first)
+// List — multiple sessions → updatedAt order (newest first)
 // ===========================================================================
 
 describe('listSavedSessions', () => {
@@ -678,61 +483,40 @@ describe('listSavedSessions', () => {
     expect(sessions[0].modelLabel).toBe('gpt-4o');
   });
 
-  it('lists multiple sessions sorted by mtime (newest first)', () => {
-    // Create sessions with slight delays to ensure different mtimes
+  it('lists multiple sessions sorted by updatedAt (newest first)', () => {
     const session1 = makeSession({
       id: 'a9999999-9999-4999-8999-999999999999',
       name: 'Old Session',
+      updatedAt: '2026-01-01T00:00:00.000Z',
     });
-    saveSession(session1, storageOpts);
-
-    // Small delay to ensure different mtime
-    const start = Date.now();
-    while (Date.now() - start < 50) {
-      // busy wait
-    }
-
     const session2 = makeSession({
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       name: 'New Session',
+      updatedAt: '2026-06-01T00:00:00.000Z',
     });
+    const session3 = makeSession({
+      id: 'abababab-abab-4bab-8bab-abababababab',
+      name: 'Newest Session',
+      updatedAt: '2026-07-01T00:00:00.000Z',
+    });
+
+    saveSession(session1, storageOpts);
     saveSession(session2, storageOpts);
+    saveSession(session3, storageOpts);
 
     const sessions = listSavedSessions(storageOpts);
-    expect(sessions).toHaveLength(2);
-    // Newest first
-    expect(sessions[0].id).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
-    expect(sessions[1].id).toBe('a9999999-9999-4999-8999-999999999999');
+    expect(sessions).toHaveLength(3);
+    expect(sessions[0].id).toBe('abababab-abab-4bab-8bab-abababababab');
+    expect(sessions[1].id).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    expect(sessions[2].id).toBe('a9999999-9999-4999-8999-999999999999');
   });
 
   it('includes chain count in summary', () => {
     const session = makeSession({
       id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       chains: [
-        {
-          id: 'chain-1',
-          sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-          messages: [],
-          status: 'completed',
-          selection: DEFAULT_SELECTION,
-          modelLabel: DEFAULT_SELECTION.modelId,
-          agentName: 'General',
-          agentType: 'internal',
-          agentTier: 'bloom',
-          subagentRecord: null,
-        },
-        {
-          id: 'chain-2',
-          sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-          messages: [],
-          status: 'completed',
-          selection: DEFAULT_SELECTION,
-          modelLabel: DEFAULT_SELECTION.modelId,
-          agentName: 'General',
-          agentType: 'internal',
-          agentTier: 'bloom',
-          subagentRecord: null,
-        },
+        makeChain('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', { id: 'chain-1' }),
+        makeChain('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', { id: 'chain-2' }),
       ],
     });
     saveSession(session, storageOpts);
@@ -742,52 +526,47 @@ describe('listSavedSessions', () => {
     expect(sessions[0].chainCount).toBe(2);
   });
 
-  it('handles corrupted session files gracefully', () => {
-    const sessionsDir = path.join(tmpDir, 'sessions');
-    // Write a valid session
-    const session = makeSession({ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' });
+  it('reports chainCount 0 for a session with no chains', () => {
+    const session = makeSession({
+      id: 'bcbc0000-0000-4000-8000-000000000000',
+      chains: [],
+    });
     saveSession(session, storageOpts);
 
-    // Write a corrupted session file
-    fs.writeFileSync(path.join(sessionsDir, 'corrupted.json'), 'not json', 'utf-8');
-
     const sessions = listSavedSessions(storageOpts);
-    // Should still return the valid session, skipping the corrupted one
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].id).toBe('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+    expect(sessions[0].chainCount).toBe(0);
   });
 
-  it('defaults name to "Unnamed" when missing', () => {
-    const sessionsDir = path.join(tmpDir, 'sessions');
-    fs.mkdirSync(sessionsDir, { recursive: true });
-    // Write a session without a name field
-    fs.writeFileSync(
-      path.join(sessionsDir, 'no-name.json'),
-      JSON.stringify({ id: 'no-name', model: 'gpt-4o', chains: [] }),
-      'utf-8',
-    );
+  it('includes cwd in summary', () => {
+    const projectDir = path.join(tmpDir, 'project-list');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const canonical = fs.realpathSync(projectDir);
 
-    const sessions = listSavedSessions(storageOpts);
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0].name).toBe('Unnamed');
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION, { cwd: projectDir });
+
+    const summaries = listSavedSessions(storageOpts);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].id).toBe(session.id);
+    expect(summaries[0].cwd).toBe(canonical);
   });
 });
 
 // ===========================================================================
-// Delete — file removed, caches cleaned
+// Delete — removes session, cleans caches
 // ===========================================================================
 
 describe('deleteSession', () => {
-  it('deletes session file', () => {
+  it('deletes session and returns true', () => {
     const session = makeSession({ id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' });
     saveSession(session, storageOpts);
 
-    const sessionPath = path.join(tmpDir, 'sessions', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd.json');
-    expect(fs.existsSync(sessionPath)).toBe(true);
+    expect(loadSession('dddddddd-dddd-4ddd-8ddd-dddddddddddd', storageOpts)).not.toBeNull();
 
     const result = deleteSession('dddddddd-dddd-4ddd-8ddd-dddddddddddd', storageOpts);
     expect(result).toBe(true);
-    expect(fs.existsSync(sessionPath)).toBe(false);
+    expect(loadSession('dddddddd-dddd-4ddd-8ddd-dddddddddddd', storageOpts)).toBeNull();
   });
 
   it('returns false for non-existent session', () => {
@@ -799,7 +578,6 @@ describe('deleteSession', () => {
     const session = makeSession({ id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' });
     saveSession(session, storageOpts);
 
-    // Create tool-output cache
     const toolOutputDir = path.join(
       tmpDir,
       'cache',
@@ -820,7 +598,6 @@ describe('deleteSession', () => {
     const session = makeSession({ id: 'ffffffff-ffff-4fff-8fff-ffffffffffff' });
     saveSession(session, storageOpts);
 
-    // Create web-fetch cache
     const webFetchDir = path.join(
       tmpDir,
       'cache',
@@ -904,11 +681,11 @@ describe('path traversal rejection', () => {
 });
 
 // ===========================================================================
-// Session cwd — create / load / list / changeCwd (U2)
+// Session cwd — create / load / list / changeCwd
 // ===========================================================================
 
 describe('session cwd persistence', () => {
-  it('create with cwd → disk JSON contains cwd → load restores it', () => {
+  it('create with cwd → load restores it', () => {
     const projectDir = path.join(tmpDir, 'project-a');
     fs.mkdirSync(projectDir, { recursive: true });
 
@@ -917,80 +694,19 @@ describe('session cwd persistence', () => {
 
     expect(session.cwd).toBe(fs.realpathSync(projectDir));
 
-    // Disk JSON has cwd near the top (after id/name/model)
-    const raw = fs.readFileSync(path.join(tmpDir, 'sessions', `${session.id}.json`), 'utf-8');
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    expect(parsed.cwd).toBe(session.cwd);
-    // Key order: cwd appears before chains
-    const cwdIdx = raw.indexOf('"cwd"');
-    const chainsIdx = raw.indexOf('"chains"');
-    expect(cwdIdx).toBeGreaterThan(-1);
-    expect(chainsIdx).toBeGreaterThan(cwdIdx);
-
     const loaded = loadSession(session.id, storageOpts);
     expect(loaded).not.toBeNull();
     expect(loaded!.cwd).toBe(session.cwd);
   });
 
-  it('create without cwd does not write process.cwd()', () => {
+  it('create without cwd yields null', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create(DEFAULT_SELECTION);
 
     expect(session.cwd).toBeNull();
 
-    const raw = fs.readFileSync(path.join(tmpDir, 'sessions', `${session.id}.json`), 'utf-8');
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    expect(parsed.cwd).toBeNull();
-    expect(parsed.cwd).not.toBe(process.cwd());
-
     const loaded = loadSession(session.id, storageOpts);
     expect(loaded!.cwd).toBeNull();
-  });
-
-  it('list summary includes cwd from partial head read', () => {
-    const projectDir = path.join(tmpDir, 'project-list');
-    fs.mkdirSync(projectDir, { recursive: true });
-    const canonical = fs.realpathSync(projectDir);
-
-    const manager = new SessionManager({ storage: storageOpts });
-    const session = manager.create(DEFAULT_SELECTION, { cwd: projectDir });
-
-    const summaries = listSavedSessions(storageOpts);
-    expect(summaries).toHaveLength(1);
-    expect(summaries[0].id).toBe(session.id);
-    expect(summaries[0].cwd).toBe(canonical);
-  });
-
-  it('legacy file without cwd → load yields null; list summary cwd null', () => {
-    const legacyId = 'd1111111-1111-4111-8111-111111111111';
-    const sessionsDir = path.join(tmpDir, 'sessions');
-    fs.mkdirSync(sessionsDir, { recursive: true });
-    // Legacy shape: no cwd field at all
-    fs.writeFileSync(
-      path.join(sessionsDir, `${legacyId}.json`),
-      JSON.stringify({
-        version: 1,
-        id: legacyId,
-        name: 'Legacy Session',
-        model: 'gpt-4o',
-        chains: [],
-        activeChainId: null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        subagent_chains: [],
-        todo_store: { tasks: [] },
-      }),
-      'utf-8',
-    );
-
-    const loaded = loadSession(legacyId, storageOpts);
-    expect(loaded).not.toBeNull();
-    expect(loaded!.cwd).toBeNull();
-
-    const summaries = listSavedSessions(storageOpts);
-    expect(summaries).toHaveLength(1);
-    expect(summaries[0].id).toBe(legacyId);
-    expect(summaries[0].cwd).toBeNull();
   });
 
   it('changeCwd persists and is visible on reload', () => {
@@ -1009,7 +725,6 @@ describe('session cwd persistence', () => {
     const loaded = loadSession(session.id, storageOpts);
     expect(loaded!.cwd).toBe(canonical);
 
-    // Also visible via list summary
     const summaries = listSavedSessions(storageOpts);
     expect(summaries[0].cwd).toBe(canonical);
   });
@@ -1026,7 +741,6 @@ describe('session cwd persistence', () => {
     const missing = path.join(tmpDir, 'does-not-exist');
     expect(() => manager.changeCwd(session.id, missing)).toThrow(/Cannot change cwd/);
 
-    // Prior cwd preserved in memory and on disk
     expect(manager.getActive()!.cwd).toBe(canonical);
     const loaded = loadSession(session.id, storageOpts);
     expect(loaded!.cwd).toBe(canonical);
@@ -1046,7 +760,7 @@ describe('session cwd persistence', () => {
 
     const manager = new SessionManager({ storage: storageOpts });
     const session1 = manager.create(DEFAULT_SELECTION);
-    manager.create(DEFAULT_SELECTION); // session1 no longer active
+    manager.create(DEFAULT_SELECTION);
 
     expect(() => manager.changeCwd(session1.id, projectDir)).toThrow(/not active/);
   });
@@ -1069,7 +783,6 @@ describe('SessionManager', () => {
     expect(session.activeChainId).toBeNull();
     expect(session.cwd).toBeNull();
 
-    // Should be saved to disk
     const loaded = loadSession(session.id, storageOpts);
     expect(loaded).not.toBeNull();
     expect(loaded!.id).toBe(session.id);
@@ -1084,7 +797,7 @@ describe('SessionManager', () => {
     expect(manager.getActive()!.id).toBe(session.id);
   });
 
-  it('clearActive() drops active without deleting the session file', () => {
+  it('clearActive() drops active without deleting the session', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create(DEFAULT_SELECTION);
     expect(manager.getActive()!.id).toBe(session.id);
@@ -1092,21 +805,18 @@ describe('SessionManager', () => {
     manager.clearActive();
     expect(manager.getActive()).toBeNull();
 
-    // File still on disk
     const loaded = loadSession(session.id, storageOpts);
     expect(loaded).not.toBeNull();
     expect(loaded!.id).toBe(session.id);
   });
 
-  it('switchTo() loads session from disk and sets as active', () => {
+  it('switchTo() loads session and sets as active', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session1 = manager.create(DEFAULT_SELECTION);
     const session2 = manager.create(ANTHROPIC_SELECTION);
 
-    // Active should be session2
     expect(manager.getActive()!.id).toBe(session2.id);
 
-    // Switch to session1
     const switched = manager.switchTo(session1.id);
     expect(switched).not.toBeNull();
     expect(switched!.id).toBe(session1.id);
@@ -1131,7 +841,6 @@ describe('SessionManager', () => {
     expect(result).toBe(true);
     expect(manager.getActive()).toBeNull();
 
-    // Should be gone from disk
     expect(loadSession(sessionId, storageOpts)).toBeNull();
   });
 
@@ -1140,10 +849,8 @@ describe('SessionManager', () => {
     const session1 = manager.create(DEFAULT_SELECTION);
     const session2 = manager.create(ANTHROPIC_SELECTION);
 
-    // Delete session1 (not active)
     manager.delete(session1.id);
 
-    // session2 should still be active
     expect(manager.getActive()!.id).toBe(session2.id);
   });
 
@@ -1155,7 +862,6 @@ describe('SessionManager', () => {
 
     expect(manager.getActive()!.name).toBe('New Name');
 
-    // Verify persisted
     const loaded = loadSession(session.id, storageOpts);
     expect(loaded!.name).toBe('New Name');
   });
@@ -1165,10 +871,8 @@ describe('SessionManager', () => {
     const session1 = manager.create(DEFAULT_SELECTION);
     manager.create(ANTHROPIC_SELECTION);
 
-    // Try to rename session1 (not active)
     manager.rename(session1.id, 'Should Not Change');
 
-    // session1 on disk should still have original name
     const loaded = loadSession(session1.id, storageOpts);
     expect(loaded!.name).not.toBe('Should Not Change');
   });
@@ -1182,31 +886,27 @@ describe('SessionManager', () => {
     expect(manager.getActive()!.selection).toEqual(ANTHROPIC_SELECTION);
     expect(manager.getActive()!.modelLabel).toBe('anthropic/claude-3.5-sonnet');
 
-    // Verify persisted
     const loaded = loadSession(session.id, storageOpts);
     expect(loaded!.selection).toEqual(ANTHROPIC_SELECTION);
     expect(loaded!.modelLabel).toBe('anthropic/claude-3.5-sonnet');
   });
 
-  it('load() loads session from disk without setting as active', () => {
+  it('load() loads session without setting as active', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create(DEFAULT_SELECTION);
     const session2 = manager.create(ANTHROPIC_SELECTION);
 
-    // Load session1 without switching
     const loaded = manager.load(session.id);
     expect(loaded).not.toBeNull();
     expect(loaded!.id).toBe(session.id);
 
-    // Active should still be session2
     expect(manager.getActive()!.id).toBe(session2.id);
   });
 
-  it('listSaved() returns sessions sorted by mtime', () => {
+  it('listSaved() returns sessions sorted by updatedAt', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session1 = manager.create(DEFAULT_SELECTION);
 
-    // Small delay
     const start = Date.now();
     while (Date.now() - start < 50) {
       // busy wait
@@ -1233,7 +933,6 @@ describe('SessionManager auto-naming', () => {
     });
     const session = manager.create(DEFAULT_SELECTION);
 
-    // Default name starts with "Session "
     expect(session.name.startsWith('Session ')).toBe(true);
 
     const result = await manager.autoNameActive();
@@ -1241,7 +940,6 @@ describe('SessionManager auto-naming', () => {
     expect(result).not.toBeNull();
     expect(result!.name).toBe('My Coding Session');
 
-    // Verify persisted
     const loaded = loadSession(session.id, storageOpts);
     expect(loaded!.name).toBe('My Coding Session');
   });
@@ -1253,7 +951,6 @@ describe('SessionManager auto-naming', () => {
     });
     const session = manager.create(DEFAULT_SELECTION);
 
-    // Manually rename
     manager.rename(session.id, 'Custom Name');
 
     const result = await manager.autoNameActive();
@@ -1312,7 +1009,6 @@ describe('SessionManager auto-naming', () => {
     const session = manager.create(DEFAULT_SELECTION);
     const originalName = session.name;
 
-    // Should not throw
     const result = await manager.autoNameActive();
     expect(result!.name).toBe(originalName);
   });
@@ -1336,7 +1032,7 @@ describe('SessionManager auto-naming', () => {
 });
 
 // ===========================================================================
-// Session switching — in-flight subagents continue running
+// Session switching
 // ===========================================================================
 
 describe('SessionManager switching', () => {
@@ -1345,15 +1041,9 @@ describe('SessionManager switching', () => {
     const session1 = manager.create(DEFAULT_SELECTION);
     manager.create(ANTHROPIC_SELECTION);
 
-    // session1 is no longer active after creating session2
-    // Switch back to session1
     const switched = manager.switchTo(session1.id);
     expect(switched).not.toBeNull();
     expect(switched!.id).toBe(session1.id);
-
-    // The key behavior: switching does NOT throw or modify subagent state.
-    // In the real system, subagent actors continue running independently.
-    // This test verifies the switch completes without error.
   });
 
   it('multiple switches preserve session data', () => {
@@ -1364,7 +1054,6 @@ describe('SessionManager switching', () => {
     const session2 = manager.create(ANTHROPIC_SELECTION);
     manager.rename(session2.id, 'Session 2');
 
-    // Switch back and forth
     manager.switchTo(session1.id);
     expect(manager.getActive()!.name).toBe('Session 1');
 
@@ -1379,7 +1068,6 @@ describe('SessionManager switching', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create(DEFAULT_SELECTION);
 
-    // Simulate external modification (e.g., another process)
     const modified: Session = {
       ...session,
       name: 'Externally Modified',
@@ -1389,7 +1077,6 @@ describe('SessionManager switching', () => {
 
     manager.getTodoStore(session.id).create('Live todo');
 
-    // Re-selecting must not replace state still owned by running tools.
     const switched = manager.switchTo(session.id);
     expect(switched!.name).toBe(session.name);
     expect(manager.getTodoStore(session.id).list()[0]?.title).toBe('Live todo');
@@ -1543,7 +1230,6 @@ describe('SessionManager multi-chain lifecycle', () => {
       expect(session.chains[i].endTime).toBeTruthy();
     }
 
-    // Flatten is full conversation (LLM history)
     const flat = session.chains.flatMap((c) => c.messages);
     expect(flat).toHaveLength(6);
   });
@@ -1619,7 +1305,6 @@ describe('SessionManager multi-chain lifecycle', () => {
     expect(chain.selection).toEqual(DEFAULT_SELECTION);
     expect(chain.modelLabel).toBe('gpt-4o');
     expect(chain.agentName).toBe('general');
-    // Finished turns clear activeChainId (Python freeze)
     expect(result!.activeChainId).toBeNull();
     expect(chain.sessionId).toBe(session.id);
   });
@@ -1784,7 +1469,6 @@ describe('SessionManager.syncSubagentChains', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create(DEFAULT_SELECTION);
 
-    // Seed a non-empty list first
     const record = makeSubagentRecord(session.id);
     manager.syncSubagentChains([record]);
     expect(manager.getActive()!.subagentChains).toHaveLength(1);
@@ -1825,7 +1509,6 @@ describe('SessionManager.syncSubagentChains', () => {
     expect(result!.subagentChains[0].id).toBe('sub-1');
     expect(result!.subagentChains[0].agent_name).toBe('explorer');
     expect(result!.subagentChains[0].result).toBe('found 3');
-    // In-memory keeps RUNNING as written by syncSubagentChains
     expect(result!.subagentChains[1].id).toBe('sub-2');
     expect(result!.subagentChains[1].status).toBe(SubagentStatus.RUNNING);
 
@@ -1836,11 +1519,8 @@ describe('SessionManager.syncSubagentChains', () => {
     expect(loaded!.subagentChains[0].task).toBe('find files');
     expect(loaded!.subagentChains[0].status).toBe(SubagentStatus.COMPLETED);
     expect(loaded!.subagentChains[1].id).toBe('sub-2');
-    // On restore, PENDING/RUNNING migrate to INTERRUPTED (matching Python)
     expect(loaded!.subagentChains[1].status).toBe(SubagentStatus.INTERRUPTED);
 
-    // A live in-memory session must remain visible as running to renderer
-    // refreshes; only a true disk restore applies crash recovery migration.
     const live = manager.load(session.id);
     expect(live!.subagentChains[1].status).toBe(SubagentStatus.RUNNING);
   });
@@ -1889,5 +1569,184 @@ describe('SessionManager.syncSubagentChains', () => {
 
     const result = manager.syncSubagentChains([]);
     expect(result!.updatedAt >= before).toBe(true);
+  });
+});
+
+// ===========================================================================
+// updateChain — targeted turn-local write (R3)
+// ===========================================================================
+
+function readChainMessagesJson(dbPath: string, chainId: string): string {
+  const db = openSqliteDb(dbPath);
+  try {
+    const row = db
+      .prepare('SELECT messages_json FROM chains WHERE id = ?')
+      .get(chainId) as { messages_json: string };
+    return row.messages_json;
+  } finally {
+    db.close();
+  }
+}
+
+describe('updateChain (targeted turn-local write, R3)', () => {
+  const SID = 'adadadad-adad-4ada-8ada-adadadadadad';
+
+  it('rewrites only the target chain row, bumps recency, leaves siblings byte-identical', () => {
+    const chainA = makeChain(SID, { id: 'chain-a', messages: [makeMessage({ content: 'A original' })] });
+    const chainB = makeChain(SID, { id: 'chain-b', messages: [makeMessage({ content: 'B original' })] });
+    saveSession(
+      makeSession({
+        id: SID,
+        chains: [chainA, chainB],
+        activeChainId: 'chain-a',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+      storageOpts,
+    );
+
+    const dbPath = storageOpts.dbPath!;
+    const bBefore = readChainMessagesJson(dbPath, 'chain-b');
+
+    const updatedA: Chain = { ...chainA, messages: [makeMessage({ content: 'A updated' })] };
+    expect(updateChain(updatedA, '2026-02-01T00:00:00.000Z', storageOpts)).toBe(true);
+
+    expect(readChainMessagesJson(dbPath, 'chain-b')).toBe(bBefore);
+
+    const loaded = loadSession(SID, storageOpts)!;
+    expect(loaded.chains.find((c) => c.id === 'chain-a')!.messages.map((m) => m.content)).toEqual(['A updated']);
+    expect(loaded.chains.find((c) => c.id === 'chain-b')!.messages.map((m) => m.content)).toEqual(['B original']);
+
+    const summary = listSavedSessions(storageOpts).find((s) => s.id === SID)!;
+    expect(summary.updatedAt).toBe(Date.parse('2026-02-01T00:00:00.000Z'));
+  });
+
+  it('persists per-turn chain metadata (selection/agent) alongside messages', () => {
+    const chain = makeChain(SID, { id: 'chain-m', messages: [makeMessage({ content: 'hi' })] });
+    saveSession(makeSession({ id: SID, chains: [chain], activeChainId: 'chain-m' }), storageOpts);
+
+    const updated: Chain = {
+      ...chain,
+      messages: [makeMessage({ content: 'hi' }), makeMessage({ role: 'assistant', content: 'yo' })],
+      selection: ANTHROPIC_SELECTION,
+      modelLabel: ANTHROPIC_SELECTION.modelId,
+      agentName: 'Coder',
+    };
+    expect(updateChain(updated, new Date().toISOString(), storageOpts)).toBe(true);
+
+    const loaded = loadSession(SID, storageOpts)!;
+    const c = loaded.chains.find((x) => x.id === 'chain-m')!;
+    expect(c.messages.map((m) => m.content)).toEqual(['hi', 'yo']);
+    expect(c.selection).toEqual(ANTHROPIC_SELECTION);
+    expect(c.agentName).toBe('Coder');
+  });
+
+  it('returns false when the chain row is missing (caller falls back to full save)', () => {
+    saveSession(makeSession({ id: SID, chains: [] }), storageOpts);
+    const ghost = makeChain(SID, { id: 'ghost-chain' });
+    expect(updateChain(ghost, new Date().toISOString(), storageOpts)).toBe(false);
+  });
+
+  it('manager per-turn write reaches disk without rewriting the completed sibling chain', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+
+    manager.startChain({ messages: [makeMessage({ id: 'u1', role: 'user', content: 'Q1' })] }, session.id);
+    manager.persistTurn({
+      messages: [
+        makeMessage({ id: 'u1', role: 'user', content: 'Q1' }),
+        makeMessage({ id: 'a1', role: 'assistant', content: 'A1' }),
+      ],
+      status: ChainStatus.COMPLETED,
+    }, session.id);
+
+    manager.startChain({ messages: [makeMessage({ id: 'u2', role: 'user', content: 'Q2' })] }, session.id);
+
+    const dbPath = storageOpts.dbPath!;
+    const completed = manager.getActive()!.chains[0];
+    const completedBefore = readChainMessagesJson(dbPath, completed.id);
+
+    manager.updateActiveChainMessages([
+      makeMessage({ id: 'u2', role: 'user', content: 'Q2' }),
+      makeMessage({ id: 'a2', role: 'assistant', content: 'A2-in-progress' }),
+    ], session.id);
+
+    expect(readChainMessagesJson(dbPath, completed.id)).toBe(completedBefore);
+
+    _clearDbCache();
+    const fresh = new SessionManager({ storage: storageOpts });
+    const loaded = fresh.switchTo(session.id)!;
+    const active = loaded.chains.find((c) => c.id === loaded.activeChainId)!;
+    expect(active.messages.map((m) => m.content)).toEqual(['Q2', 'A2-in-progress']);
+    expect(loaded.chains.find((c) => c.id === completed.id)!.messages.map((m) => m.content)).toEqual(['Q1', 'A1']);
+  });
+});
+
+// ===========================================================================
+// Load resilience — corrupt columns must not throw or silently lose chains
+// ===========================================================================
+
+describe('loadSession resilience to corrupt columns', () => {
+  const SID = 'afafafaf-afaf-4afa-8afa-afafafafafaf';
+
+  it('returns the session with safe defaults instead of throwing', () => {
+    saveSession(
+      makeSession({ id: SID, chains: [makeChain(SID, { id: 'c1', messages: [makeMessage({ content: 'hi' })] })] }),
+      storageOpts,
+    );
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(
+      "UPDATE sessions SET todo_store_json = '{not json', subagent_chains_json = '[[[', selection_json = 'oops' WHERE id = ?",
+    ).run(SID);
+    db.prepare("UPDATE chains SET messages_json = 'garbage' WHERE id = ?").run('c1');
+    db.close();
+    _clearDbCache();
+
+    const loaded = loadSession(SID, storageOpts);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.selection).toBeNull();
+    expect(loaded!.subagentChains).toEqual([]);
+    expect(loaded!.todoStore.tasks).toEqual([]);
+    // The chain survives (with empty messages) rather than being dropped.
+    expect(loaded!.chains).toHaveLength(1);
+    expect(loaded!.chains[0].messages).toEqual([]);
+  });
+
+  it('prunes orphan tool results on load (parity with chainFromStorageDict)', () => {
+    const orphan = makeMessage({ role: 'tool', type: 'tool_result', tool_call_id: 'no-such-call', content: 'orphan' });
+    const user = makeMessage({ role: 'user', content: 'q' });
+    saveSession(
+      makeSession({ id: SID, chains: [makeChain(SID, { id: 'c1', messages: [orphan, user] })] }),
+      storageOpts,
+    );
+
+    const loaded = loadSession(SID, storageOpts)!;
+    expect(loaded.chains[0].messages.map((m) => m.content)).toEqual(['q']);
+  });
+});
+
+// ===========================================================================
+// Corruption recovery through the storage layer (no permanent loss)
+// ===========================================================================
+
+describe('storage-layer corruption recovery', () => {
+  it('recovers a corrupt DB on open, preserving a backup instead of deleting it', () => {
+    const sid = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1';
+    saveSession(makeSession({ id: sid, chains: [] }), storageOpts);
+    _clearDbCache();
+
+    // Corrupt the DB (and drop sidecars) so the next open hits corruption.
+    fs.writeFileSync(storageOpts.dbPath!, Buffer.alloc(4096, 0xde));
+    for (const suffix of ['-wal', '-shm']) {
+      const sidecar = storageOpts.dbPath! + suffix;
+      if (fs.existsSync(sidecar)) fs.rmSync(sidecar);
+    }
+
+    // Storage operations heal (move-aside + rebuild → empty) instead of throwing.
+    expect(loadSession(sid, storageOpts)).toBeNull();
+    expect(listSavedSessions(storageOpts)).toEqual([]);
+
+    const backups = fs.readdirSync(tmpDir).filter((f) => f.includes('.corrupt-'));
+    expect(backups.length).toBeGreaterThan(0);
   });
 });

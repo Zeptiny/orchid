@@ -35,6 +35,7 @@ import {
   loadSession as storageLoadSession,
   deleteSession as storageDeleteSession,
   listSavedSessions as storageListSavedSessions,
+  updateChain as storageUpdateChain,
   type StorageOptions,
   type SessionSummary,
 } from './storage';
@@ -512,7 +513,13 @@ export class SessionManager {
       updatedAt: now,
     };
     this.replaceSession(updated);
-    storageSaveSession(updated, this._storageOpts);
+    // Targeted turn-local write (R3): only the active chain row + session
+    // recency are touched. Fall back to a full save if the chain row is
+    // missing (e.g., the DB was rebuilt under us).
+    const persisted = storageUpdateChain(chain, now, this._storageOpts);
+    if (!persisted) {
+      storageSaveSession(updated, this._storageOpts);
+    }
     return updated;
   }
 

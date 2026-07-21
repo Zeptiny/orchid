@@ -14,7 +14,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { Session } from '../../src/shared/types/session';
 import type { StorageOptions } from '../../src/main/session/storage';
-import { loadSession } from '../../src/main/session/storage';
+import { loadSession, _clearDbCache } from '../../src/main/session/storage';
 import { SessionManager } from '../../src/main/session/manager';
 
 // ---------------------------------------------------------------------------
@@ -30,7 +30,7 @@ function makeTmpDir(): string {
 
 function makeStorageOpts(dir: string): StorageOptions {
   return {
-    sessionsDir: path.join(dir, 'sessions'),
+    dbPath: path.join(dir, 'sessions.db'),
     toolOutputCacheDir: path.join(dir, 'cache', 'tool-output'),
     webFetchCacheDir: path.join(dir, 'cache', 'web-fetch'),
   };
@@ -42,6 +42,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  _clearDbCache();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

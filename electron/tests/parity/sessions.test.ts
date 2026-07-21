@@ -13,11 +13,12 @@ import type { Session } from '../../src/shared/types/session';
 import type { ModelSelection } from '../../src/shared/types/provider';
 import type { StorageOptions } from '../../src/main/session/storage';
 import {
-  ensureSessionsDir,
+  ensureSessionDb,
   saveSession,
   loadSession,
   listSavedSessions,
   deleteSession,
+  _clearDbCache,
 } from '../../src/main/session/storage';
 import { SessionManager } from '../../src/main/session/manager';
 
@@ -42,7 +43,7 @@ function makeTmpDir(): string {
 
 function makeStorageOpts(dir: string): StorageOptions {
   return {
-    sessionsDir: path.join(dir, 'sessions'),
+    dbPath: path.join(dir, 'sessions.db'),
     toolOutputCacheDir: path.join(dir, 'cache', 'tool-output'),
     webFetchCacheDir: path.join(dir, 'cache', 'web-fetch'),
   };
@@ -73,6 +74,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  _clearDbCache();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -157,39 +159,9 @@ describe('Session Parity', () => {
       const loaded = loadSession(randomUUID(), storageOpts);
       expect(loaded).toBeNull();
     });
-
-    it('load returns null for corrupted JSON', () => {
-      const corruptedId = 'c0000000-0000-4000-8000-000000000001';
-      fs.mkdirSync(path.join(tmpDir, 'sessions'), { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, 'sessions', `${corruptedId}.json`), 'not json', 'utf-8');
-
-      const loaded = loadSession(corruptedId, storageOpts);
-      expect(loaded).toBeNull();
-    });
   });
 
   describe('save', () => {
-    it('save creates a session file', () => {
-      const session = makeSession({ id: 'c2222222-2222-4222-8222-222222222222' });
-      saveSession(session, storageOpts);
-
-      const filePath = path.join(tmpDir, 'sessions', 'c2222222-2222-4222-8222-222222222222.json');
-      expect(fs.existsSync(filePath)).toBe(true);
-      const stored = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
-      expect(stored.version).toBe(2);
-      expect(stored.selection).toEqual(DEFAULT_SELECTION);
-      expect(stored.modelLabel).toBe(DEFAULT_SELECTION.modelId);
-      expect(stored).not.toHaveProperty('model');
-    });
-
-    it('save uses atomic write (no .tmp file after completion)', () => {
-      const session = makeSession({ id: 'c3333333-3333-4333-8333-333333333333' });
-      saveSession(session, storageOpts);
-
-      const files = fs.readdirSync(path.join(tmpDir, 'sessions'));
-      expect(files.filter((f) => f.endsWith('.tmp'))).toHaveLength(0);
-    });
-
     it('save overwrites existing session', () => {
       const session1 = makeSession({
         id: 'c4444444-4444-4444-8444-444444444444',
@@ -411,14 +383,20 @@ describe('Session Parity', () => {
   });
 
   describe('sessions directory', () => {
-    it('ensureSessionsDir creates directory with mode 0o700', () => {
-      const dir = ensureSessionsDir(storageOpts);
+    it('ensureSessionDb hardens the directory (0o700) and DB file (0o600)', () => {
+      const dir = ensureSessionDb(storageOpts);
       expect(fs.existsSync(dir)).toBe(true);
 
-      const stat = fs.statSync(dir);
+      // Relax permissions, then re-open with a fresh connection to prove the
+      // hardening runs on open (not a coincidence of mkdtemp's 0o700).
+      _clearDbCache();
+      fs.chmodSync(dir, 0o755);
+      ensureSessionDb(storageOpts);
+
       // eslint-disable-next-line no-bitwise
-      const mode = stat.mode & 0o777;
-      expect(mode).toBe(0o700);
+      expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+      // eslint-disable-next-line no-bitwise
+      expect(fs.statSync(storageOpts.dbPath!).mode & 0o777).toBe(0o600);
     });
   });
 });

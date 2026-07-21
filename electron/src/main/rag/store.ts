@@ -14,6 +14,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getConfig } from '../config/loader';
+import { openSqliteDb, isSqliteCorruptionError, deleteSqliteDb, type SqliteDatabase } from '../utils/sqlite';
 import type { Chunk } from './chunker';
 import type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
 
@@ -236,41 +237,6 @@ function loadNpy(filePath: string): number[][] | null {
 }
 
 // ---------------------------------------------------------------------------
-// SQLite wrapper (lazy import for optional dependency)
-// ---------------------------------------------------------------------------
-
-type BetterSqlite3Database = import('better-sqlite3').Database;
-
-function openDatabase(dbPath: string): BetterSqlite3Database {
-  try {
-    // Dynamic require — better-sqlite3 is an optional native dependency
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Database = require('better-sqlite3') as new (path: string) => BetterSqlite3Database;
-    const db = new Database(dbPath);
-    db.pragma('journal_mode = WAL');
-    db.pragma('busy_timeout = 5000');
-    return db;
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    // npm install alone builds against system Node; Electron needs a separate ABI rebuild.
-    const abiMismatch =
-      /NODE_MODULE_VERSION|did not self-register|was compiled against a different/i.test(detail);
-    if (abiMismatch) {
-      throw new Error(
-        `better-sqlite3 native module is not compatible with this Electron runtime. ` +
-          `From electron/, run: npm run rebuild:native\n\nUnderlying error: ${detail}`,
-        { cause: err },
-      );
-    }
-    throw new Error(
-      `better-sqlite3 is not available (${detail}). ` +
-        `Install optional deps, then rebuild for Electron: npm install && npm run rebuild:native`,
-      { cause: err },
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
 // RAGStore
 // ---------------------------------------------------------------------------
 
@@ -287,7 +253,7 @@ export class RAGStore {
   readonly vectorsFile: string;
 
   /** Cached database connection (lazy-opened, reused). */
-  private _db: BetterSqlite3Database | null = null;
+  private _db: SqliteDatabase | null = null;
 
   /**
    * Process-level search cache: dbPath -> compact matrix + chunk meta.
@@ -325,11 +291,11 @@ export class RAGStore {
   initDb(): void {
     this._ensureDir();
     try {
-      const db = openDatabase(this.dbPath);
+      const db = openSqliteDb(this.dbPath);
       db.exec(DB_SCHEMA);
       db.close();
-    } catch {
-      // Corrupted DB — rebuild
+    } catch (err) {
+      if (!isSqliteCorruptionError(err)) throw err;
       this._rebuildDb();
     }
     // Close any cached connection so _getDb() picks up the schema
@@ -342,29 +308,32 @@ export class RAGStore {
 
   private _rebuildDb(): void {
     this.dispose();
-    if (fs.existsSync(this.dbPath)) fs.unlinkSync(this.dbPath);
+    deleteSqliteDb(this.dbPath);
     this._clearVectorsFile();
-    const db = openDatabase(this.dbPath);
+    const db = openSqliteDb(this.dbPath);
     db.exec(DB_SCHEMA);
     db.close();
     this._invalidateCache();
   }
 
-  private _getDb(): BetterSqlite3Database {
+  private _getDb(): SqliteDatabase {
     if (this._db) return this._db;
     this._ensureDir();
     try {
-      this._db = openDatabase(this.dbPath);
+      this._db = openSqliteDb(this.dbPath);
       // Quick corruption check
       this._db.prepare('SELECT 1 FROM chunks LIMIT 1').get();
       return this._db;
-    } catch {
+    } catch (err) {
+      if (!isSqliteCorruptionError(err) && !(err instanceof Error && err.message.includes('no such table'))) {
+        throw err;
+      }
       if (this._db) {
         try { this._db.close(); } catch { /* ignore */ }
         this._db = null;
       }
       this._rebuildDb();
-      this._db = openDatabase(this.dbPath);
+      this._db = openSqliteDb(this.dbPath);
       return this._db;
     }
   }
@@ -942,7 +911,7 @@ export class RAGStore {
 
   clear(): void {
     this.dispose();
-    if (fs.existsSync(this.dbPath)) fs.unlinkSync(this.dbPath);
+    deleteSqliteDb(this.dbPath);
     this._clearVectorsFile();
     this._invalidateCache();
   }

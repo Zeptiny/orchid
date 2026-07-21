@@ -15,13 +15,11 @@ const mocks = vi.hoisted(() => {
     nodeOs.tmpdir(),
     `ws-ipc-${Date.now()}-${Math.random()}.json`,
   );
-  const sessionsDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'orchid-sessions-'));
   return {
     handlers,
     send,
     listSaved,
     statePath,
-    sessionsDir,
     nodeFs,
     ipcMain: {
       handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
@@ -46,10 +44,6 @@ vi.mock('../../src/main/ipc/session', () => ({
   getSessionManager: () => ({
     listSaved: mocks.listSaved,
   }),
-}));
-
-vi.mock('../../src/main/session/storage', () => ({
-  SESSIONS_DIR: mocks.sessionsDir,
 }));
 
 vi.mock('../../src/main/session/working-set', async () => {

@@ -150,7 +150,7 @@ export function isLegacyMegaChain(chains: readonly Chain[]): boolean {
  *
  * Also drops duplicate TOOL_RESULT messages for the same tool_call_id.
  */
-function reconcileOrphanToolResults(messages: Message[]): Message[] {
+export function reconcileOrphanToolResults(messages: Message[]): Message[] {
   if (!messages.length) return messages;
 
   const seenToolCallIds = new Set<string>();
@@ -207,7 +207,7 @@ export function chainToStorageDict(chain: Chain): ChainStorageDict {
   return dict;
 }
 
-function parseChainStatus(raw: unknown): ChainStatus {
+export function parseChainStatus(raw: unknown): ChainStatus {
   if (typeof raw !== 'string') return ChainStatus.COMPLETED;
   // Python RUNNING → ACTIVE
   if (raw === 'running' || raw === 'active') return ChainStatus.ACTIVE;
