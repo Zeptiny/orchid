@@ -55,6 +55,7 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
   - Also an `/init` command for it
   - When the `read` tool opens a file, rules from `AGENTS.md` in that directory (and ancestors) should be applied
 - User message queue (queue follow-ups while the agent is busy)
+- Session compaction / compression (summarize or drop older turns so long sessions stay within context limits)
 - Thinking-level selection
   - Harder than it looks: providers differ on supported levels and whether they honor them
   - User should be able to configure thinking variants per model

@@ -219,6 +219,7 @@ Orchid is an early preview. Expect rough edges. Highlights that matter when tryi
 
 ### Missing product surface
 - **No public installers** or auto-update channel yet — run or package from source
+- **No session compaction / compression** — long chats are not summarized or trimmed to stay within context limits
 - No LSP, SSH/remote workspaces, or user message queue yet
 - Config UI still allows conflicting fields in places (e.g. provider API key + env auth shown together)
 
