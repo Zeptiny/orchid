@@ -182,22 +182,24 @@ describe('ReasoningSelector markup', () => {
     expect(html).toContain('aria-expanded="false"');
   });
 
-  it('shows the override value and an indicator dot when overridden', () => {
+  it('shows the override value without an indicator dot when overridden', () => {
     const html = renderSelector({ value: 'high', defaultValue: 'medium' });
     expect(html).toContain('high');
-    expect(html).toContain('orchid-reasoning-dot');
-    expect(html).toContain('text-info');
+    expect(html).toContain('(session override)');
+    expect(html).not.toContain('orchid-reasoning-dot');
+    expect(html).not.toContain('text-info');
   });
 
-  it('omits the override indicator when inheriting the default', () => {
+  it('omits the override marker when inheriting the default', () => {
     const html = renderSelector({ value: null, defaultValue: 'medium' });
     expect(html).not.toContain('orchid-reasoning-dot');
+    expect(html).not.toContain('(session override)');
   });
 
   it('shows a numeric override in the trigger', () => {
     const html = renderSelector({ value: 8192, defaultValue: 'medium' });
     expect(html).toContain('8192');
-    expect(html).toContain('orchid-reasoning-dot');
+    expect(html).not.toContain('orchid-reasoning-dot');
   });
 
   it('renders the configured levels when open', () => {
