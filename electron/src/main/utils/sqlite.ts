@@ -108,8 +108,8 @@ function createConnection(dbPath: string): SqliteDatabase {
       );
     }
     throw new Error(
-      `better-sqlite3 is not available (${detail}). ` +
-        `Install optional deps, then rebuild for Electron: npm install && npm run rebuild:native`,
+      `better-sqlite3 failed to load (${detail}). ` +
+        `From electron/, run: npm install && npm run rebuild:native`,
       { cause: err },
     );
   }
