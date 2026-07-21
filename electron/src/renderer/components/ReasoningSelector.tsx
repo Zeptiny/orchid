@@ -2,8 +2,7 @@
  * ReasoningSelector — compact footer combo for reasoning effort.
  *
  * Picks from configured text levels or accepts free-text entry, where a bare
- * number is treated as a token budget. The session override is surfaced with a
- * dot indicator and an accent label; clearing the input resets to the
+ * number is treated as a token budget. Clearing the input resets to the
  * connection default. Rendered by the footer only for reasoning-capable models.
  */
 import { useEffect, useId, useRef, useState } from 'react';
@@ -151,15 +150,9 @@ export function ReasoningSelector({
         onClick={() => setOpen(!isOpen)}
       >
         <Icon name="zap" size={12} className="shrink-0 opacity-70" />
-        <span className={overridden ? 'text-info' : undefined}>
+        <span>
           {formatReasoningValue(effective)}
         </span>
-        {overridden && (
-          <span
-            className="orchid-reasoning-dot h-1.5 w-1.5 rounded-full bg-info"
-            aria-hidden
-          />
-        )}
         <Icon
           name="chevronDown"
           size={12}
