@@ -152,6 +152,7 @@ interface SessionRow {
   active_chain_id: string | null;
   subagent_chains_json: string;
   todo_store_json: string;
+  reasoning_effort_override: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -271,6 +272,22 @@ function chainFromRow(row: ChainRow): Chain {
   };
 }
 
+function serializeReasoningEffortOverride(value: string | number | null): string | null {
+  if (value == null) return null;
+  return JSON.stringify(value);
+}
+
+function deserializeReasoningEffortOverride(json: string | null): string | number | null {
+  if (json == null) return null;
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (typeof parsed === 'string' || typeof parsed === 'number') return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function sessionFromRow(row: SessionRow, chains: Chain[]): Session {
   return {
     id: row.id,
@@ -284,7 +301,7 @@ function sessionFromRow(row: SessionRow, chains: Chain[]): Session {
     updatedAt: row.updated_at,
     subagentChains: deserializeSubagentChains(row.subagent_chains_json),
     todoStore: deserializeTodoStore(row.todo_store_json),
-    reasoningEffortOverride: null,
+    reasoningEffortOverride: deserializeReasoningEffortOverride(row.reasoning_effort_override),
   };
 }
 
@@ -300,8 +317,8 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
   const { dbPath } = resolveOptions(opts);
   withCorruptionRecovery(dbPath, (db) => {
     const upsertSession = db.prepare(`
-      INSERT INTO sessions (id, name, selection_json, model_label, cwd, active_chain_id, subagent_chains_json, todo_store_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO sessions (id, name, selection_json, model_label, cwd, active_chain_id, subagent_chains_json, todo_store_json, reasoning_effort_override, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         selection_json = excluded.selection_json,
@@ -310,6 +327,7 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
         active_chain_id = excluded.active_chain_id,
         subagent_chains_json = excluded.subagent_chains_json,
         todo_store_json = excluded.todo_store_json,
+        reasoning_effort_override = excluded.reasoning_effort_override,
         updated_at = excluded.updated_at
     `);
 
@@ -330,6 +348,7 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
         session.activeChainId,
         serializeSubagentChains(session.subagentChains),
         serializeTodoStore(session.todoStore),
+        serializeReasoningEffortOverride(session.reasoningEffortOverride),
         session.createdAt,
         session.updatedAt,
       );

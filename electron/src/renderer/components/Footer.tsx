@@ -35,6 +35,7 @@ interface FooterProps {
   modelLabels?: Readonly<Record<string, string>>;
   modelDetails?: Readonly<Record<string, ProviderModelOption>>;
   commandContext?: CommandContext;
+  sessionId?: string | null;
 }
 
 export function Footer({
@@ -48,6 +49,7 @@ export function Footer({
   modelLabels,
   modelDetails,
   commandContext,
+  sessionId,
 }: FooterProps) {
   const confirming = interruptState && interruptState !== 'idle';
   const elapsedSeconds = useElapsedSeconds(streamStartTime, isStreaming || Boolean(confirming));
@@ -106,7 +108,7 @@ export function Footer({
     return () => {
       cancelled = true;
     };
-  }, [model]);
+  }, [model, sessionId]);
 
   const badgeTone =
     contextPercent != null && contextPercent >= 85

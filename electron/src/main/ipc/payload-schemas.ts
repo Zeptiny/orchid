@@ -109,7 +109,10 @@ export const sessionSetWorkspaceSchema = z.object({
 });
 
 export const sessionSetReasoningEffortSchema = z.object({
-  effort: z.union([z.string(), z.number()]).nullable(),
+  effort: z.union([
+    z.string().trim().min(1).max(256),
+    z.number().int().min(1).max(1_000_000),
+  ]).nullable(),
 });
 
 // ── Tool ─────────────────────────────────────────────────────────────────────

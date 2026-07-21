@@ -206,7 +206,7 @@ export function ConnectionWizard({
     setAuthMethod(connection.authMethod);
     setConnectionModelIds([...connection.modelIds]);
     setConnectionCustomModels(connectionCustomModelDrafts(connection));
-    setReasoningConfig({});
+    setReasoningConfig(connection.reasoningConfig ?? {});
     setModelsEditing(false);
     setEndpoint(connection.endpoint ?? '');
     setAllowInsecureHttp(connection.allowInsecureHttp);

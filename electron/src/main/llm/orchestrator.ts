@@ -150,7 +150,7 @@ export interface StreamChatParams {
   /** Frozen durable-attempt context for every provider invocation. */
   accounting?: ProviderAttemptAccountingContext;
   /** Provider-native reasoning options forwarded to streamText. */
-  providerOptions?: Record<string, Record<string, unknown>>;
+  providerOptions?: Record<string, Record<string, JSONValue>>;
 }
 
 interface ProviderStepUsage {
@@ -563,8 +563,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       abortSignal: combinedAbort,
       // Retry ownership belongs to Orchid's accounting-aware middleware.
       maxRetries: 0,
-      // Orchid keeps providerOptions as an opaque blob; the SDK expects JSON.
-      providerOptions: providerOptions as Record<string, Record<string, JSONValue>> | undefined,
+      providerOptions,
       onStepFinish: async ({ usage, request, toolCalls, toolResults, content }) => {
         if (usage && !usedFullStream) {
           pendingUsageEvents.push(buildStepUsage(

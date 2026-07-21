@@ -5,6 +5,7 @@
  * Tests leave the runner unset so spawn/markCompleted stay manual.
  */
 import type { Agent } from '../../shared/types/agent';
+import type { JSONValue } from 'ai';
 import type { ModelSelection } from '../../shared/types/provider';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
 import { resolveSubagentEffort } from '../llm/reasoning-effort';
@@ -120,7 +121,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
 
     let modelInstance;
     let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
-    let providerOptions: Record<string, Record<string, unknown>> | undefined;
+    let providerOptions: Record<string, Record<string, JSONValue>> | undefined;
     let accountingStore: ReturnType<typeof getProviderAccountingStore>;
     try {
       accountingStore = getProviderAccountingStore();

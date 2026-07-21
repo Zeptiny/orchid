@@ -337,6 +337,7 @@ export class SessionManager {
       ...session,
       selection,
       modelLabel,
+      reasoningEffortOverride: null,
       updatedAt: new Date().toISOString(),
     };
     this.replaceSession(updated);

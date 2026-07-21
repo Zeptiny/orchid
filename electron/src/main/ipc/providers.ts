@@ -304,6 +304,7 @@ function connectionView(
     // intentionally never rendered or accepted as a renderer-editable field.
     endpoint: allowsCustomEndpoint ? connection.endpoint ?? null : null,
     allowInsecureHttp: connection.allowInsecureHttp === true,
+    reasoningConfig: connection.reasoningConfig,
   };
 }
 

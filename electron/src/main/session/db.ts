@@ -25,6 +25,11 @@ export class SessionDb {
         schema: SESSION_SCHEMA_SQL,
         corruptionCheck: 'SELECT 1 FROM sessions LIMIT 1',
       });
+      try {
+        this._db.exec('ALTER TABLE sessions ADD COLUMN reasoning_effort_override TEXT');
+      } catch {
+        // Column already exists on migrated databases.
+      }
       this._db.pragma('foreign_keys = ON');
       this._db
         .prepare('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)')

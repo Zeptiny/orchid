@@ -1,4 +1,5 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
+import type { JSONValue } from 'ai';
 import Decimal from 'decimal.js';
 import type { EffectiveModel, ModelSelection, ProviderConnection } from '../../shared/types/provider';
 import type {
@@ -45,7 +46,7 @@ export interface ResolvedProviderExecution {
   /** Map a reasoning effort to provider-native options, when the driver supports it. */
   readonly buildReasoningOptions?: (
     effort: string | number,
-  ) => Record<string, Record<string, unknown>> | undefined;
+  ) => Record<string, Record<string, JSONValue>> | undefined;
 }
 
 /**

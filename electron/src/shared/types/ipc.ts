@@ -401,6 +401,7 @@ export interface ProviderConnectionView {
   activeTurnCount: number;
   endpoint: string | null;
   allowInsecureHttp: boolean;
+  reasoningConfig?: Record<string, import('./provider').ReasoningModelConfig>;
 }
 
 /** Status data is timestamped and redacted before it crosses IPC. */

@@ -167,18 +167,6 @@ export type CatalogModel = z.infer<typeof catalogModelSchema>;
 export type CatalogProvider = z.infer<typeof catalogProviderSchema>;
 export type ProviderCatalog = z.infer<typeof catalogEnvelopeSchema>;
 
-/** Default reasoning levels for known reasoning-capable model families. */
-export const KNOWN_REASONING_SEEDS: Readonly<Record<string, { levels: readonly string[]; default: string }>> = {
-  'o1': { levels: ['low', 'medium', 'high'], default: 'medium' },
-  'o3': { levels: ['low', 'medium', 'high'], default: 'medium' },
-  'o3-mini': { levels: ['low', 'medium', 'high'], default: 'medium' },
-  'o4-mini': { levels: ['low', 'medium', 'high'], default: 'medium' },
-  'claude-op-4': { levels: ['low', 'medium', 'high'], default: 'medium' },
-  'claude-sonnet-4': { levels: ['low', 'medium', 'high'], default: 'medium' },
-  'gemini-2.5-pro': { levels: ['low', 'medium', 'high'], default: 'medium' },
-  'gemini-2.5-flash': { levels: ['low', 'medium', 'high'], default: 'medium' },
-};
-
 /**
  * U1 intentionally has a compact provider definition. This adapter lets later
  * resolver/driver work consume catalog metadata without changing U1's stored
