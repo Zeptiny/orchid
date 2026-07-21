@@ -35,6 +35,7 @@ import {
   sessionOpenSchema,
   sessionRenameSchema,
   sessionSetWorkspaceSchema,
+  sessionSetReasoningEffortSchema,
 } from './payload-schemas';
 
 // ── Singleton session manager ────────────────────────────────────────────────
@@ -447,6 +448,54 @@ export function registerSessionIPC(): void {
     emitWorkspaceChanged(event.sender, workspace);
     return hadConversation ? null : manager.getActive(windowId);
   });
+
+  ipcMain.handle(IPC_CHANNELS.SESSION_SET_REASONING_EFFORT, async (event, payload: unknown) => {
+    const parsed = sessionSetReasoningEffortSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid session:set_reasoning_effort payload: ${parsed.error.message}`);
+    }
+
+    const windowId = String(event.sender.id);
+    const manager = getSessionManager();
+    const active = manager.getActive(windowId);
+    if (!active) {
+      return { status: 'no_active_session' };
+    }
+
+    manager.setReasoningEffortOverride(active.id, parsed.data.effort);
+    return { status: 'ok' };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG, async (event) => {
+    const windowId = String(event.sender.id);
+    const manager = getSessionManager();
+    const active = manager.getActive(windowId);
+    if (!active || !active.selection) {
+      return { levels: [], default: null, override: active?.reasoningEffortOverride ?? null, supportsReasoning: false };
+    }
+
+    const { getProviderConnectionStore, getProviderCatalogStore } = await import('../providers/runtime-context');
+    const { resolveModelSelection } = await import('../providers/resolver');
+
+    const connections = await getProviderConnectionStore().list();
+    const definitions = getProviderCatalogStore().getProviderDefinitions();
+    const resolution = resolveModelSelection(active.selection, connections, definitions);
+
+    if (resolution.kind !== 'resolved') {
+      return { levels: [], default: null, override: active.reasoningEffortOverride, supportsReasoning: false };
+    }
+
+    const { connection, model } = resolution;
+    const supportsReasoning = model.capabilities?.reasoning ?? false;
+    const modelConfig = connection.reasoningConfig?.[active.selection.modelId];
+
+    return {
+      levels: modelConfig?.levels ?? [],
+      default: modelConfig?.default ?? null,
+      override: active.reasoningEffortOverride,
+      supportsReasoning,
+    };
+  });
 }
 
 /**
@@ -465,6 +514,8 @@ export function unregisterSessionIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_PICK_PROJECT_DIR);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_SET_WORKSPACE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CHANGE_CWD);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_SET_REASONING_EFFORT);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG);
 }
 
 // Re-export draft helper for tests that need to seed draft without IPC.

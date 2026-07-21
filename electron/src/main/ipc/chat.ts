@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { agentMachine, type AgentContext } from '../agents/xstate/agent-machine';
 import { interruptMachine } from '../agents/xstate/interrupt-machine';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
+import { resolveMainAgentEffort } from '../llm/reasoning-effort';
 import { createMiddlewareStack } from '../llm/middleware';
 import { AgentType, type Agent } from '../../shared/types/agent';
 import type { ModelSelection } from '../../shared/types/provider';
@@ -853,6 +854,7 @@ function createProviderStreamFn(input: {
   readonly accounting: ProviderAttemptAccountingContext;
   readonly registry: ReturnType<typeof getBuiltinToolRegistryForRuntime>;
   readonly mcpManager: ReturnType<typeof acquireProjectMCPManager>;
+  readonly providerOptions?: Record<string, Record<string, unknown>>;
 }) {
   return async function* ({
     agent,
@@ -884,6 +886,7 @@ function createProviderStreamFn(input: {
       abortSignal,
       modelInstance: input.modelInstance,
       accounting: input.accounting,
+      providerOptions: input.providerOptions,
     });
   };
 }
@@ -1043,12 +1046,21 @@ export function registerChatIPC(): void {
     }
     let modelInstance: LanguageModelV4;
     let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
+    let providerOptions: Record<string, Record<string, unknown>> | undefined;
     let accountingStore: ReturnType<typeof getProviderAccountingStore>;
     try {
       accountingStore = getProviderAccountingStore();
       const execution = await getProviderRuntime().resolveExecution(turnSelection);
       modelInstance = execution.modelInstance;
       providerSnapshot = execution.snapshot;
+      const effort = resolveMainAgentEffort(
+        sessionGate.session,
+        execution.connection,
+        turnSelection.modelId,
+        execution.model.capabilities?.reasoning === true,
+      );
+      providerOptions =
+        effort === undefined ? undefined : execution.buildReasoningOptions?.(effort);
     } catch (error) {
       sessionsStarting.delete(sessionId);
       completeSessionActivity(sessionId, false);
@@ -1153,6 +1165,7 @@ export function registerChatIPC(): void {
             accounting,
             registry: turnRegistry,
             mcpManager,
+            providerOptions,
           }),
         },
       });

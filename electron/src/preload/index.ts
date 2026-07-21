@@ -48,6 +48,8 @@ import type {
   SessionUpdatedEvent,
   SessionChangeCwdMessage,
   SessionSetWorkspaceMessage,
+  SessionSetReasoningEffortMessage,
+  SessionReasoningConfigResult,
   SessionWorkspaceChangedEvent,
   SessionTodosChangedEvent,
   SessionActivityChangedEvent,
@@ -309,6 +311,12 @@ const orchidAPI: OrchidAPI = {
 
     changeCwd: (message: SessionChangeCwdMessage) =>
       invoke(IPC_CHANNELS.SESSION_CHANGE_CWD, message),
+
+    setReasoningEffort: (message: SessionSetReasoningEffortMessage) =>
+      invoke(IPC_CHANNELS.SESSION_SET_REASONING_EFFORT, message),
+
+    getReasoningConfig: () =>
+      invoke<SessionReasoningConfigResult>(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG),
 
     listActivity: () =>
       invoke(IPC_CHANNELS.SESSION_ACTIVITY_LIST),

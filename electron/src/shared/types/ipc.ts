@@ -314,6 +314,7 @@ export type ConfigPatchMap<V> = { readonly [key: string]: V | null };
 export type ConfigPatch = {
   default_model?: ModelSelection | null;
   tier_models?: ConfigPatchMap<ModelSelection | null>;
+  tier_reasoning_effort?: ConfigPatchMap<string | number | null>;
   ignored_dirs?: string[];
   command_timeout?: number;
   read_line_limit?: number;
@@ -451,6 +452,7 @@ export interface ProviderConnectionUpdateMessage {
   authMethod?: ProviderAuthMethod;
   modelIds?: readonly string[];
   customModels?: readonly CustomConnectionModel[];
+  reasoningConfig?: Record<string, import('./provider').ReasoningModelConfig>;
   endpoint?: string | null;
   allowInsecureHttp?: boolean;
   /** Select or replace an environment reference without exposing its value. */
@@ -602,6 +604,17 @@ export interface SessionChangeCwdMessage {
 export interface SessionSetWorkspaceMessage {
   /** Absolute path to bind (no dialog). Used by tests and non-dialog callers. */
   cwd: string;
+}
+
+export interface SessionSetReasoningEffortMessage {
+  effort: string | number | null;
+}
+
+export interface SessionReasoningConfigResult {
+  levels: string[];
+  default: string | number | null;
+  override: string | number | null;
+  supportsReasoning: boolean;
 }
 
 export interface SessionWorkspaceChangedEvent {
@@ -758,6 +771,8 @@ export interface OrchidAPI {
      * bound and return null after opening a project-bound draft instead.
      */
     changeCwd: (message: SessionChangeCwdMessage) => Promise<Session | null>;
+    setReasoningEffort: (message: SessionSetReasoningEffortMessage) => Promise<{ status: string }>;
+    getReasoningConfig: () => Promise<SessionReasoningConfigResult>;
     /** Process-wide sessions currently working, waiting, needing attention, or unread. */
     listActivity: () => Promise<SessionActivity[]>;
     /** Mark an off-screen completion as viewed. */
@@ -911,6 +926,8 @@ export const IPC_CHANNELS = {
   SESSION_SET_WORKSPACE: 'session:set_workspace',
   /** Change active session cwd + sticky default. */
   SESSION_CHANGE_CWD: 'session:change_cwd',
+  SESSION_SET_REASONING_EFFORT: 'session:set_reasoning_effort',
+  SESSION_GET_REASONING_CONFIG: 'session:get_reasoning_config',
   /** Fired when workspace binding changes. */
   SESSION_WORKSPACE_CHANGED: 'session:workspace_changed',
   /** Fired when subagent_chains are persisted (spawn progress / complete). */
@@ -1006,6 +1023,8 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.SESSION_PICK_PROJECT_DIR,
   IPC_CHANNELS.SESSION_SET_WORKSPACE,
   IPC_CHANNELS.SESSION_CHANGE_CWD,
+  IPC_CHANNELS.SESSION_SET_REASONING_EFFORT,
+  IPC_CHANNELS.SESSION_GET_REASONING_CONFIG,
   IPC_CHANNELS.SESSION_ACTIVITY_LIST,
   IPC_CHANNELS.SESSION_ACTIVITY_MARK_SEEN,
   IPC_CHANNELS.SESSION_WORKING_SET_GET,

@@ -53,6 +53,7 @@ export interface Session {
   readonly updatedAt: string;
   readonly subagentChains: readonly SubagentRecord[];
   readonly todoStore: TodoStoreData;
+  readonly reasoningEffortOverride: string | number | null;
 }
 
 // ── Storage dict ────────────────────────────────────────────────────────────
@@ -78,6 +79,7 @@ export interface SessionStorageDict {
   subagentChains?: unknown[];
   todo_store?: unknown;
   todoStore?: unknown;
+  reasoningEffortOverride?: string | number | null;
   // Forward-compat: extra keys tolerated on restore
   [key: string]: unknown;
 }
@@ -100,6 +102,7 @@ export function sessionToStorageDict(session: Session): SessionStorageDict {
     updatedAt: session.updatedAt,
     subagent_chains: session.subagentChains.map(subagentRecordToStorageDict),
     todo_store: todoStoreToStorageDict(session.todoStore),
+    reasoningEffortOverride: session.reasoningEffortOverride,
   };
 }
 
@@ -178,5 +181,10 @@ export function sessionFromStorageDict(data: unknown): Session {
           : now,
     subagentChains,
     todoStore,
+    reasoningEffortOverride:
+      typeof raw.reasoningEffortOverride === 'string' ||
+      typeof raw.reasoningEffortOverride === 'number'
+        ? raw.reasoningEffortOverride
+        : null,
   };
 }

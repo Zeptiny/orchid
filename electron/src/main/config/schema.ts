@@ -59,6 +59,14 @@ export const configSchema = z
         bloom: null,
         crown: null,
       }),
+    tier_reasoning_effort: z
+      .record(z.string(), z.union([z.string(), z.number()]).nullable())
+      .default({
+        seed: null,
+        sprout: null,
+        bloom: null,
+        crown: null,
+      }),
     ignored_dirs: z
       .array(z.string())
       .default([

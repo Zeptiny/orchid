@@ -45,4 +45,6 @@ export interface ProviderDriver {
   createLanguageModel(request: DriverModelRequest): Promise<LanguageModelV4>;
   /** Present only when the driver supports Orchid's API embedding transport. */
   createEmbeddingTarget?(request: DriverModelRequest): Promise<ProviderEmbeddingTarget>;
+  /** Translate a reasoning effort value into provider-native providerOptions. */
+  buildReasoningOptions?(effort: string | number, model: EffectiveModel): Record<string, Record<string, unknown>> | undefined;
 }

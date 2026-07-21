@@ -7,6 +7,7 @@
 import type { Agent } from '../../shared/types/agent';
 import type { ModelSelection } from '../../shared/types/provider';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
+import { resolveSubagentEffort } from '../llm/reasoning-effort';
 import { getConfig } from '../config/loader';
 import { getSessionManager } from '../ipc/session';
 import {
@@ -119,12 +120,22 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
 
     let modelInstance;
     let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
+    let providerOptions: Record<string, Record<string, unknown>> | undefined;
     let accountingStore: ReturnType<typeof getProviderAccountingStore>;
     try {
       accountingStore = getProviderAccountingStore();
       const execution = await getProviderRuntime().resolveExecution(selection);
       modelInstance = execution.modelInstance;
       providerSnapshot = execution.snapshot;
+      const effort = resolveSubagentEffort(
+        params.agent,
+        config,
+        execution.connection,
+        selection.modelId,
+        execution.model.capabilities?.reasoning === true,
+      );
+      providerOptions =
+        effort === undefined ? undefined : execution.buildReasoningOptions?.(effort);
     } catch (error) {
       yield {
         type: 'error',
@@ -174,6 +185,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         abortSignal: params.abortSignal,
         modelInstance,
         accounting,
+        providerOptions,
       });
     } finally {
       releaseProjectMCPManager(runtime);

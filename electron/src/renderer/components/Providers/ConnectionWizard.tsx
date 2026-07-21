@@ -22,6 +22,7 @@ import type {
   ModelSelection,
   ProviderAuthMethod,
   ProviderProtocol,
+  ReasoningModelConfig,
 } from '../../../shared/types/provider';
 import { isTextGenerationModel } from '../../utils/models';
 import { Alert } from '../ui/Alert';
@@ -40,6 +41,7 @@ import {
   ConnectionModelsEditor,
   connectionCustomModelDrafts,
 } from './ConnectionModelsDialog';
+import { ReasoningConfigEditor, type ReasoningModelEntry } from './ReasoningConfigEditor';
 
 export interface ProviderConnectionCompletion {
   readonly connection: ProviderConnectionView;
@@ -116,6 +118,7 @@ export function ConnectionWizard({
   const [authMethod, setAuthMethod] = useState<ProviderAuthMethod>('api-key');
   const [connectionModelIds, setConnectionModelIds] = useState<readonly string[]>([]);
   const [connectionCustomModels, setConnectionCustomModels] = useState<readonly CustomConnectionModel[]>([]);
+  const [reasoningConfig, setReasoningConfig] = useState<Record<string, ReasoningModelConfig>>({});
   const [modelsEditing, setModelsEditing] = useState(false);
   const [endpoint, setEndpoint] = useState('');
   const [allowInsecureHttp, setAllowInsecureHttp] = useState(false);
@@ -142,6 +145,24 @@ export function ConnectionWizard({
     })),
     [definitions],
   );
+  const reasoningModels = useMemo<readonly ReasoningModelEntry[]>(() => {
+    if (!selectedDefinition) return [];
+    const entries: ReasoningModelEntry[] = [];
+    for (const modelId of connectionModelIds) {
+      const catalogModel = selectedDefinition.models.find((m) => m.id === modelId);
+      const customModel = connectionCustomModels.find((m) => m.id === modelId);
+      const hasReasoning = customModel?.capabilities.reasoning
+        ?? catalogModel?.capabilities?.reasoning
+        ?? false;
+      if (hasReasoning) {
+        entries.push({
+          modelId,
+          displayName: customModel?.displayName ?? catalogModel?.displayName ?? modelId,
+        });
+      }
+    }
+    return entries;
+  }, [selectedDefinition, connectionModelIds, connectionCustomModels]);
   const supportsCustomEndpoint =
     selectedDefinition?.allowsCustomModels === true &&
     (selectedDefinition.id === 'generic-openai-compatible' ||
@@ -167,6 +188,7 @@ export function ConnectionWizard({
     setAuthMethod(defaultAuthMethod(definition));
     setConnectionModelIds(defaultModelIds(definition, nextProtocol));
     setConnectionCustomModels([]);
+    setReasoningConfig({});
     setModelsEditing(false);
     setEndpoint('');
     setAllowInsecureHttp(false);
@@ -184,6 +206,7 @@ export function ConnectionWizard({
     setAuthMethod(connection.authMethod);
     setConnectionModelIds([...connection.modelIds]);
     setConnectionCustomModels(connectionCustomModelDrafts(connection));
+    setReasoningConfig({});
     setModelsEditing(false);
     setEndpoint(connection.endpoint ?? '');
     setAllowInsecureHttp(connection.allowInsecureHttp);
@@ -311,6 +334,7 @@ export function ConnectionWizard({
     authMethod: message.authMethod,
     modelIds: message.modelIds,
     customModels: message.customModels ?? [],
+    reasoningConfig,
     ...(message.endpoint === undefined ? {} : { endpoint: message.endpoint }),
     ...(message.allowInsecureHttp === undefined
       ? {}
@@ -676,6 +700,15 @@ export function ConnectionWizard({
                   onSelectedModelIdsChange={setConnectionModelIds}
                   onCustomModelsChange={setConnectionCustomModels}
                   onEditingChange={setModelsEditing}
+                />
+              )}
+
+              {reasoningModels.length > 0 && (
+                <ReasoningConfigEditor
+                  models={reasoningModels}
+                  reasoningConfig={reasoningConfig}
+                  disabled={metadataLocked}
+                  onChange={setReasoningConfig}
                 />
               )}
 

@@ -100,6 +100,8 @@ export interface Config {
   default_model: ModelSelection | null;
   /** Per-tier connection-scoped selections. A null tier falls back to the nullable default. */
   tier_models: Record<string, ModelSelection | null>;
+  /** Per-tier reasoning effort override. Null tier falls back to connection default. */
+  tier_reasoning_effort: Record<string, string | number | null>;
   ignored_dirs: string[];
   command_timeout: number;
   read_line_limit: number;

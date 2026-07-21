@@ -284,6 +284,7 @@ function sessionFromRow(row: SessionRow, chains: Chain[]): Session {
     updatedAt: row.updated_at,
     subagentChains: deserializeSubagentChains(row.subagent_chains_json),
     todoStore: deserializeTodoStore(row.todo_store_json),
+    reasoningEffortOverride: null,
   };
 }
 

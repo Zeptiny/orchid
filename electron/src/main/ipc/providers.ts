@@ -23,6 +23,7 @@ import {
   providerAuthMethodSchema,
   providerEndpointSchema,
   providerProtocolSchema,
+  reasoningModelConfigSchema,
   type ProviderConnection,
   type ProviderDefinition,
   type ProviderModelDefinition,
@@ -93,6 +94,7 @@ const updateConnectionSchema = z.object({
   authMethod: providerAuthMethodSchema.optional(),
   modelIds: modelIdsSchema.optional(),
   customModels: z.array(customConnectionModelSchema).max(500).optional(),
+  reasoningConfig: z.record(z.string(), reasoningModelConfigSchema).optional(),
   endpoint: providerEndpointSchema.nullable().optional(),
   allowInsecureHttp: z.boolean().optional(),
   environmentVariable: environmentVariableSchema.optional(),
@@ -661,6 +663,7 @@ export function registerProviderIPC(): void {
         ...(parsed.data.authMethod === undefined ? {} : { authMethod: parsed.data.authMethod }),
         ...(parsed.data.modelIds === undefined ? {} : { modelIds: parsed.data.modelIds }),
         ...(parsed.data.customModels === undefined ? {} : { customModels: parsed.data.customModels }),
+        ...(parsed.data.reasoningConfig === undefined ? {} : { reasoningConfig: parsed.data.reasoningConfig }),
         ...(parsed.data.endpoint === undefined ? {} : { endpoint: parsed.data.endpoint }),
         ...(parsed.data.allowInsecureHttp === undefined
           ? {}

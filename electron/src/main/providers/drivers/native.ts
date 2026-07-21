@@ -1,6 +1,6 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { importESM } from '../../utils/esm-import';
-import type { ProviderProtocol } from '../../../shared/types/provider';
+import type { EffectiveModel, ProviderProtocol } from '../../../shared/types/provider';
 import type { DriverCredential, ProviderDriver } from './types';
 
 export const BUILTIN_PROVIDER_ORIGINS = {
@@ -102,6 +102,29 @@ export function createNativeProviderDrivers(): readonly ProviderDriver[] {
           apiKey: apiKeyForEmbedding(credential),
         };
       };
+    }
+    switch (id) {
+      case 'openai':
+        driver.buildReasoningOptions = (effort: string | number, _model: EffectiveModel) =>
+          typeof effort === 'number'
+            ? { openai: { maxReasoningTokens: effort } }
+            : { openai: { reasoningEffort: effort } };
+        break;
+      case 'anthropic':
+        driver.buildReasoningOptions = (effort: string | number, _model: EffectiveModel) =>
+          typeof effort === 'number'
+            ? { anthropic: { thinking: { type: 'enabled', budgetTokens: effort } } }
+            : { anthropic: { reasoningEffort: effort } };
+        break;
+      case 'google-gemini':
+        driver.buildReasoningOptions = (effort: string | number, _model: EffectiveModel) =>
+          typeof effort === 'number'
+            ? { google: { thinkingConfig: { thinkingBudget: effort } } }
+            : { google: { thinkingConfig: { thinkingLevel: effort } } };
+        break;
+      case 'xai':
+        driver.buildReasoningOptions = () => undefined;
+        break;
     }
     return driver;
   });

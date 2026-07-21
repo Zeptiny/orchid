@@ -131,6 +131,8 @@ const mocks = vi.hoisted(() => {
     resolveLanguageModel: vi.fn(async () => modelInstance),
     resolveExecution: vi.fn(async () => ({
       modelInstance,
+      connection: {},
+      model: { id: 'vendor/path/model', capabilities: { reasoning: false } },
       snapshot: {
         providerId: 'openai',
         providerDisplayName: 'OpenAI',

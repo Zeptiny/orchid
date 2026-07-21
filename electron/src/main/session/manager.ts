@@ -254,6 +254,7 @@ export class SessionManager {
       updatedAt: now,
       subagentChains: [],
       todoStore: { tasks: [] },
+      reasoningEffortOverride: null,
     };
     this._sessions.set(session.id, session);
     this._todoStores.set(session.id, new TodoStore());
@@ -372,6 +373,23 @@ export class SessionManager {
     this.replaceSession(updated);
     storageSaveSession(updated, this._storageOpts);
     return updated;
+  }
+
+  /**
+   * Set or clear the reasoning effort override for a session.
+   * Persists to disk immediately.
+   */
+  setReasoningEffortOverride(id: string, effort: string | number | null): void {
+    if (!this.isSelectedByAnyOwner(id)) return;
+    const session = this.flushTodos(id);
+    if (!session) return;
+    const updated = {
+      ...session,
+      reasoningEffortOverride: effort,
+      updatedAt: new Date().toISOString(),
+    };
+    this.replaceSession(updated);
+    storageSaveSession(updated, this._storageOpts);
   }
 
   /**

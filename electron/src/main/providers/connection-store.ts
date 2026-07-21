@@ -9,8 +9,10 @@ import {
   type CreateProviderConnectionInput,
   type ProviderConnection,
   type ProviderConnectionDocument,
+  type ReasoningModelConfig,
   type UpdateProviderConnectionInput,
 } from '../../shared/types/provider';
+import type { CatalogModel } from './catalog/schema';
 import { HOME_CONFIG_DIR, atomicWriteJson } from '../config/loader';
 import {
   withSerializedWrite,
@@ -18,6 +20,37 @@ import {
 } from '../utils/write-lock';
 
 export const PROVIDER_CONNECTIONS_PATH = path.join(HOME_CONFIG_DIR, 'providers.json');
+
+/**
+ * Populate `reasoningConfig` on a connection from catalog model metadata.
+ * Only fills absent entries — never overwrites existing user configuration.
+ */
+export function seedReasoningConfig(
+  connection: Pick<ProviderConnection, 'modelIds' | 'reasoningConfig'>,
+  catalogModels: readonly CatalogModel[],
+): Record<string, ReasoningModelConfig> | undefined {
+  const catalogById = new Map(catalogModels.map((m) => [m.id, m]));
+  const existing = connection.reasoningConfig ?? {};
+  let seeded = false;
+  const result: Record<string, ReasoningModelConfig> = { ...existing };
+
+  for (const modelId of connection.modelIds) {
+    if (result[modelId]) continue;
+    const catalogModel = catalogById.get(modelId);
+    if (!catalogModel) continue;
+    if (!catalogModel.capabilities.reasoning) continue;
+    if (!catalogModel.reasoningLevels || catalogModel.reasoningLevels.length === 0) continue;
+
+    result[modelId] = {
+      levels: [...catalogModel.reasoningLevels],
+      default: catalogModel.reasoningDefault ?? null,
+    };
+    seeded = true;
+  }
+
+  if (!seeded && !connection.reasoningConfig) return undefined;
+  return result;
+}
 
 /** Paths that have used connection-store serialization (for scoped test resets). */
 const connectionStorePaths = new Set<string>([PROVIDER_CONNECTIONS_PATH]);
@@ -76,13 +109,22 @@ export class ConnectionStore {
     return connection ? { ...connection } : null;
   }
 
-  async create(input: CreateProviderConnectionInput): Promise<ProviderConnection> {
+  async create(
+    input: CreateProviderConnectionInput,
+    catalogModels?: readonly CatalogModel[],
+  ): Promise<ProviderConnection> {
     const parsed = createProviderConnectionSchema.parse(input);
     return withSerializedWrite(this.filePath, async () => {
       const document = readDocument(this.filePath);
-      const connection = providerConnectionSchema.parse({ ...parsed, id: this.idFactory() });
+      let connection = providerConnectionSchema.parse({ ...parsed, id: this.idFactory() });
       if (document.connections.some((item) => item.id === connection.id)) {
         throw new Error(`Duplicate provider connection id '${connection.id}'`);
+      }
+      if (catalogModels && catalogModels.length > 0) {
+        const seededConfig = seedReasoningConfig(connection, catalogModels);
+        if (seededConfig) {
+          connection = providerConnectionSchema.parse({ ...connection, reasoningConfig: seededConfig });
+        }
       }
       await this.beforePersist?.();
       atomicWriteJson(this.filePath, {
