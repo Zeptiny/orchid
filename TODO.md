@@ -10,6 +10,8 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - RAG onnxruntime may not be being shipped correctly
 - Grep should also work with files
 - Subagents may be getting interrupted when only the main one should be
+- Investigate if the command timeout is being used - they appears to be hard coded at 30s
+- When the wai_for_subagent times out, it should still send the results of the subagents that completed
 
 ## Agent quality
 
@@ -62,11 +64,11 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - `AGENTS.md` handling
   - Also an `/init` command for it
   - When the `read` tool opens a file, rules from `AGENTS.md` in that directory (and ancestors) should be applied
-- User message queue (queue follow-ups while the agent is busy)
 - Session compaction / compression (summarize or drop older turns so long sessions stay within context limits)
 - Analytics dashboard
 - Allow to update the status of multiple tasks in one tool call
-  - ALso creating in one tool call
+  - Also creating in one tool call
+- Investigate if its better to not create new chains with the queued messages
 
 ## Native semantic code graph / AST tool improvements
 
