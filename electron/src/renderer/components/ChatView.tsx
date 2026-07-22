@@ -1144,6 +1144,7 @@ export function ChatView() {
           usage={chat.usage}
           maxContext={maxContext}
           messages={chat.messages}
+          streamingThinkingChars={chat.streamingThinking.length || undefined}
           model={providerPickerValue}
           modelLabels={providerModelLabels}
           modelDetails={providerModelDetails}
@@ -1177,6 +1178,7 @@ export function ChatView() {
         cumulativeUsage={chat.cumulativeUsage}
         maxContext={maxContext}
         messages={chat.messages}
+        streamingThinkingChars={chat.streamingThinking.length || undefined}
         focusSection={inspectorFocusSection}
         onFocusSectionConsumed={() => setInspectorFocusSection(null)}
       />

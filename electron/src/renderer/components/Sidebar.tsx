@@ -55,6 +55,7 @@ interface SidebarProps {
   cumulativeUsage?: Usage | null;
   maxContext?: number | null;
   messages?: readonly Message[];
+  streamingThinkingChars?: number;
   /**
    * Command-palette navigation target (section slug). When set, opens the
    * matching collapse and scrolls it into view, then parent should clear.
@@ -84,6 +85,7 @@ export function Sidebar({
   cumulativeUsage,
   maxContext,
   messages,
+  streamingThinkingChars,
   focusSection = null,
   onFocusSectionConsumed,
 }: SidebarProps) {
@@ -185,7 +187,7 @@ export function Sidebar({
           forceOpenToken={forcedSection === 'inspector-context' ? forceOpenEpoch : 0}
           badge={<ContextBadge usage={usage} maxContext={maxContext} />}
         >
-          <ContextGrid messages={messages} usage={usage} maxContext={maxContext} />
+          <ContextGrid messages={messages} usage={usage} maxContext={maxContext} streamingThinkingChars={streamingThinkingChars} />
         </CollapseBlock>
 
         <CollapseBlock

@@ -1438,20 +1438,11 @@ export function registerChatIPC(): void {
         }, 5000);
         activeAgent.interruptResetTimer = interruptResetTimer;
       } else if (activeAgent.agentCancelled) {
-        // Interrupt TIMEOUT after Esc2 (main cancelled): always cancel
-        // session-scoped subagents before dispose (M-P0-012 variant B).
-        // Esc2 itself does not cancel subagents; only this path / Esc3 /
-        // forceStopSession do.
+        // Interrupt TIMEOUT after Esc2 (main cancelled): dispose the main
+        // agent but let subagents keep running — the user did not confirm
+        // Esc3, so subagent cancellation was not requested.
         queueMicrotask(() => {
           if (activeAgents.get(sessionId) === activeAgent) {
-            try {
-              getSubagentManager().cancelRunning(sessionId);
-            } catch (err) {
-              console.debug(
-                'interrupt timeout subagent cancel failed (non-fatal):',
-                err,
-              );
-            }
             disposeActiveAgent(sessionId, activeAgent);
           }
         });

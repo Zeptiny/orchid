@@ -33,6 +33,7 @@ interface ContextGridProps {
   usage?: Usage | null;
   messages?: readonly Message[];
   maxContext?: number | null;
+  streamingThinkingChars?: number;
 }
 
 interface TokenBreakdown {
@@ -121,14 +122,19 @@ function computeBreakdown(
   messages: readonly Message[],
   usage: Usage | null,
   maxContext?: number | null,
+  streamingThinkingChars?: number,
 ): TokenBreakdown {
   const mc = maxContext && maxContext > 0 ? maxContext : 0;
 
   if (usage?.context) {
     const context = usage.context;
+    const chars = assistantMessageChars(messages);
+    if (streamingThinkingChars && streamingThinkingChars > 0) {
+      chars.reasoning += streamingThinkingChars;
+    }
     const assistant = splitAssistantTokens(
       context.assistant_tokens,
-      assistantMessageChars(messages),
+      chars,
     );
     return {
       system: context.system_tokens,
@@ -167,6 +173,9 @@ function computeBreakdown(
     .filter((m) => m.role === MessageRole.USER && !m.hidden)
     .reduce((sum, m) => sum + m.content.length, 0);
   const assistantChars = assistantMessageChars(messages);
+  if (streamingThinkingChars && streamingThinkingChars > 0) {
+    assistantChars.reasoning += streamingThinkingChars;
+  }
 
   const totalChars = toolChars + userChars + assistantChars.response + assistantChars.reasoning;
   const toolUseTokens = totalChars > 0 ? Math.round((toolChars / totalChars) * promptTokens) : 0;
@@ -240,11 +249,12 @@ export function ContextStackedBar({
   usage,
   messages,
   maxContext,
+  streamingThinkingChars,
   compact = false,
 }: ContextStackedBarProps) {
   const breakdown = useMemo(
-    () => computeBreakdown(messages ?? [], usage ?? null, maxContext),
-    [messages, usage, maxContext],
+    () => computeBreakdown(messages ?? [], usage ?? null, maxContext, streamingThinkingChars),
+    [messages, usage, maxContext, streamingThinkingChars],
   );
   const legend = useMemo(
     () => flattenLegend(buildLegendSections(breakdown)),
@@ -339,11 +349,12 @@ export function ContextLegend({
   usage,
   messages,
   maxContext,
+  streamingThinkingChars,
   variant = 'inspector',
 }: ContextLegendProps) {
   const breakdown = useMemo(
-    () => computeBreakdown(messages ?? [], usage ?? null, maxContext),
-    [messages, usage, maxContext],
+    () => computeBreakdown(messages ?? [], usage ?? null, maxContext, streamingThinkingChars),
+    [messages, usage, maxContext, streamingThinkingChars],
   );
   const sections = useMemo(() => buildLegendSections(breakdown), [breakdown]);
 
@@ -359,11 +370,11 @@ export function ContextLegend({
 }
 
 /** Sidebar context block: one stacked bar followed by its category values. */
-export function ContextGrid({ usage, messages, maxContext }: ContextGridProps) {
+export function ContextGrid({ usage, messages, maxContext, streamingThinkingChars }: ContextGridProps) {
   return (
     <div>
-      <ContextStackedBar usage={usage} messages={messages} maxContext={maxContext} />
-      <ContextLegend usage={usage} messages={messages} maxContext={maxContext} />
+      <ContextStackedBar usage={usage} messages={messages} maxContext={maxContext} streamingThinkingChars={streamingThinkingChars} />
+      <ContextLegend usage={usage} messages={messages} maxContext={maxContext} streamingThinkingChars={streamingThinkingChars} />
     </div>
   );
 }
