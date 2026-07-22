@@ -39,6 +39,11 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 - **Concepts File** — `CONCEPTS.md` at repo root — shared vocabulary that grounds all agents in the project's domain language.
 - **Compounding** — The process of documenting solved problems so future work avoids re-discovering known solutions.
 
+## Message Queue
+
+- **Message Queue** — An ephemeral, per-session list of user-composed messages waiting to be sent while the agent is working. Rendered above the input field. Strict FIFO processing.
+- **Queue Trigger** — The condition that determines when a queued message fires. Two types: "with next request" (injects before the next LLM API call, within the current chain) and "after chain ends" (sends as a new user message when the chain terminates).
+
 ## Workflow Terms
 
 - **Brainstorm** — Requirements exploration through collaborative dialogue. Produces a requirements doc.

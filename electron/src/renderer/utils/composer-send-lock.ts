@@ -15,6 +15,7 @@ export function shouldReleaseComposerSendLock(
 export type ComposerSendGate =
   | { action: 'send' }
   | { action: 'ignore' }
+  | { action: 'queue' }
   | { action: 'pick-project' }
   | { action: 'open-providers' }
   | { action: 'need-model' };
@@ -31,8 +32,11 @@ export function evaluateComposerSend(input: {
   providerAvailable: boolean;
   modelSelected: boolean;
 }): ComposerSendGate {
-  if (!input.trimmed || input.isStreaming || input.isSending) {
+  if (!input.trimmed || input.isSending) {
     return { action: 'ignore' };
+  }
+  if (input.isStreaming) {
+    return { action: 'queue' };
   }
   const isSlash = input.trimmed.startsWith('/');
   if (!input.workspaceBound && !isSlash) {
