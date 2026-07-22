@@ -3,7 +3,7 @@ import type { ConfigPatch, ConfigPatchMap } from '../../shared/types/ipc';
 import type { ModelSelection } from '../../shared/types/provider';
 
 /** Nested ConfigPatch keys that need specialized merge (not scalar assign). */
-type NestedPatchKey = 'rag' | 'tier_models' | 'tier_reasoning_effort' | 'mcp_servers' | 'providers';
+type NestedPatchKey = 'rag' | 'tier_models' | 'tier_reasoning_effort' | 'mcp_servers' | 'providers' | 'permissions';
 
 /** Scalar / nullable top-level patch keys applied with simple defined-assign. */
 type ScalarPatchKey = Exclude<keyof ConfigPatch, NestedPatchKey>;
@@ -82,6 +82,10 @@ export function applyConfigDraft(base: Config, draft: ConfigPatch): Config {
     next.providers = applyRecordMap(base.providers, draft.providers);
   }
 
+  if (draft.permissions !== undefined) {
+    next.permissions = applyRecordMap(base.permissions, draft.permissions);
+  }
+
   return next;
 }
 
@@ -91,7 +95,8 @@ function isNestedPatchKey(key: keyof ConfigPatch): key is NestedPatchKey {
     key === 'tier_models' ||
     key === 'tier_reasoning_effort' ||
     key === 'mcp_servers' ||
-    key === 'providers'
+    key === 'providers' ||
+    key === 'permissions'
   );
 }
 
@@ -135,10 +140,10 @@ function applyEffortMap(
   return next;
 }
 
-function applyRecordMap(
-  base: Record<string, Record<string, unknown>>,
-  patch: ConfigPatchMap<Record<string, unknown>>,
-): Record<string, Record<string, unknown>> {
+function applyRecordMap<V>(
+  base: Record<string, V>,
+  patch: ConfigPatchMap<V>,
+): Record<string, V> {
   const next = { ...base };
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) {

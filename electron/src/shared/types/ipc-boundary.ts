@@ -92,6 +92,12 @@ export interface ConfigDiagnostic {
   readonly message: string;
 }
 
+export type PermissionModeValue = 'allow' | 'ask' | 'decide-for-me' | 'ask-when-flagged';
+
+export type PermissionRule =
+  | PermissionModeValue
+  | { inside: PermissionModeValue; outside: PermissionModeValue };
+
 export interface Config {
   /**
    * The selected connection and model for new work. `null` keeps Orchid in
@@ -127,6 +133,8 @@ export interface Config {
    * Default 100 — high enough for real agent workloads, not unbounded.
    */
   max_tool_steps: number;
+  permission_history_size: number;
+  permissions: Record<string, PermissionRule>;
   /**
    * Sticky default project directory for new sessions / draft workspace.
    * Absolute path when set; `null` when unbound (never invented from process.cwd()).

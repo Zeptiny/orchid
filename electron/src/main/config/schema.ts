@@ -122,6 +122,19 @@ export const configSchema = z
      * Python's tool loop is unbounded; 100 is a high practical default.
      */
     max_tool_steps: z.number().int().positive().default(100),
+    permission_history_size: z.number().int().min(0).max(50).default(10),
+    permissions: z
+      .record(
+        z.string(),
+        z.union([
+          z.enum(['allow', 'ask', 'decide-for-me', 'ask-when-flagged']),
+          z.object({
+            inside: z.enum(['allow', 'ask', 'decide-for-me', 'ask-when-flagged']),
+            outside: z.enum(['allow', 'ask', 'decide-for-me', 'ask-when-flagged']),
+          }),
+        ]),
+      )
+      .default({}),
     /**
      * Sticky home-config default project directory for new sessions.
      * Empty string is treated as null. When non-null, must be absolute.

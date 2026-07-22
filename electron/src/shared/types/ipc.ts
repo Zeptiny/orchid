@@ -48,6 +48,7 @@ import type {
   ASTIndexProgress,
   IndexRunState,
   RAGConfig,
+  PermissionRule,
 } from './ipc-boundary';
 
 export type {
@@ -78,6 +79,8 @@ export type {
   ASTIndexProgress,
   IndexRunState,
   RAGConfig,
+  PermissionModeValue,
+  PermissionRule,
   UpdaterState,
   UpdateStatus,
 } from './ipc-boundary';
@@ -340,6 +343,8 @@ export type ConfigPatch = {
   llm_stream_retries?: number;
   background_command_idle_timeout?: number;
   max_tool_steps?: number;
+  permission_history_size?: number;
+  permissions?: ConfigPatchMap<PermissionRule>;
   default_project_dir?: string | null;
   always_expand_tool_groups?: boolean;
   has_completed_onboarding?: boolean;
