@@ -19,11 +19,6 @@ const TRIGGER_LABEL: Record<QueueTrigger, string> = {
   'chain-end': 'chain end',
 };
 
-const TRIGGER_CLASS: Record<QueueTrigger, string> = {
-  'next-request': 'border-primary/35 bg-primary/10 text-primary hover:bg-primary/20',
-  'chain-end': 'border-accent/35 bg-accent/10 text-accent hover:bg-accent/20',
-};
-
 /**
  * MessageQueue — deferred-send messages staged above the composer.
  *
@@ -215,7 +210,11 @@ function TriggerBadge({
       type="button"
       aria-label={`Trigger: ${TRIGGER_LABEL[message.trigger]}. Toggle to ${TRIGGER_LABEL[next]}.`}
       title={`Fires at ${TRIGGER_LABEL[message.trigger]} — click to toggle`}
-      className={`shrink-0 cursor-pointer rounded-full border px-1.5 py-px text-xs font-medium leading-tight transition-colors ${TRIGGER_CLASS[message.trigger]}`}
+      className={`shrink-0 cursor-pointer rounded-full border px-1.5 py-px text-xs font-medium leading-tight transition-colors ${
+        message.trigger === 'next-request'
+          ? 'border-primary/35 bg-primary/10 text-primary hover:bg-primary/20'
+          : 'border-accent/35 bg-accent/10 text-accent hover:bg-accent/20'
+      }`}
       onClick={() => onChangeTrigger(message.id, next)}
     >
       {TRIGGER_LABEL[message.trigger]}

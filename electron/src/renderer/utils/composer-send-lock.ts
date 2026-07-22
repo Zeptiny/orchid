@@ -36,7 +36,7 @@ export function evaluateComposerSend(input: {
     return { action: 'ignore' };
   }
   if (input.isStreaming) {
-    return { action: 'queue' };
+    return input.trimmed.startsWith('/') ? { action: 'ignore' } : { action: 'queue' };
   }
   const isSlash = input.trimmed.startsWith('/');
   if (!input.workspaceBound && !isSlash) {

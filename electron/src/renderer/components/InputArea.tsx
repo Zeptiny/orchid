@@ -418,6 +418,16 @@ export function InputArea({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [askQuestion.cancelAll, canInterrupt, hasActiveQuestion, isSlashMode, isViewActive, onCancel]);
 
+  const resetComposerHeight = useCallback(() => {
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      if (textareaRef.current) {
+        textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
+      }
+    });
+  }, []);
+
   const handleSend = useCallback(async () => {
     const trimmed = input.trim();
     // status and isSendingRef both guard: status can lag one frame behind Enter.
@@ -435,13 +445,7 @@ export function InputArea({
       if (onQueue) {
         setInput('');
         onQueue(trimmed);
-        if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-        rafRef.current = requestAnimationFrame(() => {
-          rafRef.current = null;
-          if (textareaRef.current) {
-            textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
-          }
-        });
+        resetComposerHeight();
       }
       return;
     }
@@ -464,13 +468,7 @@ export function InputArea({
       // Gate failures that resolve without throwing are cleared via status effect.
       isSendingRef.current = false;
     }
-    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      if (textareaRef.current) {
-        textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
-      }
-    });
+    resetComposerHeight();
   }, [
     input,
     isStreaming,
@@ -480,6 +478,7 @@ export function InputArea({
     onQueue,
     onSend,
     providerAvailable,
+    resetComposerHeight,
     workspaceBound,
   ]);
 

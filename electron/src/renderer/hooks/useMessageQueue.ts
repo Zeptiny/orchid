@@ -33,8 +33,8 @@ export interface UseMessageQueueReturn {
   cancelEditing: (id: string) => void;
   changeTrigger: (id: string, trigger: QueueTrigger) => void;
   clearQueue: () => void;
-  /** Consume the next batch of messages eligible to fire. Returns null if held. */
-  consumeNext: () => { messages: QueuedMessage[]; text: string } | null;
+  /** Consume the next batch of messages eligible to fire. Returns joined text or null if held. */
+  consumeNext: () => string | null;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -50,6 +50,10 @@ export function useMessageQueue(): UseMessageQueueReturn {
   const [queue, setQueue] = useState<QueuedMessage[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const editSnapshotRef = useRef<string>('');
+  const queueRef = useRef<QueuedMessage[]>([]);
+  const editingIdRef = useRef<string | null>(null);
+  queueRef.current = queue;
+  editingIdRef.current = editingId;
 
   const addToQueue = useCallback((text: string, trigger: QueueTrigger = 'next-request') => {
     const trimmed = text.trim();
@@ -82,11 +86,8 @@ export function useMessageQueue(): UseMessageQueueReturn {
   }, []);
 
   const startEditing = useCallback((id: string) => {
-    setQueue((prev) => {
-      const msg = prev.find((m) => m.id === id);
-      if (msg) editSnapshotRef.current = msg.text;
-      return prev;
-    });
+    const msg = queueRef.current.find((m) => m.id === id);
+    if (msg) editSnapshotRef.current = msg.text;
     setEditingId(id);
   }, []);
 
@@ -127,30 +128,26 @@ export function useMessageQueue(): UseMessageQueueReturn {
     setEditingId(null);
   }, []);
 
-  const consumeNext = useCallback((): { messages: QueuedMessage[]; text: string } | null => {
-    let result: { messages: QueuedMessage[]; text: string } | null = null;
+  const consumeNext = useCallback((): string | null => {
+    const current = queueRef.current;
+    if (current.length === 0) return null;
 
-    setQueue((prev) => {
-      if (prev.length === 0) return prev;
+    const front = current[0];
+    if (front.id === editingIdRef.current) return null;
 
-      const front = prev[0];
-      if (front.id === editingId) return prev;
-
-      const batch: QueuedMessage[] = [front];
-      let i = 1;
-      if (front.trigger === 'next-request') {
-        while (i < prev.length && prev[i].trigger === 'next-request' && prev[i].id !== editingId) {
-          batch.push(prev[i]);
-          i++;
-        }
+    const batch: QueuedMessage[] = [front];
+    let i = 1;
+    if (front.trigger === 'next-request') {
+      while (i < current.length && current[i].trigger === 'next-request' && current[i].id !== editingIdRef.current) {
+        batch.push(current[i]);
+        i++;
       }
+    }
 
-      result = { messages: batch, text: batch.map((m) => m.text).join('\n\n') };
-      return prev.slice(i);
-    });
-
-    return result;
-  }, [editingId]);
+    const text = batch.map((m) => m.text).join('\n\n');
+    setQueue(current.slice(i));
+    return text;
+  }, []);
 
   return {
     queue,

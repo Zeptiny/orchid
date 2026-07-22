@@ -649,14 +649,7 @@ export function ChatView() {
     await handleSend(lastUser.content);
   }, [chat, handleSend]);
 
-  useQueueAutoFire(chat.status, messageQueue, handleSend);
-
-  const handleQueue = useCallback(
-    (message: string) => {
-      messageQueue.addToQueue(message);
-    },
-    [messageQueue.addToQueue],
-  );
+  useQueueAutoFire(chat.status, messageQueue.consumeNext, messageQueue.editingId, handleSend);
 
   const sessionSwitchHandlers = useMemo(() => {
     const handlers: Record<string, (event: KeyboardEvent) => void> = {};
@@ -1108,7 +1101,7 @@ export function ChatView() {
           interruptState={chat.interruptState}
           onSend={handleSend}
           onCancel={chat.cancel}
-          onQueue={handleQueue}
+          onQueue={messageQueue.addToQueue}
           commandContext={commandContext}
           sessions={sessions}
           currentTheme={currentTheme}
