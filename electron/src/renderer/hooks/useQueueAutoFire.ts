@@ -8,6 +8,16 @@
 import { useEffect, useRef } from 'react';
 import type { ChatStatus } from './useChat';
 
+/** Pure transition check: should the queue fire on this status change? */
+export function shouldAutoFire(
+  prevStatus: ChatStatus,
+  nextStatus: ChatStatus,
+  editingId: string | null,
+  isFiring: boolean,
+): boolean {
+  return nextStatus === 'idle' && prevStatus === 'streaming' && !isFiring && editingId === null;
+}
+
 /**
  * Watches status transitions and auto-fires queued messages.
  *
@@ -26,13 +36,10 @@ export function useQueueAutoFire(
   const isFiringRef = useRef(false);
 
   useEffect(() => {
-    const wasStreaming = prevStatusRef.current === 'streaming';
+    const prev = prevStatusRef.current;
     prevStatusRef.current = status;
 
-    if (status !== 'idle') return;
-    if (!wasStreaming) return;
-    if (isFiringRef.current) return;
-    if (editingId !== null) return;
+    if (!shouldAutoFire(prev, status, editingId, isFiringRef.current)) return;
 
     const text = consumeNext();
     if (!text) return;

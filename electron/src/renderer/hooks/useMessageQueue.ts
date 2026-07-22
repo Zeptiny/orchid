@@ -44,6 +44,47 @@ function generateId(): string {
   return `qm-${nextId++}-${Date.now()}`;
 }
 
+/** Pure FIFO batch selection: pick the front message plus consecutive next-request messages. */
+export function selectBatch(
+  queue: readonly QueuedMessage[],
+  editingId: string | null,
+): { batch: QueuedMessage[]; remainder: QueuedMessage[]; text: string } | null {
+  if (queue.length === 0) return null;
+
+  const front = queue[0];
+  if (front.id === editingId) return null;
+
+  const batch: QueuedMessage[] = [front];
+  let i = 1;
+  if (front.trigger === 'next-request') {
+    while (i < queue.length && queue[i].trigger === 'next-request' && queue[i].id !== editingId) {
+      batch.push(queue[i]);
+      i++;
+    }
+  }
+
+  return {
+    batch,
+    remainder: queue.slice(i),
+    text: batch.map((m) => m.text).join('\n\n'),
+  };
+}
+
+/** Pure reorder: move item at fromIndex to toIndex. Returns copy if invalid. */
+export function reorderItems<T>(items: readonly T[], fromIndex: number, toIndex: number): T[] {
+  if (
+    fromIndex < 0 || fromIndex >= items.length ||
+    toIndex < 0 || toIndex >= items.length ||
+    fromIndex === toIndex
+  ) {
+    return [...items];
+  }
+  const next = [...items];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useMessageQueue(): UseMessageQueueReturn {
@@ -70,19 +111,7 @@ export function useMessageQueue(): UseMessageQueueReturn {
   }, []);
 
   const reorderQueue = useCallback((fromIndex: number, toIndex: number) => {
-    setQueue((prev) => {
-      if (
-        fromIndex < 0 || fromIndex >= prev.length ||
-        toIndex < 0 || toIndex >= prev.length ||
-        fromIndex === toIndex
-      ) {
-        return prev;
-      }
-      const next = [...prev];
-      const [moved] = next.splice(fromIndex, 1);
-      next.splice(toIndex, 0, moved);
-      return next;
-    });
+    setQueue((prev) => reorderItems(prev, fromIndex, toIndex));
   }, []);
 
   const startEditing = useCallback((id: string) => {
@@ -129,24 +158,10 @@ export function useMessageQueue(): UseMessageQueueReturn {
   }, []);
 
   const consumeNext = useCallback((): string | null => {
-    const current = queueRef.current;
-    if (current.length === 0) return null;
-
-    const front = current[0];
-    if (front.id === editingIdRef.current) return null;
-
-    const batch: QueuedMessage[] = [front];
-    let i = 1;
-    if (front.trigger === 'next-request') {
-      while (i < current.length && current[i].trigger === 'next-request' && current[i].id !== editingIdRef.current) {
-        batch.push(current[i]);
-        i++;
-      }
-    }
-
-    const text = batch.map((m) => m.text).join('\n\n');
-    setQueue(current.slice(i));
-    return text;
+    const result = selectBatch(queueRef.current, editingIdRef.current);
+    if (!result) return null;
+    setQueue(result.remainder);
+    return result.text;
   }, []);
 
   return {
