@@ -53,10 +53,10 @@ describe('evaluateComposerSend (lock + gates)', () => {
     );
   });
 
-  it('ignores input during streaming when send lock is held', () => {
+  it('queues input during streaming even when send lock is held', () => {
     expect(
       evaluateComposerSend({ ...ready, isStreaming: true, isSending: true }).action,
-    ).toBe('ignore');
+    ).toBe('queue');
   });
 
   it('after error residual release (isSending false), second send is admitted', () => {

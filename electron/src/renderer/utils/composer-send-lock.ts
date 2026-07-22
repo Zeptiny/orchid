@@ -32,11 +32,14 @@ export function evaluateComposerSend(input: {
   providerAvailable: boolean;
   modelSelected: boolean;
 }): ComposerSendGate {
-  if (!input.trimmed || input.isSending) {
+  if (!input.trimmed) {
     return { action: 'ignore' };
   }
   if (input.isStreaming) {
     return input.trimmed.startsWith('/') ? { action: 'ignore' } : { action: 'queue' };
+  }
+  if (input.isSending) {
+    return { action: 'ignore' };
   }
   const isSlash = input.trimmed.startsWith('/');
   if (!input.workspaceBound && !isSlash) {
