@@ -241,12 +241,25 @@ describe('grep tool', () => {
     expect(result.error.message).toContain('Invalid regex');
   });
 
-  it('should handle non-existent directory', async () => {
+  it('should handle non-existent path', async () => {
     const result = await executeGrepOutcome('test', '/nonexistent/path');
 
     expect(result.status).toBe('error');
-    expect(result.error.code).toBe('directory_not_found');
+    expect(result.error.code).toBe('path_not_found');
     expect(result.error.message).toContain('does not exist');
+  });
+
+  it('should search a single file when given a file path', async () => {
+    writeFile('src/app.ts', 'function hello() {\n  return "world";\n}\nfunction goodbye() {\n  return "moon";\n}');
+    writeFile('src/other.ts', 'function hello() { return "other"; }');
+
+    const result = await executeGrepOutcome('function', path.join(tmpDir, 'src/app.ts'));
+
+    expect(result.status).toBe('complete');
+    expect(result.data.matches).toHaveLength(2);
+    expect(result.data.matches[0].path).toBe('app.ts');
+    expect(result.data.matches[0].line).toBe(1);
+    expect(result.data.matches[1].line).toBe(4);
   });
 
   it('should return no matches message when nothing found', async () => {
