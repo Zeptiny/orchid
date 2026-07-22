@@ -114,6 +114,11 @@ export interface ChatStopMessage {
   sessionId: string;
 }
 
+/** Signal that a next-request queue message is pending; stop the current chain at the next step boundary. */
+export interface ChatQueueNextRequest {
+  sessionId: string;
+}
+
 export type ChatSnapshotState = 'idle' | 'streaming' | 'error';
 
 export interface ChatToolCallSnapshot {
@@ -738,6 +743,8 @@ export interface OrchidAPI {
   chat: {
     send: (message: ChatSendMessage) => Promise<ChatSendResult>;
     cancel: (message?: ChatCancelMessage) => Promise<{ status: string }>;
+    /** Signal that a next-request queue message is pending; stop the current chain at the next step boundary. */
+    queueNext: (request: ChatQueueNextRequest) => Promise<void>;
     /** Immediately stop exactly one session without staged Esc confirmation. */
     stop: (message: ChatStopMessage) => Promise<{ status: string }>;
     /** Read coherent persisted history and in-flight state without changing selection. */
@@ -924,6 +931,7 @@ export const IPC_CHANNELS = {
   // Chat
   CHAT_SEND: 'chat:send',
   CHAT_CANCEL: 'chat:cancel',
+  CHAT_QUEUE_NEXT: 'chat:queue-next',
   CHAT_STOP: 'chat:stop',
   CHAT_SNAPSHOT: 'chat:snapshot',
   CHAT_CHUNK: 'chat:chunk',
@@ -1057,6 +1065,7 @@ export type IPCChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.CHAT_SEND,
   IPC_CHANNELS.CHAT_CANCEL,
+  IPC_CHANNELS.CHAT_QUEUE_NEXT,
   IPC_CHANNELS.CHAT_STOP,
   IPC_CHANNELS.CHAT_SNAPSHOT,
   IPC_CHANNELS.SUBAGENTS_SNAPSHOT,
