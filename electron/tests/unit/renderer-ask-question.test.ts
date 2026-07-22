@@ -12,15 +12,21 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
+  applyQuestionResult,
   applyOptionSelection,
   applyText,
   buildSubmissions,
   createActiveQuestion,
+  enqueueQuestion,
   markAnswerSkipped,
+  reconcileQuestionSnapshot,
+  removeSettledQuestion,
+  updateActiveQuestion,
   type ActiveQuestion,
   type Question,
   type UseAskQuestionReturn,
 } from '../../src/renderer/hooks/useAskQuestion';
+import { resolveInputEscapeAction } from '../../src/renderer/components/InputArea';
 import { AskQuestionOverlay } from '../../src/renderer/components/AskQuestionOverlay';
 import { AskQuestionToolResult } from '../../src/renderer/components/ToolResults/AskQuestionToolResult';
 import {
@@ -28,6 +34,7 @@ import {
   rendererRegistrySnapshot,
 } from '../../src/renderer/components/ToolResults/registry';
 import type { CanonicalToolResult } from '../../src/shared/types/tool-result';
+import type { AskQuestionAskedEvent } from '../../src/shared/types/ipc';
 
 const RENDERER = path.resolve(__dirname, '../../src/renderer');
 
@@ -57,7 +64,11 @@ const QUESTIONS: Question[] = [
 ];
 
 function makeState(questions: Question[] = QUESTIONS): ActiveQuestion {
-  return createActiveQuestion('tool-call-1', questions);
+  return createActiveQuestion('tool-call-1', questions, 'session-1');
+}
+
+function asked(toolCallId: string, sessionId = 'session-1'): AskQuestionAskedEvent {
+  return { sessionId, toolCallId, questions: QUESTIONS };
 }
 
 function makeController(active: ActiveQuestion | null): UseAskQuestionReturn {
@@ -165,6 +176,136 @@ describe('buildSubmissions', () => {
       { selected: [], text: 'hello', skipped: false },
       { selected: ['Seeds'], text: null, skipped: true },
     ]);
+  });
+});
+
+// ── Session-affine pending queue ─────────────────────────────────────────────
+
+describe('ask_question pending queue', () => {
+  it('keeps overlapping events in FIFO order and deduplicates by session + tool call', () => {
+    let queue: ActiveQuestion[] = [];
+    queue = enqueueQuestion(queue, asked('tool-call-1'), 'session-1');
+    queue = enqueueQuestion(queue, asked('tool-call-2'), 'session-1');
+    queue = enqueueQuestion(queue, asked('tool-call-1'), 'session-1');
+
+    expect(queue.map((item) => item.toolCallId)).toEqual(['tool-call-1', 'tool-call-2']);
+  });
+
+  it('retains controls when an invoke rejects or returns ok:false', () => {
+    const queue = [
+      createActiveQuestion('tool-call-1', QUESTIONS, 'session-1'),
+      createActiveQuestion('tool-call-2', QUESTIONS, 'session-1'),
+    ];
+
+    expect(applyQuestionResult(queue, queue[0]!)).toBe(queue);
+    expect(applyQuestionResult(queue, queue[0]!, { ok: false })).toBe(queue);
+  });
+
+  it('promotes only the next item after an acknowledged settlement', () => {
+    const queue = [
+      createActiveQuestion('tool-call-1', QUESTIONS, 'session-1'),
+      createActiveQuestion('tool-call-2', QUESTIONS, 'session-1'),
+    ];
+
+    expect(applyQuestionResult(queue, queue[0]!, { ok: true }).map((item) => item.toolCallId))
+      .toEqual(['tool-call-2']);
+  });
+
+  it('updates only the active FIFO entry and preserves identity for stale or no-op edits', () => {
+    const first = createActiveQuestion('tool-call-1', QUESTIONS, 'session-1');
+    const second = createActiveQuestion('tool-call-2', QUESTIONS, 'session-1');
+    const queue = [first, second];
+
+    expect(updateActiveQuestion(queue, first, (state) => state)).toBe(queue);
+    expect(updateActiveQuestion(
+      queue,
+      createActiveQuestion('stale', QUESTIONS, 'session-1'),
+      (state) => ({ ...state, currentIndex: 1 }),
+    )).toBe(queue);
+
+    const updated = updateActiveQuestion(queue, first, (state) => ({
+      ...state,
+      currentIndex: 1,
+    }));
+    expect(updated[0]?.currentIndex).toBe(1);
+    expect(updated[1]).toBe(second);
+  });
+
+  it('hydrates a changed session from its snapshot and replays buffered events', () => {
+    const queue = reconcileQuestionSnapshot(
+      'session-2',
+      [asked('snapshot-question', 'session-2')],
+      [
+        asked('snapshot-question', 'session-2'),
+        asked('live-question', 'session-2'),
+        asked('wrong-session', 'session-1'),
+      ],
+    );
+
+    expect(queue.map((item) => [item.sessionId, item.toolCallId])).toEqual([
+      ['session-2', 'snapshot-question'],
+      ['session-2', 'live-question'],
+    ]);
+  });
+
+  it('does not resurrect a snapshot entry settled while hydration was in flight', () => {
+    const settledKeys = new Set(['session-1\u0000snapshot-question']);
+
+    const queue = reconcileQuestionSnapshot(
+      'session-1',
+      [asked('snapshot-question')],
+      [asked('live-question')],
+      settledKeys,
+    );
+
+    expect(queue.map((item) => item.toolCallId)).toEqual(['live-question']);
+  });
+
+  it('removes a settled queue entry idempotently and promotes the next question', () => {
+    const queue = [
+      createActiveQuestion('tool-call-1', QUESTIONS, 'session-1'),
+      createActiveQuestion('tool-call-2', QUESTIONS, 'session-1'),
+    ];
+    const settled = {
+      sessionId: 'session-1',
+      toolCallId: 'tool-call-1',
+      result: 'cancelled' as const,
+    };
+
+    const promoted = removeSettledQuestion(queue, settled);
+    expect(promoted.map((item) => item.toolCallId)).toEqual(['tool-call-2']);
+    expect(removeSettledQuestion(promoted, settled)).toBe(promoted);
+  });
+
+  it('defensively ignores live and snapshot questions for another session', () => {
+    expect(enqueueQuestion([], asked('wrong', 'session-2'), 'session-1')).toEqual([]);
+    expect(reconcileQuestionSnapshot('session-1', [asked('wrong', 'session-2')], []))
+      .toEqual([]);
+  });
+});
+
+describe('InputArea Escape ownership', () => {
+  it('prioritizes the active question over chat interruption', () => {
+    expect(resolveInputEscapeAction({
+      hasActiveQuestion: true,
+      canInterrupt: true,
+      isSlashMode: false,
+      isViewActive: false,
+      settingsOpen: false,
+    })).toBe('cancel-question');
+  });
+
+  it('leaves Escape to settings, inactive views, and slash menus', () => {
+    const base = {
+      hasActiveQuestion: false,
+      canInterrupt: true,
+      isSlashMode: false,
+      isViewActive: false,
+      settingsOpen: false,
+    };
+    expect(resolveInputEscapeAction({ ...base, settingsOpen: true })).toBe('none');
+    expect(resolveInputEscapeAction({ ...base, isViewActive: true })).toBe('none');
+    expect(resolveInputEscapeAction({ ...base, isSlashMode: true })).toBe('none');
   });
 });
 
@@ -285,14 +426,16 @@ describe('ask_question registry and wiring', () => {
     const src = read('hooks/useAskQuestion.ts');
     expect(src).toMatch(/window\.orchid\?\.askQuestion/);
     expect(src).toMatch(/bridge\.onAsked\(/);
-    expect(src).toMatch(/return bridge\.onAsked/);
+    expect(src).toMatch(/bridge\.onSettled\(/);
+    expect(src).toMatch(/unsubscribeAsked\(\)/);
+    expect(src).toMatch(/unsubscribeSettled\(\)/);
     expect(src).toMatch(/bridge\.answer\(\{/);
     expect(src).toMatch(/bridge\.cancel\(\{/);
   });
 
   it('InputArea swaps the composer for the overlay while a question is active', () => {
     const src = read('components/InputArea.tsx');
-    expect(src).toMatch(/useAskQuestion\(\)/);
+    expect(src).toMatch(/useAskQuestion\(sessionId\)/);
     expect(src).toMatch(/if \(askQuestion\.active\) \{/);
     expect(src).toMatch(/<AskQuestionOverlay question=\{askQuestion\} \/>/);
   });

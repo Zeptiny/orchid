@@ -467,7 +467,7 @@ describe('wait_for_subagent', () => {
     const waitPromise = handler({ subagent_ids: [record.id] });
 
     // The subagent pauses to ask a question, which unblocks the wait early.
-    const questionPromise = manager.markQuestionPending(record.id, 'tc-123', [
+    const questionPromise = manager.markQuestionPending(record.id, 'tc-123<&"', [
       {
         type: 'single',
         title: 'Which framework?',
@@ -483,7 +483,9 @@ describe('wait_for_subagent', () => {
 
     expect(result.canonical.status).toBe('complete');
     expect(result.agentProjection.content).toContain('status="question_pending"');
-    expect(result.agentProjection.content).toContain('<pending_question tool_call_id="tc-123">');
+    expect(result.agentProjection.content).toContain(
+      '<pending_question tool_call_id="tc-123&lt;&amp;&quot;">',
+    );
     expect(result.agentProjection.content).toContain(
       '<question type="single" title="Which framework?" description="Pick one">',
     );
@@ -493,7 +495,7 @@ describe('wait_for_subagent', () => {
     expect(record.state).toBe(SubagentState.RUNNING);
 
     // Resolve the pending question so the promise does not dangle.
-    manager.answerSubagentQuestion(record.id, { type: 'declined' });
+    manager.answerSubagentQuestion(record.id, 'tc-123<&"', { type: 'declined' });
     await questionPromise;
   });
 });
@@ -699,8 +701,8 @@ describe('answer_subagent', () => {
     manager = new SubagentManager();
   });
 
-  function spawnWithPendingQuestion() {
-    const record = manager.spawn('test', 'task', codeReviewerAgent);
+  function spawnWithPendingQuestion(sessionId?: string) {
+    const record = manager.spawn('test', 'task', codeReviewerAgent, { sessionId });
     manager.markRunning(record.id);
     const questionPromise = manager.markQuestionPending(record.id, 'tc-1', sampleQuestions);
     return { id: record.id, questionPromise };
@@ -711,7 +713,7 @@ describe('answer_subagent', () => {
     const { id, questionPromise } = spawnWithPendingQuestion();
 
     const answers = [{ selected: ['React'], text: null, skipped: false }];
-    const result = (await handler({ subagent_id: id, answers })) as ToolExecutionResult;
+    const result = (await handler({ subagent_id: id, tool_call_id: 'tc-1', answers })) as ToolExecutionResult;
 
     expect(result.canonical.status).toBe('complete');
     expect(result.agentProjection.content).toContain('answered');
@@ -723,11 +725,49 @@ describe('answer_subagent', () => {
     const { handler } = buildAnswerSubagentTool(manager);
     const { id, questionPromise } = spawnWithPendingQuestion();
 
-    const result = (await handler({ subagent_id: id, decline: true })) as ToolExecutionResult;
+    const result = (await handler({ subagent_id: id, tool_call_id: 'tc-1', decline: true })) as ToolExecutionResult;
 
     expect(result.canonical.status).toBe('complete');
     expect(result.agentProjection.content).toContain('declined');
     await expect(questionPromise).resolves.toEqual({ type: 'declined' });
+  });
+
+  it('rejects attempts from a subagent scope and leaves the question pending', async () => {
+    const { handler } = buildAnswerSubagentTool(manager);
+    const { id, questionPromise } = spawnWithPendingQuestion('sess-a');
+
+    try {
+      const result = (await handler(
+        { subagent_id: id, tool_call_id: 'tc-1', decline: true },
+        { cwd: '/tmp/project', sessionId: 'sess-a', agentScopeId: 'subagent-peer' },
+      )) as ToolExecutionResult;
+
+      expect(result.canonical.status).toBe('error');
+      expect(result.agentProjection.content).toMatch(/main agent/i);
+      expect(manager.getRecord(id)?.pendingQuestion).not.toBeNull();
+    } finally {
+      manager.answerSubagentQuestion(id, 'tc-1', { type: 'declined' });
+      await questionPromise;
+    }
+  });
+
+  it('rejects attempts from another session and leaves the question pending', async () => {
+    const { handler } = buildAnswerSubagentTool(manager);
+    const { id, questionPromise } = spawnWithPendingQuestion('sess-owner');
+
+    try {
+      const result = (await handler(
+        { subagent_id: id, tool_call_id: 'tc-1', decline: true },
+        { cwd: '/tmp/project', sessionId: 'sess-other', agentScopeId: 'main' },
+      )) as ToolExecutionResult;
+
+      expect(result.canonical.status).toBe('error');
+      expect(result.agentProjection.content).toContain('no pending question');
+      expect(manager.getRecord(id)?.pendingQuestion).not.toBeNull();
+    } finally {
+      manager.answerSubagentQuestion(id, 'tc-1', { type: 'declined' });
+      await questionPromise;
+    }
   });
 
   it('errors when both answers and decline are provided', async () => {
@@ -736,6 +776,7 @@ describe('answer_subagent', () => {
 
     const result = (await handler({
       subagent_id: id,
+      tool_call_id: 'tc-1',
       answers: [{ selected: ['React'], text: null, skipped: false }],
       decline: true,
     })) as ToolExecutionResult;
@@ -743,7 +784,7 @@ describe('answer_subagent', () => {
     expect(result.canonical.status).toBe('error');
     expect(result.agentProjection.content).toContain('exactly one');
     // The pending question is left untouched; clean it up.
-    manager.answerSubagentQuestion(id, { type: 'declined' });
+    manager.answerSubagentQuestion(id, 'tc-1', { type: 'declined' });
     await questionPromise;
   });
 
@@ -751,11 +792,11 @@ describe('answer_subagent', () => {
     const { handler } = buildAnswerSubagentTool(manager);
     const { id, questionPromise } = spawnWithPendingQuestion();
 
-    const result = (await handler({ subagent_id: id })) as ToolExecutionResult;
+    const result = (await handler({ subagent_id: id, tool_call_id: 'tc-1' })) as ToolExecutionResult;
 
     expect(result.canonical.status).toBe('error');
     expect(result.agentProjection.content).toContain('exactly one');
-    manager.answerSubagentQuestion(id, { type: 'declined' });
+    manager.answerSubagentQuestion(id, 'tc-1', { type: 'declined' });
     await questionPromise;
   });
 
@@ -763,7 +804,11 @@ describe('answer_subagent', () => {
     const { handler } = buildAnswerSubagentTool(manager);
     const record = manager.spawn('test', 'task', codeReviewerAgent);
 
-    const result = (await handler({ subagent_id: record.id, decline: true })) as ToolExecutionResult;
+    const result = (await handler({
+      subagent_id: record.id,
+      tool_call_id: 'tc-missing',
+      decline: true,
+    })) as ToolExecutionResult;
 
     expect(result.canonical.status).toBe('error');
     expect(result.agentProjection.content).toContain('no pending question');
@@ -774,5 +819,32 @@ describe('answer_subagent', () => {
     expect(definition.name).toBe('answer_subagent');
     expect(definition.actionLabel).toBe('Answering subagent...');
     expect(definition.category).toBe('subagent');
+    expect(definition.description).toContain('tool_call_id');
+    expect(definition.inputSchema.safeParse({
+      subagent_id: 'subagent-1',
+      decline: true,
+    }).success).toBe(false);
+    expect(definition.inputSchema.safeParse({
+      subagent_id: 'subagent-1',
+      tool_call_id: 'tc-1',
+      decline: true,
+    }).success).toBe(true);
+  });
+
+  it('rejects the wrong question identity without settling the pending question', async () => {
+    const { handler } = buildAnswerSubagentTool(manager);
+    const { id, questionPromise } = spawnWithPendingQuestion();
+
+    const result = (await handler({
+      subagent_id: id,
+      tool_call_id: 'tc-stale',
+      decline: true,
+    })) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('tc-stale');
+    expect(manager.getRecord(id)?.pendingQuestion?.toolCallId).toBe('tc-1');
+    manager.answerSubagentQuestion(id, 'tc-1', { type: 'declined' });
+    await questionPromise;
   });
 });

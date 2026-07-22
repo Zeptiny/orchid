@@ -54,6 +54,7 @@ const mocks = vi.hoisted(() => ({
         { definition: { name: 'delegate_to_subagent' } },
         { definition: { name: 'wait_for_subagent' } },
         { definition: { name: 'interrupt_subagents' } },
+        { definition: { name: 'answer_subagent' } },
       ];
     }),
   },
@@ -276,6 +277,24 @@ describe('createSubagentStreamRunner', () => {
     expect(mocks.toolRegistry.filter).toHaveBeenCalledWith([]);
     expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
       agent: expect.objectContaining({ allowed_tools: [] }),
+    }));
+  });
+
+  it('removes main-only subagent controls from wildcard child registries', async () => {
+    await collect(createSubagentStreamRunner()({
+      task: 'Inspect the project',
+      agent,
+      selection,
+      abortSignal: new AbortController().signal,
+      agentScopeId: 'scope-main-only-tools',
+      sessionId: 'session-main-only-tools',
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+    }));
+
+    expect(mocks.toolRegistry.filter).toHaveBeenCalledWith(['*']);
+    expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
+      agent: expect.objectContaining({ allowed_tools: ['read_file'] }),
     }));
   });
 });

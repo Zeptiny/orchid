@@ -1,13 +1,16 @@
 /**
  * useAskQuestion — interactive ask_question stepper state.
  *
- * Subscribes to the `ask_question:asked` IPC event, holds the active question
- * set with per-question answer state, and exposes stepper actions. Submit and
- * cancel round-trip through the askQuestion bridge and clear the active state
- * so the overlay unmounts and the composer reappears.
+ * Subscribes to the `ask_question:asked` IPC event, hydrates pending calls for
+ * the selected session, and exposes stepper actions over a deduplicated FIFO.
+ * Successful submit/cancel round-trips promote the next pending call.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AskQuestionAskedEvent } from '../../shared/types/ipc';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type {
+  AskQuestionAskedEvent,
+  AskQuestionResult,
+  AskQuestionSettledEvent,
+} from '../../shared/types/ipc';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -25,6 +28,7 @@ export interface AnswerState {
 }
 
 export interface ActiveQuestion {
+  sessionId: string;
   toolCallId: string;
   questions: Question[];
   currentIndex: number;
@@ -63,13 +67,91 @@ export interface UseAskQuestionReturn {
 export function createActiveQuestion(
   toolCallId: string,
   questions: Question[],
+  sessionId = '',
 ): ActiveQuestion {
   return {
+    sessionId,
     toolCallId,
     questions,
     currentIndex: 0,
     answers: questions.map(() => ({ selected: [], text: '', skipped: false })),
   };
+}
+
+function questionKey(question: Pick<ActiveQuestion, 'sessionId' | 'toolCallId'>): string {
+  return `${question.sessionId}\u0000${question.toolCallId}`;
+}
+
+function isUsableEvent(event: AskQuestionAskedEvent): boolean {
+  return Boolean(
+    event.sessionId &&
+    event.toolCallId &&
+    Array.isArray(event.questions) &&
+    event.questions.length > 0,
+  );
+}
+
+/** Append one pending question for the selected session without overwriting FIFO state. */
+export function enqueueQuestion(
+  queue: ActiveQuestion[],
+  event: AskQuestionAskedEvent,
+  selectedSessionId: string | null,
+): ActiveQuestion[] {
+  if (!selectedSessionId || event.sessionId !== selectedSessionId || !isUsableEvent(event)) {
+    return queue;
+  }
+  const pending = createActiveQuestion(event.toolCallId, event.questions, event.sessionId);
+  return queue.some((item) => questionKey(item) === questionKey(pending))
+    ? queue
+    : [...queue, pending];
+}
+
+/** Seed session-affine pending state, then replay events received during hydration. */
+export function reconcileQuestionSnapshot(
+  selectedSessionId: string | null,
+  snapshot: AskQuestionAskedEvent[],
+  buffered: AskQuestionAskedEvent[],
+  settledKeys: ReadonlySet<string> = new Set(),
+): ActiveQuestion[] {
+  return [...snapshot, ...buffered].reduce<ActiveQuestion[]>(
+    (queue, event) => settledKeys.has(questionKey(event))
+      ? queue
+      : enqueueQuestion(queue, event, selectedSessionId),
+    [],
+  );
+}
+
+/** Idempotently remove one question settled by the main-process store. */
+export function removeSettledQuestion(
+  queue: ActiveQuestion[],
+  settled: Pick<AskQuestionSettledEvent, 'sessionId' | 'toolCallId'>,
+): ActiveQuestion[] {
+  const settledKey = questionKey(settled);
+  const next = queue.filter((item) => questionKey(item) !== settledKey);
+  return next.length === queue.length ? queue : next;
+}
+
+/** Remove exactly one acknowledged question; rejected settlements retain the controls. */
+export function applyQuestionResult(
+  queue: ActiveQuestion[],
+  settled: Pick<ActiveQuestion, 'sessionId' | 'toolCallId'>,
+  result?: AskQuestionResult,
+): ActiveQuestion[] {
+  if (!result?.ok) return queue;
+  const settledKey = questionKey(settled);
+  return queue.filter((item) => questionKey(item) !== settledKey);
+}
+
+/** Update the active FIFO entry while rejecting stale session/tool identities. */
+export function updateActiveQuestion(
+  queue: ActiveQuestion[],
+  active: Pick<ActiveQuestion, 'sessionId' | 'toolCallId'>,
+  updater: (state: ActiveQuestion) => ActiveQuestion,
+): ActiveQuestion[] {
+  const current = queue[0];
+  if (!current || questionKey(current) !== questionKey(active)) return queue;
+  const updated = updater(current);
+  return updated === current ? queue : [updated, ...queue.slice(1)];
 }
 
 function withAnswer(
@@ -135,27 +217,122 @@ export function buildSubmissions(state: ActiveQuestion): AskQuestionSubmission[]
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
-export function useAskQuestion(): UseAskQuestionReturn {
-  const [active, setActive] = useState<ActiveQuestion | null>(null);
+export function useAskQuestion(sessionId: string | null): UseAskQuestionReturn {
+  const [queue, setQueue] = useState<ActiveQuestion[]>([]);
+  const active = queue[0]?.sessionId === sessionId ? queue[0] : null;
   const activeRef = useRef<ActiveQuestion | null>(null);
-  /** Guards against overlapping submit/cancel round-trips. */
-  const busyRef = useRef(false);
+  const selectedSessionRef = useRef(sessionId);
+  const hydrationGenerationRef = useRef(0);
+  const hydrationRef = useRef<{
+    generation: number;
+    sessionId: string;
+    buffered: AskQuestionAskedEvent[];
+    settledKeys: Set<string>;
+  } | null>(null);
+  /** Identity of the question with an in-flight answer/cancel round-trip. */
+  const busyRef = useRef<string | null>(null);
 
-  useEffect(() => {
+  selectedSessionRef.current = sessionId;
+
+  useLayoutEffect(() => {
     activeRef.current = active;
   }, [active]);
 
+  // A snapshot makes pending questions replayable after remounts and session
+  // switches. Live events received while it is in flight are buffered, then
+  // appended in arrival order after the authoritative snapshot.
   useEffect(() => {
     const bridge = window.orchid?.askQuestion;
-    if (!bridge) return;
-    return bridge.onAsked((event: AskQuestionAskedEvent) => {
-      if (!Array.isArray(event.questions) || event.questions.length === 0) return;
-      setActive(createActiveQuestion(event.toolCallId, event.questions));
+    const generation = ++hydrationGenerationRef.current;
+    busyRef.current = null;
+    setQueue([]);
+
+    if (!bridge || !sessionId) {
+      hydrationRef.current = null;
+      return;
+    }
+
+    const pending = {
+      generation,
+      sessionId,
+      buffered: [] as AskQuestionAskedEvent[],
+      settledKeys: new Set<string>(),
+    };
+    hydrationRef.current = pending;
+    let cancelled = false;
+
+    const unsubscribeAsked = bridge.onAsked((event: AskQuestionAskedEvent) => {
+      if (event.sessionId !== sessionId || !isUsableEvent(event)) return;
+      const currentHydration = hydrationRef.current;
+      if (currentHydration?.sessionId === sessionId) {
+        const key = questionKey(event);
+        if (!currentHydration.buffered.some((item) => questionKey(item) === key)) {
+          currentHydration.buffered.push(event);
+        }
+        return;
+      }
+      setQueue((previous) => enqueueQuestion(previous, event, sessionId));
     });
-  }, []);
+    const unsubscribeSettled = bridge.onSettled((event: AskQuestionSettledEvent) => {
+      if (event.sessionId !== sessionId || !event.toolCallId) return;
+      const key = questionKey(event);
+      if (busyRef.current === key) busyRef.current = null;
+      const currentHydration = hydrationRef.current;
+      if (currentHydration?.sessionId === sessionId) {
+        currentHydration.settledKeys.add(key);
+        currentHydration.buffered = currentHydration.buffered.filter(
+          (item) => questionKey(item) !== key,
+        );
+      }
+      setQueue((previous) => removeSettledQuestion(previous, event));
+    });
+
+    void bridge.snapshot().then(
+      (snapshot) => {
+        if (
+          cancelled ||
+          hydrationGenerationRef.current !== generation ||
+          selectedSessionRef.current !== sessionId
+        ) return;
+        const buffered = hydrationRef.current === pending ? pending.buffered : [];
+        const settledKeys = hydrationRef.current === pending
+          ? pending.settledKeys
+          : new Set<string>();
+        hydrationRef.current = null;
+        setQueue(reconcileQuestionSnapshot(
+          sessionId,
+          snapshot.questions,
+          buffered,
+          settledKeys,
+        ));
+      },
+      () => {
+        if (
+          cancelled ||
+          hydrationGenerationRef.current !== generation ||
+          selectedSessionRef.current !== sessionId
+        ) return;
+        const buffered = hydrationRef.current === pending ? pending.buffered : [];
+        const settledKeys = hydrationRef.current === pending
+          ? pending.settledKeys
+          : new Set<string>();
+        hydrationRef.current = null;
+        setQueue(reconcileQuestionSnapshot(sessionId, [], buffered, settledKeys));
+      },
+    );
+
+    return () => {
+      cancelled = true;
+      if (hydrationRef.current === pending) hydrationRef.current = null;
+      unsubscribeAsked();
+      unsubscribeSettled();
+    };
+  }, [sessionId]);
 
   const update = useCallback((updater: (state: ActiveQuestion) => ActiveQuestion) => {
-    setActive((prev) => (prev ? updater(prev) : prev));
+    const current = activeRef.current;
+    if (!current) return;
+    setQueue((previous) => updateActiveQuestion(previous, current, updater));
   }, []);
 
   const selectOption = useCallback(
@@ -188,69 +365,62 @@ export function useAskQuestion(): UseAskQuestionReturn {
     );
   }, [update]);
 
-  /** Clear the stepper only when the settled round-trip still owns it. */
-  const release = useCallback((toolCallId: string) => {
-    busyRef.current = false;
-    setActive((prev) => (prev && prev.toolCallId === toolCallId ? null : prev));
+  const finishRoundTrip = useCallback((state: ActiveQuestion, result?: AskQuestionResult) => {
+    const key = questionKey(state);
+    if (busyRef.current === key) busyRef.current = null;
+    setQueue((previous) => applyQuestionResult(previous, state, result));
   }, []);
 
   const sendAnswers = useCallback(
     async (state: ActiveQuestion) => {
       const bridge = window.orchid?.askQuestion;
-      if (!bridge) {
-        release(state.toolCallId);
-        return;
-      }
-      busyRef.current = true;
+      if (!bridge) return;
+      busyRef.current = questionKey(state);
       try {
-        await bridge.answer({
+        const result = await bridge.answer({
           toolCallId: state.toolCallId,
           answers: buildSubmissions(state),
         });
+        finishRoundTrip(state, result);
       } catch {
-        // The widget must release even when the bridge fails; main reports the
-        // turn-level error through the normal chat error path.
-      } finally {
-        release(state.toolCallId);
+        finishRoundTrip(state);
       }
     },
-    [release],
+    [finishRoundTrip],
   );
 
   const submit = useCallback(async () => {
     const state = activeRef.current;
-    if (!state || busyRef.current) return;
+    if (!state || busyRef.current !== null) return;
     await sendAnswers(state);
   }, [sendAnswers]);
 
   const skip = useCallback(() => {
     const state = activeRef.current;
-    if (!state || busyRef.current) return;
+    if (!state || busyRef.current !== null) return;
     const skipped = markAnswerSkipped(state, state.currentIndex);
     if (state.currentIndex >= state.questions.length - 1) {
+      setQueue((previous) => updateActiveQuestion(previous, state, () => skipped));
       void sendAnswers(skipped);
       return;
     }
-    setActive({ ...skipped, currentIndex: state.currentIndex + 1 });
+    const advanced = { ...skipped, currentIndex: state.currentIndex + 1 };
+    setQueue((previous) => updateActiveQuestion(previous, state, () => advanced));
   }, [sendAnswers]);
 
   const cancelAll = useCallback(async () => {
     const state = activeRef.current;
-    if (!state || busyRef.current) return;
+    if (!state || busyRef.current !== null) return;
     const bridge = window.orchid?.askQuestion;
-    if (!bridge) {
-      release(state.toolCallId);
-      return;
-    }
-    busyRef.current = true;
+    if (!bridge) return;
+    busyRef.current = questionKey(state);
     try {
-      await bridge.cancel({ toolCallId: state.toolCallId });
+      const result = await bridge.cancel({ toolCallId: state.toolCallId });
+      finishRoundTrip(state, result);
     } catch {
-      // Release regardless — a stuck overlay would block the composer forever.
-    } finally {
-      release(state.toolCallId);
+      finishRoundTrip(state);
     }
-  }, [release]);
+  }, [finishRoundTrip]);
 
   return useMemo(
     () => ({

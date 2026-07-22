@@ -164,7 +164,7 @@ ${escapeXml(context.directoryTree)}
         ).join('\n');
         return `      <question type="${escapeXmlAttr(question.type)}" title="${escapeXmlAttr(question.title)}"${question.description ? ` description="${escapeXmlAttr(question.description)}"` : ''}>\n${optionLines}\n      </question>`;
       }).join('\n');
-      return `  <pending_question subagent_id="${escapeXmlAttr(q.subagentId)}" name="${escapeXmlAttr(q.name)}" type="${escapeXmlAttr(q.type)}">\n${questionLines}\n  </pending_question>`;
+      return `  <pending_question subagent_id="${escapeXmlAttr(q.subagentId)}" tool_call_id="${escapeXmlAttr(q.toolCallId)}" name="${escapeXmlAttr(q.name)}" type="${escapeXmlAttr(q.type)}">\n${questionLines}\n  </pending_question>`;
     });
     content += `\n<pending_subagent_questions>\n${lines.join('\n')}\n</pending_subagent_questions>`;
   }

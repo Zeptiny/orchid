@@ -687,6 +687,13 @@ export interface AskQuestionAskedEvent {
   }>;
 }
 
+/** Event payload when a pending interactive question leaves the main store. */
+export interface AskQuestionSettledEvent {
+  sessionId: string;
+  toolCallId: string;
+  result: 'answered' | 'cancelled';
+}
+
 /** Renderer → main: submit answers for a pending ask_question tool call. */
 export interface AskQuestionAnswerMessage {
   toolCallId: string;
@@ -704,6 +711,11 @@ export interface AskQuestionCancelMessage {
 
 export interface AskQuestionResult {
   ok: boolean;
+}
+
+/** Replayable pending questions for the session selected by the invoking window. */
+export interface AskQuestionSnapshot {
+  questions: AskQuestionAskedEvent[];
 }
 
 // ── RAG API ──────────────────────────────────────────────────────────────────
@@ -898,9 +910,11 @@ export interface OrchidAPI {
   };
 
   askQuestion: {
+    snapshot: () => Promise<AskQuestionSnapshot>;
     answer: (payload: AskQuestionAnswerMessage) => Promise<AskQuestionResult>;
     cancel: (payload: AskQuestionCancelMessage) => Promise<AskQuestionResult>;
     onAsked: (callback: (event: AskQuestionAskedEvent) => void) => () => void;
+    onSettled: (callback: (event: AskQuestionSettledEvent) => void) => () => void;
   };
 }
 
@@ -1025,6 +1039,8 @@ export const IPC_CHANNELS = {
 
   // Ask Question
   ASK_QUESTION_ASKED: 'ask_question:asked',
+  ASK_QUESTION_SETTLED: 'ask_question:settled',
+  ASK_QUESTION_SNAPSHOT: 'ask_question:snapshot',
   ASK_QUESTION_ANSWER: 'ask_question:answer',
   ASK_QUESTION_CANCEL: 'ask_question:cancel',
 
@@ -1098,6 +1114,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.AST_INDEX,
   IPC_CHANNELS.AST_INDEX_STATE,
   IPC_CHANNELS.BG_CMD_SNAPSHOT,
+  IPC_CHANNELS.ASK_QUESTION_SNAPSHOT,
   IPC_CHANNELS.ASK_QUESTION_ANSWER,
   IPC_CHANNELS.ASK_QUESTION_CANCEL,
 ] as const satisfies readonly IPCChannel[];
@@ -1126,6 +1143,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
   IPC_CHANNELS.ASK_QUESTION_ASKED,
+  IPC_CHANNELS.ASK_QUESTION_SETTLED,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Window type augmentation (renderer-side) ─────────────────────────────────

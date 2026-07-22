@@ -76,6 +76,7 @@ export function buildWaitTool(
     description:
       'Wait for one or more subagents to complete and get their results. ' +
       "Returns the subagent's final output, status, and any errors. " +
+      'Pending questions include a tool_call_id that must be passed to answer_subagent. ' +
       'Use after delegate_to_subagent to collect results. ' +
       'If the wait times out, subagents keep running — call again or interrupt_subagents.',
     inputSchema: z.object({

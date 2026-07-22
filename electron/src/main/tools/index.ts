@@ -270,7 +270,7 @@ function registerBuiltinToolsInto(
   );
   registry.register(listMcpResources.definition, listMcpResources.handler);
 
-  const askQuestion = buildAskQuestionTool();
+  const askQuestion = buildAskQuestionTool(context.subagentManager);
   registry.register(askQuestion.definition, askQuestion.handler);
 }
 

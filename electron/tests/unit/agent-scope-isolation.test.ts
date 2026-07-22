@@ -21,6 +21,7 @@ import { buildListTool } from '../../src/main/tools/todo/list';
 import { buildUpdateTool } from '../../src/main/tools/todo/update';
 import { buildDeleteTool } from '../../src/main/tools/todo/delete';
 import { TodoStore } from '../../src/main/tools/todo/store';
+import { getSubagentManager } from '../../src/main/tools';
 import {
   buildSystemPromptContext,
   __resetDirectoryTreeCacheForTests,
@@ -164,5 +165,59 @@ describe('prompt context agent isolation', () => {
     });
     expect(subACtx.todos?.map((t) => t.title)).toEqual(['SubA work']);
     expect(subACtx.subagents).toEqual([]);
+  });
+
+  it('surfaces pending subagent questions only to the owning session main scope', async () => {
+    const config = defaults();
+    const manager = getSubagentManager();
+    const sessionId = `scope-question-${Date.now()}`;
+    const record = manager.spawn('question owner', 'ask parent', {
+      name: 'question-worker',
+      type: 'subagent',
+      tier: 'bloom',
+      description: 'Asks a parent-scoped question',
+      allowed_tools: ['ask_question'],
+      allowed_skills: [],
+    }, { sessionId });
+    manager.markRunning(record.id);
+    const questionPromise = manager.markQuestionPending(record.id, 'tc-scope', [
+      {
+        type: 'single',
+        title: 'Parent only?',
+        options: [{ label: 'Yes' }],
+      },
+    ]);
+
+    try {
+      const mainCtx = await buildSystemPromptContext({
+        cwd: tmpDir,
+        config,
+        sessionId,
+        agentScopeId: 'main',
+        getTodos: () => [],
+      });
+      const childCtx = await buildSystemPromptContext({
+        cwd: tmpDir,
+        config,
+        sessionId,
+        agentScopeId: 'subagent-peer',
+        getTodos: () => [],
+      });
+      const otherSessionCtx = await buildSystemPromptContext({
+        cwd: tmpDir,
+        config,
+        sessionId: `${sessionId}-other`,
+        agentScopeId: 'main',
+        getTodos: () => [],
+      });
+
+      expect(mainCtx.pendingSubagentQuestions).toHaveLength(1);
+      expect(childCtx.pendingSubagentQuestions).toEqual([]);
+      expect(otherSessionCtx.pendingSubagentQuestions).toEqual([]);
+    } finally {
+      manager.answerSubagentQuestion(record.id, 'tc-scope', { type: 'declined' });
+      await questionPromise;
+      manager.cancelOne(record.id);
+    }
   });
 });

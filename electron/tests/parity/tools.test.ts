@@ -465,7 +465,7 @@ describe('Tool Completeness', () => {
       buildWaitTool({} as any).definition.name,
       buildInterruptTool({} as any).definition.name,
       buildAnswerSubagentTool({} as any).definition.name,
-      buildAskQuestionTool().definition.name,
+      buildAskQuestionTool({} as any).definition.name,
     ];
     expect(allNames).toHaveLength(32);
     expect(new Set(allNames).size).toBe(32);

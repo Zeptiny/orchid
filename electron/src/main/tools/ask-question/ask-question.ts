@@ -1,13 +1,16 @@
 /**
  * ask_question tool — pause the agent turn to ask the user interactive questions.
  *
- * The handler generates a unique question ID, registers a pending entry in the
- * QuestionStore, and awaits the user's response (delivered via IPC). The store's
- * EventEmitter bridges to the IPC layer which forwards to the renderer.
+ * Main-agent questions wait in QuestionStore for a renderer IPC response.
+ * Subagent questions wait on their shared SubagentManager record so the owning
+ * main agent can answer or decline them without emitting a renderer event.
  */
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { JsonValue } from '../../../shared/types/tool-result';
+
+import type { AskQuestionAskedEvent } from '../../../shared/types/ipc';
+import { isMainAgentScope } from '../../../shared/types/agent-scope';
+import type { SubagentManager } from '../../agents/manager';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
@@ -17,7 +20,9 @@ import { questionStore } from './store';
 export type AskQuestionToolResult = GenericBuiltInToolOutcome;
 
 /** Build the ask_question tool definition and handler. */
-export function buildAskQuestionTool(): { definition: ToolDefinition; handler: ToolHandler } {
+export function buildAskQuestionTool(
+  manager: SubagentManager,
+): { definition: ToolDefinition; handler: ToolHandler } {
   const definition: ToolDefinition = {
     ...genericToolResultMetadata,
     name: 'ask_question',
@@ -45,13 +50,34 @@ export function buildAskQuestionTool(): { definition: ToolDefinition; handler: T
   };
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<AskQuestionToolResult> => {
-    const { questions } = input as { questions: JsonValue[] };
+    const { questions } = input as { questions: AskQuestionAskedEvent['questions'] };
     const toolCallId = randomUUID();
+
+    if (!isMainAgentScope(ctx.agentScopeId)) {
+      const result = await manager.markQuestionPending(
+        ctx.agentScopeId!,
+        toolCallId,
+        questions,
+      );
+      if (result.type === 'answered') {
+        return genericBuiltInToolOutcome(
+          'ask_question',
+          { questions, answers: result.answers },
+          'complete',
+        );
+      }
+      return genericBuiltInToolOutcome(
+        'ask_question',
+        { status: 'declined' },
+        'complete',
+      );
+    }
 
     const result = await questionStore.create(
       toolCallId,
       ctx.sessionId ?? '',
       questions,
+      ctx.abortSignal,
     );
 
     if (result.type === 'answered') {

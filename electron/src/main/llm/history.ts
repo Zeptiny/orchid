@@ -44,7 +44,7 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
       continue;
     }
 
-    if (msg.hidden) {
+    if (msg.hidden || msg.excludeFromModel) {
       continue;
     }
 
@@ -95,7 +95,7 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
       continue;
     }
 
-    if (msg.hidden) {
+    if (msg.hidden || msg.excludeFromModel) {
       continue;
     }
 

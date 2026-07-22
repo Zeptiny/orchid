@@ -138,4 +138,32 @@ describe('toApiMessages hidden filtering', () => {
     expect(result.some((m) => m.tool_call_id === 'tc-cancelled')).toBe(false);
     expect(result.some((m) => m.tool_calls?.some((t) => t.id === 'tc-cancelled'))).toBe(false);
   });
+
+  it('drops a visible tool result explicitly excluded from model context', () => {
+    const tc = makeToolCall('tc-cancelled-visible', 'ask_question');
+    const messages: Message[] = [
+      makeMessage({
+        role: MessageRole.USER,
+        content: 'Do something',
+        type: MessageType.TEXT,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        type: MessageType.TOOL_CALL,
+        tool_calls: [tc],
+      }),
+      makeMessage({
+        role: MessageRole.TOOL,
+        content: 'cancelled',
+        type: MessageType.TOOL_RESULT,
+        tool_call_id: tc.id,
+        excludeFromModel: true,
+      }),
+    ];
+
+    const result = toApiMessages(messages);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe('Do something');
+  });
 });

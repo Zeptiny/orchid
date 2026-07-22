@@ -21,6 +21,23 @@ function successfulToolResult(toolCallId: string, content: string): Record<strin
   };
 }
 
+function cancelledToolResult(toolCallId: string): Record<string, unknown> {
+  const canonical = createCanonicalToolResult('generic', {
+    status: 'cancelled',
+    data: { questions: [], answers: [], cancelled: true },
+  });
+  return {
+    type: 'tool_result',
+    toolCallId,
+    content: 'Question cancelled',
+    isError: false,
+    execution: {
+      canonical,
+      agentProjection: { content: 'Question cancelled', completeness: 'complete' },
+    },
+  };
+}
+
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const streamResponses: string[] = [];
@@ -745,6 +762,108 @@ describe('chat IPC driver streaming', () => {
     mocks.streamResponses.length = 0;
     mocks.streamEventSequences.length = 0;
     mocks.sessionManager._reset();
+  });
+
+  it('main-turn-only abort leaves subagents and background commands running', () => {
+    chatIpc.forceAbortMainTurn('11111111-1111-4111-8111-111111111111');
+
+    expect(mocks.subagentManager.cancelRunning).not.toHaveBeenCalled();
+    expect(mocks.backgroundStore.terminateSession).not.toHaveBeenCalled();
+  });
+
+  it('visible main-turn abort persists interruption and resets the renderer', async () => {
+    const sessionId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    let releaseStream: (() => void) | undefined;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'Waiting for your choice' };
+      await streamGate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const webContents = { id: 603, send };
+    mocks.electronWebContents.fromId.mockReturnValue(webContents);
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend(
+      { sender: webContents },
+      { message: 'Ask before continuing' },
+    );
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_CHUNK, 1);
+
+    chatIpc.forceAbortMainTurn(sessionId, { emitTerminalEvents: true });
+
+    expect(doneEvents(send).at(-1)?.[1]).toMatchObject({
+      type: 'done',
+      response: 'Waiting for your choice',
+      interrupted: true,
+    });
+    expect(channelEvents(send, IPC_CHANNELS.CHAT_STATE).at(-1)?.[1]).toMatchObject({
+      state: 'idle',
+      response: 'Waiting for your choice',
+      interruptState: 'idle',
+    });
+    expect(mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0]).toMatchObject({
+      status: 'interrupted',
+    });
+    expect(mocks.subagentManager.cancelRunning).not.toHaveBeenCalled();
+    expect(mocks.backgroundStore.terminateSession).not.toHaveBeenCalled();
+    releaseStream?.();
+  });
+
+  it('persists cancelled tool results as visible but excluded from model context', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession('dddddddd-dddd-4ddd-8ddd-dddddddddddd'),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield {
+        type: 'tool_call',
+        toolCallId: 'tc-question-cancelled',
+        toolName: 'ask_question',
+        args: '{"questions":[]}',
+      };
+      yield cancelledToolResult('tc-question-cancelled');
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend(
+      { sender: { id: 602, send } },
+      { message: 'Ask before continuing' },
+    );
+    await waitForDoneCount(send, 1);
+
+    const persisted = mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0] as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(persisted.messages.find((message) => (
+      message.type === MessageType.TOOL_RESULT &&
+      message.tool_call_id === 'tc-question-cancelled'
+    )))
+      .toMatchObject({
+        hidden: false,
+        excludeFromModel: true,
+      });
   });
 
   it('emits tool_update IPC payloads with the expected shape through the typed provider path', async () => {

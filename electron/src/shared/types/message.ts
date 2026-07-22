@@ -87,6 +87,8 @@ export interface Message {
   readonly timestamp: string;
   readonly usage: Usage | null;
   readonly hidden: boolean;
+  /** Persisted display message that must not be replayed to the model. */
+  readonly excludeFromModel?: boolean;
   /** Canonical terminal facts for TOOL_RESULT messages; null for other messages. */
   readonly tool_result: CanonicalToolResult | null;
 }
@@ -110,6 +112,8 @@ export interface MessageStorageDict {
     context?: ContextSnapshot;
   };
   hidden?: boolean;
+  /** Keep the message visible in history while excluding it from model context. */
+  exclude_from_model?: boolean;
   /** Explicit tool failure; only meaningful for tool_result messages. */
   is_error?: boolean;
   /** Canonical terminal facts for TOOL_RESULT records. */
@@ -200,6 +204,9 @@ export function messageToStorageDict(msg: Message): MessageStorageDict {
   if (msg.hidden) {
     d.hidden = true;
   }
+  if (msg.excludeFromModel) {
+    d.exclude_from_model = true;
+  }
   if (msg.tool_result?.status === 'error') {
     d.is_error = true;
   }
@@ -276,6 +283,7 @@ export function messageFromStorageDict(data: unknown): Message {
     timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : new Date().toISOString(),
     usage,
     hidden: raw.hidden === true,
+    excludeFromModel: raw.exclude_from_model === true,
     tool_result: toolResult,
   };
 }

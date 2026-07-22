@@ -33,6 +33,8 @@ import { SlashCommandMenu } from './SlashCommandMenu';
 import { IconButton } from './ui/IconButton';
 
 interface InputAreaProps {
+  /** Session whose pending ask_question calls may own this composer. */
+  sessionId: string | null;
   status: ChatStatus;
   model: string;
   /** Display labels for opaque connection-scoped model picker keys. */
@@ -66,7 +68,24 @@ type SubPicker = '/theme' | '/personality' | '/model' | '/sessions' | null;
 const TEXTAREA_MIN_HEIGHT_PX = 36;
 const TEXTAREA_MAX_HEIGHT_PX = 160;
 
+export type InputEscapeAction = 'cancel-question' | 'cancel-chat' | 'none';
+
+/** Resolve global Escape ownership without allowing chat cancellation to race a question. */
+export function resolveInputEscapeAction(options: {
+  hasActiveQuestion: boolean;
+  canInterrupt: boolean;
+  isSlashMode: boolean;
+  isViewActive: boolean;
+  settingsOpen: boolean;
+}): InputEscapeAction {
+  if (options.isViewActive || options.settingsOpen) return 'none';
+  if (options.hasActiveQuestion) return 'cancel-question';
+  if (!options.canInterrupt || options.isSlashMode) return 'none';
+  return 'cancel-chat';
+}
+
 export function InputArea({
+  sessionId,
   status,
   model: _model,
   modelLabels,
@@ -95,7 +114,8 @@ export function InputArea({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [subPicker, setSubPicker] = useState<SubPicker>(null);
   /** Pending ask_question stepper; while active it owns the composer area. */
-  const askQuestion = useAskQuestion();
+  const askQuestion = useAskQuestion(sessionId);
+  const hasActiveQuestion = askQuestion.active !== null;
 
   const isStreaming = status === 'streaming';
   const hasInput = Boolean(input.trim());
@@ -375,18 +395,25 @@ export function InputArea({
       if (event.key !== 'Escape') return;
       if (isViewActive) return;
       if (document.documentElement.dataset.orchidSettingsOpen === '1') return;
-
-      if (!canInterrupt) return;
-      // Let slash-menu Esc handlers win when the menu is open on confirmSubagents
-      // with typed input — only intercept when cancel UI is active without slash.
-      if (isSlashMode) return;
+      const action = resolveInputEscapeAction({
+        hasActiveQuestion,
+        canInterrupt,
+        isSlashMode,
+        isViewActive: false,
+        settingsOpen: false,
+      });
+      if (action === 'none') return;
       event.preventDefault();
+      if (action === 'cancel-question') {
+        void askQuestion.cancelAll();
+        return;
+      }
       void onCancel();
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canInterrupt, isSlashMode, isViewActive, onCancel]);
+  }, [askQuestion.cancelAll, canInterrupt, hasActiveQuestion, isSlashMode, isViewActive, onCancel]);
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim();

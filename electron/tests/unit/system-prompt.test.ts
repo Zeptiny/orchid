@@ -13,7 +13,7 @@ describe('buildDynamicSystemPrompt — pendingSubagentQuestions', () => {
           subagentId: 'sa-1',
           name: 'review auth',
           type: 'code-reviewer',
-          toolCallId: 'tc-1',
+          toolCallId: 'tc-&"1',
           questions: [
             {
               type: 'single',
@@ -31,7 +31,7 @@ describe('buildDynamicSystemPrompt — pendingSubagentQuestions', () => {
 
     expect(prompt).toContain('<pending_subagent_questions>');
     expect(prompt).toContain(
-      '<pending_question subagent_id="sa-1" name="review auth" type="code-reviewer">',
+      '<pending_question subagent_id="sa-1" tool_call_id="tc-&amp;&quot;1" name="review auth" type="code-reviewer">',
     );
     expect(prompt).toContain(
       '<question type="single" title="Which framework?" description="Pick one">',
@@ -54,7 +54,7 @@ describe('buildDynamicSystemPrompt — pendingSubagentQuestions', () => {
           subagentId: 'sa-1',
           name: 'a & b <c>',
           type: 'code-reviewer',
-          toolCallId: 'tc-1',
+          toolCallId: 'tc-1 & "quoted"',
           questions: [
             {
               type: 'single',
@@ -67,6 +67,7 @@ describe('buildDynamicSystemPrompt — pendingSubagentQuestions', () => {
     });
 
     expect(prompt).toContain('name="a &amp; b &lt;c&gt;"');
+    expect(prompt).toContain('tool_call_id="tc-1 &amp; &quot;quoted&quot;"');
     expect(prompt).toContain('title="Say &quot;hi&quot; &amp; &lt;bye&gt;"');
     expect(prompt).toContain('label="A &quot;quoted&quot; &amp; &lt;tagged&gt;"');
   });

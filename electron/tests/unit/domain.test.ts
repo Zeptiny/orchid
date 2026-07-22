@@ -64,6 +64,7 @@ function makeMessage(overrides: Partial<Message> & { role: MessageRole }): Messa
     timestamp: overrides.timestamp ?? new Date().toISOString(),
     usage: overrides.usage ?? null,
     hidden: overrides.hidden ?? false,
+    excludeFromModel: overrides.excludeFromModel ?? false,
     tool_result: overrides.tool_result ?? null,
   };
 }
@@ -667,6 +668,23 @@ describe('Domain Models: Per-chain error isolation', () => {
 // ── Additional tests ────────────────────────────────────────────────────────
 
 describe('Domain Models: Message edge cases', () => {
+  it('round-trips visible messages excluded from model context', () => {
+    const message = makeMessage({
+      role: MessageRole.TOOL,
+      type: MessageType.TOOL_RESULT,
+      content: 'Question cancelled',
+      tool_call_id: 'tool-cancelled',
+      excludeFromModel: true,
+    });
+
+    const stored = messageToStorageDict(message);
+    const restored = messageFromStorageDict(stored);
+
+    expect(stored.exclude_from_model).toBe(true);
+    expect(restored.excludeFromModel).toBe(true);
+    expect(restored.hidden).toBe(false);
+  });
+
   it('handles missing fields gracefully on restore', () => {
     const restored = messageFromStorageDict({
       role: 'assistant',

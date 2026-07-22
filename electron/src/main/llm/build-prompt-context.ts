@@ -132,8 +132,9 @@ function mapSubagents(
  */
 function mapPendingSubagentQuestions(
   sessionId: string | null | undefined,
+  agentScopeId: string,
 ): NonNullable<SystemPromptContext['pendingSubagentQuestions']> {
-  if (!sessionId) {
+  if (!sessionId || !isMainAgentScope(agentScopeId)) {
     return [];
   }
   try {
@@ -270,7 +271,7 @@ export async function buildSystemPromptContext(
     subagents: mapSubagents(sessionId, agentScopeId),
     todos: scopedTodos,
     backgroundCommands: mapBackgroundCommands(sessionId, agentScopeId),
-    pendingSubagentQuestions: mapPendingSubagentQuestions(sessionId),
+    pendingSubagentQuestions: mapPendingSubagentQuestions(sessionId, agentScopeId),
   };
 }
 
