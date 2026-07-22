@@ -31,9 +31,14 @@ export const GROUPABLE_TOOLS = new Set([
   'get_file_skeleton',
   // skill
   'skill',
+  // todo
+  'todo_create',
+  'todo_update',
+  'todo_delete',
+  'todo_list',
 ]);
 
-export type ToolGroupFamily = 'search' | 'read' | 'fetch' | 'ast' | 'skill' | 'other';
+export type ToolGroupFamily = 'search' | 'read' | 'fetch' | 'ast' | 'skill' | 'todo' | 'other';
 
 export interface ToolGroupMember {
   id: string;
@@ -49,6 +54,7 @@ export interface ToolGroupSummary {
   fetchCount: number;
   astCount: number;
   skillCount: number;
+  todoCount: number;
   failedCount: number;
   hasActive: boolean;
   /** True when any child tool failed. */
@@ -80,6 +86,14 @@ export function toolFamily(toolName: string): ToolGroupFamily {
   if (lower === 'skill') {
     return 'skill';
   }
+  if (
+    lower === 'todo_create' ||
+    lower === 'todo_update' ||
+    lower === 'todo_delete' ||
+    lower === 'todo_list'
+  ) {
+    return 'todo';
+  }
   return 'other';
 }
 
@@ -107,6 +121,7 @@ export function summarizeToolGroup(
   let fetchCount = 0;
   let astCount = 0;
   let skillCount = 0;
+  let todoCount = 0;
   let failedCount = 0;
   let hasActive = false;
 
@@ -120,6 +135,7 @@ export function summarizeToolGroup(
     else if (family === 'fetch') fetchCount += 1;
     else if (family === 'ast') astCount += 1;
     else if (family === 'skill') skillCount += 1;
+    else if (family === 'todo') todoCount += 1;
   }
 
   const parts: string[] = [];
@@ -152,6 +168,12 @@ export function summarizeToolGroup(
     );
   }
 
+  if (todoCount > 0) {
+    parts.push(
+      todoCount === 1 ? 'Updated 1 task' : `Updated ${todoCount} tasks`,
+    );
+  }
+
   // Fallback if only "other" somehow landed in a group
   if (parts.length === 0 && blocks.length > 0) {
     parts.push(
@@ -170,6 +192,7 @@ export function summarizeToolGroup(
     fetchCount,
     astCount,
     skillCount,
+    todoCount,
     failedCount,
     hasActive,
     hasFailed: failedCount > 0,

@@ -42,7 +42,6 @@ export const globDefinition: ToolDefinition = {
   inputSchema: globInputSchema,
   resultFamily: 'search-results',
   outputDataSchema: searchResultsDataSchema,
-  actionLabel: 'Globbing...',
   category: 'filesystem',
 };
 

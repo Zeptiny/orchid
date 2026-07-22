@@ -36,7 +36,6 @@ export const writeDefinition: ToolDefinition = {
   inputSchema: writeInputSchema,
   resultFamily: 'file-write',
   outputDataSchema: fileWriteDataSchema,
-  actionLabel: 'Writing...',
   category: 'filesystem',
 };
 

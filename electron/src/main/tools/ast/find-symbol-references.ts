@@ -40,7 +40,6 @@ export const findSymbolReferencesDefinition: ToolDefinition = {
     'Use this to understand where a symbol is defined and used before renaming ' +
     'or refactoring. Returns file paths with line/column ranges.',
   inputSchema: findSymbolReferencesSchema,
-  actionLabel: 'Finding references...',
   category: 'ast',
   noTimeout: true,
 };

@@ -80,7 +80,6 @@ export function buildCreateTool(
             'Ignored when called by a subagent (auto-stamped to caller).',
         ),
     }),
-    actionLabel: 'Creating todo...',
     category: 'todo',
   };
 

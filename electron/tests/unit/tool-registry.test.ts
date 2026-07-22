@@ -54,7 +54,6 @@ function makeReadTool(): ToolDefinition {
     name: 'read',
     description: 'Read file contents with optional offset and limit',
     inputSchema: readInputSchema,
-    actionLabel: 'Reading file',
     category: 'filesystem',
   };
 }
@@ -69,7 +68,6 @@ function makeGrepTool(): ToolDefinition {
     name: 'grep',
     description: 'Search file contents using regex',
     inputSchema: grepInputSchema,
-    actionLabel: 'Grepping',
     category: 'search',
   };
 }
@@ -79,7 +77,6 @@ function makeEditTool(): ToolDefinition {
     name: 'edit',
     description: 'Replace an exact string match in a file',
     inputSchema: editInputSchema,
-    actionLabel: 'Editing file',
     category: 'filesystem',
   };
 }
@@ -308,7 +305,6 @@ describe('ToolRegistry', () => {
       const readSchema = schemas['read'] as Record<string, unknown>;
       expect(readSchema.name).toBe('read');
       expect(readSchema.description).toBe('Read file contents with optional offset and limit');
-      expect(readSchema.actionLabel).toBe('Reading file');
       expect(readSchema.category).toBe('filesystem');
 
       // JSON Schema derived from zod should have the right structure
@@ -342,15 +338,6 @@ describe('ToolRegistry', () => {
       expect(required).toContain('file_path');
       expect(required).not.toContain('offset');
       expect(required).not.toContain('limit');
-    });
-
-    it('should omit actionLabel when not set', () => {
-      registry.register(makeMcpContext7ResolveTool(), dummyHandler);
-
-      const schemas = registry.toJsonSchema();
-      const mcpSchema = schemas['mcp::context7::resolve-library-id'] as Record<string, unknown>;
-      // actionLabel is not set on MCP tools, so it should be absent
-      expect(mcpSchema).not.toHaveProperty('actionLabel');
     });
   });
 

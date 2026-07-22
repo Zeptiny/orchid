@@ -244,7 +244,6 @@ describe('delegate_to_subagent', () => {
 
   it('should have correct action label and category', () => {
     const { definition } = buildDelegateTool(agents, manager);
-    expect(definition.actionLabel).toBe('Delegating...');
     expect(definition.category).toBe('subagent');
     expect(definition.name).toBe('delegate_to_subagent');
   });
@@ -431,7 +430,6 @@ describe('wait_for_subagent', () => {
   it('should have correct tool definition', () => {
     const { definition } = buildWaitTool(manager);
     expect(definition.name).toBe('wait_for_subagent');
-    expect(definition.actionLabel).toBe('Waiting...');
     expect(definition.category).toBe('subagent');
   });
 
@@ -679,7 +677,6 @@ describe('interrupt_subagents', () => {
   it('should have correct tool definition', () => {
     const { definition } = buildInterruptTool(manager);
     expect(definition.name).toBe('interrupt_subagents');
-    expect(definition.actionLabel).toBe('Interrupting...');
     expect(definition.category).toBe('subagent');
   });
 });
@@ -817,7 +814,6 @@ describe('answer_subagent', () => {
   it('should have correct tool definition', () => {
     const { definition } = buildAnswerSubagentTool(manager);
     expect(definition.name).toBe('answer_subagent');
-    expect(definition.actionLabel).toBe('Answering subagent...');
     expect(definition.category).toBe('subagent');
     expect(definition.description).toContain('tool_call_id');
     expect(definition.inputSchema.safeParse({

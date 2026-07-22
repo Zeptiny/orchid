@@ -57,7 +57,6 @@ export function buildUpdateTool(
           'Main agent only: reassign ownership. Subagents cannot change owner.',
         ),
     }),
-    actionLabel: 'Updating todo...',
     category: 'todo',
   };
 
@@ -107,6 +106,7 @@ export function buildUpdateTool(
 
     return genericBuiltInToolOutcome('todo_update', {
       taskId: task!.id,
+      title: task!.title,
       changes,
     }, 'complete');
   };

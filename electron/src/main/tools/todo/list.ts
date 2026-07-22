@@ -50,7 +50,6 @@ export function buildListTool(
         .optional()
         .describe('Deprecated: scope is always the calling agent. Ignored.'),
     }),
-    actionLabel: 'Listing todos...',
     category: 'todo',
   };
 

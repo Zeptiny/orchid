@@ -302,7 +302,6 @@ export const grepToolDefinition: ToolDefinition = {
   inputSchema: grepInputSchema,
   resultFamily: 'search-results',
   outputDataSchema: searchResultsDataSchema,
-  actionLabel: 'Grepping...',
   category: 'search',
 };
 

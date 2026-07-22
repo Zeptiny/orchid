@@ -40,7 +40,6 @@ export const renameSymbolDefinition: ToolDefinition = {
     'and references atomically per file. Use this instead of multiple edit ' +
     'calls for cross-file renames.',
   inputSchema: renameSymbolSchema,
-  actionLabel: 'Renaming symbol...',
   category: 'ast',
   noTimeout: true,
 };

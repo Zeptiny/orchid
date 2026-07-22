@@ -32,7 +32,6 @@ export function buildDeleteTool(
     inputSchema: z.object({
       id: z.string().describe('The ID of the task to delete.'),
     }),
-    actionLabel: 'Deleting todo...',
     category: 'todo',
   };
 

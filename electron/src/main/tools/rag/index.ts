@@ -30,7 +30,6 @@ export const ragIndexDefinition: ToolDefinition = {
     'Manage the RAG (Retrieval Augmented Generation) index. ' +
     'Use "status" to check index stats, "index" to build/rebuild the index, "clear" to drop it.',
   inputSchema: ragIndexSchema,
-  actionLabel: 'Managing RAG index...',
   category: 'rag',
 };
 

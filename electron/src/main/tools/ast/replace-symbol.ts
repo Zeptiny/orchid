@@ -40,7 +40,6 @@ export const replaceSymbolDefinition: ToolDefinition = {
     'for replacing whole functions — it handles the full range automatically ' +
     'and supports multiple replacements in one call with correct offsets.',
   inputSchema: replaceSymbolSchema,
-  actionLabel: 'Replacing symbol...',
   category: 'ast',
   noTimeout: true,
 };

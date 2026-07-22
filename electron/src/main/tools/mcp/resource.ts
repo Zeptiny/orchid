@@ -45,7 +45,6 @@ export function buildMcpResourceTool(
           "The URI of the MCP resource to read (e.g., 'file:///path/to/file')",
         ),
     }),
-    actionLabel: 'Reading MCP resource...',
     category: 'mcp',
   };
 

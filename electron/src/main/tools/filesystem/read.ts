@@ -32,7 +32,6 @@ export const readDefinition: ToolDefinition = {
   inputSchema: readInputSchema,
   resultFamily: 'file-content',
   outputDataSchema: fileContentDataSchema,
-  actionLabel: 'Reading...',
   category: 'filesystem',
 };
 function languageHint(filePath: string): string {

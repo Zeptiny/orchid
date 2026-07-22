@@ -30,6 +30,10 @@ describe('isGroupableTool / toolFamily', () => {
     expect(isGroupableTool('find_symbol_references')).toBe(true);
     expect(isGroupableTool('get_function')).toBe(true);
     expect(isGroupableTool('get_file_skeleton')).toBe(true);
+    expect(isGroupableTool('todo_create')).toBe(true);
+    expect(isGroupableTool('todo_update')).toBe(true);
+    expect(isGroupableTool('todo_delete')).toBe(true);
+    expect(isGroupableTool('todo_list')).toBe(true);
     expect(isGroupableTool('GREP')).toBe(true);
   });
 
@@ -37,7 +41,6 @@ describe('isGroupableTool / toolFamily', () => {
     expect(isGroupableTool('edit')).toBe(false);
     expect(isGroupableTool('write')).toBe(false);
     expect(isGroupableTool('execute_command')).toBe(false);
-    expect(isGroupableTool('todo_create')).toBe(false);
     expect(isGroupableTool('replace_symbol')).toBe(false);
     expect(isGroupableTool('rename_symbol')).toBe(false);
     expect(isGroupableTool('rag_index')).toBe(false);
@@ -53,6 +56,10 @@ describe('isGroupableTool / toolFamily', () => {
     expect(toolFamily('find_symbol_references')).toBe('ast');
     expect(toolFamily('get_function')).toBe('ast');
     expect(toolFamily('get_file_skeleton')).toBe('ast');
+    expect(toolFamily('todo_create')).toBe('todo');
+    expect(toolFamily('todo_update')).toBe('todo');
+    expect(toolFamily('todo_delete')).toBe('todo');
+    expect(toolFamily('todo_list')).toBe('todo');
     expect(toolFamily('edit')).toBe('other');
   });
 });

@@ -49,7 +49,6 @@ export function buildAnswerSubagentTool(
         .optional()
         .describe('Decline to answer. The subagent receives a declined status.'),
     }),
-    actionLabel: 'Answering subagent...',
     category: 'subagent',
   };
 

@@ -146,7 +146,6 @@ export class ToolRegistry {
         name: definition.name,
         description: definition.description,
         inputSchema: zodToJsonSchema(definition.inputSchema as any), // eslint-disable-line @typescript-eslint/no-explicit-any
-        ...(definition.actionLabel && { actionLabel: definition.actionLabel }),
         ...(definition.category && { category: definition.category }),
         ...(definition.noTimeout !== undefined && { noTimeout: definition.noTimeout }),
         resultFamily: definition.resultFamily,

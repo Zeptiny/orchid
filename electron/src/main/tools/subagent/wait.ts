@@ -143,7 +143,6 @@ export function buildWaitTool(
         .array(z.string())
         .describe('List of subagent IDs to wait for'),
     }),
-    actionLabel: 'Waiting...',
     category: 'subagent',
   };
 

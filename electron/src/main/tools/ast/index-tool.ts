@@ -38,7 +38,6 @@ export const astIndexDefinition: ToolDefinition = {
     'Use "status" to check index stats, "index" to build/rebuild the index, "clear" to drop it. ' +
     'Symbol tools (find_symbol_references, rename_symbol) auto-index on first use; use this for explicit control.',
   inputSchema: astIndexSchema,
-  actionLabel: 'Managing AST index...',
   category: 'ast',
   noTimeout: true,
 };

@@ -44,7 +44,6 @@ export function buildAskQuestionTool(
         })).min(1),
       })).min(1),
     }),
-    actionLabel: 'Asking question...',
     category: 'ask_question',
     noTimeout: true,
   };
