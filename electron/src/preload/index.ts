@@ -72,6 +72,12 @@ import type {
   SubagentSnapshotRequest,
   SubagentSnapshot,
   SubagentEvent,
+  AskQuestionAnswerMessage,
+  AskQuestionCancelMessage,
+  AskQuestionAskedEvent,
+  AskQuestionSettledEvent,
+  AskQuestionResult,
+  AskQuestionSnapshot,
 } from '../shared/types/ipc';
 import {
   chatChunkEventSchema,
@@ -449,6 +455,26 @@ const orchidAPI: OrchidAPI = {
   bgCmd: {
     snapshot: (request: BgCommandSnapshotRequest) =>
       invoke(IPC_CHANNELS.BG_CMD_SNAPSHOT, request),
+  },
+
+  askQuestion: {
+    snapshot: () =>
+      invoke<AskQuestionSnapshot>(IPC_CHANNELS.ASK_QUESTION_SNAPSHOT),
+
+    answer: (payload: AskQuestionAnswerMessage) =>
+      invoke<AskQuestionResult>(IPC_CHANNELS.ASK_QUESTION_ANSWER, payload),
+
+    cancel: (payload: AskQuestionCancelMessage) =>
+      invoke<AskQuestionResult>(IPC_CHANNELS.ASK_QUESTION_CANCEL, payload),
+
+    onAsked: (callback: (event: AskQuestionAskedEvent) => void) =>
+      on(IPC_CHANNELS.ASK_QUESTION_ASKED, (...args) => callback(args[0] as AskQuestionAskedEvent)),
+
+    onSettled: (callback: (event: AskQuestionSettledEvent) => void) =>
+      on(
+        IPC_CHANNELS.ASK_QUESTION_SETTLED,
+        (...args) => callback(args[0] as AskQuestionSettledEvent),
+      ),
   },
 };
 

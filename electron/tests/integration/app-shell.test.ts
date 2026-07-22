@@ -31,8 +31,8 @@ import {
 
 describe('IPC Channel Names', () => {
   it('all channels follow the namespace:action format', () => {
-    for (const [key, channel] of Object.entries(IPC_CHANNELS)) {
-      expect(channel).toMatch(/^[a-z]+:[a-z_]+$/);
+    for (const channel of Object.values(IPC_CHANNELS)) {
+      expect(channel).toMatch(/^[a-z_]+:[a-z_]+$/);
     }
   });
 

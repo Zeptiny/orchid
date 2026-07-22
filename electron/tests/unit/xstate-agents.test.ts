@@ -607,6 +607,66 @@ describe('SubagentManager', () => {
     expect(results.get(record.id)?.state).toBe(SubagentState.COMPLETED);
   });
 
+  it('wait resolves immediately when a requested subagent already has a pending question', async () => {
+    const record = manager.spawn('test', 'task', mockAgent);
+    manager.markRunning(record.id);
+    const questionPromise = manager.markQuestionPending(record.id, 'tc-before-wait', [
+      {
+        type: 'single',
+        title: 'Choose a direction',
+        options: [{ label: 'Continue' }],
+      },
+    ]);
+
+    try {
+      const results = await manager.wait([record.id], { timeoutMs: 30 });
+      expect(results.get(record.id)?.pendingQuestion?.toolCallId).toBe('tc-before-wait');
+    } finally {
+      manager.answerSubagentQuestion(record.id, 'tc-before-wait', { type: 'declined' });
+      await questionPromise;
+    }
+  });
+
+  it('declines a second concurrent question without replacing the first', async () => {
+    const record = manager.spawn('test', 'task', mockAgent);
+    manager.markRunning(record.id);
+
+    const first = manager.markQuestionPending(record.id, 'tc-first', [
+      {
+        type: 'single',
+        title: 'First question',
+        options: [{ label: 'Continue' }],
+      },
+    ]);
+    const second = manager.markQuestionPending(record.id, 'tc-second', [
+      {
+        type: 'single',
+        title: 'Second question',
+        options: [{ label: 'Continue' }],
+      },
+    ]);
+
+    await expect(second).resolves.toEqual({ type: 'declined' });
+    expect(record.pendingQuestion?.toolCallId).toBe('tc-first');
+    expect(manager.answerSubagentQuestion(record.id, 'tc-first', { type: 'declined' })).toBe(true);
+    await expect(first).resolves.toEqual({ type: 'declined' });
+  });
+
+  it('rejects a delayed answer after the next question is installed', async () => {
+    const record = manager.spawn('test', 'task', mockAgent);
+    manager.markRunning(record.id);
+
+    const first = manager.markQuestionPending(record.id, 'tc-first', []);
+    expect(manager.answerSubagentQuestion(record.id, 'tc-first', { type: 'declined' })).toBe(true);
+    await expect(first).resolves.toEqual({ type: 'declined' });
+
+    const second = manager.markQuestionPending(record.id, 'tc-second', []);
+    expect(manager.answerSubagentQuestion(record.id, 'tc-first', { type: 'declined' })).toBe(false);
+    expect(record.pendingQuestion?.toolCallId).toBe('tc-second');
+    expect(manager.answerSubagentQuestion(record.id, 'tc-second', { type: 'declined' })).toBe(true);
+    await expect(second).resolves.toEqual({ type: 'declined' });
+  });
+
   it('getRecord returns a single record by ID', () => {
     const record = manager.spawn('test', 'task', mockAgent);
 
@@ -630,6 +690,32 @@ describe('SubagentManager', () => {
     expect(results.size).toBe(2);
     expect(results.get(a.id)?.result).toBe('result a');
     expect(results.get(b.id)?.result).toBe('result b');
+  });
+
+  it('wait resolves on the first pending question in a multi-target wait and cleans peer waiters', async () => {
+    const a = manager.spawn('a', 'task 1', mockAgent);
+    const b = manager.spawn('b', 'task 2', mockAgent);
+    manager.markRunning(a.id);
+    manager.markRunning(b.id);
+
+    const waitPromise = manager.wait([a.id, b.id], { timeoutMs: 30 });
+    const questionPromise = manager.markQuestionPending(a.id, 'tc-first-question', [
+      {
+        type: 'single',
+        title: 'Need parent input',
+        options: [{ label: 'Proceed' }],
+      },
+    ]);
+
+    try {
+      const results = await waitPromise;
+      expect(results.get(a.id)?.pendingQuestion?.toolCallId).toBe('tc-first-question');
+      expect(results.get(b.id)?.state).toBe(SubagentState.RUNNING);
+      expect(b._resolveWait).toBeNull();
+    } finally {
+      manager.answerSubagentQuestion(a.id, 'tc-first-question', { type: 'declined' });
+      await questionPromise;
+    }
   });
 
   it('wait timeout errors without cancelling running subagents', async () => {

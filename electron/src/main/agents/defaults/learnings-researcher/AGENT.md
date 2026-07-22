@@ -13,6 +13,7 @@ allowed_tools:
   - read_output
   - send_input
   - terminate_command
+  - ask_question
 allowed_skills: []
 ---
 

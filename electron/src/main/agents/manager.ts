@@ -52,6 +52,11 @@ export const SubagentState = {
 
 export type SubagentState = (typeof SubagentState)[keyof typeof SubagentState];
 
+/** Result of answering (or declining) a subagent's pending question. */
+export type SubagentQuestionResult =
+  | { type: 'answered'; answers: Array<{ selected: string[]; text: string | null; skipped: boolean }> }
+  | { type: 'declined' };
+
 /** Terminal states — subagents in these states cannot be cancelled. */
 const TERMINAL_STATES = new Set<SubagentState>([
   SubagentState.COMPLETED,
@@ -83,6 +88,7 @@ export type SubagentStreamRunner = (params: {
 
 export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
 export type SubagentLiveChangeListener = (change: SubagentLiveChange) => void;
+type SubagentWaiterReason = 'state-change' | 'flush';
 
 /** Default max time `wait_for_subagent` will block (5 minutes). */
 export const DEFAULT_WAIT_TIMEOUT_MS = 300_000;
@@ -150,13 +156,24 @@ export interface SubagentRecord {
   /** Abort controller for the in-flight run. */
   abortController: AbortController | null;
   /** Pending completion promise resolvers. */
-  _resolveWait: Array<(record: SubagentRecord) => void> | null;
+  _resolveWait: Array<(reason: SubagentWaiterReason) => void> | null;
   /** In-flight run promise (for debugging / optional await). */
   _runPromise: Promise<void> | null;
   /** Runtime-only live projection; durable history remains in `chain`. */
   live: SubagentLiveProjection;
   _liveCommittedSegmentCount: number;
   _liveTerminalEmitted: boolean;
+  /** Pending question routed to the main agent (null when no question is outstanding). */
+  pendingQuestion: {
+    toolCallId: string;
+    questions: Array<{
+      type: 'single' | 'multi';
+      title: string;
+      description?: string;
+      options: Array<{ label: string; description?: string }>;
+    }>;
+    resolve: (result: SubagentQuestionResult) => void;
+  } | null;
 }
 
 // ── SubagentResult ──────────────────────────────────────────────────────────
@@ -252,6 +269,7 @@ export class SubagentManager {
       live: makeLiveProjection(id, options.sessionId ?? null, 'pending'),
       _liveCommittedSegmentCount: 0,
       _liveTerminalEmitted: false,
+      pendingQuestion: null,
     };
 
     this._subagents.set(id, record);
@@ -311,7 +329,8 @@ export class SubagentManager {
   }
 
   /**
-   * Wait for all specified subagents to reach a terminal state.
+   * Wait until all specified subagents are terminal or any target asks a
+   * question that requires the main agent's response.
    *
    * Optional `timeoutMs` races the wait without cancelling subagents.
    * Optional `signal` unblocks the wait when the parent turn is aborted
@@ -331,36 +350,17 @@ export class SubagentManager {
       throw new DOMException('Wait aborted', 'AbortError');
     }
 
-    const pending: Promise<void>[] = [];
-    const waiterCleanups: Array<() => void> = [];
+    const records = subagentIds
+      .map((id) => this._subagents.get(id))
+      .filter((record): record is SubagentRecord => record !== undefined);
+    const shouldReturn = () =>
+      records.some((record) => record.pendingQuestion !== null) ||
+      records.every((record) => TERMINAL_STATES.has(record.state));
 
-    for (const id of subagentIds) {
-      const record = this._subagents.get(id);
-      if (!record) continue;
-
-      if (TERMINAL_STATES.has(record.state)) continue;
-
-      const promise = new Promise<void>((resolve) => {
-        if (!record._resolveWait) {
-          record._resolveWait = [];
-        }
-        const entry = () => resolve();
-        record._resolveWait.push(entry);
-        waiterCleanups.push(() => {
-          if (!record._resolveWait) return;
-          const idx = record._resolveWait.indexOf(entry);
-          if (idx >= 0) record._resolveWait.splice(idx, 1);
-          if (record._resolveWait.length === 0) {
-            record._resolveWait = null;
-          }
-        });
-      });
-      pending.push(promise);
-    }
-
-    if (pending.length > 0) {
+    if (!shouldReturn()) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       let onAbort: (() => void) | undefined;
+      const waiterCleanups: Array<() => void> = [];
 
       try {
         await new Promise<void>((resolve, reject) => {
@@ -371,10 +371,36 @@ export class SubagentManager {
             fn();
           };
 
-          void Promise.all(pending).then(
-            () => settle(() => resolve()),
-            (err: unknown) => settle(() => reject(err)),
-          );
+          const checkPredicate = () => {
+            if (shouldReturn()) {
+              settle(resolve);
+            }
+          };
+
+          for (const record of records) {
+            if (TERMINAL_STATES.has(record.state)) continue;
+            if (!record._resolveWait) {
+              record._resolveWait = [];
+            }
+            const entry = (reason: SubagentWaiterReason) => {
+              if (reason === 'flush') {
+                settle(resolve);
+                return;
+              }
+              checkPredicate();
+            };
+            record._resolveWait.push(entry);
+            waiterCleanups.push(() => {
+              if (!record._resolveWait) return;
+              const idx = record._resolveWait.indexOf(entry);
+              if (idx >= 0) record._resolveWait.splice(idx, 1);
+              if (record._resolveWait.length === 0) {
+                record._resolveWait = null;
+              }
+            });
+          }
+
+          checkPredicate();
 
           if (timeoutMs !== undefined && timeoutMs >= 0) {
             timer = setTimeout(() => {
@@ -399,12 +425,9 @@ export class SubagentManager {
             signal.addEventListener('abort', onAbort, { once: true });
           }
         });
-      } catch (err) {
-        // Timed out or aborted: detach this wait's resolvers only.
-        // Subagents keep their current state (still RUNNING, etc.).
-        for (const cleanup of waiterCleanups) cleanup();
-        throw err;
       } finally {
+        // Detach only this wait's callbacks. Other concurrent waits remain.
+        for (const cleanup of waiterCleanups) cleanup();
         if (timer !== undefined) clearTimeout(timer);
         if (signal && onAbort) signal.removeEventListener('abort', onAbort);
       }
@@ -456,6 +479,10 @@ export class SubagentManager {
     record.error = record.error ?? 'Interrupted by user';
     record.endTime = record.endTime ?? Date.now();
     record.abortController?.abort();
+    if (record.pendingQuestion) {
+      record.pendingQuestion.resolve({ type: 'declined' });
+      record.pendingQuestion = null;
+    }
     // The runner owns the async interruption boundary. It must materialize its
     // partial live tail before the terminal projection is emitted; otherwise
     // the terminal event can make the renderer flush an incomplete record.
@@ -503,11 +530,7 @@ export class SubagentManager {
     const flushed: string[] = [];
 
     for (const record of this._subagents.values()) {
-      if (record._resolveWait && record._resolveWait.length > 0) {
-        for (const resolve of record._resolveWait) {
-          resolve(record);
-        }
-        record._resolveWait = null;
+      if (this._resolveWaiters(record, 'flush')) {
         flushed.push(record.id);
       }
     }
@@ -555,6 +578,88 @@ export class SubagentManager {
 
   getRecord(subagentId: string): SubagentRecord | undefined {
     return this._subagents.get(subagentId);
+  }
+
+  /**
+   * Store a pending question on the subagent record and unblock waiters.
+   *
+   * The record stays RUNNING — `_resolveWaiters` lets `wait_for_subagent`
+   * return early so the main agent can see and answer the question.
+   */
+  markQuestionPending(
+    subagentId: string,
+    toolCallId: string,
+    questions: Array<{
+      type: 'single' | 'multi';
+      title: string;
+      description?: string;
+      options: Array<{ label: string; description?: string }>;
+    }>,
+  ): Promise<SubagentQuestionResult> {
+    const record = this._subagents.get(subagentId);
+    if (!record) throw new Error(`Subagent '${subagentId}' not found`);
+    if (record.pendingQuestion) {
+      return Promise.resolve({ type: 'declined' });
+    }
+
+    return new Promise((resolve) => {
+      record.pendingQuestion = { toolCallId, questions, resolve };
+      this._resolveWaiters(record);
+    });
+  }
+
+  /**
+   * Resolve a subagent's pending question with the given result.
+   *
+   * Returns false if the subagent has no pending question or the supplied
+   * tool-call identity does not match the currently pending question.
+   */
+  answerSubagentQuestion(
+    subagentId: string,
+    toolCallId: string,
+    result: SubagentQuestionResult,
+  ): boolean {
+    const record = this._subagents.get(subagentId);
+    if (!record?.pendingQuestion || record.pendingQuestion.toolCallId !== toolCallId) {
+      return false;
+    }
+    record.pendingQuestion.resolve(result);
+    record.pendingQuestion = null;
+    return true;
+  }
+
+  /**
+   * Return all records for a session that have a pending question.
+   *
+   * Used by the dynamic system prompt builder to surface outstanding
+   * questions to the main agent.
+   */
+  getPendingQuestions(sessionId: string): Array<{
+    subagentId: string;
+    name: string;
+    type: string;
+    toolCallId: string;
+    questions: unknown[];
+  }> {
+    const results: Array<{
+      subagentId: string;
+      name: string;
+      type: string;
+      toolCallId: string;
+      questions: unknown[];
+    }> = [];
+    for (const [id, record] of this._subagents) {
+      if (record.sessionId === sessionId && record.pendingQuestion) {
+        results.push({
+          subagentId: id,
+          name: record.label,
+          type: record.agent.type,
+          toolCallId: record.pendingQuestion.toolCallId,
+          questions: record.pendingQuestion.questions,
+        });
+      }
+    }
+    return results;
   }
 
   getLiveProjection(subagentId: string): SubagentLiveProjection | undefined {
@@ -867,13 +972,20 @@ export class SubagentManager {
     };
   }
 
-  private _resolveWaiters(record: SubagentRecord): void {
-    if (record._resolveWait) {
-      for (const resolve of record._resolveWait) {
-        resolve(record);
+  private _resolveWaiters(
+    record: SubagentRecord,
+    reason: SubagentWaiterReason = 'state-change',
+  ): boolean {
+    const waiters = record._resolveWait;
+    if (reason === 'flush' && waiters?.length === 0) return false;
+    if (waiters) {
+      for (const resolve of waiters) {
+        resolve(reason);
       }
       record._resolveWait = null;
+      return waiters.length > 0;
     }
+    return false;
   }
 
   private _appendLiveText(record: SubagentRecord, kind: 'text' | 'thinking', content: string): void {

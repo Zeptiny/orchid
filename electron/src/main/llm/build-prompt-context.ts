@@ -126,6 +126,25 @@ function mapSubagents(
   }
 }
 
+/**
+ * Pending subagent questions surfaced so the main agent can answer or decline.
+ * Empty when there is no session or no outstanding questions.
+ */
+function mapPendingSubagentQuestions(
+  sessionId: string | null | undefined,
+  agentScopeId: string,
+): NonNullable<SystemPromptContext['pendingSubagentQuestions']> {
+  if (!sessionId || !isMainAgentScope(agentScopeId)) {
+    return [];
+  }
+  try {
+    return getSubagentManager().getPendingQuestions(sessionId) as
+      NonNullable<SystemPromptContext['pendingSubagentQuestions']>;
+  } catch {
+    return [];
+  }
+}
+
 function mapBackgroundCommands(
   sessionId: string | null | undefined,
   agentScopeId: string,
@@ -252,6 +271,7 @@ export async function buildSystemPromptContext(
     subagents: mapSubagents(sessionId, agentScopeId),
     todos: scopedTodos,
     backgroundCommands: mapBackgroundCommands(sessionId, agentScopeId),
+    pendingSubagentQuestions: mapPendingSubagentQuestions(sessionId, agentScopeId),
   };
 }
 

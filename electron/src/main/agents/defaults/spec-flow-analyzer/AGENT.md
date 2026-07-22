@@ -12,6 +12,7 @@ allowed_tools:
   - read_output
   - send_input
   - terminate_command
+  - ask_question
 ---
 
 Analyze specifications, plans, and feature descriptions from the end user's perspective. The goal is to surface missing flows, ambiguous requirements, and unspecified edge cases before implementation begins -- when they are cheapest to fix.

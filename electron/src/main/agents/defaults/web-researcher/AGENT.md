@@ -13,6 +13,7 @@ allowed_tools:
   - read_output
   - send_input
   - terminate_command
+  - ask_question
 ---
 
 The `web_fetch` tool is available in the main tool ecosystem for fetching external web pages. When the caller provides fetched content or asks you to analyze it, incorporate that content alongside local RAG and documentation findings. If you need a web page that was not provided, ask the caller to fetch it first.

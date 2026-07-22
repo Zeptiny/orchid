@@ -36,6 +36,8 @@ allowed_tools:
   - replace_symbol
   - rename_symbol
   - ast_index
+  - ask_question
+  - answer_subagent
 allowed_skills:
   - '*'
 ---

@@ -336,6 +336,12 @@ export function getLiveChatSnapshot(sessionId: string): ChatSnapshot | null {
   return active && !active.finalized ? snapshotForAgent(active) : null;
 }
 
+/** Originating renderer window for the active main-agent turn. */
+export function getActiveMainTurnWindowId(sessionId: string): string | null {
+  const active = activeAgents.get(sessionId);
+  return active && !active.finalized ? active.windowId : null;
+}
+
 function attachUsageToLatestAssistant(messages: Message[], usage: Usage): boolean {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
@@ -379,7 +385,7 @@ function flushPartialTurnContent(agent: ActiveAgent, context: AgentContext | und
 }
 
 /** Resolve WebContents for a window id (forceAbort / SESSION_UPDATED). */
-function webContentsForWindowId(windowId: string): WebContents | null {
+export function webContentsForWindowId(windowId: string): WebContents | null {
   try {
     const id = Number(windowId);
     if (!Number.isFinite(id)) return null;
@@ -426,6 +432,25 @@ export function forceAbortSession(sessionId: string): void {
     );
   }
 
+  forceAbortMainTurn(sessionId);
+}
+
+export interface ForceAbortMainTurnOptions {
+  /** Notify the originating renderer that its visible turn was interrupted. */
+  emitTerminalEvents?: boolean;
+}
+
+/**
+ * Abort and persist only the main-agent turn for one session.
+ *
+ * Interactive-question cancellation uses this narrower path so declining a
+ * main-agent question cannot terminate independent subagents or background
+ * commands owned by the same session.
+ */
+export function forceAbortMainTurn(
+  sessionId: string,
+  options: ForceAbortMainTurnOptions = {},
+): void {
   const existing = activeAgents.get(sessionId);
   if (!existing) return;
 
@@ -437,9 +462,10 @@ export function forceAbortSession(sessionId: string): void {
     return;
   }
 
+  let context: AgentContext | undefined;
   try {
     const snapshot = existing.actor.getSnapshot();
-    const context = snapshot?.context as AgentContext | undefined;
+    context = snapshot?.context as AgentContext | undefined;
     flushPartialTurnContent(existing, context);
 
     if (existing.messages.length > 0 || existing.turnMessages.length > 0) {
@@ -466,7 +492,7 @@ export function forceAbortSession(sessionId: string): void {
     }
   } catch (err) {
     console.debug(
-      'forceAbortSession persistence attempt failed (non-fatal):',
+      'forceAbortMainTurn persistence attempt failed (non-fatal):',
       err,
     );
   }
@@ -477,6 +503,36 @@ export function forceAbortSession(sessionId: string): void {
     sessionId,
     getSessionManager().getActive(existing.windowId)?.id !== sessionId,
   );
+
+  if (options.emitTerminalEvents) {
+    const ownerWebContents = webContentsForWindowId(existing.windowId);
+    if (ownerWebContents) {
+      const response = context?.response ?? '';
+      const usage = context?.usage ?? null;
+      try {
+        sendTurnEvent(ownerWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
+          type: 'done',
+          response,
+          interrupted: true,
+          usage,
+        });
+      } catch (err) {
+        console.debug('Failed to emit CHAT_DONE on main-turn abort (non-fatal):', err);
+      }
+      try {
+        sendTurnEvent(ownerWebContents, existing, IPC_CHANNELS.CHAT_STATE, {
+          state: 'idle',
+          response,
+          error: null,
+          interruptState: 'idle',
+          cwd: existing.cwd,
+        });
+      } catch (err) {
+        console.debug('Failed to emit CHAT_STATE on main-turn abort (non-fatal):', err);
+      }
+    }
+  }
+
   nextAgentGeneration(sessionId);
   disposeActiveAgent(sessionId, existing);
 }
@@ -1579,13 +1635,16 @@ export function registerChatIPC(): void {
               m.tool_call_id === update.toolCallId,
           );
           if (!hasResult) {
+            const toolResultMsg = makeToolResultMessage(
+              update.toolCallId,
+              update.toolName ?? 'unknown',
+              update.content ?? '',
+              update.toolResult!,
+            );
             activeAgent.turnMessages.push(
-              makeToolResultMessage(
-                update.toolCallId,
-                update.toolName ?? 'unknown',
-                update.content ?? '',
-                update.toolResult!,
-              ),
+              update.toolResult?.status === 'cancelled'
+                ? { ...toolResultMsg, excludeFromModel: true }
+                : toolResultMsg,
             );
           }
         }

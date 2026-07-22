@@ -16,6 +16,7 @@ allowed_tools:
   - get_file_skeleton
   - get_function
   - find_symbol_references
+  - ask_question
 ---
 
 # Agent-Native Architecture Reviewer

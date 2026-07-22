@@ -1074,6 +1074,7 @@ export function ChatView() {
         />
         <InputArea
           key={composerDraftKey}
+          sessionId={session.activeSession?.id ?? null}
           status={chat.status}
           model={providerPickerValue}
           modelLabels={providerModelLabels}

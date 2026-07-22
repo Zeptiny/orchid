@@ -34,6 +34,21 @@ export const subagentSnapshotSchema = z.object({
   sessionId: z.string().uuid(),
 }).strict();
 
+// ── Ask Question ────────────────────────────────────────────────────────────
+
+export const askQuestionAnswerSchema = z.object({
+  toolCallId: z.string().uuid(),
+  answers: z.array(z.object({
+    selected: z.array(z.string()),
+    text: z.string().nullable(),
+    skipped: z.boolean(),
+  }).strict()),
+}).strict();
+
+export const askQuestionCancelSchema = z.object({
+  toolCallId: z.string().uuid(),
+}).strict();
+
 // ── Config ───────────────────────────────────────────────────────────────────
 
 /**

@@ -29,6 +29,19 @@ export interface SystemPromptContext {
   todos?: TodoItem[];
   /** Active background commands. */
   backgroundCommands?: BackgroundCommand[];
+  /** Subagent questions awaiting a main-agent answer or decline. */
+  pendingSubagentQuestions?: Array<{
+    subagentId: string;
+    name: string;
+    type: string;
+    toolCallId: string;
+    questions: Array<{
+      type: string;
+      title: string;
+      description?: string;
+      options: Array<{ label: string; description?: string }>;
+    }>;
+  }>;
 }
 
 export interface SubagentState {
@@ -141,6 +154,19 @@ ${escapeXml(context.directoryTree)}
       return `  <subagent ${attrs}>${taskBlock}\n  </subagent>`;
     });
     content += `\n<subagents>\n${parts.join('\n')}\n</subagents>`;
+  }
+
+  if (context.pendingSubagentQuestions && context.pendingSubagentQuestions.length > 0) {
+    const lines = context.pendingSubagentQuestions.map((q) => {
+      const questionLines = q.questions.map((question) => {
+        const optionLines = question.options.map((opt) =>
+          `        <option label="${escapeXmlAttr(opt.label)}"${opt.description ? ` description="${escapeXmlAttr(opt.description)}"` : ''}/>`,
+        ).join('\n');
+        return `      <question type="${escapeXmlAttr(question.type)}" title="${escapeXmlAttr(question.title)}"${question.description ? ` description="${escapeXmlAttr(question.description)}"` : ''}>\n${optionLines}\n      </question>`;
+      }).join('\n');
+      return `  <pending_question subagent_id="${escapeXmlAttr(q.subagentId)}" tool_call_id="${escapeXmlAttr(q.toolCallId)}" name="${escapeXmlAttr(q.name)}" type="${escapeXmlAttr(q.type)}">\n${questionLines}\n  </pending_question>`;
+    });
+    content += `\n<pending_subagent_questions>\n${lines.join('\n')}\n</pending_subagent_questions>`;
   }
 
   // Todos
