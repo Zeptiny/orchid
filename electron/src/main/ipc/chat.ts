@@ -77,10 +77,16 @@ import { importESM } from '../utils/esm-import';
 import { getTierModelSelection } from '../config/loader';
 import {
   chatCancelSchema,
+  chatQueueNextSchema,
   chatSendSchema,
   chatSnapshotSchema,
   chatStopSchema,
 } from './payload-schemas';
+import {
+  clearNextRequestStop,
+  requestNextRequestStop,
+  shouldStopNextRequest,
+} from './next-request-stop';
 
 /** Upper bound for bgcmd:snapshot lastN (prevents unbounded payload reads). */
 const BG_CMD_SNAPSHOT_MAX_LAST_N = 1000;
@@ -951,6 +957,7 @@ function createProviderStreamFn(input: {
       projectRuntime: input.runtime,
       agentScopeId: 'main',
       abortSignal,
+      shouldStopEarly: () => shouldStopNextRequest(input.sessionId),
       modelInstance: input.modelInstance,
       accounting: input.accounting,
       providerOptions: input.providerOptions,
@@ -1075,6 +1082,9 @@ export function registerChatIPC(): void {
       return sessionGate.result;
     }
     const sessionId = sessionGate.session.id;
+    // Reset any stale early-stop signal so this turn (e.g. an auto-fired
+    // next-request chain) is not stopped at its first step boundary.
+    clearNextRequestStop(sessionId);
     if (sessionsStarting.has(sessionId)) {
       return {
         status: 'error',
@@ -1768,6 +1778,16 @@ export function registerChatIPC(): void {
     };
   });
 
+  // chat:queue_next — stop the current chain at the next step boundary so a
+  // queued "next-request" message can start a fresh chain. Fire-and-forget.
+  ipcMain.handle(IPC_CHANNELS.CHAT_QUEUE_NEXT, async (_event, payload: unknown) => {
+    const parsed = chatQueueNextSchema.safeParse(payload ?? {});
+    if (!parsed.success) {
+      throw new Error(`Invalid chat:queue_next payload: ${parsed.error.message}`);
+    }
+    requestNextRequestStop(parsed.data.sessionId);
+  });
+
   // chat:cancel — three-phase Esc: hint → cancel agent → cancel subagents
   ipcMain.handle(IPC_CHANNELS.CHAT_CANCEL, async (event, payload: unknown) => {
     const webContents: WebContents = event.sender;
@@ -1931,6 +1951,7 @@ export function registerChatIPC(): void {
 export function unregisterChatIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_SEND);
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_CANCEL);
+  ipcMain.removeHandler(IPC_CHANNELS.CHAT_QUEUE_NEXT);
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_STOP);
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_SNAPSHOT);
   ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_SNAPSHOT);

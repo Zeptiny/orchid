@@ -931,7 +931,7 @@ export const IPC_CHANNELS = {
   // Chat
   CHAT_SEND: 'chat:send',
   CHAT_CANCEL: 'chat:cancel',
-  CHAT_QUEUE_NEXT: 'chat:queue-next',
+  CHAT_QUEUE_NEXT: 'chat:queue_next',
   CHAT_STOP: 'chat:stop',
   CHAT_SNAPSHOT: 'chat:snapshot',
   CHAT_CHUNK: 'chat:chunk',
