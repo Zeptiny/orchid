@@ -11,7 +11,8 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - Grep should also work with files
 - Subagents may be getting interrupted when only the main one should be
 - Investigate if the command timeout is being used - they appears to be hard coded at 30s
-- When the wai_for_subagent times out, it should still send the results of the subagents that completed
+- When the wait_for_subagent times out, it should still send the results of the subagents that completed
+- Reasoning token usage appears to only be updating after chain ends(Response updats correctly)
 
 ## Agent quality
 
