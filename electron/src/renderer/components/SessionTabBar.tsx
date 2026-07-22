@@ -77,9 +77,10 @@ export function SessionTabBar({
     const root = scrollRef.current;
     if (!root) return;
     const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) return;
       if (e.deltaY === 0 || root.scrollWidth <= root.clientWidth) return;
       e.preventDefault();
-      root.scrollLeft += e.deltaY;
+      root.scrollLeft += e.deltaX || e.deltaY;
     };
     root.addEventListener('wheel', onWheel, { passive: false });
     return () => root.removeEventListener('wheel', onWheel);

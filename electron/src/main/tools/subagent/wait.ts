@@ -13,19 +13,12 @@ import { genericToolResultMetadata } from '../types';
 import { escapeXmlAttribute, escapeXmlText, genericBuiltInToolOutcome } from '../result';
 import {
   DEFAULT_WAIT_TIMEOUT_MS,
-  SubagentState,
   SubagentWaitTimeoutError,
   type SubagentManager,
   type SubagentRecord,
 } from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
 import { persistSubagentChains } from '../../agents/persist-subagent-chains';
-
-const TERMINAL_STATES = new Set<SubagentState>([
-  SubagentState.COMPLETED,
-  SubagentState.FAILED,
-  SubagentState.INTERRUPTED,
-]);
 
 function formatElapsed(ms: number): string {
   const seconds = Math.floor(Math.max(0, ms) / 1000);
@@ -178,16 +171,13 @@ export function buildWaitTool(
           const record = manager.getRecord(id);
           if (record) partialRecords.set(id, record);
         }
-        const hasTerminal = [...partialRecords.values()].some(
-          (r) => TERMINAL_STATES.has(r.state) || r.pendingQuestion !== null,
-        );
         const xml = formatSubagentRecords(partialRecords, subagent_ids);
         const timeoutNotice =
           '\n<timeout>' + escapeXmlText(err.message) + '</timeout>';
         return genericBuiltInToolOutcome(
           'wait_for_subagent',
           xml + timeoutNotice,
-          hasTerminal ? 'complete' : 'error',
+          'error',
         );
       }
       if (err instanceof DOMException && err.name === 'AbortError') {

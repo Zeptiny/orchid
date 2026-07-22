@@ -266,7 +266,7 @@ export async function executeGrepOutcome(
   const limitReached = allMatches.length >= effectiveMaxResults;
   const data: GrepResultsData = {
     kind: 'grep',
-    root: basePath,
+    root: searchRoot,
     pattern,
     matches: returnedMatches,
     totalMatches: returnedMatches.length,
