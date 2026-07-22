@@ -23,8 +23,9 @@ const TRIGGER_LABEL: Record<QueueTrigger, string> = {
  * MessageQueue — deferred-send messages staged above the composer.
  *
  * Renders the `useMessageQueue` queue as compact rows, each with a clickable
- * trigger badge ("next req" / "chain end"), inline edit (textarea with
- * Save/Cancel, Escape aborts), delete, and up/down reorder controls.
+ * trigger badge ("next req" / "chain end"), inline edit (textarea — Enter
+ * saves, Shift+Enter inserts a newline, Escape aborts), delete, and up/down
+ * reorder controls.
  * Renders nothing when the queue is empty. Purely presentational: all
  * mutations flow through the callback props.
  */
@@ -106,11 +107,17 @@ function QueueItem({
             className="w-full min-w-0 flex-1 resize-none rounded-selector border border-base-300 bg-base-100 px-2 py-1.5 text-xs leading-snug text-base-content focus:border-primary focus:outline-none"
             onChange={(event) => onUpdateEditingText(message.id, event.target.value)}
             onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
-              if (event.key !== 'Escape') return;
-              // Keep Escape from bubbling to the composer's global interrupt handler.
-              event.preventDefault();
-              event.stopPropagation();
-              onCancelEditing(message.id);
+              if (event.key === 'Escape') {
+                // Keep Escape from bubbling to the composer's global interrupt handler.
+                event.preventDefault();
+                event.stopPropagation();
+                onCancelEditing(message.id);
+                return;
+              }
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                onFinishEditing(message.id);
+              }
             }}
           />
         </div>
@@ -141,7 +148,7 @@ function QueueItem({
   return (
     <div
       role="listitem"
-      className="flex items-start gap-2 rounded-selector border border-base-300 bg-base-200 px-2 py-1.5 transition-colors hover:border-base-content/25"
+      className="flex items-center gap-2 rounded-selector border border-base-300 bg-base-200 px-2 py-1.5 transition-colors hover:border-base-content/25"
     >
       <QueueIndex index={index} />
       <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs leading-snug text-base-content/90 line-clamp-2">
@@ -191,7 +198,7 @@ function QueueItem({
 
 function QueueIndex({ index }: { index: number }) {
   return (
-    <span className="mt-px w-4 shrink-0 text-center font-mono text-xs text-base-content/35">
+    <span className="w-4 shrink-0 text-center font-mono text-xs text-base-content/35">
       {index + 1}
     </span>
   );
