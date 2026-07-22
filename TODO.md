@@ -186,8 +186,6 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 
 ## Configuration UI
 
-- Adding a provider currently allows API key and env auth at the same time
-  - Show only one method at a time, selected by toggle
 - Adding an MCP server currently allows command and URL at the same time
   - Show only one transport at a time, selected by toggle
   - No way to set an auth token yet
