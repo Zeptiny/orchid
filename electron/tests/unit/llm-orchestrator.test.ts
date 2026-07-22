@@ -2116,6 +2116,40 @@ describe('streamChat', () => {
     expect(call.tools).toBeUndefined();
   });
 
+  it('composes stopWhen with shouldStopEarly when a predicate is supplied', async () => {
+    // The composed branch CALLS the step-limit condition, so mock isStepCount
+    // to return a real function (the default-path test above uses a plain
+    // object). mockImplementationOnce restores the default for later tests.
+    const stepLimit = vi.fn(() => false);
+    aiSdkMocks.isStepCount.mockImplementationOnce(() => stepLimit);
+    setupStreamText({ fullStreamParts: [] });
+
+    const shouldStopEarly = vi.fn(() => false);
+    await collectStreamEvents(
+      streamChat({ ...makeStreamChatParams(), shouldStopEarly }),
+    );
+
+    expect(aiSdkMocks.isStepCount).toHaveBeenCalledWith(100);
+    const call = aiSdkMocks.streamText.mock.calls[0][0] as {
+      stopWhen: (ctx: unknown) => boolean;
+    };
+    expect(typeof call.stopWhen).toBe('function');
+
+    const ctx = { steps: [] };
+
+    // Early stop requested → stops even though the step-count limit says no.
+    shouldStopEarly.mockReturnValue(true);
+    stepLimit.mockReturnValue(false);
+    expect(call.stopWhen(ctx)).toBe(true);
+
+    // No early stop → delegates to the step-count limit.
+    shouldStopEarly.mockReturnValue(false);
+    stepLimit.mockReturnValue(false);
+    expect(call.stopWhen(ctx)).toBe(false);
+    stepLimit.mockReturnValue(true);
+    expect(call.stopWhen(ctx)).toBe(true);
+  });
+
   it(
     'yields stream idle timeout when fullStream hangs with no content',
     async () => {

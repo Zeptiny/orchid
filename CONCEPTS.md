@@ -42,7 +42,7 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 ## Message Queue
 
 - **Message Queue** — An ephemeral, per-session list of user-composed messages waiting to be sent while the agent is working. Rendered above the input field. Strict FIFO processing.
-- **Queue Trigger** — The condition that determines when a queued message fires. Two types: "with next request" (fires at the next idle boundary, batched with consecutive next-request messages) and "after chain ends" (fires when the chain terminates for any reason). Both fire at the idle transition; the AI SDK's `maxSteps` loop prevents true mid-step injection.
+- **Queue Trigger** — The condition that determines when a queued message fires. Two types: "with next request" (stops the current chain at the next AI-SDK step boundary via the orchestrator `stopWhen`, then the queued message starts a fresh chain there — batched with consecutive next-request messages) and "after chain ends" (fires when the chain terminates for any reason). Because the stop is evaluated at a step boundary, a long in-flight tool completes before the stop takes effect; both triggers ultimately fire on the `streaming → idle` transition.
 
 ## Workflow Terms
 
