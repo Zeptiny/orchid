@@ -5,7 +5,7 @@
  * chrome; tool call/result messages fall back to ToolCallBlock for edge cases.
  * ChatStream normally converts them into ToolBlocks for consistent ordering.
  */
-import { memo, useState, useCallback, useMemo, useEffect, useId } from 'react';
+import { memo, useState, useCallback, useMemo, useEffect, useId, useRef } from 'react';
 import type { Message } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import {
@@ -82,31 +82,40 @@ function ThinkingMessage({
   message: Message;
   isStreaming?: boolean;
 }) {
-  // Stay open while reasoning streams; user can still toggle.
+  // Open for live reasoning, then close when that segment settles.
   const [expanded, setExpanded] = useState(Boolean(isStreaming));
-  const [userToggled, setUserToggled] = useState(false);
+  const [streamingElapsedMs, setStreamingElapsedMs] = useState(0);
+  const thinkingStartedAt = useRef<number | null>(isStreaming ? Date.now() : null);
   const panelId = useId();
   const toggle = useCallback(() => {
-    setUserToggled(true);
     setExpanded((prev) => !prev);
   }, []);
   const collapse = useCallback(() => {
-    setUserToggled(true);
     setExpanded(false);
   }, []);
   const content = message.content || (message.thinking ?? '');
   // Mock shows "Thought 936ms" — estimate from content length when no duration field
   const durationLabel = useMemo(() => {
-    if (isStreaming) return null;
+    if (isStreaming) return formatDurationMs(streamingElapsedMs);
     const ms = estimateThoughtDurationMs(content);
     return ms != null ? formatDurationMs(ms) : null;
-  }, [content, isStreaming]);
+  }, [content, isStreaming, streamingElapsedMs]);
 
   useEffect(() => {
-    if (isStreaming && !userToggled) {
-      setExpanded(true);
+    setExpanded(Boolean(isStreaming));
+    if (!isStreaming) {
+      thinkingStartedAt.current = null;
+      setStreamingElapsedMs(0);
+      return undefined;
     }
-  }, [isStreaming, userToggled]);
+    thinkingStartedAt.current ??= Date.now();
+    const updateElapsed = () => {
+      setStreamingElapsedMs(Date.now() - (thinkingStartedAt.current ?? Date.now()));
+    };
+    updateElapsed();
+    const intervalId = window.setInterval(updateElapsed, 100);
+    return () => window.clearInterval(intervalId);
+  }, [isStreaming]);
 
   return (
     <div
@@ -125,7 +134,7 @@ function ThinkingMessage({
           ) : (
             <Icon name="alertCircle" size={12} />
           )}
-          {isStreaming ? 'Thinking…' : `Thought${durationLabel ? ` ${durationLabel}` : ''}`}
+          {`${isStreaming ? 'Thinking…' : 'Thought'}${durationLabel ? ` ${durationLabel}` : ''}`}
         </span>
         <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
       </button>

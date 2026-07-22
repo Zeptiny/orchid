@@ -112,6 +112,10 @@ export function ToolResultShell({
     expansionChoices.set(choiceKey, next);
     setExpanded(next);
   };
+  const collapse = () => {
+    expansionChoices.set(choiceKey, false);
+    setExpanded(false);
+  };
 
   return (
     <div className={`orchid-tool-block ${status === 'complete' ? '' : status}`} data-tool-result-status={status}>
@@ -132,7 +136,21 @@ export function ToolResultShell({
         </span>
       </button>
       {expanded && (
-        <div id={panelId} className="orchid-tool-block-content min-w-0" aria-describedby={announcementId}>
+        <div
+          id={panelId}
+          className="orchid-tool-block-content min-w-0"
+          aria-describedby={announcementId}
+          onClick={collapse}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              collapse();
+            }
+          }}
+          role="button"
+          tabIndex={0}
+          title="Click to collapse"
+        >
           {body}
           <span className="sr-only">{status} tool result</span>
           <span id={announcementId} className="sr-only" role="status" aria-live="polite">{announcement}</span>

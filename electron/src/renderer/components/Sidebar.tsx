@@ -457,7 +457,7 @@ function SubagentRow({
 
   return (
     <div className="inspector-stack gap-0">
-      <div className={`inspector-row rounded py-1 pr-0.5 ${isSelected ? 'inspector-row-active' : ''}`}>
+      <div className={`inspector-row inspector-subagent-row rounded py-1 pr-0.5 ${isSelected ? 'inspector-row-active' : ''}`}>
         <IconButton
           label={`Open ${name} in Subagent View`}
           tooltip="Open in Subagent View"

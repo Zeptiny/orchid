@@ -37,13 +37,8 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - Notifications / sounds when:
   - Chain ends
   - Needs user input (Ex: ask_question)
-- Verify if thinking blocks:
-  - Are collapsed by default
-  - Allow line breaks
-- Add thinking duration while thinking (Not only Thinking...)
-- Subagent selection on the right sidebar keeps re-selecting without user input (Cant have no subagent selected)
-- Clicking on the content of tool results are not collapsing the widget
-
+- Tool widgets / tool groups may be collapsing when a chain ends
+- Add small animations to the interface
 
 ## General backlog
 

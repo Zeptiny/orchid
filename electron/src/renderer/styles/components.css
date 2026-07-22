@@ -403,6 +403,8 @@
   .orchid-thought-content {
     @apply leading-snug text-base-content/70;
     font-size: 1rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     padding: 8px 14px 10px;
     border-left: 2px solid color-mix(in srgb, var(--msg-thinking-text, var(--color-info)) 55%, transparent);
     cursor: pointer;

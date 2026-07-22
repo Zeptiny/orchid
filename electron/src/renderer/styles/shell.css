@@ -892,6 +892,15 @@
     background: color-mix(in srgb, var(--text-primary) 4%, transparent);
   }
 
+  .inspector-subagent-row {
+    transition: background-color var(--transition-fast, 150ms ease);
+  }
+
+  .inspector-subagent-row:hover,
+  .inspector-subagent-row:focus-within {
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+  }
+
   .inspector-row-active {
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
   }

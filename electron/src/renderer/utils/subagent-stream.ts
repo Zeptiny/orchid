@@ -119,8 +119,7 @@ export function resolveSubagentSelection(
     options.existingSessionId === options.sessionId &&
     ids.has(options.existingId)
   ) return options.existingId;
-  const groups = groupSubagents(records);
-  return groups.running[0]?.id ?? groups.ended[0]?.id ?? null;
+  return null;
 }
 
 function recordWithProjection(record: SubagentRecord, projection: SubagentLiveProjection): SubagentRecord {

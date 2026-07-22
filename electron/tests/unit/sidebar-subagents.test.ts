@@ -88,10 +88,22 @@ describe('subagent sidebar grouping', () => {
     expect(html).not.toContain('View all');
     expect(html).toContain('Open in Subagent View');
     expect(html).toContain('aria-label="Open running-agent in Subagent View"');
+    expect(html).toContain('inspector-subagent-row');
     expect(html).not.toMatch(/>Open in Subagent View<\/button>/);
     expect(html.indexOf('aria-label="Open running-agent in Subagent View"'))
       .toBeLessThan(html.indexOf('inspector-row-label mono truncate'));
     expect(html).not.toContain('completed-agent');
+  });
+
+  it('highlights the hovered or keyboard-focused subagent row', () => {
+    const styles = readFileSync(
+      new URL('../../src/renderer/styles/shell.css', import.meta.url),
+      'utf8',
+    );
+
+    expect(styles).toMatch(
+      /\.inspector-subagent-row:hover,[\s\S]*?\.inspector-subagent-row:focus-within\s*\{[\s\S]*?background:\s*color-mix\(/,
+    );
   });
 
   it('places the Subagent View action beside the collapse title', () => {

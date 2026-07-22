@@ -51,11 +51,22 @@ describe('subagent live snapshot/event reducer', () => {
     expect(result.ended.map((item) => item.id)).toEqual(['new-ended', 'old-ended']);
   });
 
-  it('resolves requested, existing, then newest running/ended selection', () => {
+  it('resolves requested or existing selection without selecting a row by default', () => {
     const records = [record('ended', 'completed', '2026-01-01T00:00:04Z'), record('running', 'running', '2026-01-01T00:00:03Z')];
     expect(resolveSubagentSelection(records, { sessionId: sessionA, requestedId: 'ended' })).toBe('ended');
-    expect(resolveSubagentSelection(records, { sessionId: sessionA, requestedId: 'missing' })).toBe('running');
+    expect(resolveSubagentSelection(records, { sessionId: sessionA })).toBeNull();
+    expect(resolveSubagentSelection(records, { sessionId: sessionA, requestedId: 'missing' })).toBeNull();
     expect(resolveSubagentSelection(records, { sessionId: sessionA, existingId: 'ended', existingSessionId: sessionA })).toBe('ended');
+  });
+
+  it('preserves an explicit empty selection across snapshot refreshes', () => {
+    const records = [record('running', 'running')];
+    expect(resolveSubagentSelection(records, {
+      sessionId: sessionA,
+      requestedId: null,
+      existingId: null,
+      existingSessionId: sessionA,
+    })).toBeNull();
   });
 
   it('applies only matching content and terminal projections', () => {

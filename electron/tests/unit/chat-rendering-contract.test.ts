@@ -7,12 +7,16 @@
 import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MessageRole, MessageType, type Message } from '../../src/shared/types/message';
 import {
   AUTO_SCROLL_THRESHOLD_PX,
   isUserScrolledAwayFromBottom,
   shouldRenderChainFooter,
   shouldAutoScroll,
 } from '../../src/renderer/components/ChatStream';
+import { MessageWidget } from '../../src/renderer/components/MessageWidget';
 import { scrollContainerToLatest } from '../../src/renderer/hooks/useSmartAutoScroll';
 
 const RENDERER = path.resolve(__dirname, '../../src/renderer');
@@ -58,15 +62,46 @@ describe('chat rendering contract (U5)', () => {
       expect(error).not.toMatch(/className=.*alert\b/);
     });
 
-    it('thinking content collapses when clicked', () => {
+    it('thinking content follows the live disclosure lifecycle and preserves line breaks', () => {
       const src = read('components/MessageWidget.tsx');
+      const styles = read('styles/components.css');
       const contentStart = src.indexOf('className="orchid-thought-content"');
       const contentSource = src.slice(contentStart, contentStart + 500);
 
       expect(contentStart).toBeGreaterThanOrEqual(0);
+      expect(src).toContain('setExpanded(Boolean(isStreaming))');
+      expect(src).toContain('window.setInterval(updateElapsed, 100)');
+      expect(src).toContain('if (isStreaming) return formatDurationMs(streamingElapsedMs)');
       expect(contentSource).toContain('onClick={collapse}');
       expect(contentSource).toContain('role="button"');
       expect(contentSource).toContain('title="Click to collapse"');
+      expect(styles).toMatch(/\.orchid-thought-content\s*\{[\s\S]*?white-space:\s*pre-wrap;/);
+    });
+
+    it('starts live thinking expanded with elapsed time and settled thinking collapsed', () => {
+      const message: Message = {
+        id: 'thought-contract',
+        role: MessageRole.ASSISTANT,
+        content: 'first line\nsecond line',
+        type: MessageType.THINKING,
+        tool_calls: null,
+        tool_call_id: null,
+        name: null,
+        thinking: 'first line\nsecond line',
+        timestamp: new Date().toISOString(),
+        usage: null,
+        hidden: false,
+        tool_result: null,
+      };
+
+      const live = renderToStaticMarkup(createElement(MessageWidget, { message, isStreaming: true }));
+      const settled = renderToStaticMarkup(createElement(MessageWidget, { message, isStreaming: false }));
+
+      expect(live).toContain('aria-expanded="true"');
+      expect(live).toContain('Thinking… 0ms');
+      expect(live).toContain('first line\nsecond line');
+      expect(settled).toContain('aria-expanded="false"');
+      expect(settled).not.toContain('orchid-thought-content');
     });
   });
 
