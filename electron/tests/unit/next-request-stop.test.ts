@@ -43,4 +43,13 @@ describe('next-request-stop', () => {
     // Reading is non-destructive — the flag stays set until cleared.
     expect(shouldStopNextRequest(SESSION)).toBe(true);
   });
+
+  it('keeps sessions independent', () => {
+    requestNextRequestStop('session-a');
+    requestNextRequestStop('session-b');
+    clearNextRequestStop('session-a');
+    expect(shouldStopNextRequest('session-a')).toBe(false);
+    expect(shouldStopNextRequest('session-b')).toBe(true);
+    clearNextRequestStop('session-b');
+  });
 });

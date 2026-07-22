@@ -5,6 +5,7 @@ import { MessageRole, MessageType } from '../../src/shared/types/message';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 import {
   clearNextRequestStop,
+  requestNextRequestStop,
   shouldStopNextRequest,
 } from '../../src/main/ipc/next-request-stop';
 
@@ -1596,6 +1597,32 @@ describe('chat:queue_next early-stop signaling', () => {
     await expect(
       queueNext({ sender: { id: 933, send: vi.fn() } }, { sessionId: 123 }),
     ).rejects.toThrow(/Invalid chat:queue_next payload/);
+    expect(shouldStopNextRequest(sessionId)).toBe(false);
+  });
+
+  it('clears the early-stop flag at chat:send turn start', async () => {
+    requestNextRequestStop(sessionId);
+    expect(shouldStopNextRequest(sessionId)).toBe(true);
+
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 934, send } }, { message: 'continue' });
+    await waitForDoneCount(send, 1);
+
     expect(shouldStopNextRequest(sessionId)).toBe(false);
   });
 });
