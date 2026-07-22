@@ -9,6 +9,7 @@ import { FileContentToolResult } from './FileContentToolResult';
 import { DirectoryToolResult } from './DirectoryToolResult';
 import { SearchToolResult } from './SearchToolResult';
 import { ApplyPatchToolResult } from './ApplyPatchToolResult';
+import { AskQuestionToolResult } from './AskQuestionToolResult';
 import { LiveCommandInline } from '../ToolWidgets/LiveCommandInline';
 import { StatusBadge } from '../ui/StatusBadge';
 
@@ -109,6 +110,7 @@ toolRenderers.set('read_directory', DirectoryToolResult);
 toolRenderers.set('glob', SearchToolResult);
 toolRenderers.set('grep', SearchToolResult);
 toolRenderers.set('apply_patch', ApplyPatchToolResult);
+toolRenderers.set('ask_question', AskQuestionToolResult);
 const builtInToolRenderers = new Map(toolRenderers);
 
 export function registerToolResultRenderer(

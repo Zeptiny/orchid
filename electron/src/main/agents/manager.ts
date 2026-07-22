@@ -52,6 +52,11 @@ export const SubagentState = {
 
 export type SubagentState = (typeof SubagentState)[keyof typeof SubagentState];
 
+/** Result of answering (or declining) a subagent's pending question. */
+export type SubagentQuestionResult =
+  | { type: 'answered'; answers: Array<{ selected: string[]; text: string | null; skipped: boolean }> }
+  | { type: 'declined' };
+
 /** Terminal states — subagents in these states cannot be cancelled. */
 const TERMINAL_STATES = new Set<SubagentState>([
   SubagentState.COMPLETED,
@@ -157,6 +162,17 @@ export interface SubagentRecord {
   live: SubagentLiveProjection;
   _liveCommittedSegmentCount: number;
   _liveTerminalEmitted: boolean;
+  /** Pending question routed to the main agent (null when no question is outstanding). */
+  pendingQuestion: {
+    toolCallId: string;
+    questions: Array<{
+      type: 'single' | 'multi';
+      title: string;
+      description?: string;
+      options: Array<{ label: string; description?: string }>;
+    }>;
+    resolve: (result: SubagentQuestionResult) => void;
+  } | null;
 }
 
 // ── SubagentResult ──────────────────────────────────────────────────────────
@@ -252,6 +268,7 @@ export class SubagentManager {
       live: makeLiveProjection(id, options.sessionId ?? null, 'pending'),
       _liveCommittedSegmentCount: 0,
       _liveTerminalEmitted: false,
+      pendingQuestion: null,
     };
 
     this._subagents.set(id, record);
@@ -456,6 +473,10 @@ export class SubagentManager {
     record.error = record.error ?? 'Interrupted by user';
     record.endTime = record.endTime ?? Date.now();
     record.abortController?.abort();
+    if (record.pendingQuestion) {
+      record.pendingQuestion.resolve({ type: 'declined' });
+      record.pendingQuestion = null;
+    }
     // The runner owns the async interruption boundary. It must materialize its
     // partial live tail before the terminal projection is emitted; otherwise
     // the terminal event can make the renderer flush an incomplete record.
@@ -555,6 +576,78 @@ export class SubagentManager {
 
   getRecord(subagentId: string): SubagentRecord | undefined {
     return this._subagents.get(subagentId);
+  }
+
+  /**
+   * Store a pending question on the subagent record and unblock waiters.
+   *
+   * The record stays RUNNING — `_resolveWaiters` lets `wait_for_subagent`
+   * return early so the main agent can see and answer the question.
+   */
+  markQuestionPending(
+    subagentId: string,
+    toolCallId: string,
+    questions: Array<{
+      type: 'single' | 'multi';
+      title: string;
+      description?: string;
+      options: Array<{ label: string; description?: string }>;
+    }>,
+  ): Promise<SubagentQuestionResult> {
+    const record = this._subagents.get(subagentId);
+    if (!record) throw new Error(`Subagent '${subagentId}' not found`);
+
+    return new Promise((resolve) => {
+      record.pendingQuestion = { toolCallId, questions, resolve };
+      this._resolveWaiters(record);
+    });
+  }
+
+  /**
+   * Resolve a subagent's pending question with the given result.
+   *
+   * Returns false if the subagent has no pending question.
+   */
+  answerSubagentQuestion(subagentId: string, result: SubagentQuestionResult): boolean {
+    const record = this._subagents.get(subagentId);
+    if (!record?.pendingQuestion) return false;
+    record.pendingQuestion.resolve(result);
+    record.pendingQuestion = null;
+    return true;
+  }
+
+  /**
+   * Return all records for a session that have a pending question.
+   *
+   * Used by the dynamic system prompt builder to surface outstanding
+   * questions to the main agent.
+   */
+  getPendingQuestions(sessionId: string): Array<{
+    subagentId: string;
+    name: string;
+    type: string;
+    toolCallId: string;
+    questions: unknown[];
+  }> {
+    const results: Array<{
+      subagentId: string;
+      name: string;
+      type: string;
+      toolCallId: string;
+      questions: unknown[];
+    }> = [];
+    for (const [id, record] of this._subagents) {
+      if (record.sessionId === sessionId && record.pendingQuestion) {
+        results.push({
+          subagentId: id,
+          name: record.label,
+          type: record.agent.type,
+          toolCallId: record.pendingQuestion.toolCallId,
+          questions: record.pendingQuestion.questions,
+        });
+      }
+    }
+    return results;
   }
 
   getLiveProjection(subagentId: string): SubagentLiveProjection | undefined {

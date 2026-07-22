@@ -72,3 +72,70 @@ describe('toApiMessages match-set', () => {
     expect(result[3].content).toBe('Done with partial tools');
   });
 });
+
+describe('toApiMessages hidden filtering', () => {
+  it('excludes hidden messages from API output', () => {
+    const messages: Message[] = [
+      makeMessage({
+        role: MessageRole.USER,
+        content: 'Hello',
+        type: MessageType.TEXT,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        content: 'Visible reply',
+        type: MessageType.TEXT,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        content: 'Hidden note',
+        type: MessageType.TEXT,
+        hidden: true,
+      }),
+    ];
+
+    const result = toApiMessages(messages);
+
+    expect(result).toHaveLength(2);
+    expect(result[0].content).toBe('Hello');
+    expect(result[1].content).toBe('Visible reply');
+  });
+
+  it('drops tool_call whose only result is hidden (cancelled tool)', () => {
+    const tc = makeToolCall('tc-cancelled', 'ask_question');
+    const messages: Message[] = [
+      makeMessage({
+        role: MessageRole.USER,
+        content: 'Do something',
+        type: MessageType.TEXT,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        content: '',
+        type: MessageType.TOOL_CALL,
+        tool_calls: [tc],
+        tool_call_id: 'tc-cancelled',
+      }),
+      makeMessage({
+        role: MessageRole.TOOL,
+        content: 'cancelled',
+        type: MessageType.TOOL_RESULT,
+        tool_call_id: 'tc-cancelled',
+        hidden: true,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        content: 'Turn interrupted',
+        type: MessageType.TEXT,
+      }),
+    ];
+
+    const result = toApiMessages(messages);
+
+    expect(result).toHaveLength(2);
+    expect(result[0].content).toBe('Do something');
+    expect(result[1].content).toBe('Turn interrupted');
+    expect(result.some((m) => m.tool_call_id === 'tc-cancelled')).toBe(false);
+    expect(result.some((m) => m.tool_calls?.some((t) => t.id === 'tc-cancelled'))).toBe(false);
+  });
+});

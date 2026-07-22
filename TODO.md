@@ -34,6 +34,16 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
   - Todo: `todo_create`, `todo_update`, `todo_list`, `todo_delete`
   - Web / subagents / skills: `web_fetch`, `delegate_to_subagent`, `wait_for_subagent`, `interrupt_subagents`, `skill`
   - MCP: `read_mcp_resource`, `list_mcp_resources`, and dynamically registered MCP tools
+- Notifications / sounds when:
+  - Chain ends
+  - Needs user input (Ex: ask_question)
+- Verify if thinking blocks:
+  - Are collapsed by default
+  - Allow line breaks
+- Add thinking duration while thinking (Not only Thinking...)
+- Subagent selection on the right sidebar keeps re-selecting without user input (Cant have no subagent selected)
+- Clicking on the content of tool results are not collapsing the widget
+
 
 ## General backlog
 
@@ -62,17 +72,6 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - **Do not change this until the design is clearer**
 - Multiple primary agent types (general, plan, etc.) that can be switched mid-conversation
 
-## `ask_question` tool
-
-- Support multiple multiple-choice questions
-  - Each with a title and description
-- Always allow a free-text answer option
-- Allow several questions in one tool call
-  - e.g. two 4-option questions plus one 2-option question
-- Under consideration: let subagents use this tool to ask the main agent / user
-  - Main agent must notice immediately (status update + leave `wait_for_subagent` if any subagent has a question)
-  - Main agent must be able to decline answering (e.g. research-only, or forward to the user)
-
 ## Approval / permission system
 
 - Evaluate integrating checks from [destructive_command_guard](https://github.com/Dicklesworthstone/destructive_command_guard)
@@ -97,6 +96,12 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
   - Multi-turn? Still under consideration
   - Useful for clarifications without stopping work
     - e.g. “How does function X interact with system Y?”
+- Close subagent
+  - Remove it from the dynamic system prompt, the agent information is not needed anymore
+  - Does not actually deletes anything from the session
+- A tool to continue the work / follow up input
+  - Ex: Agent implemented something and created a bug, send an input telling it to fix
+  - Cannot be used with closed agents
 
 ## Needs improvement
 

@@ -12,6 +12,7 @@ import { useRef, useCallback, useEffect, useState, useMemo } from 'react';
 import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption } from '../../shared/types/ipc';
 import type { ChatStatus, InterruptState } from '../hooks/useChat';
+import { useAskQuestion } from '../hooks/useAskQuestion';
 import {
   COMMANDS,
   trackRecentCommand,
@@ -27,6 +28,7 @@ import {
   evaluateComposerSend,
   shouldReleaseComposerSendLock,
 } from '../utils/composer-send-lock';
+import { AskQuestionOverlay } from './AskQuestionOverlay';
 import { SlashCommandMenu } from './SlashCommandMenu';
 import { IconButton } from './ui/IconButton';
 
@@ -92,6 +94,8 @@ export function InputArea({
   const [input, setInput] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [subPicker, setSubPicker] = useState<SubPicker>(null);
+  /** Pending ask_question stepper; while active it owns the composer area. */
+  const askQuestion = useAskQuestion();
 
   const isStreaming = status === 'streaming';
   const hasInput = Boolean(input.trim());
@@ -559,6 +563,16 @@ export function InputArea({
   // During confirmSubagents the agent is done — keep input editable for follow-ups.
   const inputDisabled = isStreaming || interruptState === 'confirmAgent';
   const plainChatBlocked = !workspaceBound || !providerAvailable || !modelSelected;
+
+  // A pending ask_question tool call owns the composer area; the composer (and
+  // every send path) stays unmounted until it is answered or cancelled.
+  if (askQuestion.active) {
+    return (
+      <div className="orchid-composer-area">
+        <AskQuestionOverlay question={askQuestion} />
+      </div>
+    );
+  }
 
   return (
     <div className="orchid-composer-area">

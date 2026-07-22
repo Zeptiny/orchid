@@ -41,9 +41,11 @@ import { buildWebFetchTool, type SummarizeCallback } from './web/fetch';
 import { buildSkillTool } from './skill/skill';
 import { buildMcpResourceTool } from './mcp/resource';
 import { buildListMcpResourcesTool } from './mcp/list-resources';
+import { buildAskQuestionTool } from './ask-question';
 import { buildDelegateTool } from './subagent/delegate';
 import { buildWaitTool } from './subagent/wait';
 import { buildInterruptTool } from './subagent/interrupt';
+import { buildAnswerSubagentTool } from './subagent/answer';
 import { SubagentManager } from '../agents/manager';
 import { getTierModelSelection } from '../config/loader';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
@@ -253,6 +255,8 @@ function registerBuiltinToolsInto(
   registry.register(wait.definition, wait.handler);
   const interrupt = buildInterruptTool(context.subagentManager);
   registry.register(interrupt.definition, interrupt.handler);
+  const answerSubagent = buildAnswerSubagentTool(context.subagentManager);
+  registry.register(answerSubagent.definition, answerSubagent.handler);
 
   const skill = buildSkillTool(context.skills);
   registry.register(skill.definition, skill.handler);
@@ -266,6 +270,8 @@ function registerBuiltinToolsInto(
   );
   registry.register(listMcpResources.definition, listMcpResources.handler);
 
+  const askQuestion = buildAskQuestionTool();
+  registry.register(askQuestion.definition, askQuestion.handler);
 }
 
 /** Build a dedicated, immutable-definition registry for one project runtime. */

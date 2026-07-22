@@ -1579,13 +1579,16 @@ export function registerChatIPC(): void {
               m.tool_call_id === update.toolCallId,
           );
           if (!hasResult) {
+            const toolResultMsg = makeToolResultMessage(
+              update.toolCallId,
+              update.toolName ?? 'unknown',
+              update.content ?? '',
+              update.toolResult!,
+            );
             activeAgent.turnMessages.push(
-              makeToolResultMessage(
-                update.toolCallId,
-                update.toolName ?? 'unknown',
-                update.content ?? '',
-                update.toolResult!,
-              ),
+              update.toolResult?.status === 'cancelled'
+                ? { ...toolResultMsg, hidden: true }
+                : toolResultMsg,
             );
           }
         }

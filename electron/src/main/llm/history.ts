@@ -44,6 +44,10 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
       continue;
     }
 
+    if (msg.hidden) {
+      continue;
+    }
+
     // Skip tool_call messages with no tool_calls
     if (msg.type === MessageType.TOOL_CALL && (!msg.tool_calls || msg.tool_calls.length === 0)) {
       continue;
@@ -88,6 +92,10 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
   for (const msg of messages) {
     // Skip error messages
     if (msg.type === MessageType.ERROR) {
+      continue;
+    }
+
+    if (msg.hidden) {
       continue;
     }
 

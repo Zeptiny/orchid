@@ -670,6 +670,42 @@ export interface ToolExecuteMessage {
 
 export type ToolExecuteResult = ToolExecutionResult;
 
+// ── Ask Question API ─────────────────────────────────────────────────────────
+
+/** Event payload when the agent asks the user interactive questions. */
+export interface AskQuestionAskedEvent {
+  sessionId: string;
+  toolCallId: string;
+  questions: Array<{
+    type: 'single' | 'multi';
+    title: string;
+    description?: string;
+    options: Array<{
+      label: string;
+      description?: string;
+    }>;
+  }>;
+}
+
+/** Renderer → main: submit answers for a pending ask_question tool call. */
+export interface AskQuestionAnswerMessage {
+  toolCallId: string;
+  answers: Array<{
+    selected: string[];
+    text: string | null;
+    skipped: boolean;
+  }>;
+}
+
+/** Renderer → main: cancel a pending ask_question tool call. */
+export interface AskQuestionCancelMessage {
+  toolCallId: string;
+}
+
+export interface AskQuestionResult {
+  ok: boolean;
+}
+
 // ── RAG API ──────────────────────────────────────────────────────────────────
 
 export interface RAGIndexMessage {
@@ -860,6 +896,12 @@ export interface OrchidAPI {
   bgCmd: {
     snapshot: (request: BgCommandSnapshotRequest) => Promise<BgCommandSnapshotResult>;
   };
+
+  askQuestion: {
+    answer: (payload: AskQuestionAnswerMessage) => Promise<AskQuestionResult>;
+    cancel: (payload: AskQuestionCancelMessage) => Promise<AskQuestionResult>;
+    onAsked: (callback: (event: AskQuestionAskedEvent) => void) => () => void;
+  };
 }
 
 // ── IPC Channel names ────────────────────────────────────────────────────────
@@ -981,6 +1023,11 @@ export const IPC_CHANNELS = {
   // Background Commands
   BG_CMD_SNAPSHOT: 'bgcmd:snapshot',
 
+  // Ask Question
+  ASK_QUESTION_ASKED: 'ask_question:asked',
+  ASK_QUESTION_ANSWER: 'ask_question:answer',
+  ASK_QUESTION_CANCEL: 'ask_question:cancel',
+
   // Updater
   UPDATER_STATUS_UPDATE: 'updater:status_update',
   UPDATER_PROGRESS: 'updater:progress',
@@ -1051,6 +1098,8 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.AST_INDEX,
   IPC_CHANNELS.AST_INDEX_STATE,
   IPC_CHANNELS.BG_CMD_SNAPSHOT,
+  IPC_CHANNELS.ASK_QUESTION_ANSWER,
+  IPC_CHANNELS.ASK_QUESTION_CANCEL,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────
@@ -1076,6 +1125,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.SESSION_WORKING_SET_CHANGED,
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
+  IPC_CHANNELS.ASK_QUESTION_ASKED,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Window type augmentation (renderer-side) ─────────────────────────────────

@@ -30,6 +30,38 @@ function formatElapsed(ms: number): string {
   return `${hours}h ${remainingMinutes}m`;
 }
 
+/** Render a subagent's pending question as a compact XML block. */
+function formatPendingQuestion(pending: {
+  toolCallId: string;
+  questions: Array<{
+    type: string;
+    title: string;
+    description?: string;
+    options: Array<{ label: string; description?: string }>;
+  }>;
+}): string {
+  const questionBlocks = pending.questions
+    .map((question) => {
+      const optionBlocks = question.options
+        .map((opt) =>
+          '<option label="' + escapeXmlAttribute(opt.label) + '"' +
+          (opt.description
+            ? ' description="' + escapeXmlAttribute(opt.description) + '"'
+            : '') +
+          '/>')
+        .join('');
+      return '<question type="' + escapeXmlAttribute(question.type) +
+        '" title="' + escapeXmlAttribute(question.title) + '"' +
+        (question.description
+          ? ' description="' + escapeXmlAttribute(question.description) + '"'
+          : '') +
+        '>' + optionBlocks + '</question>';
+    })
+    .join('');
+  return '<pending_question tool_call_id="' + escapeXmlAttribute(pending.toolCallId) + '">' +
+    questionBlocks + '</pending_question>';
+}
+
 /**
  * Build the wait_for_subagent tool.
  *
@@ -117,18 +149,25 @@ export function buildWaitTool(
           ? Date.now() - record.startTime
           : null;
 
+      const status = record.pendingQuestion ? 'question_pending' : record.state;
+
       const attrs =
         'id="' + escapeXmlAttribute(sid) +
         '" name="' + escapeXmlAttribute(record.label) +
         '" type="' + escapeXmlAttribute(record.agent.type) +
-        '" status="' + escapeXmlAttribute(record.state) + '"' +
+        '" status="' + escapeXmlAttribute(status) + '"' +
         (elapsed !== null ? ' elapsed="' + escapeXmlAttribute(formatElapsed(elapsed)) + '"' : '');
 
       const taskBlock = record.task
         ? '<task>' + escapeXmlText(record.task) + '</task>'
         : '';
 
-      if (record.result) {
+      if (record.pendingQuestion) {
+        parts.push(
+          '<subagent ' + attrs + '>' + taskBlock +
+            formatPendingQuestion(record.pendingQuestion) + '</subagent>',
+        );
+      } else if (record.result) {
         parts.push(
           '<subagent ' + attrs + '>' + taskBlock +
             '<result>' + escapeXmlText(record.result) + '</result></subagent>',

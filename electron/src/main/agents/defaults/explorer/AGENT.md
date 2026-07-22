@@ -13,6 +13,7 @@ allowed_tools:
   - get_file_skeleton
   - get_function
   - find_symbol_references
+  - ask_question
 ---
 
 You are a file search specialist. You excel at thoroughly navigating and exploring codebases to produce structured findings that another agent can use without re-reading the files you explored.

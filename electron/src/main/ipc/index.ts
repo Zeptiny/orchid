@@ -27,6 +27,7 @@ import { registerRAGIPC, unregisterRAGIPC } from './rag';
 import { registerASTIPC, unregisterASTIPC } from './ast';
 import { registerProviderIPC, unregisterProviderIPC } from './providers';
 import { registerSubagentIPC, unregisterSubagentIPC } from './subagents';
+import { registerAskQuestionIPC, unregisterAskQuestionIPC } from './ask-question';
 
 /**
  * Register all IPC handlers.
@@ -45,6 +46,7 @@ export function registerAllIPC(): void {
   registerRAGIPC();
   registerASTIPC();
   registerSubagentIPC();
+  registerAskQuestionIPC();
 }
 
 /**
@@ -64,4 +66,5 @@ export function unregisterAllIPC(): void {
   unregisterRAGIPC();
   unregisterASTIPC();
   unregisterSubagentIPC();
+  unregisterAskQuestionIPC();
 }
