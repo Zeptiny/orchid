@@ -136,34 +136,50 @@ describe('reorderItems', () => {
 
 describe('shouldAutoFire', () => {
   it('fires on streaming → idle transition', () => {
-    expect(shouldAutoFire('streaming', 'idle', null, false)).toBe(true);
+    expect(shouldAutoFire('streaming', 'idle', null, null, false)).toBe(true);
   });
 
   it('does not fire without a transition (idle → idle)', () => {
-    expect(shouldAutoFire('idle', 'idle', null, false)).toBe(false);
+    expect(shouldAutoFire('idle', 'idle', null, null, false)).toBe(false);
   });
 
   it('does not fire when transitioning to streaming', () => {
-    expect(shouldAutoFire('idle', 'streaming', null, false)).toBe(false);
+    expect(shouldAutoFire('idle', 'streaming', null, null, false)).toBe(false);
   });
 
   it('does not fire when transitioning to error', () => {
-    expect(shouldAutoFire('streaming', 'error', null, false)).toBe(false);
+    expect(shouldAutoFire('streaming', 'error', null, null, false)).toBe(false);
   });
 
   it('does not fire while already firing (double-fire guard)', () => {
-    expect(shouldAutoFire('streaming', 'idle', null, true)).toBe(false);
+    expect(shouldAutoFire('streaming', 'idle', null, null, true)).toBe(false);
   });
 
   it('does not fire while editing', () => {
-    expect(shouldAutoFire('streaming', 'idle', 'msg-1', false)).toBe(false);
+    expect(shouldAutoFire('streaming', 'idle', 'msg-1', 'msg-1', false)).toBe(false);
   });
 
   it('fires after editing ends (editingId null)', () => {
-    expect(shouldAutoFire('streaming', 'idle', null, false)).toBe(true);
+    expect(shouldAutoFire('streaming', 'idle', null, null, false)).toBe(true);
   });
 
   it('does not fire from error → idle (not a streaming transition)', () => {
-    expect(shouldAutoFire('error', 'idle', null, false)).toBe(false);
+    expect(shouldAutoFire('error', 'idle', null, null, false)).toBe(false);
+  });
+
+  it('fires when editing ends while idle', () => {
+    expect(shouldAutoFire('idle', 'idle', null, 'msg-1', false)).toBe(true);
+  });
+
+  it('does not fire while still editing (idle)', () => {
+    expect(shouldAutoFire('idle', 'idle', 'msg-1', 'msg-1', false)).toBe(false);
+  });
+
+  it('does not fire on editing-end if not idle (still streaming)', () => {
+    expect(shouldAutoFire('streaming', 'streaming', null, 'msg-1', false)).toBe(false);
+  });
+
+  it('does not fire on editing-end while a fire is in flight', () => {
+    expect(shouldAutoFire('idle', 'idle', null, 'msg-1', true)).toBe(false);
   });
 });

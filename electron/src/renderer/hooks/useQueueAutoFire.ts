@@ -8,14 +8,20 @@
 import { useEffect, useRef } from 'react';
 import type { ChatStatus } from './useChat';
 
-/** Pure transition check: should the queue fire on this status change? */
+/**
+ * Pure transition check: should the queue fire on this status change?
+ *
+ * @param prevEditingId - editing-id observed on the previous run
+ */
 export function shouldAutoFire(
   prevStatus: ChatStatus,
   nextStatus: ChatStatus,
   editingId: string | null,
+  prevEditingId: string | null,
   isFiring: boolean,
 ): boolean {
-  return nextStatus === 'idle' && prevStatus === 'streaming' && !isFiring && editingId === null;
+  if (isFiring || editingId !== null || nextStatus !== 'idle') return false;
+  return prevStatus === 'streaming' || prevEditingId !== null;
 }
 
 /**
@@ -33,13 +39,16 @@ export function useQueueAutoFire(
   sendFn: (message: string) => Promise<void>,
 ): void {
   const prevStatusRef = useRef<ChatStatus>(status);
+  const prevEditingRef = useRef<string | null>(editingId);
   const isFiringRef = useRef(false);
 
   useEffect(() => {
     const prev = prevStatusRef.current;
+    const prevEditing = prevEditingRef.current;
     prevStatusRef.current = status;
+    prevEditingRef.current = editingId;
 
-    if (!shouldAutoFire(prev, status, editingId, isFiringRef.current)) return;
+    if (!shouldAutoFire(prev, status, editingId, prevEditing, isFiringRef.current)) return;
 
     const text = consumeNext();
     if (!text) return;
