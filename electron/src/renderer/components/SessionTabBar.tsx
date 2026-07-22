@@ -73,6 +73,18 @@ export function SessionTabBar({
     active?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [focusedSessionId, showDraft, openSessionIds]);
 
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY === 0 || root.scrollWidth <= root.clientWidth) return;
+      e.preventDefault();
+      root.scrollLeft += e.deltaY;
+    };
+    root.addEventListener('wheel', onWheel, { passive: false });
+    return () => root.removeEventListener('wheel', onWheel);
+  }, []);
+
   return (
     <div
       className="session-tab-bar border-b border-base-300 bg-base-200/55"
