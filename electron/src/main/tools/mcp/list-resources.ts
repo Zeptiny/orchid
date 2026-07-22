@@ -28,7 +28,6 @@ export function buildListMcpResourcesTool(
       'Returns URI, server name, and optional name/description for each resource. ' +
       'Use read_mcp_resource with a URI to fetch content.',
     inputSchema: z.object({}),
-    actionLabel: 'Listing MCP resources...',
     category: 'mcp',
   };
 

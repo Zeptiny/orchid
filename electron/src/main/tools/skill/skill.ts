@@ -342,7 +342,6 @@ export function buildSkillTool(
             `Available skills:\n${skillLines}`,
         ),
     }),
-    actionLabel: 'Loading skill...',
     category: 'skill',
   };
 

@@ -43,7 +43,6 @@ export function buildInterruptTool(
           'List of subagent IDs to interrupt. Pass an empty list to interrupt all running subagents in this session.',
         ),
     }),
-    actionLabel: 'Interrupting...',
     category: 'subagent',
   };
 

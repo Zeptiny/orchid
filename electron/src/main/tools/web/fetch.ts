@@ -224,7 +224,6 @@ export function buildWebFetchTool(
           'Optional question or extraction request. Omit or leave blank to return the raw page content.',
         ),
     }),
-    actionLabel: 'Fetching...',
     category: 'web',
   };
 

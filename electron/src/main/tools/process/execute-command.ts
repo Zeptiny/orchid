@@ -374,7 +374,6 @@ export const executeCommandToolDefinition: ToolDefinition = {
     'Execute a shell command and return its output. Use for running tests, git commands, ' +
     'build tools, linting, and other CLI operations. Prefer this over writing scripts — run commands directly.',
   inputSchema: executeCommandInputSchema,
-  actionLabel: 'Running...',
   category: 'process',
 };
 

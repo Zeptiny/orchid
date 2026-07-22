@@ -162,7 +162,7 @@ function rerunInput(
 export const grepInputSchema = z.object({
   pattern: z.string().describe('The regex pattern to search for'),
   directory_path: z.string().describe(
-    'The directory to search in, relative to the current working directory',
+    'The file or directory to search in, relative to the current working directory',
   ),
   include_pattern: z.string().optional().describe(
     'Glob pattern to filter files (e.g., "*.py", "*.txt"). If not set, all files are searched.',
@@ -210,16 +210,16 @@ export async function executeGrepOutcome(
   }
 
   const basePath = path.resolve(directoryPath);
+  let stat: fs.Stats;
   try {
-    const stat = await fs.promises.stat(basePath);
-    if (!stat.isDirectory()) throw new Error('path is not a directory');
+    stat = await fs.promises.stat(basePath);
   } catch {
     return {
       status: 'error',
       data: emptyData(basePath, pattern),
       error: {
-        code: 'directory_not_found',
-        message: `Directory '${directoryPath}' does not exist.`,
+        code: 'path_not_found',
+        message: `Path '${directoryPath}' does not exist.`,
       },
     };
   }
@@ -227,7 +227,16 @@ export async function executeGrepOutcome(
   const ignored = new Set(config?.ignored_dirs ?? getConfig().ignored_dirs);
   let fileRegex: RegExp | null = null;
   if (includePattern) fileRegex = globToRegex(includePattern, { caseInsensitive: true });
-  const filePaths = await collectFiles(basePath, fileRegex, ignored);
+
+  let searchRoot: string;
+  let filePaths: string[];
+  if (stat.isFile()) {
+    searchRoot = path.dirname(basePath);
+    filePaths = [basePath];
+  } else {
+    searchRoot = basePath;
+    filePaths = await collectFiles(basePath, fileRegex, ignored);
+  }
   const semaphore = new Semaphore(SEMAPHORE_LIMIT);
   const perFile = new Map<string, GrepMatch[]>();
 
@@ -239,7 +248,7 @@ export async function executeGrepOutcome(
         Promise.resolve().then(() => searchFileSync(
           filePath,
           regex,
-          basePath,
+          searchRoot,
           effectiveMaxResults,
         )),
         new Promise<GrepMatch[] | null>((resolve) => {
@@ -257,7 +266,7 @@ export async function executeGrepOutcome(
   const limitReached = allMatches.length >= effectiveMaxResults;
   const data: GrepResultsData = {
     kind: 'grep',
-    root: basePath,
+    root: searchRoot,
     pattern,
     matches: returnedMatches,
     totalMatches: returnedMatches.length,
@@ -288,11 +297,11 @@ export const grepToolDefinition: ToolDefinition = {
   name: 'grep',
   description:
     'Search file contents using regex. Returns matching lines with file paths and line numbers. ' +
+    'Accepts a file path to search a single file, or a directory to search recursively. ' +
     'Use to find function definitions, variable references, error messages, or any text pattern across the codebase.',
   inputSchema: grepInputSchema,
   resultFamily: 'search-results',
   outputDataSchema: searchResultsDataSchema,
-  actionLabel: 'Grepping...',
   category: 'search',
 };
 

@@ -199,7 +199,6 @@ export const applyPatchDefinition: ToolDefinition = {
   inputSchema: applyPatchInputSchema,
   resultFamily: 'generic',
   outputDataSchema: applyPatchResultDataSchema,
-  actionLabel: 'Applying patch...',
   category: 'filesystem',
   agentProjector: applyPatchAgentProjector,
 };

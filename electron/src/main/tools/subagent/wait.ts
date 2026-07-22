@@ -15,6 +15,7 @@ import {
   DEFAULT_WAIT_TIMEOUT_MS,
   SubagentWaitTimeoutError,
   type SubagentManager,
+  type SubagentRecord,
 } from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
 import { persistSubagentChains } from '../../agents/persist-subagent-chains';
@@ -62,6 +63,57 @@ function formatPendingQuestion(pending: {
     questionBlocks + '</pending_question>';
 }
 
+function formatRecordXml(sid: string, record: SubagentRecord): string {
+  const elapsed = record.endTime !== null
+    ? record.endTime - record.startTime
+    : record.startTime
+      ? Date.now() - record.startTime
+      : null;
+
+  const status = record.pendingQuestion ? 'question_pending' : record.state;
+
+  const attrs =
+    'id="' + escapeXmlAttribute(sid) +
+    '" name="' + escapeXmlAttribute(record.label) +
+    '" type="' + escapeXmlAttribute(record.agent.type) +
+    '" status="' + escapeXmlAttribute(status) + '"' +
+    (elapsed !== null ? ' elapsed="' + escapeXmlAttribute(formatElapsed(elapsed)) + '"' : '');
+
+  const taskBlock = record.task
+    ? '<task>' + escapeXmlText(record.task) + '</task>'
+    : '';
+
+  if (record.pendingQuestion) {
+    return '<subagent ' + attrs + '>' + taskBlock +
+      formatPendingQuestion(record.pendingQuestion) + '</subagent>';
+  }
+  if (record.result) {
+    return '<subagent ' + attrs + '>' + taskBlock +
+      '<result>' + escapeXmlText(record.result) + '</result></subagent>';
+  }
+  if (record.error) {
+    return '<subagent ' + attrs + '>' + taskBlock +
+      '<error>' + escapeXmlText(record.error) + '</error></subagent>';
+  }
+  return '<subagent ' + attrs + '>' + taskBlock + '</subagent>';
+}
+
+function formatSubagentRecords(
+  records: Map<string, SubagentRecord>,
+  subagentIds: string[],
+): string {
+  const parts: string[] = [];
+  for (const [sid, record] of records) {
+    parts.push(formatRecordXml(sid, record));
+  }
+  const foundIds = new Set(records.keys());
+  const missing = subagentIds.filter((id) => !foundIds.has(id));
+  const missingBlock = missing.length > 0
+    ? '<not_found>' + escapeXmlText(missing.join(', ')) + '</not_found>'
+    : '';
+  return '<subagents>' + parts.join('\n') + missingBlock + '</subagents>';
+}
+
 /**
  * Build the wait_for_subagent tool.
  *
@@ -84,7 +136,6 @@ export function buildWaitTool(
         .array(z.string())
         .describe('List of subagent IDs to wait for'),
     }),
-    actionLabel: 'Waiting...',
     category: 'subagent',
   };
 
@@ -115,11 +166,19 @@ export function buildWaitTool(
       });
     } catch (err) {
       if (err instanceof SubagentWaitTimeoutError) {
-        const statusBlock =
-          err.statusSnapshot.length > 0
-            ? `\n<status>\n${err.statusSnapshot.join('\n')}\n</status>`
-            : '';
-        return genericBuiltInToolOutcome('wait_for_subagent', `${err.message}${statusBlock}`, 'error');
+        const partialRecords = new Map<string, SubagentRecord>();
+        for (const id of ownedIds) {
+          const record = manager.getRecord(id);
+          if (record) partialRecords.set(id, record);
+        }
+        const xml = formatSubagentRecords(partialRecords, subagent_ids);
+        const timeoutNotice =
+          '\n<timeout>' + escapeXmlText(err.message) + '</timeout>';
+        return genericBuiltInToolOutcome(
+          'wait_for_subagent',
+          xml + timeoutNotice,
+          'error',
+        );
       }
       if (err instanceof DOMException && err.name === 'AbortError') {
         return genericBuiltInToolOutcome('wait_for_subagent', 'Wait aborted because the parent turn was cancelled. ' +
@@ -141,57 +200,7 @@ export function buildWaitTool(
       return genericBuiltInToolOutcome('wait_for_subagent', `No subagents found for IDs: ${subagent_ids.join(', ')}`, 'empty');
     }
 
-    // Build result parts for each found subagent
-    const parts: string[] = [];
-    for (const [sid, record] of records) {
-      const elapsed = record.endTime !== null
-        ? record.endTime - record.startTime
-        : record.startTime
-          ? Date.now() - record.startTime
-          : null;
-
-      const status = record.pendingQuestion ? 'question_pending' : record.state;
-
-      const attrs =
-        'id="' + escapeXmlAttribute(sid) +
-        '" name="' + escapeXmlAttribute(record.label) +
-        '" type="' + escapeXmlAttribute(record.agent.type) +
-        '" status="' + escapeXmlAttribute(status) + '"' +
-        (elapsed !== null ? ' elapsed="' + escapeXmlAttribute(formatElapsed(elapsed)) + '"' : '');
-
-      const taskBlock = record.task
-        ? '<task>' + escapeXmlText(record.task) + '</task>'
-        : '';
-
-      if (record.pendingQuestion) {
-        parts.push(
-          '<subagent ' + attrs + '>' + taskBlock +
-            formatPendingQuestion(record.pendingQuestion) + '</subagent>',
-        );
-      } else if (record.result) {
-        parts.push(
-          '<subagent ' + attrs + '>' + taskBlock +
-            '<result>' + escapeXmlText(record.result) + '</result></subagent>',
-        );
-      } else if (record.error) {
-        parts.push(
-          '<subagent ' + attrs + '>' + taskBlock +
-            '<error>' + escapeXmlText(record.error) + '</error></subagent>',
-        );
-      } else {
-        parts.push('<subagent ' + attrs + '>' + taskBlock + '</subagent>');
-      }
-    }
-
-    // Track missing IDs (not found in manager)
-    const foundIds = new Set(records.keys());
-    const missing = subagent_ids.filter((id) => !foundIds.has(id));
-    const missingBlock = missing.length > 0
-      ? '<not_found>' + escapeXmlText(missing.join(', ')) + '</not_found>'
-      : '';
-
-    const content = '<subagents>' + parts.join('\n') + missingBlock + '</subagents>';
-
+    const content = formatSubagentRecords(records, subagent_ids);
     return genericBuiltInToolOutcome('wait_for_subagent', content, 'complete');
   };
 

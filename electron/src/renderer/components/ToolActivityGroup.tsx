@@ -83,7 +83,9 @@ export function ToolActivityGroup({
           ? 'globe'
           : summary.readCount > 0
             ? 'eye'
-            : 'tool';
+            : summary.todoCount > 0
+              ? 'check'
+              : 'tool';
 
   // Badge = tool count (title already describes tools; thoughts stay hidden in chrome)
   const badgeCount = tools.length > 0 ? tools.length : items.length;

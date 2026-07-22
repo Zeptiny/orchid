@@ -37,7 +37,6 @@ export const getFileSkeletonDefinition: ToolDefinition = {
     "to understand a file's structure before reading specific functions. " +
     'Returns definition names with line numbers and visual separators.',
   inputSchema: getFileSkeletonSchema,
-  actionLabel: 'Getting skeleton...',
   category: 'ast',
   noTimeout: true,
 };

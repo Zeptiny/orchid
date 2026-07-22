@@ -356,7 +356,6 @@ describe('buildSkillTool', () => {
 
     expect(definition.name).toBe('skill');
     expect(definition.description).toContain('Load a specialized skill');
-    expect(definition.actionLabel).toBe('Loading skill...');
     expect(definition.category).toBe('skill');
   });
 
@@ -867,7 +866,6 @@ describe('MCP Resource Tool', () => {
 
     expect(definition.name).toBe('read_mcp_resource');
     expect(definition.description).toContain('Read a resource from an MCP server');
-    expect(definition.actionLabel).toBe('Reading MCP resource...');
     expect(definition.category).toBe('mcp');
   });
 

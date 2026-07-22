@@ -82,7 +82,6 @@ export const sendInputToolDefinition: ToolDefinition = {
     'when the command is not interactive or when a user owns the input ' +
     '(control: USER).',
   inputSchema: sendInputSchema,
-  actionLabel: 'Sending input...',
   category: 'process',
 };
 

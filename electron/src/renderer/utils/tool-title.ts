@@ -235,6 +235,16 @@ function withLifecycle(
   return labeled(lifecycle.completed, subject, subjectSuffix);
 }
 
+function todoResultTitle(result: CanonicalToolResult | null | undefined): string | null {
+  if (!result || typeof result.data !== 'object' || result.data === null || Array.isArray(result.data)) {
+    return null;
+  }
+  const value = (result.data as { value?: unknown }).value;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const title = (value as { title?: unknown }).title;
+  return typeof title === 'string' && title.length > 0 ? title : null;
+}
+
 function readReturnedRange(result: CanonicalToolResult | null | undefined): string | null {
   if (result?.family !== 'file-content' || typeof result.data !== 'object' || result.data === null || Array.isArray(result.data)) {
     return null;
@@ -365,10 +375,10 @@ export function buildToolTitle(input: ToolTitleInput): ToolTitle {
   }, valueForKey(rawArgs, args, ['title']) ?? undefined);
   if (tool === 'todo_update') return withLifecycle(input.status, {
     preparing: 'Preparing to update task', running: 'Updating task', completed: 'Updated task', failed: 'update task',
-  }, valueForKey(rawArgs, args, ['title', 'id']) ?? undefined);
+  }, valueForKey(rawArgs, args, ['title']) ?? todoResultTitle(input.toolResult) ?? valueForKey(rawArgs, args, ['id']) ?? undefined);
   if (tool === 'todo_delete') return withLifecycle(input.status, {
     preparing: 'Preparing to delete task', running: 'Deleting task', completed: 'Deleted task', failed: 'delete task',
-  }, valueForKey(rawArgs, args, ['title', 'id']) ?? undefined);
+  }, valueForKey(rawArgs, args, ['title']) ?? todoResultTitle(input.toolResult) ?? valueForKey(rawArgs, args, ['id']) ?? undefined);
   if (tool === 'todo_list') return withLifecycle(input.status, {
     preparing: 'Preparing to list tasks', running: 'Listing tasks', completed: 'Listed tasks', failed: 'list tasks',
   });

@@ -39,7 +39,6 @@ export const getFunctionDefinition: ToolDefinition = {
     'an entire file when you only need one function. Reports ' +
     '"no changes" if the function body has not changed since last retrieval.',
   inputSchema: getFunctionSchema,
-  actionLabel: 'Extracting function...',
   category: 'ast',
   noTimeout: true,
 };

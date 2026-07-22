@@ -8,11 +8,6 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 
 - Scrolling up in chat is impossible
 - RAG onnxruntime may not be being shipped correctly
-- Grep should also work with files
-- Subagents may be getting interrupted when only the main one should be
-- Investigate if the command timeout is being used - they appears to be hard coded at 30s
-- When the wait_for_subagent times out, it should still send the results of the subagents that completed
-- Reasoning token usage appears to only be updating after chain ends(Response updats correctly)
 
 ## Agent quality
 
@@ -187,6 +182,9 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - A tool to continue the work / follow up input
   - Ex: Agent implemented something and created a bug, send an input telling it to fix
   - Cannot be used with closed agents
+- A tool to view what the agent is currently doing / working
+  - May be summarized?
+  - Maybe only its TODOs are enough?
 
 ## Needs improvement
 

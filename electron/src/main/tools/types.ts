@@ -66,9 +66,6 @@ export interface ToolDefinition {
   /** Tool-level agent projector override (wins over its family default). */
   agentProjector?: AgentProjector;
 
-  /** Action label shown in UI (e.g., "Reading file", "Editing file") */
-  actionLabel?: string;
-
   /** Tool category for grouping/filtering */
   category: string;
 

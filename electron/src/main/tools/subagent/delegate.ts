@@ -80,7 +80,6 @@ export function buildDelegateTool(
             `Available tiers (from fastest to most capable):\n${tierLines}`,
         ),
     }),
-    actionLabel: 'Delegating...',
     category: 'subagent',
   };
 

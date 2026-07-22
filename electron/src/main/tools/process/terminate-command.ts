@@ -67,7 +67,6 @@ export const terminateCommandToolDefinition: ToolDefinition = {
     'SIGKILL to the process group. Use when a background command is no ' +
     'longer needed or is stuck.',
   inputSchema: terminateCommandInputSchema,
-  actionLabel: 'Terminating...',
   category: 'process',
 };
 

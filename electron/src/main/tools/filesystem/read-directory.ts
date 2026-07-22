@@ -44,7 +44,6 @@ export const readDirectoryDefinition: ToolDefinition = {
   inputSchema: readDirectoryInputSchema,
   resultFamily: 'directory-entries',
   outputDataSchema: directoryEntriesDataSchema,
-  actionLabel: 'Browsing...',
   category: 'filesystem',
 };
 

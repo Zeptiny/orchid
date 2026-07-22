@@ -217,7 +217,6 @@
     width: 100%;
     padding: 4px 6px;
     box-sizing: border-box;
-    scrollbar-width: thin;
   }
 
   .session-tab {

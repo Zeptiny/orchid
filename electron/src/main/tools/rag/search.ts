@@ -44,7 +44,6 @@ export const ragSearchDefinition: ToolDefinition = {
     'Search the codebase using semantic search (RAG). Returns code chunks most relevant to the query. ' +
       'Use file_pattern to narrow results to specific files (e.g. "*.py", "src/**/*.ts").',
   inputSchema: ragSearchSchema,
-  actionLabel: 'Searching codebase...',
   category: 'rag',
 };
 

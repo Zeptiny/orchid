@@ -176,6 +176,7 @@
 
 .orchid-msg-user {
   padding: 12px 16px !important;
+  white-space: pre-wrap;
   color: var(--msg-user-text, var(--color-base-content));
   background: var(
     --msg-user-bg,

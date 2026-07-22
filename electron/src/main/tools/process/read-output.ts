@@ -83,7 +83,6 @@ export const readOutputToolDefinition: ToolDefinition = {
     'output and exit code. Use wait_ms for long-polling: blocks until new ' +
     'output, exit, or deadline.',
   inputSchema: readOutputInputSchema,
-  actionLabel: 'Reading output...',
   category: 'process',
   /** Long-poll wait_ms can approach 60s; skip outer dispatch timeout. */
   noTimeout: true,

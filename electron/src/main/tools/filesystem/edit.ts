@@ -39,7 +39,6 @@ export const editDefinition: ToolDefinition = {
   inputSchema: editInputSchema,
   resultFamily: 'file-change',
   outputDataSchema: fileChangeDataSchema,
-  actionLabel: 'Editing...',
   category: 'filesystem',
 };
 function errorOutcome(

@@ -38,7 +38,6 @@ function makeReadTool(): ToolDefinition {
     name: 'read',
     description: 'Read file contents with optional offset and limit',
     inputSchema: readInputSchema,
-    actionLabel: 'Reading file',
     category: 'filesystem',
   };
 }
@@ -48,7 +47,6 @@ function makeEditTool(): ToolDefinition {
     name: 'edit',
     description: 'Replace an exact string match in a file',
     inputSchema: editInputSchema,
-    actionLabel: 'Editing file',
     category: 'filesystem',
   };
 }

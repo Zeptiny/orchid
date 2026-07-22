@@ -31,6 +31,7 @@ interface FooterProps {
   usage?: Usage | null;
   maxContext?: number | null;
   messages?: readonly Message[];
+  streamingThinkingChars?: number;
   model?: string;
   modelLabels?: Readonly<Record<string, string>>;
   modelDetails?: Readonly<Record<string, ProviderModelOption>>;
@@ -45,6 +46,7 @@ export function Footer({
   usage,
   maxContext,
   messages = [],
+  streamingThinkingChars,
   model = '',
   modelLabels,
   modelDetails,
@@ -307,11 +309,13 @@ export function Footer({
                 usage={usage}
                 messages={messages}
                 maxContext={maxContext}
+                streamingThinkingChars={streamingThinkingChars}
               />
               <ContextLegend
                 usage={usage}
                 messages={messages}
                 maxContext={maxContext}
+                streamingThinkingChars={streamingThinkingChars}
                 variant="panel"
               />
             </div>
