@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler, ToolHandlerOutcome } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { getToolConfig, resolveToolPath } from '../types';
 import { isBinaryFileSync } from '../ast/utils';
 import {
@@ -33,6 +34,7 @@ export const readDefinition: ToolDefinition = {
   resultFamily: 'file-content',
   outputDataSchema: fileContentDataSchema,
   category: 'filesystem',
+  riskClass: RiskClass.READ_ONLY,
 };
 function languageHint(filePath: string): string {
   const extension = path.extname(filePath).toLowerCase();

@@ -7,6 +7,7 @@
 import * as fs from 'node:fs';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler, ToolHandlerOutcome } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { resolveToolPath } from '../types';
 import { atomicWrite } from '../ast/utils';
 import { buildStructuredFileChange } from './structured-diff';
@@ -40,6 +41,7 @@ export const editDefinition: ToolDefinition = {
   resultFamily: 'file-change',
   outputDataSchema: fileChangeDataSchema,
   category: 'filesystem',
+  riskClass: RiskClass.MUTATION,
 };
 function errorOutcome(
   filePath: string,

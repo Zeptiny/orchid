@@ -6,6 +6,7 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolExecutionContext, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import type { TodoStore } from './store';
@@ -81,6 +82,7 @@ export function buildCreateTool(
         ),
     }),
     category: 'todo',
+    riskClass: RiskClass.MUTATION,
   };
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<TodoToolResult> => {

@@ -40,6 +40,7 @@ import {
   createDynamicToolOutcome,
   genericToolResultDataSchema,
 } from '../../shared/types/tool-result';
+import { RiskClass } from '../../shared/types/permission';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -517,6 +518,7 @@ export class MCPManager {
           resultFamily: 'generic',
           outputDataSchema: genericToolResultDataSchema,
           category: 'mcp',
+          riskClass: RiskClass.MCP,
         };
 
         const handler: ToolHandler = async (input: unknown, ctx) => {

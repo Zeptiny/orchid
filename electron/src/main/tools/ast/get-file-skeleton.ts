@@ -9,6 +9,7 @@
 import * as fs from 'node:fs';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { resolveToolPath } from '../types';
@@ -38,6 +39,7 @@ export const getFileSkeletonDefinition: ToolDefinition = {
     'Returns definition names with line numbers and visual separators.',
   inputSchema: getFileSkeletonSchema,
   category: 'ast',
+  riskClass: RiskClass.READ_ONLY,
   noTimeout: true,
 };
 

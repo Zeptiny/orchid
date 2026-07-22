@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { getConfig } from '../../config/loader';
 import type { Config } from '../../config/schema';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { getToolConfig, resolveToolPath } from '../types';
 import { isBinaryFile } from '../ast/utils';
 import { globToRegex } from '../glob-pattern';
@@ -303,6 +304,7 @@ export const grepToolDefinition: ToolDefinition = {
   resultFamily: 'search-results',
   outputDataSchema: searchResultsDataSchema,
   category: 'search',
+  riskClass: RiskClass.READ_ONLY,
 };
 
 export const grepHandler: ToolHandler = async (

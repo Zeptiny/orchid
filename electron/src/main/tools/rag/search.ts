@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { getToolConfig } from '../types';
@@ -45,6 +46,7 @@ export const ragSearchDefinition: ToolDefinition = {
       'Use file_pattern to narrow results to specific files (e.g. "*.py", "src/**/*.ts").',
   inputSchema: ragSearchSchema,
   category: 'rag',
+  riskClass: RiskClass.READ_ONLY,
 };
 
 // ---------------------------------------------------------------------------

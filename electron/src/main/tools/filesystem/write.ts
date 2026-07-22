@@ -8,6 +8,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { resolveToolPath } from '../types';
 import { atomicWrite } from '../ast/utils';
 import {
@@ -37,6 +38,7 @@ export const writeDefinition: ToolDefinition = {
   resultFamily: 'file-write',
   outputDataSchema: fileWriteDataSchema,
   category: 'filesystem',
+  riskClass: RiskClass.MUTATION,
 };
 
 function countLines(content: string): number {

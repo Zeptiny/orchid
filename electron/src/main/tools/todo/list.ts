@@ -7,6 +7,7 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import type { TodoToolResult, TodoStoreSource } from './create';
@@ -51,6 +52,7 @@ export function buildListTool(
         .describe('Deprecated: scope is always the calling agent. Ignored.'),
     }),
     category: 'todo',
+    riskClass: RiskClass.READ_ONLY,
   };
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<TodoToolResult> => {

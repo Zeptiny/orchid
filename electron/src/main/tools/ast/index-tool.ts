@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { indexProject } from '../../ast/indexer';
@@ -39,6 +40,7 @@ export const astIndexDefinition: ToolDefinition = {
     'Symbol tools (find_symbol_references, rename_symbol) auto-index on first use; use this for explicit control.',
   inputSchema: astIndexSchema,
   category: 'ast',
+  riskClass: RiskClass.MUTATION,
   noTimeout: true,
 };
 

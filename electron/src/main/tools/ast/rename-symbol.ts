@@ -10,6 +10,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { ensureIndexed } from '../../ast/indexer';
@@ -41,6 +42,7 @@ export const renameSymbolDefinition: ToolDefinition = {
     'calls for cross-file renames.',
   inputSchema: renameSymbolSchema,
   category: 'ast',
+  riskClass: RiskClass.MUTATION,
   noTimeout: true,
 };
 

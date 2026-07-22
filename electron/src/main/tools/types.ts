@@ -20,6 +20,7 @@ import type {
   ToolResultFamily,
 } from '../../shared/types/tool-result';
 import { genericToolResultDataSchema } from '../../shared/types/tool-result';
+import type { RiskClass } from '../../shared/types/permission';
 
 /** Shared explicit result contract for built-ins using the generic family. */
 export const genericToolResultMetadata = {
@@ -68,6 +69,9 @@ export interface ToolDefinition {
 
   /** Tool category for grouping/filtering */
   category: string;
+
+  /** Risk classification for permission gating */
+  riskClass: RiskClass;
 
   /** If true, skip timeout for this tool */
   noTimeout?: boolean;

@@ -9,6 +9,7 @@
 import * as fs from 'node:fs';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { resolveToolPath } from '../types';
@@ -40,6 +41,7 @@ export const getFunctionDefinition: ToolDefinition = {
     '"no changes" if the function body has not changed since last retrieval.',
   inputSchema: getFunctionSchema,
   category: 'ast',
+  riskClass: RiskClass.READ_ONLY,
   noTimeout: true,
 };
 

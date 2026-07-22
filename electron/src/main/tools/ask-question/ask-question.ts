@@ -12,6 +12,7 @@ import type { AskQuestionAskedEvent } from '../../../shared/types/ipc';
 import { isMainAgentScope } from '../../../shared/types/agent-scope';
 import type { SubagentManager } from '../../agents/manager';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { questionStore } from './store';
@@ -45,6 +46,7 @@ export function buildAskQuestionTool(
       })).min(1),
     }),
     category: 'ask_question',
+    riskClass: RiskClass.READ_ONLY,
     noTimeout: true,
   };
 

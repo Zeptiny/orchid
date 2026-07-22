@@ -11,6 +11,7 @@ import { normalizeAgentScopeId } from '../../../shared/types/agent-scope';
 import { getBackgroundStore } from './background-store';
 import { backgroundCommandNotFound } from './not-found';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 
@@ -83,6 +84,7 @@ export const sendInputToolDefinition: ToolDefinition = {
     '(control: USER).',
   inputSchema: sendInputSchema,
   category: 'process',
+  riskClass: RiskClass.EXECUTION,
 };
 
 export const sendInputHandler: ToolHandler = async (input: unknown, ctx) => {

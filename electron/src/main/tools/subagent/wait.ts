@@ -9,6 +9,7 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { escapeXmlAttribute, escapeXmlText, genericBuiltInToolOutcome } from '../result';
 import {
@@ -137,6 +138,7 @@ export function buildWaitTool(
         .describe('List of subagent IDs to wait for'),
     }),
     category: 'subagent',
+    riskClass: RiskClass.READ_ONLY,
   };
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<SubagentToolResult> => {

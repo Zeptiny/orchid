@@ -9,6 +9,7 @@
 import * as fs from 'node:fs';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { resolveToolPath } from '../types';
@@ -41,6 +42,7 @@ export const replaceSymbolDefinition: ToolDefinition = {
     'and supports multiple replacements in one call with correct offsets.',
   inputSchema: replaceSymbolSchema,
   category: 'ast',
+  riskClass: RiskClass.MUTATION,
   noTimeout: true,
 };
 

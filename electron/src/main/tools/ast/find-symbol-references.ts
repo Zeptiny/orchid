@@ -8,6 +8,7 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { resolveToolPath } from '../types';
@@ -41,6 +42,7 @@ export const findSymbolReferencesDefinition: ToolDefinition = {
     'or refactoring. Returns file paths with line/column ranges.',
   inputSchema: findSymbolReferencesSchema,
   category: 'ast',
+  riskClass: RiskClass.READ_ONLY,
   noTimeout: true,
 };
 

@@ -8,6 +8,7 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { type GenericBuiltInToolOutcome } from '../result';
 import { createDynamicToolOutcome } from '../../../shared/types/tool-result';
@@ -46,6 +47,7 @@ export function buildMcpResourceTool(
         ),
     }),
     category: 'mcp',
+    riskClass: RiskClass.READ_ONLY,
   };
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<McpResourceResult> => {

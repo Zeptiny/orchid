@@ -9,6 +9,7 @@ import { z } from 'zod';
 
 import { isMainAgentScope } from '../../../shared/types/agent-scope';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import type { SubagentManager, SubagentQuestionResult } from '../../agents/manager';
@@ -50,6 +51,7 @@ export function buildAnswerSubagentTool(
         .describe('Decline to answer. The subagent receives a declined status.'),
     }),
     category: 'subagent',
+    riskClass: RiskClass.DELEGATION,
   };
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<SubagentToolResult> => {

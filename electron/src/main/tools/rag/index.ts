@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { indexProject, getStatus, clearIndex } from '../../rag/indexer';
@@ -31,6 +32,7 @@ export const ragIndexDefinition: ToolDefinition = {
     'Use "status" to check index stats, "index" to build/rebuild the index, "clear" to drop it.',
   inputSchema: ragIndexSchema,
   category: 'rag',
+  riskClass: RiskClass.MUTATION,
 };
 
 // ---------------------------------------------------------------------------

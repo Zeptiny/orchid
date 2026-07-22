@@ -16,6 +16,7 @@ import * as path from 'node:path';
 import { safeFsync } from '../../utils/safe-fsync';
 import { URL } from 'node:url';
 import type { ToolDefinition, ToolExecutionContext, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { HOME_CONFIG_DIR } from '../../config/loader';
@@ -225,6 +226,7 @@ export function buildWebFetchTool(
         ),
     }),
     category: 'web',
+    riskClass: RiskClass.NETWORK,
   };
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<WebFetchResult> => {

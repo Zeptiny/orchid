@@ -17,6 +17,7 @@ import { getConfig } from '../../config/loader';
 import type { Config } from '../../config/schema';
 import { getBackgroundStore, ENV_SUPPRESSION } from './background-store';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { getToolConfig, resolveToolPath } from '../types';
@@ -375,6 +376,7 @@ export const executeCommandToolDefinition: ToolDefinition = {
     'build tools, linting, and other CLI operations. Prefer this over writing scripts — run commands directly.',
   inputSchema: executeCommandInputSchema,
   category: 'process',
+  riskClass: RiskClass.EXECUTION,
 };
 
 export const executeCommandHandler: ToolHandler = async (input: unknown, ctx) => {
