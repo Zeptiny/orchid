@@ -22,6 +22,10 @@ export const chatCancelSchema = z.object({
   sessionId: z.string().uuid().optional(),
 });
 
+export const chatQueueNextSchema = z.object({
+  sessionId: z.string().uuid(),
+});
+
 export const chatSnapshotSchema = z.object({
   sessionId: z.string().uuid().optional(),
 });

@@ -44,6 +44,8 @@ interface InputAreaProps {
   interruptState?: InterruptState;
   onSend: (message: string) => Promise<void>;
   onCancel: () => Promise<void>;
+  /** Called when the user submits a message while the agent is streaming. */
+  onQueue?: (message: string) => void;
   /** When set, enables `/command` autocomplete above the input. */
   commandContext?: CommandContext;
   sessions?: SessionSummary[];
@@ -93,6 +95,7 @@ export function InputArea({
   interruptState = 'idle',
   onSend,
   onCancel,
+  onQueue,
   commandContext,
   sessions = [],
   currentTheme = 'default',
@@ -125,12 +128,12 @@ export function InputArea({
   const canInterrupt =
     isStreaming || interruptState === 'confirmAgent' || interruptState === 'confirmSubagents';
   /**
-   * Show cancel (square) while streaming / first confirm, and during
-   * confirmSubagents only when the input is empty. Typing a follow-up message
-   * switches the control back to send.
+   * Show cancel (square) while streaming with no input / first confirm, and
+   * during confirmSubagents only when the input is empty. Typing a message
+   * switches the control to queue (streaming) or send (confirmSubagents).
    */
   const showCancel =
-    isStreaming ||
+    (isStreaming && !hasInput) ||
     interruptState === 'confirmAgent' ||
     (interruptState === 'confirmSubagents' && !hasInput);
 
@@ -415,6 +418,16 @@ export function InputArea({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [askQuestion.cancelAll, canInterrupt, hasActiveQuestion, isSlashMode, isViewActive, onCancel]);
 
+  const resetComposerHeight = useCallback(() => {
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      if (textareaRef.current) {
+        textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
+      }
+    });
+  }, []);
+
   const handleSend = useCallback(async () => {
     const trimmed = input.trim();
     // status and isSendingRef both guard: status can lag one frame behind Enter.
@@ -428,6 +441,14 @@ export function InputArea({
       modelSelected,
     });
     if (gate.action === 'ignore') return;
+    if (gate.action === 'queue') {
+      if (onQueue) {
+        setInput('');
+        onQueue(trimmed);
+        resetComposerHeight();
+      }
+      return;
+    }
     if (gate.action === 'pick-project') {
       onPickProjectDir?.();
       return;
@@ -447,21 +468,17 @@ export function InputArea({
       // Gate failures that resolve without throwing are cleared via status effect.
       isSendingRef.current = false;
     }
-    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      if (textareaRef.current) {
-        textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
-      }
-    });
+    resetComposerHeight();
   }, [
     input,
     isStreaming,
     modelSelected,
     onOpenProviders,
     onPickProjectDir,
+    onQueue,
     onSend,
     providerAvailable,
+    resetComposerHeight,
     workspaceBound,
   ]);
 
@@ -587,8 +604,8 @@ export function InputArea({
 
   const cancelVariant = interruptState === 'confirmSubagents' ? 'warning' : 'error';
 
-  // During confirmSubagents the agent is done — keep input editable for follow-ups.
-  const inputDisabled = isStreaming || interruptState === 'confirmAgent';
+  // During streaming the user can type to queue; only confirmAgent blocks input.
+  const inputDisabled = interruptState === 'confirmAgent';
   const plainChatBlocked = !workspaceBound || !providerAvailable || !modelSelected;
 
   // A pending ask_question tool call owns the composer area; the composer (and
@@ -678,19 +695,21 @@ export function InputArea({
             onChange={handleChange}
             onKeyDown={handleKeyDown}
             placeholder={
-              isStreaming || interruptState === 'confirmAgent'
-                ? 'Streaming… (Esc or ■ to interrupt)'
-                : interruptState === 'confirmSubagents'
-                  ? 'Type a follow-up, or Esc / ■ to cancel subagents…'
-                  : !workspaceBound
-                    ? 'Choose a project folder first… (or /cd)'
-                    : !providerAvailable
-                      ? 'Set up a provider before chatting…'
-                      : !modelSelected
-                        ? 'Select a connection and model first…'
-                        : commandContext
-                          ? 'Type a message or /command… (Enter to send)'
-                          : 'Type a message… (Enter to send, Shift+Enter for newline)'
+              isStreaming
+                ? 'Type to queue a message… (Esc to interrupt)'
+                : interruptState === 'confirmAgent'
+                  ? 'Streaming… (Esc or ■ to interrupt)'
+                  : interruptState === 'confirmSubagents'
+                    ? 'Type a follow-up, or Esc / ■ to cancel subagents…'
+                    : !workspaceBound
+                      ? 'Choose a project folder first… (or /cd)'
+                      : !providerAvailable
+                        ? 'Set up a provider before chatting…'
+                        : !modelSelected
+                          ? 'Select a connection and model first…'
+                          : commandContext
+                            ? 'Type a message or /command… (Enter to send)'
+                            : 'Type a message… (Enter to send, Shift+Enter for newline)'
             }
             disabled={inputDisabled}
             rows={1}
@@ -709,6 +728,17 @@ export function InputArea({
                 className="orchid-composer-action btn-square"
                 onClick={() => void onCancel()}
                 iconSize={14}
+              />
+            ) : isStreaming && hasInput ? (
+              <IconButton
+                label="Queue message"
+                icon="list"
+                size="sm"
+                variant="primary"
+                className="orchid-composer-action btn-square"
+                onClick={() => void handleSend()}
+                disabled={input.trim().startsWith('/')}
+                iconSize={16}
               />
             ) : (
               <IconButton

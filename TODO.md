@@ -8,6 +8,11 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 
 - Scrolling up in chat is impossible
 - RAG onnxruntime may not be being shipped correctly
+- Grep should also work with files
+- Subagents may be getting interrupted when only the main one should be
+- Investigate if the command timeout is being used - they appears to be hard coded at 30s
+- When the wait_for_subagent times out, it should still send the results of the subagents that completed
+- Reasoning token usage appears to only be updating after chain ends(Response updats correctly)
 
 ## Agent quality
 
@@ -39,6 +44,8 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
   - Needs user input (Ex: ask_question)
 - Tool widgets / tool groups may be collapsing when a chain ends
 - Add small animations to the interface
+- Task update / changes can be grouped
+  - They are not resolving to the task name, but the ID on the title
 
 ## General backlog
 
@@ -58,9 +65,11 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - `AGENTS.md` handling
   - Also an `/init` command for it
   - When the `read` tool opens a file, rules from `AGENTS.md` in that directory (and ancestors) should be applied
-- User message queue (queue follow-ups while the agent is busy)
 - Session compaction / compression (summarize or drop older turns so long sessions stay within context limits)
 - Analytics dashboard
+- Allow to update the status of multiple tasks in one tool call
+  - Also creating in one tool call
+- Investigate if its better to not create new chains with the queued messages
 
 ## Native semantic code graph / AST tool improvements
 

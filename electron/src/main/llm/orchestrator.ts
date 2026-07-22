@@ -146,6 +146,13 @@ export interface StreamChatParams {
   agentScopeId?: string;
   /** Abort signal for cancellation. */
   abortSignal?: AbortSignal;
+  /**
+   * Optional early-stop predicate evaluated at each step boundary. When it
+   * returns true the multi-step loop stops after the current step (a clean
+   * termination, not an abort). Used to end a chain early so a queued
+   * "next-request" message can start a fresh chain.
+   */
+  shouldStopEarly?: () => boolean;
   /** The AI SDK model instance to use for streaming. */
   modelInstance: LanguageModelV4;
   /** Frozen durable-attempt context for every provider invocation. */
@@ -348,6 +355,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     projectRuntime,
     agentScopeId,
     abortSignal,
+    shouldStopEarly,
     modelInstance,
     accounting,
     providerOptions,
@@ -554,13 +562,23 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       });
     };
 
+    // Stop at the step-count limit OR when an early stop is requested (e.g. a
+    // queued "next-request" message). Without a predicate the step-count
+    // condition is passed through unchanged so the default path behaves exactly
+    // as before; a supplied predicate never stops early unless it returns true.
+    const stepLimit = isStepCount(maxSteps);
+    const stopWhen = shouldStopEarly
+      ? (ctx: Parameters<typeof stepLimit>[0]) =>
+          stepLimit(ctx) || shouldStopEarly()
+      : stepLimit;
+
     const result = streamText({
       model: wrappedModel,
       system: fullSystemPrompt,
       messages: coreMessages,
       include: { requestMessages: true },
       tools: Object.keys(tools).length > 0 ? tools : undefined,
-      stopWhen: isStepCount(maxSteps),
+      stopWhen,
       abortSignal: combinedAbort,
       // Retry ownership belongs to Orchid's accounting-aware middleware.
       maxRetries: 0,

@@ -11,6 +11,8 @@ import { useTodos } from '../hooks/useTodos';
 import { useSessionActivity } from '../hooks/useSessionActivity';
 import { useSessionTabs } from '../hooks/useSessionTabs';
 import { useProviders } from '../hooks/useProviders';
+import { useMessageQueue } from '../hooks/useMessageQueue';
+import { useQueueAutoFire } from '../hooks/useQueueAutoFire';
 import {
   providerModelOptionDisplayName,
   providerModelOptionKey,
@@ -26,6 +28,7 @@ import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus, CommandContext } 
 import type { ProviderModelOption, SessionOpenResult } from '../../shared/types/ipc';
 import { ChatStream } from './ChatStream';
 import { InputArea } from './InputArea';
+import { MessageQueue } from './MessageQueue';
 import { Footer } from './Footer';
 import { Sidebar } from './Sidebar';
 import { LeftSidebar } from './LeftSidebar';
@@ -51,6 +54,7 @@ export function ChatView() {
   const activity = useSessionActivity();
   const tabs = useSessionTabs();
   const providers = useProviders();
+  const messageQueue = useMessageQueue();
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
@@ -304,6 +308,7 @@ export function ChatView() {
       }
 
       setDraftTabVisible(false);
+      messageQueue.clearQueue();
       // Commit once: sidebar lists from the session, chat (messages + live) via
       // hydrate. hydrateSnapshot owns the single message replace (no double set).
       subagents.applyFromSession(result.session.subagentChains);
@@ -314,7 +319,7 @@ export function ChatView() {
         live: result.live,
       });
     },
-    [session, chat, subagents.applyFromSession, todos.applyFromSession, draftTabVisible],
+    [session, chat, subagents.applyFromSession, todos.applyFromSession, draftTabVisible, messageQueue.clearQueue],
   );
 
   // ConfigView left-rail pick: same hydrate path as sidebar (not store-only load).
@@ -331,6 +336,7 @@ export function ChatView() {
   const enterDraftMode = useCallback(async (opts?: { clearComposer?: boolean }) => {
     const gen = ++sessionSwitchGen.current;
     chat.beginSessionSwitch(null);
+    messageQueue.clearQueue();
     await session.enterDraft();
     if (gen !== sessionSwitchGen.current) return;
     applySessionMessages(null);
@@ -338,7 +344,7 @@ export function ChatView() {
     if (opts?.clearComposer) {
       setComposerDraftKey((k) => k + 1);
     }
-  }, [session, chat, applySessionMessages]);
+  }, [session, chat, applySessionMessages, messageQueue.clearQueue]);
 
   // New chat: draft in the currently selected project. Never open a folder
   // picker here — inherit session.cwd → workspace.cwd → sticky default.
@@ -642,6 +648,27 @@ export function ChatView() {
     chat.clearError();
     await handleSend(lastUser.content);
   }, [chat, handleSend]);
+
+  const handleQueue = useCallback(
+    (text: string) => {
+      const trigger = messageQueue.addToQueue(text);
+      const sessionId = session.activeSession?.id;
+      // Only next-request messages stop the chain early; chain-end messages
+      // queue without signaling so the current run continues to its natural end.
+      if (trigger === 'next-request' && chat.status === 'streaming' && sessionId) {
+        void window.orchid?.chat?.queueNext({ sessionId })?.catch(() => {});
+      }
+    },
+    [messageQueue.addToQueue, chat.status, session.activeSession?.id],
+  );
+
+  useQueueAutoFire(
+    chat.status,
+    messageQueue.consumeNext,
+    messageQueue.restoreBatch,
+    messageQueue.editingId,
+    handleSend,
+  );
 
   const sessionSwitchHandlers = useMemo(() => {
     const handlers: Record<string, (event: KeyboardEvent) => void> = {};
@@ -1072,6 +1099,17 @@ export function ChatView() {
           interrupted={chat.interrupted}
           alwaysExpandToolGroups={alwaysExpandToolGroups}
         />
+        <MessageQueue
+          queue={messageQueue.queue}
+          editingId={messageQueue.editingId}
+          onRemove={messageQueue.removeFromQueue}
+          onReorder={messageQueue.reorderQueue}
+          onStartEditing={messageQueue.startEditing}
+          onUpdateEditingText={messageQueue.updateEditingText}
+          onFinishEditing={messageQueue.finishEditing}
+          onCancelEditing={messageQueue.cancelEditing}
+          onChangeTrigger={messageQueue.changeTrigger}
+        />
         <InputArea
           key={composerDraftKey}
           sessionId={session.activeSession?.id ?? null}
@@ -1082,6 +1120,7 @@ export function ChatView() {
           interruptState={chat.interruptState}
           onSend={handleSend}
           onCancel={chat.cancel}
+          onQueue={handleQueue}
           commandContext={commandContext}
           sessions={sessions}
           currentTheme={currentTheme}

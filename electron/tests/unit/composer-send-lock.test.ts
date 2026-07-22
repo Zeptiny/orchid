@@ -38,10 +38,31 @@ describe('evaluateComposerSend (lock + gates)', () => {
     modelSelected: true,
   };
 
-  it('ignores empty input, streaming, and held send lock', () => {
+  it('ignores empty input and held send lock', () => {
     expect(evaluateComposerSend({ ...ready, trimmed: '' }).action).toBe('ignore');
-    expect(evaluateComposerSend({ ...ready, isStreaming: true }).action).toBe('ignore');
     expect(evaluateComposerSend({ ...ready, isSending: true }).action).toBe('ignore');
+  });
+
+  it('queues non-empty input during streaming', () => {
+    expect(evaluateComposerSend({ ...ready, isStreaming: true }).action).toBe('queue');
+  });
+
+  it('ignores slash commands during streaming (not queueable)', () => {
+    expect(evaluateComposerSend({ ...ready, isStreaming: true, trimmed: '/help' }).action).toBe(
+      'ignore',
+    );
+  });
+
+  it('ignores empty input during streaming', () => {
+    expect(evaluateComposerSend({ ...ready, trimmed: '', isStreaming: true }).action).toBe(
+      'ignore',
+    );
+  });
+
+  it('queues input during streaming even when send lock is held', () => {
+    expect(
+      evaluateComposerSend({ ...ready, isStreaming: true, isSending: true }).action,
+    ).toBe('queue');
   });
 
   it('after error residual release (isSending false), second send is admitted', () => {

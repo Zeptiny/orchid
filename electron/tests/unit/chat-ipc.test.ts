@@ -3,6 +3,11 @@ import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 import type { Agent } from '../../src/shared/types/agent';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
+import {
+  clearNextRequestStop,
+  requestNextRequestStop,
+  shouldStopNextRequest,
+} from '../../src/main/ipc/next-request-stop';
 
 function successfulToolResult(toolCallId: string, content: string): Record<string, unknown> {
   const canonical = createCanonicalToolResult('generic', {
@@ -1543,5 +1548,81 @@ describe('chat:send draft single-flight (M-P1-013)', () => {
     );
     expect(statuses.filter((s) => s === 'started')).toHaveLength(1);
     expect(statuses).toContain('error');
+  });
+});
+
+describe('chat:queue_next early-stop signaling', () => {
+  const sessionId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    mocks.runtimeRegistry._reset();
+    mocks.sessionManager._reset();
+    clearNextRequestStop(sessionId);
+    chatIpc = await import('../../src/main/ipc/chat');
+    chatIpc.registerChatIPC();
+  });
+
+  afterEach(() => {
+    chatIpc.unregisterChatIPC();
+    mocks.handlers.clear();
+    clearNextRequestStop(sessionId);
+    mocks.sessionManager._reset();
+  });
+
+  it('sets the early-stop flag for a valid sessionId', async () => {
+    const queueNext = mocks.handlers.get(IPC_CHANNELS.CHAT_QUEUE_NEXT)!;
+    await queueNext({ sender: { id: 930, send: vi.fn() } }, { sessionId });
+    expect(shouldStopNextRequest(sessionId)).toBe(true);
+  });
+
+  it('is idempotent for repeated signals', async () => {
+    const queueNext = mocks.handlers.get(IPC_CHANNELS.CHAT_QUEUE_NEXT)!;
+    await queueNext({ sender: { id: 931, send: vi.fn() } }, { sessionId });
+    await queueNext({ sender: { id: 931, send: vi.fn() } }, { sessionId });
+    expect(shouldStopNextRequest(sessionId)).toBe(true);
+  });
+
+  it('throws on a payload missing sessionId', async () => {
+    const queueNext = mocks.handlers.get(IPC_CHANNELS.CHAT_QUEUE_NEXT)!;
+    await expect(
+      queueNext({ sender: { id: 932, send: vi.fn() } }, {}),
+    ).rejects.toThrow(/Invalid chat:queue_next payload/);
+    expect(shouldStopNextRequest(sessionId)).toBe(false);
+  });
+
+  it('throws on a wrong-typed sessionId', async () => {
+    const queueNext = mocks.handlers.get(IPC_CHANNELS.CHAT_QUEUE_NEXT)!;
+    await expect(
+      queueNext({ sender: { id: 933, send: vi.fn() } }, { sessionId: 123 }),
+    ).rejects.toThrow(/Invalid chat:queue_next payload/);
+    expect(shouldStopNextRequest(sessionId)).toBe(false);
+  });
+
+  it('clears the early-stop flag at chat:send turn start', async () => {
+    requestNextRequestStop(sessionId);
+    expect(shouldStopNextRequest(sessionId)).toBe(true);
+
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 934, send } }, { message: 'continue' });
+    await waitForDoneCount(send, 1);
+
+    expect(shouldStopNextRequest(sessionId)).toBe(false);
   });
 });

@@ -21,6 +21,7 @@ import type {
   OrchidAPI,
   ChatSendMessage,
   ChatCancelMessage,
+  ChatQueueNextRequest,
   ChatStopMessage,
   ChatSnapshotMessage,
   ChatChunkEvent,
@@ -199,6 +200,9 @@ const orchidAPI: OrchidAPI = {
 
     cancel: (message?: ChatCancelMessage) =>
       invoke(IPC_CHANNELS.CHAT_CANCEL, message ?? {}),
+
+    queueNext: (request: ChatQueueNextRequest) =>
+      invoke(IPC_CHANNELS.CHAT_QUEUE_NEXT, request),
 
     stop: (message: ChatStopMessage) =>
       invoke(IPC_CHANNELS.CHAT_STOP, message),
