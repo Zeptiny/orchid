@@ -654,7 +654,7 @@ export function ChatView() {
       messageQueue.addToQueue(text);
       const sessionId = session.activeSession?.id;
       if (chat.status === 'streaming' && sessionId) {
-        void window.orchid?.chat?.queueNext({ sessionId });
+        void window.orchid?.chat?.queueNext({ sessionId })?.catch(() => {});
       }
     },
     [messageQueue, chat.status, session.activeSession?.id],

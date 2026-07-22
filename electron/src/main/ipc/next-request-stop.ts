@@ -2,7 +2,7 @@
  * Per-session early-stop flag for "next-request" queue messages.
  *
  * When the renderer queues a next-request message mid-stream, it signals
- * `chat:queue-next` so the current chain stops at the next step boundary and
+ * `chat:queue_next` so the current chain stops at the next step boundary and
  * the queued message can start a fresh chain. The flag is set by the IPC
  * handler, read by the orchestrator's `stopWhen` predicate, and cleared at
  * turn start so a stale signal never stops the new chain immediately.

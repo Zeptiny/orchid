@@ -22,6 +22,7 @@ import {
   type WorkspaceInfo,
 } from '../project/workspace';
 import { getProjectRuntimeRegistry } from '../project/runtime';
+import { clearNextRequestStop } from './next-request-stop';
 import { removeSessionActivity } from './session-activity';
 import {
   workingSetClearFocus,
@@ -337,6 +338,7 @@ export function registerSessionIPC(): void {
     // recreate activity after it disappears from the catalog.
     const { forceStopSession } = await import('./chat');
     forceStopSession(parsed.data.id);
+    clearNextRequestStop(parsed.data.id);
     const deleted = manager.delete(parsed.data.id);
     if (deleted) {
       removeSessionActivity(parsed.data.id);
