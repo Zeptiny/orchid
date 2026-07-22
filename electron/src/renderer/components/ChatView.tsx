@@ -649,6 +649,17 @@ export function ChatView() {
     await handleSend(lastUser.content);
   }, [chat, handleSend]);
 
+  const handleQueue = useCallback(
+    (text: string) => {
+      messageQueue.addToQueue(text);
+      const sessionId = session.activeSession?.id;
+      if (chat.status === 'streaming' && sessionId) {
+        void window.orchid?.chat?.queueNext({ sessionId });
+      }
+    },
+    [messageQueue, chat.status, session.activeSession?.id],
+  );
+
   useQueueAutoFire(chat.status, messageQueue.consumeNext, messageQueue.editingId, handleSend);
 
   const sessionSwitchHandlers = useMemo(() => {
@@ -1101,7 +1112,7 @@ export function ChatView() {
           interruptState={chat.interruptState}
           onSend={handleSend}
           onCancel={chat.cancel}
-          onQueue={messageQueue.addToQueue}
+          onQueue={handleQueue}
           commandContext={commandContext}
           sessions={sessions}
           currentTheme={currentTheme}
