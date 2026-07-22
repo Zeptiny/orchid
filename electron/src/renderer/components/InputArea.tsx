@@ -737,6 +737,7 @@ export function InputArea({
                 variant="primary"
                 className="orchid-composer-action btn-square"
                 onClick={() => void handleSend()}
+                disabled={input.trim().startsWith('/')}
                 iconSize={16}
               />
             ) : (

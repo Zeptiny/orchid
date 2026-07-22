@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef } from 'react';
 import type { ChatStatus } from './useChat';
+import type { ConsumedBatch, QueuedMessage } from './useMessageQueue';
 
 /**
  * Pure transition check: should the queue fire on this status change?
@@ -28,13 +29,15 @@ export function shouldAutoFire(
  * Watches status transitions and auto-fires queued messages.
  *
  * @param status - Current chat status from useChat
- * @param consumeNext - Returns joined text of the next eligible batch, or null if held
+ * @param consumeNext - Returns the next eligible batch (text + messages), or null if held
+ * @param restoreBatch - Restores a consumed batch to the front of the queue on send failure
  * @param editingId - Currently editing message ID (null when not editing)
  * @param sendFn - Sends a message via the chat (same signature as ChatView.handleSend)
  */
 export function useQueueAutoFire(
   status: ChatStatus,
-  consumeNext: () => string | null,
+  consumeNext: () => ConsumedBatch | null,
+  restoreBatch: (batch: readonly QueuedMessage[]) => void,
   editingId: string | null,
   sendFn: (message: string) => Promise<void>,
 ): void {
@@ -50,18 +53,19 @@ export function useQueueAutoFire(
 
     if (!shouldAutoFire(prev, status, editingId, prevEditing, isFiringRef.current)) return;
 
-    const text = consumeNext();
-    if (!text) return;
+    const consumed = consumeNext();
+    if (!consumed) return;
 
     isFiringRef.current = true;
-    sendFn(text)
+    sendFn(consumed.text)
       .catch(() => {
-        // Send failed — consumed messages are lost. Surface via console;
-        // the queue is ephemeral and the user can re-type.
-        console.warn('Queue auto-fire: send failed, consumed messages were not delivered.');
+        // Send failed — restore the consumed batch to its FIFO position so the
+        // messages are not permanently lost; they fire on the next transition.
+        restoreBatch(consumed.batch);
+        console.warn('Queue auto-fire: send failed, consumed messages restored to the queue.');
       })
       .finally(() => {
         isFiringRef.current = false;
       });
-  }, [status, editingId, consumeNext, sendFn]);
+  }, [status, editingId, consumeNext, restoreBatch, sendFn]);
 }

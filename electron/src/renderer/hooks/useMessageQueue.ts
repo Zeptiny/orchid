@@ -21,10 +21,16 @@ export interface QueuedMessage {
   readonly createdAt: number;
 }
 
+/** A consumed batch: the joined text plus the original messages (for restore on failure). */
+export interface ConsumedBatch {
+  text: string;
+  batch: QueuedMessage[];
+}
+
 export interface UseMessageQueueReturn {
   queue: readonly QueuedMessage[];
   editingId: string | null;
-  addToQueue: (text: string, trigger?: QueueTrigger) => void;
+  addToQueue: (text: string, trigger?: QueueTrigger) => QueueTrigger | null;
   removeFromQueue: (id: string) => void;
   reorderQueue: (fromIndex: number, toIndex: number) => void;
   startEditing: (id: string) => void;
@@ -33,8 +39,10 @@ export interface UseMessageQueueReturn {
   cancelEditing: (id: string) => void;
   changeTrigger: (id: string, trigger: QueueTrigger) => void;
   clearQueue: () => void;
-  /** Consume the next batch of messages eligible to fire. Returns joined text or null if held. */
-  consumeNext: () => string | null;
+  /** Consume the next batch of messages eligible to fire. Returns text + batch, or null if held. */
+  consumeNext: () => ConsumedBatch | null;
+  /** Restore a previously consumed batch to the front of the queue (FIFO). */
+  restoreBatch: (batch: readonly QueuedMessage[]) => void;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -96,14 +104,18 @@ export function useMessageQueue(): UseMessageQueueReturn {
   queueRef.current = queue;
   editingIdRef.current = editingId;
 
-  const addToQueue = useCallback((text: string, trigger: QueueTrigger = 'next-request') => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setQueue((prev) => [
-      ...prev,
-      { id: generateId(), text: trimmed, trigger, createdAt: Date.now() },
-    ]);
-  }, []);
+  const addToQueue = useCallback(
+    (text: string, trigger: QueueTrigger = 'next-request'): QueueTrigger | null => {
+      const trimmed = text.trim();
+      if (!trimmed) return null;
+      setQueue((prev) => [
+        ...prev,
+        { id: generateId(), text: trimmed, trigger, createdAt: Date.now() },
+      ]);
+      return trigger;
+    },
+    [],
+  );
 
   const removeFromQueue = useCallback((id: string) => {
     setQueue((prev) => prev.filter((m) => m.id !== id));
@@ -157,11 +169,16 @@ export function useMessageQueue(): UseMessageQueueReturn {
     setEditingId(null);
   }, []);
 
-  const consumeNext = useCallback((): string | null => {
+  const consumeNext = useCallback((): ConsumedBatch | null => {
     const result = selectBatch(queueRef.current, editingIdRef.current);
     if (!result) return null;
     setQueue(result.remainder);
-    return result.text;
+    return { text: result.text, batch: result.batch };
+  }, []);
+
+  const restoreBatch = useCallback((batch: readonly QueuedMessage[]) => {
+    if (batch.length === 0) return;
+    setQueue((prev) => [...batch, ...prev]);
   }, []);
 
   return {
@@ -177,5 +194,6 @@ export function useMessageQueue(): UseMessageQueueReturn {
     changeTrigger,
     clearQueue,
     consumeNext,
+    restoreBatch,
   };
 }

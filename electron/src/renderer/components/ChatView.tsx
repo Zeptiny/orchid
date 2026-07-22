@@ -651,16 +651,24 @@ export function ChatView() {
 
   const handleQueue = useCallback(
     (text: string) => {
-      messageQueue.addToQueue(text);
+      const trigger = messageQueue.addToQueue(text);
       const sessionId = session.activeSession?.id;
-      if (chat.status === 'streaming' && sessionId) {
+      // Only next-request messages stop the chain early; chain-end messages
+      // queue without signaling so the current run continues to its natural end.
+      if (trigger === 'next-request' && chat.status === 'streaming' && sessionId) {
         void window.orchid?.chat?.queueNext({ sessionId })?.catch(() => {});
       }
     },
-    [messageQueue, chat.status, session.activeSession?.id],
+    [messageQueue.addToQueue, chat.status, session.activeSession?.id],
   );
 
-  useQueueAutoFire(chat.status, messageQueue.consumeNext, messageQueue.editingId, handleSend);
+  useQueueAutoFire(
+    chat.status,
+    messageQueue.consumeNext,
+    messageQueue.restoreBatch,
+    messageQueue.editingId,
+    handleSend,
+  );
 
   const sessionSwitchHandlers = useMemo(() => {
     const handlers: Record<string, (event: KeyboardEvent) => void> = {};
