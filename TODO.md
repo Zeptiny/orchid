@@ -40,8 +40,6 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
   - Needs user input (Ex: ask_question)
 - Tool widgets / tool groups may be collapsing when a chain ends
 - Add small animations to the interface
-- Task update / changes can be grouped
-  - They are not resolving to the task name, but the ID on the title
 
 ## General backlog
 
