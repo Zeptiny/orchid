@@ -25,25 +25,26 @@ const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
   'ask-when-flagged': 'Prompt only for dangerous calls',
 };
 
+const DEFAULT_LABEL = 'Default';
+const DEFAULT_DESCRIPTION = 'Per-tool rules from project config';
+
 /** Human-readable label for a permission mode, or "Default" when unset. */
 export function formatPermissionMode(mode: PermissionMode | null): string {
-  if (mode == null) return 'Default';
+  if (mode == null) return DEFAULT_LABEL;
   return MODE_LABELS[mode];
 }
 
 interface PermissionSelectorProps {
   value: PermissionMode | null;
-  defaultValue: PermissionMode;
   onChange: (value: PermissionMode | null) => void;
   className?: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }
 
-/** Session permission-mode picker with an inherited/overridden indicator and popover menu. */
+/** Session permission-mode picker with per-tool default and blanket override modes. */
 export function PermissionSelector({
   value,
-  defaultValue,
   onChange,
   className = '',
   open: controlledOpen,
@@ -82,14 +83,13 @@ export function PermissionSelector({
   }, [isOpen, isControlled, onOpenChange]);
 
   const overridden = value != null;
-  const effective = value ?? defaultValue;
 
   const selectMode = (mode: PermissionMode) => {
     onChange(mode);
     setOpen(false);
   };
 
-  const reset = () => {
+  const selectDefault = () => {
     onChange(null);
     setOpen(false);
   };
@@ -104,18 +104,12 @@ export function PermissionSelector({
         aria-expanded={isOpen}
         aria-controls={isOpen ? menuId : undefined}
         aria-label="Session permissions"
-        title={`Session permissions: ${formatPermissionMode(effective)}${overridden ? ' (session override)' : ' (inherited)'}`}
+        title={`Session permissions: ${formatPermissionMode(value)}${overridden ? ' (session override)' : ' (per-tool rules)'}`}
         onClick={() => setOpen(!isOpen)}
       >
         <Icon name="shield" size={12} className="shrink-0 opacity-70" />
         <span className="inline-flex items-center gap-1">
-          {formatPermissionMode(effective)}
-          {!overridden && (
-            <>
-              <span className="size-1 rounded-full bg-base-content/40" aria-hidden />
-              <span className="sr-only">(inherited)</span>
-            </>
-          )}
+          {formatPermissionMode(value)}
         </span>
         <Icon
           name="chevronDown"
@@ -134,6 +128,16 @@ export function PermissionSelector({
           <div className="px-1 pb-0.5 text-xs font-medium text-base-content/60">
             Session permissions
           </div>
+          <Button
+            variant={value == null ? 'primary' : 'ghost'}
+            size="xs"
+            className="h-auto w-full flex-col items-start gap-0.5 py-1.5"
+            aria-pressed={value == null}
+            onClick={selectDefault}
+          >
+            <span className="font-semibold">{DEFAULT_LABEL}</span>
+            <span className="text-left opacity-70">{DEFAULT_DESCRIPTION}</span>
+          </Button>
           {PERMISSION_MODES.map((mode) => {
             const selected = value === mode;
             return (
@@ -145,23 +149,11 @@ export function PermissionSelector({
                 aria-pressed={selected}
                 onClick={() => selectMode(mode)}
               >
-                <span className="flex items-center gap-1.5">
-                  <span className="font-semibold">{MODE_LABELS[mode]}</span>
-                  {mode === defaultValue && <span className="opacity-60">(default)</span>}
-                </span>
+                <span className="font-semibold">{MODE_LABELS[mode]}</span>
                 <span className="text-left opacity-70">{MODE_DESCRIPTIONS[mode]}</span>
               </Button>
             );
           })}
-          <Button
-            variant="ghost"
-            size="xs"
-            className="w-full justify-start"
-            disabled={!overridden}
-            onClick={reset}
-          >
-            Reset to default
-          </Button>
         </div>
       )}
     </div>

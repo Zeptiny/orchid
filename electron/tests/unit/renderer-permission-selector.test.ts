@@ -10,7 +10,6 @@ import type { PermissionMode } from '../../src/shared/types/permission';
 
 interface RenderOptions {
   value?: PermissionMode | null;
-  defaultValue?: PermissionMode;
   onChange?: (value: PermissionMode | null) => void;
   open?: boolean;
 }
@@ -18,13 +17,11 @@ interface RenderOptions {
 function renderSelector(options: RenderOptions = {}): string {
   const {
     value = null,
-    defaultValue = 'ask-when-flagged',
     onChange = () => {},
     open,
   } = options;
   const node: ReactElement = createElement(PermissionSelector, {
     value,
-    defaultValue,
     onChange,
     ...(open === undefined ? {} : { open }),
   });
@@ -51,18 +48,18 @@ describe('formatPermissionMode', () => {
 });
 
 describe('PermissionSelector markup', () => {
-  it('shows the inherited default label when no override is set', () => {
-    const html = renderSelector({ value: null, defaultValue: 'ask-when-flagged' });
-    expect(html).toContain('Ask when flagged');
+  it('shows Default when no override is set', () => {
+    const html = renderSelector({ value: null });
+    expect(html).toContain('Default');
     expect(html).toContain('aria-expanded="false"');
-    expect(html).toContain('(inherited)');
+    expect(html).toContain('(per-tool rules)');
   });
 
-  it('shows the override label without the inheritance indicator when overridden', () => {
-    const html = renderSelector({ value: 'allow', defaultValue: 'ask-when-flagged' });
+  it('shows the override label with session override indicator', () => {
+    const html = renderSelector({ value: 'allow' });
     expect(html).toContain('Allow all');
     expect(html).toContain('(session override)');
-    expect(html).not.toContain('(inherited)');
+    expect(html).not.toContain('(per-tool rules)');
   });
 
   it('renders the shield trigger icon', () => {
@@ -71,9 +68,11 @@ describe('PermissionSelector markup', () => {
     expect(html).toContain('<svg');
   });
 
-  it('renders all four modes with labels and descriptions when open', () => {
+  it('renders Default and all four modes with labels and descriptions when open', () => {
     const html = renderSelector({ open: true });
     expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('Default');
+    expect(html).toContain('Per-tool rules from project config');
     expect(html).toContain('Allow all');
     expect(html).toContain('Execute everything without asking');
     expect(html).toContain('Always ask');
@@ -84,30 +83,19 @@ describe('PermissionSelector markup', () => {
     expect(html).toContain('Prompt only for dangerous calls');
   });
 
+  it('marks Default as pressed when no override is set', () => {
+    const html = renderSelector({ open: true, value: null });
+    expect(html).toContain('aria-pressed="true"');
+  });
+
   it('marks the active mode as pressed', () => {
     const html = renderSelector({ open: true, value: 'decide-for-me' });
     expect(html).toContain('aria-pressed="true"');
   });
 
-  it('marks the inherited default option in the popover', () => {
-    const html = renderSelector({ open: true, defaultValue: 'ask' });
-    expect(html).toContain('(default)');
-  });
-
-  it('disables Reset to default while inheriting', () => {
-    const html = renderSelector({ open: true, value: null });
-    expect(html).toMatch(/disabled[^>]*>\s*Reset to default/);
-  });
-
-  it('enables Reset to default when a session override is active', () => {
-    const html = renderSelector({ open: true, value: 'allow' });
-    expect(html).toContain('Reset to default');
-    expect(html).not.toMatch(/disabled[^>]*>\s*Reset to default/);
-  });
-
   it('does not render the popover while closed', () => {
     const html = renderSelector({ value: 'allow' });
-    expect(html).not.toContain('Reset to default');
+    expect(html).not.toContain('Per-tool rules from project config');
     expect(html).not.toContain('Execute everything without asking');
   });
 });

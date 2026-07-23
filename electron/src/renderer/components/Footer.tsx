@@ -305,7 +305,6 @@ export function Footer({
       <div className="orchid-chat-footer-end shrink-0 flex items-center gap-1.5">
         <PermissionSelector
           value={sessionPermissionMode}
-          defaultValue="ask-when-flagged"
           onChange={handlePermissionModeChange}
         />
         {reasoningConfig && shouldShowReasoningSelector(reasoningConfig) && (
