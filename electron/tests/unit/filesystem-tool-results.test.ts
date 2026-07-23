@@ -329,8 +329,10 @@ describe('typed filesystem outcomes', () => {
 
 describe('bounded family projections', () => {
   it('keeps every canonical glob record while materializing omitted projection records', async () => {
+    const fixedMtime = new Date('2024-01-01T00:00:00Z');
     for (let index = 0; index < 240; index += 1) {
-      writeFixture(`many/file-${String(index).padStart(3, '0')}.ts`, `export const n = ${index};`);
+      const filePath = writeFixture(`many/file-${String(index).padStart(3, '0')}.ts`, `export const n = ${index};`);
+      fs.utimesSync(filePath, fixedMtime, fixedMtime);
     }
     const registry = new ToolRegistry();
     registry.register(globDefinition, globHandler);
