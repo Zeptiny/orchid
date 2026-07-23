@@ -9,7 +9,13 @@ const PROJECT_DIR = '/tmp/orchid-mcp-ipc-project';
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const getStatus = vi.fn(() => [
-    { name: 'filesystem', status: 'connected' as const, tools: 3 },
+    {
+      name: 'filesystem',
+      status: 'connected' as const,
+      toolCount: 3,
+      tools: ['list_dir', 'read_file', 'stat'],
+      error: null,
+    },
   ]);
   const getManager = vi.fn(() => ({ getStatus }));
   const getRuntime = vi.fn(() => ({ projectDir: PROJECT_DIR, config: {} }));
@@ -53,7 +59,13 @@ beforeEach(async () => {
   mocks.resolveBoundProjectPath.mockReturnValue(PROJECT_DIR);
   mocks.getStatus.mockClear();
   mocks.getStatus.mockReturnValue([
-    { name: 'filesystem', status: 'connected' as const, tools: 3 },
+    {
+      name: 'filesystem',
+      status: 'connected' as const,
+      toolCount: 3,
+      tools: ['list_dir', 'read_file', 'stat'],
+      error: null,
+    },
   ]);
   mocks.getManager.mockClear();
   mocks.getManager.mockReturnValue({ getStatus: mocks.getStatus });
@@ -91,7 +103,13 @@ describe('mcp:status', () => {
       expect.objectContaining({ projectDir: PROJECT_DIR }),
     );
     expect(status).toEqual([
-      { name: 'filesystem', status: 'connected', tools: 3 },
+      {
+        name: 'filesystem',
+        status: 'connected',
+        toolCount: 3,
+        tools: ['list_dir', 'read_file', 'stat'],
+        error: null,
+      },
     ]);
   });
 });

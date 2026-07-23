@@ -176,6 +176,8 @@ export interface MCPServerStatus {
   status: MCPServerStatusValue;
   /** Number of tools discovered from this server. */
   toolCount: number;
+  /** Un-namespaced names of tools discovered from this server. */
+  tools: string[];
   /** Error message if status is "failed" or "unavailable", null otherwise. */
   error: string | null;
 }

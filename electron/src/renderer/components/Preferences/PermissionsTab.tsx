@@ -1,6 +1,7 @@
-import { useCallback, useMemo, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type {
   Config,
+  MCPServerStatus,
   PermissionModeValue,
   PermissionRule,
 } from '../../../shared/types/ipc-boundary';
@@ -285,6 +286,8 @@ export interface PermissionsTabProps {
   onScopeChange?: (scope: PermissionConfigScope) => void;
   inheritedPermissions?: Record<string, PermissionRule>;
   projectLoading?: boolean;
+  /** Live MCP server status; fetched over IPC when omitted. */
+  mcpStatus?: readonly MCPServerStatus[];
 }
 
 /** Preferences tab for per-tool permission modes: inside/outside slots for file tools, single modes elsewhere, plus per-server MCP grouping. */
@@ -297,8 +300,40 @@ export function PermissionsTab({
   onScopeChange,
   inheritedPermissions = {},
   projectLoading = false,
+  mcpStatus: mcpStatusProp,
 }: PermissionsTabProps) {
   const effectiveScope = lockedScope ?? scope;
+  const [fetchedMcpStatus, setFetchedMcpStatus] = useState<readonly MCPServerStatus[]>([]);
+
+  const refreshMcpStatus = useCallback(async () => {
+    try {
+      if (window.orchid?.mcp?.status) {
+        setFetchedMcpStatus(await window.orchid.mcp.status());
+      }
+    } catch {
+      // Non-fatal — live MCP tools simply are not enumerated.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (mcpStatusProp !== undefined) return;
+    void refreshMcpStatus();
+  }, [mcpStatusProp, refreshMcpStatus]);
+
+  const mcpStatus = mcpStatusProp ?? fetchedMcpStatus;
+
+  // MCP servers connect in the background after the window opens, so the
+  // first snapshot often lands on "starting". Poll until every server leaves
+  // that state so discovered tools appear.
+  useEffect(() => {
+    if (mcpStatusProp !== undefined) return;
+    if (!mcpStatus.some((server) => server.status === 'starting')) return;
+    const id = setInterval(() => {
+      void refreshMcpStatus();
+    }, 1500);
+    return () => clearInterval(id);
+  }, [mcpStatus, mcpStatusProp, refreshMcpStatus]);
+
   const permissions = config.permissions;
   const overrideCount = Object.keys(permissions).length;
   const permissionKeys = useMemo(
@@ -345,13 +380,22 @@ export function PermissionsTab({
       const server = key.slice(MCP_PREFIX.length).split('::')[0];
       if (server) servers.add(server);
     }
+    for (const server of mcpStatus) servers.add(server.name);
     return Array.from(servers).sort((a, b) => a.localeCompare(b));
-  }, [config.mcp_servers, permissionKeys]);
+  }, [config.mcp_servers, mcpStatus, permissionKeys]);
 
   const mcpOverrideCount = useMemo(
     () => Object.keys(permissions).filter((key) => key.startsWith(MCP_PREFIX)).length,
     [permissions],
   );
+
+  const liveToolsByServer = useMemo(() => {
+    const map = new Map<string, readonly string[]>();
+    for (const server of mcpStatus) {
+      if (server.tools.length > 0) map.set(server.name, server.tools);
+    }
+    return map;
+  }, [mcpStatus]);
 
   if (projectLoading && effectiveScope === 'project') {
     return <StateMessage kind="loading" title="Loading project permissions…" />;
@@ -459,13 +503,18 @@ export function PermissionsTab({
             {mcpServers.map((server) => {
               const wildcard = `${MCP_PREFIX}${server}::*`;
               const prefix = `${MCP_PREFIX}${server}::`;
-              const toolKeys = permissionKeys
-                .filter((key) => key.startsWith(prefix) && key !== wildcard)
-                .sort((a, b) => a.localeCompare(b));
+              const toolKeySet = new Set(
+                permissionKeys.filter((key) => key.startsWith(prefix) && key !== wildcard),
+              );
+              for (const tool of liveToolsByServer.get(server) ?? []) {
+                toolKeySet.add(`${prefix}${tool}`);
+              }
+              const toolKeys = Array.from(toolKeySet).sort((a, b) => a.localeCompare(b));
               const customCount = (permissions[wildcard] !== undefined ? 1 : 0) +
                 Object.keys(permissions).filter(
                   (key) => key.startsWith(prefix) && key !== wildcard,
                 ).length;
+              const serverStatus = mcpStatus.find((entry) => entry.name === server);
               return (
                 <Disclosure
                   key={server}
@@ -473,6 +522,14 @@ export function PermissionsTab({
                   summary={
                     <span className="flex items-center gap-2">
                       <span className="font-mono text-sm font-medium">{server}</span>
+                      {serverStatus && serverStatus.status !== 'connected' && (
+                        <StatusBadge
+                          tone={serverStatus.status === 'starting' ? 'warning' : 'error'}
+                          size="xs"
+                        >
+                          {serverStatus.status}
+                        </StatusBadge>
+                      )}
                       {overrideActions(customCount)}
                     </span>
                   }

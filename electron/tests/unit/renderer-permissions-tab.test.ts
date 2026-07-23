@@ -239,6 +239,94 @@ describe('PermissionsTab MCP section', () => {
     expect(html).toContain('id="perm-mcp::context7::resolve-library-id"');
     expect(selectedValue(html, 'perm-mcp::context7::resolve-library-id')).toBe('allow');
   });
+
+  it('lists live tools reported by connected MCP servers', () => {
+    const html = renderToStaticMarkup(
+      createElement(PermissionsTab, {
+        config: makeConfig({ mcp_servers: { context7: { command: 'npx' } } }),
+        updateDraft: () => {},
+        mcpStatus: [
+          {
+            name: 'context7',
+            status: 'connected' as const,
+            toolCount: 2,
+            tools: ['resolve-library-id', 'query-docs'],
+            error: null,
+          },
+        ],
+      }),
+    );
+    expect(html).toContain('>query-docs</span>');
+    expect(html).toContain('>resolve-library-id</span>');
+    expect(html).toContain('id="perm-mcp::context7::query-docs"');
+    expect(selectedValue(html, 'perm-mcp::context7::query-docs')).toBe('ask');
+  });
+
+  it('merges live tools with existing per-tool overrides', () => {
+    const permissions: Record<string, PermissionRule> = {
+      'mcp::context7::query-docs': 'allow',
+    };
+    const html = renderToStaticMarkup(
+      createElement(PermissionsTab, {
+        config: makeConfig({
+          mcp_servers: { context7: { command: 'npx' } },
+          permissions,
+        }),
+        updateDraft: () => {},
+        mcpStatus: [
+          {
+            name: 'context7',
+            status: 'connected' as const,
+            toolCount: 2,
+            tools: ['resolve-library-id', 'query-docs'],
+            error: null,
+          },
+        ],
+      }),
+    );
+    expect(selectedValue(html, 'perm-mcp::context7::query-docs')).toBe('allow');
+    expect(selectedValue(html, 'perm-mcp::context7::resolve-library-id')).toBe('ask');
+  });
+
+  it('shows servers discovered only through live status', () => {
+    const html = renderToStaticMarkup(
+      createElement(PermissionsTab, {
+        config: makeConfig(),
+        updateDraft: () => {},
+        mcpStatus: [
+          {
+            name: 'runtime-only',
+            status: 'connected' as const,
+            toolCount: 1,
+            tools: ['ping'],
+            error: null,
+          },
+        ],
+      }),
+    );
+    expect(html).toContain('>runtime-only</span>');
+    expect(html).toContain('mcp::runtime-only::*');
+    expect(html).toContain('>ping</span>');
+  });
+
+  it('flags servers that are not connected', () => {
+    const html = renderToStaticMarkup(
+      createElement(PermissionsTab, {
+        config: makeConfig({ mcp_servers: { broken: { command: 'nope' } } }),
+        updateDraft: () => {},
+        mcpStatus: [
+          {
+            name: 'broken',
+            status: 'failed' as const,
+            toolCount: 0,
+            tools: [],
+            error: 'ENOENT',
+          },
+        ],
+      }),
+    );
+    expect(html).toContain('>failed</span>');
+  });
 });
 
 describe('PermissionsTab reset button', () => {

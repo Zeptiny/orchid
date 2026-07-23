@@ -378,12 +378,23 @@ export class MCPManager {
    * Get the status of all configured MCP servers.
    */
   getStatus(): MCPServerStatus[] {
+    const toolsByServer = new Map<string, string[]>();
+    for (const namespaced of this._tools.keys()) {
+      const { serverName, toolName } = this._parseToolName(namespaced);
+      const list = toolsByServer.get(serverName);
+      if (list) list.push(toolName);
+      else toolsByServer.set(serverName, [toolName]);
+    }
+
     const statuses: MCPServerStatus[] = [];
     for (const [name, status] of this._serverStatus) {
+      const tools = toolsByServer.get(name) ?? [];
+      tools.sort((a, b) => a.localeCompare(b));
       statuses.push({
         name,
         status: status.status,
         toolCount: status.toolCount,
+        tools,
         error: status.error,
       });
     }
