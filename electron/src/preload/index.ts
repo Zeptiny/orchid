@@ -79,6 +79,12 @@ import type {
   AskQuestionSettledEvent,
   AskQuestionResult,
   AskQuestionSnapshot,
+  PermissionApprovalAnswerMessage,
+  PermissionSetSessionModeMessage,
+  PermissionApprovalRequestedEvent,
+  PermissionApprovalSettledEvent,
+  PermissionApprovalSnapshot,
+  PermissionResult,
 } from '../shared/types/ipc';
 import {
   chatChunkEventSchema,
@@ -478,6 +484,29 @@ const orchidAPI: OrchidAPI = {
       on(
         IPC_CHANNELS.ASK_QUESTION_SETTLED,
         (...args) => callback(args[0] as AskQuestionSettledEvent),
+      ),
+  },
+
+  permission: {
+    snapshot: () =>
+      invoke<PermissionApprovalSnapshot>(IPC_CHANNELS.PERMISSION_SNAPSHOT),
+
+    answer: (payload: PermissionApprovalAnswerMessage) =>
+      invoke<PermissionResult>(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER, payload),
+
+    setSessionMode: (payload: PermissionSetSessionModeMessage) =>
+      invoke<PermissionResult>(IPC_CHANNELS.PERMISSION_SET_SESSION_MODE, payload),
+
+    onApprovalRequested: (callback: (event: PermissionApprovalRequestedEvent) => void) =>
+      on(
+        IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED,
+        (...args) => callback(args[0] as PermissionApprovalRequestedEvent),
+      ),
+
+    onApprovalSettled: (callback: (event: PermissionApprovalSettledEvent) => void) =>
+      on(
+        IPC_CHANNELS.PERMISSION_APPROVAL_SETTLED,
+        (...args) => callback(args[0] as PermissionApprovalSettledEvent),
       ),
   },
 };

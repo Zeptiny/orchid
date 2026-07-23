@@ -728,6 +728,54 @@ export interface AskQuestionSnapshot {
   questions: AskQuestionAskedEvent[];
 }
 
+// ── Permission API ───────────────────────────────────────────────────────────
+
+export interface PermissionApprovalRequestedEvent {
+  toolCallId: string;
+  sessionId: string;
+  toolName: string;
+  riskClass: string;
+  args: unknown;
+  cwd: string;
+  scope?: string;
+}
+
+export interface PermissionApprovalSettledEvent {
+  sessionId: string;
+  toolCallId: string;
+  result: {
+    decision: 'approved' | 'denied';
+    reason?: string;
+  };
+}
+
+export interface PermissionApprovalAnswerMessage {
+  toolCallId: string;
+  decision: 'approved' | 'denied';
+  reason?: string;
+}
+
+export interface PermissionSetSessionModeMessage {
+  sessionId: string;
+  mode: 'allow' | 'ask' | 'decide-for-me' | 'ask-when-flagged';
+}
+
+export interface PermissionApprovalSnapshot {
+  approvals: Array<{
+    toolCallId: string;
+    sessionId: string;
+    toolName: string;
+    riskClass: string;
+    args: unknown;
+    cwd: string;
+    scope?: string;
+  }>;
+}
+
+export interface PermissionResult {
+  ok: boolean;
+}
+
 // ── RAG API ──────────────────────────────────────────────────────────────────
 
 export interface RAGIndexMessage {
@@ -928,6 +976,14 @@ export interface OrchidAPI {
     onAsked: (callback: (event: AskQuestionAskedEvent) => void) => () => void;
     onSettled: (callback: (event: AskQuestionSettledEvent) => void) => () => void;
   };
+
+  permission: {
+    snapshot: () => Promise<PermissionApprovalSnapshot>;
+    answer: (payload: PermissionApprovalAnswerMessage) => Promise<PermissionResult>;
+    setSessionMode: (payload: PermissionSetSessionModeMessage) => Promise<PermissionResult>;
+    onApprovalRequested: (callback: (event: PermissionApprovalRequestedEvent) => void) => () => void;
+    onApprovalSettled: (callback: (event: PermissionApprovalSettledEvent) => void) => () => void;
+  };
 }
 
 // ── IPC Channel names ────────────────────────────────────────────────────────
@@ -1057,6 +1113,13 @@ export const IPC_CHANNELS = {
   ASK_QUESTION_ANSWER: 'ask_question:answer',
   ASK_QUESTION_CANCEL: 'ask_question:cancel',
 
+  // Permission
+  PERMISSION_APPROVAL_REQUESTED: 'permission:approval_requested',
+  PERMISSION_APPROVAL_SETTLED: 'permission:approval_settled',
+  PERMISSION_APPROVAL_ANSWER: 'permission:approval_answer',
+  PERMISSION_SNAPSHOT: 'permission:snapshot',
+  PERMISSION_SET_SESSION_MODE: 'permission:set_session_mode',
+
   // Updater
   UPDATER_STATUS_UPDATE: 'updater:status_update',
   UPDATER_PROGRESS: 'updater:progress',
@@ -1131,6 +1194,9 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.ASK_QUESTION_SNAPSHOT,
   IPC_CHANNELS.ASK_QUESTION_ANSWER,
   IPC_CHANNELS.ASK_QUESTION_CANCEL,
+  IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER,
+  IPC_CHANNELS.PERMISSION_SNAPSHOT,
+  IPC_CHANNELS.PERMISSION_SET_SESSION_MODE,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────
@@ -1158,6 +1224,8 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.AST_PROGRESS,
   IPC_CHANNELS.ASK_QUESTION_ASKED,
   IPC_CHANNELS.ASK_QUESTION_SETTLED,
+  IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED,
+  IPC_CHANNELS.PERMISSION_APPROVAL_SETTLED,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Window type augmentation (renderer-side) ─────────────────────────────────
