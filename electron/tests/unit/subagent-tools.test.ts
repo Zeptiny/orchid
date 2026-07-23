@@ -13,7 +13,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { AgentType, AgentTier, type Agent } from '../../src/shared/types/agent';
-import { SubagentManager, SubagentState } from '../../src/main/agents/manager';
+import {
+  SubagentManager,
+  SubagentState,
+  getDefaultWaitTimeoutMs,
+  type SubagentRecord,
+} from '../../src/main/agents/manager';
 import { buildDelegateTool as buildDelegateToolRaw } from '../../src/main/tools/subagent/delegate';
 import { buildWaitTool as buildWaitToolRaw } from '../../src/main/tools/subagent/wait';
 import { buildInterruptTool as buildInterruptToolRaw } from '../../src/main/tools/subagent/interrupt';
@@ -455,6 +460,44 @@ describe('wait_for_subagent', () => {
     expect(result.agentProjection.content).toContain(record.id);
     expect(record.state).toBe(SubagentState.RUNNING);
     waitSpy.mockRestore();
+  });
+
+  it('uses the frozen turn-start wait timeout, ignoring live config changes', async () => {
+    const { handler } = buildWaitTool(manager);
+    const record = manager.spawn('test', 'task', codeReviewerAgent, {
+      sessionId: 'session-test',
+    });
+    manager.markCompleted(record.id, 'done');
+
+    // The turn-start snapshot freezes a non-default wait budget (42s).
+    const frozenCtx = {
+      cwd: '/tmp',
+      sessionId: 'session-test',
+      projectRuntime: {
+        projectDir: '/tmp',
+        config: { subagent_wait_timeout: 42 },
+        agents: new Map(),
+        skills: new Map(),
+        personalities: new Map(),
+      },
+    } as unknown as ToolExecutionContext;
+
+    let capturedTimeoutMs: number | undefined;
+    const waitSpy = vi.spyOn(manager, 'wait').mockImplementation(async (_ids, opts) => {
+      capturedTimeoutMs = opts?.timeoutMs;
+      return new Map<string, SubagentRecord>();
+    });
+
+    try {
+      await handler({ subagent_ids: [record.id] }, frozenCtx);
+    } finally {
+      waitSpy.mockRestore();
+    }
+
+    // The frozen 42s budget wins; the live default differs, so a mid-turn
+    // config change cannot alter the in-flight wait timeout.
+    expect(capturedTimeoutMs).toBe(42_000);
+    expect(getDefaultWaitTimeoutMs()).not.toBe(42_000);
   });
 
   it('returns early with a pending_question block when a subagent asks a question', async () => {

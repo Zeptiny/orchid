@@ -378,13 +378,16 @@ export class BackgroundProcessStore {
     }
     if (this._entries.size <= maxEntries) return;
 
-    // Sort by createdAt (oldest first), protect the newest N
+    // Sort by createdAt (oldest first), protect the newest N. Cap the protected
+    // count at maxEntries so limits below PROTECT_COUNT can still evict down to
+    // the configured maximum instead of stalling above it.
     const sortedIds = Array.from(this._entries.entries())
       .sort(([, a], [, b]) => a.createdAt - b.createdAt)
       .map(([id]) => id);
 
-    const evictable = sortedIds.length > PROTECT_COUNT
-      ? sortedIds.slice(0, -PROTECT_COUNT)
+    const protectCount = Math.min(PROTECT_COUNT, maxEntries);
+    const evictable = sortedIds.length > protectCount
+      ? sortedIds.slice(0, -protectCount)
       : [];
 
     while (this._entries.size > maxEntries && evictable.length > 0) {

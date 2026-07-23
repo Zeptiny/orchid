@@ -11,10 +11,12 @@ import { normalizeAgentScopeId } from '../../../shared/types/agent-scope';
 import { getBackgroundStore } from './background-store';
 import { backgroundCommandNotFound } from './not-found';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { getToolConfig } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { getConfig } from '../../config/loader';
+import type { Config } from '../../config/schema';
 
 // ---------------------------------------------------------------------------
 // Zod schema
@@ -38,6 +40,7 @@ export async function executeReadOutput(
   waitMs?: number,
   sessionId?: string | null,
   agentScopeId?: string | null,
+  config?: Config,
 ): Promise<GenericBuiltInToolOutcome> {
   const store = getBackgroundStore();
   const scopeSessionId = sessionId ?? null;
@@ -52,7 +55,7 @@ export async function executeReadOutput(
   if (waitMs !== undefined && waitMs > 0 && entry.exitCode === null) {
     let longPollMaxMs: number;
     try {
-      longPollMaxMs = getConfig().read_output_long_poll_max * 1000;
+      longPollMaxMs = (config ?? getConfig()).read_output_long_poll_max * 1000;
     } catch {
       longPollMaxMs = 60 * 1000;
     }
@@ -93,11 +96,19 @@ export const readOutputToolDefinition: ToolDefinition = {
 
 export const readOutputHandler: ToolHandler = async (input: unknown, ctx) => {
   const { id, last_n, wait_ms } = input as ReadOutputInput;
+  // Prefer the frozen turn config; fall back to live config for legacy callers.
+  let frozenConfig: Config | undefined;
+  try {
+    frozenConfig = getToolConfig(ctx);
+  } catch {
+    frozenConfig = undefined;
+  }
   return executeReadOutput(
     id,
     last_n,
     wait_ms,
     ctx.sessionId ?? null,
     ctx.agentScopeId ?? 'main',
+    frozenConfig,
   );
 };

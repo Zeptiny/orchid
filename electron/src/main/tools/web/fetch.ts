@@ -16,10 +16,11 @@ import * as path from 'node:path';
 import { safeFsync } from '../../utils/safe-fsync';
 import { URL } from 'node:url';
 import type { ToolDefinition, ToolExecutionContext, ToolHandler } from '../types';
+import { getToolConfig } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
-import { getConfig, HOME_CONFIG_DIR } from '../../config/loader';
+import { HOME_CONFIG_DIR } from '../../config/loader';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -239,7 +240,7 @@ export function buildWebFetchTool(
     let maxBodySize: number;
     let userAgent: string;
     try {
-      const cfg = getConfig();
+      const cfg = getToolConfig(ctx);
       fetchTimeoutMs = cfg.web_fetch_timeout * 1000;
       maxBodySize = cfg.web_fetch_max_body_bytes;
       userAgent = cfg.web_fetch_user_agent;
@@ -279,11 +280,11 @@ export function buildWebFetchTool(
         message.toLowerCase().includes('abort') ||
         fetchSignal.aborted;
       if (aborted) {
-        // Prefer outer cancel over the local 30s budget when both could apply.
+        // Prefer outer cancel over the local fetch budget when both could apply.
         if (parentAbort?.aborted && !timeoutController.signal.aborted) {
           return genericBuiltInToolOutcome('web_fetch', 'Request was cancelled.', 'cancelled');
         }
-        return genericBuiltInToolOutcome('web_fetch', 'Error: Request timed out after 30 seconds.', 'error');
+        return genericBuiltInToolOutcome('web_fetch', `Error: Request timed out after ${fetchTimeoutMs / 1000} seconds.`, 'error');
       }
       return genericBuiltInToolOutcome('web_fetch', `Error: ${message}`, 'error');
     } finally {

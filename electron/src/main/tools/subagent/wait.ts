@@ -9,6 +9,7 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { getToolConfig } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { escapeXmlAttribute, escapeXmlText, genericBuiltInToolOutcome } from '../result';
@@ -160,10 +161,24 @@ export function buildWaitTool(
     // Wait only for records the caller owns. This must happen after filtering:
     // waiting for a peer record would otherwise block this turn and expose its
     // terminal state through timing even if its result were omitted.
+    // Resolve the wait budget from the frozen turn-start config so a mid-turn
+    // settings change cannot alter an in-flight wait. Legacy callers without a
+    // frozen project runtime fall back to the live default.
+    let waitTimeoutMs: number;
+    try {
+      const frozen = ctx ? getToolConfig(ctx).subagent_wait_timeout : undefined;
+      waitTimeoutMs =
+        typeof frozen === 'number' && frozen > 0
+          ? frozen * 1000
+          : getDefaultWaitTimeoutMs();
+    } catch {
+      waitTimeoutMs = getDefaultWaitTimeoutMs();
+    }
+
     let records: Awaited<ReturnType<SubagentManager['wait']>>;
     try {
       records = await manager.wait(ownedIds, {
-        timeoutMs: getDefaultWaitTimeoutMs(),
+        timeoutMs: waitTimeoutMs,
         signal: ctx?.abortSignal,
       });
     } catch (err) {
