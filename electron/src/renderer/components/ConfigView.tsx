@@ -5,6 +5,7 @@ import type { ConfigDiagnostic, ConfigPatch } from '../../shared/types/ipc';
 import { AgentsTab } from './Preferences/AgentsTab';
 import { GeneralTab } from './Preferences/GeneralTab';
 import { MCPServersTab } from './Preferences/MCPServersTab';
+import { PermissionsTab } from './Preferences/PermissionsTab';
 import { PersonalitiesTab } from './Preferences/PersonalitiesTab';
 import { ProvidersTab } from './Preferences/ProvidersTab';
 import { RAGTab } from './Preferences/RAGTab';
@@ -26,6 +27,7 @@ import { Tabs } from './ui/Tabs';
 
 type TabId =
   | 'general'
+  | 'permissions'
   | 'providers'
   | 'mcp'
   | 'tier-models'
@@ -41,6 +43,7 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { id: 'general', label: 'General' },
+  { id: 'permissions', label: 'Permissions' },
   { id: 'providers', label: 'Providers' },
   { id: 'mcp', label: 'MCP' },
   { id: 'tier-models', label: 'Tier Models' },
@@ -565,6 +568,8 @@ function renderTab(
           onChange={updateDraft}
         />
       );
+    case 'permissions':
+      return <PermissionsTab config={config} updateDraft={updateDraft} />;
     case 'providers':
       return <ProvidersTab />;
     case 'mcp':

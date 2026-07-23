@@ -9,6 +9,7 @@ import { useCallback, useEffect, useId, useState, type CSSProperties } from 'rea
 import type { Message, Usage } from '../../shared/types/message';
 import type { CommandContext } from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption, SessionReasoningConfigResult } from '../../shared/types/ipc';
+import type { PermissionMode } from '../../shared/types/permission';
 import { useElapsedSeconds, type InterruptState } from '../hooks/useChat';
 import { FOOTER_SHORTCUT_IDS, getShortcut } from '../keyboard';
 import { resolveModelNotifyLabel } from '../utils/provider-selection';
@@ -17,10 +18,18 @@ import { contextUsedTokens } from '../../shared/usage';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
 import { ModelPicker } from './ModelPicker';
+import { PermissionSelector } from './PermissionSelector';
 import { ReasoningSelector, shouldShowReasoningSelector } from './ReasoningSelector';
 import { Button } from './ui/Button';
 import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
+
+interface PermissionBridge {
+  setSessionMode?: (message: {
+    sessionId: string | null;
+    mode: PermissionMode | null;
+  }) => Promise<unknown>;
+}
 
 interface FooterProps {
   /** Stream start (ms epoch); footer ticks elapsed locally at 1s while streaming. */
@@ -58,6 +67,7 @@ export function Footer({
   const [contextOpen, setContextOpen] = useState(false);
   const contextMenuId = useId();
   const [reasoningConfig, setReasoningConfig] = useState<SessionReasoningConfigResult | null>(null);
+  const [sessionPermissionMode, setSessionPermissionMode] = useState<PermissionMode | null>(null);
 
   const usedContextTokens = contextUsedTokens(usage);
   const contextPercent = getContextPercent(usage, maxContext);
@@ -151,6 +161,15 @@ export function Footer({
     [],
   );
 
+  const handlePermissionModeChange = useCallback(
+    (next: PermissionMode | null) => {
+      setSessionPermissionMode(next);
+      const permission = (window.orchid as { permission?: PermissionBridge }).permission;
+      permission?.setSessionMode?.({ sessionId: sessionId ?? null, mode: next })?.catch(() => {});
+    },
+    [sessionId],
+  );
+
   return (
     <div className="orchid-chat-footer">
       <div className="orchid-chat-footer-main min-w-0 flex-1 flex items-center gap-2 overflow-hidden">
@@ -211,6 +230,11 @@ export function Footer({
       </div>
 
       <div className="orchid-chat-footer-end shrink-0 flex items-center gap-1.5">
+        <PermissionSelector
+          value={sessionPermissionMode}
+          defaultValue="ask-when-flagged"
+          onChange={handlePermissionModeChange}
+        />
         {reasoningConfig && shouldShowReasoningSelector(reasoningConfig) && (
           <ReasoningSelector
             levels={reasoningConfig.levels}
