@@ -8,8 +8,6 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 
 - Scrolling up in chat is impossible
 - RAG onnxruntime may not be being shipped correctly
-- Web fetch agents task are appearing to the main agent
-  - Ex: if a web fetch has 300K tokens, the main agent get the full fetch as the task defined
 - Commands timeout appears to always be 30s
 
 ## Agent quality
@@ -154,24 +152,6 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 
 - **Do not change this until the design is clearer**
 - Multiple primary agent types (general, plan, etc.) that can be switched mid-conversation
-
-## Approval / permission system
-
-- Evaluate integrating checks from [destructive_command_guard](https://github.com/Dicklesworthstone/destructive_command_guard)
-- Tools would gain a permission attribute, with modes such as:
-  - Always ask
-  - Allow everything / yolo
-  - Decide for me (seed-tier agent decides per call)
-    - What context would need to be sent to the agent?
-  - Ask when flagged
-    - Only when `destructive_command_guard` (or equivalent) flags the action
-- Resolve paths in tools so agents cannot read/write outside the working directory by path tricks
-  - Shell commands can still escape; with permissions and user approval of every command, responsibility stays with the user
-- Each tool will have a permission default (Ie: Allow, ask, decide, ask when flagged)
-  - The permissions can be configured in the UI
-  - The permissions can be overwritten by the project
-  - The configured permissions can be overwritten by the configured permission on the interface
-    - A selector similar to the agent / reasoning effort
 
 ## Subagents
 
