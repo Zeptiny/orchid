@@ -11,13 +11,16 @@ import {
   type FileToolPermission,
 } from '../../../shared/types/permission';
 import { Icon, type IconName } from '../Icon';
+import { parseConfigNumber } from '../../utils/config-draft';
 import { Button } from '../ui/Button';
 import { Disclosure } from '../ui/Disclosure';
+import { FormField } from '../ui/FormField';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
 import { Select } from '../ui/Select';
 import { StateMessage } from '../ui/StateMessage';
 import { StatusBadge } from '../ui/StatusBadge';
+import { TextInput } from '../ui/TextInput';
 import { ScopeToggle } from './ScopeToggle';
 
 const PERMISSION_MODES: ReadonlyArray<{ value: PermissionModeValue; label: string }> = [
@@ -383,6 +386,34 @@ export function PermissionsTab({
           Reset all to defaults
         </Button>
       </div>
+
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader title="History" />
+        <div className="config-form-grid">
+          <FormField
+            label="Permission History Size"
+            htmlFor="perm-history-size"
+            hint="Number of recent permission decisions to remember (0 disables)."
+            className="config-field"
+          >
+            <TextInput
+              id="perm-history-size"
+              type="number"
+              value={config.permission_history_size}
+              onChange={(e) => {
+                const num = parseConfigNumber(e.target.value, 0, { integer: true });
+                if (num !== null && num <= 50) {
+                  updateDraft({ permission_history_size: num });
+                }
+              }}
+              bordered
+              className="w-full"
+              min={0}
+              max={50}
+            />
+          </FormField>
+        </div>
+      </Panel>
 
       {RISK_SECTIONS.map((section) => {
         const customCount = section.tools.filter(

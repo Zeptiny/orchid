@@ -106,6 +106,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
     Record<string, ConfigPatchMap<PermissionRule>>
   >({});
   const [personalities, setPersonalities] = useState<string[]>([]);
+  const [projectOverrides, setProjectOverrides] = useState<Record<string, unknown> | null>(null);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [showRestartDialog, setShowRestartDialog] = useState(false);
   /**
@@ -272,6 +273,26 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
       unsub?.();
     };
   }, [loadDefinitions, refreshPermissionScopes]);
+
+  useEffect(() => {
+    const boundProjectDir = projectScopeLoading ? null : permissionScopes?.projectDir ?? null;
+    const readProject = window.orchid?.config?.readProject;
+    if (!boundProjectDir || !readProject) {
+      setProjectOverrides(null);
+      return;
+    }
+    let cancelled = false;
+    readProject(boundProjectDir)
+      .then((result) => {
+        if (!cancelled) setProjectOverrides(result?.overrides ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setProjectOverrides(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [permissionScopes?.projectDir, projectScopeLoading]);
 
   const tabItems = useMemo(
     () => TABS.map((tab) => ({ ...tab, ariaBusy: pendingTab === tab.id })),
@@ -632,6 +653,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
                   ? updateProjectPermissionDraft
                   : updateDraft,
               },
+              projectOverrides,
             )
           ) : (
             <StateMessage kind="warning" title="Configuration could not be loaded." />
@@ -774,6 +796,7 @@ function renderTab(
     onScopeChange: () => {},
     updateDraft,
   },
+  projectOverrides: Record<string, unknown> | null = null,
 ) {
   switch (activeTab) {
     case 'general':
@@ -795,6 +818,25 @@ function renderTab(
           readLineLimit={config.read_line_limit}
           theme={config.theme}
           alwaysExpandToolGroups={config.always_expand_tool_groups}
+          commandMaxOutputBytes={config.command_max_output_bytes}
+          toolOutputInlineThreshold={config.tool_output_inline_threshold}
+          grepPerFileTimeout={config.grep_per_file_timeout}
+          webFetchTimeout={config.web_fetch_timeout}
+          webFetchMaxBodyBytes={config.web_fetch_max_body_bytes}
+          webFetchUserAgent={config.web_fetch_user_agent}
+          llmRetryBackoffBase={config.llm_retry_backoff_base}
+          llmRetryMaxDelay={config.llm_retry_max_delay}
+          maxBackgroundProcesses={config.max_background_processes}
+          approvalTimeout={config.approval_timeout}
+          subagentWaitTimeout={config.subagent_wait_timeout}
+          bgPromptMaxEntries={config.bg_prompt_max_entries}
+          bgPromptTailLines={config.bg_prompt_tail_lines}
+          bgPromptTailChars={config.bg_prompt_tail_chars}
+          bgOutputHeadBytes={config.bg_output_head_bytes}
+          bgOutputTailBytes={config.bg_output_tail_bytes}
+          readOutputLongPollMax={config.read_output_long_poll_max}
+          mcpResultMaxBytes={config.mcp_result_max_bytes}
+          projectOverrides={projectOverrides}
           onChange={updateDraft}
         />
       );

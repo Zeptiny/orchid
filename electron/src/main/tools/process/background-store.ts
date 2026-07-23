@@ -11,12 +11,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { sleep } from '../../utils/async';
 import { HeadTailBuffer } from './head-tail-buffer';
+import { getConfig } from '../../config/loader';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const MAX_ENTRIES = 64;
 const PROTECT_COUNT = 8; // most-recent entries protected from LRU eviction
 
 const ENV_SUPPRESSION: Record<string, string> = {
@@ -370,7 +370,8 @@ export class BackgroundProcessStore {
   // -- LRU eviction --------------------------------------------------------
 
   pruneIfNeeded(): void {
-    if (this._entries.size <= MAX_ENTRIES) return;
+    const maxEntries = getConfig().max_background_processes;
+    if (this._entries.size <= maxEntries) return;
 
     // Sort by createdAt (oldest first), protect the newest N
     const sortedIds = Array.from(this._entries.entries())
@@ -381,7 +382,7 @@ export class BackgroundProcessStore {
       ? sortedIds.slice(0, -PROTECT_COUNT)
       : [];
 
-    while (this._entries.size > MAX_ENTRIES && evictable.length > 0) {
+    while (this._entries.size > maxEntries && evictable.length > 0) {
       const victimId = evictable.shift()!;
       this._terminateAndRemove(victimId);
     }

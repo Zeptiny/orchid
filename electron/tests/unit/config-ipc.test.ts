@@ -77,11 +77,6 @@ vi.mock('../../src/main/project/runtime', () => ({
   clearProjectRuntimeRegistry: mocks.clearProjectRuntimeRegistry,
 }));
 
-vi.mock('../../src/main/llm/model-metadata', () => ({
-  resolveModelMetadata: vi.fn(),
-  clearModelMetadataCache: vi.fn(),
-}));
-
 vi.mock('../../src/main/mcp/project-registry', () => ({
   invalidateAllProjectMCPManagers: mocks.invalidateAllProjectMCPManagers,
 }));

@@ -5,7 +5,10 @@
  * Provider connections live in their own store and IPC surface; this boundary
  * fails closed for legacy provider aliases and secrets in the config document.
  */
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { ipcMain } from 'electron';
+import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import {
   getConfig,
@@ -14,13 +17,10 @@ import {
   atomicWriteJson,
   HOME_CONFIG_DIR,
   HOME_CONFIG_PATH,
+  PROJECT_CONFIG_NAME,
 } from '../config/loader';
 import { mergeConfigUpdates } from '../config/merge';
 import { configSchema } from '../config/schema';
-import {
-  clearModelMetadataCache,
-  resolveModelMetadata,
-} from '../llm/model-metadata';
 import {
   listPersonalityNames,
   loadPersonalities,
@@ -71,6 +71,14 @@ export function _resetConfigSaveChainForTests(): void {
 
 // ── IPC registration ─────────────────────────────────────────────────────────
 
+function loadJsonSafe(filePath: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
 export function registerConfigIPC(): void {
   // config:get — provider connection metadata and credentials never travel in
   // this general configuration response.
@@ -83,14 +91,6 @@ export function registerConfigIPC(): void {
   // presenting a disconnected workspace.
   ipcMain.handle(IPC_CHANNELS.CONFIG_DIAGNOSTICS, async () => {
     return getConfigDiagnostics({ projectDir: HOME_CONFIG_DIR });
-  });
-
-  // config:model_metadata — resolve metadata for a given model ID
-  ipcMain.handle(IPC_CHANNELS.CONFIG_MODEL_METADATA, async (_event, modelId: unknown) => {
-    if (typeof modelId !== 'string' || !modelId) {
-      throw new Error('config:model_metadata requires a non-empty modelId string');
-    }
-    return resolveModelMetadata(modelId);
   });
 
   // config:list_personalities — home personalities only (~/.orchid/personalities).
@@ -139,14 +139,40 @@ export function registerConfigIPC(): void {
       // snapshots so only already-running turns retain the previous config.
       clearProjectRuntimeRegistry();
       invalidateAllProjectMCPManagers();
-      // Drop model-metadata cache so picker limits reflect new overrides.
-      clearModelMetadataCache();
 
       // Keep the process-wide compatibility cache home-only. Project overlays
       // are independently resolved for the session/turn that needs them.
       ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
 
       return { status: 'saved' as const };
+    });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CONFIG_READ_PROJECT, async (_event, projectDir: unknown) => {
+    if (typeof projectDir !== 'string' || !projectDir) {
+      throw new Error('config:read_project requires a non-empty projectDir string');
+    }
+    const configPath = path.join(projectDir, PROJECT_CONFIG_NAME);
+    const raw = loadJsonSafe(configPath);
+    return { projectDir, overrides: raw ?? {} };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CONFIG_SAVE_PROJECT, async (_event, payload: unknown) => {
+    const schema = z.object({
+      projectDir: z.string().min(1),
+      updates: z.record(z.unknown()),
+    });
+    const parsed = schema.parse(payload);
+    const { projectDir, updates } = parsed;
+
+    return withConfigSaveLock(async () => {
+      const configPath = path.join(projectDir, PROJECT_CONFIG_NAME);
+      const current = loadJsonSafe(configPath) ?? {};
+      const merged = mergeConfigUpdates(current, updates);
+      atomicWriteJson(configPath, merged);
+      ConfigManager.reset();
+      clearProjectRuntimeRegistry();
+      invalidateAllProjectMCPManagers();
     });
   });
 }
@@ -158,6 +184,7 @@ export function unregisterConfigIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_GET);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_DIAGNOSTICS);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_SAVE);
-  ipcMain.removeHandler(IPC_CHANNELS.CONFIG_MODEL_METADATA);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES);
+  ipcMain.removeHandler(IPC_CHANNELS.CONFIG_READ_PROJECT);
+  ipcMain.removeHandler(IPC_CHANNELS.CONFIG_SAVE_PROJECT);
 }

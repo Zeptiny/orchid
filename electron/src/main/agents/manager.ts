@@ -92,8 +92,15 @@ export type SubagentChangeListener = (records: readonly SubagentRecord[]) => voi
 export type SubagentLiveChangeListener = (change: SubagentLiveChange) => void;
 type SubagentWaiterReason = 'state-change' | 'flush';
 
-/** Default max time `wait_for_subagent` will block (5 minutes). */
-export const DEFAULT_WAIT_TIMEOUT_MS = 300_000;
+export function getDefaultWaitTimeoutMs(): number {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getConfig } = require('../config/loader') as typeof import('../config/loader');
+    return getConfig().subagent_wait_timeout * 1000;
+  } catch {
+    return 300_000;
+  }
+}
 
 /**
  * Thrown by `SubagentManager.wait` when the wait budget elapses while any

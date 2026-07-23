@@ -14,12 +14,7 @@ import type { ToolDefinition, ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const MAX_LONG_POLL_MS = 60_000;
+import { getConfig } from '../../config/loader';
 
 // ---------------------------------------------------------------------------
 // Zod schema
@@ -55,7 +50,7 @@ export async function executeReadOutput(
 
   // Long-poll: wait for new output or exit before snapshotting.
   if (waitMs !== undefined && waitMs > 0 && entry.exitCode === null) {
-    const bounded = Math.min(waitMs, MAX_LONG_POLL_MS);
+    const bounded = Math.min(waitMs, getConfig().read_output_long_poll_max * 1000);
     await store.wait_for_progress(id, bounded);
   }
 

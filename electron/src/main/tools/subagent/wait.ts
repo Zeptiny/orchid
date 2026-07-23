@@ -13,7 +13,7 @@ import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { escapeXmlAttribute, escapeXmlText, genericBuiltInToolOutcome } from '../result';
 import {
-  DEFAULT_WAIT_TIMEOUT_MS,
+  getDefaultWaitTimeoutMs,
   SubagentWaitTimeoutError,
   type SubagentManager,
   type SubagentRecord,
@@ -163,7 +163,7 @@ export function buildWaitTool(
     let records: Awaited<ReturnType<SubagentManager['wait']>>;
     try {
       records = await manager.wait(ownedIds, {
-        timeoutMs: DEFAULT_WAIT_TIMEOUT_MS,
+        timeoutMs: getDefaultWaitTimeoutMs(),
         signal: ctx?.abortSignal,
       });
     } catch (err) {

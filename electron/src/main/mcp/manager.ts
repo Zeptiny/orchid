@@ -36,6 +36,7 @@ import type { MCPServerConfig, MCPServerStatus, MCPServerStatusValue } from './s
 import { isValidServerName } from './schema';
 import { createTransport } from './transport';
 import { withTimeoutPromise } from '../utils/async';
+import { getConfig } from '../config/loader';
 import {
   createDynamicToolOutcome,
   genericToolResultDataSchema,
@@ -535,7 +536,7 @@ export class MCPManager {
             });
           }
           const serialized = JSON.stringify(raw);
-          if (serialized.length > 5 * 1024 * 1024) {
+          if (serialized.length > getConfig().mcp_result_max_bytes) {
             return {
               status: 'partial',
               data: {

@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { ModelMetadata } from '../../shared/types/ipc-boundary';
+import { useMemo } from 'react';
 import type { ProviderModelOption } from '../../shared/types/ipc';
 import { withCurrentModelOption } from '../utils/models';
 import { providerModelOptionContextLabel } from '../utils/provider-selection';
@@ -74,7 +73,6 @@ export function ModelPicker({
     dropdownClassName,
   } = usePopoverListbox();
 
-  const [metadata, setMetadata] = useState<Record<string, ModelMetadata | null>>({});
   const additionalOptionsByValue = useMemo(
     () => new Map(additionalOptions.map((option) => [option.value, option])),
     [additionalOptions],
@@ -101,31 +99,6 @@ export function ModelPicker({
   }, [additionalOptionsByValue, modelOptions, optionDetails, optionLabels, query]);
 
   useClampActiveIndex(activeIndex, filteredModels.length, setActiveIndex);
-
-  useEffect(() => {
-    // Connection-scoped provider options carry their own catalog metadata.
-    // Legacy/local string options retain the old compatibility lookup.
-    if (!open || optionLabels || optionDetails || !window.orchid?.config?.modelMetadata) return;
-    let cancelled = false;
-    // Always refresh when opened so overrides saved in Preferences appear
-    // without requiring an app restart (main-process cache is cleared on save).
-    Promise.all(
-      modelOptions.map(async (model) => {
-        try {
-          return [model, await window.orchid.config.modelMetadata(model)] as const;
-        } catch {
-          return [model, null] as const;
-        }
-      }),
-    ).then((entries) => {
-      if (cancelled) return;
-      setMetadata(Object.fromEntries(entries));
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [modelOptions, open, optionLabels, optionDetails]);
 
   const selectModel = (model: string) => {
     if (additionalOptionsByValue.get(model)?.disabled) return;
@@ -246,7 +219,6 @@ export function ModelPicker({
               </thead>
               <tbody>
                 {filteredModels.map((model, index) => {
-                  const modelMetadata = metadata[model];
                   const detail = optionDetails?.[model];
                   const additionalOption = additionalOptionsByValue.get(model);
                   const displayName = optionLabels?.[model]
@@ -255,13 +227,13 @@ export function ModelPicker({
                     ?? displayModelId(model);
                   const contextLimit = detail
                     ? detail.model.limits?.contextTokens ?? null
-                    : modelMetadata?.max_input_tokens ?? null;
+                    : null;
                   const outputLimit = detail
                     ? detail.model.limits?.outputTokens ?? null
-                    : modelMetadata?.max_output_tokens ?? null;
+                    : null;
                   const supportsVision = detail
                     ? detail.model.capabilities?.inputModalities.includes('image') ?? null
-                    : modelMetadata?.supports_vision ?? null;
+                    : null;
                   const selected = model === value;
                   const unavailable = detail?.available === false || additionalOption?.disabled === true;
                   const description = additionalOption?.description

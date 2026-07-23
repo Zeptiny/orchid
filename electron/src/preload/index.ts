@@ -265,11 +265,14 @@ const orchidAPI: OrchidAPI = {
     savePermissionScope: (message: PermissionConfigScopeSaveMessage) =>
       invoke(IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE, message),
 
-    modelMetadata: (modelId: string) =>
-      invoke(IPC_CHANNELS.CONFIG_MODEL_METADATA, modelId),
-
     listPersonalities: () =>
       invoke(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES),
+
+    readProject: (projectDir: string) =>
+      invoke(IPC_CHANNELS.CONFIG_READ_PROJECT, projectDir),
+
+    saveProject: (message: unknown) =>
+      invoke(IPC_CHANNELS.CONFIG_SAVE_PROJECT, message),
   },
 
   providers: {

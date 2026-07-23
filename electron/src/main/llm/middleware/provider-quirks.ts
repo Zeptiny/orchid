@@ -6,12 +6,15 @@
  * handling is owned by the AI SDK; mid-stream post-content recovery remains
  * an open residual (see retry middleware for pre-content retries only).
  */
-
-/**
- * Threshold for tool output offloading.
- * Matches Python `_TOOL_OUTPUT_INLINE_THRESHOLD = 20_000` (client.py:46).
- */
-export const TOOL_OUTPUT_INLINE_THRESHOLD = 20_000;
+export function getToolOutputInlineThreshold(): number {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getConfig } = require('../../config/loader') as typeof import('../../config/loader');
+    return getConfig().tool_output_inline_threshold;
+  } catch {
+    return 20_000;
+  }
+}
 
 /**
  * Tools exempt from output offloading.

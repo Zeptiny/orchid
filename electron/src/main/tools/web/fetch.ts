@@ -19,23 +19,14 @@ import type { ToolDefinition, ToolExecutionContext, ToolHandler } from '../types
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
-import { HOME_CONFIG_DIR } from '../../config/loader';
+import { getConfig, HOME_CONFIG_DIR } from '../../config/loader';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Fetch timeout in milliseconds (30 seconds). */
-const FETCH_TIMEOUT_MS = 30_000;
-
-/** Maximum response body size in bytes (10 MiB). */
-const MAX_BODY_SIZE = 10 * 1024 * 1024;
-
 /** Threshold for writing raw content to cache file (10K chars). */
 const RAW_CONTENT_THRESHOLD = 10_000;
-
-/** User-Agent header for fetch requests. */
-const USER_AGENT = 'Orchid/1.0 web-fetch (Electron)';
 
 /** Turndown instance configured for markdown output. */
 const turndown = new TurndownService({
@@ -244,10 +235,15 @@ export function buildWebFetchTool(
       return genericBuiltInToolOutcome('web_fetch', `Error: ${urlError}`, 'error');
     }
 
-    // Fetch the URL — combine outer tool-dispatch abort with the 30s HTTP budget
+    const cfg = getConfig();
+    const fetchTimeoutMs = cfg.web_fetch_timeout * 1000;
+    const maxBodySize = cfg.web_fetch_max_body_bytes;
+    const userAgent = cfg.web_fetch_user_agent;
+
+    // Fetch the URL — combine outer tool-dispatch abort with the HTTP budget
     let response: Response;
     const timeoutController = new AbortController();
-    const timeoutId = setTimeout(() => timeoutController.abort(), FETCH_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => timeoutController.abort(), fetchTimeoutMs);
     if (typeof timeoutId === 'object' && timeoutId && 'unref' in timeoutId) {
       (timeoutId as NodeJS.Timeout).unref();
     }
@@ -261,7 +257,7 @@ export function buildWebFetchTool(
       response = await fetch(url, {
         signal: fetchSignal,
         headers: {
-          'User-Agent': USER_AGENT,
+          'User-Agent': userAgent,
           Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         },
         redirect: 'follow',
@@ -298,8 +294,8 @@ export function buildWebFetchTool(
     let body: string;
     try {
       const buffer = await response.arrayBuffer();
-      if (buffer.byteLength > MAX_BODY_SIZE) {
-        return genericBuiltInToolOutcome('web_fetch', `Error: Response body exceeds ${MAX_BODY_SIZE} bytes limit.`, 'error');
+      if (buffer.byteLength > maxBodySize) {
+        return genericBuiltInToolOutcome('web_fetch', `Error: Response body exceeds ${maxBodySize} bytes limit.`, 'error');
       }
       body = new TextDecoder().decode(buffer);
     } catch (err) {
