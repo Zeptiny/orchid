@@ -216,7 +216,7 @@ describe('Agent Loading — Defaults', () => {
       projectDir: path.join(tmpDir, 'empty-project'),
     });
 
-    expect(agents.size).toBe(27);
+    expect(agents.size).toBe(28);
 
     const names = Array.from(agents.keys()).sort();
     expect(names).toEqual([
@@ -405,7 +405,7 @@ describe('Agent Loading — Defaults', () => {
     });
 
     const agents = listAgents();
-    expect(agents).toHaveLength(27);
+    expect(agents).toHaveLength(28);
     expect(agents.every((a) => a.name && a.description)).toBe(true);
   });
 });
@@ -674,7 +674,7 @@ describe('Seeding', () => {
       const stat = fs.statSync(path.join(targetDir, e));
       return stat.isDirectory();
     });
-    expect(entries.length).toBe(27);
+    expect(entries.length).toBe(28);
 
     // Each should have an AGENT.md
     for (const entry of entries) {

@@ -75,7 +75,7 @@ describe('Agent Parity', () => {
       projectDir: path.join(tmpDir, 'empty-project'),
     });
 
-    expect(agents.size).toBe(27);
+    expect(agents.size).toBe(28);
   });
 
   it('all expected agent names are present', () => {
