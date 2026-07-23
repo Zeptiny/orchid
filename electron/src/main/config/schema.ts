@@ -44,6 +44,16 @@ const deprecatedProvidersSchema = z
     message: 'providers is deprecated and must be empty',
   });
 
+export const permissionRuleSchema = z.union([
+  z.enum(['allow', 'ask', 'decide-for-me', 'ask-when-flagged']),
+  z.object({
+    inside: z.enum(['allow', 'ask', 'decide-for-me', 'ask-when-flagged']),
+    outside: z.enum(['allow', 'ask', 'decide-for-me', 'ask-when-flagged']),
+  }).strict(),
+]);
+
+export const permissionsConfigSchema = z.record(z.string(), permissionRuleSchema);
+
 // ---------------------------------------------------------------------------
 // Main config schema
 // ---------------------------------------------------------------------------
@@ -124,16 +134,7 @@ export const configSchema = z
     max_tool_steps: z.number().int().positive().default(100),
     permission_history_size: z.number().int().min(0).max(50).default(10),
     permissions: z
-      .record(
-        z.string(),
-        z.union([
-          z.enum(['allow', 'ask', 'decide-for-me', 'ask-when-flagged']),
-          z.object({
-            inside: z.enum(['allow', 'ask', 'decide-for-me', 'ask-when-flagged']),
-            outside: z.enum(['allow', 'ask', 'decide-for-me', 'ask-when-flagged']),
-          }),
-        ]),
-      )
+      .record(z.string(), permissionRuleSchema)
       .default({}),
     /**
      * Sticky home-config default project directory for new sessions.

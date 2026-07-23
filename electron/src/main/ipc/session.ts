@@ -336,8 +336,18 @@ export function registerSessionIPC(): void {
     const wasActive = manager.getActive(String(event.sender.id))?.id === parsed.data.id;
     // A deleted background session must not keep spending provider/tool work or
     // recreate activity after it disappears from the catalog.
-    const { forceStopSession } = await import('./chat');
+    const [
+      { forceStopSession },
+      { clearPermissionSessionState },
+      { clearToolCallHistoryForSession },
+    ] = await Promise.all([
+      import('./chat'),
+      import('./permission'),
+      import('../llm/tool-dispatch'),
+    ]);
     forceStopSession(parsed.data.id);
+    clearPermissionSessionState(parsed.data.id);
+    clearToolCallHistoryForSession(parsed.data.id);
     clearNextRequestStop(parsed.data.id);
     const deleted = manager.delete(parsed.data.id);
     if (deleted) {

@@ -6,7 +6,7 @@
  */
 import { z } from 'zod';
 import { modelSelectionSchema } from '../../shared/types/provider';
-import { configSchema } from '../config/schema';
+import { configSchema, permissionRuleSchema } from '../config/schema';
 
 // ── Chat ─────────────────────────────────────────────────────────────────────
 
@@ -90,6 +90,32 @@ export const configSaveSchema = z.object({
     }
   }
 });
+
+const permissionUpdatesSchema = z.record(z.string(), permissionRuleSchema.nullable())
+  .superRefine((updates, ctx) => {
+    for (const key of Object.keys(updates)) {
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Unsafe permission key: ${key}`,
+          path: [key],
+        });
+      }
+    }
+  });
+
+export const permissionConfigScopeSaveSchema = z.discriminatedUnion('scope', [
+  z.object({
+    scope: z.literal('global'),
+    updates: permissionUpdatesSchema,
+    expectedProjectDir: z.never().optional(),
+  }).strict(),
+  z.object({
+    scope: z.literal('project'),
+    updates: permissionUpdatesSchema,
+    expectedProjectDir: z.string().min(1),
+  }).strict(),
+]);
 
 // ── Session ──────────────────────────────────────────────────────────────────
 

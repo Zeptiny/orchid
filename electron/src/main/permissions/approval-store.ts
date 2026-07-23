@@ -43,6 +43,7 @@ export class ApprovalStore extends EventEmitter {
     cwd: string,
     scope?: string,
     abortSignal?: AbortSignal,
+    ownerWindowId?: string,
   ): Promise<ApprovalResult> {
     if (abortSignal?.aborted) {
       return Promise.resolve({ decision: 'denied', reason: 'cancelled' });
@@ -61,7 +62,7 @@ export class ApprovalStore extends EventEmitter {
         args,
         cwd,
         scope,
-        ownerWindowId: null,
+        ownerWindowId: ownerWindowId ?? null,
         resolve,
         abortSignal,
         onAbort,
@@ -112,6 +113,17 @@ export class ApprovalStore extends EventEmitter {
     }
   }
 
+  cancelAllForOwnerWindow(ownerWindowId: string): string[] {
+    const sessionIds = new Set<string>();
+    for (const [toolCallId, entry] of this.pending) {
+      if (entry.ownerWindowId === ownerWindowId) {
+        sessionIds.add(entry.sessionId);
+        this.settle(toolCallId, { decision: 'denied', reason: 'cancelled' });
+      }
+    }
+    return [...sessionIds];
+  }
+
   get(toolCallId: string): ApprovalEntry | undefined {
     return this.pending.get(toolCallId);
   }
@@ -126,18 +138,23 @@ export class ApprovalStore extends EventEmitter {
     return true;
   }
 
-  getSnapshot(): PendingApproval[] {
-    return [...this.pending.values()].map(
-      ({ toolCallId, sessionId, toolName, riskClass, args, cwd, scope }) => ({
-        toolCallId,
-        sessionId,
-        toolName,
-        riskClass,
-        args,
-        cwd,
-        scope,
-      }),
-    );
+  listForOwner(sessionId: string, ownerWindowId: string): PendingApproval[] {
+    return [...this.pending.values()]
+      .filter(
+        (entry) =>
+          entry.sessionId === sessionId && entry.ownerWindowId === ownerWindowId,
+      )
+      .map(
+        ({ toolCallId, sessionId: ownerSessionId, toolName, riskClass, args, cwd, scope }) => ({
+          toolCallId,
+          sessionId: ownerSessionId,
+          toolName,
+          riskClass,
+          args,
+          cwd,
+          scope,
+        }),
+      );
   }
 
   cleanupAll(): void {

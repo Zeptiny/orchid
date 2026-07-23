@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { PermissionsTab } from '../../src/renderer/components/Preferences/PermissionsTab';
 import type { Config, PermissionRule } from '../../src/shared/types/ipc-boundary';
-import { applyConfigDraft } from '../../src/renderer/utils/config-draft';
+import { applyConfigDraft, mergeConfigDraft } from '../../src/renderer/utils/config-draft';
+import type { ConfigPatch } from '../../src/shared/types/ipc';
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -65,6 +66,36 @@ function selectedValue(html: string, selectId: string): string | null {
 }
 
 describe('PermissionsTab grouping', () => {
+  it('renders separate global and active-project scope controls', () => {
+    const html = renderToStaticMarkup(createElement(PermissionsTab, {
+      config: makeConfig(),
+      updateDraft: () => {},
+      scope: 'project',
+      projectDir: '/work/project',
+      onScopeChange: () => {},
+    }));
+    expect(html).toContain('Permission configuration scope');
+    expect(html).toContain('Global');
+    expect(html).toContain('Project');
+    expect(html).toContain('/work/project');
+    expect(html).toContain('active project scope');
+    expect(html).not.toContain('>All</button>');
+  });
+
+  it('withholds project editors while a new workspace scope is loading', () => {
+    const html = renderToStaticMarkup(createElement(PermissionsTab, {
+      config: makeConfig({ permissions: { write: 'allow' } }),
+      updateDraft: () => {},
+      scope: 'project',
+      projectDir: '/work/old-project',
+      projectLoading: true,
+      onScopeChange: () => {},
+    }));
+
+    expect(html).toContain('Loading project permissions');
+    expect(html).not.toContain('id="perm-write-inside"');
+  });
+
   it('renders one section per risk class plus MCP', () => {
     const html = renderTab(makeConfig());
     for (const title of [
@@ -239,5 +270,19 @@ describe('PermissionsTab reset button', () => {
       ),
     });
     expect(cleared.permissions).toEqual({});
+  });
+
+  it('accumulates sequential edits and lets a later edit replace a reset tombstone', () => {
+    const base = makeConfig({ permissions: { grep: 'allow' } });
+    let draft: ConfigPatch = {};
+    draft = mergeConfigDraft(draft, { permissions: { grep: 'ask' } });
+    draft = mergeConfigDraft(draft, { permissions: { edit: 'decide-for-me' } });
+    draft = mergeConfigDraft(draft, { permissions: { grep: null } });
+    draft = mergeConfigDraft(draft, { permissions: { grep: 'ask-when-flagged' } });
+
+    expect(applyConfigDraft(base, draft).permissions).toEqual({
+      grep: 'ask-when-flagged',
+      edit: 'decide-for-me',
+    });
   });
 });

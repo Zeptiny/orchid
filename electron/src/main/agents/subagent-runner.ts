@@ -70,6 +70,8 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     selection: ModelSelection | null;
     abortSignal: AbortSignal;
     sessionId?: string;
+    /** Originating renderer window frozen by the parent turn. */
+    windowId?: string;
     /** Frozen parent-turn workspace cwd. */
     cwd?: string;
     /** This subagent's scope id (record.id) for todos / bg / prompt isolation. */
@@ -185,6 +187,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         registry,
         mcpManager,
         sessionId,
+        windowId: params.windowId,
         projectRuntime: runtime,
         agentScopeId: params.agentScopeId,
         abortSignal: params.abortSignal,

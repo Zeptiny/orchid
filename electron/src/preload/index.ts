@@ -34,6 +34,8 @@ import type {
   ChatToolCallDeltaEvent,
   ChatToolCallUpdateEvent,
   ConfigSaveMessage,
+  PermissionConfigScopeSaveMessage,
+  PermissionConfigScopes,
   ProviderConnectionCreateMessage,
   ProviderConnectionUpdateMessage,
   ProviderSubmitApiKeyMessage,
@@ -80,11 +82,14 @@ import type {
   AskQuestionResult,
   AskQuestionSnapshot,
   PermissionApprovalAnswerMessage,
+  PermissionGetSessionModeMessage,
   PermissionSetSessionModeMessage,
   PermissionApprovalRequestedEvent,
   PermissionApprovalSettledEvent,
   PermissionApprovalSnapshot,
   PermissionResult,
+  PermissionSessionModeMutationResult,
+  PermissionSessionModeResult,
 } from '../shared/types/ipc';
 import {
   chatChunkEventSchema,
@@ -253,6 +258,12 @@ const orchidAPI: OrchidAPI = {
 
     save: (updates: ConfigSaveMessage) =>
       invoke(IPC_CHANNELS.CONFIG_SAVE, updates),
+
+    permissionScopes: () =>
+      invoke<PermissionConfigScopes>(IPC_CHANNELS.CONFIG_PERMISSION_SCOPES),
+
+    savePermissionScope: (message: PermissionConfigScopeSaveMessage) =>
+      invoke(IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE, message),
 
     modelMetadata: (modelId: string) =>
       invoke(IPC_CHANNELS.CONFIG_MODEL_METADATA, modelId),
@@ -495,7 +506,10 @@ const orchidAPI: OrchidAPI = {
       invoke<PermissionResult>(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER, payload),
 
     setSessionMode: (payload: PermissionSetSessionModeMessage) =>
-      invoke<PermissionResult>(IPC_CHANNELS.PERMISSION_SET_SESSION_MODE, payload),
+      invoke<PermissionSessionModeMutationResult>(IPC_CHANNELS.PERMISSION_SET_SESSION_MODE, payload),
+
+    getSessionMode: (payload: PermissionGetSessionModeMessage) =>
+      invoke<PermissionSessionModeResult>(IPC_CHANNELS.PERMISSION_GET_SESSION_MODE, payload),
 
     onApprovalRequested: (callback: (event: PermissionApprovalRequestedEvent) => void) =>
       on(

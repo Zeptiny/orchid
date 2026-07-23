@@ -214,6 +214,7 @@ describe('createSubagentStreamRunner', () => {
       abortSignal: new AbortController().signal,
       agentScopeId: 'scope-4',
       sessionId: 'session-4',
+      windowId: 'window-10',
       cwd: '/tmp/project',
       projectRuntime: runtime(),
     }));
@@ -226,6 +227,7 @@ describe('createSubagentStreamRunner', () => {
     expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
       modelInstance: expect.any(Object),
       sessionId: 'session-4',
+      windowId: 'window-10',
       agentScopeId: 'scope-4',
       registry: mocks.toolRegistry,
       mcpManager: mocks.mcpManager,

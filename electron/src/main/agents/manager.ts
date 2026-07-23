@@ -73,6 +73,8 @@ export type SubagentStreamRunner = (params: {
   selection: ModelSelection | null;
   abortSignal: AbortSignal;
   sessionId?: string;
+  /** Originating renderer window frozen by the parent turn. */
+  windowId?: string;
   /** Frozen parent-turn workspace cwd (do not re-resolve live session). */
   cwd?: string;
   /** This subagent's scope id (record.id) for todos / bg / prompt isolation. */
@@ -152,6 +154,8 @@ export interface SubagentRecord {
    * (global manager + getActive() would otherwise attach chains to the new session).
    */
   readonly sessionId: string | null;
+  /** Runtime-only owner window used for approval delivery. */
+  readonly windowId: string | null;
   readonly projectRuntime?: ProjectRuntime;
   /** Abort controller for the in-flight run. */
   abortController: AbortController | null;
@@ -232,13 +236,15 @@ export class SubagentManager {
       selection?: ModelSelection | null;
       parentChainIndex?: number;
       sessionId?: string;
+      /** Originating renderer window frozen by the parent turn. */
+      windowId?: string;
       /** Frozen parent-turn workspace cwd for tools/prompt. */
       cwd?: string;
       /** Immutable parent project snapshot. */
       projectRuntime?: ProjectRuntime;
     } = {},
   ): SubagentRecord {
-    const id = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const id = `subagent-${randomUUID()}`;
 
     const userMessage = makeUserMessage(task);
     const selection = options.selection ?? null;
@@ -262,6 +268,7 @@ export class SubagentManager {
       selection,
       parentChainIndex: options.parentChainIndex ?? null,
       sessionId: options.sessionId ?? null,
+      windowId: options.windowId ?? null,
       projectRuntime: options.projectRuntime,
       abortController: null,
       _resolveWait: [],
@@ -718,6 +725,7 @@ export class SubagentManager {
         selection: record.selection,
         abortSignal: abort.signal,
         sessionId: record.sessionId ?? undefined,
+        windowId: record.windowId ?? undefined,
         cwd,
         agentScopeId: record.id,
         chainId: record.chain?.id,

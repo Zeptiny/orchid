@@ -5,17 +5,17 @@ export const filesystemPack: DetectionPack = {
   safePatterns: [
     {
       name: 'rm-temp',
-      regex: /\brm\s+.*(?:\/tmp\/|\/var\/tmp\/|node_modules\/\.cache|\.next\/cache)/i,
+      regex: /^(?!.*(?:^|\/)\.\.(?:\/|\s|["']|$))\s*rm\s+(?:(?:-[a-z]+|--[a-z-]+)\s+)*(?:(?:["']?(?:\/tmp\/|\/var\/tmp\/)[^\s"']+["']?|["']?\S*(?:node_modules\/\.cache|\.next\/cache)(?:\/[^\s"']*)?["']?)\s*)+$/i,
       description: 'rm targeting temporary or cache paths',
     },
     {
       name: 'rm-help',
-      regex: /\brm\s+(?:--help|--version)\b/i,
+      regex: /^\s*rm\s+(?:--help|--version)\s*$/i,
       description: 'rm help or version output',
     },
     {
       name: 'find-help',
-      regex: /\bfind\s+(?:--help|--version)\b/i,
+      regex: /^\s*find\s+(?:--help|--version)\s*$/i,
       description: 'find help or version output',
     },
   ],

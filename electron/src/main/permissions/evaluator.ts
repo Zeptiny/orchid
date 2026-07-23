@@ -8,7 +8,7 @@ export interface EvaluatorContext {
 }
 
 export interface EvaluatorResult {
-  decision: 'approved' | 'denied';
+  decision: 'approved' | 'denied' | 'fallback-to-ask' | 'cancelled';
   reason?: string;
 }
 
@@ -20,18 +20,28 @@ export type GenerateTextFn = (params: {
 const MAX_ARGS_LENGTH = 2000;
 const MAX_ARGS_SUMMARY_LENGTH = 200;
 
+/** Whether the evaluator can see the complete serialized argument payload. */
+export function canEvaluateToolCallArgs(args: unknown): boolean {
+  try {
+    const serialized = JSON.stringify(args);
+    return serialized !== undefined && serialized.length <= MAX_ARGS_LENGTH;
+  } catch {
+    return false;
+  }
+}
+
 export function buildEvaluatorPrompt(
   context: EvaluatorContext,
   config: { permission_history_size: number },
 ): string {
   const argsJson = JSON.stringify(context.args);
-  const truncatedArgs =
-    argsJson.length > MAX_ARGS_LENGTH
-      ? argsJson.slice(0, MAX_ARGS_LENGTH)
-      : argsJson;
+  if (argsJson === undefined || argsJson.length > MAX_ARGS_LENGTH) {
+    throw new Error('Evaluator arguments exceed the complete-context budget.');
+  }
 
-  const recentCalls = context.recentToolCalls
-    .slice(0, config.permission_history_size)
+  const recentCalls = (config.permission_history_size <= 0
+    ? []
+    : context.recentToolCalls.slice(-config.permission_history_size))
     .map(
       (call) =>
         `- ${call.name}: ${call.argsSummary.slice(0, MAX_ARGS_SUMMARY_LENGTH)}`,
@@ -41,7 +51,7 @@ export function buildEvaluatorPrompt(
   const lines = [
     `Tool: ${context.toolName}`,
     `Risk class: ${context.riskClass}`,
-    `Arguments: ${truncatedArgs}`,
+    `Arguments: ${argsJson}`,
     `Working directory: ${context.cwd}`,
     '',
     `User's request: ${context.triggeringMessage}`,
@@ -73,9 +83,9 @@ export function parseEvaluatorResponse(raw: string): EvaluatorResult {
         reason: parsed.reason ?? 'denied by evaluator',
       };
     }
-    return { decision: 'denied', reason: 'evaluator response unparseable' };
+    return { decision: 'fallback-to-ask', reason: 'evaluator response unparseable' };
   } catch {
-    return { decision: 'denied', reason: 'evaluator response unparseable' };
+    return { decision: 'fallback-to-ask', reason: 'evaluator response unparseable' };
   }
 }
 
@@ -85,11 +95,17 @@ export async function evaluateToolCall(
   generateText: GenerateTextFn,
   systemPrompt: string,
 ): Promise<EvaluatorResult> {
+  if (!canEvaluateToolCallArgs(context.args)) {
+    return {
+      decision: 'fallback-to-ask',
+      reason: 'evaluator arguments exceed the complete-context budget',
+    };
+  }
   const userMessage = buildEvaluatorPrompt(context, config);
   try {
     const response = await generateText({ systemPrompt, userMessage });
     return parseEvaluatorResponse(response);
   } catch {
-    return { decision: 'denied', reason: 'evaluator invocation failed' };
+    return { decision: 'fallback-to-ask', reason: 'evaluator invocation failed' };
   }
 }

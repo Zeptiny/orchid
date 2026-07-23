@@ -923,6 +923,7 @@ function createProviderStreamFn(input: {
   readonly messages: Message[];
   readonly runtime: ProjectRuntime;
   readonly sessionId: string;
+  readonly windowId: string;
   readonly modelInstance: LanguageModelV4;
   readonly accounting: ProviderAttemptAccountingContext;
   readonly registry: ReturnType<typeof getBuiltinToolRegistryForRuntime>;
@@ -954,6 +955,7 @@ function createProviderStreamFn(input: {
       registry: input.registry,
       mcpManager: input.mcpManager,
       sessionId: input.sessionId,
+      windowId: input.windowId,
       projectRuntime: input.runtime,
       agentScopeId: 'main',
       abortSignal,
@@ -1178,6 +1180,7 @@ export function registerChatIPC(): void {
     const turnCtx: ToolExecutionContext = {
       cwd: sessionGate.cwd,
       sessionId,
+      windowId,
       projectRuntime: runtime,
       agentScopeId: 'main',
       selection: turnSelection,
@@ -1238,6 +1241,7 @@ export function registerChatIPC(): void {
             messages,
             runtime,
             sessionId,
+            windowId,
             modelInstance,
             accounting,
             registry: turnRegistry,

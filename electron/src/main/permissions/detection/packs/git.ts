@@ -5,27 +5,27 @@ export const gitPack: DetectionPack = {
   safePatterns: [
     {
       name: 'checkout-new-branch',
-      regex: /\bgit\s+(?:\S+\s+)*checkout\s+-b\s+/i,
+      regex: /^\s*git\s+(?:\S+\s+)*checkout\s+-b\s+\S+(?:\s+\S+)*\s*$/i,
       description: 'Creating a new branch with checkout -b',
     },
     {
       name: 'checkout-orphan',
-      regex: /\bgit\s+(?:\S+\s+)*checkout\s+--orphan\s+/i,
+      regex: /^\s*git\s+(?:\S+\s+)*checkout\s+--orphan\s+\S+(?:\s+\S+)*\s*$/i,
       description: 'Creating an orphan branch',
     },
     {
       name: 'restore-staged',
-      regex: /\bgit\s+(?:\S+\s+)*restore\b(?=\s)(?=.*\s--staged\b)/i,
+      regex: /^\s*git\s+(?:\S+\s+)*restore\b(?=\s)(?=.*\s(?:--staged|-S)\b)(?!.*\s(?:--worktree|-W)\b).*\s*$/i,
       description: 'Restore --staged only (unstaging)',
     },
     {
       name: 'clean-dry-run',
-      regex: /\bgit\s+(?:\S+\s+)*clean\s+(-[a-z]*n|--dry-run)/i,
+      regex: /^\s*git\s+(?:\S+\s+)*clean\s+(?:-[a-z]*n[a-z]*|--dry-run)(?:\s+\S+)*\s*$/i,
       description: 'Git clean dry run preview',
     },
     {
       name: 'push-force-with-lease',
-      regex: /\bgit\s+(?:\S+\s+)*push\s+.*--force-with-lease/i,
+      regex: /^(?!.*(?:^|\s)(?:--force|-[a-z]*f[a-z]*)(?=\s|$))\s*git\s+(?:\S+\s+)*push\s+.*--force-with-lease(?:=\S+)?(?:\s+\S+)*\s*$/i,
       description: 'Safe force push with lease',
     },
   ],
@@ -42,7 +42,7 @@ export const gitPack: DetectionPack = {
     },
     {
       name: 'restore-worktree',
-      regex: /\bgit\s+(?:\S+\s+)*restore\b(?=\s)(?!.*\s(?:--staged|-S)\b)/i,
+      regex: /\bgit\s+(?:\S+\s+)*restore\b(?=\s)(?:(?=.*\s(?:--worktree|-W)\b)|(?!.*\s(?:--staged|-S)\b))/i,
       description: 'Restore without --staged discards working tree changes',
     },
     {

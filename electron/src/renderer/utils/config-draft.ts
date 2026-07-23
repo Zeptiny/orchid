@@ -8,6 +8,33 @@ type NestedPatchKey = 'rag' | 'tier_models' | 'tier_reasoning_effort' | 'mcp_ser
 /** Scalar / nullable top-level patch keys applied with simple defined-assign. */
 type ScalarPatchKey = Exclude<keyof ConfigPatch, NestedPatchKey>;
 
+/** Merge incremental form updates without dropping earlier nested-map edits. */
+export function mergeConfigDraft(
+  current: ConfigPatch,
+  updates: ConfigPatch,
+): ConfigPatch {
+  const next: ConfigPatch = { ...current, ...updates };
+  if (updates.tier_models !== undefined) {
+    next.tier_models = { ...(current.tier_models ?? {}), ...updates.tier_models };
+  }
+  if (updates.tier_reasoning_effort !== undefined) {
+    next.tier_reasoning_effort = { ...(current.tier_reasoning_effort ?? {}), ...updates.tier_reasoning_effort };
+  }
+  if (updates.mcp_servers !== undefined) {
+    next.mcp_servers = updates.mcp_servers;
+  }
+  if (updates.providers !== undefined) {
+    next.providers = updates.providers;
+  }
+  if (updates.permissions !== undefined) {
+    next.permissions = { ...(current.permissions ?? {}), ...updates.permissions };
+  }
+  if (updates.rag !== undefined) {
+    next.rag = { ...(current.rag ?? {}), ...updates.rag };
+  }
+  return next;
+}
+
 /**
  * Compile-time: Config and ConfigPatch must expose the same key set so draft
  * merge cannot silently drop newly added config fields.

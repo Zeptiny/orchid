@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import type {
   PermissionMode,
@@ -74,6 +75,48 @@ function isPathContainedIn(resolved: string, cwd: string): boolean {
   return resolved === cwd || resolved.startsWith(cwd + path.sep);
 }
 
+function isMissingPathError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
+}
+
+function canonicalizeEffectivePath(candidate: string): string | null {
+  let current = path.resolve(candidate);
+  const missingParts: string[] = [];
+
+  while (true) {
+    try {
+      const existingParent = fs.realpathSync.native(current);
+      return path.resolve(existingParent, ...missingParts);
+    } catch (error) {
+      if (!isMissingPathError(error)) return null;
+
+      try {
+        fs.lstatSync(current);
+        return null;
+      } catch (lstatError) {
+        if (!isMissingPathError(lstatError)) return null;
+      }
+
+      const parent = path.dirname(current);
+      if (parent === current) return null;
+      missingParts.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function canonicalizeExistingPath(candidate: string): string | null {
+  try {
+    return fs.realpathSync.native(path.resolve(candidate));
+  } catch {
+    return null;
+  }
+}
+
 export function resolveToolScope(
   toolName: string,
   args: Record<string, unknown>,
@@ -81,12 +124,15 @@ export function resolveToolScope(
 ): ToolScope | undefined {
   if (!FILE_TOOLS.has(toolName)) return undefined;
 
+  const canonicalCwd = canonicalizeExistingPath(cwd);
+  if (canonicalCwd === null) return 'outside';
+
   const toolPaths = extractPathsFromArgs(toolName, args);
   if (toolPaths.length === 0) return 'inside';
 
   for (const toolPath of toolPaths) {
-    const resolved = path.resolve(cwd, toolPath);
-    if (!isPathContainedIn(resolved, cwd)) return 'outside';
+    const target = canonicalizeEffectivePath(path.resolve(cwd, toolPath));
+    if (target === null || !isPathContainedIn(target, canonicalCwd)) return 'outside';
   }
   return 'inside';
 }
@@ -98,6 +144,23 @@ function resolvePermissionRule(
   if (typeof rule === 'string') return rule;
   if (scope !== undefined) return rule[scope];
   return rule.inside;
+}
+
+function resolveConfiguredRule(
+  toolName: string,
+  permissions: Config['permissions'],
+): PermissionRule | undefined {
+  const exact = permissions[toolName];
+  if (exact !== undefined) return exact;
+
+  const mcpPrefix = 'mcp::';
+  if (!toolName.startsWith(mcpPrefix)) return undefined;
+  const serverEnd = toolName.indexOf('::', mcpPrefix.length);
+  if (serverEnd < 0) return undefined;
+
+  const serverName = toolName.slice(mcpPrefix.length, serverEnd);
+  if (serverName === '') return undefined;
+  return permissions[`${mcpPrefix}${serverName}::*`];
 }
 
 export function resolvePermission(
@@ -120,7 +183,7 @@ export function resolvePermission(
     mode = RISK_CLASS_DEFAULTS[riskClass];
   }
 
-  const configRule = config.permissions?.[toolName];
+  const configRule = resolveConfiguredRule(toolName, config.permissions);
   if (configRule !== undefined) {
     mode = resolvePermissionRule(configRule, scope);
     source = 'project-config';

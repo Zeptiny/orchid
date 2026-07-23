@@ -9,6 +9,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { ConfigDiagnostic } from '../../shared/types/ipc-boundary';
 import { configSchema, defaults, type Config } from './schema';
@@ -130,15 +131,52 @@ function sanitizeConfigLayer(data: Record<string, unknown>): {
  * Atomic write with fsync + rename + chmod 600 + fsync parent dir.
  * Matches Python `config.py:475-497`.
  */
-export function atomicWriteJson(filePath: string, data: unknown): void {
+export function atomicWriteJson(
+  filePath: string,
+  data: unknown,
+  options: { hardenDirectory?: boolean } = {},
+): void {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
-  fs.chmodSync(dir, 0o700);
+  if (options.hardenDirectory !== false) fs.chmodSync(dir, 0o700);
 
-  const tmp = filePath + '.tmp';
+  const openExclusiveTemp = (): { fd: number; path: string } => {
+    const baseFlags = fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY;
+    const noFollow = fs.constants.O_NOFOLLOW ?? 0;
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const tmpPath = path.join(
+        dir,
+        `.${path.basename(filePath)}.${process.pid}.${randomBytes(12).toString('hex')}.tmp`,
+      );
+      try {
+        return { fd: fs.openSync(tmpPath, baseFlags | noFollow, 0o600), path: tmpPath };
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'EEXIST') continue;
+        if (noFollow !== 0 && (code === 'EINVAL' || code === 'ENOTSUP' || code === 'EOPNOTSUPP')) {
+          try {
+            return { fd: fs.openSync(tmpPath, baseFlags, 0o600), path: tmpPath };
+          } catch (fallbackError) {
+            if ((fallbackError as NodeJS.ErrnoException).code === 'EEXIST') continue;
+            throw fallbackError;
+          }
+        }
+        throw error;
+      }
+    }
+    throw new Error(`Could not create an exclusive temporary file for ${filePath}`);
+  };
+
+  let tmp: string | null = null;
   try {
-    const fd = fs.openSync(tmp, 'w');
+    const opened = openExclusiveTemp();
+    const fd = opened.fd;
+    tmp = opened.path;
     try {
+      if (!fs.fstatSync(fd).isFile()) {
+        throw new Error(`Temporary configuration target is not a regular file: ${tmp}`);
+      }
       const json = JSON.stringify(data, null, 2);
       fs.writeSync(fd, json, undefined, 'utf-8');
       safeFsync(fd);
@@ -146,6 +184,7 @@ export function atomicWriteJson(filePath: string, data: unknown): void {
       fs.closeSync(fd);
     }
     fs.renameSync(tmp, filePath);
+    tmp = null;
     fs.chmodSync(filePath, 0o600);
 
     // fsync parent dir to persist the rename
@@ -156,10 +195,12 @@ export function atomicWriteJson(filePath: string, data: unknown): void {
       fs.closeSync(dirFd);
     }
   } catch (err) {
-    try {
-      fs.unlinkSync(tmp);
-    } catch {
-      // ignore cleanup error
+    if (tmp != null) {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        // ignore cleanup error
+      }
     }
     throw err;
   }

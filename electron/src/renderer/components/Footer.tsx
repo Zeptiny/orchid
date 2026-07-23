@@ -5,10 +5,17 @@
  * Right: model picker + context radial with dropup breakdown.
  * Wording mirrors the multi-stage cancel button on the composer.
  */
-import { useCallback, useEffect, useId, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
 import type { CommandContext } from '../../shared/types/ipc-boundary';
-import type { ProviderModelOption, SessionReasoningConfigResult } from '../../shared/types/ipc';
+import type {
+  PermissionGetSessionModeMessage,
+  PermissionSessionModeMutationResult,
+  PermissionSessionModeResult,
+  PermissionSetSessionModeMessage,
+  ProviderModelOption,
+  SessionReasoningConfigResult,
+} from '../../shared/types/ipc';
 import type { PermissionMode } from '../../shared/types/permission';
 import { useElapsedSeconds, type InterruptState } from '../hooks/useChat';
 import { FOOTER_SHORTCUT_IDS, getShortcut } from '../keyboard';
@@ -24,11 +31,55 @@ import { Button } from './ui/Button';
 import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
 
-interface PermissionBridge {
-  setSessionMode?: (message: {
-    sessionId: string | null;
-    mode: PermissionMode | null;
-  }) => Promise<unknown>;
+/** Orders async permission-mode reads and writes so stale responses cannot commit. */
+export class PermissionModeCoordinator {
+  private generation = 0;
+
+  async hydrate(
+    expectedSessionId: string | null,
+    read: (message: PermissionGetSessionModeMessage) => Promise<PermissionSessionModeResult>,
+    commit: (mode: PermissionMode | null) => void,
+  ): Promise<void> {
+    const generation = ++this.generation;
+    commit(null);
+    try {
+      const result = await read({ expectedSessionId });
+      if (
+        generation === this.generation &&
+        result.ok &&
+        result.sessionId === expectedSessionId
+      ) {
+        commit(result.mode);
+      }
+    } catch {
+      // Keep the inherited state when hydration fails.
+    }
+  }
+
+  async update(
+    expectedSessionId: string | null,
+    mode: PermissionMode | null,
+    write: (message: PermissionSetSessionModeMessage) => Promise<PermissionSessionModeMutationResult>,
+    commit: (mode: PermissionMode | null) => void,
+  ): Promise<void> {
+    const generation = ++this.generation;
+    try {
+      const result = await write({ mode, expectedSessionId });
+      if (
+        generation === this.generation &&
+        result.ok &&
+        result.sessionId === expectedSessionId
+      ) {
+        commit(mode);
+      }
+    } catch {
+      // Keep the last confirmed mode when persistence fails.
+    }
+  }
+
+  invalidate(): void {
+    this.generation += 1;
+  }
 }
 
 interface FooterProps {
@@ -68,6 +119,7 @@ export function Footer({
   const contextMenuId = useId();
   const [reasoningConfig, setReasoningConfig] = useState<SessionReasoningConfigResult | null>(null);
   const [sessionPermissionMode, setSessionPermissionMode] = useState<PermissionMode | null>(null);
+  const permissionModeCoordinator = useRef(new PermissionModeCoordinator());
 
   const usedContextTokens = contextUsedTokens(usage);
   const contextPercent = getContextPercent(usage, maxContext);
@@ -122,6 +174,22 @@ export function Footer({
     };
   }, [model, sessionId]);
 
+  useEffect(() => {
+    const permission = window.orchid?.permission;
+    const coordinator = permissionModeCoordinator.current;
+    if (!permission?.getSessionMode) {
+      coordinator.invalidate();
+      setSessionPermissionMode(null);
+      return;
+    }
+    void coordinator.hydrate(
+      sessionId ?? null,
+      (message) => permission.getSessionMode(message),
+      setSessionPermissionMode,
+    );
+    return () => coordinator.invalidate();
+  }, [sessionId]);
+
   const badgeTone =
     contextPercent != null && contextPercent >= 85
       ? 'error'
@@ -163,9 +231,14 @@ export function Footer({
 
   const handlePermissionModeChange = useCallback(
     (next: PermissionMode | null) => {
-      setSessionPermissionMode(next);
-      const permission = (window.orchid as { permission?: PermissionBridge }).permission;
-      permission?.setSessionMode?.({ sessionId: sessionId ?? null, mode: next })?.catch(() => {});
+      const permission = window.orchid?.permission;
+      if (!permission?.setSessionMode) return;
+      void permissionModeCoordinator.current.update(
+        sessionId ?? null,
+        next,
+        (message) => permission.setSessionMode(message),
+        setSessionPermissionMode,
+      );
     },
     [sessionId],
   );

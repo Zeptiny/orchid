@@ -4,7 +4,7 @@ import type {
   PermissionModeValue,
   PermissionRule,
 } from '../../../shared/types/ipc-boundary';
-import type { ConfigPatch } from '../../../shared/types/ipc';
+import type { ConfigPatch, PermissionConfigScope } from '../../../shared/types/ipc';
 import { Icon, type IconName } from '../Icon';
 import { Button } from '../ui/Button';
 import { Disclosure } from '../ui/Disclosure';
@@ -13,6 +13,7 @@ import { SectionHeader } from '../ui/SectionHeader';
 import { Select } from '../ui/Select';
 import { StateMessage } from '../ui/StateMessage';
 import { StatusBadge } from '../ui/StatusBadge';
+import { ScopeToggle } from './ScopeToggle';
 
 const PERMISSION_MODES: ReadonlyArray<{ value: PermissionModeValue; label: string }> = [
   { value: 'allow', label: 'Allow' },
@@ -231,18 +232,18 @@ function SlotPicker({
 function PermissionToolRow({
   tool,
   rule,
+  overridden,
   defaultMode,
   onModeChange,
   onSlotChange,
 }: {
   tool: string;
   rule: PermissionRule | undefined;
+  overridden: boolean;
   defaultMode: PermissionModeValue;
   onModeChange: (tool: string, mode: PermissionModeValue) => void;
   onSlotChange: (tool: string, slot: 'inside' | 'outside', mode: PermissionModeValue) => void;
 }) {
-  const overridden = rule !== undefined;
-
   if (FILE_TOOLS.has(tool)) {
     const defaults = FILE_TOOL_DEFAULTS[tool] ?? FILE_SLOT_FALLBACK;
     return (
@@ -301,11 +302,31 @@ function overrideActions(count: number): ReactNode {
 export interface PermissionsTabProps {
   config: Config;
   updateDraft: (updates: ConfigPatch) => void;
+  scope?: PermissionConfigScope;
+  projectDir?: string | null;
+  onScopeChange?: (scope: PermissionConfigScope) => void;
+  inheritedPermissions?: Record<string, PermissionRule>;
+  projectLoading?: boolean;
 }
 
-export function PermissionsTab({ config, updateDraft }: PermissionsTabProps) {
+export function PermissionsTab({
+  config,
+  updateDraft,
+  scope = 'global',
+  projectDir = null,
+  onScopeChange,
+  inheritedPermissions = {},
+  projectLoading = false,
+}: PermissionsTabProps) {
   const permissions = config.permissions;
   const overrideCount = Object.keys(permissions).length;
+  const permissionKeys = useMemo(
+    () => Array.from(new Set([
+      ...Object.keys(inheritedPermissions),
+      ...Object.keys(permissions),
+    ])),
+    [inheritedPermissions, permissions],
+  );
 
   const setToolMode = useCallback(
     (tool: string, mode: PermissionModeValue) => {
@@ -316,7 +337,7 @@ export function PermissionsTab({ config, updateDraft }: PermissionsTabProps) {
 
   const setToolSlot = useCallback(
     (tool: string, slot: 'inside' | 'outside', mode: PermissionModeValue) => {
-      const rule = permissions[tool];
+      const rule = permissions[tool] ?? inheritedPermissions[tool];
       const defaults = FILE_TOOL_DEFAULTS[tool] ?? FILE_SLOT_FALLBACK;
       const next: FileSlotDefaults = {
         inside: effectiveSlot(rule, 'inside', defaults.inside),
@@ -325,7 +346,7 @@ export function PermissionsTab({ config, updateDraft }: PermissionsTabProps) {
       next[slot] = mode;
       updateDraft({ permissions: { [tool]: next } });
     },
-    [permissions, updateDraft],
+    [inheritedPermissions, permissions, updateDraft],
   );
 
   const handleResetAll = useCallback(() => {
@@ -338,27 +359,44 @@ export function PermissionsTab({ config, updateDraft }: PermissionsTabProps) {
 
   const mcpServers = useMemo(() => {
     const servers = new Set<string>(Object.keys(config.mcp_servers));
-    for (const key of Object.keys(permissions)) {
+    for (const key of permissionKeys) {
       if (!key.startsWith(MCP_PREFIX)) continue;
       const server = key.slice(MCP_PREFIX.length).split('::')[0];
       if (server) servers.add(server);
     }
     return Array.from(servers).sort((a, b) => a.localeCompare(b));
-  }, [config.mcp_servers, permissions]);
+  }, [config.mcp_servers, permissionKeys]);
 
   const mcpOverrideCount = useMemo(
     () => Object.keys(permissions).filter((key) => key.startsWith(MCP_PREFIX)).length,
     [permissions],
   );
 
+  if (projectLoading && scope === 'project') {
+    return <StateMessage kind="loading" title="Loading project permissions…" />;
+  }
+
   return (
     <div className="config-form flex flex-col gap-4">
+      {onScopeChange && (
+        <ScopeToggle
+          value={scope}
+          onChange={(next) => {
+            if (next !== 'all') onScopeChange(next);
+          }}
+          projectAvailable={!projectLoading && projectDir != null}
+          projectDir={projectDir}
+          includeAll={false}
+          ariaLabel="Permission configuration scope"
+        />
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-2xl text-sm text-base-content/70">
-          Choose how each tool behaves when the agent wants to use it. File tools carry
+          Choose how each tool behaves in the {scope === 'project' ? 'active project' : 'global user'} scope. File tools carry
           separate rules for paths inside and outside the current project; everything else
-          uses a single mode. Tools you leave untouched fall back to their risk-class
-          default.
+          uses a single mode. Tools you leave untouched {scope === 'project'
+            ? 'inherit the global user rule before falling back to the risk-class default.'
+            : 'fall back to their risk-class default.'}
         </p>
         <Button
           variant="ghost"
@@ -387,7 +425,8 @@ export function PermissionsTab({ config, updateDraft }: PermissionsTabProps) {
                 <PermissionToolRow
                   key={tool}
                   tool={tool}
-                  rule={permissions[tool]}
+                  rule={permissions[tool] ?? inheritedPermissions[tool]}
+                  overridden={permissions[tool] !== undefined}
                   defaultMode={section.defaultMode}
                   onModeChange={setToolMode}
                   onSlotChange={setToolSlot}
@@ -411,10 +450,13 @@ export function PermissionsTab({ config, updateDraft }: PermissionsTabProps) {
             {mcpServers.map((server) => {
               const wildcard = `${MCP_PREFIX}${server}::*`;
               const prefix = `${MCP_PREFIX}${server}::`;
-              const toolKeys = Object.keys(permissions)
+              const toolKeys = permissionKeys
                 .filter((key) => key.startsWith(prefix) && key !== wildcard)
                 .sort((a, b) => a.localeCompare(b));
-              const customCount = (permissions[wildcard] !== undefined ? 1 : 0) + toolKeys.length;
+              const customCount = (permissions[wildcard] !== undefined ? 1 : 0) +
+                Object.keys(permissions).filter(
+                  (key) => key.startsWith(prefix) && key !== wildcard,
+                ).length;
               return (
                 <Disclosure
                   key={server}
@@ -435,16 +477,28 @@ export function PermissionsTab({ config, updateDraft }: PermissionsTabProps) {
                       <ModeSelect
                         id={`perm-mcp-${server}-all`}
                         ariaLabel={`All ${server} tools permission mode`}
-                        value={effectiveSlot(permissions[wildcard], 'inside', MCP_DEFAULT_MODE)}
+                        value={effectiveSlot(
+                          permissions[wildcard] ?? inheritedPermissions[wildcard],
+                          'inside',
+                          MCP_DEFAULT_MODE,
+                        )}
                         onChange={(mode) => setToolMode(wildcard, mode)}
                       />
                     </ToolRow>
                     {toolKeys.map((key) => (
-                      <ToolRow key={key} name={key.slice(prefix.length)} overridden>
+                      <ToolRow
+                        key={key}
+                        name={key.slice(prefix.length)}
+                        overridden={permissions[key] !== undefined}
+                      >
                         <ModeSelect
                           id={`perm-${key}`}
                           ariaLabel={`${key} permission mode`}
-                          value={effectiveSlot(permissions[key], 'inside', MCP_DEFAULT_MODE)}
+                          value={effectiveSlot(
+                            permissions[key] ?? inheritedPermissions[key],
+                            'inside',
+                            MCP_DEFAULT_MODE,
+                          )}
                           onChange={(mode) => setToolMode(key, mode)}
                         />
                       </ToolRow>

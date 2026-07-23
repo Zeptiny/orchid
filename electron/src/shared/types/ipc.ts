@@ -48,6 +48,7 @@ import type {
   ASTIndexProgress,
   IndexRunState,
   RAGConfig,
+  PermissionModeValue,
   PermissionRule,
 } from './ipc-boundary';
 
@@ -353,6 +354,27 @@ export type ConfigPatch = {
 export interface ConfigSaveMessage {
   updates: ConfigPatch;
 }
+
+export type PermissionConfigScope = 'global' | 'project';
+
+export interface PermissionConfigScopes {
+  global: Record<string, PermissionRule>;
+  project: Record<string, PermissionRule>;
+  projectDir: string | null;
+}
+
+export type PermissionConfigScopeSaveMessage =
+  | {
+      scope: 'global';
+      updates: ConfigPatchMap<PermissionRule>;
+      expectedProjectDir?: never;
+    }
+  | {
+      scope: 'project';
+      updates: ConfigPatchMap<PermissionRule>;
+      /** Canonical project observed when this draft was created. */
+      expectedProjectDir: string;
+    };
 
 // ── Provider API ─────────────────────────────────────────────────────────────
 
@@ -756,8 +778,25 @@ export interface PermissionApprovalAnswerMessage {
 }
 
 export interface PermissionSetSessionModeMessage {
-  sessionId: string;
-  mode: 'allow' | 'ask' | 'decide-for-me' | 'ask-when-flagged';
+  mode: PermissionModeValue | null;
+  /** Session identity observed by the renderer before issuing this request. */
+  expectedSessionId: string | null;
+}
+
+export interface PermissionGetSessionModeMessage {
+  /** Session identity observed by the renderer before issuing this request. */
+  expectedSessionId: string | null;
+}
+
+export interface PermissionSessionModeResult {
+  ok: boolean;
+  sessionId: string | null;
+  mode: PermissionModeValue | null;
+}
+
+export interface PermissionSessionModeMutationResult {
+  ok: boolean;
+  sessionId: string | null;
 }
 
 export interface PermissionApprovalSnapshot {
@@ -817,6 +856,8 @@ export interface OrchidAPI {
     get: () => Promise<Config>;
     diagnostics: () => Promise<ConfigDiagnostic[]>;
     save: (updates: ConfigSaveMessage) => Promise<{ status: string }>;
+    permissionScopes: () => Promise<PermissionConfigScopes>;
+    savePermissionScope: (message: PermissionConfigScopeSaveMessage) => Promise<{ status: string }>;
     modelMetadata: (modelId: string) => Promise<ModelMetadata>;
     /** List personality names loaded from `~/.orchid/personalities/*.md`. */
     listPersonalities: () => Promise<string[]>;
@@ -980,7 +1021,8 @@ export interface OrchidAPI {
   permission: {
     snapshot: () => Promise<PermissionApprovalSnapshot>;
     answer: (payload: PermissionApprovalAnswerMessage) => Promise<PermissionResult>;
-    setSessionMode: (payload: PermissionSetSessionModeMessage) => Promise<PermissionResult>;
+    setSessionMode: (payload: PermissionSetSessionModeMessage) => Promise<PermissionSessionModeMutationResult>;
+    getSessionMode: (payload: PermissionGetSessionModeMessage) => Promise<PermissionSessionModeResult>;
     onApprovalRequested: (callback: (event: PermissionApprovalRequestedEvent) => void) => () => void;
     onApprovalSettled: (callback: (event: PermissionApprovalSettledEvent) => void) => () => void;
   };
@@ -1012,6 +1054,8 @@ export const IPC_CHANNELS = {
   CONFIG_GET: 'config:get',
   CONFIG_DIAGNOSTICS: 'config:diagnostics',
   CONFIG_SAVE: 'config:save',
+  CONFIG_PERMISSION_SCOPES: 'config:permission_scopes',
+  CONFIG_SAVE_PERMISSION_SCOPE: 'config:save_permission_scope',
   CONFIG_MODEL_METADATA: 'config:model_metadata',
   CONFIG_LIST_PERSONALITIES: 'config:list_personalities',
 
@@ -1119,6 +1163,7 @@ export const IPC_CHANNELS = {
   PERMISSION_APPROVAL_ANSWER: 'permission:approval_answer',
   PERMISSION_SNAPSHOT: 'permission:snapshot',
   PERMISSION_SET_SESSION_MODE: 'permission:set_session_mode',
+  PERMISSION_GET_SESSION_MODE: 'permission:get_session_mode',
 
   // Updater
   UPDATER_STATUS_UPDATE: 'updater:status_update',
@@ -1140,6 +1185,8 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.CONFIG_GET,
   IPC_CHANNELS.CONFIG_DIAGNOSTICS,
   IPC_CHANNELS.CONFIG_SAVE,
+  IPC_CHANNELS.CONFIG_PERMISSION_SCOPES,
+  IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE,
   IPC_CHANNELS.CONFIG_MODEL_METADATA,
   IPC_CHANNELS.CONFIG_LIST_PERSONALITIES,
   IPC_CHANNELS.PROVIDERS_LIST,
@@ -1197,6 +1244,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER,
   IPC_CHANNELS.PERMISSION_SNAPSHOT,
   IPC_CHANNELS.PERMISSION_SET_SESSION_MODE,
+  IPC_CHANNELS.PERMISSION_GET_SESSION_MODE,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────

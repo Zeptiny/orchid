@@ -6,6 +6,7 @@ import { defaults } from '../../src/main/config/schema';
 import {
   applyConfigDraft,
   configNumberPatch,
+  mergeConfigDraft,
   parseConfigNumber,
 } from '../../src/renderer/utils/config-draft';
 import type { Config } from '../../src/shared/types/ipc-boundary';
@@ -72,6 +73,35 @@ describe('configNumberPatch', () => {
     expect(configNumberPatch('command_timeout', 30)).toEqual({
       command_timeout: 30,
     });
+  });
+});
+
+describe('mergeConfigDraft', () => {
+  it('replaces full MCP editor maps so delete and rename are not resurrected', () => {
+    const first = mergeConfigDraft({}, {
+      mcp_servers: {
+        old: { command: 'old-command' },
+        keep: { command: 'keep-command' },
+      },
+    });
+    const renamed = mergeConfigDraft(first, {
+      mcp_servers: {
+        renamed: { command: 'old-command' },
+        keep: { command: 'keep-command' },
+      },
+    });
+
+    expect(renamed.mcp_servers).toEqual({
+      renamed: { command: 'old-command' },
+      keep: { command: 'keep-command' },
+    });
+  });
+
+  it('continues to accumulate incremental permission edits and tombstones', () => {
+    const first = mergeConfigDraft({}, { permissions: { grep: 'ask' } });
+    const second = mergeConfigDraft(first, { permissions: { write: 'allow', grep: null } });
+
+    expect(second.permissions).toEqual({ grep: null, write: 'allow' });
   });
 });
 

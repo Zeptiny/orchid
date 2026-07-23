@@ -88,6 +88,8 @@ export interface ToolExecutionContext {
   cwd: string;
   /** Session id when available (bg process ownership, output offload). */
   sessionId?: string;
+  /** Originating renderer window frozen for approval delivery. */
+  windowId?: string;
   /** Immutable project definitions captured when the parent turn began. */
   projectRuntime?: ProjectRuntime;
   /** Connection/model identity frozen by the parent turn. */

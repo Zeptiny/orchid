@@ -130,6 +130,7 @@ export function buildDelegateTool(
       parentChainIndex,
       // Prefer frozen turn context sessionId over live getActive() (mid-turn switch).
       sessionId: ctx.sessionId,
+      windowId: ctx.windowId,
       cwd: ctx.cwd,
       projectRuntime: ctx.projectRuntime,
     });

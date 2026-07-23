@@ -5,7 +5,7 @@
  * `_maybe_offload_tool_output` (client.py:251-307).
  *
  * Features:
- * - 60s timeout (configurable via `command_timeout` config)
+ * - 30s timeout (configurable via `command_timeout` config; overridden by per-call `timeout` arg on execute_command)
  * - Certain tools exempt from timeout (e.g., AST tools, `read_output`)
  * - `wait_for_subagent` uses a longer dedicated outer timeout (300s)
  * - Output offloading: outputs >20KB written to cache files, replaced with
@@ -44,7 +44,12 @@ import { resolvePermission, passesRiskClassFloor, FILE_TOOLS } from '../permissi
 import { approvalStore } from '../permissions/approval-store';
 import { createDefaultEngine, DetectionEngine } from '../permissions/detection';
 import { sessionPermissionOverrides } from '../ipc/permission';
-import { evaluateToolCall, type EvaluatorContext } from '../permissions/evaluator';
+import {
+  canEvaluateToolCallArgs,
+  evaluateToolCall,
+  type EvaluatorContext,
+  type EvaluatorResult,
+} from '../permissions/evaluator';
 import { getProviderRuntime } from '../providers';
 import { createMiddlewareStack } from './middleware';
 import { getTierModelSelection } from '../config/loader';
@@ -57,8 +62,11 @@ import type { Config } from '../../shared/types/ipc-boundary';
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Default tool execution timeout in seconds. */
-const DEFAULT_TOOL_TIMEOUT_S = 60;
+/**
+ * Default tool execution timeout in seconds. Only used when the caller does
+ * not pass `timeoutSeconds` (orchestrator always passes `command_timeout`).
+ */
+const DEFAULT_TOOL_TIMEOUT_S = 30;
 
 /**
  * Outer dispatch timeout for `wait_for_subagent` (seconds).
@@ -83,7 +91,7 @@ export interface ToolDispatchRequest {
 }
 
 export interface ToolDispatchOptions {
-  /** Tool timeout in seconds. Defaults to 60. */
+  /** Tool timeout in seconds. Defaults to DEFAULT_TOOL_TIMEOUT_S (30). */
   timeoutSeconds?: number;
   /**
    * Outer timeout for `wait_for_subagent` only (seconds).
@@ -100,6 +108,8 @@ export interface ToolDispatchOptions {
   cwd?: string;
   /** Agent scope (`main` or subagent id) for todos / bg command isolation. */
   agentScopeId?: string;
+  /** Originating renderer window frozen for approval delivery. */
+  windowId?: string;
   /** Immutable project definitions captured when this turn began. */
   projectRuntime?: ProjectRuntime;
   /** Parent-turn abort signal (unblocks wait without cancelling children). */
@@ -115,14 +125,60 @@ export interface ToolDispatchOptions {
 let detectionEngine: DetectionEngine | null = null;
 
 const TOOL_CALL_HISTORY_SIZE = 50;
-const toolCallHistory: Array<{ name: string; argsSummary: string }> = [];
+type ToolCallHistoryEntry = { name: string; argsSummary: string };
+const toolCallHistory = new Map<string, Map<string, ToolCallHistoryEntry[]>>();
 
-function recordToolCall(name: string, args: unknown): void {
+function historyScope(agentScopeId: string | undefined): string {
+  return agentScopeId ?? 'main';
+}
+
+function recordToolCall(
+  sessionId: string | undefined,
+  agentScopeId: string | undefined,
+  name: string,
+  args: unknown,
+): void {
+  if (!sessionId) return;
   const summary = JSON.stringify(args) ?? '';
-  toolCallHistory.push({ name, argsSummary: summary.slice(0, 200) });
-  if (toolCallHistory.length > TOOL_CALL_HISTORY_SIZE) {
-    toolCallHistory.shift();
+  let sessionHistory = toolCallHistory.get(sessionId);
+  if (!sessionHistory) {
+    sessionHistory = new Map();
+    toolCallHistory.set(sessionId, sessionHistory);
   }
+  const scope = historyScope(agentScopeId);
+  const entries = sessionHistory.get(scope) ?? [];
+  entries.push({ name, argsSummary: summary.slice(0, 200) });
+  if (entries.length > TOOL_CALL_HISTORY_SIZE) {
+    entries.splice(0, entries.length - TOOL_CALL_HISTORY_SIZE);
+  }
+  sessionHistory.set(scope, entries);
+}
+
+/** Return newest bounded evaluator history for one session and agent scope. */
+export function getRecentToolCallHistory(
+  sessionId: string,
+  agentScopeId: string | undefined,
+  limit: number,
+): ToolCallHistoryEntry[] {
+  if (limit <= 0) return [];
+  const entries = toolCallHistory.get(sessionId)?.get(historyScope(agentScopeId)) ?? [];
+  return entries.slice(-Math.min(limit, TOOL_CALL_HISTORY_SIZE));
+}
+
+/** Drop evaluator history once a session is permanently deleted. */
+export function clearToolCallHistoryForSession(sessionId: string): void {
+  toolCallHistory.delete(sessionId);
+}
+
+/** Drop evaluator history for one terminal agent without affecting its peers. */
+export function clearToolCallHistoryForAgentScope(
+  sessionId: string,
+  agentScopeId: string,
+): void {
+  const sessionHistory = toolCallHistory.get(sessionId);
+  if (!sessionHistory) return;
+  sessionHistory.delete(historyScope(agentScopeId));
+  if (sessionHistory.size === 0) toolCallHistory.delete(sessionId);
 }
 
 const FALLBACK_CONFIG: Config = {
@@ -130,7 +186,7 @@ const FALLBACK_CONFIG: Config = {
   tier_models: {},
   tier_reasoning_effort: {},
   ignored_dirs: [],
-  command_timeout: 60,
+  command_timeout: 30,
   read_line_limit: 2000,
   grep_max_results: 100,
   directory_tree_depth: 3,
@@ -171,6 +227,7 @@ async function requestApproval(
   cwd: string,
   scope: ToolScope | undefined,
   abortSignal?: AbortSignal,
+  ownerWindowId?: string,
 ): Promise<ToolExecutionResult | null> {
   const result = await approvalStore.create(
     toolCallId,
@@ -181,6 +238,7 @@ async function requestApproval(
     cwd,
     scope,
     abortSignal,
+    ownerWindowId,
   );
   if (result.decision === 'approved') return null;
   const reason = result.reason ? ` (${result.reason})` : '';
@@ -201,16 +259,37 @@ async function runEvaluator(
   config: Config,
   projectRuntime: ProjectRuntime | undefined,
   triggeringMessage: string,
-): Promise<'approved' | 'denied'> {
-  if (!projectRuntime) return 'denied';
+  sessionId: string,
+  agentScopeId: string | undefined,
+  abortSignal?: AbortSignal,
+): Promise<EvaluatorResult> {
+  if (abortSignal?.aborted) {
+    return { decision: 'cancelled', reason: 'parent turn cancelled' };
+  }
+  if (!canEvaluateToolCallArgs(args)) {
+    return {
+      decision: 'fallback-to-ask',
+      reason: 'evaluator arguments exceed the complete-context budget',
+    };
+  }
+  if (!projectRuntime) {
+    return { decision: 'fallback-to-ask', reason: 'evaluator runtime unavailable' };
+  }
   const evaluatorAgent = projectRuntime.agents.get('permission-evaluator');
-  if (!evaluatorAgent || evaluatorAgent.type !== AgentType.INTERNAL) return 'denied';
+  if (!evaluatorAgent || evaluatorAgent.type !== AgentType.INTERNAL) {
+    return { decision: 'fallback-to-ask', reason: 'permission evaluator unavailable' };
+  }
 
   const selection = getTierModelSelection(config, evaluatorAgent.tier);
-  if (!selection) return 'denied';
+  if (!selection) {
+    return { decision: 'fallback-to-ask', reason: 'permission evaluator model unavailable' };
+  }
 
   try {
     const execution = await getProviderRuntime().resolveExecution(selection);
+    if (abortSignal?.aborted) {
+      return { decision: 'cancelled', reason: 'parent turn cancelled' };
+    }
     const { generateText, wrapLanguageModel } = await importESM<typeof import('ai')>('ai');
     const model = wrapLanguageModel({
       model: execution.modelInstance,
@@ -225,27 +304,49 @@ async function runEvaluator(
       args,
       cwd,
       triggeringMessage,
-      recentToolCalls: [...toolCallHistory],
+      recentToolCalls: getRecentToolCallHistory(
+        sessionId,
+        agentScopeId,
+        config.permission_history_size,
+      ),
     };
+    if (abortSignal?.aborted) {
+      return { decision: 'cancelled', reason: 'parent turn cancelled' };
+    }
 
     const result = await evaluateToolCall(
       context,
       config,
       async ({ systemPrompt, userMessage }) => {
+        const timeoutSignal = AbortSignal.timeout(30_000);
+        const evaluatorSignal = abortSignal == null
+          ? timeoutSignal
+          : AbortSignal.any([abortSignal, timeoutSignal]);
         const response = await generateText({
           model,
           instructions: systemPrompt,
           messages: [{ role: 'user', content: userMessage }],
-          abortSignal: AbortSignal.timeout(30_000),
+          abortSignal: evaluatorSignal,
           maxRetries: 0,
         });
         return response.text;
       },
       evaluatorAgent.system_prompt,
     );
-    return result.decision;
-  } catch {
-    return 'denied';
+    if (abortSignal?.aborted) {
+      return { decision: 'cancelled', reason: 'parent turn cancelled' };
+    }
+    return result;
+  } catch (error) {
+    if (abortSignal?.aborted) {
+      return { decision: 'cancelled', reason: 'parent turn cancelled' };
+    }
+    return {
+      decision: 'fallback-to-ask',
+      reason: error instanceof Error
+        ? `evaluator unavailable: ${error.message}`
+        : 'evaluator unavailable',
+    };
   }
 }
 
@@ -260,8 +361,9 @@ async function checkPermission(
   projectRuntime: ProjectRuntime | undefined,
   triggeringMessage: string,
   abortSignal?: AbortSignal,
+  agentScopeId?: string,
+  ownerWindowId?: string,
 ): Promise<ToolExecutionResult | null> {
-  if (name === 'ask_question') return null;
   if (!sessionId) return null;
   if (!riskClass) return null;
 
@@ -275,25 +377,83 @@ async function checkPermission(
   if (mode === 'allow') return null;
 
   if (mode === 'ask') {
-    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal);
+    return requestApproval(
+      toolCallId,
+      sessionId,
+      name,
+      riskClass,
+      args,
+      cwd,
+      scope,
+      abortSignal,
+      ownerWindowId,
+    );
   }
 
   if (mode === 'decide-for-me') {
     if (!passesRiskClassFloor(name, riskClass, args, cwd, config)) return null;
-    const decision = await runEvaluator(name, riskClass, args, cwd, config, projectRuntime, triggeringMessage);
-    if (decision === 'approved') return null;
+    const result = await runEvaluator(
+      name,
+      riskClass,
+      args,
+      cwd,
+      config,
+      projectRuntime,
+      triggeringMessage,
+      sessionId,
+      agentScopeId,
+      abortSignal,
+    );
+    if (result.decision === 'cancelled') {
+      return genericTerminalExecution(
+        toolCallId,
+        name,
+        'cancelled',
+        `Tool '${name}' was cancelled.`,
+        'parent_cancelled',
+      );
+    }
+    if (result.decision === 'approved') return null;
+    if (result.decision === 'fallback-to-ask') {
+      return requestApproval(
+        toolCallId,
+        sessionId,
+        name,
+        riskClass,
+        args,
+        cwd,
+        scope,
+        abortSignal,
+        ownerWindowId,
+      );
+    }
+    const evaluatorReason = result.reason ? ` (${result.reason})` : '';
     return genericTerminalExecution(
       toolCallId,
       name,
       'error',
-      `Permission denied for tool '${name}' by evaluator.`,
+      `Permission denied for tool '${name}' by evaluator${evaluatorReason}.`,
       'permission_denied',
+    );
+  }
+
+  if (name === 'send_input') {
+    return requestApproval(
+      toolCallId,
+      sessionId,
+      name,
+      riskClass,
+      args,
+      cwd,
+      scope,
+      abortSignal,
+      ownerWindowId,
     );
   }
 
   if (!passesRiskClassFloor(name, riskClass, args, cwd, config)) return null;
 
-  if (name === 'execute_command' || name === 'send_input') {
+  if (name === 'execute_command') {
     const command = typeof args['command'] === 'string'
       ? args['command']
       : typeof args['text'] === 'string'
@@ -302,19 +462,19 @@ async function checkPermission(
     if (!detectionEngine) detectionEngine = createDefaultEngine();
     const detection = detectionEngine.evaluate(command);
     if (!detection.flagged) return null;
-    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal);
+    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal, ownerWindowId);
   }
 
   if (name.startsWith('mcp::')) {
-    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal);
+    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal, ownerWindowId);
   }
 
   if (FILE_TOOLS.has(name)) {
     if (scope === 'inside') return null;
-    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal);
+    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal, ownerWindowId);
   }
 
-  return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal);
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -410,8 +570,6 @@ export async function executeToolCall(
     );
   }
 
-  recordToolCall(name, args);
-
   const permissionConfig = options.projectRuntime?.config ?? FALLBACK_CONFIG;
   const permissionDenial = await checkPermission(
     toolCallId,
@@ -424,8 +582,20 @@ export async function executeToolCall(
     options.projectRuntime,
     options.triggeringMessage ?? '',
     options.abortSignal,
+    options.agentScopeId,
+    options.windowId,
   );
+  if (options.abortSignal?.aborted) {
+    return genericTerminalExecution(
+      toolCallId,
+      name,
+      'cancelled',
+      `Tool '${name}' was cancelled.`,
+      'parent_cancelled',
+    );
+  }
   if (permissionDenial) return permissionDenial;
+  recordToolCall(options.sessionId, options.agentScopeId, name, args);
 
   // Timeout AbortController — aborted by runWithToolTimeout so foreground
   // process tools can kill the live ChildProcess handle (not only reject).
@@ -441,16 +611,29 @@ export async function executeToolCall(
     sessionId: options.sessionId,
     projectRuntime: options.projectRuntime,
     agentScopeId: options.agentScopeId,
+    windowId: options.windowId,
     abortSignal: combinedAbort,
   };
 
   // wait_for_subagent uses a dedicated outer budget (default 300s), not
   // command_timeout, so the tool can return its structured timeout message
   // (subagents stay running) before the dispatch race fires.
-  const effectiveTimeoutSeconds =
-    name === 'wait_for_subagent'
-      ? (options.waitTimeoutSeconds ?? WAIT_TOOL_OUTER_TIMEOUT_S)
-      : timeoutSeconds;
+  //
+  // execute_command: honor a per-call `timeout` so the inner process timeout
+  // can return its structured message before the outer dispatch race fires.
+  // Add a small buffer for spawn/teardown overhead.
+  const effectiveTimeoutSeconds = (() => {
+    if (name === 'wait_for_subagent') {
+      return options.waitTimeoutSeconds ?? WAIT_TOOL_OUTER_TIMEOUT_S;
+    }
+    if (name === 'execute_command') {
+      const callTimeout = (validation.data as { timeout?: unknown } | null)?.timeout;
+      if (typeof callTimeout === 'number' && callTimeout > 0) {
+        return Math.max(timeoutSeconds, callTimeout + 5);
+      }
+    }
+    return timeoutSeconds;
+  })();
 
   // Execute with optional timeout (shared policy with MCP wrappers).
   // Timeout exemption is definition.noTimeout only (no parallel name set).

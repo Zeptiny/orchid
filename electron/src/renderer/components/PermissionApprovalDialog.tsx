@@ -14,28 +14,9 @@ import { Button } from './ui/Button';
 import { DialogSurface } from './ui/DialogSurface';
 import { StatusBadge, type StatusBadgeTone } from './ui/StatusBadge';
 
-const MAX_ARG_STRING_LENGTH = 500;
-
-function truncateLongStrings(value: unknown): unknown {
-  if (typeof value === 'string') {
-    if (value.length <= MAX_ARG_STRING_LENGTH) return value;
-    const remaining = value.length - MAX_ARG_STRING_LENGTH;
-    return `${value.slice(0, MAX_ARG_STRING_LENGTH)}… (${remaining} more characters)`;
-  }
-  if (Array.isArray(value)) return value.map(truncateLongStrings);
-  if (value !== null && typeof value === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) {
-      result[key] = truncateLongStrings(entry);
-    }
-    return result;
-  }
-  return value;
-}
-
 export function formatToolArgs(args: unknown): string {
   try {
-    return JSON.stringify(truncateLongStrings(args), null, 2) ?? String(args);
+    return JSON.stringify(args, null, 2) ?? String(args);
   } catch {
     return String(args);
   }

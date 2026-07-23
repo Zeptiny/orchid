@@ -12,6 +12,7 @@ import { app, BrowserWindow, Menu } from 'electron';
 import { spawnSync } from 'node:child_process';
 import * as path from 'path';
 import { registerAllIPC, unregisterAllIPC } from './ipc';
+import { handlePermissionOwnerDestroyed } from './ipc/permission';
 import {
   ensureHomeConfig,
   ConfigManager,
@@ -179,7 +180,7 @@ function resolveAppIcon(): string | undefined {
 }
 
 function createWindow(): void {
-  mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 800,
@@ -194,18 +195,24 @@ function createWindow(): void {
       sandbox: true,
     },
   });
+  mainWindow = window;
+  const ownerWindowId = String(window.webContents.id);
+  window.webContents.once('destroyed', () => {
+    handlePermissionOwnerDestroyed(ownerWindowId);
+  });
 
   if (!app.isPackaged) {
     // Dev mode: load from Vite dev server
-    mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools();
+    window.loadURL('http://localhost:5173');
+    window.webContents.openDevTools();
   } else {
     // Production: load built renderer
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+    window.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
-  mainWindow.on('closed', () => {
-    mainWindow = null;
+  window.on('closed', () => {
+    handlePermissionOwnerDestroyed(ownerWindowId);
+    if (mainWindow === window) mainWindow = null;
   });
 }
 

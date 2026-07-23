@@ -137,6 +137,8 @@ export interface StreamChatParams {
   mcpManager: MCPManager | null;
   /** Session ID for tool output offloading. */
   sessionId?: string;
+  /** Originating renderer window frozen for approval delivery. */
+  windowId?: string;
   /** Immutable project config/definitions captured when this turn began. */
   projectRuntime?: ProjectRuntime;
   /**
@@ -352,6 +354,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     registry,
     mcpManager,
     sessionId,
+    windowId,
     projectRuntime,
     agentScopeId,
     abortSignal,
@@ -462,6 +465,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
   const tools = buildToolMap(agent.allowed_tools, registry, mcpManager, {
     sessionId,
+    windowId,
     timeoutSeconds: config.command_timeout,
     cwd: context.cwd,
     agentScopeId,
