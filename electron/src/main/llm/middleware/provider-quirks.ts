@@ -6,6 +6,14 @@
  * handling is owned by the AI SDK; mid-stream post-content recovery remains
  * an open residual (see retry middleware for pre-content retries only).
  */
+/**
+ * Resolve the tool-output inline threshold in characters.
+ *
+ * Source: `tool_output_inline_threshold` from the live process-wide config
+ * (`getConfig()`). Falls back to 20_000 characters when the config is not
+ * loaded. Tool handlers with a frozen turn context should prefer the per-turn
+ * snapshot via `getToolConfig(ctx)`.
+ */
 export function getToolOutputInlineThreshold(): number {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports

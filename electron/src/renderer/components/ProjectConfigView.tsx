@@ -21,9 +21,13 @@ import { StatusBadge } from './ui/StatusBadge';
 import { Tabs } from './ui/Tabs';
 import { TextInput } from './ui/TextInput';
 
+/** Props for {@link ProjectConfigView}. */
 export interface ProjectConfigViewProps {
+  /** Absolute directory of the project whose config is being edited. */
   projectDir: string;
+  /** Called to start a new chat bound to the given project directory. */
   onNewChat: (projectDir: string) => void;
+  /** Called to dismiss the config view. */
   onClose: () => void;
 }
 
@@ -172,10 +176,12 @@ const ALL_FIELD_KEYS = Object.values(TAB_SECTIONS).flatMap((sections) => (
   (sections ?? []).flatMap((section) => section.fields.map((field) => field.key))
 ));
 
+/** Type guard for a non-null, non-array plain object. */
 export function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/** Read a stored project override by field key, resolving `rag.*` into the nested RAG map. */
 export function readStoredOverride(overrides: Record<string, unknown>, key: string): unknown {
   if (key.startsWith('rag.')) {
     const rag = overrides['rag'];
@@ -184,6 +190,7 @@ export function readStoredOverride(overrides: Record<string, unknown>, key: stri
   return overrides[key];
 }
 
+/** Read a value from the global (home) config by field key, resolving `rag.*` into the nested RAG map. */
 export function readGlobalValue(config: Config | null, key: string): unknown {
   if (!config) return undefined;
   if (key.startsWith('rag.')) {
@@ -192,6 +199,7 @@ export function readGlobalValue(config: Config | null, key: string): unknown {
   return config[key as keyof Config];
 }
 
+/** Coerce a config value into an editable form input value (arrays become comma-separated). */
 export function toInputValue(value: unknown): string | number {
   if (value === null || value === undefined) return '';
   if (typeof value === 'number') return value;
@@ -199,6 +207,7 @@ export function toInputValue(value: unknown): string | number {
   return String(value);
 }
 
+/** Derive a stable, DOM-safe input element id from a config field key. */
 export function fieldInputId(key: string): string {
   return `project-config-${key.replace(/[^a-zA-Z0-9]+/g, '-')}`;
 }
@@ -221,6 +230,7 @@ function applyPermissionPatch(
   return next;
 }
 
+/** Project-scoped configuration editor: views and edits per-project config overrides. */
 export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectConfigViewProps) {
   const [activeTab, setActiveTab] = useState<ProjectTab>('general');
   const [overrides, setOverrides] = useState<Record<string, unknown>>({});

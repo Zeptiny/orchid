@@ -92,6 +92,15 @@ export type SubagentChangeListener = (records: readonly SubagentRecord[]) => voi
 export type SubagentLiveChangeListener = (change: SubagentLiveChange) => void;
 type SubagentWaiterReason = 'state-change' | 'flush';
 
+/**
+ * Resolve the default `wait_for_subagent` budget in milliseconds.
+ *
+ * Source: `subagent_wait_timeout` (seconds) from the live process-wide config
+ * (`getConfig()`), multiplied by 1000. Falls back to 300_000 ms (300s) when the
+ * config is not loaded. Turn-scoped callers should prefer the frozen project
+ * runtime config via `getToolConfig(ctx)` so a mid-turn settings change cannot
+ * alter an in-flight wait.
+ */
 export function getDefaultWaitTimeoutMs(): number {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
