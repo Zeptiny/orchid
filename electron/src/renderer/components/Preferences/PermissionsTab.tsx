@@ -280,6 +280,7 @@ export interface PermissionsTabProps {
   config: Config;
   updateDraft: (updates: ConfigPatch) => void;
   scope?: PermissionConfigScope;
+  lockedScope?: 'global' | 'project';
   projectDir?: string | null;
   onScopeChange?: (scope: PermissionConfigScope) => void;
   inheritedPermissions?: Record<string, PermissionRule>;
@@ -291,11 +292,13 @@ export function PermissionsTab({
   config,
   updateDraft,
   scope = 'global',
+  lockedScope,
   projectDir = null,
   onScopeChange,
   inheritedPermissions = {},
   projectLoading = false,
 }: PermissionsTabProps) {
+  const effectiveScope = lockedScope ?? scope;
   const permissions = config.permissions;
   const overrideCount = Object.keys(permissions).length;
   const permissionKeys = useMemo(
@@ -350,13 +353,13 @@ export function PermissionsTab({
     [permissions],
   );
 
-  if (projectLoading && scope === 'project') {
+  if (projectLoading && effectiveScope === 'project') {
     return <StateMessage kind="loading" title="Loading project permissions…" />;
   }
 
   return (
     <div className="config-form flex flex-col gap-4">
-      {onScopeChange && (
+      {onScopeChange && !lockedScope && (
         <ScopeToggle
           value={scope}
           onChange={(next) => {
@@ -370,9 +373,9 @@ export function PermissionsTab({
       )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-2xl text-sm text-base-content/70">
-          Choose how each tool behaves in the {scope === 'project' ? 'active project' : 'global user'} scope. File tools carry
+          Choose how each tool behaves in the {effectiveScope === 'project' ? 'active project' : 'global user'} scope. File tools carry
           separate rules for paths inside and outside the current project; everything else
-          uses a single mode. Tools you leave untouched {scope === 'project'
+          uses a single mode. Tools you leave untouched {effectiveScope === 'project'
             ? 'inherit the global user rule before falling back to the risk-class default.'
             : 'fall back to their risk-class default.'}
         </p>

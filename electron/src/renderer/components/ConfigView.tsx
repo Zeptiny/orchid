@@ -106,7 +106,6 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
     Record<string, ConfigPatchMap<PermissionRule>>
   >({});
   const [personalities, setPersonalities] = useState<string[]>([]);
-  const [projectOverrides, setProjectOverrides] = useState<Record<string, unknown> | null>(null);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [showRestartDialog, setShowRestartDialog] = useState(false);
   /**
@@ -273,26 +272,6 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
       unsub?.();
     };
   }, [loadDefinitions, refreshPermissionScopes]);
-
-  useEffect(() => {
-    const boundProjectDir = projectScopeLoading ? null : permissionScopes?.projectDir ?? null;
-    const readProject = window.orchid?.config?.readProject;
-    if (!boundProjectDir || !readProject) {
-      setProjectOverrides(null);
-      return;
-    }
-    let cancelled = false;
-    readProject(boundProjectDir)
-      .then((result) => {
-        if (!cancelled) setProjectOverrides(result?.overrides ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setProjectOverrides(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [permissionScopes?.projectDir, projectScopeLoading]);
 
   const tabItems = useMemo(
     () => TABS.map((tab) => ({ ...tab, ariaBusy: pendingTab === tab.id })),
@@ -653,7 +632,6 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
                   ? updateProjectPermissionDraft
                   : updateDraft,
               },
-              projectOverrides,
             )
           ) : (
             <StateMessage kind="warning" title="Configuration could not be loaded." />
@@ -796,7 +774,6 @@ function renderTab(
     onScopeChange: () => {},
     updateDraft,
   },
-  projectOverrides: Record<string, unknown> | null = null,
 ) {
   switch (activeTab) {
     case 'general':
@@ -836,7 +813,6 @@ function renderTab(
           bgOutputTailBytes={config.bg_output_tail_bytes}
           readOutputLongPollMax={config.read_output_long_poll_max}
           mcpResultMaxBytes={config.mcp_result_max_bytes}
-          projectOverrides={projectOverrides}
           onChange={updateDraft}
         />
       );
@@ -846,6 +822,7 @@ function renderTab(
           config={permission.config}
           updateDraft={permission.updateDraft}
           scope={permission.scope}
+          lockedScope="global"
           projectDir={permission.projectDir}
           inheritedPermissions={permission.scope === 'project'
             ? permission.inheritedPermissions
@@ -887,7 +864,7 @@ function renderTab(
       if (!definitions) {
         return <StateMessage kind="warning" title="Skills could not be loaded." />;
       }
-      return <SkillsTab data={definitions} onReload={reloadDefinitions} />;
+      return <SkillsTab data={definitions} onReload={reloadDefinitions} lockedScope="global" />;
     case 'agents':
       if (!definitions) {
         return <StateMessage kind="warning" title="Agents could not be loaded." />;
@@ -897,12 +874,13 @@ function renderTab(
           data={definitions}
           tierModels={config.tier_models}
           onReload={reloadDefinitions}
+          lockedScope="global"
         />
       );
     case 'personalities':
       if (!definitions) {
         return <StateMessage kind="warning" title="Personalities could not be loaded." />;
       }
-      return <PersonalitiesTab data={definitions} onReload={reloadDefinitions} />;
+      return <PersonalitiesTab data={definitions} onReload={reloadDefinitions} lockedScope="global" />;
   }
 }

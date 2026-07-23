@@ -38,6 +38,7 @@ export interface AgentsTabProps {
   tierModels: Record<string, ModelSelection | null>;
   /** Re-fetch after mutations (parent owns cache). */
   onReload: () => Promise<void>;
+  lockedScope?: 'global' | 'project';
 }
 
 interface AgentForm {
@@ -103,7 +104,7 @@ function sortAgents(list: readonly ManagedAgent[]): ManagedAgent[] {
   });
 }
 
-export function AgentsTab({ data, tierModels, onReload }: AgentsTabProps) {
+export function AgentsTab({ data, tierModels, onReload, lockedScope }: AgentsTabProps) {
   const providers = useProviders();
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<ScopeFilter>('all');
@@ -134,8 +135,8 @@ export function AgentsTab({ data, tierModels, onReload }: AgentsTabProps) {
   const availableTools = data.availableTools;
   const availableSkills = data.availableSkills;
 
-  const effectiveFilter: ScopeFilter =
-    filter === 'project' && !projectAvailable ? 'all' : filter;
+  const effectiveFilter: ScopeFilter = lockedScope
+    ?? (filter === 'project' && !projectAvailable ? 'all' : filter);
 
   const visible = useMemo(() => {
     const filtered =
@@ -414,14 +415,16 @@ export function AgentsTab({ data, tierModels, onReload }: AgentsTabProps) {
           }
         />
 
-        <div className="config-scope-bar">
-          <ScopeToggle
-            value={effectiveFilter}
-            onChange={setFilter}
-            projectAvailable={projectAvailable}
-            projectDir={projectDir}
-          />
-        </div>
+        {!lockedScope && (
+          <div className="config-scope-bar">
+            <ScopeToggle
+              value={effectiveFilter}
+              onChange={setFilter}
+              projectAvailable={projectAvailable}
+              projectDir={projectDir}
+            />
+          </div>
+        )}
 
         {error && (
           <Alert tone="error" className="py-2 text-sm mb-3" action={

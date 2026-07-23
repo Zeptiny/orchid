@@ -889,6 +889,7 @@ export interface OrchidAPI {
     listPersonalities: () => Promise<string[]>;
     readProject: (projectDir: string) => Promise<ProjectConfigReadResult>;
     saveProject: (message: ProjectConfigSaveMessage) => Promise<void>;
+    getHome: () => Promise<Config>;
   };
 
   providers: {
@@ -1087,6 +1088,7 @@ export const IPC_CHANNELS = {
   CONFIG_LIST_PERSONALITIES: 'config:list_personalities',
   CONFIG_READ_PROJECT: 'config:read_project',
   CONFIG_SAVE_PROJECT: 'config:save_project',
+  CONFIG_GET_HOME: 'config:get_home',
 
   // Providers — every response is redacted and every mutation is validated
   // in the main process. There is deliberately no generic credential-read API.
@@ -1219,6 +1221,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.CONFIG_LIST_PERSONALITIES,
   IPC_CHANNELS.CONFIG_READ_PROJECT,
   IPC_CHANNELS.CONFIG_SAVE_PROJECT,
+  IPC_CHANNELS.CONFIG_GET_HOME,
   IPC_CHANNELS.PROVIDERS_LIST,
   IPC_CHANNELS.PROVIDERS_CREATE,
   IPC_CHANNELS.PROVIDERS_UPDATE,

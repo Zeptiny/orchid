@@ -1,15 +1,8 @@
-/**
- * GeneralTab project-override indicator contract.
- *
- * Static-markup verification (no DOM runtime in this suite): fields whose
- * config key exists in the bound project's `.orchid.json` overrides render a
- * "project" scope badge next to the label; everything else stays bare.
- */
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { GeneralTab, type GeneralTabProps } from '../../src/renderer/components/Preferences/GeneralTab';
 
-const BASE_PROPS: Omit<GeneralTabProps, 'projectOverrides'> = {
+const BASE_PROPS: GeneralTabProps = {
   theme: 'default',
   personality: 'default',
   personalities: ['default'],
@@ -47,39 +40,24 @@ const BASE_PROPS: Omit<GeneralTabProps, 'projectOverrides'> = {
   onChange: () => {},
 };
 
-function renderTab(projectOverrides?: Record<string, unknown> | null): string {
-  return renderToStaticMarkup(
-    <GeneralTab {...BASE_PROPS} projectOverrides={projectOverrides} />,
-  );
+function renderTab(): string {
+  return renderToStaticMarkup(<GeneralTab {...BASE_PROPS} />);
 }
 
 function projectBadgeCount(html: string): number {
   return (html.match(/>project<\/span>/g) ?? []).length;
 }
 
-describe('GeneralTab project override indicators', () => {
-  it('renders no project badges without overrides', () => {
-    expect(projectBadgeCount(renderTab(null))).toBe(0);
-    expect(projectBadgeCount(renderTab(undefined))).toBe(0);
-    expect(projectBadgeCount(renderTab({}))).toBe(0);
+describe('GeneralTab rendering', () => {
+  it('renders without project override badges', () => {
+    expect(projectBadgeCount(renderTab())).toBe(0);
   });
 
-  it('badges each field whose key exists in the project overrides', () => {
-    const html = renderTab({ command_timeout: 60, web_fetch_user_agent: 'custom-agent' });
-    expect(projectBadgeCount(html)).toBe(2);
+  it('renders field labels as plain strings', () => {
+    const html = renderTab();
     expect(html).toContain('Command Timeout (s)');
     expect(html).toContain('Web Fetch User-Agent');
-  });
-
-  it('badges the checkbox field when its key is overridden', () => {
-    const html = renderTab({ always_expand_tool_groups: true });
-    expect(projectBadgeCount(html)).toBe(1);
     expect(html).toContain('Always expand tool groups');
-  });
-
-  it('ignores override keys that have no GeneralTab field', () => {
-    const html = renderTab({ rag: { top_k: 5 }, default_model: null, theme: 'dark' });
-    expect(projectBadgeCount(html)).toBe(1);
     expect(html).toContain('Theme');
   });
 });

@@ -11,6 +11,7 @@ import {
   readStoredOverride,
   toInputValue,
 } from '../../src/renderer/components/ProjectConfigView';
+import type { DefinitionsListResult } from '../../src/shared/types/definitions';
 import type { Config } from '../../src/shared/types/ipc-boundary';
 
 const noop = () => {};
@@ -74,14 +75,65 @@ const MOCK_CONFIG = {
   llm_retry_max_delay: 30,
 } satisfies Config;
 
+const MOCK_DEFINITIONS = {
+  projectDir: PROJECT_DIR,
+  skills: [
+    {
+      name: 'deploy-check',
+      description: 'Verify a deploy',
+      requires: [],
+      content: '# Deploy workflow',
+      resources: [],
+      scope: 'project',
+      path: `${PROJECT_DIR}/.orchid/skills/deploy-check/SKILL.md`,
+      overriddenByProject: false,
+    },
+  ],
+  agents: [
+    {
+      name: 'code-reviewer',
+      type: 'subagent',
+      tier: 'bloom',
+      description: 'Reviews code changes',
+      system_prompt: 'Review carefully.',
+      allowed_tools: ['read', 'grep'],
+      allowed_skills: ['*'],
+      scope: 'project',
+      path: `${PROJECT_DIR}/.orchid/agents/code-reviewer/AGENT.md`,
+      overriddenByProject: false,
+    },
+  ],
+  personalities: [
+    {
+      name: 'default',
+      content: 'Be helpful.',
+      scope: 'global',
+      path: '/home/user/.orchid/personalities/default.md',
+      overriddenByProject: false,
+    },
+    {
+      name: 'project-voice',
+      content: 'Project tone guidance.',
+      scope: 'project',
+      path: `${PROJECT_DIR}/.orchid/personalities/project-voice.md`,
+      overriddenByProject: false,
+    },
+  ],
+  availableTools: ['read', 'grep', 'write'],
+  availableSkills: ['deploy-check'],
+} satisfies DefinitionsListResult;
+
 function mockOrchid(overrides: Record<string, unknown> = {}) {
   const readProject = vi.fn().mockResolvedValue({ projectDir: PROJECT_DIR, overrides });
-  const get = vi.fn().mockResolvedValue(MOCK_CONFIG);
+  const getHome = vi.fn().mockResolvedValue(MOCK_CONFIG);
   const saveProject = vi.fn().mockResolvedValue(undefined);
+  const savePermissionScope = vi.fn().mockResolvedValue({ status: 'saved' });
+  const list = vi.fn().mockResolvedValue(MOCK_DEFINITIONS);
   (window as Record<string, unknown>).orchid = {
-    config: { readProject, get, saveProject },
+    config: { readProject, getHome, saveProject, savePermissionScope },
+    definitions: { list },
   };
-  return { readProject, get, saveProject };
+  return { readProject, getHome, saveProject, savePermissionScope, list };
 }
 
 function renderView() {
@@ -92,6 +144,10 @@ function renderView() {
 
 function inputById(key: string): HTMLInputElement {
   return document.querySelector(`input[id="${fieldInputId(key)}"]`) as HTMLInputElement;
+}
+
+function selectById(key: string): HTMLSelectElement {
+  return document.querySelector(`select[id="${fieldInputId(key)}"]`) as HTMLSelectElement;
 }
 
 function setInputValue(input: HTMLInputElement, value: string): void {
@@ -110,6 +166,10 @@ async function renderLoaded(overrides: Record<string, unknown> = {}) {
     expect(screen.queryByText('Loading project configuration…')).toBeNull();
   });
   return { ...mocks, ...result };
+}
+
+async function switchTab(user: ReturnType<typeof userEvent.setup>, label: string): Promise<void> {
+  await user.click(screen.getByRole('tab', { name: label }));
 }
 
 function renderStatic(): string {
@@ -137,26 +197,71 @@ describe('ProjectConfigView', () => {
     expect(html).toContain('Back');
   });
 
+  it('renders all eight tab buttons', () => {
+    const html = renderStatic();
+    for (const label of [
+      'General',
+      'Permissions',
+      'MCP Servers',
+      'Tier Models',
+      'RAG',
+      'Skills',
+      'Agents',
+      'Personalities',
+    ]) {
+      expect(html).toContain(label);
+    }
+  });
+
   it('starts in a loading state before overrides resolve', () => {
     const html = renderStatic();
     expect(html).toContain('Loading project configuration');
     expect(html).not.toContain('Tool Limits');
   });
 
-  it('fields render with global placeholders after load', async () => {
+  it('loads placeholders from the home-only config', async () => {
+    const { getHome } = await renderLoaded();
+    expect(getHome).toHaveBeenCalledTimes(1);
+    expect(inputById('command_timeout').placeholder).toBe('30');
+  });
+
+  it('general tab fields render with global placeholders after load', async () => {
     await renderLoaded();
     const timeoutInput = inputById('command_timeout');
     expect(timeoutInput).not.toBeNull();
     expect(timeoutInput.placeholder).toBe('30');
     expect(timeoutInput.value).toBe('');
 
+    const agentInput = inputById('web_fetch_user_agent');
+    expect(agentInput.placeholder).toBe('Orchid/1.0 web-fetch (Electron)');
+  });
+
+  it('rag tab fields render after switching tabs', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    expect(document.querySelector(`input[id="${fieldInputId('rag.chunk_size')}"]`)).toBeNull();
+
+    await switchTab(user, 'RAG');
     const ragInput = inputById('rag.chunk_size');
     expect(ragInput).not.toBeNull();
     expect(ragInput.placeholder).toBe('2000');
     expect(ragInput.value).toBe('');
+  });
 
-    const agentInput = inputById('web_fetch_user_agent');
-    expect(agentInput.placeholder).toBe('Orchid/1.0 web-fetch (Electron)');
+  it('mcp tab renders timeout fields with placeholders', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    await switchTab(user, 'MCP Servers');
+    expect(inputById('mcp_startup_timeout').placeholder).toBe('60');
+    expect(inputById('mcp_per_server_timeout').placeholder).toBe('10');
+    expect(inputById('mcp_result_max_bytes').placeholder).toBe('5242880');
+  });
+
+  it('tier models tab points to global configuration', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    await switchTab(user, 'Tier Models');
+    expect(screen.getByText('Tier models are configured globally')).toBeTruthy();
   });
 
   it('field change updates draft and shows dirty state', async () => {
@@ -193,6 +298,7 @@ describe('ProjectConfigView', () => {
   it('RAG nested key mapping produces nested rag object in save payload', async () => {
     const user = userEvent.setup();
     const { saveProject } = await renderLoaded();
+    await switchTab(user, 'RAG');
     const input = inputById('rag.chunk_size');
     setInputValue(input, '4000');
 
@@ -230,7 +336,7 @@ describe('ProjectConfigView', () => {
     });
   });
 
-  it('reset all stages nulls for all overridden fields', async () => {
+  it('reset all stages nulls for all overridden fields across tabs', async () => {
     const user = userEvent.setup();
     const { saveProject } = await renderLoaded({
       command_timeout: 60,
@@ -243,6 +349,7 @@ describe('ProjectConfigView', () => {
 
     expect(inputById('command_timeout').value).toBe('');
     expect(inputById('web_fetch_timeout').value).toBe('');
+    await switchTab(user, 'RAG');
     expect(inputById('rag.chunk_size').value).toBe('');
     expect(screen.getByText('Unsaved')).toBeTruthy();
 
@@ -261,11 +368,155 @@ describe('ProjectConfigView', () => {
     });
   });
 
+  it('theme select stages an override and saves it', async () => {
+    const user = userEvent.setup();
+    const { saveProject } = await renderLoaded();
+    const themeSelect = selectById('theme');
+    expect(themeSelect).not.toBeNull();
+    expect(themeSelect.value).toBe('');
+    expect(themeSelect.options[0].textContent).toBe('Inherit global (Default (Dark))');
+
+    await user.selectOptions(themeSelect, 'light');
+    expect(screen.getByText('Unsaved')).toBeTruthy();
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: { theme: 'light' },
+      });
+    });
+  });
+
+  it('boolean select stages a true override', async () => {
+    const user = userEvent.setup();
+    const { saveProject } = await renderLoaded();
+    const expandSelect = selectById('always_expand_tool_groups');
+    expect(expandSelect.value).toBe('');
+    expect(expandSelect.options[0].textContent).toBe('Inherit global (disabled)');
+
+    await user.selectOptions(expandSelect, 'true');
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: { always_expand_tool_groups: true },
+      });
+    });
+  });
+
+  it('ignored dirs list stages an array override', async () => {
+    const user = userEvent.setup();
+    const { saveProject } = await renderLoaded();
+    const input = inputById('ignored_dirs');
+    expect(input.placeholder).toBe('.git');
+
+    setInputValue(input, '.git, node_modules');
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: { ignored_dirs: ['.git', 'node_modules'] },
+      });
+    });
+  });
+
+  it('permissions tab shows stored project rules and saves via savePermissionScope', async () => {
+    const user = userEvent.setup();
+    const { savePermissionScope, saveProject } = await renderLoaded({
+      permissions: { grep: 'ask' },
+    });
+    await switchTab(user, 'Permissions');
+
+    const grepSelect = screen.getByLabelText('grep permission mode') as HTMLSelectElement;
+    expect(grepSelect.value).toBe('ask');
+
+    await user.selectOptions(grepSelect, 'allow');
+    expect(screen.getByText('Unsaved')).toBeTruthy();
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(savePermissionScope).toHaveBeenCalledWith({
+        scope: 'project',
+        updates: { grep: 'allow' },
+        expectedProjectDir: PROJECT_DIR,
+      });
+    });
+    expect(saveProject).not.toHaveBeenCalled();
+  });
+
+  it('permissions tab inherits global rules without marking them as overrides', async () => {
+    const user = userEvent.setup();
+    const homeWithPermissions = { ...MOCK_CONFIG, permissions: { web_fetch: 'allow' } };
+    const readProject = vi.fn().mockResolvedValue({ projectDir: PROJECT_DIR, overrides: {} });
+    const getHome = vi.fn().mockResolvedValue(homeWithPermissions);
+    (window as Record<string, unknown>).orchid = {
+      config: {
+        readProject,
+        getHome,
+        saveProject: vi.fn(),
+        savePermissionScope: vi.fn().mockResolvedValue({ status: 'saved' }),
+      },
+      definitions: { list: vi.fn().mockResolvedValue(MOCK_DEFINITIONS) },
+    };
+    renderView();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading project configuration…')).toBeNull();
+    });
+    await switchTab(user, 'Permissions');
+
+    const webFetchSelect = screen.getByLabelText('web_fetch permission mode') as HTMLSelectElement;
+    expect(webFetchSelect.value).toBe('allow');
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+  });
+
+  it('skills tab renders embedded SkillsTab with project scope', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    await switchTab(user, 'Skills');
+    await waitFor(() => {
+      expect(screen.getByText('deploy-check')).toBeTruthy();
+    });
+    expect(screen.queryByText('Save')).toBeNull();
+    expect(screen.queryByText('Reset All')).toBeNull();
+  });
+
+  it('agents tab renders embedded AgentsTab', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    await switchTab(user, 'Agents');
+    await waitFor(() => {
+      expect(screen.getByText('code-reviewer')).toBeTruthy();
+    });
+  });
+
+  it('personalities tab renders embedded PersonalitiesTab', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    await switchTab(user, 'Personalities');
+    await waitFor(() => {
+      expect(screen.getByText('project-voice')).toBeTruthy();
+    });
+  });
+
   it('isPlainRecord guard prevents crash on non-object overrides', async () => {
     const readProject = vi.fn().mockResolvedValue({ projectDir: PROJECT_DIR, overrides: [1, 2, 3] });
-    const get = vi.fn().mockResolvedValue(MOCK_CONFIG);
+    const getHome = vi.fn().mockResolvedValue(MOCK_CONFIG);
     (window as Record<string, unknown>).orchid = {
-      config: { readProject, get, saveProject: vi.fn() },
+      config: { readProject, getHome, saveProject: vi.fn(), savePermissionScope: vi.fn() },
+      definitions: { list: vi.fn().mockResolvedValue(MOCK_DEFINITIONS) },
     };
 
     renderView();
@@ -315,6 +566,8 @@ describe('ProjectConfigView helpers', () => {
     expect(toInputValue(undefined)).toBe('');
     expect(toInputValue(42)).toBe(42);
     expect(toInputValue('hello')).toBe('hello');
+    expect(toInputValue(['.git', 'dist'])).toBe('.git, dist');
+    expect(toInputValue(true)).toBe('true');
   });
 
   it('fieldInputId sanitizes keys into valid DOM ids', () => {

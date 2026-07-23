@@ -273,6 +273,9 @@ const orchidAPI: OrchidAPI = {
 
     saveProject: (message: unknown) =>
       invoke(IPC_CHANNELS.CONFIG_SAVE_PROJECT, message),
+
+    getHome: () =>
+      invoke(IPC_CHANNELS.CONFIG_GET_HOME),
   },
 
   providers: {

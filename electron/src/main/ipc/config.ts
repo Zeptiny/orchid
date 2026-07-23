@@ -13,6 +13,7 @@ import { IPC_CHANNELS } from '../../shared/types/ipc';
 import {
   getConfig,
   getConfigDiagnostics,
+  loadConfig,
   ConfigManager,
   atomicWriteJson,
   HOME_CONFIG_DIR,
@@ -143,6 +144,11 @@ export function registerConfigIPC(): void {
     return { ...getConfig(), providers: {} };
   });
 
+  ipcMain.handle(IPC_CHANNELS.CONFIG_GET_HOME, async () => {
+    const result = loadConfig({ projectDir: HOME_CONFIG_DIR });
+    return { ...result, providers: {} };
+  });
+
   // Expose only non-secret compatibility notices. This lets the renderer
   // explain why a legacy provider/default was reset instead of silently
   // presenting a disconnected workspace.
@@ -257,6 +263,7 @@ export function registerConfigIPC(): void {
  */
 export function unregisterConfigIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_GET);
+  ipcMain.removeHandler(IPC_CHANNELS.CONFIG_GET_HOME);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_DIAGNOSTICS);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_SAVE);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES);
