@@ -40,6 +40,12 @@ import {
 } from '../../shared/types/tool-result';
 import { materializeCanonicalResultRetrieval } from '../tools/result-retrieval';
 import { withTimeout as sharedWithTimeout } from '../utils/async';
+import { resolvePermission, passesRiskClassFloor, FILE_TOOLS } from '../permissions/resolver';
+import { approvalStore } from '../permissions/approval-store';
+import { createDefaultEngine, DetectionEngine } from '../permissions/detection';
+import { sessionPermissionOverrides } from '../ipc/permission';
+import type { PermissionMode, RiskClass, ToolScope } from '../../shared/types/permission';
+import type { Config } from '../../shared/types/ipc-boundary';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -92,6 +98,136 @@ export interface ToolDispatchOptions {
   projectRuntime?: ProjectRuntime;
   /** Parent-turn abort signal (unblocks wait without cancelling children). */
   abortSignal?: AbortSignal;
+}
+
+// ---------------------------------------------------------------------------
+// Permission gate
+// ---------------------------------------------------------------------------
+
+let detectionEngine: DetectionEngine | null = null;
+
+const FALLBACK_CONFIG: Config = {
+  default_model: null,
+  tier_models: {},
+  tier_reasoning_effort: {},
+  ignored_dirs: [],
+  command_timeout: 60,
+  read_line_limit: 2000,
+  grep_max_results: 100,
+  directory_tree_depth: 3,
+  theme: 'system',
+  personality: 'default',
+  rag: {
+    chunk_size: 1000,
+    chunk_overlap: 200,
+    top_k: 5,
+    max_file_size: 100_000,
+    embedding_model: 'all-MiniLM-L6-v2',
+    embedding_threads: 2,
+    embedding_batch_size: 16,
+    embedding_api_model: null,
+  },
+  ast_max_file_size: 100_000,
+  mcp_startup_timeout: 30_000,
+  mcp_per_server_timeout: 10_000,
+  mcp_servers: {},
+  providers: {},
+  llm_stream_idle_timeout: 120_000,
+  llm_stream_retries: 3,
+  background_command_idle_timeout: 300_000,
+  max_tool_steps: 100,
+  permission_history_size: 10,
+  permissions: {},
+  default_project_dir: null,
+  always_expand_tool_groups: false,
+  has_completed_onboarding: true,
+};
+
+async function requestApproval(
+  toolCallId: string,
+  sessionId: string | undefined,
+  toolName: string,
+  riskClass: RiskClass,
+  args: Record<string, unknown>,
+  cwd: string,
+  scope: ToolScope | undefined,
+  abortSignal?: AbortSignal,
+): Promise<ToolExecutionResult | null> {
+  const result = await approvalStore.create(
+    toolCallId,
+    sessionId ?? '',
+    toolName,
+    riskClass,
+    args,
+    cwd,
+    scope,
+    abortSignal,
+  );
+  if (result.decision === 'approved') return null;
+  const reason = result.reason ? ` (${result.reason})` : '';
+  return genericTerminalExecution(
+    toolCallId,
+    toolName,
+    'error',
+    `Permission denied for tool '${toolName}'${reason}.`,
+    'permission_denied',
+  );
+}
+
+async function checkPermission(
+  toolCallId: string,
+  name: string,
+  riskClass: RiskClass,
+  args: Record<string, unknown>,
+  cwd: string,
+  sessionId: string | undefined,
+  config: Config,
+  abortSignal?: AbortSignal,
+): Promise<ToolExecutionResult | null> {
+  if (name === 'ask_question') return null;
+
+  const sessionOverride: PermissionMode | null = sessionId
+    ? (sessionPermissionOverrides.get(sessionId) ?? null)
+    : null;
+
+  const resolution = resolvePermission(name, riskClass, args, cwd, config, sessionOverride);
+  const { mode, scope } = resolution;
+
+  if (mode === 'allow') return null;
+
+  if (mode === 'ask') {
+    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal);
+  }
+
+  if (mode === 'decide-for-me') {
+    if (!passesRiskClassFloor(name, riskClass, args, cwd, config)) return null;
+    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal);
+  }
+
+  if (!passesRiskClassFloor(name, riskClass, args, cwd, config)) return null;
+
+  if (name === 'execute_command' || name === 'send_input') {
+    const command = typeof args['command'] === 'string'
+      ? args['command']
+      : typeof args['text'] === 'string'
+        ? args['text']
+        : '';
+    if (!detectionEngine) detectionEngine = createDefaultEngine();
+    const detection = detectionEngine.evaluate(command);
+    if (!detection.flagged) return null;
+    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal);
+  }
+
+  if (name.startsWith('mcp::')) {
+    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal);
+  }
+
+  if (FILE_TOOLS.has(name)) {
+    if (scope === 'inside') return null;
+    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal);
+  }
+
+  return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal);
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +322,19 @@ export async function executeToolCall(
       'missing_workspace',
     );
   }
+
+  const permissionConfig = options.projectRuntime?.config ?? FALLBACK_CONFIG;
+  const permissionDenial = await checkPermission(
+    toolCallId,
+    name,
+    registered.definition.riskClass,
+    args as Record<string, unknown>,
+    options.cwd,
+    options.sessionId,
+    permissionConfig,
+    options.abortSignal,
+  );
+  if (permissionDenial) return permissionDenial;
 
   // Timeout AbortController — aborted by runWithToolTimeout so foreground
   // process tools can kill the live ChildProcess handle (not only reject).
