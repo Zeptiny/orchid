@@ -1,29 +1,135 @@
-/**
- * ProjectConfigView rendering contract.
- *
- * Static-markup verification (no DOM runtime in this suite): header chrome
- * (basename, full path, actions) and the initial loading surface before
- * project overrides resolve.
- */
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ProjectConfigView } from '../../src/renderer/components/ProjectConfigView';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import {
+  ProjectConfigView,
+  fieldInputId,
+  isPlainRecord,
+  readGlobalValue,
+  readStoredOverride,
+  toInputValue,
+} from '../../src/renderer/components/ProjectConfigView';
+import type { Config } from '../../src/shared/types/ipc-boundary';
 
 const noop = () => {};
 
-function renderView(): string {
-  return renderToStaticMarkup(
-    <ProjectConfigView
-      projectDir="/home/user/projects/orchid"
-      onNewChat={noop}
-      onClose={noop}
-    />,
+const PROJECT_DIR = '/home/user/projects/orchid';
+
+const MOCK_CONFIG = {
+  default_model: null,
+  tier_models: { seed: null, sprout: null, bloom: null, crown: null },
+  tier_reasoning_effort: { seed: null, sprout: null, bloom: null, crown: null },
+  ignored_dirs: ['.git'],
+  command_timeout: 30,
+  read_line_limit: 1000,
+  grep_max_results: 100,
+  directory_tree_depth: 2,
+  theme: 'default',
+  personality: 'default',
+  rag: {
+    chunk_size: 2000,
+    chunk_overlap: 200,
+    top_k: 5,
+    max_file_size: 512000,
+    embedding_model: 'fastembed/BAAI/bge-small-en-v1.5',
+    embedding_threads: 2,
+    embedding_batch_size: 16,
+    embedding_api_timeout: 30,
+    embedding_api_retries: 3,
+    embedding_api_model: null,
+  },
+  ast_max_file_size: 1048576,
+  mcp_startup_timeout: 60,
+  mcp_per_server_timeout: 10,
+  mcp_servers: {},
+  providers: {},
+  llm_stream_idle_timeout: 300,
+  llm_stream_retries: 3,
+  background_command_idle_timeout: 900,
+  max_tool_steps: 100,
+  permission_history_size: 10,
+  permissions: {},
+  default_project_dir: null,
+  always_expand_tool_groups: false,
+  has_completed_onboarding: false,
+  command_max_output_bytes: 1048576,
+  tool_output_inline_threshold: 20000,
+  approval_timeout: 600,
+  subagent_wait_timeout: 300,
+  web_fetch_timeout: 30,
+  web_fetch_max_body_bytes: 10485760,
+  web_fetch_user_agent: 'Orchid/1.0 web-fetch (Electron)',
+  bg_prompt_max_entries: 5,
+  bg_prompt_tail_lines: 8,
+  bg_prompt_tail_chars: 500,
+  mcp_result_max_bytes: 5242880,
+  max_background_processes: 64,
+  bg_output_head_bytes: 524288,
+  bg_output_tail_bytes: 524288,
+  grep_per_file_timeout: 10,
+  read_output_long_poll_max: 60,
+  llm_retry_backoff_base: 0.2,
+  llm_retry_max_delay: 30,
+} satisfies Config;
+
+function mockOrchid(overrides: Record<string, unknown> = {}) {
+  const readProject = vi.fn().mockResolvedValue({ projectDir: PROJECT_DIR, overrides });
+  const get = vi.fn().mockResolvedValue(MOCK_CONFIG);
+  const saveProject = vi.fn().mockResolvedValue(undefined);
+  (window as Record<string, unknown>).orchid = {
+    config: { readProject, get, saveProject },
+  };
+  return { readProject, get, saveProject };
+}
+
+function renderView() {
+  return render(
+    <ProjectConfigView projectDir={PROJECT_DIR} onNewChat={noop} onClose={noop} />,
   );
 }
 
+function inputById(key: string): HTMLInputElement {
+  return document.querySelector(`input[id="${fieldInputId(key)}"]`) as HTMLInputElement;
+}
+
+function setInputValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    'value',
+  )!.set!;
+  setter.call(input, value);
+  fireEvent.change(input, { target: { value } });
+}
+
+async function renderLoaded(overrides: Record<string, unknown> = {}) {
+  const mocks = mockOrchid(overrides);
+  const result = renderView();
+  await waitFor(() => {
+    expect(screen.queryByText('Loading project configuration…')).toBeNull();
+  });
+  return { ...mocks, ...result };
+}
+
+function renderStatic(): string {
+  return renderToStaticMarkup(
+    <ProjectConfigView projectDir={PROJECT_DIR} onNewChat={noop} onClose={noop} />,
+  );
+}
+
+beforeEach(() => {
+  mockOrchid();
+});
+
+afterEach(() => {
+  cleanup();
+  delete (window as Record<string, unknown>).orchid;
+});
+
 describe('ProjectConfigView', () => {
   it('renders the project basename, full path, and header actions', () => {
-    const html = renderView();
+    const html = renderStatic();
     expect(html).toContain('orchid');
     expect(html).toContain('/home/user/projects/orchid');
     expect(html).toContain('New Chat');
@@ -32,8 +138,187 @@ describe('ProjectConfigView', () => {
   });
 
   it('starts in a loading state before overrides resolve', () => {
-    const html = renderView();
+    const html = renderStatic();
     expect(html).toContain('Loading project configuration');
     expect(html).not.toContain('Tool Limits');
+  });
+
+  it('fields render with global placeholders after load', async () => {
+    await renderLoaded();
+    const timeoutInput = inputById('command_timeout');
+    expect(timeoutInput).not.toBeNull();
+    expect(timeoutInput.placeholder).toBe('30');
+    expect(timeoutInput.value).toBe('');
+
+    const ragInput = inputById('rag.chunk_size');
+    expect(ragInput).not.toBeNull();
+    expect(ragInput.placeholder).toBe('2000');
+    expect(ragInput.value).toBe('');
+
+    const agentInput = inputById('web_fetch_user_agent');
+    expect(agentInput.placeholder).toBe('Orchid/1.0 web-fetch (Electron)');
+  });
+
+  it('field change updates draft and shows dirty state', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    const input = inputById('command_timeout');
+    await user.click(input);
+    await user.keyboard('60');
+
+    expect(screen.getByText('Unsaved')).toBeTruthy();
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(false);
+  });
+
+  it('save calls saveProject with correct payload', async () => {
+    const user = userEvent.setup();
+    const { saveProject, readProject } = await renderLoaded();
+    const input = inputById('command_timeout');
+    await user.click(input);
+    await user.keyboard('60');
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: { command_timeout: 60 },
+      });
+    });
+    expect(readProject).toHaveBeenCalledTimes(2);
+  });
+
+  it('RAG nested key mapping produces nested rag object in save payload', async () => {
+    const user = userEvent.setup();
+    const { saveProject } = await renderLoaded();
+    const input = inputById('rag.chunk_size');
+    setInputValue(input, '4000');
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: { rag: { chunk_size: 4000 } },
+      });
+    });
+  });
+
+  it('per-field reset stages null tombstone', async () => {
+    const user = userEvent.setup();
+    const { saveProject } = await renderLoaded({ command_timeout: 60 });
+    const input = inputById('command_timeout');
+    expect(input.value).toBe('60');
+
+    const resetButton = screen.getByLabelText('Reset Command Timeout (s) to global');
+    await user.click(resetButton);
+
+    expect(input.value).toBe('');
+    expect(screen.getByText('Unsaved')).toBeTruthy();
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: { command_timeout: null },
+      });
+    });
+  });
+
+  it('reset all stages nulls for all overridden fields', async () => {
+    const user = userEvent.setup();
+    const { saveProject } = await renderLoaded({
+      command_timeout: 60,
+      web_fetch_timeout: 45,
+      rag: { chunk_size: 4000 },
+    });
+
+    const resetAllButton = screen.getByText('Reset All').closest('button') as HTMLButtonElement;
+    await user.click(resetAllButton);
+
+    expect(inputById('command_timeout').value).toBe('');
+    expect(inputById('web_fetch_timeout').value).toBe('');
+    expect(inputById('rag.chunk_size').value).toBe('');
+    expect(screen.getByText('Unsaved')).toBeTruthy();
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: {
+          command_timeout: null,
+          web_fetch_timeout: null,
+          rag: { chunk_size: null },
+        },
+      });
+    });
+  });
+
+  it('isPlainRecord guard prevents crash on non-object overrides', async () => {
+    const readProject = vi.fn().mockResolvedValue({ projectDir: PROJECT_DIR, overrides: [1, 2, 3] });
+    const get = vi.fn().mockResolvedValue(MOCK_CONFIG);
+    (window as Record<string, unknown>).orchid = {
+      config: { readProject, get, saveProject: vi.fn() },
+    };
+
+    renderView();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading project configuration…')).toBeNull();
+    });
+
+    expect(screen.getByText('Tool Limits')).toBeTruthy();
+    const input = inputById('command_timeout');
+    expect(input.value).toBe('');
+    expect(input.placeholder).toBe('30');
+  });
+});
+
+describe('ProjectConfigView helpers', () => {
+  it('isPlainRecord accepts plain objects and rejects arrays, null, primitives', () => {
+    expect(isPlainRecord({})).toBe(true);
+    expect(isPlainRecord({ a: 1 })).toBe(true);
+    expect(isPlainRecord(null)).toBe(false);
+    expect(isPlainRecord([1, 2, 3])).toBe(false);
+    expect(isPlainRecord('string')).toBe(false);
+    expect(isPlainRecord(42)).toBe(false);
+    expect(isPlainRecord(undefined)).toBe(false);
+  });
+
+  it('readStoredOverride reads top-level and nested rag keys', () => {
+    const overrides = { command_timeout: 60, rag: { chunk_size: 4000 } };
+    expect(readStoredOverride(overrides, 'command_timeout')).toBe(60);
+    expect(readStoredOverride(overrides, 'rag.chunk_size')).toBe(4000);
+    expect(readStoredOverride(overrides, 'rag.top_k')).toBeUndefined();
+    expect(readStoredOverride(overrides, 'missing')).toBeUndefined();
+  });
+
+  it('readStoredOverride returns undefined for rag keys when rag is not a record', () => {
+    expect(readStoredOverride({ rag: [1] }, 'rag.chunk_size')).toBeUndefined();
+    expect(readStoredOverride({ rag: 'bad' }, 'rag.chunk_size')).toBeUndefined();
+  });
+
+  it('readGlobalValue reads top-level and nested rag values from config', () => {
+    expect(readGlobalValue(MOCK_CONFIG, 'command_timeout')).toBe(30);
+    expect(readGlobalValue(MOCK_CONFIG, 'rag.chunk_size')).toBe(2000);
+    expect(readGlobalValue(null, 'command_timeout')).toBeUndefined();
+  });
+
+  it('toInputValue converts values for input elements', () => {
+    expect(toInputValue(null)).toBe('');
+    expect(toInputValue(undefined)).toBe('');
+    expect(toInputValue(42)).toBe(42);
+    expect(toInputValue('hello')).toBe('hello');
+  });
+
+  it('fieldInputId sanitizes keys into valid DOM ids', () => {
+    expect(fieldInputId('command_timeout')).toBe('project-config-command-timeout');
+    expect(fieldInputId('rag.chunk_size')).toBe('project-config-rag-chunk-size');
   });
 });

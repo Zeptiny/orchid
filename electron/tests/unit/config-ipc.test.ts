@@ -4,6 +4,9 @@
  * General preferences still use serialized read → merge → write cycles, but
  * provider aliases, credentials, and rename flows no longer belong to config.
  */
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 import { defaults } from '../../src/main/config/schema';
@@ -12,9 +15,11 @@ import { defaults } from '../../src/main/config/schema';
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const state = { workspaceCwd: null as string | null };
 
   return {
     handlers,
+    state,
     ipcMain: {
       handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
         handlers.set(channel, handler);
@@ -29,6 +34,8 @@ const mocks = vi.hoisted(() => {
     getConfigCalls: 0,
     clearProjectRuntimeRegistry: vi.fn(),
     invalidateAllProjectMCPManagers: vi.fn(),
+    canonicalizeProjectDirectory: vi.fn((dir: string) => dir),
+    resolveWindowWorkspace: vi.fn(() => ({ status: 'valid' as const, cwd: state.workspaceCwd })),
   };
 });
 
@@ -42,6 +49,7 @@ let configState: Record<string, unknown>;
 vi.mock('../../src/main/config/loader', () => ({
   HOME_CONFIG_PATH: '/tmp/orchid-test-config.json',
   HOME_CONFIG_DIR: '/tmp/orchid-test-home',
+  PROJECT_CONFIG_NAME: '.orchid.json',
   getConfig: vi.fn(() => {
     mocks.getConfigCalls++;
     return configState;
@@ -86,9 +94,19 @@ vi.mock('../../src/main/personality/registry', () => ({
   loadPersonalities: vi.fn(),
 }));
 
+vi.mock('../../src/main/project/path', () => ({
+  canonicalizeProjectDirectory: mocks.canonicalizeProjectDirectory,
+}));
+
+vi.mock('../../src/main/ipc/session', () => ({
+  resolveWindowWorkspace: mocks.resolveWindowWorkspace,
+}));
+
 // ── Import after mocks ──────────────────────────────────────────────────────
 
 let configIpc: typeof import('../../src/main/ipc/config');
+let loader: typeof import('../../src/main/config/loader');
+let projectDir: string;
 
 beforeEach(async () => {
   mocks.handlers.clear();
@@ -96,17 +114,25 @@ beforeEach(async () => {
   mocks.getConfigCalls = 0;
   mocks.clearProjectRuntimeRegistry.mockClear();
   mocks.invalidateAllProjectMCPManagers.mockClear();
+  mocks.canonicalizeProjectDirectory.mockClear();
+  mocks.resolveWindowWorkspace.mockClear();
+
+  projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-config-ipc-'));
+  mocks.state.workspaceCwd = projectDir;
 
   // Fresh default config state for each test
   configState = defaults() as unknown as Record<string, unknown>;
 
   configIpc = await import('../../src/main/ipc/config');
+  loader = await import('../../src/main/config/loader');
   configIpc._resetConfigSaveChainForTests();
   configIpc.registerConfigIPC();
 });
 
 afterEach(() => {
   configIpc.unregisterConfigIPC();
+  mocks.state.workspaceCwd = null;
+  fs.rmSync(projectDir, { recursive: true, force: true });
 });
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -137,6 +163,43 @@ function callSave(updates: Record<string, unknown>) {
 
 function callRawSave(payload: unknown) {
   return getSaveHandler()(null, payload);
+}
+
+const fakeEvent = { sender: { id: 1 } };
+
+function getReadProjectHandler() {
+  const handler = mocks.handlers.get(IPC_CHANNELS.CONFIG_READ_PROJECT);
+  if (!handler) throw new Error('config:read_project handler not registered');
+  return handler;
+}
+
+function getSaveProjectHandler() {
+  const handler = mocks.handlers.get(IPC_CHANNELS.CONFIG_SAVE_PROJECT);
+  if (!handler) throw new Error('config:save_project handler not registered');
+  return handler;
+}
+
+function callReadProject(dir: unknown) {
+  return getReadProjectHandler()(fakeEvent, dir);
+}
+
+function callSaveProject(updates: Record<string, unknown>, dir: string = projectDir) {
+  return getSaveProjectHandler()(fakeEvent, { projectDir: dir, updates });
+}
+
+function writeProjectConfig(value: unknown): void {
+  fs.writeFileSync(path.join(projectDir, '.orchid.json'), JSON.stringify(value), 'utf-8');
+}
+
+function lastProjectWrite(): { path: string; data: Record<string, unknown>; options: unknown } {
+  const calls = vi.mocked(loader.atomicWriteJson).mock.calls;
+  const last = calls[calls.length - 1];
+  if (!last) throw new Error('atomicWriteJson was not called');
+  return {
+    path: last[0] as string,
+    data: mocks.writtenConfigs[mocks.writtenConfigs.length - 1] as Record<string, unknown>,
+    options: last[2],
+  };
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -275,5 +338,127 @@ describe('provider configuration boundary (U1)', () => {
     expect(loader.getConfigDiagnostics).toHaveBeenCalledWith({
       projectDir: '/tmp/orchid-test-home',
     });
+  });
+});
+
+describe('config:read_project', () => {
+  it('returns empty overrides when the project config file is missing', async () => {
+    await expect(callReadProject(projectDir)).resolves.toEqual({
+      projectDir,
+      overrides: {},
+    });
+  });
+
+  it('returns parsed overrides from a valid project config object', async () => {
+    writeProjectConfig({ theme: 'project-dark', command_timeout: 45 });
+
+    await expect(callReadProject(projectDir)).resolves.toEqual({
+      projectDir,
+      overrides: { theme: 'project-dark', command_timeout: 45 },
+    });
+  });
+
+  it('returns empty overrides when the file contains malformed JSON', async () => {
+    fs.writeFileSync(path.join(projectDir, '.orchid.json'), '{ not valid json', 'utf-8');
+
+    await expect(callReadProject(projectDir)).resolves.toEqual({
+      projectDir,
+      overrides: {},
+    });
+  });
+
+  it('returns empty overrides when the file contains a non-object JSON value', async () => {
+    for (const raw of ['[1, 2, 3]', '"a string"', '42']) {
+      fs.writeFileSync(path.join(projectDir, '.orchid.json'), raw, 'utf-8');
+
+      await expect(callReadProject(projectDir)).resolves.toEqual({
+        projectDir,
+        overrides: {},
+      });
+    }
+  });
+
+  it('rejects a non-string projectDir', async () => {
+    await expect(callReadProject(123)).rejects.toThrow(/non-empty projectDir/);
+    await expect(callReadProject('')).rejects.toThrow(/non-empty projectDir/);
+    await expect(callReadProject(null)).rejects.toThrow(/non-empty projectDir/);
+  });
+
+  it('rejects a projectDir that does not match the bound workspace', async () => {
+    mocks.state.workspaceCwd = '/some/other/workspace';
+
+    await expect(callReadProject(projectDir)).rejects.toThrow(/selected workspace/);
+  });
+
+  it('rejects when no workspace is bound', async () => {
+    mocks.state.workspaceCwd = null;
+
+    await expect(callReadProject(projectDir)).rejects.toThrow(/bound project/);
+  });
+});
+
+describe('config:save_project', () => {
+  it('merges updates and writes to the project config path', async () => {
+    await callSaveProject({ theme: 'project-theme', command_timeout: 42 });
+
+    const write = lastProjectWrite();
+    expect(write.path).toBe(path.join(projectDir, '.orchid.json'));
+    expect(write.data['theme']).toBe('project-theme');
+    expect(write.data['command_timeout']).toBe(42);
+    expect(write.options).toEqual({ hardenDirectory: false });
+  });
+
+  it('deletes a key with a null tombstone from an existing config', async () => {
+    writeProjectConfig({ theme: 'kept', command_timeout: 99 });
+
+    await callSaveProject({ command_timeout: null });
+
+    const write = lastProjectWrite();
+    expect(write.data['theme']).toBe('kept');
+    expect(write.data).not.toHaveProperty('command_timeout');
+  });
+
+  it('filters out keys outside the project config allowlist', async () => {
+    await callSaveProject({
+      theme: 'visible',
+      mcp_servers: { evil: { command: 'rm' } },
+      permissions: { Bash: 'approve' },
+      default_model: { connectionId: 'c', modelId: 'm' },
+    });
+
+    const write = lastProjectWrite();
+    expect(write.data['theme']).toBe('visible');
+    expect(write.data).not.toHaveProperty('mcp_servers');
+    expect(write.data).not.toHaveProperty('permissions');
+    expect(write.data).not.toHaveProperty('default_model');
+  });
+
+  it('rejects schema-violating values without writing', async () => {
+    await expect(callSaveProject({ command_timeout: -5 })).rejects.toThrow(
+      /Invalid project config/,
+    );
+
+    expect(mocks.writtenConfigs).toHaveLength(0);
+  });
+
+  it('invalidates caches and reloads the home config after saving', async () => {
+    vi.mocked(loader.ConfigManager.reset).mockClear();
+    vi.mocked(loader.ConfigManager.load).mockClear();
+
+    await callSaveProject({ theme: 'cache-test' });
+
+    expect(loader.ConfigManager.reset).toHaveBeenCalledTimes(1);
+    expect(mocks.clearProjectRuntimeRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.invalidateAllProjectMCPManagers).toHaveBeenCalledTimes(1);
+    expect(loader.ConfigManager.load).toHaveBeenCalledWith({
+      projectDir: '/tmp/orchid-test-home',
+    });
+  });
+
+  it('rejects a projectDir that does not match the bound workspace', async () => {
+    mocks.state.workspaceCwd = '/some/other/workspace';
+
+    await expect(callSaveProject({ theme: 'x' })).rejects.toThrow(/selected workspace/);
+    expect(mocks.writtenConfigs).toHaveLength(0);
   });
 });

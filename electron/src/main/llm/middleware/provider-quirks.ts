@@ -27,6 +27,5 @@ export const TOOLS_WITHOUT_OUTPUT_OFFLOAD = new Set([
   'directory_tree',
   'web_fetch',
   'skill',
-  'write',
   'wait_for_subagent',
 ]);

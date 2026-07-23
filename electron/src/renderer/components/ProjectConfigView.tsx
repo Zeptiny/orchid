@@ -113,11 +113,11 @@ const SECTIONS: ProjectConfigSection[] = [
 
 const ALL_FIELD_KEYS = SECTIONS.flatMap((section) => section.fields.map((field) => field.key));
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
+export function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function readStoredOverride(overrides: Record<string, unknown>, key: string): unknown {
+export function readStoredOverride(overrides: Record<string, unknown>, key: string): unknown {
   if (key.startsWith('rag.')) {
     const rag = overrides['rag'];
     return isPlainRecord(rag) ? rag[key.slice(4)] : undefined;
@@ -125,7 +125,7 @@ function readStoredOverride(overrides: Record<string, unknown>, key: string): un
   return overrides[key];
 }
 
-function readGlobalValue(config: Config | null, key: string): unknown {
+export function readGlobalValue(config: Config | null, key: string): unknown {
   if (!config) return undefined;
   if (key.startsWith('rag.')) {
     return config.rag[key.slice(4) as keyof RAGConfig];
@@ -133,13 +133,13 @@ function readGlobalValue(config: Config | null, key: string): unknown {
   return config[key as keyof Config];
 }
 
-function toInputValue(value: unknown): string | number {
+export function toInputValue(value: unknown): string | number {
   if (value === null || value === undefined) return '';
   if (typeof value === 'number') return value;
   return String(value);
 }
 
-function fieldInputId(key: string): string {
+export function fieldInputId(key: string): string {
   return `project-config-${key.replace(/[^a-zA-Z0-9]+/g, '-')}`;
 }
 

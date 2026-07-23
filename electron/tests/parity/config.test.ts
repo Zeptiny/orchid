@@ -12,7 +12,7 @@ const DEFAULT_SELECTION = {
   modelId: 'vendor/models/gpt-4o',
 };
 
-// ── Expected config fields (23 total) ──────────────────────────────────────
+// ── Expected config fields (40 total) ──────────────────────────────────────
 
 interface ConfigFieldExpectation {
   field: string;
@@ -114,6 +114,114 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
   // Desktop UI preference outside the migrated core configuration contract.
   { field: 'always_expand_tool_groups', type: 'boolean', defaultValue: false },
   { field: 'has_completed_onboarding', type: 'boolean', defaultValue: false },
+  {
+    field: 'command_max_output_bytes',
+    type: 'number',
+    defaultValue: 1_048_576,
+    envOverride: 'ORCHID_COMMAND_MAX_OUTPUT_BYTES',
+  },
+  {
+    field: 'tool_output_inline_threshold',
+    type: 'number',
+    defaultValue: 20_000,
+    envOverride: 'ORCHID_TOOL_OUTPUT_INLINE_THRESHOLD',
+  },
+  {
+    field: 'approval_timeout',
+    type: 'number',
+    defaultValue: 600,
+    envOverride: 'ORCHID_APPROVAL_TIMEOUT',
+  },
+  {
+    field: 'subagent_wait_timeout',
+    type: 'number',
+    defaultValue: 300,
+    envOverride: 'ORCHID_SUBAGENT_WAIT_TIMEOUT',
+  },
+  {
+    field: 'web_fetch_timeout',
+    type: 'number',
+    defaultValue: 30,
+    envOverride: 'ORCHID_WEB_FETCH_TIMEOUT',
+  },
+  {
+    field: 'web_fetch_max_body_bytes',
+    type: 'number',
+    defaultValue: 10_485_760,
+    envOverride: 'ORCHID_WEB_FETCH_MAX_BODY',
+  },
+  {
+    field: 'web_fetch_user_agent',
+    type: 'string',
+    defaultValue: 'Orchid/1.0 web-fetch (Electron)',
+    envOverride: 'ORCHID_WEB_FETCH_USER_AGENT',
+  },
+  {
+    field: 'bg_prompt_max_entries',
+    type: 'number',
+    defaultValue: 5,
+    envOverride: 'ORCHID_BG_PROMPT_MAX_ENTRIES',
+  },
+  {
+    field: 'bg_prompt_tail_lines',
+    type: 'number',
+    defaultValue: 8,
+    envOverride: 'ORCHID_BG_PROMPT_TAIL_LINES',
+  },
+  {
+    field: 'bg_prompt_tail_chars',
+    type: 'number',
+    defaultValue: 500,
+    envOverride: 'ORCHID_BG_PROMPT_TAIL_CHARS',
+  },
+  {
+    field: 'mcp_result_max_bytes',
+    type: 'number',
+    defaultValue: 5_242_880,
+    envOverride: 'ORCHID_MCP_RESULT_MAX_BYTES',
+  },
+  {
+    field: 'max_background_processes',
+    type: 'number',
+    defaultValue: 64,
+    envOverride: 'ORCHID_MAX_BG_PROCESSES',
+  },
+  {
+    field: 'bg_output_head_bytes',
+    type: 'number',
+    defaultValue: 524_288,
+    envOverride: 'ORCHID_BG_OUTPUT_HEAD_BYTES',
+  },
+  {
+    field: 'bg_output_tail_bytes',
+    type: 'number',
+    defaultValue: 524_288,
+    envOverride: 'ORCHID_BG_OUTPUT_TAIL_BYTES',
+  },
+  {
+    field: 'grep_per_file_timeout',
+    type: 'number',
+    defaultValue: 10,
+    envOverride: 'ORCHID_GREP_PER_FILE_TIMEOUT',
+  },
+  {
+    field: 'read_output_long_poll_max',
+    type: 'number',
+    defaultValue: 60,
+    envOverride: 'ORCHID_READ_OUTPUT_LONG_POLL_MAX',
+  },
+  {
+    field: 'llm_retry_backoff_base',
+    type: 'number',
+    defaultValue: 0.2,
+    envOverride: 'ORCHID_LLM_RETRY_BACKOFF_BASE',
+  },
+  {
+    field: 'llm_retry_max_delay',
+    type: 'number',
+    defaultValue: 30,
+    envOverride: 'ORCHID_LLM_RETRY_MAX_DELAY',
+  },
 ];
 
 const EXPECTED_RAG_FIELDS = [
@@ -149,6 +257,18 @@ const EXPECTED_RAG_FIELDS = [
     defaultValue: 16,
     envOverride: 'ORCHID_RAG_EMBEDDING_BATCH_SIZE',
   },
+  {
+    field: 'embedding_api_timeout',
+    type: 'number',
+    defaultValue: 30,
+    envOverride: 'ORCHID_RAG_EMBEDDING_API_TIMEOUT',
+  },
+  {
+    field: 'embedding_api_retries',
+    type: 'number',
+    defaultValue: 3,
+    envOverride: 'ORCHID_RAG_EMBEDDING_API_RETRIES',
+  },
 ];
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -182,6 +302,24 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('default_project_dir');
       expect(cfg).toHaveProperty('always_expand_tool_groups');
       expect(cfg).toHaveProperty('has_completed_onboarding');
+      expect(cfg).toHaveProperty('command_max_output_bytes');
+      expect(cfg).toHaveProperty('tool_output_inline_threshold');
+      expect(cfg).toHaveProperty('approval_timeout');
+      expect(cfg).toHaveProperty('subagent_wait_timeout');
+      expect(cfg).toHaveProperty('web_fetch_timeout');
+      expect(cfg).toHaveProperty('web_fetch_max_body_bytes');
+      expect(cfg).toHaveProperty('web_fetch_user_agent');
+      expect(cfg).toHaveProperty('bg_prompt_max_entries');
+      expect(cfg).toHaveProperty('bg_prompt_tail_lines');
+      expect(cfg).toHaveProperty('bg_prompt_tail_chars');
+      expect(cfg).toHaveProperty('mcp_result_max_bytes');
+      expect(cfg).toHaveProperty('max_background_processes');
+      expect(cfg).toHaveProperty('bg_output_head_bytes');
+      expect(cfg).toHaveProperty('bg_output_tail_bytes');
+      expect(cfg).toHaveProperty('grep_per_file_timeout');
+      expect(cfg).toHaveProperty('read_output_long_poll_max');
+      expect(cfg).toHaveProperty('llm_retry_backoff_base');
+      expect(cfg).toHaveProperty('llm_retry_max_delay');
 
       // RAG nested fields (5)
       expect(cfg.rag).toHaveProperty('chunk_size');
@@ -189,6 +327,8 @@ describe('Config Parity', () => {
       expect(cfg.rag).toHaveProperty('top_k');
       expect(cfg.rag).toHaveProperty('max_file_size');
       expect(cfg.rag).toHaveProperty('embedding_model');
+      expect(cfg.rag).toHaveProperty('embedding_api_timeout');
+      expect(cfg.rag).toHaveProperty('embedding_api_retries');
     });
 
     it('top-level field count matches expected (43 top-level + 10 rag nested fields)', () => {

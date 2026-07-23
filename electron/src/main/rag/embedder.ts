@@ -232,14 +232,15 @@ export class ApiEmbedder implements IEmbedder {
 
   private async _embedBatchWithRetry(texts: string[]): Promise<Float32Array[]> {
     let lastError: Error | undefined;
+    const totalAttempts = Math.max(1, this.maxRetries + 1);
 
-    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+    for (let attempt = 0; attempt < totalAttempts; attempt++) {
       try {
         return await this._embedBatch(texts);
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
         if (isPermanentApiError(lastError)) break;
-        if (attempt < this.maxRetries - 1) {
+        if (attempt < totalAttempts - 1) {
           const wait = 2 ** attempt * 1000;
           await new Promise((resolve) => setTimeout(resolve, wait));
         }
@@ -247,7 +248,7 @@ export class ApiEmbedder implements IEmbedder {
     }
 
     throw new EmbeddingError(
-      `API embedding failed after ${this.maxRetries} attempts: ${lastError?.message}`,
+      `API embedding failed after ${totalAttempts} attempts: ${lastError?.message}`,
     );
   }
   private async _embedBatch(texts: string[]): Promise<Float32Array[]> {
