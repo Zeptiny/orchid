@@ -236,6 +236,7 @@ describe('Agent Loading — Defaults', () => {
       'learnings-researcher',
       'maintainability-reviewer',
       'performance-reviewer',
+      'permission-evaluator',
       'pr-comment-resolver',
       'product-lens-reviewer',
       'reliability-reviewer',
@@ -368,7 +369,7 @@ describe('Agent Loading — Defaults', () => {
     }
 
     // Verify tier distribution matches Python defaults
-    expect(tierCounts.seed).toBe(3); // explorer, web-fetch, session-namer
+    expect(tierCounts.seed).toBe(4); // explorer, web-fetch, session-namer
     expect(tierCounts.sprout).toBe(2); // web-researcher, learnings-researcher
     expect(tierCounts.bloom).toBe(11); // general, implementer, api-contract, etc.
     expect(tierCounts.crown).toBe(11); // reviewers, adversarial, etc.
@@ -387,9 +388,10 @@ describe('Agent Loading — Defaults', () => {
     );
 
     // Only bundled runtime-only agents are internal
-    expect(internalAgents).toHaveLength(3);
+    expect(internalAgents).toHaveLength(4);
     expect(internalAgents.map((a) => a.name).sort()).toEqual([
       'general',
+      'permission-evaluator',
       'session-namer',
       'web-fetch',
     ]);

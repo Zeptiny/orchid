@@ -120,7 +120,7 @@ export function resolvePermission(
     mode = RISK_CLASS_DEFAULTS[riskClass];
   }
 
-  const configRule = config.permissions[toolName];
+  const configRule = config.permissions?.[toolName];
   if (configRule !== undefined) {
     mode = resolvePermissionRule(configRule, scope);
     source = 'project-config';

@@ -185,6 +185,8 @@ async function checkPermission(
   abortSignal?: AbortSignal,
 ): Promise<ToolExecutionResult | null> {
   if (name === 'ask_question') return null;
+  if (!sessionId) return null;
+  if (!riskClass) return null;
 
   const sessionOverride: PermissionMode | null = sessionId
     ? (sessionPermissionOverrides.get(sessionId) ?? null)
