@@ -12,7 +12,7 @@ const DEFAULT_SELECTION = {
   modelId: 'vendor/models/gpt-4o',
 };
 
-// ── Expected config fields (40 total) ──────────────────────────────────────
+// ── Expected config fields (43 total) ──────────────────────────────────────
 
 interface ConfigFieldExpectation {
   field: string;
@@ -321,7 +321,7 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('llm_retry_backoff_base');
       expect(cfg).toHaveProperty('llm_retry_max_delay');
 
-      // RAG nested fields (5)
+      // RAG nested fields (7)
       expect(cfg.rag).toHaveProperty('chunk_size');
       expect(cfg.rag).toHaveProperty('chunk_overlap');
       expect(cfg.rag).toHaveProperty('top_k');

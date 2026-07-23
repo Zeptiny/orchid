@@ -8,7 +8,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ipcMain } from 'electron';
-import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import {
   getConfig,
@@ -29,7 +28,11 @@ import {
 import { canonicalizeProjectDirectory } from '../project/path';
 import { clearProjectRuntimeRegistry } from '../project/runtime';
 import { invalidateAllProjectMCPManagers } from '../mcp/project-registry';
-import { configSaveSchema } from './payload-schemas';
+import {
+  configSaveSchema,
+  configSaveProjectSchema,
+  configReadProjectSchema,
+} from './payload-schemas';
 import { resolveWindowWorkspace } from './session';
 
 // ── Config save lock ────────────────────────────────────────────────────────
@@ -212,21 +215,18 @@ export function registerConfigIPC(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.CONFIG_READ_PROJECT, async (event, projectDir: unknown) => {
-    if (typeof projectDir !== 'string' || !projectDir) {
+    const parsed = configReadProjectSchema.safeParse(projectDir);
+    if (!parsed.success) {
       throw new Error('config:read_project requires a non-empty projectDir string');
     }
-    const verifiedProjectDir = verifyProjectWorkspace(event.sender.id, projectDir);
+    const verifiedProjectDir = verifyProjectWorkspace(event.sender.id, parsed.data);
     const configPath = path.join(verifiedProjectDir, PROJECT_CONFIG_NAME);
     const raw = loadJsonSafe(configPath);
     return { projectDir: verifiedProjectDir, overrides: isPlainObject(raw) ? raw : {} };
   });
 
   ipcMain.handle(IPC_CHANNELS.CONFIG_SAVE_PROJECT, async (event, payload: unknown) => {
-    const schema = z.object({
-      projectDir: z.string().min(1),
-      updates: z.record(z.unknown()),
-    });
-    const parsed = schema.parse(payload);
+    const parsed = configSaveProjectSchema.parse(payload);
     const { projectDir, updates } = parsed;
 
     const verifiedProjectDir = verifyProjectWorkspace(event.sender.id, projectDir);
