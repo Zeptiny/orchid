@@ -455,6 +455,11 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   // ── Filter and build tools ──
   // Freeze session cwd from prompt context so tools match the turn's workspace.
   // Rebuild skill tool with this agent's allowed_skills (Python per-stream filter).
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+  const triggeringMessage = typeof lastUserMessage?.content === 'string'
+    ? lastUserMessage.content
+    : '';
+
   const tools = buildToolMap(agent.allowed_tools, registry, mcpManager, {
     sessionId,
     timeoutSeconds: config.command_timeout,
@@ -462,6 +467,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     agentScopeId,
     projectRuntime,
     abortSignal,
+    triggeringMessage,
   }, {
     skills: projectRuntime
       ? new Map(projectRuntime.skills)

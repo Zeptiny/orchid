@@ -44,6 +44,12 @@ import { resolvePermission, passesRiskClassFloor, FILE_TOOLS } from '../permissi
 import { approvalStore } from '../permissions/approval-store';
 import { createDefaultEngine, DetectionEngine } from '../permissions/detection';
 import { sessionPermissionOverrides } from '../ipc/permission';
+import { evaluateToolCall, type EvaluatorContext } from '../permissions/evaluator';
+import { getProviderRuntime } from '../providers';
+import { createMiddlewareStack } from './middleware';
+import { getTierModelSelection } from '../config/loader';
+import { importESM } from '../utils/esm-import';
+import { AgentType } from '../../shared/types/agent';
 import type { PermissionMode, RiskClass, ToolScope } from '../../shared/types/permission';
 import type { Config } from '../../shared/types/ipc-boundary';
 
@@ -98,6 +104,8 @@ export interface ToolDispatchOptions {
   projectRuntime?: ProjectRuntime;
   /** Parent-turn abort signal (unblocks wait without cancelling children). */
   abortSignal?: AbortSignal;
+  /** The user message that triggered the current turn (for decide-for-me evaluator). */
+  triggeringMessage?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +113,17 @@ export interface ToolDispatchOptions {
 // ---------------------------------------------------------------------------
 
 let detectionEngine: DetectionEngine | null = null;
+
+const TOOL_CALL_HISTORY_SIZE = 50;
+const toolCallHistory: Array<{ name: string; argsSummary: string }> = [];
+
+function recordToolCall(name: string, args: unknown): void {
+  const summary = JSON.stringify(args) ?? '';
+  toolCallHistory.push({ name, argsSummary: summary.slice(0, 200) });
+  if (toolCallHistory.length > TOOL_CALL_HISTORY_SIZE) {
+    toolCallHistory.shift();
+  }
+}
 
 const FALLBACK_CONFIG: Config = {
   default_model: null,
@@ -174,6 +193,62 @@ async function requestApproval(
   );
 }
 
+async function runEvaluator(
+  name: string,
+  riskClass: RiskClass,
+  args: Record<string, unknown>,
+  cwd: string,
+  config: Config,
+  projectRuntime: ProjectRuntime | undefined,
+  triggeringMessage: string,
+): Promise<'approved' | 'denied'> {
+  if (!projectRuntime) return 'denied';
+  const evaluatorAgent = projectRuntime.agents.get('permission-evaluator');
+  if (!evaluatorAgent || evaluatorAgent.type !== AgentType.INTERNAL) return 'denied';
+
+  const selection = getTierModelSelection(config, evaluatorAgent.tier);
+  if (!selection) return 'denied';
+
+  try {
+    const execution = await getProviderRuntime().resolveExecution(selection);
+    const { generateText, wrapLanguageModel } = await importESM<typeof import('ai')>('ai');
+    const model = wrapLanguageModel({
+      model: execution.modelInstance,
+      middleware: createMiddlewareStack({
+        retry: { maxRetries: config.llm_stream_retries },
+      }),
+    });
+
+    const context: EvaluatorContext = {
+      toolName: name,
+      riskClass,
+      args,
+      cwd,
+      triggeringMessage,
+      recentToolCalls: [...toolCallHistory],
+    };
+
+    const result = await evaluateToolCall(
+      context,
+      config,
+      async ({ systemPrompt, userMessage }) => {
+        const response = await generateText({
+          model,
+          instructions: systemPrompt,
+          messages: [{ role: 'user', content: userMessage }],
+          abortSignal: AbortSignal.timeout(30_000),
+          maxRetries: 0,
+        });
+        return response.text;
+      },
+      evaluatorAgent.system_prompt,
+    );
+    return result.decision;
+  } catch {
+    return 'denied';
+  }
+}
+
 async function checkPermission(
   toolCallId: string,
   name: string,
@@ -182,6 +257,8 @@ async function checkPermission(
   cwd: string,
   sessionId: string | undefined,
   config: Config,
+  projectRuntime: ProjectRuntime | undefined,
+  triggeringMessage: string,
   abortSignal?: AbortSignal,
 ): Promise<ToolExecutionResult | null> {
   if (name === 'ask_question') return null;
@@ -203,7 +280,15 @@ async function checkPermission(
 
   if (mode === 'decide-for-me') {
     if (!passesRiskClassFloor(name, riskClass, args, cwd, config)) return null;
-    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal);
+    const decision = await runEvaluator(name, riskClass, args, cwd, config, projectRuntime, triggeringMessage);
+    if (decision === 'approved') return null;
+    return genericTerminalExecution(
+      toolCallId,
+      name,
+      'error',
+      `Permission denied for tool '${name}' by evaluator.`,
+      'permission_denied',
+    );
   }
 
   if (!passesRiskClassFloor(name, riskClass, args, cwd, config)) return null;
@@ -325,6 +410,8 @@ export async function executeToolCall(
     );
   }
 
+  recordToolCall(name, args);
+
   const permissionConfig = options.projectRuntime?.config ?? FALLBACK_CONFIG;
   const permissionDenial = await checkPermission(
     toolCallId,
@@ -334,6 +421,8 @@ export async function executeToolCall(
     options.cwd,
     options.sessionId,
     permissionConfig,
+    options.projectRuntime,
+    options.triggeringMessage ?? '',
     options.abortSignal,
   );
   if (permissionDenial) return permissionDenial;
