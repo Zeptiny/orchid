@@ -13,6 +13,7 @@ import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boun
 import type { ProviderModelOption } from '../../shared/types/ipc';
 import type { ChatStatus, InterruptState } from '../hooks/useChat';
 import { useAskQuestion } from '../hooks/useAskQuestion';
+import { usePermissionApproval } from '../hooks/usePermissionApproval';
 import {
   COMMANDS,
   trackRecentCommand,
@@ -29,6 +30,7 @@ import {
   shouldReleaseComposerSendLock,
 } from '../utils/composer-send-lock';
 import { AskQuestionOverlay } from './AskQuestionOverlay';
+import { PermissionApprovalPanel } from './PermissionApprovalPanel';
 import { SlashCommandMenu } from './SlashCommandMenu';
 import { IconButton } from './ui/IconButton';
 
@@ -119,6 +121,8 @@ export function InputArea({
   /** Pending ask_question stepper; while active it owns the composer area. */
   const askQuestion = useAskQuestion(sessionId);
   const hasActiveQuestion = askQuestion.active !== null;
+  /** Pending permission approval; while active it owns the composer area. */
+  const permission = usePermissionApproval(sessionId);
 
   const isStreaming = status === 'streaming';
   const hasInput = Boolean(input.trim());
@@ -607,6 +611,25 @@ export function InputArea({
   // During streaming the user can type to queue; only confirmAgent blocks input.
   const inputDisabled = interruptState === 'confirmAgent';
   const plainChatBlocked = !workspaceBound || !providerAvailable || !modelSelected;
+
+  // A pending permission approval owns the composer area; the composer (and
+  // every send path) stays unmounted until it is approved or denied. The chat
+  // stream above stays mounted and scrollable. Takes precedence over a pending
+  // question because it gates a potentially dangerous tool call.
+  if (permission.active) {
+    return (
+      <div className="orchid-composer-area">
+        <section className="orchid-permission" aria-label="Permission request">
+          <PermissionApprovalPanel
+            key={permission.active.toolCallId}
+            request={permission.active}
+            submittingDecision={permission.submittingDecision}
+            onAnswer={permission.answer}
+          />
+        </section>
+      </div>
+    );
+  }
 
   // A pending ask_question tool call owns the composer area; the composer (and
   // every send path) stays unmounted until it is answered or cancelled.

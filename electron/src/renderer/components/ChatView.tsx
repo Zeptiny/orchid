@@ -33,7 +33,6 @@ import { Footer } from './Footer';
 import { Sidebar } from './Sidebar';
 import { LeftSidebar } from './LeftSidebar';
 import { CommandPalette } from './CommandPalette';
-import { PermissionApprovalDialog } from './PermissionApprovalDialog';
 import { ProjectConfigView } from './ProjectConfigView';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { SessionHeader } from './session-header';
@@ -1180,10 +1179,6 @@ export function ChatView() {
         focusSection={inspectorFocusSection}
         onFocusSectionConsumed={() => setInspectorFocusSection(null)}
       />
-
-      {session.activeSession?.id ? (
-        <PermissionApprovalDialog sessionId={session.activeSession.id} />
-      ) : null}
 
       <CommandPalette
         isOpen={paletteOpen}

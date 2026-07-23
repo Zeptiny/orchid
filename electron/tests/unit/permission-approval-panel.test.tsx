@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
-  PermissionApprovalDialog,
   PermissionApprovalPanel,
   enqueueApproval,
   formatToolArgs,
   reconcileApprovals,
   removeApproval,
-} from '../../src/renderer/components/PermissionApprovalDialog';
-import { DialogSurface } from '../../src/renderer/components/ui/DialogSurface';
+} from '../../src/renderer/components/PermissionApprovalPanel';
 import type { PermissionApprovalRequestedEvent } from '../../src/shared/types/ipc';
 
 function approvalRequest(
@@ -38,23 +36,15 @@ function renderPanel(
   );
 }
 
-function renderDialog(request: PermissionApprovalRequestedEvent): string {
+function renderInlineCard(request: PermissionApprovalRequestedEvent): string {
   return renderToStaticMarkup(
-    <DialogSurface
-      isOpen
-      onClose={() => {}}
-      closeOnBackdrop={false}
-      closeOnEscape={false}
-      label="Permission request"
-      overlayClassName="orchid-permission-overlay"
-      panelClassName="orchid-permission-dialog"
-    >
+    <section className="orchid-permission" aria-label="Permission request">
       <PermissionApprovalPanel
         request={request}
         submittingDecision={null}
         onAnswer={() => {}}
       />
-    </DialogSurface>,
+    </section>,
   );
 }
 
@@ -197,18 +187,14 @@ describe('PermissionApprovalPanel markup', () => {
   });
 });
 
-describe('PermissionApprovalDialog shell', () => {
-  it('renders a centered modal dialog with the approval panel', () => {
-    const html = renderDialog(approvalRequest());
-    expect(html).toContain('role="dialog"');
-    expect(html).toContain('aria-modal="true"');
+describe('inline composer card', () => {
+  it('renders the approval panel inside the inline card without a modal overlay', () => {
+    const html = renderInlineCard(approvalRequest());
+    expect(html).toContain('orchid-permission');
     expect(html).toContain('aria-label="Permission request"');
-    expect(html).toContain('orchid-permission-overlay');
-    expect(html).toContain('orchid-permission-dialog');
     expect(html).toContain('execute_command');
-  });
-
-  it('renders nothing while no approval is pending', () => {
-    expect(renderToStaticMarkup(<PermissionApprovalDialog sessionId="session-1" />)).toBe('');
+    expect(html).not.toContain('role="dialog"');
+    expect(html).not.toContain('aria-modal');
+    expect(html).not.toContain('orchid-permission-overlay');
   });
 });

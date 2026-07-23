@@ -1,18 +1,8 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type Ref,
-} from 'react';
-import type {
-  PermissionApprovalAnswerMessage,
-  PermissionApprovalRequestedEvent,
-} from '../../shared/types/ipc';
+import { useEffect, useRef, useState } from 'react';
+import type { PermissionApprovalRequestedEvent } from '../../shared/types/ipc';
 import type { RiskClass } from '../../shared/types/permission';
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
-import { DialogSurface } from './ui/DialogSurface';
 import { StatusBadge, type StatusBadgeTone } from './ui/StatusBadge';
 
 export function formatToolArgs(args: unknown): string {
@@ -67,21 +57,26 @@ export function reconcileApprovals(
 export interface PermissionApprovalPanelProps {
   request: PermissionApprovalRequestedEvent;
   submittingDecision: 'approved' | 'denied' | null;
-  denyButtonRef?: Ref<HTMLButtonElement>;
   onAnswer: (decision: 'approved' | 'denied', reason?: string) => void;
 }
 
 export function PermissionApprovalPanel({
   request,
   submittingDecision,
-  denyButtonRef,
   onAnswer,
 }: PermissionApprovalPanelProps) {
   const [reasonMode, setReasonMode] = useState(false);
   const [reason, setReason] = useState('');
   const reasonInputRef = useRef<HTMLTextAreaElement>(null);
+  const denyButtonRef = useRef<HTMLButtonElement>(null);
   const busy = submittingDecision !== null;
   const trimmedReason = reason.trim();
+
+  // Safe default: land focus on Deny so a bare Enter refuses the call. The
+  // panel is keyed by toolCallId, so this runs once per request.
+  useEffect(() => {
+    denyButtonRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     if (reasonMode) reasonInputRef.current?.focus();
@@ -217,139 +212,3 @@ export function PermissionApprovalPanel({
   );
 }
 
-export interface PermissionApprovalDialogProps {
-  sessionId: string;
-}
-
-const NOOP = () => {};
-
-export function PermissionApprovalDialog({ sessionId }: PermissionApprovalDialogProps) {
-  const [queue, setQueue] = useState<PermissionApprovalRequestedEvent[]>([]);
-  const [submittingDecision, setSubmittingDecision] = useState<'approved' | 'denied' | null>(null);
-  const busyRef = useRef<string | null>(null);
-  const hydrationRef = useRef<{
-    buffered: PermissionApprovalRequestedEvent[];
-    settledToolCallIds: Set<string>;
-  } | null>(null);
-  const hydrationGenerationRef = useRef(0);
-  const denyButtonRef = useRef<HTMLButtonElement>(null);
-
-  const pending = queue[0]?.sessionId === sessionId ? queue[0] : null;
-
-  useEffect(() => {
-    const bridge = window.orchid?.permission;
-    const generation = ++hydrationGenerationRef.current;
-    busyRef.current = null;
-    setQueue([]);
-    setSubmittingDecision(null);
-
-    if (!bridge) {
-      hydrationRef.current = null;
-      return;
-    }
-
-    const hydration = {
-      buffered: [] as PermissionApprovalRequestedEvent[],
-      settledToolCallIds: new Set<string>(),
-    };
-    hydrationRef.current = hydration;
-    let cancelled = false;
-
-    const unsubscribeRequested = bridge.onApprovalRequested((event) => {
-      if (event.sessionId !== sessionId || !event.toolCallId) return;
-      if (hydrationRef.current === hydration) {
-        if (!hydration.buffered.some((item) => item.toolCallId === event.toolCallId)) {
-          hydration.buffered.push(event);
-        }
-        return;
-      }
-      setQueue((previous) => enqueueApproval(previous, event));
-    });
-
-    const unsubscribeSettled = bridge.onApprovalSettled((event) => {
-      if (event.sessionId !== sessionId || !event.toolCallId) return;
-      if (busyRef.current === event.toolCallId) busyRef.current = null;
-      if (hydrationRef.current === hydration) {
-        hydration.settledToolCallIds.add(event.toolCallId);
-        hydration.buffered = hydration.buffered.filter(
-          (item) => item.toolCallId !== event.toolCallId,
-        );
-      }
-      setQueue((previous) => removeApproval(previous, event.toolCallId));
-    });
-
-    const applySnapshot = (snapshot: PermissionApprovalRequestedEvent[]) => {
-      if (cancelled || hydrationGenerationRef.current !== generation) return;
-      if (hydrationRef.current !== hydration) return;
-      hydrationRef.current = null;
-      setQueue(
-        reconcileApprovals(
-          snapshot,
-          hydration.buffered,
-          hydration.settledToolCallIds,
-          sessionId,
-        ),
-      );
-    };
-
-    void bridge.snapshot().then(
-      (snapshot) => applySnapshot(snapshot.approvals),
-      () => applySnapshot([]),
-    );
-
-    return () => {
-      cancelled = true;
-      if (hydrationRef.current === hydration) hydrationRef.current = null;
-      unsubscribeRequested();
-      unsubscribeSettled();
-    };
-  }, [sessionId]);
-
-  const answer = useCallback(
-    (decision: 'approved' | 'denied', reason?: string) => {
-      const bridge = window.orchid?.permission;
-      if (!bridge || !pending || busyRef.current) return;
-      const toolCallId = pending.toolCallId;
-      busyRef.current = toolCallId;
-      setSubmittingDecision(decision);
-      const payload: PermissionApprovalAnswerMessage = reason
-        ? { toolCallId, decision, reason }
-        : { toolCallId, decision };
-      const finish = () => {
-        if (busyRef.current === toolCallId) busyRef.current = null;
-        setSubmittingDecision(null);
-      };
-      void bridge.answer(payload).then(
-        (result) => {
-          finish();
-          if (result.ok) setQueue((previous) => removeApproval(previous, toolCallId));
-        },
-        finish,
-      );
-    },
-    [pending],
-  );
-
-  if (!pending) return null;
-
-  return (
-    <DialogSurface
-      isOpen
-      onClose={NOOP}
-      closeOnBackdrop={false}
-      closeOnEscape={false}
-      label="Permission request"
-      initialFocusRef={denyButtonRef}
-      overlayClassName="orchid-permission-overlay"
-      panelClassName="orchid-permission-dialog"
-    >
-      <PermissionApprovalPanel
-        key={pending.toolCallId}
-        request={pending}
-        submittingDecision={submittingDecision}
-        denyButtonRef={denyButtonRef}
-        onAnswer={answer}
-      />
-    </DialogSurface>
-  );
-}
