@@ -52,6 +52,7 @@ export const FILE_TOOLS = new Set<string>([
   'write',
   'edit',
   'apply_patch',
+  'grep',
   'glob',
   'read_directory',
   'get_file_skeleton',
@@ -64,6 +65,7 @@ export const FILE_TOOLS = new Set<string>([
 /** Default inside/outside permission modes for each file tool. */
 export const FILE_TOOL_DEFAULTS: Record<string, FileToolPermission> = {
   read: { inside: 'allow', outside: 'ask' },
+  grep: { inside: 'allow', outside: 'ask' },
   glob: { inside: 'allow', outside: 'ask' },
   read_directory: { inside: 'allow', outside: 'ask' },
   get_file_skeleton: { inside: 'allow', outside: 'ask' },

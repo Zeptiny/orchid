@@ -156,8 +156,10 @@ describe('PermissionsTab grouping', () => {
     expect(html).toContain('id="perm-read-outside"');
     expect(html).toContain('id="perm-apply_patch-inside"');
     expect(html).toContain('id="perm-apply_patch-outside"');
-    expect(html).not.toContain('id="perm-grep-inside"');
-    expect(html).toContain('id="perm-grep"');
+    expect(html).toContain('id="perm-grep-inside"');
+    expect(html).toContain('id="perm-grep-outside"');
+    expect(html).not.toContain('id="perm-rag_search-inside"');
+    expect(html).toContain('id="perm-rag_search"');
     expect(html).toContain('id="perm-execute_command"');
     expect(html).toContain('Inside project');
     expect(html).toContain('Outside project');
@@ -165,7 +167,7 @@ describe('PermissionsTab grouping', () => {
 
   it('renders all four modes in each selector', () => {
     const html = renderTab(makeConfig());
-    const start = html.indexOf('id="perm-grep"');
+    const start = html.indexOf('id="perm-execute_command"');
     const block = html.slice(start, html.indexOf('</select>', start));
     for (const mode of ['allow', 'ask', 'decide-for-me', 'ask-when-flagged']) {
       expect(block).toContain(`value="${mode}"`);
@@ -176,7 +178,8 @@ describe('PermissionsTab grouping', () => {
 describe('PermissionsTab defaults and overrides', () => {
   it('shows risk-class defaults when no overrides are set', () => {
     const html = renderTab(makeConfig());
-    expect(selectedValue(html, 'perm-grep')).toBe('allow');
+    expect(selectedValue(html, 'perm-grep-inside')).toBe('allow');
+    expect(selectedValue(html, 'perm-grep-outside')).toBe('ask');
     expect(selectedValue(html, 'perm-execute_command')).toBe('ask');
     expect(selectedValue(html, 'perm-web_fetch')).toBe('ask');
     expect(selectedValue(html, 'perm-read-inside')).toBe('allow');

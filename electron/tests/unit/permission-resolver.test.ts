@@ -94,6 +94,15 @@ describe('permission resolver', () => {
     expect(resolveToolScope('apply_patch', { patch }, workspace)).toBe('outside');
   });
 
+  it('classifies grep by its directory_path scope', () => {
+    expect(
+      resolveToolScope('grep', { pattern: 'x', directory_path: '.' }, workspace),
+    ).toBe('inside');
+    expect(
+      resolveToolScope('grep', { pattern: 'x', directory_path: outside }, workspace),
+    ).toBe('outside');
+  });
+
   it('resolves an exact MCP rule before its server wildcard and the risk default', () => {
     const config = defaults();
     config.permissions = {
