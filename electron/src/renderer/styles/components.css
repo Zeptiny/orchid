@@ -1152,6 +1152,73 @@
     @apply px-3 py-4 text-center text-xs text-base-content/60;
   }
 
+  /* ── Permission approval dialog ───────────────────────────────────────────── */
+
+  .orchid-permission-overlay {
+    @apply fixed inset-0 z-50 flex items-center justify-center p-4;
+    background: color-mix(in srgb, var(--overlay-color) 62%, transparent);
+    backdrop-filter: blur(2px);
+  }
+
+  .orchid-permission-dialog {
+    @apply flex w-full max-w-xl flex-col overflow-hidden rounded-box border border-base-300 bg-base-200 shadow-2xl;
+    animation: orchid-rise 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .orchid-permission-header {
+    @apply flex items-start justify-between gap-3 border-b border-base-300 px-4 py-3;
+    background: color-mix(in srgb, var(--color-warning) 9%, var(--color-base-200));
+  }
+
+  .orchid-permission-icon {
+    @apply flex h-9 w-9 shrink-0 items-center justify-center rounded-lg;
+    border: 1px solid color-mix(in srgb, var(--color-warning) 35%, var(--color-base-300));
+    background: color-mix(in srgb, var(--color-warning) 15%, var(--color-base-100));
+    color: var(--color-warning);
+  }
+
+  .orchid-permission-eyebrow {
+    @apply text-xs font-semibold uppercase tracking-wide text-base-content/60;
+  }
+
+  .orchid-permission-title {
+    @apply m-0 truncate font-mono text-base font-semibold leading-tight text-base-content;
+  }
+
+  .orchid-permission-cwd {
+    @apply truncate font-mono text-xs text-base-content/60;
+  }
+
+  .orchid-permission-body {
+    @apply flex flex-col gap-2.5 overflow-y-auto px-4 py-3;
+    max-height: 60vh;
+  }
+
+  .orchid-permission-section-label {
+    @apply text-xs font-medium text-base-content/60;
+  }
+
+  .orchid-permission-args {
+    @apply m-0 overflow-auto rounded-md border border-base-300 bg-base-100 p-3 font-mono text-xs leading-relaxed text-base-content;
+    max-height: 300px;
+  }
+
+  .orchid-permission-reason {
+    @apply w-full resize-none rounded-md border border-base-300 bg-base-100 px-2.5 py-2 text-sm text-base-content outline-none;
+    transition:
+      border-color var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+      box-shadow var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
+  }
+
+  .orchid-permission-reason:focus {
+    border-color: color-mix(in srgb, var(--color-error) 45%, var(--color-base-300));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-error) 10%, transparent);
+  }
+
+  .orchid-permission-footer {
+    @apply flex items-center justify-end gap-2 border-t border-base-300 px-4 py-3;
+  }
+
   /* ── Keyboard shortcuts help modal ────────────────────────────────────────── */
 
   .orchid-shortcuts-help-overlay {
