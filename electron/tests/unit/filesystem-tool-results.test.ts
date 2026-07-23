@@ -479,7 +479,7 @@ describe('XML agent projections', () => {
     expect(execution.agentProjection.content).not.toContain('<tail>');
   });
 
-  it('write projection: long files use head/tail only (middle omitted)', async () => {
+  it('write projection: long files include full content in preview', async () => {
     const registry = new ToolRegistry();
     registry.register(writeDefinition, writeHandler);
     const lines = Array.from({ length: 20 }, (_, i) => `line-${i + 1}`);
@@ -495,14 +495,12 @@ describe('XML agent projections', () => {
     );
     const proj = execution.agentProjection.content;
     expect(fileWriteDataSchema.parse(execution.canonical.data).content).toContain('line-10');
-    expect(proj).toContain('<head>');
-    expect(proj).toContain('<tail>');
+    expect(proj).toContain('<preview>');
     expect(proj).toContain('line-1');
-    expect(proj).toContain('line-5');
-    expect(proj).toContain('line-16');
+    expect(proj).toContain('line-10');
     expect(proj).toContain('line-20');
-    expect(proj).not.toContain('line-10');
-    expect(proj).not.toContain('<preview>');
+    expect(proj).not.toContain('<head>');
+    expect(proj).not.toContain('<tail>');
   });
 });
 

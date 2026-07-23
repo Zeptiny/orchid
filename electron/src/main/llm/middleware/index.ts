@@ -27,7 +27,7 @@ export { createRetryMiddleware, type RetryMiddlewareOptions } from './retry';
 export { createThrottleMiddleware, type ThrottleMiddlewareOptions } from './throttle';
 export { isTransientError } from './error-classification';
 export {
-  TOOL_OUTPUT_INLINE_THRESHOLD,
+  getToolOutputInlineThreshold,
   TOOLS_WITHOUT_OUTPUT_OFFLOAD,
 } from './provider-quirks';
 export {

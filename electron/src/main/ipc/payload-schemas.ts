@@ -91,6 +91,19 @@ export const configSaveSchema = z.object({
   }
 });
 
+/**
+ * Project-scoped config:save payload — a verified `projectDir` plus a
+ * free-form updates map. Allowed-key filtering and merged-structure
+ * validation happen in the handler after the workspace is verified.
+ */
+export const configSaveProjectSchema = z.object({
+  projectDir: z.string().min(1),
+  updates: z.record(z.unknown()),
+});
+
+/** Project-scoped config:read payload — a bare non-empty `projectDir`. */
+export const configReadProjectSchema = z.string().min(1);
+
 const permissionUpdatesSchema = z.record(z.string(), permissionRuleSchema.nullable())
   .superRefine((updates, ctx) => {
     for (const key of Object.keys(updates)) {

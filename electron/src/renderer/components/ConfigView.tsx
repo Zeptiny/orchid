@@ -795,6 +795,24 @@ function renderTab(
           readLineLimit={config.read_line_limit}
           theme={config.theme}
           alwaysExpandToolGroups={config.always_expand_tool_groups}
+          commandMaxOutputBytes={config.command_max_output_bytes}
+          toolOutputInlineThreshold={config.tool_output_inline_threshold}
+          grepPerFileTimeout={config.grep_per_file_timeout}
+          webFetchTimeout={config.web_fetch_timeout}
+          webFetchMaxBodyBytes={config.web_fetch_max_body_bytes}
+          webFetchUserAgent={config.web_fetch_user_agent}
+          llmRetryBackoffBase={config.llm_retry_backoff_base}
+          llmRetryMaxDelay={config.llm_retry_max_delay}
+          maxBackgroundProcesses={config.max_background_processes}
+          approvalTimeout={config.approval_timeout}
+          subagentWaitTimeout={config.subagent_wait_timeout}
+          bgPromptMaxEntries={config.bg_prompt_max_entries}
+          bgPromptTailLines={config.bg_prompt_tail_lines}
+          bgPromptTailChars={config.bg_prompt_tail_chars}
+          bgOutputHeadBytes={config.bg_output_head_bytes}
+          bgOutputTailBytes={config.bg_output_tail_bytes}
+          readOutputLongPollMax={config.read_output_long_poll_max}
+          mcpResultMaxBytes={config.mcp_result_max_bytes}
           onChange={updateDraft}
         />
       );
@@ -804,6 +822,7 @@ function renderTab(
           config={permission.config}
           updateDraft={permission.updateDraft}
           scope={permission.scope}
+          lockedScope="global"
           projectDir={permission.projectDir}
           inheritedPermissions={permission.scope === 'project'
             ? permission.inheritedPermissions
@@ -845,7 +864,7 @@ function renderTab(
       if (!definitions) {
         return <StateMessage kind="warning" title="Skills could not be loaded." />;
       }
-      return <SkillsTab data={definitions} onReload={reloadDefinitions} />;
+      return <SkillsTab data={definitions} onReload={reloadDefinitions} lockedScope="global" />;
     case 'agents':
       if (!definitions) {
         return <StateMessage kind="warning" title="Agents could not be loaded." />;
@@ -855,12 +874,13 @@ function renderTab(
           data={definitions}
           tierModels={config.tier_models}
           onReload={reloadDefinitions}
+          lockedScope="global"
         />
       );
     case 'personalities':
       if (!definitions) {
         return <StateMessage kind="warning" title="Personalities could not be loaded." />;
       }
-      return <PersonalitiesTab data={definitions} onReload={reloadDefinitions} />;
+      return <PersonalitiesTab data={definitions} onReload={reloadDefinitions} lockedScope="global" />;
   }
 }

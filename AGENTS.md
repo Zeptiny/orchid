@@ -282,7 +282,10 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 - Each main-agent and subagent turn builds a registry from its frozen project runtime; the process singleton remains only for non-turn compatibility surfaces
 - Built-in tools: filesystem, search, process, AST, RAG, todo, web, skill, MCP, subagent
 - MCP tools are merged from the leased project-owned `MCPManager` at stream time; leases keep superseded managers alive until their turns finish
-- Tool output offloading: large outputs stored in session files, summary sent to LLM
+- Tool results pass through two layers before reaching the LLM:
+  1. **Agent projection** (`result.ts`): each tool family has an `AgentProjector` that transforms canonical result data into the LLM-visible XML. Projectors must not truncate — they send full content and rely on the offloading layer for size control.
+  2. **Output offloading** (`tool-dispatch.ts`): if the projected content exceeds `tool_output_inline_threshold` (config, default 20 KB) and the tool is not in `TOOLS_WITHOUT_OUTPUT_OFFLOAD` (`provider-quirks.ts`), the content is written to a per-session cache file and replaced with a compact pointer. When no session is active (e.g., subagent context), content is hard-truncated to the threshold with a warning instead.
+  - `TOOLS_WITHOUT_OUTPUT_OFFLOAD` exempts self-limiting tools (read, grep, glob, etc.) whose projections already bound their output. Do not add projection-level truncation to individual tools — size control belongs in the offloading layer so behavior stays uniform across all tools.
 - **`ToolExecutionContext`**: frozen `{ cwd, sessionId? }` captured at turn start; every tool handler receives it (never re-reads live session/process.cwd mid-turn)
 - **`tool:execute` IPC**: allowlisted read-only tools only; args validated via `toolRegistry.validate` before the handler
 
@@ -303,7 +306,7 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 Applied via `wrapLanguageModel()`:
 1. **Retry** (outermost) — exponential backoff for transient errors
 2. **Throttle** — rate-limits thinking content yields
-(Empty-choices handling is owned by the AI SDK; tool-output offload thresholds live in `provider-quirks.ts` as constants only.)
+(Empty-choices handling is owned by the AI SDK; tool-output offload thresholds are config-driven via `tool_output_inline_threshold` with fallback defaults in `provider-quirks.ts`.)
 
 ### RAG Pipeline
 - ONNX-based local embeddings (`fastembed/BAAI/bge-small-en-v1.5`)

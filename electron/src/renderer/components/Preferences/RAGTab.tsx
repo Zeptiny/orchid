@@ -35,6 +35,8 @@ export interface RAGConfig {
   embedding_model: string;
   embedding_threads: number;
   embedding_batch_size: number;
+  embedding_api_timeout: number;
+  embedding_api_retries: number;
   embedding_api_model: ModelSelection | null;
 }
 
@@ -254,6 +256,34 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
               min={1}
               max={256}
               title="Texts per forward pass. Lower = less peak RAM/CPU."
+            />
+          </FormField>
+
+          <FormField label="Embedding API Timeout (s)" htmlFor="rag-embedding-api-timeout" className="config-field">
+            <TextInput
+              id="rag-embedding-api-timeout"
+              type="number"
+              value={rag.embedding_api_timeout ?? 30}
+              onChange={(e) => {
+                const num = parseConfigNumber(e.target.value, 1);
+                if (num !== null) updateField('embedding_api_timeout', num);
+              }}
+              bordered
+              className="w-full"
+              min={1}
+            />
+          </FormField>
+
+          <FormField label="Embedding API Retries" htmlFor="rag-embedding-api-retries" className="config-field">
+            <TextInput
+              id="rag-embedding-api-retries"
+              type="number"
+              value={rag.embedding_api_retries ?? 3}
+              onChange={(e) => handleNumberChange('embedding_api_retries', e.target.value, 0)}
+              bordered
+              className="w-full"
+              min={0}
+              max={10}
             />
           </FormField>
         </div>

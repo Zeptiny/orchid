@@ -39,7 +39,6 @@ import type {
   SessionActivity,
   Config,
   ConfigDiagnostic,
-  ModelMetadata,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -71,7 +70,6 @@ export type {
   SessionActivity,
   Config,
   ConfigDiagnostic,
-  ModelMetadata,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -350,6 +348,24 @@ export type ConfigPatch = {
   default_project_dir?: string | null;
   always_expand_tool_groups?: boolean;
   has_completed_onboarding?: boolean;
+  command_max_output_bytes?: number;
+  tool_output_inline_threshold?: number;
+  approval_timeout?: number;
+  subagent_wait_timeout?: number;
+  web_fetch_timeout?: number;
+  web_fetch_max_body_bytes?: number;
+  web_fetch_user_agent?: string;
+  bg_prompt_max_entries?: number;
+  bg_prompt_tail_lines?: number;
+  bg_prompt_tail_chars?: number;
+  mcp_result_max_bytes?: number;
+  max_background_processes?: number;
+  bg_output_head_bytes?: number;
+  bg_output_tail_bytes?: number;
+  grep_per_file_timeout?: number;
+  read_output_long_poll_max?: number;
+  llm_retry_backoff_base?: number;
+  llm_retry_max_delay?: number;
 };
 
 export interface ConfigSaveMessage {
@@ -376,6 +392,16 @@ export type PermissionConfigScopeSaveMessage =
       /** Canonical project observed when this draft was created. */
       expectedProjectDir: string;
     };
+
+export interface ProjectConfigReadResult {
+  projectDir: string;
+  overrides: Record<string, unknown>;
+}
+
+export interface ProjectConfigSaveMessage {
+  projectDir: string;
+  updates: Record<string, unknown>;
+}
 
 // ── Provider API ─────────────────────────────────────────────────────────────
 
@@ -859,9 +885,11 @@ export interface OrchidAPI {
     save: (updates: ConfigSaveMessage) => Promise<{ status: string }>;
     permissionScopes: () => Promise<PermissionConfigScopes>;
     savePermissionScope: (message: PermissionConfigScopeSaveMessage) => Promise<{ status: string }>;
-    modelMetadata: (modelId: string) => Promise<ModelMetadata>;
     /** List personality names loaded from `~/.orchid/personalities/*.md`. */
     listPersonalities: () => Promise<string[]>;
+    readProject: (projectDir: string) => Promise<ProjectConfigReadResult>;
+    saveProject: (message: ProjectConfigSaveMessage) => Promise<void>;
+    getHome: () => Promise<Config>;
   };
 
   providers: {
@@ -1057,8 +1085,10 @@ export const IPC_CHANNELS = {
   CONFIG_SAVE: 'config:save',
   CONFIG_PERMISSION_SCOPES: 'config:permission_scopes',
   CONFIG_SAVE_PERMISSION_SCOPE: 'config:save_permission_scope',
-  CONFIG_MODEL_METADATA: 'config:model_metadata',
   CONFIG_LIST_PERSONALITIES: 'config:list_personalities',
+  CONFIG_READ_PROJECT: 'config:read_project',
+  CONFIG_SAVE_PROJECT: 'config:save_project',
+  CONFIG_GET_HOME: 'config:get_home',
 
   // Providers — every response is redacted and every mutation is validated
   // in the main process. There is deliberately no generic credential-read API.
@@ -1188,8 +1218,10 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.CONFIG_SAVE,
   IPC_CHANNELS.CONFIG_PERMISSION_SCOPES,
   IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE,
-  IPC_CHANNELS.CONFIG_MODEL_METADATA,
   IPC_CHANNELS.CONFIG_LIST_PERSONALITIES,
+  IPC_CHANNELS.CONFIG_READ_PROJECT,
+  IPC_CHANNELS.CONFIG_SAVE_PROJECT,
+  IPC_CHANNELS.CONFIG_GET_HOME,
   IPC_CHANNELS.PROVIDERS_LIST,
   IPC_CHANNELS.PROVIDERS_CREATE,
   IPC_CHANNELS.PROVIDERS_UPDATE,

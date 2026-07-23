@@ -321,6 +321,24 @@ const ENV_MAP: EnvMapping[] = [
   { envKey: 'ORCHID_MCP_PER_SERVER_TIMEOUT', configPath: ['mcp_per_server_timeout'], type: 'float' },
   { envKey: 'ORCHID_BG_CMD_IDLE_TIMEOUT', configPath: ['background_command_idle_timeout'], type: 'float' },
   { envKey: 'ORCHID_MAX_TOOL_STEPS', configPath: ['max_tool_steps'], type: 'int' },
+  { envKey: 'ORCHID_COMMAND_MAX_OUTPUT_BYTES', configPath: ['command_max_output_bytes'], type: 'int' },
+  { envKey: 'ORCHID_TOOL_OUTPUT_INLINE_THRESHOLD', configPath: ['tool_output_inline_threshold'], type: 'int' },
+  { envKey: 'ORCHID_APPROVAL_TIMEOUT', configPath: ['approval_timeout'], type: 'float' },
+  { envKey: 'ORCHID_SUBAGENT_WAIT_TIMEOUT', configPath: ['subagent_wait_timeout'], type: 'float' },
+  { envKey: 'ORCHID_WEB_FETCH_TIMEOUT', configPath: ['web_fetch_timeout'], type: 'float' },
+  { envKey: 'ORCHID_WEB_FETCH_MAX_BODY', configPath: ['web_fetch_max_body_bytes'], type: 'int' },
+  { envKey: 'ORCHID_WEB_FETCH_USER_AGENT', configPath: ['web_fetch_user_agent'], type: 'string' },
+  { envKey: 'ORCHID_BG_PROMPT_MAX_ENTRIES', configPath: ['bg_prompt_max_entries'], type: 'int' },
+  { envKey: 'ORCHID_BG_PROMPT_TAIL_LINES', configPath: ['bg_prompt_tail_lines'], type: 'int' },
+  { envKey: 'ORCHID_BG_PROMPT_TAIL_CHARS', configPath: ['bg_prompt_tail_chars'], type: 'int' },
+  { envKey: 'ORCHID_MCP_RESULT_MAX_BYTES', configPath: ['mcp_result_max_bytes'], type: 'int' },
+  { envKey: 'ORCHID_MAX_BG_PROCESSES', configPath: ['max_background_processes'], type: 'int' },
+  { envKey: 'ORCHID_BG_OUTPUT_HEAD_BYTES', configPath: ['bg_output_head_bytes'], type: 'int' },
+  { envKey: 'ORCHID_BG_OUTPUT_TAIL_BYTES', configPath: ['bg_output_tail_bytes'], type: 'int' },
+  { envKey: 'ORCHID_GREP_PER_FILE_TIMEOUT', configPath: ['grep_per_file_timeout'], type: 'float' },
+  { envKey: 'ORCHID_READ_OUTPUT_LONG_POLL_MAX', configPath: ['read_output_long_poll_max'], type: 'float' },
+  { envKey: 'ORCHID_LLM_RETRY_BACKOFF_BASE', configPath: ['llm_retry_backoff_base'], type: 'float' },
+  { envKey: 'ORCHID_LLM_RETRY_MAX_DELAY', configPath: ['llm_retry_max_delay'], type: 'float' },
 ];
 
 /** Nested RAG env mappings — matches Python `config.py:136-142`. */
@@ -332,6 +350,8 @@ const RAG_ENV_MAP: EnvMapping[] = [
   { envKey: 'ORCHID_RAG_EMBEDDING_MODEL', configPath: ['rag', 'embedding_model'], type: 'string' },
   { envKey: 'ORCHID_RAG_EMBEDDING_THREADS', configPath: ['rag', 'embedding_threads'], type: 'int' },
   { envKey: 'ORCHID_RAG_EMBEDDING_BATCH_SIZE', configPath: ['rag', 'embedding_batch_size'], type: 'int' },
+  { envKey: 'ORCHID_RAG_EMBEDDING_API_TIMEOUT', configPath: ['rag', 'embedding_api_timeout'], type: 'float' },
+  { envKey: 'ORCHID_RAG_EMBEDDING_API_RETRIES', configPath: ['rag', 'embedding_api_retries'], type: 'int' },
 ];
 
 /**

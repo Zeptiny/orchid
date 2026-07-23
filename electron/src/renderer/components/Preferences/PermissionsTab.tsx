@@ -11,13 +11,16 @@ import {
   type FileToolPermission,
 } from '../../../shared/types/permission';
 import { Icon, type IconName } from '../Icon';
+import { parseConfigNumber } from '../../utils/config-draft';
 import { Button } from '../ui/Button';
 import { Disclosure } from '../ui/Disclosure';
+import { FormField } from '../ui/FormField';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
 import { Select } from '../ui/Select';
 import { StateMessage } from '../ui/StateMessage';
 import { StatusBadge } from '../ui/StatusBadge';
+import { TextInput } from '../ui/TextInput';
 import { ScopeToggle } from './ScopeToggle';
 
 const PERMISSION_MODES: ReadonlyArray<{ value: PermissionModeValue; label: string }> = [
@@ -277,6 +280,7 @@ export interface PermissionsTabProps {
   config: Config;
   updateDraft: (updates: ConfigPatch) => void;
   scope?: PermissionConfigScope;
+  lockedScope?: 'global' | 'project';
   projectDir?: string | null;
   onScopeChange?: (scope: PermissionConfigScope) => void;
   inheritedPermissions?: Record<string, PermissionRule>;
@@ -288,11 +292,13 @@ export function PermissionsTab({
   config,
   updateDraft,
   scope = 'global',
+  lockedScope,
   projectDir = null,
   onScopeChange,
   inheritedPermissions = {},
   projectLoading = false,
 }: PermissionsTabProps) {
+  const effectiveScope = lockedScope ?? scope;
   const permissions = config.permissions;
   const overrideCount = Object.keys(permissions).length;
   const permissionKeys = useMemo(
@@ -347,13 +353,13 @@ export function PermissionsTab({
     [permissions],
   );
 
-  if (projectLoading && scope === 'project') {
+  if (projectLoading && effectiveScope === 'project') {
     return <StateMessage kind="loading" title="Loading project permissions…" />;
   }
 
   return (
     <div className="config-form flex flex-col gap-4">
-      {onScopeChange && (
+      {onScopeChange && !lockedScope && (
         <ScopeToggle
           value={scope}
           onChange={(next) => {
@@ -367,9 +373,9 @@ export function PermissionsTab({
       )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-2xl text-sm text-base-content/70">
-          Choose how each tool behaves in the {scope === 'project' ? 'active project' : 'global user'} scope. File tools carry
+          Choose how each tool behaves in the {effectiveScope === 'project' ? 'active project' : 'global user'} scope. File tools carry
           separate rules for paths inside and outside the current project; everything else
-          uses a single mode. Tools you leave untouched {scope === 'project'
+          uses a single mode. Tools you leave untouched {effectiveScope === 'project'
             ? 'inherit the global user rule before falling back to the risk-class default.'
             : 'fall back to their risk-class default.'}
         </p>
@@ -383,6 +389,34 @@ export function PermissionsTab({
           Reset all to defaults
         </Button>
       </div>
+
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader title="History" />
+        <div className="config-form-grid">
+          <FormField
+            label="Permission History Size"
+            htmlFor="perm-history-size"
+            hint="Number of recent permission decisions to remember (0 disables)."
+            className="config-field"
+          >
+            <TextInput
+              id="perm-history-size"
+              type="number"
+              value={config.permission_history_size}
+              onChange={(e) => {
+                const num = parseConfigNumber(e.target.value, 0, { integer: true });
+                if (num !== null && num <= 50) {
+                  updateDraft({ permission_history_size: num });
+                }
+              }}
+              bordered
+              className="w-full"
+              min={0}
+              max={50}
+            />
+          </FormField>
+        </div>
+      </Panel>
 
       {RISK_SECTIONS.map((section) => {
         const customCount = section.tools.filter(

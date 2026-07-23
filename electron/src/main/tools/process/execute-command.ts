@@ -23,12 +23,6 @@ import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../re
 import { getToolConfig, resolveToolPath } from '../types';
 
 // ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const MAX_OUTPUT_BYTES = 1 * 1024 * 1024; // 1 MiB
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -175,7 +169,7 @@ export interface ExecuteCommandOptions {
   interactive?: boolean;
   sessionId?: string;
   agentScopeId?: string;
-  config?: Pick<Config, 'command_timeout'>;
+  config?: Pick<Config, 'command_timeout' | 'command_max_output_bytes'>;
   abortSignal?: AbortSignal;
 }
 
@@ -242,6 +236,7 @@ export async function executeCommand(
     timeout = options.config?.command_timeout ?? getConfig().command_timeout;
   }
   const timeoutMs = timeout * 1000;
+  const maxOutputBytes = options.config?.command_max_output_bytes ?? getConfig().command_max_output_bytes;
 
   const env = { ...process.env, ...ENV_SUPPRESSION };
 
@@ -301,7 +296,7 @@ export async function executeCommand(
     try {
       let bounded: { stdout: Buffer; stderr: Buffer; truncated: boolean };
       try {
-        bounded = await readBounded(proc, timeoutMs, MAX_OUTPUT_BYTES, abortSignal);
+        bounded = await readBounded(proc, timeoutMs, maxOutputBytes, abortSignal);
       } catch (err) {
         // Inner command_timeout or outer abort — kill live handle if still running
         if (proc.exitCode === null) {

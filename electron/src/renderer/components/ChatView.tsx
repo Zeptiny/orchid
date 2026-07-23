@@ -34,6 +34,7 @@ import { Sidebar } from './Sidebar';
 import { LeftSidebar } from './LeftSidebar';
 import { CommandPalette } from './CommandPalette';
 import { PermissionApprovalDialog } from './PermissionApprovalDialog';
+import { ProjectConfigView } from './ProjectConfigView';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { SessionHeader } from './session-header';
 import { SessionTabBar } from './SessionTabBar';
@@ -82,6 +83,7 @@ export function ChatView() {
   const [toast, setToast] = useState<Toast | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [contentMode, setContentMode] = useState<'chat' | 'subagents'>('chat');
+  const [projectConfigDir, setProjectConfigDir] = useState<string | null>(null);
   const [subagentOpenRequest, setSubagentOpenRequest] = useState<SubagentOpenRequest>({ generation: 0, id: null });
   const chatContentRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -91,7 +93,7 @@ export function ChatView() {
     if (!element) return;
     if (contentMode === 'subagents') element.setAttribute('inert', '');
     else element.removeAttribute('inert');
-  }, [contentMode]);
+  }, [contentMode, projectConfigDir]);
 
   const openSubagentView = useCallback((id?: string) => {
     setSubagentOpenRequest((previous) => ({ generation: previous.generation + 1, id: id ?? null }));
@@ -278,6 +280,7 @@ export function ChatView() {
 
   const handleSessionSelect = useCallback(
     async (id: string) => {
+      setProjectConfigDir(null);
       // Already focused this session (not draft) — skip full reload to avoid flicker.
       if (session.activeSession?.id === id && !draftTabVisible) {
         return;
@@ -335,6 +338,7 @@ export function ChatView() {
   }, [handleSessionSelect]);
 
   const enterDraftMode = useCallback(async (opts?: { clearComposer?: boolean }) => {
+    setProjectConfigDir(null);
     const gen = ++sessionSwitchGen.current;
     chat.beginSessionSwitch(null);
     messageQueue.clearQueue();
@@ -380,14 +384,9 @@ export function ChatView() {
     });
   }, [session, enterDraftMode]);
 
-  // Project header click: select the project itself (draft bound to it) without
-  // loading the first session in that group.
-  const handleProjectSelect = useCallback(async (projectDir: string) => {
-    const gen = ++sessionSwitchGen.current;
-    const workspace = await session.setWorkspace(projectDir);
-    if (!workspace?.cwd || gen !== sessionSwitchGen.current) return;
-    await enterDraftMode({ clearComposer: true });
-  }, [session, enterDraftMode]);
+  const handleProjectSelect = useCallback((projectDir: string) => {
+    setProjectConfigDir(projectDir);
+  }, []);
 
   // Restore durable open tabs (or empty draft) instead of auto-picking library[0].
   useEffect(() => {
@@ -905,28 +904,13 @@ export function ChatView() {
     onClose: () => setPaletteOpen(false),
   };
 
-  const model = session.activeSession?.selection?.modelId ?? currentSelection?.modelId ?? '';
-
   useEffect(() => {
     if (selectedProviderModel) {
       setMaxContext(selectedProviderModel.model.limits?.contextTokens ?? null);
       return;
     }
-    if (!model || !window.orchid?.config?.modelMetadata) {
-      // Hold previous maxContext while session is switching so the footer
-      // radial does not drop to 0% before the next model is known.
-      if (!chat.isSwitchingSession) setMaxContext(null);
-      return;
-    }
-    let cancelled = false;
-    window.orchid.config.modelMetadata(model).then((meta) => {
-      if (!cancelled) setMaxContext(meta?.max_input_tokens ?? null);
-    }).catch(() => {
-      // Keep previous window size on transient metadata failure.
-      if (!cancelled && !chat.isSwitchingSession) setMaxContext(null);
-    });
-    return () => { cancelled = true; };
-  }, [model, selectedProviderModel, chat.isSwitchingSession]);
+    if (!chat.isSwitchingSession) setMaxContext(null);
+  }, [selectedProviderModel, chat.isSwitchingSession]);
 
   const sessions =
     session.listState.status === 'ready' || session.listState.status === 'partial'
@@ -995,6 +979,17 @@ export function ChatView() {
             <span className="command-toast-message min-w-0 flex-1">{toast.message}</span>
           </Alert>
         )}
+        {projectConfigDir ? (
+          <ProjectConfigView
+            projectDir={projectConfigDir}
+            onNewChat={(dir) => {
+              setProjectConfigDir(null);
+              void handleProjectSessionCreate(dir);
+            }}
+            onClose={() => setProjectConfigDir(null)}
+          />
+        ) : (
+          <>
         <SessionTabBar
           openSessionIds={tabs.snapshot.openSessionIds}
           focusedSessionId={tabs.snapshot.focusedSessionId}
@@ -1156,6 +1151,8 @@ export function ChatView() {
         {contentMode === 'subagents' ? (
           <SubagentView subagents={subagents} openRequest={subagentOpenRequest} onBackToChat={() => setContentMode('chat')} />
         ) : null}
+          </>
+        )}
       </main>
 
       <Sidebar

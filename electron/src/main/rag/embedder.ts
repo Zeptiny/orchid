@@ -162,8 +162,8 @@ export interface IEmbedder {
 // API-based embedding (provider /embeddings endpoint)
 // ---------------------------------------------------------------------------
 
-/** Max retries for transient API failures (rate limits, network blips). */
-const API_MAX_RETRIES = 3;
+const DEFAULT_API_MAX_RETRIES = 3;
+const DEFAULT_API_TIMEOUT_MS = 30_000;
 
 /** Errors that will not recover by retrying (auth, bad model, bad request). */
 function isPermanentApiError(err: Error): boolean {
@@ -188,17 +188,23 @@ export class ApiEmbedder implements IEmbedder {
   private apiKey: string | undefined;
   private modelId: string;
   private batchSize: number;
+  private timeoutMs: number;
+  private maxRetries: number;
 
   constructor(
     baseUrl: string,
     apiKey: string | undefined,
     modelId: string,
     batchSize?: number,
+    timeoutMs?: number,
+    maxRetries?: number,
   ) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.apiKey = apiKey;
     this.modelId = modelId;
     this.batchSize = Math.max(1, Math.min(256, batchSize ?? 64));
+    this.timeoutMs = timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
+    this.maxRetries = maxRetries ?? DEFAULT_API_MAX_RETRIES;
   }
 
   async embed(texts: string[]): Promise<Float32Array[]> {
@@ -226,14 +232,15 @@ export class ApiEmbedder implements IEmbedder {
 
   private async _embedBatchWithRetry(texts: string[]): Promise<Float32Array[]> {
     let lastError: Error | undefined;
+    const totalAttempts = Math.max(1, this.maxRetries + 1);
 
-    for (let attempt = 0; attempt < API_MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt < totalAttempts; attempt++) {
       try {
         return await this._embedBatch(texts);
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
         if (isPermanentApiError(lastError)) break;
-        if (attempt < API_MAX_RETRIES - 1) {
+        if (attempt < totalAttempts - 1) {
           const wait = 2 ** attempt * 1000;
           await new Promise((resolve) => setTimeout(resolve, wait));
         }
@@ -241,7 +248,7 @@ export class ApiEmbedder implements IEmbedder {
     }
 
     throw new EmbeddingError(
-      `API embedding failed after ${API_MAX_RETRIES} attempts: ${lastError?.message}`,
+      `API embedding failed after ${totalAttempts} attempts: ${lastError?.message}`,
     );
   }
   private async _embedBatch(texts: string[]): Promise<Float32Array[]> {
@@ -253,7 +260,7 @@ export class ApiEmbedder implements IEmbedder {
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30_000);
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
       const response = await fetch(`${this.baseUrl}/embeddings`, {
@@ -306,6 +313,8 @@ export async function createEmbedderFromConfig(): Promise<IEmbedder> {
   let cfgBatch = DEFAULT_BATCH_SIZE;
   let cfgModel: string | undefined;
   let cfgApiSelection: ModelSelection | null = null;
+  let cfgApiTimeout: number | undefined;
+  let cfgApiRetries: number | undefined;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { getConfig } = require('../config/loader') as typeof import('../config/loader');
@@ -317,6 +326,12 @@ export async function createEmbedderFromConfig(): Promise<IEmbedder> {
     }
     if (typeof rag.embedding_batch_size === 'number' && rag.embedding_batch_size > 0) {
       cfgBatch = rag.embedding_batch_size;
+    }
+    if (typeof rag.embedding_api_timeout === 'number' && rag.embedding_api_timeout > 0) {
+      cfgApiTimeout = rag.embedding_api_timeout * 1000;
+    }
+    if (typeof rag.embedding_api_retries === 'number' && rag.embedding_api_retries >= 0) {
+      cfgApiRetries = rag.embedding_api_retries;
     }
   } catch {
     // config unavailable — use hard defaults
@@ -333,6 +348,8 @@ export async function createEmbedderFromConfig(): Promise<IEmbedder> {
       target.apiKey,
       cfgApiSelection.modelId,
       cfgBatch,
+      cfgApiTimeout,
+      cfgApiRetries,
     );
   }
 

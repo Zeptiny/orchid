@@ -58,15 +58,6 @@ export interface SessionActivity {
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
-export interface ModelMetadata {
-  /** Maximum input tokens the model accepts. Null if unknown. */
-  max_input_tokens: number | null;
-  /** Maximum output tokens the model can generate. Null if unknown. */
-  max_output_tokens: number | null;
-  /** Whether the model supports image/vision inputs. */
-  supports_vision: boolean;
-}
-
 export interface RAGConfig {
   chunk_size: number;
   chunk_overlap: number;
@@ -83,6 +74,8 @@ export interface RAGConfig {
    * Default 16 (was a hard-coded 100).
    */
   embedding_batch_size: number;
+  embedding_api_timeout: number;
+  embedding_api_retries: number;
   /** Optional connection-scoped API embedding model; null keeps ONNX local. */
   embedding_api_model: ModelSelection | null;
 }
@@ -152,6 +145,24 @@ export interface Config {
    * is treated as true at load so upgrades are not re-onboarded.
    */
   has_completed_onboarding: boolean;
+  command_max_output_bytes: number;
+  tool_output_inline_threshold: number;
+  approval_timeout: number;
+  subagent_wait_timeout: number;
+  web_fetch_timeout: number;
+  web_fetch_max_body_bytes: number;
+  web_fetch_user_agent: string;
+  bg_prompt_max_entries: number;
+  bg_prompt_tail_lines: number;
+  bg_prompt_tail_chars: number;
+  mcp_result_max_bytes: number;
+  max_background_processes: number;
+  bg_output_head_bytes: number;
+  bg_output_tail_bytes: number;
+  grep_per_file_timeout: number;
+  read_output_long_poll_max: number;
+  llm_retry_backoff_base: number;
+  llm_retry_max_delay: number;
 }
 
 // ── MCP ─────────────────────────────────────────────────────────────────────

@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import type { ToolRegistry } from '../tools/registry';
 import {
-  TOOL_OUTPUT_INLINE_THRESHOLD,
+  getToolOutputInlineThreshold,
   TOOLS_WITHOUT_OUTPUT_OFFLOAD,
 } from './middleware/provider-quirks';
 import {
@@ -29,7 +29,7 @@ import {
 } from '../tools/result';
 import type { ToolExecutionContext } from '../tools/types';
 import type { ProjectRuntime } from '../project/runtime';
-import { DEFAULT_WAIT_TIMEOUT_MS } from '../agents/manager';
+import { getDefaultWaitTimeoutMs } from '../agents/manager';
 import {
   createCanonicalToolResult,
   type JsonValue,
@@ -63,12 +63,9 @@ export {
  */
 const DEFAULT_TOOL_TIMEOUT_S = 30;
 
-/**
- * Outer dispatch timeout for `wait_for_subagent` (seconds).
- * Slightly longer than the wait tool's internal DEFAULT_WAIT_TIMEOUT_MS so
- * the structured "still running" tool result wins; this is a backstop.
- */
-const WAIT_TOOL_OUTER_TIMEOUT_S = Math.ceil(DEFAULT_WAIT_TIMEOUT_MS / 1000) + 5;
+function getWaitToolOuterTimeoutS(): number {
+  return Math.ceil(getDefaultWaitTimeoutMs() / 1000) + 5;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -90,7 +87,7 @@ export interface ToolDispatchOptions {
   timeoutSeconds?: number;
   /**
    * Outer timeout for `wait_for_subagent` only (seconds).
-   * Defaults to DEFAULT_WAIT_TIMEOUT_MS / 1000 (300). Independent of
+   * Defaults to subagent_wait_timeout + 5s. Independent of
    * `timeoutSeconds` / command_timeout so waits are not cut short by 30–60s.
    */
   waitTimeoutSeconds?: number;
@@ -277,7 +274,7 @@ export async function executeToolCall(
   // Add a small buffer for spawn/teardown overhead.
   const effectiveTimeoutSeconds = (() => {
     if (name === 'wait_for_subagent') {
-      return options.waitTimeoutSeconds ?? WAIT_TOOL_OUTER_TIMEOUT_S;
+      return options.waitTimeoutSeconds ?? getWaitToolOuterTimeoutS();
     }
     if (name === 'execute_command') {
       const callTimeout = (validation.data as { timeout?: unknown } | null)?.timeout;
@@ -526,7 +523,7 @@ function maybeOffloadAgentProjection(
 /**
  * Bound tool output size before it enters `api_messages`.
  *
- * Outputs at or below `TOOL_OUTPUT_INLINE_THRESHOLD` and tools that
+ * Outputs at or below `tool_output_inline_threshold` and tools that
  * already self-limit (`TOOLS_WITHOUT_OUTPUT_OFFLOAD`) pass through
  * unchanged. Larger outputs are written to a per-session cache file
  * and replaced with a compact pointer so the provider context window
@@ -560,8 +557,9 @@ function maybeOffloadToolOutputDetailed(
   toolCallId: string,
   sessionId?: string,
 ): ToolOutputOffloadResult {
+  const inlineThreshold = getToolOutputInlineThreshold();
   if (
-    content.length <= TOOL_OUTPUT_INLINE_THRESHOLD ||
+    content.length <= inlineThreshold ||
     TOOLS_WITHOUT_OUTPUT_OFFLOAD.has(toolName)
   ) {
     return { content };
@@ -569,10 +567,10 @@ function maybeOffloadToolOutputDetailed(
 
   if (!sessionId) {
     // No session — hard-truncate
-    const truncated = content.slice(0, TOOL_OUTPUT_INLINE_THRESHOLD);
+    const truncated = content.slice(0, inlineThreshold);
     return { content: (
       `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}">\n` +
-      `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters ` +
+      `<warning>Output exceeded ${inlineThreshold} characters ` +
       `and was truncated because no active session is available for cache ` +
       `storage. Use the tool again with narrower scope (offset/limit) to ` +
       `inspect the full result.</warning>\n` +
@@ -605,7 +603,7 @@ function maybeOffloadToolOutputDetailed(
     const escapedPath = escapeXmlAttribute(filePath);
     return { content: (
       `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}" file="${escapedPath}">\n` +
-      `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters and ` +
+      `<warning>Output exceeded ${inlineThreshold} characters and ` +
       `was written to ${escapeXmlText(filePath)}. Use read (with offset/limit) or grep to inspect ` +
       `it.</warning>\n` +
       `<retrieve tool="read" path="${escapedPath}" />\n` +
@@ -614,10 +612,10 @@ function maybeOffloadToolOutputDetailed(
   } catch (err) {
     // Cache write failed — truncate inline
     console.warn(`Failed to offload tool output for ${toolName}:`, err);
-    const truncated = content.slice(0, TOOL_OUTPUT_INLINE_THRESHOLD);
+    const truncated = content.slice(0, inlineThreshold);
     return { content: (
       `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}">\n` +
-      `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters ` +
+      `<warning>Output exceeded ${inlineThreshold} characters ` +
       `and cache write failed (${escapeXmlText(err instanceof Error ? err.message : String(err))}). Truncated below; re-run the tool with ` +
       `narrower scope to inspect the full result.</warning>\n` +
       `<payload>${escapeXmlText(truncated)}</payload>\n` +

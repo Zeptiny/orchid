@@ -1,9 +1,7 @@
 import { EventEmitter } from 'node:events';
 
 import type { RiskClass, ToolScope } from '../../shared/types/permission';
-
-/** Default wall-clock budget for an unanswered approval before it fails closed. */
-const DEFAULT_APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
+import { getConfig } from '../config/loader';
 
 /** Outcome of an approval request once it has been settled. */
 export interface ApprovalResult {
@@ -45,11 +43,7 @@ export interface ApprovalSettledEvent {
 export class ApprovalStore extends EventEmitter {
   private pending = new Map<string, ApprovalEntry>();
 
-  /**
-   * @param approvalTimeoutMs Wall-clock budget before an unanswered approval
-   * fails closed as denied; values <= 0 disable the timeout.
-   */
-  constructor(private readonly approvalTimeoutMs: number = DEFAULT_APPROVAL_TIMEOUT_MS) {
+  constructor(private readonly approvalTimeoutMs: number | null = null) {
     super();
   }
 
@@ -87,10 +81,17 @@ export class ApprovalStore extends EventEmitter {
         abortSignal,
         onAbort,
       };
-      if (this.approvalTimeoutMs > 0) {
+      const timeoutMs = this.approvalTimeoutMs ?? (() => {
+        try {
+          return getConfig().approval_timeout * 1000;
+        } catch {
+          return 600_000;
+        }
+      })();
+      if (timeoutMs > 0) {
         const timer = setTimeout(() => {
           this.settle(toolCallId, { decision: 'denied', reason: 'approval-timeout' });
-        }, this.approvalTimeoutMs);
+        }, timeoutMs);
         timer.unref?.();
         entry.timeout = timer;
       }

@@ -1006,7 +1006,7 @@ describe('output offloading', () => {
 
   it('passes through all exempt tools', () => {
     const content = 'x'.repeat(30_000);
-    const exemptTools = ['read', 'grep', 'glob', 'directory_tree', 'web_fetch', 'skill', 'write', 'wait_for_subagent'];
+    const exemptTools = ['read', 'grep', 'glob', 'directory_tree', 'web_fetch', 'skill', 'wait_for_subagent'];
     
     for (const tool of exemptTools) {
       const result = maybeOffloadToolOutput(tool, content, 'tc-1', 'session-1');

@@ -32,6 +32,7 @@
 import { z } from 'zod';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { ToolDefinition, ToolHandler, RegisteredTool } from '../tools/types';
+import { getToolConfig } from '../tools/types';
 import type { MCPServerConfig, MCPServerStatus, MCPServerStatusValue } from './schema';
 import { isValidServerName } from './schema';
 import { createTransport } from './transport';
@@ -535,11 +536,18 @@ export class MCPManager {
             });
           }
           const serialized = JSON.stringify(raw);
-          if (serialized.length > 5 * 1024 * 1024) {
+          let mcpResultMaxBytes: number;
+          try {
+            mcpResultMaxBytes = getToolConfig(ctx).mcp_result_max_bytes;
+          } catch {
+            mcpResultMaxBytes = 5_242_880;
+          }
+          const serializedBytes = Buffer.byteLength(serialized, 'utf8');
+          if (serializedBytes > mcpResultMaxBytes) {
             return {
               status: 'partial',
               data: {
-                value: serialized.slice(0, 10000) + '\n...[truncated: ' + serialized.length + ' bytes total]',
+                value: serialized.slice(0, 10000) + '\n...[truncated: ' + serializedBytes + ' bytes total]',
                 origin: { kind: 'mcp', name: registryName },
               },
               retrieval: { kind: 'rerun', toolName: registryName, input: {} },

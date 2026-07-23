@@ -92,8 +92,24 @@ export type SubagentChangeListener = (records: readonly SubagentRecord[]) => voi
 export type SubagentLiveChangeListener = (change: SubagentLiveChange) => void;
 type SubagentWaiterReason = 'state-change' | 'flush';
 
-/** Default max time `wait_for_subagent` will block (5 minutes). */
-export const DEFAULT_WAIT_TIMEOUT_MS = 300_000;
+/**
+ * Resolve the default `wait_for_subagent` budget in milliseconds.
+ *
+ * Source: `subagent_wait_timeout` (seconds) from the live process-wide config
+ * (`getConfig()`), multiplied by 1000. Falls back to 300_000 ms (300s) when the
+ * config is not loaded. Turn-scoped callers should prefer the frozen project
+ * runtime config via `getToolConfig(ctx)` so a mid-turn settings change cannot
+ * alter an in-flight wait.
+ */
+export function getDefaultWaitTimeoutMs(): number {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getConfig } = require('../config/loader') as typeof import('../config/loader');
+    return getConfig().subagent_wait_timeout * 1000;
+  } catch {
+    return 300_000;
+  }
+}
 
 /**
  * Thrown by `SubagentManager.wait` when the wait budget elapses while any

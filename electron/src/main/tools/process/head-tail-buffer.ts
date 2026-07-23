@@ -8,24 +8,47 @@
  * Ported from Python `src/orchid/tools/background_store.py` HeadTailBuffer.
  */
 
-const HEAD_CAP = 512 * 1024; // 512 KiB
-const TAIL_CAP = 512 * 1024; // 512 KiB
-const TOTAL_CAP = HEAD_CAP + TAIL_CAP; // ~1 MiB hard cap
+const DEFAULT_HEAD_CAP = 512 * 1024; // 512 KiB
+const DEFAULT_TAIL_CAP = 512 * 1024; // 512 KiB
+
+function resolveCaps(): { headCap: number; tailCap: number } {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getConfig } = require('../../config/loader') as typeof import('../../config/loader');
+    const cfg = getConfig();
+    return { headCap: cfg.bg_output_head_bytes, tailCap: cfg.bg_output_tail_bytes };
+  } catch {
+    return { headCap: DEFAULT_HEAD_CAP, tailCap: DEFAULT_TAIL_CAP };
+  }
+}
 
 export class HeadTailBuffer {
-  /** Frozen first HEAD_CAP bytes once the total cap is exceeded. */
+  private readonly _headCap: number;
+  private readonly _tailCap: number;
+  private readonly _totalCap: number;
+
+  /** Frozen first headCap bytes once the total cap is exceeded. */
   private _head: Buffer = Buffer.alloc(0);
   private _headLocked = false;
 
-  /** Pre-lock accumulation (under TOTAL_CAP) as a chunk list. */
+  /** Pre-lock accumulation (under totalCap) as a chunk list. */
   private _preLockChunks: Buffer[] = [];
   private _preLockLength = 0;
 
-  /** Post-lock / overflow tail as a chunk list, trimmed to TAIL_CAP. */
+  /** Post-lock / overflow tail as a chunk list, trimmed to tailCap. */
   private _tailChunks: Buffer[] = [];
   private _tailLength = 0;
 
   private _totalWritten = 0;
+
+  constructor(headCap?: number, tailCap?: number) {
+    const caps = headCap !== undefined || tailCap !== undefined
+      ? { headCap: headCap ?? DEFAULT_HEAD_CAP, tailCap: tailCap ?? DEFAULT_TAIL_CAP }
+      : resolveCaps();
+    this._headCap = caps.headCap;
+    this._tailCap = caps.tailCap;
+    this._totalCap = caps.headCap + caps.tailCap;
+  }
 
   /** Append data to the buffer, respecting the hard cap. */
   append(data: Buffer): void {
@@ -43,22 +66,21 @@ export class HeadTailBuffer {
     this._preLockChunks.push(owned);
     this._preLockLength += owned.length;
 
-    if (this._preLockLength <= TOTAL_CAP) {
+    if (this._preLockLength <= this._totalCap) {
       return;
     }
 
-    // Over cap — materialize once, split into head (first HEAD_CAP) and tail.
+    // Over cap — materialize once, split into head (first headCap) and tail.
     const combined = Buffer.concat(this._preLockChunks, this._preLockLength);
     this._preLockChunks = [];
     this._preLockLength = 0;
-    this._head = Buffer.from(combined.subarray(0, HEAD_CAP));
+    this._head = Buffer.from(combined.subarray(0, this._headCap));
     this._headLocked = true;
 
-    if (combined.length <= TOTAL_CAP) {
-      // Edge case: merging freed enough room (shouldn't happen after > TOTAL_CAP).
-      this._pushTail(Buffer.from(combined.subarray(HEAD_CAP)));
+    if (combined.length <= this._totalCap) {
+      this._pushTail(Buffer.from(combined.subarray(this._headCap)));
     } else {
-      this._pushTail(Buffer.from(combined.subarray(combined.length - TAIL_CAP)));
+      this._pushTail(Buffer.from(combined.subarray(combined.length - this._tailCap)));
     }
   }
 
@@ -106,9 +128,9 @@ export class HeadTailBuffer {
   private _pushTail(data: Buffer): void {
     if (data.length === 0) return;
     // Caller must pass owned buffers (append copies on ingest).
-    if (data.length >= TAIL_CAP) {
-      this._tailChunks = [Buffer.from(data.subarray(data.length - TAIL_CAP))];
-      this._tailLength = TAIL_CAP;
+    if (data.length >= this._tailCap) {
+      this._tailChunks = [Buffer.from(data.subarray(data.length - this._tailCap))];
+      this._tailLength = this._tailCap;
       return;
     }
     this._tailChunks.push(data);
@@ -117,8 +139,8 @@ export class HeadTailBuffer {
   }
 
   private _trimTail(): void {
-    while (this._tailLength > TAIL_CAP && this._tailChunks.length > 0) {
-      const excess = this._tailLength - TAIL_CAP;
+    while (this._tailLength > this._tailCap && this._tailChunks.length > 0) {
+      const excess = this._tailLength - this._tailCap;
       const first = this._tailChunks[0];
       if (first.length <= excess) {
         this._tailChunks.shift();
@@ -154,4 +176,7 @@ export class HeadTailBuffer {
   }
 }
 
+const HEAD_CAP = DEFAULT_HEAD_CAP;
+const TAIL_CAP = DEFAULT_TAIL_CAP;
+const TOTAL_CAP = HEAD_CAP + TAIL_CAP;
 export { HEAD_CAP, TAIL_CAP, TOTAL_CAP };
