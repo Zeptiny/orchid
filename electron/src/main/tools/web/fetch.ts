@@ -235,10 +235,19 @@ export function buildWebFetchTool(
       return genericBuiltInToolOutcome('web_fetch', `Error: ${urlError}`, 'error');
     }
 
-    const cfg = getConfig();
-    const fetchTimeoutMs = cfg.web_fetch_timeout * 1000;
-    const maxBodySize = cfg.web_fetch_max_body_bytes;
-    const userAgent = cfg.web_fetch_user_agent;
+    let fetchTimeoutMs: number;
+    let maxBodySize: number;
+    let userAgent: string;
+    try {
+      const cfg = getConfig();
+      fetchTimeoutMs = cfg.web_fetch_timeout * 1000;
+      maxBodySize = cfg.web_fetch_max_body_bytes;
+      userAgent = cfg.web_fetch_user_agent;
+    } catch {
+      fetchTimeoutMs = 30 * 1000;
+      maxBodySize = 10_485_760;
+      userAgent = 'Orchid/1.0 web-fetch (Electron)';
+    }
 
     // Fetch the URL — combine outer tool-dispatch abort with the HTTP budget
     let response: Response;

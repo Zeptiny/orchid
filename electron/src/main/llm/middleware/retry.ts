@@ -40,11 +40,19 @@ const DEFAULT_MAX_RETRIES = 3;
 // ---------------------------------------------------------------------------
 
 function backoffDelayMs(attempt: number): number {
-  const cfg = getConfig();
-  const base = cfg.llm_retry_backoff_base;
+  let base: number;
+  let maxDelay: number;
+  try {
+    const cfg = getConfig();
+    base = cfg.llm_retry_backoff_base;
+    maxDelay = cfg.llm_retry_max_delay;
+  } catch {
+    base = 0.2;
+    maxDelay = 30;
+  }
   const exponential = base * Math.pow(2, attempt);
   const jitter = Math.random() * base;
-  return Math.min(exponential + jitter, cfg.llm_retry_max_delay) * 1000;
+  return Math.min(exponential + jitter, maxDelay) * 1000;
 }
 
 /** Parts that are safe to re-emit after a pre-content retry (metadata only). */

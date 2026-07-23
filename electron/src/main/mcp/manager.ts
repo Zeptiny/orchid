@@ -536,7 +536,13 @@ export class MCPManager {
             });
           }
           const serialized = JSON.stringify(raw);
-          if (serialized.length > getConfig().mcp_result_max_bytes) {
+          let mcpResultMaxBytes: number;
+          try {
+            mcpResultMaxBytes = getConfig().mcp_result_max_bytes;
+          } catch {
+            mcpResultMaxBytes = 5_242_880;
+          }
+          if (serialized.length > mcpResultMaxBytes) {
             return {
               status: 'partial',
               data: {

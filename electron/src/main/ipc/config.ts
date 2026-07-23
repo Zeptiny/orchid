@@ -245,11 +245,15 @@ export function registerConfigIPC(): void {
         isPlainObject(current) ? current : {},
         filteredUpdates,
       );
-      const validated = configSchema.safeParse(merged);
+      const filtered = Object.fromEntries(
+        Object.entries(merged).filter(([k]) => PROJECT_CONFIG_ALLOWED_KEYS.has(k) || k === 'rag'),
+      );
+      delete filtered['providers'];
+      const validated = configSchema.safeParse(filtered);
       if (!validated.success) {
         throw new Error(`Invalid project config: ${validated.error.message}`);
       }
-      atomicWriteJson(configPath, merged, { hardenDirectory: false });
+      atomicWriteJson(configPath, filtered, { hardenDirectory: false });
       ConfigManager.reset();
       clearProjectRuntimeRegistry();
       invalidateAllProjectMCPManagers();

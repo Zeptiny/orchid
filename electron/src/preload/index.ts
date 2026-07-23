@@ -34,6 +34,7 @@ import type {
   ChatToolCallDeltaEvent,
   ChatToolCallUpdateEvent,
   ConfigSaveMessage,
+  ProjectConfigSaveMessage,
   PermissionConfigScopeSaveMessage,
   PermissionConfigScopes,
   ProviderConnectionCreateMessage,
@@ -271,7 +272,7 @@ const orchidAPI: OrchidAPI = {
     readProject: (projectDir: string) =>
       invoke(IPC_CHANNELS.CONFIG_READ_PROJECT, projectDir),
 
-    saveProject: (message: unknown) =>
+    saveProject: (message: ProjectConfigSaveMessage) =>
       invoke(IPC_CHANNELS.CONFIG_SAVE_PROJECT, message),
 
     getHome: () =>

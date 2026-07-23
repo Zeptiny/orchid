@@ -224,7 +224,12 @@ export async function executeGrepOutcome(
     };
   }
 
-  const perFileTimeoutMs = (config?.grep_per_file_timeout ?? getConfig().grep_per_file_timeout) * 1000;
+  let perFileTimeoutMs: number;
+  try {
+    perFileTimeoutMs = (config?.grep_per_file_timeout ?? getConfig().grep_per_file_timeout) * 1000;
+  } catch {
+    perFileTimeoutMs = (config?.grep_per_file_timeout ?? 10) * 1000;
+  }
   const ignored = new Set(config?.ignored_dirs ?? getConfig().ignored_dirs);
   let fileRegex: RegExp | null = null;
   if (includePattern) fileRegex = globToRegex(includePattern, { caseInsensitive: true });

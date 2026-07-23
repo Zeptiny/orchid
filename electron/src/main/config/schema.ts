@@ -167,9 +167,9 @@ export const configSchema = z
     has_completed_onboarding: z.boolean().default(false),
     command_max_output_bytes: z.number().int().positive().default(1_048_576),
     tool_output_inline_threshold: z.number().int().positive().default(20_000),
-    approval_timeout: z.number().positive().default(600),
-    subagent_wait_timeout: z.number().positive().default(300),
-    web_fetch_timeout: z.number().positive().default(30),
+    approval_timeout: z.number().positive().max(3600).default(600),
+    subagent_wait_timeout: z.number().positive().max(3600).default(300),
+    web_fetch_timeout: z.number().positive().max(300).default(30),
     web_fetch_max_body_bytes: z.number().int().positive().default(10_485_760),
     web_fetch_user_agent: z.string().min(1).default('Orchid/1.0 web-fetch (Electron)'),
     bg_prompt_max_entries: z.number().int().min(1).max(50).default(5),
@@ -180,9 +180,9 @@ export const configSchema = z
     bg_output_head_bytes: z.number().int().positive().default(524_288),
     bg_output_tail_bytes: z.number().int().positive().default(524_288),
     grep_per_file_timeout: z.number().positive().default(10),
-    read_output_long_poll_max: z.number().positive().default(60),
+    read_output_long_poll_max: z.number().positive().max(300).default(60),
     llm_retry_backoff_base: z.number().min(0.01).max(10).default(0.2),
-    llm_retry_max_delay: z.number().positive().default(30),
+    llm_retry_max_delay: z.number().positive().max(300).default(30),
   })
   .strict();
 

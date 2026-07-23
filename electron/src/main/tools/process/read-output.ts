@@ -50,7 +50,13 @@ export async function executeReadOutput(
 
   // Long-poll: wait for new output or exit before snapshotting.
   if (waitMs !== undefined && waitMs > 0 && entry.exitCode === null) {
-    const bounded = Math.min(waitMs, getConfig().read_output_long_poll_max * 1000);
+    let longPollMaxMs: number;
+    try {
+      longPollMaxMs = getConfig().read_output_long_poll_max * 1000;
+    } catch {
+      longPollMaxMs = 60 * 1000;
+    }
+    const bounded = Math.min(waitMs, longPollMaxMs);
     await store.wait_for_progress(id, bounded);
   }
 

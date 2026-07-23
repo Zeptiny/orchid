@@ -370,7 +370,12 @@ export class BackgroundProcessStore {
   // -- LRU eviction --------------------------------------------------------
 
   pruneIfNeeded(): void {
-    const maxEntries = getConfig().max_background_processes;
+    let maxEntries: number;
+    try {
+      maxEntries = getConfig().max_background_processes;
+    } catch {
+      maxEntries = 64;
+    }
     if (this._entries.size <= maxEntries) return;
 
     // Sort by createdAt (oldest first), protect the newest N

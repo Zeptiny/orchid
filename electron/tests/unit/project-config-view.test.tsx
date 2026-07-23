@@ -511,6 +511,38 @@ describe('ProjectConfigView', () => {
     });
   });
 
+  it('save failure displays the error message from the rejected promise', async () => {
+    const user = userEvent.setup();
+    const { saveProject } = await renderLoaded();
+    const input = inputById('command_timeout');
+    await user.click(input);
+    await user.keyboard('60');
+
+    saveProject.mockRejectedValueOnce(new Error('disk full'));
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(screen.getByText('disk full')).toBeTruthy();
+    });
+  });
+
+  it('load failure displays a configuration error message', async () => {
+    const readProject = vi.fn().mockRejectedValue(new Error('ENOENT'));
+    const getHome = vi.fn().mockResolvedValue(MOCK_CONFIG);
+    (window as Record<string, unknown>).orchid = {
+      config: { readProject, getHome, saveProject: vi.fn(), savePermissionScope: vi.fn() },
+      definitions: { list: vi.fn().mockResolvedValue(MOCK_DEFINITIONS) },
+    };
+
+    renderView();
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to load project configuration.')).toBeTruthy();
+    });
+  });
+
   it('isPlainRecord guard prevents crash on non-object overrides', async () => {
     const readProject = vi.fn().mockResolvedValue({ projectDir: PROJECT_DIR, overrides: [1, 2, 3] });
     const getHome = vi.fn().mockResolvedValue(MOCK_CONFIG);
