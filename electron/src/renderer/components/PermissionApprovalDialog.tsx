@@ -9,6 +9,7 @@ import type {
   PermissionApprovalAnswerMessage,
   PermissionApprovalRequestedEvent,
 } from '../../shared/types/ipc';
+import type { RiskClass } from '../../shared/types/permission';
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
 import { DialogSurface } from './ui/DialogSurface';
@@ -22,7 +23,7 @@ export function formatToolArgs(args: unknown): string {
   }
 }
 
-const RISK_BADGE_TONES: Record<string, StatusBadgeTone> = {
+const RISK_BADGE_TONES: Record<RiskClass, StatusBadgeTone> = {
   'read-only': 'info',
   mutation: 'warning',
   execution: 'error',
@@ -110,7 +111,7 @@ export function PermissionApprovalPanel({
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
           <StatusBadge
-            tone={RISK_BADGE_TONES[request.riskClass] ?? 'neutral'}
+            tone={RISK_BADGE_TONES[request.riskClass]}
             size="sm"
             withDot
           >

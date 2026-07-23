@@ -7,6 +7,7 @@
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { Config } from '../../shared/types/ipc-boundary';
+import { PERMISSION_MODE_VALUES } from '../../shared/types/permission';
 import { modelSelectionSchema } from '../../shared/types/provider';
 
 export type { Config, RAGConfig, ModelMetadata } from '../../shared/types/ipc-boundary';
@@ -45,10 +46,10 @@ const deprecatedProvidersSchema = z
   });
 
 export const permissionRuleSchema = z.union([
-  z.enum(['allow', 'ask', 'decide-for-me', 'ask-when-flagged']),
+  z.enum(PERMISSION_MODE_VALUES),
   z.object({
-    inside: z.enum(['allow', 'ask', 'decide-for-me', 'ask-when-flagged']),
-    outside: z.enum(['allow', 'ask', 'decide-for-me', 'ask-when-flagged']),
+    inside: z.enum(PERMISSION_MODE_VALUES),
+    outside: z.enum(PERMISSION_MODE_VALUES),
   }).strict(),
 ]);
 

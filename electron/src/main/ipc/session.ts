@@ -343,7 +343,7 @@ export function registerSessionIPC(): void {
     ] = await Promise.all([
       import('./chat'),
       import('./permission'),
-      import('../llm/tool-dispatch'),
+      import('../permissions/history'),
     ]);
     forceStopSession(parsed.data.id);
     clearPermissionSessionState(parsed.data.id);

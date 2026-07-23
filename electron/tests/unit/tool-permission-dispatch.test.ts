@@ -121,18 +121,18 @@ describe('ask-when-flagged tool dispatch', () => {
     );
 
     expect(historyApi().getRecentToolCallHistory(sessionId, 'main', 1)).toEqual([
-      { name: 'web_fetch', argsSummary: '{"url":"https://new.example"}' },
+      { name: 'web_fetch', argsSummary: 'url=https://new.example' },
     ]);
     expect(historyApi().getRecentToolCallHistory(sessionId, 'main', 0)).toEqual([]);
     expect(historyApi().getRecentToolCallHistory(sessionId, 'main', 10)).toEqual([
-      { name: 'web_fetch', argsSummary: '{"url":"https://old.example"}' },
-      { name: 'web_fetch', argsSummary: '{"url":"https://new.example"}' },
+      { name: 'web_fetch', argsSummary: 'url=https://old.example' },
+      { name: 'web_fetch', argsSummary: 'url=https://new.example' },
     ]);
     historyApi().clearToolCallHistoryForSession(sessionId);
     expect(historyApi().getRecentToolCallHistory(sessionId, 'main', 10)).toEqual([]);
     expect(historyApi().getRecentToolCallHistory(sessionId, 'subagent-1', 10)).toEqual([]);
     expect(historyApi().getRecentToolCallHistory(otherSessionId, 'main', 10)).toEqual([
-      { name: 'web_fetch', argsSummary: '{"url":"https://other.example"}' },
+      { name: 'web_fetch', argsSummary: 'url=https://other.example' },
     ]);
   });
 
@@ -223,7 +223,7 @@ describe('ask-when-flagged tool dispatch', () => {
     );
 
     expect(historyWhilePending).toEqual([
-      { name: 'web_fetch', argsSummary: '{"url":"https://prior.example"}' },
+      { name: 'web_fetch', argsSummary: 'url=https://prior.example' },
     ]);
   });
 

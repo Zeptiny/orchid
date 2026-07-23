@@ -454,6 +454,7 @@ describe('executeToolCall', () => {
     registry.register(
       {
         name: 'echo',
+        riskClass: 'read-only',
         description: 'Echo input',
         inputSchema: z.object({ text: z.string() }),
         resultFamily: 'generic',
@@ -484,6 +485,7 @@ describe('executeToolCall', () => {
     registry.register(
       {
         name: 'typed',
+        riskClass: 'read-only',
         description: 'Typed result',
         inputSchema: z.object({}),
         resultFamily: 'generic',
@@ -509,6 +511,7 @@ describe('executeToolCall', () => {
     registry.register(
       {
         name: 'abortable',
+        riskClass: 'read-only',
         description: 'Waits for cancellation',
         inputSchema: z.object({}),
         category: 'test',
@@ -540,6 +543,7 @@ describe('executeToolCall', () => {
     registry.register(
       {
         name: 'bounded',
+        riskClass: 'read-only',
         description: 'Bounds agent output',
         inputSchema: z.object({}),
         resultFamily: 'generic',
@@ -599,6 +603,7 @@ describe('executeToolCall', () => {
     registry.register(
       {
         name: 'partial_with_cache',
+        riskClass: 'read-only',
         description: 'Produces a partial projection expecting cache recovery',
         inputSchema: z.object({}),
         resultFamily: 'generic',
@@ -652,6 +657,7 @@ describe('executeToolCall', () => {
     registry.register(
       {
         name: 'large_projected',
+        riskClass: 'read-only',
         description: 'Large projection',
         inputSchema: z.object({}),
         resultFamily: 'generic',
@@ -726,6 +732,7 @@ describe('executeToolCall', () => {
     registry.register(
       {
         name: 'echo',
+        riskClass: 'read-only',
         description: 'Echo input',
         inputSchema: z.object({ text: z.string() }),
         resultFamily: 'generic',
@@ -751,6 +758,7 @@ describe('executeToolCall', () => {
     registry.register(
       {
         name: 'echo',
+        riskClass: 'read-only',
         description: 'Echo input',
         inputSchema: z.object({
           text: z.string(),
@@ -778,6 +786,7 @@ describe('executeToolCall', () => {
     registry.register(
       {
         name: 'fail',
+        riskClass: 'read-only',
         description: 'Always fails',
         inputSchema: z.object({}),
         category: 'test',
@@ -799,6 +808,7 @@ describe('executeToolCall', () => {
       registry.register(
         {
           name: 'slow',
+          riskClass: 'read-only',
           description: 'Slow tool',
           inputSchema: z.object({}),
           category: 'test',
@@ -823,6 +833,7 @@ describe('executeToolCall', () => {
       registry.register(
         {
           name: 'instant',
+          riskClass: 'read-only',
           description: 'Would run if not timed out',
           inputSchema: z.object({}),
           category: 'test',
@@ -843,6 +854,7 @@ describe('executeToolCall', () => {
       registry.register(
         {
           name: 'custom_long',
+          riskClass: 'read-only',
           description: 'Long-running exempt tool',
           inputSchema: z.object({}),
           resultFamily: 'generic',
@@ -866,6 +878,7 @@ describe('executeToolCall', () => {
       registry.register(
         {
           name: 'wait_for_subagent',
+          riskClass: 'read-only',
           description: 'Wait tool',
           inputSchema: z.object({}),
           category: 'test',
@@ -891,6 +904,7 @@ describe('executeToolCall', () => {
       registry.register(
         {
           name: 'read_output',
+          riskClass: 'read-only',
           description: 'Read output tool without noTimeout flag',
           inputSchema: z.object({}),
           resultFamily: 'generic',
@@ -914,6 +928,7 @@ describe('executeToolCall', () => {
       registry.register(
         {
           name: 'read_output_exempt',
+          riskClass: 'read-only',
           description: 'Read output with definition flag',
           inputSchema: z.object({}),
           resultFamily: 'generic',
@@ -937,6 +952,7 @@ describe('executeToolCall', () => {
       registry.register(
         {
           name: 'slow_abortable',
+          riskClass: 'read-only',
           description: 'Slow tool that listens for abort',
           inputSchema: z.object({}),
           category: 'test',
@@ -1067,6 +1083,7 @@ describe('ToolRegistry integration with dispatch', () => {
     registry.register(
       {
         name: 'test_tool',
+        riskClass: 'read-only',
         description: 'Test',
         inputSchema: z.object({ query: z.string() }),
         category: 'test',
@@ -1084,6 +1101,7 @@ describe('ToolRegistry integration with dispatch', () => {
     registry.register(
       {
         name: 'existing',
+        riskClass: 'read-only',
         description: 'Exists',
         inputSchema: z.object({}),
         category: 'test',
@@ -1103,6 +1121,7 @@ describe('ToolRegistry integration with dispatch', () => {
     registry.register(
       {
         name: 'test_tool',
+        riskClass: 'read-only',
         description: 'Test',
         inputSchema,
         category: 'test',
@@ -1131,6 +1150,7 @@ describe('ToolRegistry integration with dispatch', () => {
     registry.register(
       {
         name: 'projected',
+        riskClass: 'read-only',
         description: 'Projection boundary',
         inputSchema: z.object({}),
         resultFamily: 'generic',
@@ -1180,6 +1200,7 @@ describe('ToolRegistry integration with dispatch', () => {
     registry.register(
       {
         name: 'status_result',
+        riskClass: 'read-only',
         description: 'Status result',
         inputSchema: z.object({ status: z.enum(['error', 'cancelled']) }),
         resultFamily: 'generic',
@@ -1237,6 +1258,7 @@ describe('ToolRegistry integration with dispatch', () => {
       getTools: () => internalNames.map((name, index) => ({
         definition: {
           name,
+          riskClass: 'read-only',
           description: `MCP tool ${index}`,
           inputSchema: z.object({ query: z.string().optional() }),
           resultFamily: 'generic',

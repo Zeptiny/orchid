@@ -4,7 +4,7 @@ export interface DisclosureProps
   extends Omit<DetailsHTMLAttributes<HTMLDetailsElement>, 'children' | 'title'> {
   summary: ReactNode;
   children: ReactNode;
-  variant?: 'default' | 'section';
+  variant?: 'default' | 'section' | 'card';
   summaryClassName?: string;
   contentClassName?: string;
 }
@@ -12,16 +12,19 @@ export interface DisclosureProps
 const VARIANT_CLASS = {
   default: '',
   section: 'rounded-none border-y border-base-300',
+  card: 'rounded-md border border-base-300 bg-base-100',
 } as const;
 
 const VARIANT_SUMMARY_CLASS = {
   default: '',
   section: 'px-3 py-2 text-sm font-medium',
+  card: '',
 } as const;
 
 const VARIANT_CONTENT_CLASS = {
   default: '',
   section: 'px-3 pb-3',
+  card: '',
 } as const;
 
 /** Native, keyboard-accessible disclosure with collapse styling. */

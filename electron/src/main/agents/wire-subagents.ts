@@ -10,7 +10,7 @@ import { createSubagentStreamRunner } from './subagent-runner';
 import { createSubagentPersistenceScheduler, persistSubagentChains } from './persist-subagent-chains';
 import { flushSubagentEvents, isEligibleSubagentRecipient, queueSubagentEvent } from '../ipc/subagents';
 import { SubagentState } from './manager';
-import { clearToolCallHistoryForAgentScope } from '../llm/tool-dispatch';
+import { clearToolCallHistoryForAgentScope } from '../permissions/history';
 
 let wired = false;
 let persistenceScheduler: ReturnType<typeof createSubagentPersistenceScheduler> | null = null;

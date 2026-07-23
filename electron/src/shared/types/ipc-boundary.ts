@@ -10,6 +10,7 @@
  */
 
 import type { ModelSelection } from './provider';
+import type { PermissionMode } from './permission';
 
 // ── Session ─────────────────────────────────────────────────────────────────
 
@@ -92,7 +93,7 @@ export interface ConfigDiagnostic {
   readonly message: string;
 }
 
-export type PermissionModeValue = 'allow' | 'ask' | 'decide-for-me' | 'ask-when-flagged';
+export type PermissionModeValue = PermissionMode;
 
 export type PermissionRule =
   | PermissionModeValue

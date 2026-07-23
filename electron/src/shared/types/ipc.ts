@@ -15,6 +15,7 @@ import type {
   ToolExecutionResult,
 } from './tool-result';
 import type { SubagentLiveProjection, SubagentRecord } from './subagent';
+import type { RiskClass, ToolScope } from './permission';
 import type {
   CustomConnectionModel,
   ModelSelection,
@@ -756,10 +757,10 @@ export interface PermissionApprovalRequestedEvent {
   toolCallId: string;
   sessionId: string;
   toolName: string;
-  riskClass: string;
+  riskClass: RiskClass;
   args: unknown;
   cwd: string;
-  scope?: string;
+  scope?: ToolScope;
 }
 
 export interface PermissionApprovalSettledEvent {
@@ -804,10 +805,10 @@ export interface PermissionApprovalSnapshot {
     toolCallId: string;
     sessionId: string;
     toolName: string;
-    riskClass: string;
+    riskClass: RiskClass;
     args: unknown;
     cwd: string;
-    scope?: string;
+    scope?: ToolScope;
   }>;
 }
 

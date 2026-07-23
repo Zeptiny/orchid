@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { executeToolCall } from '../../src/main/llm/tool-dispatch';
+import { sessionPermissionOverrides } from '../../src/main/permissions/session-overrides';
 import { ToolRegistry } from '../../src/main/tools/registry';
 import {
   editDefinition,
@@ -60,6 +61,8 @@ import { applyPatchResultDataSchema } from '../../src/shared/types/tool-result-a
 
 let tmpDir: string;
 
+const SESSION_ID = 'filesystem-results-session';
+
 function outcome<T>(value: unknown): ToolHandlerOutcome<T> {
   return value as ToolHandlerOutcome<T>;
 }
@@ -74,9 +77,11 @@ function writeFixture(relativePath: string, content: string): string {
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'filesystem-results-'));
   _setResultRetrievalCacheRootForTests(path.join(tmpDir, 'retrieval-cache'));
+  sessionPermissionOverrides.set(SESSION_ID, 'allow');
 });
 
 afterEach(() => {
+  sessionPermissionOverrides.delete(SESSION_ID);
   _setStructuredPatchForTests(null);
   _setResultRetrievalCacheRootForTests(null);
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -383,6 +388,7 @@ describe('XML agent projections', () => {
     registry.register(readDirectoryDefinition, readDirectoryHandler);
     const context = {
       cwd: tmpDir,
+      sessionId: SESSION_ID,
       projectRuntime: { config: { ignored_dirs: [] } as never },
     };
 
@@ -440,7 +446,7 @@ describe('XML agent projections', () => {
         args: { file_path: 'empty.txt', content: '' },
       },
       registry,
-      { cwd: tmpDir },
+      { cwd: tmpDir, sessionId: SESSION_ID },
     );
     expect(execution.canonical.status).toBe('complete');
     expect(fileWriteDataSchema.parse(execution.canonical.data).content).toBe('');
@@ -461,7 +467,7 @@ describe('XML agent projections', () => {
         args: { file_path: 'short.txt', content },
       },
       registry,
-      { cwd: tmpDir },
+      { cwd: tmpDir, sessionId: SESSION_ID },
     );
     expect(fileWriteDataSchema.parse(execution.canonical.data).content).toBe(content);
     expect(execution.agentProjection.content).toContain('<preview>');
@@ -483,7 +489,7 @@ describe('XML agent projections', () => {
         args: { file_path: 'long.txt', content },
       },
       registry,
-      { cwd: tmpDir },
+      { cwd: tmpDir, sessionId: SESSION_ID },
     );
     const proj = execution.agentProjection.content;
     expect(fileWriteDataSchema.parse(execution.canonical.data).content).toContain('line-10');

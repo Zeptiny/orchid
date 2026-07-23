@@ -5,6 +5,11 @@ import type {
   PermissionRule,
 } from '../../../shared/types/ipc-boundary';
 import type { ConfigPatch, PermissionConfigScope } from '../../../shared/types/ipc';
+import {
+  FILE_TOOLS,
+  FILE_TOOL_DEFAULTS,
+  type FileToolPermission,
+} from '../../../shared/types/permission';
 import { Icon, type IconName } from '../Icon';
 import { Button } from '../ui/Button';
 import { Disclosure } from '../ui/Disclosure';
@@ -24,11 +29,6 @@ const PERMISSION_MODES: ReadonlyArray<{ value: PermissionModeValue; label: strin
 
 const MCP_PREFIX = 'mcp::';
 const MCP_DEFAULT_MODE: PermissionModeValue = 'ask';
-
-interface FileSlotDefaults {
-  inside: PermissionModeValue;
-  outside: PermissionModeValue;
-}
 
 interface RiskSection {
   id: string;
@@ -109,35 +109,8 @@ const RISK_SECTIONS: readonly RiskSection[] = [
   },
 ];
 
-const FILE_TOOLS = new Set([
-  'read',
-  'write',
-  'edit',
-  'apply_patch',
-  'glob',
-  'read_directory',
-  'get_file_skeleton',
-  'get_function',
-  'find_symbol_references',
-  'replace_symbol',
-  'rename_symbol',
-]);
-
-const FILE_TOOL_DEFAULTS: Record<string, FileSlotDefaults> = {
-  read: { inside: 'allow', outside: 'ask' },
-  glob: { inside: 'allow', outside: 'ask' },
-  read_directory: { inside: 'allow', outside: 'ask' },
-  get_file_skeleton: { inside: 'allow', outside: 'ask' },
-  get_function: { inside: 'allow', outside: 'ask' },
-  find_symbol_references: { inside: 'allow', outside: 'ask' },
-  write: { inside: 'ask', outside: 'ask' },
-  edit: { inside: 'ask', outside: 'ask' },
-  apply_patch: { inside: 'ask', outside: 'ask' },
-  replace_symbol: { inside: 'ask', outside: 'ask' },
-  rename_symbol: { inside: 'ask', outside: 'ask' },
-};
-
-const FILE_SLOT_FALLBACK: FileSlotDefaults = { inside: 'ask', outside: 'ask' };
+/** UI fallback for file tools missing from the shared defaults table. */
+const FILE_SLOT_FALLBACK: FileToolPermission = { inside: 'ask', outside: 'ask' };
 
 function effectiveSlot(
   rule: PermissionRule | undefined,
@@ -299,6 +272,7 @@ function overrideActions(count: number): ReactNode {
   return count > 0 ? <OverrideBadge count={count} /> : undefined;
 }
 
+/** Props for {@link PermissionsTab}. */
 export interface PermissionsTabProps {
   config: Config;
   updateDraft: (updates: ConfigPatch) => void;
@@ -309,6 +283,7 @@ export interface PermissionsTabProps {
   projectLoading?: boolean;
 }
 
+/** Preferences tab for per-tool permission modes: inside/outside slots for file tools, single modes elsewhere, plus per-server MCP grouping. */
 export function PermissionsTab({
   config,
   updateDraft,
@@ -339,7 +314,7 @@ export function PermissionsTab({
     (tool: string, slot: 'inside' | 'outside', mode: PermissionModeValue) => {
       const rule = permissions[tool] ?? inheritedPermissions[tool];
       const defaults = FILE_TOOL_DEFAULTS[tool] ?? FILE_SLOT_FALLBACK;
-      const next: FileSlotDefaults = {
+      const next: FileToolPermission = {
         inside: effectiveSlot(rule, 'inside', defaults.inside),
         outside: effectiveSlot(rule, 'outside', defaults.outside),
       };
@@ -460,13 +435,13 @@ export function PermissionsTab({
               return (
                 <Disclosure
                   key={server}
+                  variant="card"
                   summary={
                     <span className="flex items-center gap-2">
                       <span className="font-mono text-sm font-medium">{server}</span>
                       {overrideActions(customCount)}
                     </span>
                   }
-                  className="border border-base-300 bg-base-100"
                 >
                   <div className="divide-y divide-base-300/60">
                     <ToolRow

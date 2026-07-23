@@ -82,6 +82,18 @@ describe('permission resolver', () => {
     ).toBe('outside');
   });
 
+  it('classifies an apply_patch with a Move to destination outside the workspace as outside', () => {
+    const patch = [
+      '*** Update File: src/a.ts',
+      '*** Move to: ../outside.ts',
+      '@@ -1 +1 @@',
+      '-old',
+      '+new',
+    ].join('\n');
+
+    expect(resolveToolScope('apply_patch', { patch }, workspace)).toBe('outside');
+  });
+
   it('resolves an exact MCP rule before its server wildcard and the risk default', () => {
     const config = defaults();
     config.permissions = {

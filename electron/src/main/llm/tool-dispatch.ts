@@ -32,7 +32,6 @@ import type { ProjectRuntime } from '../project/runtime';
 import { DEFAULT_WAIT_TIMEOUT_MS } from '../agents/manager';
 import {
   createCanonicalToolResult,
-  toolExecutionResultSchema,
   type JsonValue,
   type ToolResultRetrieval,
   type ToolExecutionResult,
@@ -40,23 +39,19 @@ import {
 } from '../../shared/types/tool-result';
 import { materializeCanonicalResultRetrieval } from '../tools/result-retrieval';
 import { withTimeout as sharedWithTimeout } from '../utils/async';
-import { resolvePermission, passesRiskClassFloor, FILE_TOOLS } from '../permissions/resolver';
-import { approvalStore } from '../permissions/approval-store';
-import { createDefaultEngine, DetectionEngine } from '../permissions/detection';
-import { sessionPermissionOverrides } from '../ipc/permission';
-import {
-  canEvaluateToolCallArgs,
-  evaluateToolCall,
-  type EvaluatorContext,
-  type EvaluatorResult,
-} from '../permissions/evaluator';
-import { getProviderRuntime } from '../providers';
-import { createMiddlewareStack } from './middleware';
-import { getTierModelSelection } from '../config/loader';
-import { importESM } from '../utils/esm-import';
-import { AgentType } from '../../shared/types/agent';
-import type { PermissionMode, RiskClass, ToolScope } from '../../shared/types/permission';
+import { checkPermission } from '../permissions/gate';
+import { recordToolCall } from '../permissions/history';
+import { genericTerminalExecution } from './terminal-result';
+import { defaults } from '../config/schema';
 import type { Config } from '../../shared/types/ipc-boundary';
+
+// Re-exported so existing consumers keep importing these from tool-dispatch.
+export { genericTerminalExecution };
+export {
+  clearToolCallHistoryForAgentScope,
+  clearToolCallHistoryForSession,
+  getRecentToolCallHistory,
+} from '../permissions/history';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -122,360 +117,7 @@ export interface ToolDispatchOptions {
 // Permission gate
 // ---------------------------------------------------------------------------
 
-let detectionEngine: DetectionEngine | null = null;
-
-const TOOL_CALL_HISTORY_SIZE = 50;
-type ToolCallHistoryEntry = { name: string; argsSummary: string };
-const toolCallHistory = new Map<string, Map<string, ToolCallHistoryEntry[]>>();
-
-function historyScope(agentScopeId: string | undefined): string {
-  return agentScopeId ?? 'main';
-}
-
-function recordToolCall(
-  sessionId: string | undefined,
-  agentScopeId: string | undefined,
-  name: string,
-  args: unknown,
-): void {
-  if (!sessionId) return;
-  const summary = JSON.stringify(args) ?? '';
-  let sessionHistory = toolCallHistory.get(sessionId);
-  if (!sessionHistory) {
-    sessionHistory = new Map();
-    toolCallHistory.set(sessionId, sessionHistory);
-  }
-  const scope = historyScope(agentScopeId);
-  const entries = sessionHistory.get(scope) ?? [];
-  entries.push({ name, argsSummary: summary.slice(0, 200) });
-  if (entries.length > TOOL_CALL_HISTORY_SIZE) {
-    entries.splice(0, entries.length - TOOL_CALL_HISTORY_SIZE);
-  }
-  sessionHistory.set(scope, entries);
-}
-
-/** Return newest bounded evaluator history for one session and agent scope. */
-export function getRecentToolCallHistory(
-  sessionId: string,
-  agentScopeId: string | undefined,
-  limit: number,
-): ToolCallHistoryEntry[] {
-  if (limit <= 0) return [];
-  const entries = toolCallHistory.get(sessionId)?.get(historyScope(agentScopeId)) ?? [];
-  return entries.slice(-Math.min(limit, TOOL_CALL_HISTORY_SIZE));
-}
-
-/** Drop evaluator history once a session is permanently deleted. */
-export function clearToolCallHistoryForSession(sessionId: string): void {
-  toolCallHistory.delete(sessionId);
-}
-
-/** Drop evaluator history for one terminal agent without affecting its peers. */
-export function clearToolCallHistoryForAgentScope(
-  sessionId: string,
-  agentScopeId: string,
-): void {
-  const sessionHistory = toolCallHistory.get(sessionId);
-  if (!sessionHistory) return;
-  sessionHistory.delete(historyScope(agentScopeId));
-  if (sessionHistory.size === 0) toolCallHistory.delete(sessionId);
-}
-
-const FALLBACK_CONFIG: Config = {
-  default_model: null,
-  tier_models: {},
-  tier_reasoning_effort: {},
-  ignored_dirs: [],
-  command_timeout: 30,
-  read_line_limit: 2000,
-  grep_max_results: 100,
-  directory_tree_depth: 3,
-  theme: 'system',
-  personality: 'default',
-  rag: {
-    chunk_size: 1000,
-    chunk_overlap: 200,
-    top_k: 5,
-    max_file_size: 100_000,
-    embedding_model: 'all-MiniLM-L6-v2',
-    embedding_threads: 2,
-    embedding_batch_size: 16,
-    embedding_api_model: null,
-  },
-  ast_max_file_size: 100_000,
-  mcp_startup_timeout: 30_000,
-  mcp_per_server_timeout: 10_000,
-  mcp_servers: {},
-  providers: {},
-  llm_stream_idle_timeout: 120_000,
-  llm_stream_retries: 3,
-  background_command_idle_timeout: 300_000,
-  max_tool_steps: 100,
-  permission_history_size: 10,
-  permissions: {},
-  default_project_dir: null,
-  always_expand_tool_groups: false,
-  has_completed_onboarding: true,
-};
-
-async function requestApproval(
-  toolCallId: string,
-  sessionId: string | undefined,
-  toolName: string,
-  riskClass: RiskClass,
-  args: Record<string, unknown>,
-  cwd: string,
-  scope: ToolScope | undefined,
-  abortSignal?: AbortSignal,
-  ownerWindowId?: string,
-): Promise<ToolExecutionResult | null> {
-  const result = await approvalStore.create(
-    toolCallId,
-    sessionId ?? '',
-    toolName,
-    riskClass,
-    args,
-    cwd,
-    scope,
-    abortSignal,
-    ownerWindowId,
-  );
-  if (result.decision === 'approved') return null;
-  const reason = result.reason ? ` (${result.reason})` : '';
-  return genericTerminalExecution(
-    toolCallId,
-    toolName,
-    'error',
-    `Permission denied for tool '${toolName}'${reason}.`,
-    'permission_denied',
-  );
-}
-
-async function runEvaluator(
-  name: string,
-  riskClass: RiskClass,
-  args: Record<string, unknown>,
-  cwd: string,
-  config: Config,
-  projectRuntime: ProjectRuntime | undefined,
-  triggeringMessage: string,
-  sessionId: string,
-  agentScopeId: string | undefined,
-  abortSignal?: AbortSignal,
-): Promise<EvaluatorResult> {
-  if (abortSignal?.aborted) {
-    return { decision: 'cancelled', reason: 'parent turn cancelled' };
-  }
-  if (!canEvaluateToolCallArgs(args)) {
-    return {
-      decision: 'fallback-to-ask',
-      reason: 'evaluator arguments exceed the complete-context budget',
-    };
-  }
-  if (!projectRuntime) {
-    return { decision: 'fallback-to-ask', reason: 'evaluator runtime unavailable' };
-  }
-  const evaluatorAgent = projectRuntime.agents.get('permission-evaluator');
-  if (!evaluatorAgent || evaluatorAgent.type !== AgentType.INTERNAL) {
-    return { decision: 'fallback-to-ask', reason: 'permission evaluator unavailable' };
-  }
-
-  const selection = getTierModelSelection(config, evaluatorAgent.tier);
-  if (!selection) {
-    return { decision: 'fallback-to-ask', reason: 'permission evaluator model unavailable' };
-  }
-
-  try {
-    const execution = await getProviderRuntime().resolveExecution(selection);
-    if (abortSignal?.aborted) {
-      return { decision: 'cancelled', reason: 'parent turn cancelled' };
-    }
-    const { generateText, wrapLanguageModel } = await importESM<typeof import('ai')>('ai');
-    const model = wrapLanguageModel({
-      model: execution.modelInstance,
-      middleware: createMiddlewareStack({
-        retry: { maxRetries: config.llm_stream_retries },
-      }),
-    });
-
-    const context: EvaluatorContext = {
-      toolName: name,
-      riskClass,
-      args,
-      cwd,
-      triggeringMessage,
-      recentToolCalls: getRecentToolCallHistory(
-        sessionId,
-        agentScopeId,
-        config.permission_history_size,
-      ),
-    };
-    if (abortSignal?.aborted) {
-      return { decision: 'cancelled', reason: 'parent turn cancelled' };
-    }
-
-    const result = await evaluateToolCall(
-      context,
-      config,
-      async ({ systemPrompt, userMessage }) => {
-        const timeoutSignal = AbortSignal.timeout(30_000);
-        const evaluatorSignal = abortSignal == null
-          ? timeoutSignal
-          : AbortSignal.any([abortSignal, timeoutSignal]);
-        const response = await generateText({
-          model,
-          instructions: systemPrompt,
-          messages: [{ role: 'user', content: userMessage }],
-          abortSignal: evaluatorSignal,
-          maxRetries: 0,
-        });
-        return response.text;
-      },
-      evaluatorAgent.system_prompt,
-    );
-    if (abortSignal?.aborted) {
-      return { decision: 'cancelled', reason: 'parent turn cancelled' };
-    }
-    return result;
-  } catch (error) {
-    if (abortSignal?.aborted) {
-      return { decision: 'cancelled', reason: 'parent turn cancelled' };
-    }
-    return {
-      decision: 'fallback-to-ask',
-      reason: error instanceof Error
-        ? `evaluator unavailable: ${error.message}`
-        : 'evaluator unavailable',
-    };
-  }
-}
-
-async function checkPermission(
-  toolCallId: string,
-  name: string,
-  riskClass: RiskClass,
-  args: Record<string, unknown>,
-  cwd: string,
-  sessionId: string | undefined,
-  config: Config,
-  projectRuntime: ProjectRuntime | undefined,
-  triggeringMessage: string,
-  abortSignal?: AbortSignal,
-  agentScopeId?: string,
-  ownerWindowId?: string,
-): Promise<ToolExecutionResult | null> {
-  if (!sessionId) return null;
-  if (!riskClass) return null;
-
-  const sessionOverride: PermissionMode | null = sessionId
-    ? (sessionPermissionOverrides.get(sessionId) ?? null)
-    : null;
-
-  const resolution = resolvePermission(name, riskClass, args, cwd, config, sessionOverride);
-  const { mode, scope } = resolution;
-
-  if (mode === 'allow') return null;
-
-  if (mode === 'ask') {
-    return requestApproval(
-      toolCallId,
-      sessionId,
-      name,
-      riskClass,
-      args,
-      cwd,
-      scope,
-      abortSignal,
-      ownerWindowId,
-    );
-  }
-
-  if (mode === 'decide-for-me') {
-    if (!passesRiskClassFloor(name, riskClass, args, cwd, config)) return null;
-    const result = await runEvaluator(
-      name,
-      riskClass,
-      args,
-      cwd,
-      config,
-      projectRuntime,
-      triggeringMessage,
-      sessionId,
-      agentScopeId,
-      abortSignal,
-    );
-    if (result.decision === 'cancelled') {
-      return genericTerminalExecution(
-        toolCallId,
-        name,
-        'cancelled',
-        `Tool '${name}' was cancelled.`,
-        'parent_cancelled',
-      );
-    }
-    if (result.decision === 'approved') return null;
-    if (result.decision === 'fallback-to-ask') {
-      return requestApproval(
-        toolCallId,
-        sessionId,
-        name,
-        riskClass,
-        args,
-        cwd,
-        scope,
-        abortSignal,
-        ownerWindowId,
-      );
-    }
-    const evaluatorReason = result.reason ? ` (${result.reason})` : '';
-    return genericTerminalExecution(
-      toolCallId,
-      name,
-      'error',
-      `Permission denied for tool '${name}' by evaluator${evaluatorReason}.`,
-      'permission_denied',
-    );
-  }
-
-  if (name === 'send_input') {
-    return requestApproval(
-      toolCallId,
-      sessionId,
-      name,
-      riskClass,
-      args,
-      cwd,
-      scope,
-      abortSignal,
-      ownerWindowId,
-    );
-  }
-
-  if (!passesRiskClassFloor(name, riskClass, args, cwd, config)) return null;
-
-  if (name === 'execute_command') {
-    const command = typeof args['command'] === 'string'
-      ? args['command']
-      : typeof args['text'] === 'string'
-        ? args['text']
-        : '';
-    if (!detectionEngine) detectionEngine = createDefaultEngine();
-    const detection = detectionEngine.evaluate(command);
-    if (!detection.flagged) return null;
-    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal, ownerWindowId);
-  }
-
-  if (name.startsWith('mcp::')) {
-    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal, ownerWindowId);
-  }
-
-  if (FILE_TOOLS.has(name)) {
-    if (scope === 'inside') return null;
-    return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal, ownerWindowId);
-  }
-
-  return null;
-}
+const FALLBACK_CONFIG: Config = defaults();
 
 // ---------------------------------------------------------------------------
 // Tool dispatch
@@ -571,20 +213,31 @@ export async function executeToolCall(
   }
 
   const permissionConfig = options.projectRuntime?.config ?? FALLBACK_CONFIG;
-  const permissionDenial = await checkPermission(
-    toolCallId,
-    name,
-    registered.definition.riskClass,
-    args as Record<string, unknown>,
-    options.cwd,
-    options.sessionId,
-    permissionConfig,
-    options.projectRuntime,
-    options.triggeringMessage ?? '',
-    options.abortSignal,
-    options.agentScopeId,
-    options.windowId,
-  );
+  let permissionDenial: ToolExecutionResult | null;
+  try {
+    permissionDenial = await checkPermission(
+      toolCallId,
+      name,
+      registered.definition.riskClass,
+      args as Record<string, unknown>,
+      options.cwd,
+      options.sessionId,
+      permissionConfig,
+      options.projectRuntime,
+      options.triggeringMessage ?? '',
+      options.abortSignal,
+      options.agentScopeId,
+      options.windowId,
+    );
+  } catch (error) {
+    return genericTerminalExecution(
+      toolCallId,
+      name,
+      'error',
+      `Permission gate error for tool '${name}': ${error instanceof Error ? error.message : 'unknown error'}.`,
+      'permission_gate_error',
+    );
+  }
   if (options.abortSignal?.aborted) {
     return genericTerminalExecution(
       toolCallId,
@@ -731,39 +384,6 @@ function isToolHandlerOutcome(value: unknown): value is ToolHandlerOutcome<JsonV
       String(candidate.status),
     ) && Object.hasOwn(candidate, 'data')
   );
-}
-
-export function genericTerminalExecution(
-  toolCallId: string,
-  toolName: string,
-  status: 'error' | 'cancelled',
-  message: string,
-  code: string,
-): ToolExecutionResult {
-  const canonical = status === 'error'
-    ? createCanonicalToolResult('generic', {
-        status,
-        data: {
-          value: message,
-          origin: { kind: 'built-in', name: toolName },
-        },
-        error: { code, message },
-      })
-    : createCanonicalToolResult('generic', {
-        status,
-        data: {
-          value: message,
-          origin: { kind: 'built-in', name: toolName },
-        },
-      });
-  const execution = finalizeToolExecutionResult({
-    canonical,
-    toolName,
-    toolCallId,
-    expectedFamily: 'generic',
-    projector: genericAgentProjector,
-  });
-  return toolExecutionResultSchema.parse(execution) as ToolExecutionResult;
 }
 
 function finalizeHandlerResult(

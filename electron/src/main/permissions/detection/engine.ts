@@ -131,6 +131,35 @@ function checkLiteralSimpleCommand(command: string): LiteralCommandCheck {
   return { literal: true };
 }
 
+const SHELL_COMMAND_REGEX = /^\s*(?:sh|bash|zsh|dash|ksh)\b/;
+const INTERPRETER_EVAL_REGEX =
+  /^\s*(?:python3?|ruby|perl|node|php|pwsh|powershell)\s+(?:-[a-zA-Z]*[cerp]\b|--eval\b|--command\b)/;
+
+/**
+ * Invoking a shell, or an interpreter with an eval-style flag, runs arbitrary
+ * code and is flagged regardless of pipe position. Per-stage denylists miss
+ * pipe-to-shell and interpreter RCE (e.g. `curl … | sh`, `python -c …`)
+ * because each pipeline stage is scored in isolation, so the leading command
+ * token itself is treated as the destructive signal.
+ */
+function checkExecutionRisk(segment: string): DetectionResult | null {
+  if (matches(SHELL_COMMAND_REGEX, segment)) {
+    return {
+      flagged: true,
+      pattern: 'shell-invocation',
+      description: 'Direct shell invocation executes arbitrary commands',
+    };
+  }
+  if (matches(INTERPRETER_EVAL_REGEX, segment)) {
+    return {
+      flagged: true,
+      pattern: 'interpreter-eval',
+      description: 'Interpreter eval flag executes arbitrary code',
+    };
+  }
+  return null;
+}
+
 export class DetectionEngine {
   private packs: DetectionPack[] = [];
 
@@ -162,6 +191,11 @@ export class DetectionEngine {
         if (safe) break;
       }
       if (safe) continue;
+
+      const executionRisk = checkExecutionRisk(segment);
+      if (executionRisk !== null) {
+        return executionRisk;
+      }
 
       for (const pack of this.packs) {
         for (const pattern of pack.destructivePatterns) {

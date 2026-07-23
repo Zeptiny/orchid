@@ -3,6 +3,7 @@ import type { PermissionMode } from '../../shared/types/permission';
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
 
+/** All permission modes in popover display order. */
 export const PERMISSION_MODES: readonly PermissionMode[] = [
   'allow',
   'ask',
@@ -24,6 +25,7 @@ const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
   'ask-when-flagged': 'Prompt only for dangerous calls',
 };
 
+/** Human-readable label for a permission mode, or "Default" when unset. */
 export function formatPermissionMode(mode: PermissionMode | null): string {
   if (mode == null) return 'Default';
   return MODE_LABELS[mode];
@@ -38,6 +40,7 @@ interface PermissionSelectorProps {
   onOpenChange?: (open: boolean) => void;
 }
 
+/** Session permission-mode picker with an inherited/overridden indicator and popover menu. */
 export function PermissionSelector({
   value,
   defaultValue,

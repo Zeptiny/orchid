@@ -1,52 +1,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type {
-  PermissionMode,
-  RiskClass,
-  ToolScope,
-  FileToolPermission,
-  PermissionResolution,
+import {
+  RISK_CLASS_DEFAULTS,
+  FILE_TOOLS,
+  FILE_TOOL_DEFAULTS,
+  type PermissionMode,
+  type RiskClass,
+  type ToolScope,
+  type PermissionResolution,
 } from '../../shared/types/permission';
 import type { Config, PermissionRule } from '../../shared/types/ipc-boundary';
 
-export const RISK_CLASS_DEFAULTS: Record<RiskClass, PermissionMode> = {
-  'read-only': 'allow',
-  mutation: 'ask',
-  execution: 'ask',
-  delegation: 'ask',
-  network: 'ask',
-  mcp: 'ask',
-};
-
-export const FILE_TOOLS = new Set<string>([
-  'read',
-  'write',
-  'edit',
-  'apply_patch',
-  'glob',
-  'read_directory',
-  'get_file_skeleton',
-  'get_function',
-  'find_symbol_references',
-  'replace_symbol',
-  'rename_symbol',
-]);
-
-export const FILE_TOOL_DEFAULTS: Record<string, FileToolPermission> = {
-  read: { inside: 'allow', outside: 'ask' },
-  glob: { inside: 'allow', outside: 'ask' },
-  read_directory: { inside: 'allow', outside: 'ask' },
-  get_file_skeleton: { inside: 'allow', outside: 'ask' },
-  get_function: { inside: 'allow', outside: 'ask' },
-  find_symbol_references: { inside: 'allow', outside: 'ask' },
-  write: { inside: 'ask', outside: 'ask' },
-  edit: { inside: 'ask', outside: 'ask' },
-  apply_patch: { inside: 'ask', outside: 'ask' },
-  replace_symbol: { inside: 'ask', outside: 'ask' },
-  rename_symbol: { inside: 'ask', outside: 'ask' },
-};
+// Re-export the shared source-of-truth constants so existing consumers that
+// import them from the resolver (tool-dispatch.ts, permissions/index.ts) keep
+// working without duplicating the definitions here.
+export { RISK_CLASS_DEFAULTS, FILE_TOOLS, FILE_TOOL_DEFAULTS };
 
 const PATCH_FILE_PATTERN = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm;
+const PATCH_MOVE_TO_PATTERN = /^\*\*\* Move to: (.+)$/gm;
 
 function extractPathsFromArgs(
   toolName: string,
@@ -59,6 +30,12 @@ function extractPathsFromArgs(
     for (const match of patch.matchAll(PATCH_FILE_PATTERN)) {
       const filePath = match[1]?.trim();
       if (filePath) paths.push(filePath);
+    }
+    // Also containment-check `*** Move to:` destinations so a patch that moves
+    // a file outside the workspace is not classified 'inside'.
+    for (const match of patch.matchAll(PATCH_MOVE_TO_PATTERN)) {
+      const moveToPath = match[1]?.trim();
+      if (moveToPath) paths.push(moveToPath);
     }
     return paths;
   }
@@ -117,6 +94,23 @@ function canonicalizeExistingPath(candidate: string): string | null {
   }
 }
 
+// The cwd is frozen per turn, so canonicalizing it on every file-tool call
+// repeats a blocking fs.realpathSync.native on the main-process event loop.
+// Memoize the result in a small bounded cache keyed by the resolved cwd.
+// Per-target symlink resolution (canonicalizeEffectivePath) stays live.
+const canonicalPathCache = new Map<string, string | null>();
+const CANONICAL_CACHE_MAX = 256;
+
+function canonicalizeExistingPathCached(candidate: string): string | null {
+  const key = path.resolve(candidate);
+  if (canonicalPathCache.has(key)) return canonicalPathCache.get(key) ?? null;
+  const result = canonicalizeExistingPath(key);
+  if (canonicalPathCache.size >= CANONICAL_CACHE_MAX) canonicalPathCache.clear();
+  canonicalPathCache.set(key, result);
+  return result;
+}
+
+/** Resolve a file tool's workspace scope ('inside' | 'outside') from its args. */
 export function resolveToolScope(
   toolName: string,
   args: Record<string, unknown>,
@@ -124,7 +118,7 @@ export function resolveToolScope(
 ): ToolScope | undefined {
   if (!FILE_TOOLS.has(toolName)) return undefined;
 
-  const canonicalCwd = canonicalizeExistingPath(cwd);
+  const canonicalCwd = canonicalizeExistingPathCached(cwd);
   if (canonicalCwd === null) return 'outside';
 
   const toolPaths = extractPathsFromArgs(toolName, args);
@@ -150,7 +144,7 @@ function resolveConfiguredRule(
   toolName: string,
   permissions: Config['permissions'],
 ): PermissionRule | undefined {
-  const exact = permissions[toolName];
+  const exact = permissions?.[toolName];
   if (exact !== undefined) return exact;
 
   const mcpPrefix = 'mcp::';
@@ -160,9 +154,10 @@ function resolveConfiguredRule(
 
   const serverName = toolName.slice(mcpPrefix.length, serverEnd);
   if (serverName === '') return undefined;
-  return permissions[`${mcpPrefix}${serverName}::*`];
+  return permissions?.[`${mcpPrefix}${serverName}::*`];
 }
 
+/** Resolve the effective permission mode for a tool call and where it came from. */
 export function resolvePermission(
   toolName: string,
   riskClass: RiskClass,
@@ -197,6 +192,7 @@ export function resolvePermission(
   return { mode, source, scope };
 }
 
+/** Whether a tool call's resolved mode clears the risk-class floor (i.e. is not auto-allowed). */
 export function passesRiskClassFloor(
   toolName: string,
   riskClass: RiskClass,

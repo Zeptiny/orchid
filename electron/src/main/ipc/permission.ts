@@ -1,10 +1,22 @@
+/**
+ * Permission IPC — bridge approval requests and permission config between the
+ * main-process approval store and the renderer.
+ *
+ * Forwards approval-requested/settled events to the owning window only, and
+ * exposes zod-validated invoke channels for answering approvals, session mode
+ * overrides, and global/project permission scope reads and saves.
+ */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { PermissionRule } from '../../shared/types/ipc-boundary';
-import type { PermissionMode } from '../../shared/types/permission';
+import {
+  PERMISSION_MODE_VALUES,
+  type RiskClass,
+  type ToolScope,
+} from '../../shared/types/permission';
 import {
   atomicWriteJson,
   ConfigManager,
@@ -29,8 +41,9 @@ import {
 import { permissionConfigScopeSaveSchema } from './payload-schemas';
 import { withConfigSaveLock } from './config';
 import { getSessionManager, resolveWindowWorkspace } from './session';
+import { sessionPermissionOverrides } from '../permissions/session-overrides';
 
-export const sessionPermissionOverrides = new Map<string, PermissionMode>();
+export { sessionPermissionOverrides };
 
 const approvalAnswerSchema = z.object({
   toolCallId: z.string().min(1),
@@ -39,7 +52,7 @@ const approvalAnswerSchema = z.object({
 }).strict();
 
 const setSessionModeSchema = z.object({
-  mode: z.enum(['allow', 'ask', 'decide-for-me', 'ask-when-flagged']).nullable(),
+  mode: z.enum(PERMISSION_MODE_VALUES).nullable(),
   expectedSessionId: z.string().min(1).nullable(),
 }).strict();
 
@@ -51,10 +64,10 @@ interface ApprovalRequestedPayload {
   toolCallId: string;
   sessionId: string;
   toolName: string;
-  riskClass: string;
+  riskClass: RiskClass;
   args: unknown;
   cwd: string;
-  scope?: string;
+  scope?: ToolScope;
 }
 
 function abortUndeliverableApproval(

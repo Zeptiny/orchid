@@ -1,17 +1,22 @@
+import type { RiskClass } from '../../shared/types/permission';
+
+/** Context describing a single tool call the evaluator is asked to judge. */
 export interface EvaluatorContext {
   toolName: string;
-  riskClass: string;
+  riskClass: RiskClass;
   args: unknown;
   cwd: string;
   triggeringMessage: string;
   recentToolCalls: Array<{ name: string; argsSummary: string }>;
 }
 
+/** Outcome of an evaluator judgment for a tool call. */
 export interface EvaluatorResult {
   decision: 'approved' | 'denied' | 'fallback-to-ask' | 'cancelled';
   reason?: string;
 }
 
+/** Injectable LLM text-generation function used to run the evaluator. */
 export type GenerateTextFn = (params: {
   systemPrompt: string;
   userMessage: string;
@@ -30,6 +35,7 @@ export function canEvaluateToolCallArgs(args: unknown): boolean {
   }
 }
 
+/** Build the complete-context user prompt the evaluator model receives. */
 export function buildEvaluatorPrompt(
   context: EvaluatorContext,
   config: { permission_history_size: number },
@@ -68,6 +74,7 @@ export function buildEvaluatorPrompt(
   return lines.join('\n');
 }
 
+/** Parse a raw evaluator model response into a structured result. */
 export function parseEvaluatorResponse(raw: string): EvaluatorResult {
   try {
     const parsed = JSON.parse(raw.trim()) as {
@@ -89,6 +96,7 @@ export function parseEvaluatorResponse(raw: string): EvaluatorResult {
   }
 }
 
+/** Evaluate a tool call end-to-end, falling back to ask on any failure. */
 export async function evaluateToolCall(
   context: EvaluatorContext,
   config: { permission_history_size: number },

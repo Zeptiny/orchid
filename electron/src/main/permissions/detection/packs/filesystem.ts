@@ -36,6 +36,11 @@ export const filesystemPack: DetectionPack = {
       description: 'rm -rf not targeting temp directories',
     },
     {
+      name: 'rm-long-recursive',
+      regex: /\brm\b.*--recursive\b/i,
+      description: 'Recursive delete via long-form --recursive flag',
+    },
+    {
       name: 'find-delete',
       regex: /\bfind\s+.*-delete\b/i,
       description: 'find with -delete flag',
@@ -44,6 +49,21 @@ export const filesystemPack: DetectionPack = {
       name: 'find-exec-rm',
       regex: /\bfind\s+.*-exec\s+rm\b/i,
       description: 'find with -exec rm',
+    },
+    {
+      name: 'find-execdir',
+      regex: /\bfind\s+.*-execdir\b/i,
+      description: 'find with -execdir running a command per match',
+    },
+    {
+      name: 'chmod-recursive',
+      regex: /\bchmod\s+(?:\S+\s+)*-[a-zA-Z]*R[a-zA-Z]*(?:\s|$)/i,
+      description: 'Recursive chmod changes permissions across a tree',
+    },
+    {
+      name: 'chown-recursive',
+      regex: /\bchown\s+(?:\S+\s+)*-[a-zA-Z]*R[a-zA-Z]*(?:\s|$)/i,
+      description: 'Recursive chown changes ownership across a tree',
     },
     {
       name: 'truncate-zero',
