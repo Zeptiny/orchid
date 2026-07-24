@@ -41,7 +41,12 @@ import {
 import { permissionConfigScopeSaveSchema } from './payload-schemas';
 import { withConfigSaveLock } from './config';
 import { getSessionManager, resolveWindowWorkspace } from './session';
-import { sessionPermissionOverrides } from '../permissions/session-overrides';
+import {
+  sessionPermissionOverrides,
+  setDraftPermissionOverride,
+  getDraftPermissionOverride,
+  clearDraftPermissionOverrides,
+} from '../permissions/session-overrides';
 
 export { sessionPermissionOverrides };
 
@@ -217,10 +222,25 @@ export function registerPermissionIPC(): void {
     IPC_CHANNELS.PERMISSION_SET_SESSION_MODE,
     (event, payload: unknown) => {
       const parsed = setSessionModeSchema.parse(payload);
+      const windowId = String(event.sender.id);
       const sessionId = selectedSessionId(event.sender.id);
-      if (sessionId == null || sessionId !== parsed.expectedSessionId) {
+
+      if (sessionId == null) {
+        // Draft mode (no session file yet): stash in the per-window draft store.
+        // Transferred to the session when one is created.
+        if (parsed.expectedSessionId !== null) {
+          return { ok: false, sessionId: null };
+        }
+        setDraftPermissionOverride(windowId, parsed.mode);
+        return { ok: true, sessionId: null };
+      }
+
+      if (sessionId !== parsed.expectedSessionId) {
         return { ok: false, sessionId };
       }
+
+      // Persist to the session DB + sync the in-memory gate map.
+      getSessionManager().setPermissionMode(sessionId, parsed.mode);
       if (parsed.mode == null) {
         sessionPermissionOverrides.delete(sessionId);
       } else {
@@ -232,16 +252,31 @@ export function registerPermissionIPC(): void {
 
   ipcMain.handle(IPC_CHANNELS.PERMISSION_GET_SESSION_MODE, (event, payload: unknown) => {
     const parsed = getSessionModeSchema.parse(payload);
+    const windowId = String(event.sender.id);
     const sessionId = selectedSessionId(event.sender.id);
+
+    if (sessionId == null) {
+      // Draft mode: read the per-window draft override.
+      if (parsed.expectedSessionId !== null) {
+        return { ok: false, sessionId: null, mode: null };
+      }
+      return {
+        ok: true,
+        sessionId: null,
+        mode: getDraftPermissionOverride(windowId) ?? null,
+      };
+    }
+
     if (sessionId !== parsed.expectedSessionId) {
       return { ok: false, sessionId, mode: null };
     }
+
+    // The session record is the source of truth (survives restarts).
+    const session = getSessionManager().getSession(sessionId);
     return {
       ok: true,
       sessionId,
-      mode: sessionId == null
-        ? null
-        : sessionPermissionOverrides.get(sessionId) ?? null,
+      mode: session?.permissionMode ?? null,
     };
   });
 
@@ -298,6 +333,7 @@ export function unregisterPermissionIPC(): void {
   approvalStore.cleanupAll();
   approvalStore.off('approval-requested', onApprovalRequested);
   approvalStore.off('approval-settled', onApprovalSettled);
+  clearDraftPermissionOverrides();
   ipcMain.removeHandler(IPC_CHANNELS.PERMISSION_SNAPSHOT);
   ipcMain.removeHandler(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER);
   ipcMain.removeHandler(IPC_CHANNELS.PERMISSION_SET_SESSION_MODE);

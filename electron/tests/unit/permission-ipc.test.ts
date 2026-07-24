@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => {
     isDestroyed: () => boolean;
     send: ReturnType<typeof vi.fn>;
   }>();
+  const sessionPermissionModeById = new Map<string, string | null>();
 
   return {
     handlers,
@@ -34,7 +35,16 @@ const mocks = vi.hoisted(() => {
         const id = selectedByWebContents.get(Number(ownerId));
         return id ? { id } : null;
       }),
+      getSession: vi.fn((id: string) => {
+        const exists = [...selectedByWebContents.values()].includes(id);
+        return exists ? { id, permissionMode: sessionPermissionModeById.get(id) ?? null } : null;
+      }),
+      setPermissionMode: vi.fn((id: string, mode: string | null) => {
+        if (mode == null) sessionPermissionModeById.delete(id);
+        else sessionPermissionModeById.set(id, mode);
+      }),
     },
+    sessionPermissionModeById,
   };
 });
 
@@ -131,6 +141,8 @@ describe('permission IPC ownership', () => {
     approvalStore.cleanupAll();
     _resetConfigSaveChainForTests();
     permissionIpc.sessionPermissionOverrides.clear();
+    mocks.sessionPermissionModeById.clear();
+    mocks.sessionManager.setPermissionMode.mockClear();
     permissionIpc.registerPermissionIPC();
     fs.rmSync(TEST_CONFIG_ROOT, { recursive: true, force: true });
     fs.mkdirSync(path.dirname(TEST_HOME_CONFIG), { recursive: true });
@@ -160,10 +172,12 @@ describe('permission IPC ownership', () => {
     expect(permissionIpc.sessionPermissionOverrides.has(SESSION_B)).toBe(false);
 
     mocks.selectedByWebContents.delete(10);
+    // Draft mode (no active session): the override is stashed per-window,
+    // not in the session map. It returns ok: true so the coordinator commits.
     expect(setMode(eventFrom(10), {
-      expectedSessionId: SESSION_A,
+      expectedSessionId: null,
       mode: 'ask',
-    })).toEqual({ ok: false, sessionId: null });
+    })).toEqual({ ok: true, sessionId: null });
     expect(permissionIpc.sessionPermissionOverrides.get(SESSION_A)).toBe('allow');
   });
 
@@ -182,8 +196,8 @@ describe('permission IPC ownership', () => {
   it('reads distinct modes for the session selected by each sender', () => {
     mocks.selectedByWebContents.set(10, SESSION_A);
     mocks.selectedByWebContents.set(20, SESSION_B);
-    permissionIpc.sessionPermissionOverrides.set(SESSION_A, 'allow');
-    permissionIpc.sessionPermissionOverrides.set(SESSION_B, 'ask');
+    mocks.sessionPermissionModeById.set(SESSION_A, 'allow');
+    mocks.sessionPermissionModeById.set(SESSION_B, 'ask');
     const getMode = mocks.handlers.get(IPC_CHANNELS.PERMISSION_GET_SESSION_MODE)!;
 
     expect(getMode(eventFrom(10), { expectedSessionId: SESSION_A })).toEqual({

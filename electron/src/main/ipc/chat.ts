@@ -28,6 +28,7 @@ import {
   getSessionManager,
   resolveWindowWorkspace,
   takeDraftReasoningOverride,
+  takeDraftPermissionOverride,
 } from './session';
 import { workingSetOpenOrFocus } from './session-working-set';
 import { getBackgroundStore } from '../tools/process/background-store';
@@ -775,6 +776,10 @@ export function ensureActiveSession(
   if (draftOverride !== undefined) {
     manager.setReasoningEffortOverride(created.id, draftOverride);
   }
+  const draftPermission = takeDraftPermissionOverride(windowId);
+  if (draftPermission !== undefined) {
+    manager.setPermissionMode(created.id, draftPermission);
+  }
   const session =
     manager.getSession(created.id) ??
     { ...created, reasoningEffortOverride: draftOverride ?? created.reasoningEffortOverride };
@@ -1200,7 +1205,6 @@ export function registerChatIPC(): void {
     // Freeze turn tool/prompt context + model at send time (R6): mid-turn
     // session switch must not rebind tools, model, or working_directory.
     const sessionManager = getSessionManager();
-    const activeSession = sessionGate.session;
     const turnCtx: ToolExecutionContext = {
       cwd: sessionGate.cwd,
       sessionId,
@@ -1217,7 +1221,7 @@ export function registerChatIPC(): void {
     try {
       const chain = sessionManager.startChain({
         selection: turnSelection,
-        modelLabel: activeSession.modelLabel ?? turnSelection.modelId,
+        modelLabel: turnSelection.modelId,
         agentName: agent.name,
         agentType: agent.type,
         agentTier: agent.tier,

@@ -79,6 +79,7 @@ function makeSession(overrides: Partial<Session> & { model?: string } = {}): Ses
     subagentChains: overrides.subagentChains ?? [],
     todoStore: overrides.todoStore ?? { tasks: [] },
     reasoningEffortOverride: overrides.reasoningEffortOverride ?? null,
+    permissionMode: overrides.permissionMode ?? null,
   };
 }
 
@@ -1871,5 +1872,52 @@ describe('reasoningEffortOverride SQLite round-trip', () => {
 
     const loaded = loadSession(session.id, storageOpts)!;
     expect(loaded.reasoningEffortOverride).toBeNull();
+  });
+});
+
+describe('permissionMode SQLite round-trip', () => {
+  it('round-trips a permission mode string', () => {
+    const session = makeSession({
+      id: 'd1d1d1d1-d1d1-4d1d-8d1d-d1d1d1d1d1d1',
+      permissionMode: 'ask' as never,
+    });
+    saveSession(session, storageOpts);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.permissionMode).toBe('ask');
+  });
+
+  it('round-trips null permission mode as null', () => {
+    const session = makeSession({
+      id: 'd2d2d2d2-d2d2-4d2d-8d2d-d2d2d2d2d2d2',
+      permissionMode: null,
+    });
+    saveSession(session, storageOpts);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.permissionMode).toBeNull();
+  });
+
+  it('persists permission mode through SessionManager.setPermissionMode', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const created = manager.create(null, { cwd: null });
+    manager.setPermissionMode(created.id, 'allow');
+
+    _clearDbCache();
+
+    const loaded = loadSession(created.id, storageOpts)!;
+    expect(loaded.permissionMode).toBe('allow');
+  });
+
+  it('clears permission mode when set to null', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const created = manager.create(null, { cwd: null });
+    manager.setPermissionMode(created.id, 'ask');
+    manager.setPermissionMode(created.id, null);
+
+    _clearDbCache();
+
+    const loaded = loadSession(created.id, storageOpts)!;
+    expect(loaded.permissionMode).toBeNull();
   });
 });

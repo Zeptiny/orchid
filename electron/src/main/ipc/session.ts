@@ -25,6 +25,10 @@ import { getProjectRuntimeRegistry } from '../project/runtime';
 import { clearNextRequestStop } from './next-request-stop';
 import { removeSessionActivity } from './session-activity';
 import {
+  takeDraftPermissionOverride,
+  hydrateSessionPermissionOverride,
+} from '../permissions/session-overrides';
+import {
   workingSetClearFocus,
   workingSetOpenOrFocus,
   workingSetRemove,
@@ -201,6 +205,9 @@ export function registerSessionIPC(): void {
 
     if (session) {
       workingSetOpenOrFocus(session.id, windowId);
+      // Hydrate the in-memory permission gate map from the persisted session
+      // record so the override survives restarts.
+      hydrateSessionPermissionOverride(session.id, session.permissionMode);
     } else {
       // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
       workingSetRemove(id, windowId);
@@ -247,6 +254,7 @@ export function registerSessionIPC(): void {
 
     if (session) {
       workingSetOpenOrFocus(session.id, windowId);
+      hydrateSessionPermissionOverride(session.id, session.permissionMode);
     } else {
       // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
       workingSetRemove(id, windowId);
@@ -300,6 +308,10 @@ export function registerSessionIPC(): void {
     const draftOverride = takeDraftReasoningOverride(windowId);
     if (draftOverride !== undefined) {
       manager.setReasoningEffortOverride(created.id, draftOverride);
+    }
+    const draftPermission = takeDraftPermissionOverride(windowId);
+    if (draftPermission !== undefined) {
+      manager.setPermissionMode(created.id, draftPermission);
     }
     const session = manager.getSession(created.id) ?? created;
     // Draft was promoted into the session.
@@ -585,4 +597,4 @@ export function unregisterSessionIPC(): void {
 }
 
 // Re-export draft helper for tests that need to seed draft without IPC.
-export { getDraftCwd, setDraftCwd, clearDraftCwd };
+export { getDraftCwd, setDraftCwd, clearDraftCwd, takeDraftPermissionOverride };

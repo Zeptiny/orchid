@@ -34,6 +34,13 @@ export class SessionDb {
           throw error;
         }
       }
+      try {
+        this._db.exec('ALTER TABLE sessions ADD COLUMN permission_mode TEXT');
+      } catch (error) {
+        if (!(error instanceof Error && /duplicate column name/i.test(error.message))) {
+          throw error;
+        }
+      }
       this._db.pragma('foreign_keys = ON');
       this._db
         .prepare('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)')

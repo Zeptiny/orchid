@@ -25,6 +25,7 @@ import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Message } from '../../shared/types/message';
 import { ChainStatus, type Chain } from '../../shared/types/chain';
+import type { PermissionMode } from '../../shared/types/permission';
 import {
   canonicalizeProjectDirectory,
   inspectProjectDirectory,
@@ -255,6 +256,7 @@ export class SessionManager {
       subagentChains: [],
       todoStore: { tasks: [] },
       reasoningEffortOverride: null,
+      permissionMode: null,
     };
     this._sessions.set(session.id, session);
     this._todoStores.set(session.id, new TodoStore());
@@ -387,6 +389,23 @@ export class SessionManager {
     const updated = {
       ...session,
       reasoningEffortOverride: effort,
+      updatedAt: new Date().toISOString(),
+    };
+    this.replaceSession(updated);
+    storageSaveSession(updated, this._storageOpts);
+  }
+
+  /**
+   * Set or clear the per-session permission-mode override.
+   * Persists to disk immediately so the choice survives restarts.
+   */
+  setPermissionMode(id: string, mode: PermissionMode | null): void {
+    if (!this.isSelectedByAnyOwner(id)) return;
+    const session = this.flushTodos(id);
+    if (!session) return;
+    const updated = {
+      ...session,
+      permissionMode: mode,
       updatedAt: new Date().toISOString(),
     };
     this.replaceSession(updated);

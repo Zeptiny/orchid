@@ -16,6 +16,7 @@ import type { Message } from '../../shared/types/message';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { SubagentRecord } from '../../shared/types/subagent';
 import type { TodoStoreData } from '../../shared/types/todo';
+import { PERMISSION_MODE_VALUES, type PermissionMode } from '../../shared/types/permission';
 import {
   messageToStorageDict,
   messageFromStorageDict,
@@ -153,6 +154,7 @@ interface SessionRow {
   subagent_chains_json: string;
   todo_store_json: string;
   reasoning_effort_override: string | null;
+  permission_mode: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -288,6 +290,17 @@ function deserializeReasoningEffortOverride(json: string | null): string | numbe
   }
 }
 
+function serializePermissionMode(mode: PermissionMode | null): string | null {
+  return mode ?? null;
+}
+
+function deserializePermissionMode(value: string | null): PermissionMode | null {
+  if (value == null) return null;
+  return (PERMISSION_MODE_VALUES as readonly string[]).includes(value)
+    ? (value as PermissionMode)
+    : null;
+}
+
 function sessionFromRow(row: SessionRow, chains: Chain[]): Session {
   return {
     id: row.id,
@@ -302,6 +315,7 @@ function sessionFromRow(row: SessionRow, chains: Chain[]): Session {
     subagentChains: deserializeSubagentChains(row.subagent_chains_json),
     todoStore: deserializeTodoStore(row.todo_store_json),
     reasoningEffortOverride: deserializeReasoningEffortOverride(row.reasoning_effort_override),
+    permissionMode: deserializePermissionMode(row.permission_mode),
   };
 }
 
@@ -317,8 +331,8 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
   const { dbPath } = resolveOptions(opts);
   withCorruptionRecovery(dbPath, (db) => {
     const upsertSession = db.prepare(`
-      INSERT INTO sessions (id, name, selection_json, model_label, cwd, active_chain_id, subagent_chains_json, todo_store_json, reasoning_effort_override, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO sessions (id, name, selection_json, model_label, cwd, active_chain_id, subagent_chains_json, todo_store_json, reasoning_effort_override, permission_mode, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         selection_json = excluded.selection_json,
@@ -328,6 +342,7 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
         subagent_chains_json = excluded.subagent_chains_json,
         todo_store_json = excluded.todo_store_json,
         reasoning_effort_override = excluded.reasoning_effort_override,
+        permission_mode = excluded.permission_mode,
         updated_at = excluded.updated_at
     `);
 
@@ -349,6 +364,7 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
         serializeSubagentChains(session.subagentChains),
         serializeTodoStore(session.todoStore),
         serializeReasoningEffortOverride(session.reasoningEffortOverride),
+        serializePermissionMode(session.permissionMode),
         session.createdAt,
         session.updatedAt,
       );

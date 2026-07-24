@@ -238,6 +238,13 @@ const mocks = vi.hoisted(() => {
       sessionsById.set(id, updated);
       if (activeSession?.id === id) activeSession = updated;
     }),
+    setPermissionMode: vi.fn((id: string, mode: string | null) => {
+      const target = sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null);
+      if (!target) return;
+      const updated = { ...target, permissionMode: mode };
+      sessionsById.set(id, updated);
+      if (activeSession?.id === id) activeSession = updated;
+    }),
     getSession: vi.fn((id: string) => sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null)),
     switchTo: vi.fn((id: string) => {
       const session = sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null);
@@ -348,6 +355,7 @@ const mocks = vi.hoisted(() => {
       sessionManager.startChain.mockClear();
       sessionManager.persistTurn.mockClear();
       sessionManager.setReasoningEffortOverride.mockClear();
+      sessionManager.setPermissionMode.mockClear();
       sessionManager.autoNameActive.mockClear();
       sessionManager.autoName.mockClear();
     },
@@ -445,6 +453,9 @@ const mocks = vi.hoisted(() => {
     workspace,
     takeDraftReasoningOverride: vi.fn(
       () => undefined as string | number | null | undefined,
+    ),
+    takeDraftPermissionOverride: vi.fn(
+      () => undefined as string | null | undefined,
     ),
     ipcMain: {
       handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
@@ -569,6 +580,8 @@ vi.mock('../../src/main/ipc/session', () => ({
     mocks.workspace.resolveWorkspace(windowId),
   takeDraftReasoningOverride: (windowId: string) =>
     mocks.takeDraftReasoningOverride(windowId),
+  takeDraftPermissionOverride: (windowId: string) =>
+    mocks.takeDraftPermissionOverride(windowId),
 }));
 
 vi.mock('../../src/main/project/runtime', () => ({
@@ -742,6 +755,7 @@ function makeSession(id: string, cwd = mocks.workspace._testProjectDir) {
     updatedAt: new Date().toISOString(),
     subagentChains: [],
     todoStore: { tasks: [] },
+    permissionMode: null,
   };
 }
 

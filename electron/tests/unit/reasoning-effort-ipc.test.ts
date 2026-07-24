@@ -134,6 +134,7 @@ function makeSession(overrides: Partial<{
     subagentChains: [],
     todoStore: { tasks: [] },
     reasoningEffortOverride: overrides.reasoningEffortOverride ?? null,
+    permissionMode: null as string | null,
   };
 }
 
