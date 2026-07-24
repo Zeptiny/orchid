@@ -632,7 +632,7 @@ function HighlightedText({ query, text }: { query: string; text: string }) {
     <>
       {segments.map((seg, i) =>
         seg.highlighted ? (
-          <mark key={i} className="orchid-command-palette-highlight bg-primary/30 rounded-sm px-px">{seg.text}</mark>
+          <span key={i} className="orchid-command-palette-highlight bg-primary/30">{seg.text}</span>
         ) : (
           <span key={i}>{seg.text}</span>
         ),
