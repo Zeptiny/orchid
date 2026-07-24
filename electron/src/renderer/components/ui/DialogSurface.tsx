@@ -5,6 +5,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useFocusTrap } from '../../keyboard';
 
 const DEFAULT_OVERLAY =
@@ -98,7 +99,7 @@ export function DialogSurface({
     .trim()
     .replace(/\s+/g, ' ');
 
-  return (
+  return createPortal(
     <div
       className={overlayClasses}
       onClick={closeOnBackdrop ? onClose : undefined}
@@ -117,6 +118,7 @@ export function DialogSurface({
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
