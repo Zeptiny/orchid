@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import type { CanonicalToolResult, TerminalToolResultStatus } from '../../../shared/types/tool-result';
 import type { ToolBlock } from '../../hooks/useChat';
 import { Icon, type IconName } from '../Icon';
+import { CollapsibleRegion } from '../ui/CollapsibleRegion';
 import { Spinner } from '../ui/Spinner';
 import { StatusBadge } from '../ui/StatusBadge';
 import { GenericToolResult } from './GenericToolResult';
@@ -127,17 +128,22 @@ export function ToolResultShell({
         aria-controls={panelId}
       >
         <span className="orchid-tool-block-title-left min-w-0">
-          {active ? (loadingIndicator ?? <Spinner size="xs" aria-hidden className="shrink-0" />) : <Icon name={iconName} size={12} className="shrink-0" />}
+          <span key={status} className="orchid-tool-lifecycle-icon shrink-0">
+            {active ? (loadingIndicator ?? <Spinner size="xs" aria-hidden />) : <Icon name={iconName} size={12} />}
+          </span>
           <span className="orchid-tool-block-title-text min-w-0 truncate">{displayTitle}</span>
         </span>
         <span className="orchid-tool-block-title-right shrink-0">
           {lifecycleBadge(block, canonical, statusBadge)}
-          <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
+          <Icon
+            name="chevronDown"
+            size={12}
+            className={`orchid-disclosure-chevron ${expanded ? 'is-open' : ''}`}
+          />
         </span>
       </button>
-      {expanded && (
+      <CollapsibleRegion open={expanded} id={panelId}>
         <div
-          id={panelId}
           className="orchid-tool-block-content min-w-0"
           aria-describedby={announcementId}
           onClick={collapse}
@@ -155,7 +161,7 @@ export function ToolResultShell({
           <span className="sr-only">{status} tool result</span>
           <span id={announcementId} className="sr-only" role="status" aria-live="polite">{announcement}</span>
         </div>
-      )}
+      </CollapsibleRegion>
     </div>
   );
 }

@@ -101,7 +101,10 @@ describe('chat rendering contract (U5)', () => {
       expect(live).toContain('Thinking… 0ms');
       expect(live).toContain('first line\nsecond line');
       expect(settled).toContain('aria-expanded="false"');
-      expect(settled).not.toContain('orchid-thought-content');
+      expect(settled).toContain('orchid-thought-content');
+      expect(settled).toContain('orchid-collapsible-region');
+      expect(settled).toContain('aria-hidden="true"');
+      expect(settled).toContain('inert=""');
     });
   });
 

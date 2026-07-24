@@ -660,7 +660,7 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
   };
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-base-100 text-base-content">
+    <div className="orchid-view-enter flex min-h-0 min-w-0 flex-1 flex-col bg-base-100 text-base-content">
       <header className="config-main-header">
         <div className="config-main-header-text">
           <h1 className="truncate" title={projectName}>{projectName}</h1>
@@ -710,7 +710,7 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
       {error && (
         <Alert
           tone="error"
-          className="rounded-none py-2.5 text-sm"
+          className="orchid-state-enter rounded-none py-2.5 text-sm"
           icon="alert"
           iconSize={14}
           action={
@@ -735,11 +735,13 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
       />
 
       <div className="config-body">
+        <div key={activeTab} className="orchid-view-enter">
         {loading ? (
           <StateMessage kind="loading" title="Loading project configuration…" />
         ) : (
           renderTab()
         )}
+        </div>
       </div>
 
       <footer className="config-footer-bar orchid-shortcut-bar">

@@ -111,7 +111,7 @@ export const SessionTabBar = memo(function SessionTabBar({
           return (
             <div
               key={id}
-              className={`session-tab ${active ? 'session-tab-active' : ''}`}
+              className={`session-tab orchid-list-item-enter ${active ? 'session-tab-active' : ''}`}
               role="tab"
               aria-selected={active}
               id={`session-tab-${id}`}
@@ -174,7 +174,7 @@ export const SessionTabBar = memo(function SessionTabBar({
 
         {showDraft ? (
           <div
-            className="session-tab session-tab-active session-tab-draft"
+            className="session-tab session-tab-active session-tab-draft orchid-list-item-enter"
             role="tab"
             aria-selected
             id="session-tab-draft"

@@ -123,7 +123,7 @@ export function PermissionSelector({
           id={menuId}
           role="dialog"
           aria-label="Session permissions"
-          className="absolute bottom-full right-0 z-50 mb-1 flex w-60 flex-col gap-1 rounded-box border border-base-300 bg-base-200 p-1.5 shadow-lg"
+          className="orchid-popover-enter absolute bottom-full right-0 z-50 mb-1 flex w-60 flex-col gap-1 rounded-box border border-base-300 bg-base-200 p-1.5 shadow-lg"
         >
           <div className="px-1 pb-0.5 text-xs font-medium text-base-content/60">
             Session permissions

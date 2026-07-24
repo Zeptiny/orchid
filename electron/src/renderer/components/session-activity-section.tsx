@@ -81,7 +81,7 @@ export const SessionActivitySection = memo(function SessionActivitySection({
           const projectPath = session?.cwd ?? activity.cwd;
           const elapsed = elapsedLabel(activity.startedAt, now);
           return (
-            <div key={activity.sessionId} className="session-activity-row" role="listitem">
+            <div key={activity.sessionId} className="session-activity-row orchid-list-item-enter" role="listitem">
               <button
                 className="session-activity-select"
                 type="button"

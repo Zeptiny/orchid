@@ -393,7 +393,7 @@ The renderer uses a **primitives-as-API, primitives.css-as-engine** model (Daisy
 
 **Extend the primitive, don't override via className.** If you need a new visual variant, add it to the primitive's variant type and `Record<Union, string>` class map. Don't write `variant="ghost" className="text-error hover:bg-error/10"` — that creates two sources of truth for one control's visual semantics. className on a primitive is for layout utilities only (`flex`, `gap-2`, `w-full`, `mt-3`).
 
-**chat.css is dead.** It is header-only (10 lines, no CSS rules). Any new CSS rule belongs in `components.css` `@layer components` (for product composites) or `markdown.css` (for markdown rendering). The growth guard fails on any increase.
+**chat.css is dead.** It is header-only (10 lines, no CSS rules). Any new CSS rule belongs in `components.css` `@layer components` (for product composites), `motion.css` (for shared state-transition behavior), or `markdown.css` (for markdown rendering). The growth guard fails on any increase.
 
 **components.css growth.** components.css is at ~1,963 lines. Prefer splitting by surface area (onboarding, config, session, chat) if it crosses ~2,000 lines. Avoid adding new rules when a primitive or Tailwind utility can express the same result.
 
@@ -406,6 +406,19 @@ The renderer uses a **primitives-as-API, primitives.css-as-engine** model (Daisy
 **Visual smoke per migration batch.** The contract tests are source-level grep — they verify class strings exist in files, not that rendered output looks right. After every batch of primitive migrations, run the app across all 5 themes and visually confirm at minimum: buttons, alerts, inputs, tabs, cards, badges.
 
 **New primitive checklist.** Every new `.tsx` file in `components/ui/` must: (1) export a typed component with `PascalCase` name, (2) use `Record<Union, string>` class maps for variants (not inline ternaries), (3) apply `.trim().replace(/\s+/g, ' ')` on className templates, (4) include a JSDoc docstring, (5) use `forwardRef` for interactive elements (button, input, select), (6) pass the "primitive purity" test (no domain imports). Add unit tests in `tests/unit/renderer-ui-primitives.test.ts` using the existing `renderToStaticMarkup` pattern.
+
+### Motion and state transitions
+
+Motion is a shared interaction contract, not local decoration. Use it to explain continuity (panel resize, disclosure expansion, list insertion, view replacement) or confirm meaningful state changes (idle/running/confirm, send/queue/cancel, tool lifecycle, transient feedback).
+
+- Use the theme-owned `--transition-fast`, `--transition-normal`, and `--transition-slow` tokens. Controls and chevrons use `fast`, status/popover/view entrances use `normal`, and shell geometry uses `slow`; do not introduce one-off duration/easing literals when a token fits.
+- Reuse the `orchid-*` vocabulary in `styles/motion.css`. Stateful disclosures must use `CollapsibleRegion` so content remains mounted while height and opacity settle; the trigger continues to own `aria-expanded` and `aria-controls`.
+- Prefer opacity and transform for frequent motion. Grid-track animation is approved for mounted disclosures, and width/grid-column animation is approved for the existing shell. Do not animate layout broadly.
+- Key mutually exclusive status/action wrappers so their entrance motion replays when semantic state changes. Give inserted list items and mounted settings/onboarding/subagent views stable React keys.
+- Never animate streaming text, live token or elapsed counters, terminal output, cursor updates, or high-frequency progress text. Progress geometry may transition through the primitive engine.
+- Overlays and popovers use the shared fade/pop vocabulary. Avoid bespoke keyframes in feature stylesheets.
+- Every motion path must remain usable under `prefers-reduced-motion`; the global exception rule short-circuits animations and transitions. New motion CSS must not bypass it.
+- Validate motion changes with primitive/unit and source-contract tests. Visual smoke remains required when browser inspection is permitted by the task.
 
 ### Naming
 - **Files**: `kebab-case.ts` / `kebab-case.tsx`

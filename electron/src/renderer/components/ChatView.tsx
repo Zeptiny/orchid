@@ -1008,7 +1008,7 @@ export function ChatView() {
           <Alert
             tone={toast.severity as AlertTone}
             variant="soft"
-            className={`command-toast command-toast-${toast.severity} py-2 text-sm`}
+            className={`command-toast command-toast-${toast.severity} orchid-state-enter py-2 text-sm`}
             role="status"
             aria-live="polite"
             action={
@@ -1060,13 +1060,13 @@ export function ChatView() {
         {closeConfirmId ? (
           <div
             ref={closeConfirmRef}
-            className="session-tab-confirm"
+            className="session-tab-confirm orchid-overlay-enter"
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="session-tab-confirm-title"
             aria-describedby="session-tab-confirm-desc"
           >
-            <div className="session-tab-confirm-card border border-base-300 bg-base-100 shadow-lg">
+            <div className="session-tab-confirm-card orchid-dialog-enter border border-base-300 bg-base-100 shadow-lg">
               <p id="session-tab-confirm-title" className="session-tab-confirm-text font-semibold">
                 Close running session tab?
               </p>
@@ -1099,7 +1099,7 @@ export function ChatView() {
         ) : null}
         <div
           ref={chatContentRef}
-          className={contentMode === 'subagents' ? 'orchid-chat-content-preserved orchid-chat-content-hidden' : 'orchid-chat-content-preserved'}
+          className={contentMode === 'subagents' ? 'orchid-chat-content-preserved orchid-chat-content-hidden' : 'orchid-chat-content-preserved orchid-view-enter'}
           aria-hidden={contentMode === 'subagents' ? true : undefined}
         >
         <ChatStream
@@ -1173,7 +1173,9 @@ export function ChatView() {
         />
         </div>
         {contentMode === 'subagents' ? (
-          <SubagentView subagents={subagents} openRequest={subagentOpenRequest} onBackToChat={() => setContentMode('chat')} />
+          <div className="orchid-view-enter h-full min-h-0">
+            <SubagentView subagents={subagents} openRequest={subagentOpenRequest} onBackToChat={() => setContentMode('chat')} />
+          </div>
         ) : null}
           </>
         )}

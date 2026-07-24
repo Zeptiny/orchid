@@ -459,7 +459,7 @@ export const CommandPalette = memo(function CommandPalette({
 
   return (
     <div
-      className="orchid-command-palette-overlay fixed inset-0 z-50 flex justify-center bg-black/55 pt-20"
+      className="orchid-command-palette-overlay orchid-overlay-enter fixed inset-0 z-50 flex justify-center bg-black/55 pt-20"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -467,7 +467,7 @@ export const CommandPalette = memo(function CommandPalette({
     >
       <div
         ref={panelRef}
-        className="orchid-command-palette flex max-h-96 w-full max-w-xl flex-col overflow-hidden rounded-box border border-base-300 bg-base-200 shadow-2xl mx-4"
+        className="orchid-command-palette orchid-dialog-enter flex max-h-96 w-full max-w-xl flex-col overflow-hidden rounded-box border border-base-300 bg-base-200 shadow-2xl mx-4"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={handleKeyDown}
       >

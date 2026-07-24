@@ -95,7 +95,7 @@ function QueueItem({
     return (
       <div
         role="listitem"
-        className="flex flex-col gap-1.5 rounded-selector border border-primary/40 bg-base-200 px-2 py-1.5"
+        className="orchid-list-item-enter flex flex-col gap-1.5 rounded-selector border border-primary/40 bg-base-200 px-2 py-1.5"
       >
         <div className="flex items-start gap-2">
           <QueueIndex index={index} />
@@ -148,7 +148,7 @@ function QueueItem({
   return (
     <div
       role="listitem"
-      className="flex items-center gap-2 rounded-selector border border-base-300 bg-base-200 px-2 py-1.5 transition-colors hover:border-base-content/25"
+      className="orchid-list-item-enter flex items-center gap-2 rounded-selector border border-base-300 bg-base-200 px-2 py-1.5 transition-colors hover:border-base-content/25"
     >
       <QueueIndex index={index} />
       <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs leading-snug text-base-content/90 line-clamp-2">

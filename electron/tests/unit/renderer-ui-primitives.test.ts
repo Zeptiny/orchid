@@ -24,6 +24,7 @@ import { Tabs } from '../../src/renderer/components/ui/Tabs';
 import { Alert } from '../../src/renderer/components/ui/Alert';
 import { Spinner } from '../../src/renderer/components/ui/Spinner';
 import { Disclosure } from '../../src/renderer/components/ui/Disclosure';
+import { CollapsibleRegion } from '../../src/renderer/components/ui/CollapsibleRegion';
 
 function markup(node: ReactElement): string {
   return renderToStaticMarkup(node);
@@ -70,6 +71,26 @@ describe('Disclosure', () => {
     expect(html).toContain('rounded-none border-y border-base-300');
     expect(html).toContain('Long prompt');
     expect(html).not.toMatch(/<details[^>]*\sopen(?:=|\s|>)/);
+  });
+});
+
+describe('CollapsibleRegion', () => {
+  it('keeps closed content mounted but hidden from interaction', () => {
+    const html = markup(
+      createElement(CollapsibleRegion, { open: false, id: 'details' }, 'Details'),
+    );
+    expect(html).toContain('orchid-collapsible-region');
+    expect(html).toContain('aria-hidden="true"');
+    expect(html).toContain('inert=""');
+    expect(html).toContain('Details');
+    expect(html).not.toContain('is-open');
+  });
+
+  it('marks open content without inert semantics', () => {
+    const html = markup(createElement(CollapsibleRegion, { open: true }, 'Details'));
+    expect(html).toContain('orchid-collapsible-region is-open');
+    expect(html).not.toContain('aria-hidden');
+    expect(html).not.toContain('inert');
   });
 });
 

@@ -644,7 +644,7 @@ export const InputArea = memo(function InputArea({
   return (
     <div className="orchid-composer-area">
       {!workspaceBound && (
-        <div className="orchid-composer-gate alert alert-warning" role="status">
+        <div className="orchid-composer-gate orchid-state-enter alert alert-warning" role="status">
           <span>Select a project folder before chatting.</span>
           {onPickProjectDir && (
             <IconButton
@@ -663,7 +663,7 @@ export const InputArea = memo(function InputArea({
 
       {!providerAvailable && (
         <div
-          className="orchid-composer-gate alert alert-info"
+          className="orchid-composer-gate orchid-state-enter alert alert-info"
           role="status"
           aria-live="polite"
         >
@@ -685,7 +685,7 @@ export const InputArea = memo(function InputArea({
 
       {providerAvailable && !modelSelected && (
         <div
-          className="orchid-composer-gate alert alert-warning"
+          className="orchid-composer-gate orchid-state-enter alert alert-warning"
           role="status"
           aria-live="polite"
         >
@@ -742,6 +742,10 @@ export const InputArea = memo(function InputArea({
           />
 
           <div className="orchid-composer-controls">
+            <span
+              key={showCancel ? 'cancel' : isStreaming && hasInput ? 'queue' : showMenu ? 'command' : 'send'}
+              className="orchid-composer-action-swap"
+            >
             {showCancel ? (
               <IconButton
                 label={cancelTitle}
@@ -781,6 +785,7 @@ export const InputArea = memo(function InputArea({
                 iconSize={16}
               />
             )}
+            </span>
           </div>
         </div>
       </div>

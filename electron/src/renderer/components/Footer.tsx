@@ -247,7 +247,10 @@ export const Footer = memo(function Footer({
     <div className="orchid-chat-footer">
       <div className="orchid-chat-footer-main min-w-0 flex-1 flex items-center gap-2 overflow-hidden">
         {isStreaming || confirming ? (
-          <>
+          <span
+            key={confirming ? interruptState : 'running'}
+            className="orchid-footer-state min-w-0 gap-2"
+          >
             {confirming ? (
               <span className="interrupt-hint inline-flex items-center gap-1 font-medium text-warning shrink-0">
                 <Icon name="alert" size={12} />
@@ -276,9 +279,9 @@ export const Footer = memo(function Footer({
                     : 'to interrupt'}
               </span>
             </span>
-          </>
+          </span>
         ) : (
-          <>
+          <span key="idle" className="orchid-footer-state min-w-0 gap-2">
             {FOOTER_SHORTCUT_IDS.map((id, index) => {
               const def = getShortcut(id);
               if (!def) return null;
@@ -298,7 +301,7 @@ export const Footer = memo(function Footer({
                 </span>
               );
             })}
-          </>
+          </span>
         )}
       </div>
 

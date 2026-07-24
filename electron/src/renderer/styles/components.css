@@ -1532,7 +1532,7 @@
   .mock-collapse .mock-collapse-title:hover {
     filter: brightness(1.06);
   }
-  .mock-collapse > .mock-collapse-content {
+  .mock-collapse .mock-collapse-content {
     padding: 6px 8px;
     font-size: 12px;
   }

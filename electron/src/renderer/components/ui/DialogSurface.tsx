@@ -85,15 +85,18 @@ export function DialogSurface({
 
   if (!isOpen) return null;
 
-  const overlayClasses =
-    overlayClassName ?? (variant === 'modal' ? MODAL_OVERLAY : DEFAULT_OVERLAY);
+  const overlayClasses = `${overlayClassName ?? (variant === 'modal' ? MODAL_OVERLAY : DEFAULT_OVERLAY)} orchid-overlay-enter`
+    .trim()
+    .replace(/\s+/g, ' ');
   const panelClasses = [
     panelClassName ?? (variant === 'modal' ? MODAL_PANEL : DEFAULT_PANEL),
+    'orchid-dialog-enter',
     className,
   ]
     .filter(Boolean)
     .join(' ')
-    .trim();
+    .trim()
+    .replace(/\s+/g, ' ');
 
   return (
     <div

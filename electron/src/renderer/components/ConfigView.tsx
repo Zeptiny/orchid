@@ -511,7 +511,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
   return (
     <div
       ref={rootRef}
-      className="config-shell grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
+      className="config-shell orchid-view-enter grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
     >
       <LeftSidebar
         activeSessionId={session.activeSession?.id ?? null}
@@ -573,7 +573,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
         {error && (
           <Alert
             tone="error"
-            className="rounded-none py-2.5 text-sm"
+            className="orchid-state-enter rounded-none py-2.5 text-sm"
             icon="alert"
             iconSize={14}
             action={
@@ -610,6 +610,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
         />
 
         <div className="config-body">
+          <div key={activeTab} className="orchid-view-enter">
           {loading ? (
             <StateMessage kind="loading" title="Loading configuration…" />
           ) : currentConfig ? (
@@ -636,6 +637,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
           ) : (
             <StateMessage kind="warning" title="Configuration could not be loaded." />
           )}
+          </div>
         </div>
 
         <footer className="config-footer-bar orchid-shortcut-bar">

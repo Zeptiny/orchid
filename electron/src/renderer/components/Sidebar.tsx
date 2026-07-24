@@ -27,6 +27,7 @@ import {
 import { formatUsageSummary } from '../utils/format-usage';
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
+import { CollapsibleRegion } from './ui/CollapsibleRegion';
 import { DropdownMenu } from './ui/DropdownMenu';
 import { IconButton } from './ui/IconButton';
 import { Spinner } from './ui/Spinner';
@@ -285,22 +286,21 @@ function CollapseBlock({
             {badge}
           </span>
           <Icon
-            name={open ? 'chevronDown' : 'chevronRight'}
+            name="chevronDown"
             size={12}
-            className="shrink-0 text-base-content/40"
+            className={`orchid-disclosure-chevron shrink-0 text-base-content/40 ${open ? 'is-open' : ''}`}
           />
         </button>
       </div>
-      {open && (
+      <CollapsibleRegion open={open} id={contentId}>
         <div
-          id={contentId}
           className="mock-collapse-content"
           role="region"
           aria-labelledby={`${sectionId}-trigger`}
         >
           {children}
         </div>
-      )}
+      </CollapsibleRegion>
     </div>
   );
 }
@@ -825,17 +825,17 @@ function IndexProgressPanel({
   detail?: string;
 }) {
   if (!progress) {
-    return <div className="subtle">Indexing…</div>;
+    return <div className="subtle orchid-state-enter">Indexing…</div>;
   }
   if (progress.total === 0) {
     return (
-      <div className="subtle">
+      <div className="subtle orchid-state-enter">
         {progress.phase === 'discovering' ? 'Scanning project…' : 'Indexing…'}
       </div>
     );
   }
   return (
-    <div className="inspector-stack gap-0">
+    <div className="inspector-stack orchid-state-enter gap-0">
       <progress
         className="progress progress-primary h-1 w-full"
         value={progress.done}
