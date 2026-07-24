@@ -352,7 +352,7 @@ export function SubagentsSection({
   onOpenView = () => {},
 }: SubagentsSectionProps) {
   if (state.status === 'loading') {
-    return <StateMessage kind="loading" className="py-4" title="Loading subagents…" />;
+    return <StateMessage kind="loading" className="inspector-empty py-4" title="Loading subagents…" />;
   }
 
   if (state.status === 'error') {
@@ -521,7 +521,7 @@ interface TodosSectionProps {
 
 function TodosSection({ state }: TodosSectionProps) {
   if (state.status === 'loading') {
-    return <StateMessage kind="loading" className="py-4" title="Loading todos…" />;
+    return <StateMessage kind="loading" className="inspector-empty py-4" title="Loading todos…" />;
   }
 
   if (state.status === 'error') {
