@@ -436,7 +436,7 @@ describe('ProjectConfigView', () => {
     });
     await switchTab(user, 'Permissions');
 
-    const grepSelect = screen.getByLabelText('grep permission mode') as HTMLSelectElement;
+    const grepSelect = screen.getByLabelText('grep — inside project') as HTMLSelectElement;
     expect(grepSelect.value).toBe('ask');
 
     await user.selectOptions(grepSelect, 'allow');
@@ -448,7 +448,7 @@ describe('ProjectConfigView', () => {
     await waitFor(() => {
       expect(savePermissionScope).toHaveBeenCalledWith({
         scope: 'project',
-        updates: { grep: 'allow' },
+        updates: { grep: { inside: 'allow', outside: 'ask' } },
         expectedProjectDir: PROJECT_DIR,
       });
     });

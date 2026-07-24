@@ -99,7 +99,7 @@ export function DialogSurface({
     .trim()
     .replace(/\s+/g, ' ');
 
-  return createPortal(
+  const content = (
     <div
       className={overlayClasses}
       onClick={closeOnBackdrop ? onClose : undefined}
@@ -118,7 +118,9 @@ export function DialogSurface({
       >
         {children}
       </div>
-    </div>,
-    document.body,
+    </div>
   );
+
+  if (typeof document === 'undefined') return content;
+  return createPortal(content, document.body);
 }
