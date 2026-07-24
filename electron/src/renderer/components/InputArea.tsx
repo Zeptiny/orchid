@@ -8,7 +8,7 @@
  * Enter send · Shift+Enter newline · Ctrl/Cmd+S send · Esc multi-stage interrupt.
  * Slash commands: type `/` to open autocomplete above the input.
  */
-import { useRef, useCallback, useEffect, useState, useMemo } from 'react';
+import { memo, useRef, useCallback, useEffect, useState, useMemo } from 'react';
 import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption } from '../../shared/types/ipc';
 import type { ChatStatus, InterruptState } from '../hooks/useChat';
@@ -88,7 +88,7 @@ export function resolveInputEscapeAction(options: {
   return 'cancel-chat';
 }
 
-export function InputArea({
+export const InputArea = memo(function InputArea({
   sessionId,
   status,
   model: _model,
@@ -786,7 +786,7 @@ export function InputArea({
       </div>
     </div>
   );
-}
+});
 
 function filterResults(items: PaletteResult[], query: string): PaletteResult[] {
   const q = query.trim();

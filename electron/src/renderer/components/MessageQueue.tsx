@@ -1,4 +1,4 @@
-import type { KeyboardEvent } from 'react';
+import { memo, type KeyboardEvent } from 'react';
 import type { QueuedMessage, QueueTrigger } from '../hooks/useMessageQueue';
 import { IconButton } from './ui/IconButton';
 
@@ -29,7 +29,7 @@ const TRIGGER_LABEL: Record<QueueTrigger, string> = {
  * Renders nothing when the queue is empty. Purely presentational: all
  * mutations flow through the callback props.
  */
-export function MessageQueue({
+export const MessageQueue = memo(function MessageQueue({
   queue,
   editingId,
   onRemove,
@@ -62,7 +62,7 @@ export function MessageQueue({
       ))}
     </div>
   );
-}
+});
 
 interface QueueItemProps {
   message: QueuedMessage;

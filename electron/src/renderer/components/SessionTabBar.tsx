@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import type { SessionActivity, SessionSummary } from '../../shared/types/ipc-boundary';
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
@@ -32,7 +32,7 @@ function projectBasename(cwd: string | null | undefined): string | null {
   return parts.at(-1) ?? cwd;
 }
 
-export function SessionTabBar({
+export const SessionTabBar = memo(function SessionTabBar({
   openSessionIds,
   focusedSessionId,
   sessions,
@@ -210,4 +210,4 @@ export function SessionTabBar({
       </div>
     </div>
   );
-}
+});

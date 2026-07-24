@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { Session } from '../../shared/types/session';
 import type { WorkspaceInfo } from '../../shared/types/ipc';
 import { Icon } from './Icon';
@@ -14,7 +15,7 @@ function projectName(cwd: string | null): string {
 }
 
 /** Persistent identity chrome for the session currently shown in the center pane. */
-export function SessionHeader({ session, workspace }: SessionHeaderProps) {
+export const SessionHeader = memo(function SessionHeader({ session, workspace }: SessionHeaderProps) {
   const cwd = session?.cwd ?? workspace?.cwd ?? null;
   const title = session?.name ?? 'New chat';
 
@@ -31,4 +32,4 @@ export function SessionHeader({ session, workspace }: SessionHeaderProps) {
       </div>
     </header>
   );
-}
+});

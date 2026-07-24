@@ -274,7 +274,7 @@ export function ChatView() {
       subagents.applyFromSession(loadedSession.subagentChains);
       todos.applyFromSession(loadedSession.todoStore.tasks);
     },
-    [chat, subagents.applyFromSession, todos.applyFromSession],
+    [chat.setMessages, subagents.applyFromSession, todos.applyFromSession],
   );
 
   const handleSessionSelect = useCallback(
@@ -322,7 +322,7 @@ export function ChatView() {
         live: result.live,
       });
     },
-    [session, chat, subagents.applyFromSession, todos.applyFromSession, draftTabVisible, messageQueue.clearQueue],
+    [session, chat.beginSessionSwitch, chat.hydrateSnapshot, subagents.applyFromSession, todos.applyFromSession, draftTabVisible, messageQueue.clearQueue],
   );
 
   // ConfigView left-rail pick: same hydrate path as sidebar (not store-only load).
@@ -348,7 +348,7 @@ export function ChatView() {
     if (opts?.clearComposer) {
       setComposerDraftKey((k) => k + 1);
     }
-  }, [session, chat, applySessionMessages, messageQueue.clearQueue]);
+  }, [session, chat.beginSessionSwitch, applySessionMessages, messageQueue.clearQueue]);
 
   // New chat: draft in the currently selected project. Never open a folder
   // picker here — inherit session.cwd → workspace.cwd → sticky default.
@@ -490,7 +490,7 @@ export function ChatView() {
       if (gen !== sessionSwitchGen.current) return;
       await focusAfterWorkingSet(snapshot);
     },
-    [session, chat, tabs, focusAfterWorkingSet],
+    [session, chat.setMessages, tabs.refresh, focusAfterWorkingSet],
   );
 
   const notify = useCallback((message: string, severity: ToastSeverity = 'info') => {
@@ -572,7 +572,23 @@ export function ChatView() {
         notify(`Project folder: ${info.cwd}`, 'info');
       }
     }
-  }, [session, chat, applySessionMessages, notify]);
+  }, [session, chat.beginSessionSwitch, applySessionMessages, notify]);
+
+  // Stable prop wrappers for the memoized LeftSidebar. Inline arrows here would
+  // give the rail a fresh identity every render and defeat React.memo, so the
+  // whole sidebar re-rendered on each streamed token / activity broadcast.
+  const handleSessionCreateClick = useCallback(() => {
+    void handleSessionCreate();
+  }, [handleSessionCreate]);
+  const handleProjectSessionCreateClick = useCallback((projectDir: string) => {
+    void handleProjectSessionCreate(projectDir);
+  }, [handleProjectSessionCreate]);
+  const handlePickProjectDirClick = useCallback(() => {
+    void handlePickProjectDir();
+  }, [handlePickProjectDir]);
+  const handleStopSession = useCallback((sessionId: string) => {
+    void chat.stop(sessionId);
+  }, [chat.stop]);
 
   const handleSelectProviderModel = useCallback(async (key: string) => {
     const option = providerModelByKey.get(key);
@@ -623,7 +639,7 @@ export function ChatView() {
       });
     },
     [
-      chat,
+      chat.send,
       chat.isSwitchingSession,
       session.activeSession?.id,
       session.activeSession?.selection,
@@ -696,6 +712,26 @@ export function ChatView() {
     setComposerDraftKey((k) => k + 1);
     await handleSessionSelect(nextId);
   }, [tabs.snapshot, handleSessionSelect]);
+
+  // Stable prop wrappers for the memoized tab bar / composer / inspector.
+  // Inline arrows would hand those components a fresh identity every render and
+  // defeat React.memo, re-rendering them on each streamed token.
+  const handleTabSelect = useCallback((id: string) => {
+    setDraftTabVisible(false);
+    void handleSessionSelect(id);
+  }, [handleSessionSelect]);
+  const handleSelectDraftTab = useCallback(() => {
+    void enterDraftMode();
+  }, [enterDraftMode]);
+  const handleCloseDraftTab = useCallback(() => {
+    void leaveDraftToOpenTab();
+  }, [leaveDraftToOpenTab]);
+  const handleOpenProviders = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('orchid:open-settings', { detail: { tab: 'providers' } }));
+  }, []);
+  const handleFocusSectionConsumed = useCallback(() => {
+    setInspectorFocusSection(null);
+  }, []);
 
   const handleCloseFocusedTab = useCallback(() => {
     if (draftTabVisible && !session.activeSession) {
@@ -855,7 +891,10 @@ export function ChatView() {
     void subagents.refresh();
   }, [chat.status, chat.messages.length, session.activeSession?.id, subagents.refresh]);
 
-  const commandContext: CommandContext = {
+  // Memoized so the composer, footer, and command palette (all memoized) are
+  // not invalidated on every render — previously a fresh object each render
+  // forced those subtrees to re-render on every streamed token.
+  const commandContext: CommandContext = useMemo(() => ({
     onCreateSession: handleSessionCreate,
     onLoadSession: handleSessionSelect,
     onDeleteSession: session.deleteSession,
@@ -901,7 +940,20 @@ export function ChatView() {
     },
     onNotify: notify,
     onClose: () => setPaletteOpen(false),
-  };
+  }), [
+    handleSessionCreate,
+    handleSessionSelect,
+    session,
+    handleSelectProviderModel,
+    availableProviderModels,
+    providerPickerValue,
+    openSettings,
+    handlePickProjectDir,
+    handleIndexRAG,
+    handleIndexAST,
+    refreshIndex,
+    notify,
+  ]);
 
   useEffect(() => {
     if (selectedProviderModel) {
@@ -935,27 +987,17 @@ export function ChatView() {
         }
         isCollapsed={leftSidebarCollapsed}
         onOpenSettings={openSettings}
-        onPickProjectDir={() => {
-          void handlePickProjectDir();
-        }}
+        onPickProjectDir={handlePickProjectDirClick}
         projectPickerCreatesDraft={Boolean(session.activeSession?.chains.length)}
         onRefreshSessions={session.refresh}
-        onSessionCreate={() => {
-          void handleSessionCreate();
-        }}
-        onProjectSessionCreate={(projectDir) => {
-          void handleProjectSessionCreate(projectDir);
-        }}
-        onProjectSelect={(projectDir) => {
-          void handleProjectSelect(projectDir);
-        }}
+        onSessionCreate={handleSessionCreateClick}
+        onProjectSessionCreate={handleProjectSessionCreateClick}
+        onProjectSelect={handleProjectSelect}
         onSessionDelete={handleSessionDelete}
         onSessionSelect={handleSessionSelect}
         onSessionRename={handleSessionRename}
         activities={activity.activities}
-        onStopSession={(sessionId) => {
-          void chat.stop(sessionId);
-        }}
+        onStopSession={handleStopSession}
         onToggle={toggleLeftSidebar}
         sessionListState={session.listState}
         workspace={session.workspace}
@@ -1005,17 +1047,10 @@ export function ChatView() {
               ? session.workspace.cwd.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? null
               : null
           }
-          onSelect={(id) => {
-            setDraftTabVisible(false);
-            void handleSessionSelect(id);
-          }}
-          onSelectDraft={() => {
-            void enterDraftMode();
-          }}
+          onSelect={handleTabSelect}
+          onSelectDraft={handleSelectDraftTab}
           onClose={requestCloseTab}
-          onCloseDraft={() => {
-            void leaveDraftToOpenTab();
-          }}
+          onCloseDraft={handleCloseDraftTab}
           onRename={handleSessionRename}
         />
         <SessionHeader
@@ -1081,13 +1116,7 @@ export function ChatView() {
           sessionId={session.activeSession?.id ?? null}
           onClearError={chat.clearError}
           onOpenSettings={openSettings}
-          onPickProjectDir={
-            workspaceBound
-              ? undefined
-              : () => {
-                  void handlePickProjectDir();
-                }
-          }
+          onPickProjectDir={workspaceBound ? undefined : handlePickProjectDirClick}
           workspaceUnbound={!workspaceBound}
           onRetry={handleRetry}
           streamStartTime={chat.streamStartTime}
@@ -1124,12 +1153,8 @@ export function ChatView() {
           workspaceBound={workspaceBound}
           providerAvailable={providerAvailable}
           modelSelected={modelSelected}
-          onOpenProviders={() => {
-            window.dispatchEvent(new CustomEvent('orchid:open-settings', { detail: { tab: 'providers' } }));
-          }}
-          onPickProjectDir={() => {
-            void handlePickProjectDir();
-          }}
+          onOpenProviders={handleOpenProviders}
+          onPickProjectDir={handlePickProjectDirClick}
           isViewActive={contentMode === 'subagents'}
         />
         <Footer
@@ -1177,7 +1202,7 @@ export function ChatView() {
         messages={chat.messages}
         streamingThinkingChars={Math.floor(chat.streamingThinking.length / 500) * 500 || undefined}
         focusSection={inspectorFocusSection}
-        onFocusSectionConsumed={() => setInspectorFocusSection(null)}
+        onFocusSectionConsumed={handleFocusSectionConsumed}
       />
 
       <CommandPalette

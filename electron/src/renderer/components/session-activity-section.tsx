@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import type {
   SessionActivity,
   SessionSummary,
@@ -43,7 +43,7 @@ function elapsedLabel(startedAt: number | null, now: number): string | null {
 }
 
 /** Global list of work that continues even when another session is selected. */
-export function SessionActivitySection({
+export const SessionActivitySection = memo(function SessionActivitySection({
   activities,
   sessions,
   onSelect,
@@ -123,4 +123,4 @@ export function SessionActivitySection({
       </div>
     </section>
   );
-}
+});

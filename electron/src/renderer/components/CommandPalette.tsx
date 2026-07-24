@@ -3,7 +3,7 @@
  *
  * Uses the modal and list primitives.
  */
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { memo, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
   COMMANDS,
   getRecentCommands,
@@ -57,7 +57,7 @@ const CATEGORY_ICONS: Record<CommandCategory, IconName> = {
   navigation: 'arrowRight',
 };
 
-export function CommandPalette({
+export const CommandPalette = memo(function CommandPalette({
   isOpen,
   onClose,
   context,
@@ -624,7 +624,7 @@ export function CommandPalette({
       </div>
     </div>
   );
-}
+});
 
 function HighlightedText({ query, text }: { query: string; text: string }) {
   const segments = highlightMatch(query, text);

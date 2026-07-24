@@ -2,7 +2,7 @@
  * Sidebar — right inspector panel (Todos, Subagents, Context, Usage, Index, MCP).
  * Iteration 012 mock-aligned collapse blocks.
  */
-import { useEffect, useState, type ReactNode } from 'react';
+import { memo, useEffect, useState, type ReactNode } from 'react';
 import type {
   MCPServerStatus,
   MCPServerStatusValue,
@@ -64,7 +64,7 @@ interface SidebarProps {
   onFocusSectionConsumed?: () => void;
 }
 
-export function Sidebar({
+export const Sidebar = memo(function Sidebar({
   isOpen,
   onToggle,
   subagentState,
@@ -225,7 +225,7 @@ export function Sidebar({
       </div>
     </aside>
   );
-}
+});
 
 // ── Mock-style Collapse Block ───────────────────────────────────────────────
 

@@ -5,7 +5,7 @@
  * Right: model picker + context radial with dropup breakdown.
  * Wording mirrors the multi-stage cancel button on the composer.
  */
-import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
 import type { CommandContext } from '../../shared/types/ipc-boundary';
 import type {
@@ -99,7 +99,7 @@ interface FooterProps {
   sessionId?: string | null;
 }
 
-export function Footer({
+export const Footer = memo(function Footer({
   streamStartTime = null,
   isStreaming,
   interruptState,
@@ -421,7 +421,7 @@ export function Footer({
       </div>
     </div>
   );
-}
+});
 
 function formatElapsed(seconds: number): string {
   if (seconds < 60) {

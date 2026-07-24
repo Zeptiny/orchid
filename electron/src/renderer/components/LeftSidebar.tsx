@@ -1,4 +1,6 @@
 import {
+  memo,
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -73,7 +75,7 @@ interface LeftSidebarProps {
  * Project groups are always visible, show recent work first, and expand
  * independently; search remains global and session titles never scroll.
  */
-export function LeftSidebar({
+export const LeftSidebar = memo(function LeftSidebar({
   isCollapsed,
   onToggle,
   sessionListState,
@@ -265,7 +267,7 @@ export function LeftSidebar({
       </div>
     </aside>
   );
-}
+});
 
 // ── Workspace chip ───────────────────────────────────────────────────────────
 
@@ -643,10 +645,8 @@ function ProjectSessionList({
                       keyboardSessionActive && index === activeIndex
                     }
                     showPathHint={false}
-                    onSelect={(id) => {
-                      setActiveIndex(index);
-                      onSelect(id);
-                    }}
+                    onActivate={setActiveIndex}
+                    onSelect={onSelect}
                     onDelete={onDelete}
                     onRename={onRename}
                   />
@@ -684,7 +684,7 @@ function ProjectSessionList({
   );
 }
 
-function SessionRow({
+const SessionRow = memo(function SessionRow({
   session,
   activity,
   optionId,
@@ -692,6 +692,7 @@ function SessionRow({
   isActive,
   isKeyboardActive,
   showPathHint,
+  onActivate,
   onSelect,
   onDelete,
   onRename,
@@ -703,6 +704,7 @@ function SessionRow({
   isActive: boolean;
   isKeyboardActive: boolean;
   showPathHint: boolean;
+  onActivate: (index: number) => void;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onRename?: (id: string, name: string) => void | Promise<void>;
@@ -710,6 +712,11 @@ function SessionRow({
   const pathHint = session.cwd
     ? truncatePathDisplay(session.cwd, 24)
     : 'Unknown path';
+
+  const handleSelect = useCallback(() => {
+    onActivate(sessionIndex);
+    onSelect(session.id);
+  }, [onActivate, onSelect, sessionIndex, session.id]);
 
   return (
     <div
@@ -725,7 +732,7 @@ function SessionRow({
           isKeyboardActive ? 'session-item-keyboard' : ''
         }`}
         title={session.cwd ?? session.name}
-        onClick={() => onSelect(session.id)}
+        onClick={handleSelect}
       >
         {activity && (
           <span
@@ -759,8 +766,8 @@ function SessionRow({
               name={session.name}
               className="session-item-name truncate"
               title={`${session.name} (double-click or F2 to rename)`}
-              onSelect={() => onSelect(session.id)}
-              onBeginEdit={() => onSelect(session.id)}
+              onSelect={handleSelect}
+              onBeginEdit={handleSelect}
               onRename={(next) => onRename(session.id, next)}
             />
           ) : (
@@ -790,4 +797,4 @@ function SessionRow({
       </Button>
     </div>
   );
-}
+});
