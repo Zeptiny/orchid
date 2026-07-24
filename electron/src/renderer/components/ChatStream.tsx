@@ -362,25 +362,28 @@ export function ChatStream({
           </div>
         )}
 
-        {historyItems.map((item) =>
+        {/* History + live tail + active footer render as ONE keyed sequence.
+            Separate JSX child expressions would each reconcile as their own
+            slot, so at turn end the committed bubble/footer (in history) would
+            unmount the live one (in the tail) and remount — replaying the
+            orchid-rise entrance animation as a visible flicker. One flat array
+            lets React match the shared keys (seg id / footer-chain id) and
+            reuse the DOM nodes across the live→committed swap. */}
+        {[
+          ...historyItems,
+          ...liveGroupedItems,
+          ...(history.activeFooter
+            ? [{
+                ...history.activeFooter,
+                elapsedSeconds:
+                  status === 'streaming' && streamStartTime != null
+                    ? liveElapsedSeconds
+                    : undefined,
+              }]
+            : []),
+        ].map((item) =>
           renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
         )}
-        {liveGroupedItems.map((item) =>
-          renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
-        )}
-        {history.activeFooter &&
-          renderStreamItem(
-            {
-              ...history.activeFooter,
-              elapsedSeconds:
-                status === 'streaming' && streamStartTime != null
-                  ? liveElapsedSeconds
-                  : undefined,
-            },
-            alwaysExpandToolGroups,
-            expandChain,
-            subagents,
-          )}
       </div>
       {isUserScrolledUp ? (
         <Button
