@@ -41,6 +41,7 @@ export const getFileSkeletonDefinition: ToolDefinition = {
   category: 'ast',
   riskClass: RiskClass.READ_ONLY,
   noTimeout: true,
+  offload: true,
 };
 
 // ---------------------------------------------------------------------------

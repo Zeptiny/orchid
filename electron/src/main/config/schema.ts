@@ -117,6 +117,7 @@ export const configSchema = z
     read_line_limit: z.number().int().positive().default(1000),
     grep_max_results: z.number().int().positive().default(100),
     directory_tree_depth: z.number().int().positive().default(2),
+    tool_worker_pool_size: z.number().int().min(0).max(8).default(2),
     theme: z.string().min(1).default('default'),
     personality: z.string().min(1).default('default'),
     rag: ragConfigSchema.default({}),

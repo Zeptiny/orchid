@@ -310,6 +310,7 @@ export const grepToolDefinition: ToolDefinition = {
   outputDataSchema: searchResultsDataSchema,
   category: 'search',
   riskClass: RiskClass.READ_ONLY,
+  offload: true,
 };
 
 export const grepHandler: ToolHandler = async (

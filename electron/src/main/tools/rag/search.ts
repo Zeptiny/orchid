@@ -47,6 +47,7 @@ export const ragSearchDefinition: ToolDefinition = {
   inputSchema: ragSearchSchema,
   category: 'rag',
   riskClass: RiskClass.READ_ONLY,
+  offload: true,
 };
 
 // ---------------------------------------------------------------------------

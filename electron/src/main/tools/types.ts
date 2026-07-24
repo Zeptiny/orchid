@@ -75,6 +75,8 @@ export interface ToolDefinition {
 
   /** If true, skip timeout for this tool */
   noTimeout?: boolean;
+
+  offload?: boolean;
 }
 
 /**
@@ -124,6 +126,18 @@ export interface ToolExecutionContext {
  */
 export function getToolConfig(ctx: ToolExecutionContext): Config {
   return ctx.projectRuntime?.config ?? getConfig();
+}
+
+export interface WorkerToolContext {
+  cwd: string;
+  config: Config;
+}
+
+export function toWorkerContext(ctx: ToolExecutionContext): WorkerToolContext {
+  return {
+    cwd: ctx.cwd,
+    config: ctx.projectRuntime?.config ?? getConfig(),
+  };
 }
 
 /**

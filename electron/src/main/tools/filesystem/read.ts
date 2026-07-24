@@ -35,6 +35,7 @@ export const readDefinition: ToolDefinition = {
   outputDataSchema: fileContentDataSchema,
   category: 'filesystem',
   riskClass: RiskClass.READ_ONLY,
+  offload: true,
 };
 function languageHint(filePath: string): string {
   const extension = path.extname(filePath).toLowerCase();

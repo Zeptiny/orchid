@@ -45,6 +45,7 @@ export const globDefinition: ToolDefinition = {
   outputDataSchema: searchResultsDataSchema,
   category: 'filesystem',
   riskClass: RiskClass.READ_ONLY,
+  offload: true,
 };
 
 // ── Walk records ───────────────────────────────────────────────────────────

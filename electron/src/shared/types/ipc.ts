@@ -332,6 +332,7 @@ export type ConfigPatch = {
   read_line_limit?: number;
   grep_max_results?: number;
   directory_tree_depth?: number;
+  tool_worker_pool_size?: number;
   theme?: string;
   personality?: string;
   rag?: Partial<RAGConfig> & {

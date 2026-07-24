@@ -28,6 +28,8 @@ import {
   renderRetrieval,
 } from '../tools/result';
 import type { ToolExecutionContext } from '../tools/types';
+import { toWorkerContext } from '../tools/types';
+import { getToolWorkerPool } from './tool-pool';
 import type { ProjectRuntime } from '../project/runtime';
 import { getDefaultWaitTimeoutMs } from '../agents/manager';
 import {
@@ -291,15 +293,29 @@ export async function executeToolCall(
   const handlerArgs = validation.data;
   let result: unknown;
   try {
-    result = await runWithToolTimeout(
-      () => registered.handler(handlerArgs, toolCtx),
-      name,
-      {
-        timeoutSeconds: effectiveTimeoutSeconds,
-        noTimeout: Boolean(registered.definition.noTimeout),
-        abortController: timeoutAbort,
-      },
-    );
+    const offloadPool = registered.definition.offload ? getToolWorkerPool() : null;
+    if (offloadPool) {
+      const workerCtx = toWorkerContext(toolCtx);
+      result = await runWithToolTimeout(
+        () => offloadPool.run({ toolName: name, args: handlerArgs, context: workerCtx }),
+        name,
+        {
+          timeoutSeconds: effectiveTimeoutSeconds,
+          noTimeout: Boolean(registered.definition.noTimeout),
+          abortController: timeoutAbort,
+        },
+      );
+    } else {
+      result = await runWithToolTimeout(
+        () => registered.handler(handlerArgs, toolCtx),
+        name,
+        {
+          timeoutSeconds: effectiveTimeoutSeconds,
+          noTimeout: Boolean(registered.definition.noTimeout),
+          abortController: timeoutAbort,
+        },
+      );
+    }
   } catch (err) {
     if (err instanceof ToolTimeoutError) {
       return genericTerminalExecution(

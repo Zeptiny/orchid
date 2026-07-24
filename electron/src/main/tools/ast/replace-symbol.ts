@@ -44,6 +44,7 @@ export const replaceSymbolDefinition: ToolDefinition = {
   category: 'ast',
   riskClass: RiskClass.MUTATION,
   noTimeout: true,
+  offload: true,
 };
 
 // ---------------------------------------------------------------------------

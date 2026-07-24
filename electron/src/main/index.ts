@@ -30,6 +30,7 @@ import { initFileLogging, closeFileLogging } from './logging';
 import { registerBuiltinTools } from './tools';
 import { getBackgroundStore } from './tools/process/background-store';
 import { wireSubagentRuntime, flushSubagentPersistence } from './agents/wire-subagents';
+import { initToolWorkerPool, disposeToolWorkerPool } from './llm/tool-pool';
 import { getConfig } from './config/loader';
 import { ProviderCatalogStore } from './providers/catalog/store';
 import { ProviderCatalogUpdater, createHttpCatalogTransport } from './providers/catalog/updater';
@@ -256,6 +257,11 @@ app.whenReady().then(async () => {
     // Start subagent stream runner + session persistence for token usage
     wireSubagentRuntime();
 
+    const poolSize = getConfig().tool_worker_pool_size;
+    if (poolSize > 0) {
+      await initToolWorkerPool(getConfig(), poolSize);
+    }
+
     // 5. Register all IPC handlers (before creating window)
     registerAllIPC();
 
@@ -361,6 +367,8 @@ app.on('before-quit', async (event) => {
 
     // 4. Shut down MCP transports
     await shutdownProjectMCPManagers();
+
+    await disposeToolWorkerPool();
 
     // 5. Destroy auto-updater
     destroyUpdater();
