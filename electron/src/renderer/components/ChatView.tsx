@@ -1173,7 +1173,7 @@ export function ChatView() {
         />
         </div>
         {contentMode === 'subagents' ? (
-          <div className="orchid-view-enter h-full min-h-0">
+          <div className="orchid-view-enter flex min-h-0 flex-1 flex-col">
             <SubagentView subagents={subagents} openRequest={subagentOpenRequest} onBackToChat={() => setContentMode('chat')} />
           </div>
         ) : null}
