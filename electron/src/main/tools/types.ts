@@ -76,6 +76,7 @@ export interface ToolDefinition {
   /** If true, skip timeout for this tool */
   noTimeout?: boolean;
 
+  /** If true, execute the handler in a worker thread via the tool worker pool. */
   offload?: boolean;
 }
 

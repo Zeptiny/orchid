@@ -320,6 +320,7 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('read_output_long_poll_max');
       expect(cfg).toHaveProperty('llm_retry_backoff_base');
       expect(cfg).toHaveProperty('llm_retry_max_delay');
+      expect(cfg).toHaveProperty('tool_worker_pool_size');
 
       // RAG nested fields (7)
       expect(cfg.rag).toHaveProperty('chunk_size');

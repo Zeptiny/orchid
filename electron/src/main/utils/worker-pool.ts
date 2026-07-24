@@ -63,7 +63,7 @@ export class WorkerPool {
     }
   }
 
-  run<T>(payload: Record<string, unknown>): Promise<T> {
+  run<T>(payload: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
     if (this.disposed) throw new PoolDisposedError();
     const taskId = this.nextTaskId++;
     const message: Record<string, unknown> = { type: 'execute', taskId, ...payload };
@@ -73,6 +73,9 @@ export class WorkerPool {
         reject,
         workerId: -1,
       });
+      if (signal) {
+        signal.addEventListener('abort', () => this.terminateTask(taskId), { once: true });
+      }
       const idleWorkerId = this.findIdleWorker();
       if (idleWorkerId !== null) {
         this.dispatch(idleWorkerId, taskId, message);
@@ -98,7 +101,11 @@ export class WorkerPool {
     if (!this.disposed) {
       void this.spawnWorker()
         .then(() => this.processQueue())
-        .catch(() => undefined);
+        .catch((err) => {
+          console.error('[worker-pool] Failed to respawn worker', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
     }
   }
 
@@ -162,6 +169,7 @@ export class WorkerPool {
       });
       worker.on('error', (err) => {
         if (!ready) {
+          this.workers.delete(workerId);
           reject(err);
           return;
         }
@@ -169,6 +177,7 @@ export class WorkerPool {
       });
       worker.on('exit', (code) => {
         if (!ready) {
+          this.workers.delete(workerId);
           reject(new Error(`Worker exited with code ${code} before ready`));
           return;
         }
@@ -216,7 +225,11 @@ export class WorkerPool {
     if (this.disposed) return;
     void this.spawnWorker()
       .then(() => this.processQueue())
-      .catch(() => undefined);
+      .catch((err) => {
+        console.error('[worker-pool] Failed to respawn worker', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
   }
 
   private findIdleWorker(): number | null {

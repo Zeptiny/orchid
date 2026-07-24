@@ -1,4 +1,4 @@
-import { parentPort, workerData } from 'node:worker_threads';
+import { parentPort } from 'node:worker_threads';
 import { ConfigManager } from '../config/loader';
 import { createBuiltinToolRegistry } from './index';
 import type {
@@ -6,16 +6,12 @@ import type {
   ToolHandlerOutcome,
   WorkerToolContext,
 } from './types';
-import type { Config } from '../config/schema';
+import type { ProjectRuntime } from '../project/runtime';
 import type { JsonValue } from '../../shared/types/tool-result';
-
-interface ToolWorkerStartData {
-  config: Config;
-}
 
 interface ToolWorkerExecuteMessage {
   type: 'execute';
-  taskId: string;
+  taskId: number;
   toolName: string;
   args: unknown;
   context: WorkerToolContext;
@@ -23,14 +19,12 @@ interface ToolWorkerExecuteMessage {
 
 type ToolWorkerOutbound =
   | { type: 'ready' }
-  | { type: 'result'; taskId: string; result: ToolHandlerOutcome<JsonValue> }
-  | { type: 'error'; taskId: string; error: string };
+  | { type: 'result'; taskId: number; result: ToolHandlerOutcome<JsonValue> }
+  | { type: 'error'; taskId: number; error: string };
 
 function post(msg: ToolWorkerOutbound): void {
   parentPort?.postMessage(msg);
 }
-
-const _startData = (workerData ?? {}) as ToolWorkerStartData;
 
 ConfigManager.reset();
 ConfigManager.load();
@@ -53,7 +47,14 @@ async function handleExecute(message: ToolWorkerExecuteMessage): Promise<void> {
       post({ type: 'error', taskId, error: validation.error });
       return;
     }
-    const toolCtx: ToolExecutionContext = { cwd: context.cwd };
+    const projectRuntime: ProjectRuntime = {
+      projectDir: context.cwd,
+      config: context.config,
+      agents: new Map(),
+      skills: new Map(),
+      personalities: new Map(),
+    };
+    const toolCtx: ToolExecutionContext = { cwd: context.cwd, projectRuntime };
     const result = await registered.handler(validation.data, toolCtx);
     post({ type: 'result', taskId, result });
   } catch (err: unknown) {

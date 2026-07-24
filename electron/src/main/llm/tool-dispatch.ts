@@ -294,28 +294,20 @@ export async function executeToolCall(
   let result: unknown;
   try {
     const offloadPool = registered.definition.offload ? getToolWorkerPool() : null;
-    if (offloadPool) {
-      const workerCtx = toWorkerContext(toolCtx);
-      result = await runWithToolTimeout(
-        () => offloadPool.run({ toolName: name, args: handlerArgs, context: workerCtx }),
-        name,
-        {
-          timeoutSeconds: effectiveTimeoutSeconds,
-          noTimeout: Boolean(registered.definition.noTimeout),
-          abortController: timeoutAbort,
-        },
-      );
-    } else {
-      result = await runWithToolTimeout(
-        () => registered.handler(handlerArgs, toolCtx),
-        name,
-        {
-          timeoutSeconds: effectiveTimeoutSeconds,
-          noTimeout: Boolean(registered.definition.noTimeout),
-          abortController: timeoutAbort,
-        },
-      );
-    }
+    const execute = offloadPool
+      ? () => {
+          const workerCtx = toWorkerContext(toolCtx);
+          return offloadPool.run(
+            { toolName: name, args: handlerArgs, context: workerCtx },
+            timeoutAbort?.signal,
+          );
+        }
+      : () => registered.handler(handlerArgs, toolCtx);
+    result = await runWithToolTimeout(execute, name, {
+      timeoutSeconds: effectiveTimeoutSeconds,
+      noTimeout: Boolean(registered.definition.noTimeout),
+      abortController: timeoutAbort,
+    });
   } catch (err) {
     if (err instanceof ToolTimeoutError) {
       return genericTerminalExecution(
