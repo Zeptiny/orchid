@@ -130,13 +130,6 @@ export const LeftSidebar = memo(function LeftSidebar({
           aria-expanded={false}
           aria-controls="left-sidebar-body"
         />
-        <IconButton
-          label={`New session (${formatShortcut('session.new')})`}
-          icon="plus"
-          size="sm"
-          iconSize={16}
-          onClick={onSessionCreate}
-        />
         {onPickProjectDir && (
           <IconButton
             label={
@@ -208,17 +201,6 @@ export const LeftSidebar = memo(function LeftSidebar({
           onNewChatInProject={onSessionCreate}
           projectPickerCreatesDraft={projectPickerCreatesDraft}
         />
-
-        <Button
-          variant="ghost"
-          size="sm"
-          className="session-new-btn"
-          onClick={onSessionCreate}
-          title={`New session (${formatShortcut('session.new')})`}
-        >
-          <Icon name="plus" size={14} />
-          <span>New Session</span>
-        </Button>
 
         <div className="session-search">
           <Icon name="search" size={12} className="session-search-icon" />
