@@ -215,12 +215,16 @@ interface ChatEventIdentity {
 export interface ChatChunkEvent extends ChatEventIdentity {
   type: 'chunk';
   data: string;
+  /** Canonical identity shared by the live segment and persisted message. */
+  segmentId: string;
 }
 
 /** Reasoning/thinking stream delta (models that emit reasoning-delta). */
 export interface ChatThinkingEvent extends ChatEventIdentity {
   type: 'thinking';
   data: string;
+  /** Canonical identity shared by the live segment and persisted message. */
+  segmentId: string;
 }
 
 export interface ChatStateEvent extends ChatEventIdentity {

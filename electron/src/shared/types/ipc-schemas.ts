@@ -32,11 +32,13 @@ const usageSchema = z.object({
 export const chatChunkEventSchema = chatEventIdentitySchema.extend({
   type: z.literal('chunk'),
   data: z.string(),
+  segmentId: z.string().min(1),
 });
 
 export const chatThinkingEventSchema = chatEventIdentitySchema.extend({
   type: z.literal('thinking'),
   data: z.string(),
+  segmentId: z.string().min(1),
 });
 
 export const chatStateEventSchema = chatEventIdentitySchema.extend({

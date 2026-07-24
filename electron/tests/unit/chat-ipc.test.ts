@@ -1007,6 +1007,53 @@ describe('chat session snapshot hydration', () => {
     mocks.sessionManager._reset();
   });
 
+  it('uses live segment ids for persisted thinking and assistant messages', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession('cccccccc-cccc-4ccc-8ccc-cccccccccccc'),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'thinking', text: 'Stable reasoning' };
+      yield { type: 'content', text: 'Stable final response' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend(
+      { sender: { id: 604, send } },
+      { message: 'Keep the bubble mounted' },
+    );
+    await waitForDoneCount(send, 1);
+
+    const chunk = channelEvents(send, IPC_CHANNELS.CHAT_CHUNK).at(-1)?.[1] as {
+      segmentId?: string;
+    };
+    const thinking = channelEvents(send, IPC_CHANNELS.CHAT_THINKING).at(-1)?.[1] as {
+      segmentId?: string;
+    };
+    const persisted = mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0] as {
+      messages: Array<Record<string, unknown>>;
+    };
+    const assistant = persisted.messages.find(
+      (message) => message.role === MessageRole.ASSISTANT && message.content === 'Stable final response',
+    );
+    const reasoning = persisted.messages.find(
+      (message) => message.type === MessageType.THINKING && message.content === 'Stable reasoning',
+    );
+
+    expect(chunk.segmentId).toEqual(expect.any(String));
+    expect(thinking.segmentId).toEqual(expect.any(String));
+    expect(assistant?.id).toBe(chunk.segmentId);
+    expect(reasoning?.id).toBe(thinking.segmentId);
+  });
+
   it('keeps persisted history available after the live actor completes', async () => {
     const selection = {
       connectionId: '11111111-1111-4111-8111-111111111111',

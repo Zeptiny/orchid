@@ -94,6 +94,23 @@ export type StreamSegment =
   | { kind: 'text'; id: string; content: string }
   | { kind: 'thinking'; id: string; content: string };
 
+/** Append one canonical text/thinking delta without inventing renderer-local identity. */
+export function appendStreamSegmentDelta(
+  segments: readonly StreamSegment[],
+  kind: 'text' | 'thinking',
+  segmentId: string,
+  data: string,
+): StreamSegment[] {
+  const last = segments.at(-1);
+  if (last?.kind === kind && last.id === segmentId) {
+    return [
+      ...segments.slice(0, -1),
+      { ...last, content: last.content + data },
+    ];
+  }
+  return [...segments, { kind, id: segmentId, content: data }];
+}
+
 export interface ChatState {
   /** All messages in the current chain. */
   messages: Message[];
@@ -518,19 +535,9 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         accumulatedContentRef.current += event.data;
         setStreamingContent(accumulatedContentRef.current);
         // Append to last text segment, or open a new one (preserves tool→text→tool order).
-        applyStreamSegments((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.kind === 'text') {
-            return [
-              ...prev.slice(0, -1),
-              { ...last, content: last.content + event.data },
-            ];
-          }
-          return [
-            ...prev,
-            { kind: 'text', id: crypto.randomUUID(), content: event.data },
-          ];
-        });
+        applyStreamSegments((prev) =>
+          appendStreamSegmentDelta(prev, 'text', event.segmentId, event.data),
+        );
       });
     });
 
@@ -540,19 +547,9 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           accumulatedThinkingRef.current += event.data;
           setStreamingThinking(accumulatedThinkingRef.current);
           // Chronological thinking segments → Thought widgets in ChatStream
-          applyStreamSegments((prev) => {
-            const last = prev[prev.length - 1];
-            if (last?.kind === 'thinking') {
-              return [
-                ...prev.slice(0, -1),
-                { ...last, content: last.content + event.data },
-              ];
-            }
-            return [
-              ...prev,
-              { kind: 'thinking', id: crypto.randomUUID(), content: event.data },
-            ];
-          });
+          applyStreamSegments((prev) =>
+            appendStreamSegmentDelta(prev, 'thinking', event.segmentId, event.data),
+          );
         });
       }) ?? (() => {});
 
