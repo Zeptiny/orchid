@@ -47,8 +47,8 @@ describe('evaluateComposerSend (lock + gates)', () => {
     expect(evaluateComposerSend({ ...ready, isStreaming: true }).action).toBe('queue');
   });
 
-  it('ignores slash commands during streaming (not queueable)', () => {
-    expect(evaluateComposerSend({ ...ready, isStreaming: true, trimmed: '/help' }).action).toBe(
+  it('keeps unknown slash input out of the queue fallback during streaming', () => {
+    expect(evaluateComposerSend({ ...ready, isStreaming: true, trimmed: '/unknown' }).action).toBe(
       'ignore',
     );
   });
