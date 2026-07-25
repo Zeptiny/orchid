@@ -10,12 +10,8 @@
 The application has a sound overall architecture: heavy RAG and AST indexing work is
 already moved to worker threads, provider and session data use shared renderer stores,
 and many renderer subtrees are memoized. The remaining optimization opportunities are
-concentrated in startup loading, long-session scaling, and synchronous persistence.
-
-The production renderer currently builds as a single 1.053 MB minified JavaScript
-chunk (286.74 KB gzip). Route-level code splitting would reduce startup parsing and
-memory use, particularly for settings and onboarding surfaces that are not needed in
-every session.
+concentrated in startup sequencing, long-session scaling, synchronous persistence,
+and resource lifecycle management.
 
 No source files were modified as part of the original audit. This document records
 the findings and recommended implementation order.
@@ -33,7 +29,6 @@ the findings and recommended implementation order.
 
 | ID | Priority | Area | Finding |
 | --- | --- | --- | --- |
-| F3 | P2 | Startup | The renderer ships as one large JavaScript chunk |
 | F4 | P2 | Transcript scaling | Old chains are collapsed but not virtualized or aggregated |
 | F5 | P2 | Persistence | Turn boundaries synchronously rewrite the complete session |
 | F6 | P2 | Resource lifecycle | Short-lived RAG and AST stores can leave SQLite connections open |
@@ -42,78 +37,6 @@ the findings and recommended implementation order.
 | F9 | P3 | Startup latency | Tool workers are initialized before the first application window |
 | F10 | P3 | Renderer computation | Context usage is recomputed more often than necessary |
 | F11 | P3 | Maintainability | Several UI modules and the shared component stylesheet are oversized |
-
----
-
-## F3 — Single Large Renderer Bundle
-
-**Priority:** P2  
-**Area:** Startup time and renderer memory
-
-### Evidence
-
-The production build generated:
-
-```text
-dist/renderer/assets/index-*.js    1,052.89 kB
-gzip size                            286.74 kB
-```
-
-Vite emitted its large-chunk warning.
-
-There are no renderer `React.lazy()` or dynamic `import()` boundaries. The root
-statically imports Settings and Onboarding:
-
-- [`electron/src/renderer/App.tsx`](electron/src/renderer/App.tsx#L6)
-
-`ChatView` statically imports project configuration, command palette, shortcut help,
-and the full subagent view:
-
-- [`electron/src/renderer/components/ChatView.tsx`](electron/src/renderer/components/ChatView.tsx#L29)
-
-`ConfigView` statically imports every settings tab:
-
-- [`electron/src/renderer/components/ConfigView.tsx`](electron/src/renderer/components/ConfigView.tsx#L11)
-
-### User Impact
-
-Because this is Electron, network download size is not the main concern. The costs are:
-
-- JavaScript parsing and compilation on every application launch.
-- Module initialization for surfaces the user may not open.
-- Higher initial renderer memory.
-- More work before the first interactive chat screen.
-
-### Recommendation
-
-Introduce lazy boundaries in this order:
-
-1. `ConfigView`
-2. `OnboardingScreen`
-3. `ProjectConfigView`
-4. `SubagentView`
-5. Individual settings tabs
-6. Provider connection wizard and model-management dialogs
-
-The first-run decision should be resolved from one bootstrap configuration read. Once
-the application knows whether onboarding is required, it can load the appropriate
-surface instead of eagerly loading both onboarding and the complete chat shell.
-
-Use small loading placeholders that match the target surface dimensions to avoid
-layout movement.
-
-### Suggested Verification
-
-- Compare production bundle output before and after splitting.
-- Record time to renderer first paint and first interaction.
-- Confirm opening a lazy surface does not introduce a blank frame.
-- Confirm settings tab switching still preserves unsaved draft state.
-
-### Acceptance Criteria
-
-- The initial chat JavaScript chunk is materially smaller.
-- Settings and onboarding compile into separate chunks.
-- Lazy loading does not reset chat, session, or configuration state.
 
 ---
 
@@ -572,9 +495,8 @@ CSS.
 ### Phase 1 — Startup
 
 1. Introduce one bootstrap configuration snapshot.
-2. Lazy-load Settings, onboarding, project configuration, and subagent surfaces.
-3. Move worker-pool readiness off the first-window critical path.
-4. Add startup performance marks and bundle-size reporting.
+2. Move worker-pool readiness off the first-window critical path.
+3. Add startup performance marks and bundle-size reporting.
 
 ### Phase 2 — Long-Running Session Stability
 
@@ -595,7 +517,6 @@ These should be finalized using measurements on supported hardware:
 
 | Metric | Suggested initial target |
 | --- | --- |
-| Initial renderer JavaScript | Material reduction from the current 1.053 MB chunk |
 | Transcript DOM size | Bounded independently of total chain count |
 | Turn-boundary persistence | Approximately constant with historical chain count |
 
@@ -620,7 +541,6 @@ Results:
 - ESLint passed.
 - Three focused test files passed.
 - 112 focused tests passed.
-- The production build emitted a large-chunk warning.
 
 ## Review Limitations
 

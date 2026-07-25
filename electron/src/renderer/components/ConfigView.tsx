@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { DefinitionsListResult } from '../../shared/types/definitions';
 import type { Config, PermissionRule } from '../../shared/types/ipc-boundary';
 import type {
@@ -8,15 +16,6 @@ import type {
   PermissionConfigScope,
   PermissionConfigScopes,
 } from '../../shared/types/ipc';
-import { AgentsTab } from './Preferences/AgentsTab';
-import { GeneralTab } from './Preferences/GeneralTab';
-import { MCPServersTab } from './Preferences/MCPServersTab';
-import { PermissionsTab } from './Preferences/PermissionsTab';
-import { PersonalitiesTab } from './Preferences/PersonalitiesTab';
-import { ProvidersTab } from './Preferences/ProvidersTab';
-import { RAGTab } from './Preferences/RAGTab';
-import { SkillsTab } from './Preferences/SkillsTab';
-import { TierModelsTab } from './Preferences/TierModelsTab';
 import { LeftSidebar } from './LeftSidebar';
 import { useProviders } from '../hooks/useProviders';
 import { useSession } from '../hooks/useSession';
@@ -41,6 +40,34 @@ import { DialogSurface } from './ui/DialogSurface';
 import { StateMessage } from './ui/StateMessage';
 import { StatusBadge } from './ui/StatusBadge';
 import { Tabs } from './ui/Tabs';
+
+const AgentsTab = lazy(() => import('./Preferences/AgentsTab').then((module) => ({
+  default: module.AgentsTab,
+})));
+const GeneralTab = lazy(() => import('./Preferences/GeneralTab').then((module) => ({
+  default: module.GeneralTab,
+})));
+const MCPServersTab = lazy(() => import('./Preferences/MCPServersTab').then((module) => ({
+  default: module.MCPServersTab,
+})));
+const PermissionsTab = lazy(() => import('./Preferences/PermissionsTab').then((module) => ({
+  default: module.PermissionsTab,
+})));
+const PersonalitiesTab = lazy(() => import('./Preferences/PersonalitiesTab').then((module) => ({
+  default: module.PersonalitiesTab,
+})));
+const ProvidersTab = lazy(() => import('./Preferences/ProvidersTab').then((module) => ({
+  default: module.ProvidersTab,
+})));
+const RAGTab = lazy(() => import('./Preferences/RAGTab').then((module) => ({
+  default: module.RAGTab,
+})));
+const SkillsTab = lazy(() => import('./Preferences/SkillsTab').then((module) => ({
+  default: module.SkillsTab,
+})));
+const TierModelsTab = lazy(() => import('./Preferences/TierModelsTab').then((module) => ({
+  default: module.TierModelsTab,
+})));
 
 type TabId =
   | 'general'
@@ -614,26 +641,38 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
           {loading ? (
             <StateMessage kind="loading" title="Loading configuration…" />
           ) : currentConfig ? (
-            renderTab(
-              activeTab,
-              currentConfig,
-              updateDraft,
-              personalities,
-              definitions,
-              defsLoading,
-              loadDefinitions,
-              {
-                config: permissionConfig ?? currentConfig,
-                scope: permissionScope,
-                projectDir: permissionScopes?.projectDir ?? null,
-                inheritedPermissions: permissionScopes?.global ?? {},
-                projectLoading: projectScopeLoading,
-                onScopeChange: setPermissionScope,
-                updateDraft: permissionScope === 'project'
-                  ? updateProjectPermissionDraft
-                  : updateDraft,
-              },
-            )
+            <Suspense
+              fallback={(
+                <StateMessage
+                  kind="loading"
+                  title="Loading settings section…"
+                  className="min-h-48"
+                  role="status"
+                  aria-live="polite"
+                />
+              )}
+            >
+              {renderTab(
+                activeTab,
+                currentConfig,
+                updateDraft,
+                personalities,
+                definitions,
+                defsLoading,
+                loadDefinitions,
+                {
+                  config: permissionConfig ?? currentConfig,
+                  scope: permissionScope,
+                  projectDir: permissionScopes?.projectDir ?? null,
+                  inheritedPermissions: permissionScopes?.global ?? {},
+                  projectLoading: projectScopeLoading,
+                  onScopeChange: setPermissionScope,
+                  updateDraft: permissionScope === 'project'
+                    ? updateProjectPermissionDraft
+                    : updateDraft,
+                },
+              )}
+            </Suspense>
           ) : (
             <StateMessage kind="warning" title="Configuration could not be loaded." />
           )}

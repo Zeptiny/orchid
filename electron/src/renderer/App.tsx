@@ -1,13 +1,25 @@
 /**
  * App root — theme provider + ChatView layout + ConfigView + Onboarding.
  */
-import { useState, useEffect, useCallback } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useState,
+} from 'react';
 import { ChatView } from './components/ChatView';
-import { ConfigView } from './components/ConfigView';
-import { OnboardingScreen } from './components/Onboarding/OnboardingScreen';
+import { StateMessage } from './components/ui/StateMessage';
 import { applyTheme, type ThemeName, THEME_NAMES } from './themes';
 
 type SettingsTab = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag' | 'skills' | 'agents' | 'personalities';
+
+const ConfigView = lazy(() => import('./components/ConfigView').then((module) => ({
+  default: module.ConfigView,
+})));
+const OnboardingScreen = lazy(() => import('./components/Onboarding/OnboardingScreen').then((module) => ({
+  default: module.OnboardingScreen,
+})));
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -118,16 +130,34 @@ function App() {
         <ChatView />
       </div>
       {configOpen && (
-        <ConfigView
-          initialTab={settingsTab}
-          onClose={() => setConfigOpen(false)}
-        />
+        <Suspense
+          fallback={(
+            <div className="flex h-screen min-h-0 items-center justify-center bg-base-100">
+              <StateMessage kind="loading" title="Loading Settings…" role="status" aria-live="polite" />
+            </div>
+          )}
+        >
+          <ConfigView
+            initialTab={settingsTab}
+            onClose={() => setConfigOpen(false)}
+          />
+        </Suspense>
       )}
-      <OnboardingScreen
-        isOpen={onboardingOpen && onboardingChecked}
-        onComplete={() => setOnboardingOpen(false)}
-        onSkip={() => setOnboardingOpen(false)}
-      />
+      {onboardingOpen && onboardingChecked ? (
+        <Suspense
+          fallback={(
+            <div className="onb-overlay">
+              <StateMessage kind="loading" title="Loading setup…" role="status" aria-live="polite" />
+            </div>
+          )}
+        >
+          <OnboardingScreen
+            isOpen
+            onComplete={() => setOnboardingOpen(false)}
+            onSkip={() => setOnboardingOpen(false)}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

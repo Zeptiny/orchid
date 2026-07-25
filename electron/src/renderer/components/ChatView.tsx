@@ -3,7 +3,15 @@
  *
  * Iteration 012 three-panel shell: left sessions | center chat | right inspector.
  */
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useChat } from '../hooks/useChat';
 import { useSession } from '../hooks/useSession';
 import { useSubagents } from '../hooks/useSubagents';
@@ -34,13 +42,20 @@ import { Footer } from './Footer';
 import { Sidebar } from './Sidebar';
 import { LeftSidebar } from './LeftSidebar';
 import { CommandPalette } from './CommandPalette';
-import { ProjectConfigView } from './ProjectConfigView';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { SessionHeader } from './session-header';
 import { SessionTabBar } from './SessionTabBar';
 import { Alert, type AlertTone } from './ui/Alert';
 import { Button } from './ui/Button';
-import { SubagentView, type SubagentOpenRequest } from './SubagentView';
+import { StateMessage } from './ui/StateMessage';
+import type { SubagentOpenRequest } from './SubagentView';
+
+const ProjectConfigView = lazy(() => import('./ProjectConfigView').then((module) => ({
+  default: module.ProjectConfigView,
+})));
+const SubagentView = lazy(() => import('./SubagentView').then((module) => ({
+  default: module.SubagentView,
+})));
 
 type ToastSeverity = 'info' | 'warning' | 'error';
 interface Toast {
@@ -1025,14 +1040,26 @@ export function ChatView() {
           </Alert>
         )}
         {projectConfigDir ? (
-          <ProjectConfigView
-            projectDir={projectConfigDir}
-            onNewChat={(dir) => {
-              setProjectConfigDir(null);
-              void handleProjectSessionCreate(dir);
-            }}
-            onClose={() => setProjectConfigDir(null)}
-          />
+          <Suspense
+            fallback={(
+              <StateMessage
+                kind="loading"
+                title="Loading project settings…"
+                className="min-h-0 flex-1"
+                role="status"
+                aria-live="polite"
+              />
+            )}
+          >
+            <ProjectConfigView
+              projectDir={projectConfigDir}
+              onNewChat={(dir) => {
+                setProjectConfigDir(null);
+                void handleProjectSessionCreate(dir);
+              }}
+              onClose={() => setProjectConfigDir(null)}
+            />
+          </Suspense>
         ) : (
           <>
         <SessionTabBar
@@ -1179,7 +1206,19 @@ export function ChatView() {
         </div>
         {contentMode === 'subagents' ? (
           <div className="orchid-view-enter flex min-h-0 flex-1 flex-col">
-            <SubagentView subagents={subagents} openRequest={subagentOpenRequest} onBackToChat={() => setContentMode('chat')} />
+            <Suspense
+              fallback={(
+                <StateMessage
+                  kind="loading"
+                  title="Loading subagent view…"
+                  className="min-h-0 flex-1"
+                  role="status"
+                  aria-live="polite"
+                />
+              )}
+            >
+              <SubagentView subagents={subagents} openRequest={subagentOpenRequest} onBackToChat={() => setContentMode('chat')} />
+            </Suspense>
           </div>
         ) : null}
           </>
