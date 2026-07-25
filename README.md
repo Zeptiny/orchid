@@ -202,7 +202,6 @@ Deep developer map: [`AGENTS.md`](AGENTS.md). Domain vocabulary: [`CONCEPTS.md`]
 Orchid is an early preview. Expect rough edges. Highlights that matter when trying the app:
 
 ### UX & reliability
-- **Chat scrolling** — scrolling up in the chat stream is currently broken
 - **Error surfacing** — some API / tool / subagent failures (e.g. rate limits) may not show a clear message in the UI
 - **Tool UI polish** — not every tool has full generating/running states; many results still use a generic viewer instead of dedicated widgets
 - **Background commands** — viewing live output and sending stdin to background processes is incomplete
