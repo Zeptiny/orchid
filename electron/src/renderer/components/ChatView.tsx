@@ -1107,6 +1107,7 @@ export function ChatView() {
           streamingContent={chat.streamingContent}
           toolBlocks={chat.toolBlocks}
           streamSegments={chat.streamSegments}
+          streamRevision={chat.streamRevision}
           status={chat.status}
           error={chat.error}
           usage={chat.usage}

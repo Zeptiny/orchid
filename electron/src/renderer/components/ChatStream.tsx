@@ -59,6 +59,8 @@ interface ChatStreamProps {
   toolBlocks: ToolBlock[];
   /** Chronological live segments for the in-flight turn (tool/text/thinking). */
   streamSegments?: readonly StreamSegment[];
+  /** Monotonic live-state revision used for bounded auto-scroll updates. */
+  streamRevision: number;
   status: ChatStatus;
   error: string | null;
   usage: Usage | null;
@@ -181,6 +183,7 @@ export function ChatStream({
   streamingContent,
   toolBlocks,
   streamSegments = [],
+  streamRevision,
   status,
   error,
   onClearError,
@@ -197,14 +200,14 @@ export function ChatStream({
   interrupted,
   alwaysExpandToolGroups = false,
 }: ChatStreamProps) {
-  const scrollContentKey = useMemo(
-    () =>
-      `${messages.length}:${streamingContent}:${JSON.stringify(toolBlocks)}:${JSON.stringify(streamSegments)}`,
-    [messages.length, streamingContent, toolBlocks, streamSegments],
-  );
-  const { containerRef, isUserScrolledUp, jumpToLatest } = useSmartAutoScroll({
+  const {
+    containerRef,
+    isUserScrolledUp,
+    followLatest,
+    jumpToLatest,
+  } = useSmartAutoScroll({
     resetKey: sessionId,
-    contentKey: scrollContentKey,
+    contentKey: `${messages.length}:${streamRevision}`,
   });
   /** Chain indexes the user expanded from a collapsed stub. */
   const [expandedChainIndexes, setExpandedChainIndexes] = useState<Set<number>>(
@@ -233,10 +236,10 @@ export function ChatStream({
     prevStatusRef.current = status;
     if (status === 'streaming' && prev !== 'streaming') {
       if (shouldAutoScroll(isUserScrolledUp)) {
-        jumpToLatest();
+        followLatest();
       }
     }
-  }, [status, isUserScrolledUp, jumpToLatest]);
+  }, [status, isUserScrolledUp, followLatest]);
 
   // Reset scroll-away + expanded stubs only when the session is replaced.
   useEffect(() => {

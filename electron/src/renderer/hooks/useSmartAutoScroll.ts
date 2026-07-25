@@ -39,6 +39,7 @@ export interface SmartAutoScrollOptions {
 export interface SmartAutoScrollResult {
   containerRef: RefCallback<HTMLDivElement>;
   isUserScrolledUp: boolean;
+  followLatest: () => void;
   jumpToLatest: () => void;
 }
 
@@ -73,13 +74,17 @@ export function useSmartAutoScroll({
     scrollContainerToLatest(container, behavior);
   }, [container]);
 
-  useEffect(() => {
-    setIsUserScrolledUp(false);
-    if (enabled) scrollToLatest('auto');
-  }, [enabled, resetKey, scrollToLatest]);
+  const followLatest = useCallback(() => {
+    scrollToLatest('auto');
+  }, [scrollToLatest]);
 
   useEffect(() => {
-    if (enabled && shouldAutoScroll(isUserScrolledUp)) scrollToLatest();
+    setIsUserScrolledUp(false);
+    if (enabled) followLatest();
+  }, [enabled, resetKey, followLatest]);
+
+  useEffect(() => {
+    if (enabled && shouldAutoScroll(isUserScrolledUp)) scrollToLatest('auto');
   }, [contentKey, enabled, isUserScrolledUp, scrollToLatest]);
 
   const jumpToLatest = useCallback(() => {
@@ -87,5 +92,5 @@ export function useSmartAutoScroll({
     scrollToLatest();
   }, [scrollToLatest]);
 
-  return { containerRef, isUserScrolledUp, jumpToLatest };
+  return { containerRef, isUserScrolledUp, followLatest, jumpToLatest };
 }

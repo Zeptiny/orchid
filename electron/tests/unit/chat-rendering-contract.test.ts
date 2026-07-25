@@ -17,6 +17,7 @@ import {
   shouldAutoScroll,
 } from '../../src/renderer/components/ChatStream';
 import { MessageWidget } from '../../src/renderer/components/MessageWidget';
+import { MarkdownContent } from '../../src/renderer/components/MarkdownContent';
 import { scrollContainerToLatest } from '../../src/renderer/hooks/useSmartAutoScroll';
 
 const RENDERER = path.resolve(__dirname, '../../src/renderer');
@@ -168,9 +169,54 @@ describe('chat rendering contract (U5)', () => {
       expect(src).toContain('onClick={jumpToLatest}');
       expect(src).toContain('Jump to latest');
     });
+
+    it('uses a bounded revision key and instant follow scrolling during live updates', () => {
+      const stream = read('components/ChatStream.tsx');
+      const scrollHook = read('hooks/useSmartAutoScroll.ts');
+
+      expect(stream).toMatch(/contentKey:\s*`\$\{messages\.length\}:\$\{streamRevision\}`/);
+      expect(stream).not.toContain('JSON.stringify');
+      expect(scrollHook).toMatch(
+        /shouldAutoScroll\(isUserScrolledUp\)\)\s*scrollToLatest\('auto'\)/,
+      );
+      expect(scrollHook).toMatch(/jumpToLatest[\s\S]*scrollToLatest\(\)/);
+    });
   });
 
   describe('stream defect fixes', () => {
+    it('batches text and thinking deltas into one animation-frame publish', () => {
+      const src = read('hooks/useChat.ts');
+      const subscriptions = src.slice(
+        src.indexOf('const unsubChunk'),
+        src.indexOf('const unsubState'),
+      );
+
+      expect(src).toContain('pendingStreamDeltasRef');
+      expect(src).toContain('window.requestAnimationFrame');
+      expect(src).toContain('scheduleStreamFrame');
+      expect(subscriptions).not.toContain('setStreamingContent');
+      expect(subscriptions).not.toContain('setStreamingThinking');
+      expect(subscriptions).not.toContain('applyStreamSegments');
+    });
+
+    it('defers syntax highlighting until the active text segment settles', () => {
+      const markdown = '```ts\nconst orchid = true;\n```';
+      const streaming = renderToStaticMarkup(
+        createElement(MarkdownContent, { content: markdown, isStreaming: true }),
+      );
+      const settled = renderToStaticMarkup(
+        createElement(MarkdownContent, { content: markdown }),
+      );
+
+      expect(streaming).not.toContain('hljs');
+      expect(settled).toContain('hljs');
+
+      const messageWidget = read('components/MessageWidget.tsx');
+      expect(messageWidget).toContain(
+        '<MarkdownContent content={message.content} isStreaming={isStreaming} />',
+      );
+    });
+
     it('send failure cleanup removes optimistic bubble on throw', () => {
       const src = read('hooks/useChat.ts');
       expect(src).toMatch(/Drop the optimistic user bubble when send never started/);

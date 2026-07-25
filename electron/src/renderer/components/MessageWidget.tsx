@@ -71,7 +71,9 @@ function AssistantMessage({
   if (!message.content && !isStreaming) return null;
   return (
     <div className="orchid-msg orchid-msg-assistant px-1 py-1">
-      {message.content ? <MarkdownContent content={message.content} /> : null}
+      {message.content ? (
+        <MarkdownContent content={message.content} isStreaming={isStreaming} />
+      ) : null}
     </div>
   );
 }
