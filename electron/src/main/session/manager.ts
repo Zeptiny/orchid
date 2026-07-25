@@ -32,11 +32,15 @@ import {
 } from '../project/path';
 import { TodoStore } from '../tools/todo/store';
 import {
+  appendActiveChain as storageAppendActiveChain,
+  finishChain as storageFinishChain,
   saveSession as storageSaveSession,
   loadSession as storageLoadSession,
   deleteSession as storageDeleteSession,
   listSavedSessions as storageListSavedSessions,
   updateChain as storageUpdateChain,
+  updateSessionFields as storageUpdateSessionFields,
+  type SessionFieldsUpdate,
   type StorageOptions,
   type SessionSummary,
 } from './storage';
@@ -131,6 +135,21 @@ export class SessionManager {
     return session;
   }
 
+  private persistSessionFields(
+    session: Session,
+    update: Omit<SessionFieldsUpdate, 'updatedAt'>,
+  ): Session {
+    const persisted = storageUpdateSessionFields(
+      session.id,
+      { ...update, updatedAt: session.updatedAt },
+      this._storageOpts,
+    );
+    if (!persisted) {
+      storageSaveSession(session, this._storageOpts);
+    }
+    return this.replaceSession(session);
+  }
+
   private selectedSessionId(ownerId?: string): string | null {
     return this._selectedByOwner.get(this.ownerKey(ownerId)) ?? null;
   }
@@ -194,8 +213,7 @@ export class SessionManager {
       todoStore: this.getTodoStore(sessionId).toData(),
       updatedAt: new Date().toISOString(),
     };
-    this.replaceSession(updated);
-    storageSaveSession(updated, this._storageOpts);
+    this.persistSessionFields(updated, { todoStore: updated.todoStore });
   }
 
   /** Embed a session's live todos into its in-memory snapshot before a save. */
@@ -317,8 +335,10 @@ export class SessionManager {
     const session = this.flushTodos(id);
     if (!session) return;
     const updated = { ...session, name, updatedAt: new Date().toISOString() };
-    this.replaceSession(updated);
-    storageSaveSession(updated, this._storageOpts);
+    this.persistSessionFields(updated, {
+      name: updated.name,
+      todoStore: updated.todoStore,
+    });
   }
 
   /**
@@ -342,8 +362,12 @@ export class SessionManager {
       reasoningEffortOverride: null,
       updatedAt: new Date().toISOString(),
     };
-    this.replaceSession(updated);
-    storageSaveSession(updated, this._storageOpts);
+    this.persistSessionFields(updated, {
+      selection: updated.selection,
+      modelLabel: updated.modelLabel,
+      reasoningEffortOverride: updated.reasoningEffortOverride,
+      todoStore: updated.todoStore,
+    });
   }
 
   /**
@@ -373,8 +397,10 @@ export class SessionManager {
       cwd: inspection.path,
       updatedAt: new Date().toISOString(),
     };
-    this.replaceSession(updated);
-    storageSaveSession(updated, this._storageOpts);
+    this.persistSessionFields(updated, {
+      cwd: updated.cwd,
+      todoStore: updated.todoStore,
+    });
     return updated;
   }
 
@@ -391,8 +417,10 @@ export class SessionManager {
       reasoningEffortOverride: effort,
       updatedAt: new Date().toISOString(),
     };
-    this.replaceSession(updated);
-    storageSaveSession(updated, this._storageOpts);
+    this.persistSessionFields(updated, {
+      reasoningEffortOverride: updated.reasoningEffortOverride,
+      todoStore: updated.todoStore,
+    });
   }
 
   /**
@@ -408,8 +436,10 @@ export class SessionManager {
       permissionMode: mode,
       updatedAt: new Date().toISOString(),
     };
-    this.replaceSession(updated);
-    storageSaveSession(updated, this._storageOpts);
+    this.persistSessionFields(updated, {
+      permissionMode: updated.permissionMode,
+      todoStore: updated.todoStore,
+    });
   }
 
   /**
@@ -474,8 +504,10 @@ export class SessionManager {
 
     const now = new Date().toISOString();
     // Freeze any leftover ACTIVE chain before opening a new one.
+    const interruptedChainIds: string[] = [];
     let chains = session.chains.map((c) => {
       if (c.status !== ChainStatus.ACTIVE) return c;
+      interruptedChainIds.push(c.id);
       return {
         ...c,
         status: ChainStatus.INTERRUPTED,
@@ -512,8 +544,17 @@ export class SessionManager {
       todoStore: this.getTodoStore(session.id).toData(),
       updatedAt: now,
     };
+    const persisted = storageAppendActiveChain(
+      chain,
+      interruptedChainIds,
+      now,
+      updated.todoStore,
+      this._storageOpts,
+    );
+    if (!persisted) {
+      storageSaveSession(updated, this._storageOpts);
+    }
     this.replaceSession(updated);
-    storageSaveSession(updated, this._storageOpts);
     return chain;
   }
 
@@ -550,14 +591,11 @@ export class SessionManager {
       todoStore: this.getTodoStore(session.id).toData(),
       updatedAt: now,
     };
-    this.replaceSession(updated);
-    // Targeted turn-local write (R3): only the active chain row + session
-    // recency are touched. Fall back to a full save if the chain row is
-    // missing (e.g., the DB was rebuilt under us).
     const persisted = storageUpdateChain(chain, now, this._storageOpts);
     if (!persisted) {
       storageSaveSession(updated, this._storageOpts);
     }
+    this.replaceSession(updated);
     return updated;
   }
 
@@ -598,8 +636,16 @@ export class SessionManager {
       todoStore: this.getTodoStore(session.id).toData(),
       updatedAt: now,
     };
+    const persisted = storageFinishChain(
+      chain,
+      now,
+      updated.todoStore,
+      this._storageOpts,
+    );
+    if (!persisted) {
+      storageSaveSession(updated, this._storageOpts);
+    }
     this.replaceSession(updated);
-    storageSaveSession(updated, this._storageOpts);
     return updated;
   }
 
@@ -711,8 +757,10 @@ export class SessionManager {
         todoStore: this.getTodoStore(targetId).toData(),
         updatedAt: now,
       };
-      this.replaceSession(updated);
-      storageSaveSession(updated, this._storageOpts);
+      this.persistSessionFields(updated, {
+        subagentChains: updated.subagentChains,
+        todoStore: updated.todoStore,
+      });
       return updated;
     }
 
@@ -727,7 +775,14 @@ export class SessionManager {
       subagentChains: chains,
       updatedAt: now,
     };
-    storageSaveSession(updated, this._storageOpts);
+    const persisted = storageUpdateSessionFields(
+      updated.id,
+      { subagentChains: updated.subagentChains, updatedAt: updated.updatedAt },
+      this._storageOpts,
+    );
+    if (!persisted) {
+      storageSaveSession(updated, this._storageOpts);
+    }
     return updated;
   }
 
@@ -778,8 +833,7 @@ export class SessionManager {
           name: title,
           updatedAt: new Date().toISOString(),
         };
-        this.replaceSession(updated);
-        storageSaveSession(updated, this._storageOpts);
+        this.persistSessionFields(updated, { name: updated.name });
         return updated;
       }
     } catch (err) {

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => {
     lastIndexed: null,
     lastIndexDuration: null,
   }));
+  const dispose = vi.fn();
 
   return {
     handlers,
@@ -27,10 +28,15 @@ const mocks = vi.hoisted(() => {
     },
     BrowserWindow: { getAllWindows: vi.fn(() => []) },
     resolveBoundProjectPath: vi.fn((): string | null => PROJECT_DIR),
-    ASTStore: vi.fn(function MockASTStore(this: { status: typeof status }) {
+    ASTStore: vi.fn(function MockASTStore(this: {
+      status: typeof status;
+      dispose: typeof dispose;
+    }) {
       this.status = status;
+      this.dispose = dispose;
     }),
     status,
+    dispose,
     getIndexState: vi.fn(() => ({ phase: 'idle' as const })),
     isIndexing: vi.fn(() => false),
     indexProject: vi.fn(async () => ({
@@ -71,6 +77,7 @@ beforeEach(async () => {
   mocks.resolveBoundProjectPath.mockReset();
   mocks.resolveBoundProjectPath.mockReturnValue(PROJECT_DIR);
   mocks.status.mockClear();
+  mocks.dispose.mockClear();
   mocks.ASTStore.mockClear();
   mocks.getIndexState.mockClear();
   mocks.isIndexing.mockReset();
@@ -110,6 +117,17 @@ describe('ast:status / ast:index_state', () => {
     const status = await handler(IPC_CHANNELS.AST_STATUS)(event);
     expect(mocks.ASTStore).toHaveBeenCalledWith(PROJECT_DIR);
     expect(status).toMatchObject({ totalFiles: 4, totalSymbols: 20 });
+    expect(mocks.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('disposes ASTStore when reading status fails', async () => {
+    mocks.status.mockImplementationOnce(() => {
+      throw new Error('status failed');
+    });
+
+    await expect(handler(IPC_CHANNELS.AST_STATUS)(event))
+      .rejects.toThrow('status failed');
+    expect(mocks.dispose).toHaveBeenCalledOnce();
   });
 
   it('passes project path to index state', async () => {

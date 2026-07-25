@@ -36,12 +36,19 @@ export interface SmartAutoScrollOptions {
   enabled?: boolean;
 }
 
+/** State and commands for an owned transcript viewport. */
 export interface SmartAutoScrollResult {
   containerRef: RefCallback<HTMLDivElement>;
   isUserScrolledUp: boolean;
+  /** Follow the latest content immediately without clearing scroll-away state. */
+  followLatest: () => void;
   jumpToLatest: () => void;
 }
 
+/**
+ * Keep a visible transcript pinned while preserving a reader's scroll-away
+ * choice. `followLatest` performs an immediate container-only scroll.
+ */
 export function useSmartAutoScroll({
   resetKey = null,
   contentKey,
@@ -73,13 +80,16 @@ export function useSmartAutoScroll({
     scrollContainerToLatest(container, behavior);
   }, [container]);
 
-  useEffect(() => {
-    setIsUserScrolledUp(false);
-    if (enabled) scrollToLatest('auto');
-  }, [enabled, resetKey, scrollToLatest]);
+  const followLatest = useCallback(() => {
+    scrollToLatest('auto');
+  }, [scrollToLatest]);
 
   useEffect(() => {
-    if (enabled && shouldAutoScroll(isUserScrolledUp)) scrollToLatest();
+    setIsUserScrolledUp(false);
+  }, [resetKey]);
+
+  useEffect(() => {
+    if (enabled && shouldAutoScroll(isUserScrolledUp)) scrollToLatest('auto');
   }, [contentKey, enabled, isUserScrolledUp, scrollToLatest]);
 
   const jumpToLatest = useCallback(() => {
@@ -87,5 +97,5 @@ export function useSmartAutoScroll({
     scrollToLatest();
   }, [scrollToLatest]);
 
-  return { containerRef, isUserScrolledUp, jumpToLatest };
+  return { containerRef, isUserScrolledUp, followLatest, jumpToLatest };
 }

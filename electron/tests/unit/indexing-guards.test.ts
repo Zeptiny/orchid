@@ -20,6 +20,12 @@ import * as path from 'node:path';
 
 const { MockRAGStore, MockEmbedder, MockASTStore } = vi.hoisted(() => {
   class MockRAGStore {
+    static lastInstance: MockRAGStore | undefined;
+
+    constructor() {
+      MockRAGStore.lastInstance = this;
+    }
+
     initDb = vi.fn();
     getFileHashes = vi.fn().mockReturnValue(new Map());
     loadVectorState = vi.fn().mockReturnValue({
@@ -44,6 +50,7 @@ const { MockRAGStore, MockEmbedder, MockASTStore } = vi.hoisted(() => {
     clear = vi.fn();
     deleteByFile = vi.fn();
     updateFileHash = vi.fn();
+    dispose = vi.fn();
   }
 
   class MockEmbedder {
@@ -51,6 +58,12 @@ const { MockRAGStore, MockEmbedder, MockASTStore } = vi.hoisted(() => {
   }
 
   class MockASTStore {
+    static lastInstance: MockASTStore | undefined;
+
+    constructor() {
+      MockASTStore.lastInstance = this;
+    }
+
     initDb = vi.fn();
     getAllFileHashes = vi.fn().mockReturnValue({});
     upsertFile = vi.fn();
@@ -63,6 +76,7 @@ const { MockRAGStore, MockEmbedder, MockASTStore } = vi.hoisted(() => {
       indexDuration: 0,
       dbSize: 0,
     });
+    dispose = vi.fn();
   }
 
   return { MockRAGStore, MockEmbedder, MockASTStore };
@@ -186,6 +200,7 @@ describe('RAG indexing concurrency guard', () => {
     const result = await ragIndexProject(tmpDir);
     expect(result).toBeDefined();
     expect(result.filesScanned).toBeGreaterThanOrEqual(0);
+    expect(MockRAGStore.lastInstance?.dispose).toHaveBeenCalledTimes(1);
     expect(ragIsIndexing()).toBe(false);
   });
 
@@ -282,6 +297,7 @@ describe('AST indexing concurrency guard', () => {
     const result = await astIndexProject({ projectPath: tmpDir, inline: true });
     expect(result).toBeDefined();
     expect(result.filesScanned).toBeGreaterThanOrEqual(0);
+    expect(MockASTStore.lastInstance?.dispose).toHaveBeenCalledTimes(1);
     expect(astIsIndexing()).toBe(false);
   });
 

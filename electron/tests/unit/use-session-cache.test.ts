@@ -273,7 +273,10 @@ describe('useSession shared cache', () => {
     expect(useSessionSrc).toMatch(/Shared store \(one session state for all useSession\(\) callers\)/);
     // Chat stays mounted under Config so both hooks remain live on one store.
     expect(appSrc).toMatch(/Keep ChatView mounted under Config/);
-    expect(appSrc).toMatch(/configOpen \? 'hidden' : 'contents'/);
+    expect(appSrc).toMatch(/chatVisible \? 'contents' : 'hidden'/);
+    expect(appSrc).toMatch(/<ChatView isVisible=\{chatVisible\}/);
+    expect(chatView).toMatch(/<DeferredSurface isVisible=\{isVisible\}>[\s\S]*?<ChatStream/);
+    expect(chatView).toMatch(/<DeferredSurface isVisible=\{isVisible\}>[\s\S]*?<Sidebar/);
   });
 
   it('Config session pick routes through ChatView hydrate (not store-only load)', async () => {

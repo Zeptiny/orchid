@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   acceptChatEvent,
   appendStreamSegmentDelta,
+  appendStreamSegmentDeltas,
   beginCancelRequest,
   bindChatSession,
   chatToolSnapshotToBlock,
@@ -46,6 +47,27 @@ describe('useChat event affinity', () => {
     expect(next).toEqual([
       { kind: 'text', id: 'text-segment', content: 'Hello world' },
       { kind: 'text', id: 'next-segment', content: '!' },
+    ]);
+  });
+
+  it('applies a frame of stream deltas without mutating the previous segments', () => {
+    const previous = [
+      { kind: 'text' as const, id: 'text-segment', content: 'Hello' },
+    ];
+
+    const next = appendStreamSegmentDeltas(previous, [
+      { kind: 'text', segmentId: 'text-segment', data: ' world' },
+      { kind: 'text', segmentId: 'text-segment', data: '!' },
+      { kind: 'thinking', segmentId: 'thinking-segment', data: 'Checking' },
+      { kind: 'thinking', segmentId: 'thinking-segment', data: ' files' },
+    ]);
+
+    expect(previous).toEqual([
+      { kind: 'text', id: 'text-segment', content: 'Hello' },
+    ]);
+    expect(next).toEqual([
+      { kind: 'text', id: 'text-segment', content: 'Hello world!' },
+      { kind: 'thinking', id: 'thinking-segment', content: 'Checking files' },
     ]);
   });
 

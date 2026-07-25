@@ -8,7 +8,13 @@
 @layer orchid {
   /* ── Chat shell / session chrome ──────────────────────────────────────── */
 
+  .app-frame {
+    position: relative;
+    isolation: isolate;
+  }
+
   .main-pane {
+    grid-column: 2;
     min-width: 0;
     min-height: 0;
     display: flex;
@@ -33,9 +39,17 @@
     border-right: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
   }
 
+  .left-panel:not(.left-panel-overlay) {
+    grid-column: 1;
+  }
+
   .right-panel {
     width: 300px;
     border-left: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
+  }
+
+  .right-panel:not(.right-panel-overlay) {
+    grid-column: 3;
   }
 
   .left-panel-collapsed {
@@ -56,6 +70,23 @@
     align-items: center;
     padding: 8px 0;
     border-left: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
+  }
+
+  .left-panel-overlay,
+  .right-panel-overlay {
+    position: absolute;
+    inset-block: 0;
+    z-index: 20;
+    max-width: calc(100% - 48px);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .left-panel-overlay {
+    inset-inline-start: 0;
+  }
+
+  .right-panel-overlay {
+    inset-inline-end: 0;
   }
 
   .right-panel-toolbar {

@@ -13,6 +13,7 @@ import { Worker } from 'node:worker_threads';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from './parser';
 import { ASTStore, type Symbol } from './store';
 import { getConfig } from '../config';
+import { withDisposableAsync } from '../utils/with-disposable';
 import type { ASTIndexResult, ASTIndexProgress } from '../../shared/types/ipc-boundary';
 
 export type { ASTIndexResult, ASTIndexProgress } from '../../shared/types/ipc-boundary';
@@ -270,8 +271,8 @@ export async function runIndexProjectImpl(opts: {
     filesDeleted: 0,
   });
 
-  const store = new ASTStore(projectPath);
-  store.initDb();
+  return withDisposableAsync(new ASTStore(projectPath), async (store) => {
+    store.initDb();
 
   const existingHashes = store.getAllFileHashes();
   const indexedFiles = new Set<string>();
@@ -376,7 +377,8 @@ export async function runIndexProjectImpl(opts: {
     elapsedSeconds: result.durationSeconds,
   });
 
-  return result;
+    return result;
+  });
 }
 
 // ---------------------------------------------------------------------------

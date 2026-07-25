@@ -12,6 +12,10 @@ import * as path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { getConfig } from '../config/loader';
 import type { Config } from '../config/schema';
+import {
+  withDisposable,
+  withDisposableAsync,
+} from '../utils/with-disposable';
 import { chunkFile } from './chunker';
 import { createEmbedderFromConfig, type IEmbedder } from './embedder';
 import { RAGStore } from './store';
@@ -246,25 +250,26 @@ export async function runIndexProjectImpl(
   });
 
   if (files.length === 0) {
-    const store = new RAGStore(root);
-    store.initDb();
-    store.touchLastIndexed();
-    stats.durationSeconds = elapsed();
-    emit({
-      phase: 'done',
-      done: 0,
-      total: 0,
-      filesIndexed: 0,
-      filesSkipped: 0,
-      chunksCreated: 0,
-      filesDeleted: 0,
-      elapsedSeconds: stats.durationSeconds,
+    return withDisposable(new RAGStore(root), (store) => {
+      store.initDb();
+      store.touchLastIndexed();
+      stats.durationSeconds = elapsed();
+      emit({
+        phase: 'done',
+        done: 0,
+        total: 0,
+        filesIndexed: 0,
+        filesSkipped: 0,
+        chunksCreated: 0,
+        filesDeleted: 0,
+        elapsedSeconds: stats.durationSeconds,
+      });
+      return stats;
     });
-    return stats;
   }
 
-  const store = new RAGStore(root);
-  store.initDb();
+  return withDisposableAsync(new RAGStore(root), async (store) => {
+    store.initDb();
 
   if (!embedder) {
     embedder = await createEmbedderFromConfig();
@@ -415,7 +420,8 @@ export async function runIndexProjectImpl(
     elapsedSeconds: stats.durationSeconds,
   });
 
-  return stats;
+    return stats;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -513,8 +519,10 @@ export function getStatus(projectPath?: string): RAGStoreStatus {
     throw new Error('projectPath is required; pass the active workspace cwd');
   }
   const root = projectPath;
-  const store = new RAGStore(root);
-  return store.status();
+  return withDisposable(
+    new RAGStore(root),
+    (store) => store.status(),
+  );
 }
 
 export function clearIndex(projectPath?: string): void {
@@ -522,8 +530,10 @@ export function clearIndex(projectPath?: string): void {
     throw new Error('projectPath is required; pass the active workspace cwd');
   }
   const root = projectPath;
-  const store = new RAGStore(root);
-  store.clear();
+  withDisposable(
+    new RAGStore(root),
+    (store) => store.clear(),
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -1,13 +1,26 @@
 /**
  * App root — theme provider + ChatView layout + ConfigView + Onboarding.
  */
-import { useState, useEffect, useCallback } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useState,
+} from 'react';
 import { ChatView } from './components/ChatView';
-import { ConfigView } from './components/ConfigView';
-import { OnboardingScreen } from './components/Onboarding/OnboardingScreen';
+import { StateMessage } from './components/ui/StateMessage';
 import { applyTheme, type ThemeName, THEME_NAMES } from './themes';
+import type { Config } from '../shared/types/ipc-boundary';
 
 type SettingsTab = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag' | 'skills' | 'agents' | 'personalities';
+
+const ConfigView = lazy(() => import('./components/ConfigView').then((module) => ({
+  default: module.ConfigView,
+})));
+const OnboardingScreen = lazy(() => import('./components/Onboarding/OnboardingScreen').then((module) => ({
+  default: module.OnboardingScreen,
+})));
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -17,6 +30,7 @@ function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
+  const [bootstrapConfig, setBootstrapConfig] = useState<Config | null>(null);
 
   // Apply theme on mount and when it changes
   useEffect(() => {
@@ -24,38 +38,29 @@ function App() {
 
   }, [theme]);
 
-  // Load saved theme from config on mount + check onboarding
+  // Load one shared config snapshot for theme, onboarding, and ChatView.
   useEffect(() => {
-    async function loadTheme() {
+    async function loadBootstrapConfig() {
       try {
         if (window.orchid?.config?.get) {
           const config = await window.orchid.config.get();
+          setBootstrapConfig(config);
           const savedTheme = config.theme as ThemeName;
           if (THEME_NAMES.includes(savedTheme)) {
             setThemeState(savedTheme);
           }
-        }
-      } catch {
-        // Use default theme if config fails
-      }
-    }
-
-    async function checkOnboarding() {
-      try {
-        if (window.orchid?.config?.get) {
-          const config = await window.orchid.config.get();
           // First-run wizard opens only until finish/skip; provider recovery
           // after completion uses Settings / composer setup paths.
           setOnboardingOpen(config.has_completed_onboarding !== true);
         }
       } catch {
-        // Non-fatal — skip onboarding check
+        // Non-fatal — use the default theme and skip onboarding.
+      } finally {
+        setOnboardingChecked(true);
       }
-      setOnboardingChecked(true);
     }
 
-    loadTheme();
-    checkOnboarding();
+    void loadBootstrapConfig();
   }, []);
 
   // Listen for `orchid:open-settings` event (from /settings and provider gates).
@@ -108,26 +113,47 @@ function App() {
     };
   }, [configOpen]);
 
+  const chatVisible =
+    !configOpen && !(onboardingOpen && onboardingChecked);
+
   return (
     <div className="app-root h-screen min-h-0 overflow-hidden bg-base-100 text-base-content" data-theme={theme}>
       {/* Keep ChatView mounted under Config so selection/draft state is not
           wiped and the first session is not auto-selected again on close.
           Shared useSession store (useSyncExternalStore) keeps chat + settings
           on one active session / list / workspace snapshot. */}
-      <div className={configOpen ? 'hidden' : 'contents'} aria-hidden={configOpen}>
-        <ChatView />
+      <div className={chatVisible ? 'contents' : 'hidden'} aria-hidden={!chatVisible}>
+        <ChatView isVisible={chatVisible} bootstrapConfig={bootstrapConfig} />
       </div>
       {configOpen && (
-        <ConfigView
-          initialTab={settingsTab}
-          onClose={() => setConfigOpen(false)}
-        />
+        <Suspense
+          fallback={(
+            <div className="flex h-screen min-h-0 items-center justify-center bg-base-100">
+              <StateMessage kind="loading" title="Loading Settings…" role="status" aria-live="polite" />
+            </div>
+          )}
+        >
+          <ConfigView
+            initialTab={settingsTab}
+            onClose={() => setConfigOpen(false)}
+          />
+        </Suspense>
       )}
-      <OnboardingScreen
-        isOpen={onboardingOpen && onboardingChecked}
-        onComplete={() => setOnboardingOpen(false)}
-        onSkip={() => setOnboardingOpen(false)}
-      />
+      {onboardingOpen && onboardingChecked ? (
+        <Suspense
+          fallback={(
+            <div className="onb-overlay">
+              <StateMessage kind="loading" title="Loading setup…" role="status" aria-live="polite" />
+            </div>
+          )}
+        >
+          <OnboardingScreen
+            isOpen
+            onComplete={() => setOnboardingOpen(false)}
+            onSkip={() => setOnboardingOpen(false)}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

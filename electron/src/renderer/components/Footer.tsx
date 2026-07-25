@@ -20,7 +20,7 @@ import type { PermissionMode } from '../../shared/types/permission';
 import { useElapsedSeconds, type InterruptState } from '../hooks/useChat';
 import { FOOTER_SHORTCUT_IDS, getShortcut } from '../keyboard';
 import { resolveModelNotifyLabel } from '../utils/provider-selection';
-import { ContextLegend, ContextStackedBar, contextPercent as getContextPercent } from './ContextGrid';
+import { ContextBreakdownView, contextPercent as getContextPercent } from './ContextGrid';
 import { contextUsedTokens } from '../../shared/usage';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
@@ -83,6 +83,8 @@ export class PermissionModeCoordinator {
 }
 
 interface FooterProps {
+  /** Whether the chat surface is currently available for presentation work. */
+  isVisible?: boolean;
   /** Stream start (ms epoch); footer ticks elapsed locally at 1s while streaming. */
   streamStartTime?: number | null;
   isStreaming: boolean;
@@ -100,6 +102,7 @@ interface FooterProps {
 }
 
 export const Footer = memo(function Footer({
+  isVisible = true,
   streamStartTime = null,
   isStreaming,
   interruptState,
@@ -114,7 +117,10 @@ export const Footer = memo(function Footer({
   sessionId,
 }: FooterProps) {
   const confirming = interruptState && interruptState !== 'idle';
-  const elapsedSeconds = useElapsedSeconds(streamStartTime, isStreaming || Boolean(confirming));
+  const elapsedSeconds = useElapsedSeconds(
+    streamStartTime,
+    isVisible && (isStreaming || Boolean(confirming)),
+  );
   const [contextOpen, setContextOpen] = useState(false);
   const contextMenuId = useId();
   const [reasoningConfig, setReasoningConfig] = useState<SessionReasoningConfigResult | null>(null);
@@ -404,13 +410,7 @@ export const Footer = memo(function Footer({
               </div>
             </div>
             <div className="footer-context-panel-body">
-              <ContextStackedBar
-                usage={usage}
-                messages={messages}
-                maxContext={maxContext}
-                streamingThinkingChars={streamingThinkingChars}
-              />
-              <ContextLegend
+              <ContextBreakdownView
                 usage={usage}
                 messages={messages}
                 maxContext={maxContext}

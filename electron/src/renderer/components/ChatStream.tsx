@@ -54,11 +54,15 @@ export { AUTO_SCROLL_THRESHOLD_PX, isUserScrolledAwayFromBottom, shouldAutoScrol
 export const CHAIN_COLLAPSE_THRESHOLD = 20;
 
 interface ChatStreamProps {
+  /** Whether the chat surface is currently available for presentation work. */
+  isVisible?: boolean;
   messages: Message[];
   streamingContent: string;
   toolBlocks: ToolBlock[];
   /** Chronological live segments for the in-flight turn (tool/text/thinking). */
   streamSegments?: readonly StreamSegment[];
+  /** Monotonic live-state revision used for bounded auto-scroll updates. */
+  streamRevision: number;
   status: ChatStatus;
   error: string | null;
   usage: Usage | null;
@@ -175,12 +179,17 @@ function assistantMessageDedupeKey(message: Message): string | null {
   return `${message.type}\0${content}`;
 }
 
-
+/**
+ * Render the main transcript while deferring scroll listeners, elapsed timers,
+ * and follow-latest transitions whenever its surface is hidden.
+ */
 export function ChatStream({
+  isVisible = true,
   messages,
   streamingContent,
   toolBlocks,
   streamSegments = [],
+  streamRevision,
   status,
   error,
   onClearError,
@@ -197,14 +206,15 @@ export function ChatStream({
   interrupted,
   alwaysExpandToolGroups = false,
 }: ChatStreamProps) {
-  const scrollContentKey = useMemo(
-    () =>
-      `${messages.length}:${streamingContent}:${JSON.stringify(toolBlocks)}:${JSON.stringify(streamSegments)}`,
-    [messages.length, streamingContent, toolBlocks, streamSegments],
-  );
-  const { containerRef, isUserScrolledUp, jumpToLatest } = useSmartAutoScroll({
+  const {
+    containerRef,
+    isUserScrolledUp,
+    followLatest,
+    jumpToLatest,
+  } = useSmartAutoScroll({
     resetKey: sessionId,
-    contentKey: scrollContentKey,
+    contentKey: `${messages.length}:${streamRevision}`,
+    enabled: isVisible,
   });
   /** Chain indexes the user expanded from a collapsed stub. */
   const [expandedChainIndexes, setExpandedChainIndexes] = useState<Set<number>>(
@@ -213,7 +223,7 @@ export function ChatStream({
   // Active footer only — never a history-memo dependency.
   const liveElapsedSeconds = useElapsedSeconds(
     streamStartTime,
-    status === 'streaming',
+    isVisible && status === 'streaming',
   );
 
   const expandChain = useCallback((chainIndex: number) => {
@@ -231,12 +241,12 @@ export function ChatStream({
   useEffect(() => {
     const prev = prevStatusRef.current;
     prevStatusRef.current = status;
-    if (status === 'streaming' && prev !== 'streaming') {
+    if (isVisible && status === 'streaming' && prev !== 'streaming') {
       if (shouldAutoScroll(isUserScrolledUp)) {
-        jumpToLatest();
+        followLatest();
       }
     }
-  }, [status, isUserScrolledUp, jumpToLatest]);
+  }, [status, isVisible, isUserScrolledUp, followLatest]);
 
   // Reset scroll-away + expanded stubs only when the session is replaced.
   useEffect(() => {

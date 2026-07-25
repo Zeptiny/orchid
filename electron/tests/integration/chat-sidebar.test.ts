@@ -822,6 +822,10 @@ describe('CSS Structure', () => {
     expect(css).toContain('.main-pane');
     expect(css).toContain('.left-panel');
     expect(css).toContain('.right-panel');
+    expect(css).toContain('.left-panel-overlay');
+    expect(css).toContain('.right-panel-overlay');
+    expect(css).toContain('.left-panel:not(.left-panel-overlay)');
+    expect(css).toContain('.right-panel:not(.right-panel-overlay)');
     expect(css).toContain('.orchid-chat-scroll');
   });
 

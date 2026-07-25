@@ -82,27 +82,37 @@ export function contextPercent(
   return Math.min(100, Math.round((contextUsedTokens(usage) / maxContext) * 100));
 }
 
-function assistantMessageChars(messages: readonly Message[]): {
+interface MessageChars {
+  tools: number;
+  user: number;
   response: number;
   reasoning: number;
-} {
-  return messages.reduce(
-    (counts, message) => {
-      if (message.role !== MessageRole.ASSISTANT || message.hidden) return counts;
+}
 
-      const reasoning = message.type === MessageType.THINKING
-        ? message.content.length
-        : message.thinking?.length ?? 0;
-      const response = message.type === MessageType.THINKING || message.type === MessageType.TOOL_CALL
-        ? 0
-        : message.content.length;
-      return {
-        response: counts.response + response,
-        reasoning: counts.reasoning + reasoning,
-      };
-    },
-    { response: 0, reasoning: 0 },
-  );
+function countMessageChars(messages: readonly Message[]): MessageChars {
+  const counts: MessageChars = {
+    tools: 0,
+    user: 0,
+    response: 0,
+    reasoning: 0,
+  };
+  for (const message of messages) {
+    if (message.hidden) continue;
+    if (message.type === MessageType.TOOL_CALL || message.type === MessageType.TOOL_RESULT) {
+      counts.tools += message.content.length;
+    }
+    if (message.role === MessageRole.USER) {
+      counts.user += message.content.length;
+    }
+    if (message.role !== MessageRole.ASSISTANT) continue;
+    counts.reasoning += message.type === MessageType.THINKING
+      ? message.content.length
+      : message.thinking?.length ?? 0;
+    if (message.type !== MessageType.THINKING && message.type !== MessageType.TOOL_CALL) {
+      counts.response += message.content.length;
+    }
+  }
+  return counts;
 }
 
 function splitAssistantTokens(
@@ -128,7 +138,7 @@ function computeBreakdown(
 
   if (usage?.context) {
     const context = usage.context;
-    const chars = assistantMessageChars(messages);
+    const chars = countMessageChars(messages);
     if (streamingThinkingChars && streamingThinkingChars > 0) {
       chars.reasoning += streamingThinkingChars;
     }
@@ -166,21 +176,15 @@ function computeBreakdown(
   const promptTokens = usage.prompt_tokens;
   const completionTokens = usage.completion_tokens ?? 0;
 
-  const toolChars = messages
-    .filter((m) => m.type === MessageType.TOOL_CALL || m.type === MessageType.TOOL_RESULT)
-    .reduce((sum, m) => sum + m.content.length, 0);
-  const userChars = messages
-    .filter((m) => m.role === MessageRole.USER && !m.hidden)
-    .reduce((sum, m) => sum + m.content.length, 0);
-  const assistantChars = assistantMessageChars(messages);
+  const chars = countMessageChars(messages);
   if (streamingThinkingChars && streamingThinkingChars > 0) {
-    assistantChars.reasoning += streamingThinkingChars;
+    chars.reasoning += streamingThinkingChars;
   }
 
-  const totalChars = toolChars + userChars + assistantChars.response + assistantChars.reasoning;
-  const toolUseTokens = totalChars > 0 ? Math.round((toolChars / totalChars) * promptTokens) : 0;
-  const userTokens = totalChars > 0 ? Math.round((userChars / totalChars) * promptTokens) : 0;
-  const assistantTokens = splitAssistantTokens(completionTokens, assistantChars);
+  const totalChars = chars.tools + chars.user + chars.response + chars.reasoning;
+  const toolUseTokens = totalChars > 0 ? Math.round((chars.tools / totalChars) * promptTokens) : 0;
+  const userTokens = totalChars > 0 ? Math.round((chars.user / totalChars) * promptTokens) : 0;
+  const assistantTokens = splitAssistantTokens(completionTokens, chars);
   const systemTokens = Math.max(0, promptTokens - toolUseTokens - userTokens);
   const freeTokens = mc > 0
     ? Math.max(0, mc - promptTokens - completionTokens)
@@ -241,6 +245,7 @@ function flattenLegend(sections: readonly LegendSection[]): LegendEntry[] {
 }
 
 interface ContextStackedBarProps extends ContextGridProps {
+  breakdown?: TokenBreakdown;
   compact?: boolean;
 }
 
@@ -250,11 +255,13 @@ export function ContextStackedBar({
   messages,
   maxContext,
   streamingThinkingChars,
+  breakdown: sharedBreakdown,
   compact = false,
 }: ContextStackedBarProps) {
   const breakdown = useMemo(
-    () => computeBreakdown(messages ?? [], usage ?? null, maxContext, streamingThinkingChars),
-    [messages, usage, maxContext, streamingThinkingChars],
+    () => sharedBreakdown ??
+      computeBreakdown(messages ?? [], usage ?? null, maxContext, streamingThinkingChars),
+    [sharedBreakdown, messages, usage, maxContext, streamingThinkingChars],
   );
   const legend = useMemo(
     () => flattenLegend(buildLegendSections(breakdown)),
@@ -297,6 +304,7 @@ export function ContextStackedBar({
 }
 
 interface ContextLegendProps extends ContextGridProps {
+  breakdown?: TokenBreakdown;
   /** `inspector` uses compact rows; `panel` uses the footer dropup styling. */
   variant?: 'inspector' | 'panel';
 }
@@ -350,11 +358,13 @@ export function ContextLegend({
   messages,
   maxContext,
   streamingThinkingChars,
+  breakdown: sharedBreakdown,
   variant = 'inspector',
 }: ContextLegendProps) {
   const breakdown = useMemo(
-    () => computeBreakdown(messages ?? [], usage ?? null, maxContext, streamingThinkingChars),
-    [messages, usage, maxContext, streamingThinkingChars],
+    () => sharedBreakdown ??
+      computeBreakdown(messages ?? [], usage ?? null, maxContext, streamingThinkingChars),
+    [sharedBreakdown, messages, usage, maxContext, streamingThinkingChars],
   );
   const sections = useMemo(() => buildLegendSections(breakdown), [breakdown]);
 
@@ -369,12 +379,47 @@ export function ContextLegend({
   );
 }
 
+interface ContextBreakdownViewProps extends ContextGridProps {
+  variant?: 'inspector' | 'panel';
+}
+
+/** Paired context visualization computed once for its bar and legend. */
+export function ContextBreakdownView({
+  usage,
+  messages,
+  maxContext,
+  streamingThinkingChars,
+  variant = 'inspector',
+}: ContextBreakdownViewProps) {
+  const breakdown = useMemo(
+    () => computeBreakdown(messages ?? [], usage ?? null, maxContext, streamingThinkingChars),
+    [messages, usage, maxContext, streamingThinkingChars],
+  );
+  return (
+    <>
+      <ContextStackedBar
+        usage={usage}
+        maxContext={maxContext}
+        breakdown={breakdown}
+      />
+      <ContextLegend
+        variant={variant}
+        breakdown={breakdown}
+      />
+    </>
+  );
+}
+
 /** Sidebar context block: one stacked bar followed by its category values. */
 export function ContextGrid({ usage, messages, maxContext, streamingThinkingChars }: ContextGridProps) {
   return (
     <div>
-      <ContextStackedBar usage={usage} messages={messages} maxContext={maxContext} streamingThinkingChars={streamingThinkingChars} />
-      <ContextLegend usage={usage} messages={messages} maxContext={maxContext} streamingThinkingChars={streamingThinkingChars} />
+      <ContextBreakdownView
+        usage={usage}
+        messages={messages}
+        maxContext={maxContext}
+        streamingThinkingChars={streamingThinkingChars}
+      />
     </div>
   );
 }
