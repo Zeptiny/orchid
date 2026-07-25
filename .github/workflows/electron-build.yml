@@ -2,9 +2,9 @@ name: Electron Build & Package
 
 on:
   push:
-    branches: [main, feat/ts-electron-migration]
+    branches: [main]
   pull_request:
-    branches: [main, feat/ts-electron-migration]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
