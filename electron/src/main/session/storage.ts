@@ -326,15 +326,17 @@ function sessionFromRow(row: SessionRow, chains: Chain[]): Session {
   };
 }
 
+const INSERT_CHAIN_SQL = `
+  INSERT INTO chains (id, session_id, ordinal, status, selection_json, model_label, agent_name, agent_type, agent_tier, subagent_record_json, messages_json, start_time, end_time)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`;
+
 function insertChainRow(
-  db: SqliteDatabase,
+  insertChain: import('better-sqlite3').Statement,
   chain: Chain,
   ordinal: number,
 ): void {
-  db.prepare(`
-    INSERT INTO chains (id, session_id, ordinal, status, selection_json, model_label, agent_name, agent_type, agent_tier, subagent_record_json, messages_json, start_time, end_time)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  insertChain.run(
     chain.id,
     chain.sessionId,
     ordinal,
@@ -409,6 +411,7 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
     `);
 
     const deleteChains = db.prepare('DELETE FROM chains WHERE session_id = ?');
+    const insertChain = db.prepare(INSERT_CHAIN_SQL);
 
     const txn = db.transaction(() => {
       upsertSession.run(
@@ -430,7 +433,7 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
 
       for (let i = 0; i < session.chains.length; i++) {
         const chain = session.chains[i]!;
-        insertChainRow(db, chain, i);
+        insertChainRow(insertChain, chain, i);
       }
     });
 
@@ -461,7 +464,9 @@ export function updateSessionFields(
     values.push(value);
   };
 
-  if (Object.hasOwn(update, 'name')) add('name', update.name);
+  if (Object.hasOwn(update, 'name') && update.name !== undefined) {
+    add('name', update.name);
+  }
   if (Object.hasOwn(update, 'selection')) {
     add('selection_json', serializeSelection(update.selection ?? null));
   }
@@ -510,6 +515,7 @@ export function appendActiveChain(
   if (!isValidSessionId(chain.sessionId)) return false;
   const { dbPath } = resolveOptions(opts);
   return withCorruptionRecovery(dbPath, (db) => {
+    const insertChain = db.prepare(INSERT_CHAIN_SQL);
     const txn = db.transaction(() => {
       const sessionResult = db
         .prepare(
@@ -545,7 +551,7 @@ export function appendActiveChain(
           'SELECT COALESCE(MAX(ordinal), -1) + 1 AS ordinal FROM chains WHERE session_id = ?',
         )
         .get(chain.sessionId) as { ordinal: number };
-      insertChainRow(db, chain, ordinalRow.ordinal);
+      insertChainRow(insertChain, chain, ordinalRow.ordinal);
       return true;
     });
     return txn();

@@ -142,6 +142,12 @@ describe('chat rendering contract (U5)', () => {
       );
       // New stream start still respects shouldAutoScroll
       expect(src).toMatch(/shouldAutoScroll\(isUserScrolledUp\)/);
+      expect(src).toMatch(
+        /if \(isVisible && status === 'streaming' && prev !== 'streaming'\)/,
+      );
+      expect(src).toMatch(
+        /\[status, isVisible, isUserScrolledUp, followLatest\]/,
+      );
     });
 
     it('binds the scroll listener to a late-mounted container', () => {
@@ -194,6 +200,7 @@ describe('chat rendering contract (U5)', () => {
       expect(src).toContain('pendingStreamDeltasRef');
       expect(src).toContain('window.requestAnimationFrame');
       expect(src).toContain('scheduleStreamFrame');
+      expect(src).toContain('const publishStreamState = useCallback');
       expect(subscriptions).not.toContain('setStreamingContent');
       expect(subscriptions).not.toContain('setStreamingThinking');
       expect(subscriptions).not.toContain('applyStreamSegments');

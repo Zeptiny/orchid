@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import type { ComponentType, LazyExoticComponent } from 'react';
 import type { DefinitionsListResult } from '../../shared/types/definitions';
 import type { Config, PermissionRule } from '../../shared/types/ipc-boundary';
 import type {
@@ -41,31 +42,49 @@ import { StateMessage } from './ui/StateMessage';
 import { StatusBadge } from './ui/StatusBadge';
 import { Tabs } from './ui/Tabs';
 
-const AgentsTab = lazy(() => import('./Preferences/AgentsTab').then((module) => ({
+type LoadableComponent = ComponentType<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+interface PreloadableLazyComponent<T extends LoadableComponent>
+  extends LazyExoticComponent<T> {
+  preload: () => Promise<{ default: T }>;
+}
+
+function lazyWithPreload<T extends LoadableComponent>(
+  loadModule: () => Promise<{ default: T }>,
+): PreloadableLazyComponent<T> {
+  let promise: Promise<{ default: T }> | null = null;
+  const load = () => {
+    promise ??= loadModule();
+    return promise;
+  };
+  return Object.assign(lazy(load), { preload: load });
+}
+
+const AgentsTab = lazyWithPreload(() => import('./Preferences/AgentsTab').then((module) => ({
   default: module.AgentsTab,
 })));
-const GeneralTab = lazy(() => import('./Preferences/GeneralTab').then((module) => ({
+const GeneralTab = lazyWithPreload(() => import('./Preferences/GeneralTab').then((module) => ({
   default: module.GeneralTab,
 })));
-const MCPServersTab = lazy(() => import('./Preferences/MCPServersTab').then((module) => ({
+const MCPServersTab = lazyWithPreload(() => import('./Preferences/MCPServersTab').then((module) => ({
   default: module.MCPServersTab,
 })));
-const PermissionsTab = lazy(() => import('./Preferences/PermissionsTab').then((module) => ({
+const PermissionsTab = lazyWithPreload(() => import('./Preferences/PermissionsTab').then((module) => ({
   default: module.PermissionsTab,
 })));
-const PersonalitiesTab = lazy(() => import('./Preferences/PersonalitiesTab').then((module) => ({
+const PersonalitiesTab = lazyWithPreload(() => import('./Preferences/PersonalitiesTab').then((module) => ({
   default: module.PersonalitiesTab,
 })));
-const ProvidersTab = lazy(() => import('./Preferences/ProvidersTab').then((module) => ({
+const ProvidersTab = lazyWithPreload(() => import('./Preferences/ProvidersTab').then((module) => ({
   default: module.ProvidersTab,
 })));
-const RAGTab = lazy(() => import('./Preferences/RAGTab').then((module) => ({
+const RAGTab = lazyWithPreload(() => import('./Preferences/RAGTab').then((module) => ({
   default: module.RAGTab,
 })));
-const SkillsTab = lazy(() => import('./Preferences/SkillsTab').then((module) => ({
+const SkillsTab = lazyWithPreload(() => import('./Preferences/SkillsTab').then((module) => ({
   default: module.SkillsTab,
 })));
-const TierModelsTab = lazy(() => import('./Preferences/TierModelsTab').then((module) => ({
+const TierModelsTab = lazyWithPreload(() => import('./Preferences/TierModelsTab').then((module) => ({
   default: module.TierModelsTab,
 })));
 
@@ -79,6 +98,18 @@ type TabId =
   | 'skills'
   | 'agents'
   | 'personalities';
+
+const TAB_COMPONENTS = {
+  general: GeneralTab,
+  permissions: PermissionsTab,
+  providers: ProvidersTab,
+  mcp: MCPServersTab,
+  'tier-models': TierModelsTab,
+  rag: RAGTab,
+  skills: SkillsTab,
+  agents: AgentsTab,
+  personalities: PersonalitiesTab,
+} satisfies Record<TabId, { preload: () => Promise<unknown> }>;
 
 interface TabDef {
   id: TabId;
@@ -219,7 +250,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
     const gen = ++tabSwitchGen.current;
     setPendingTab(tab);
 
-    try {
+    const dataPrefetch = async () => {
       if (tab === 'providers') {
         if (!providers.overview) await providers.refresh();
       } else if (tab === 'tier-models' || tab === 'rag') {
@@ -227,9 +258,13 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
       } else if (tab === 'skills' || tab === 'agents' || tab === 'personalities') {
         if (!definitions) await loadDefinitions({ silent: true });
       }
-    } catch {
-      // Still switch — tab will show its own error/empty content.
-    }
+    };
+
+    // Still switch after either failure — the tab will show its own error/empty content.
+    await Promise.allSettled([
+      TAB_COMPONENTS[tab].preload(),
+      dataPrefetch(),
+    ]);
 
     if (gen !== tabSwitchGen.current) return;
     setActiveTab(tab);

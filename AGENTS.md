@@ -12,11 +12,11 @@ The Electron application is Orchid's sole runtime. Its main-process architecture
 
 The repo root holds documentation, design artifacts, and tooling caches. **The Electron application itself lives in `electron/`** — its own `package.json`, `src/`, `tests/`, `scripts/`, and TypeScript configs are all under that directory.
 
-`docs/solutions/` is the searchable knowledge store for documented bugs, practices, and workflow patterns. Entries are organized by category with YAML frontmatter such as `module`, `tags`, and `problem_type`, and are relevant when implementing, debugging, or making decisions in documented areas.
+The repository-root path `docs/solutions/` is the searchable knowledge store for documented bugs, practices, and workflow patterns. Entries are organized by category with YAML frontmatter such as `module`, `tags`, and `problem_type`, and are relevant when implementing, debugging, or making decisions in documented areas.
 
-`CONCEPTS.md` defines the project's shared domain vocabulary and is relevant when orienting to the codebase or discussing named entities, processes, and status concepts.
+The repository-root file `CONCEPTS.md` defines the project's shared domain vocabulary and is relevant when orienting to the codebase or discussing named entities, processes, and status concepts.
 
-> **Path convention:** Unless otherwise stated, every path in this document is relative to the Electron app root (`electron/`). For example, `src/main/index.ts` means `electron/src/main/index.ts`, and the `npm run …` commands below run from `electron/`.
+> **Path convention:** The explicitly identified repository-root paths above are exceptions. Unless otherwise stated, every other path in this document is relative to the Electron app root (`electron/`). For example, `src/main/index.ts` means `electron/src/main/index.ts`, and the `npm run …` commands below run from `electron/`.
 
 ## Tech Stack
 

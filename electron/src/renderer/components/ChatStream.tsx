@@ -179,7 +179,10 @@ function assistantMessageDedupeKey(message: Message): string | null {
   return `${message.type}\0${content}`;
 }
 
-
+/**
+ * Render the main transcript while deferring scroll listeners, elapsed timers,
+ * and follow-latest transitions whenever its surface is hidden.
+ */
 export function ChatStream({
   isVisible = true,
   messages,
@@ -238,12 +241,12 @@ export function ChatStream({
   useEffect(() => {
     const prev = prevStatusRef.current;
     prevStatusRef.current = status;
-    if (status === 'streaming' && prev !== 'streaming') {
+    if (isVisible && status === 'streaming' && prev !== 'streaming') {
       if (shouldAutoScroll(isUserScrolledUp)) {
         followLatest();
       }
     }
-  }, [status, isUserScrolledUp, followLatest]);
+  }, [status, isVisible, isUserScrolledUp, followLatest]);
 
   // Reset scroll-away + expanded stubs only when the session is replaced.
   useEffect(() => {

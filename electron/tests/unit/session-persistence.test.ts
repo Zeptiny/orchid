@@ -16,6 +16,7 @@ import {
   listSavedSessions,
   deleteSession,
   updateChain,
+  updateSessionFields,
   isValidSessionId,
   _clearDbCache,
 } from '../../src/main/session/storage';
@@ -1755,6 +1756,28 @@ describe('updateChain (targeted turn-local write, R3)', () => {
 // ===========================================================================
 
 describe('incremental session persistence', () => {
+  it('does not bind an explicitly undefined session name', () => {
+    const session = makeSession({
+      id: 'acacacac-acac-4aca-8aca-acacacacacac',
+      name: 'Preserved name',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    saveSession(session, storageOpts);
+
+    expect(updateSessionFields(
+      session.id,
+      {
+        name: undefined,
+        updatedAt: '2026-02-01T00:00:00.000Z',
+      },
+      storageOpts,
+    )).toBe(true);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.name).toBe('Preserved name');
+    expect(loaded.updatedAt).toBe('2026-02-01T00:00:00.000Z');
+  });
+
   it('does not delete historical chain rows during ordinary lifecycle updates', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create(DEFAULT_SELECTION);

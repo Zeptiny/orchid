@@ -46,7 +46,7 @@ describe('lazy renderer boundaries', () => {
 
     for (const tabModule of tabModules) {
       expect(configView).toContain(
-        `lazy(() => import('./Preferences/${tabModule}')`,
+        `lazyWithPreload(() => import('./Preferences/${tabModule}')`,
       );
       expect(configView).not.toContain(
         `import { ${tabModule} } from`,
@@ -55,5 +55,7 @@ describe('lazy renderer boundaries', () => {
 
     expect(configView).toContain('<Suspense');
     expect(configView).toContain('renderTab(');
+    expect(configView).toContain('TAB_COMPONENTS[tab].preload()');
+    expect(configView).toContain('await Promise.allSettled([');
   });
 });

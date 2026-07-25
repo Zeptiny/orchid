@@ -36,13 +36,19 @@ export interface SmartAutoScrollOptions {
   enabled?: boolean;
 }
 
+/** State and commands for an owned transcript viewport. */
 export interface SmartAutoScrollResult {
   containerRef: RefCallback<HTMLDivElement>;
   isUserScrolledUp: boolean;
+  /** Follow the latest content immediately without clearing scroll-away state. */
   followLatest: () => void;
   jumpToLatest: () => void;
 }
 
+/**
+ * Keep a visible transcript pinned while preserving a reader's scroll-away
+ * choice. `followLatest` performs an immediate container-only scroll.
+ */
 export function useSmartAutoScroll({
   resetKey = null,
   contentKey,

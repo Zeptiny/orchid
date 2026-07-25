@@ -577,14 +577,18 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     streamFrameIdRef.current = null;
   }, []);
 
-  const publishBufferedStream = useCallback(() => {
-    streamFrameIdRef.current = null;
-    flushPendingStreamData();
+  const publishStreamState = useCallback(() => {
     setStreamingContent(accumulatedContentRef.current);
     setStreamingThinking(accumulatedThinkingRef.current);
     setStreamSegments(streamSegmentsRef.current);
     setStreamRevision((revision) => revision + 1);
-  }, [flushPendingStreamData]);
+  }, []);
+
+  const publishBufferedStream = useCallback(() => {
+    streamFrameIdRef.current = null;
+    flushPendingStreamData();
+    publishStreamState();
+  }, [flushPendingStreamData, publishStreamState]);
 
   const scheduleStreamFrame = useCallback(() => {
     if (streamFrameIdRef.current != null) return;
@@ -595,11 +599,8 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     cancelStreamFrame();
     const hadPendingData = flushPendingStreamData();
     if (!publish || !hadPendingData) return;
-    setStreamingContent(accumulatedContentRef.current);
-    setStreamingThinking(accumulatedThinkingRef.current);
-    setStreamSegments(streamSegmentsRef.current);
-    setStreamRevision((revision) => revision + 1);
-  }, [cancelStreamFrame, flushPendingStreamData]);
+    publishStreamState();
+  }, [cancelStreamFrame, flushPendingStreamData, publishStreamState]);
 
   const discardStreamFrame = useCallback(() => {
     cancelStreamFrame();

@@ -111,6 +111,32 @@ describe('context grid breakdown', () => {
     });
   });
 
+  it('excludes hidden messages from every character bucket', () => {
+    const hiddenTool = {
+      role: 'assistant',
+      content: 'hidden tool output',
+      type: MessageType.TOOL_RESULT,
+      thinking: null,
+      hidden: true,
+    } as unknown as Message;
+
+    expect(computeContextCategories(
+      [hiddenTool],
+      {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+        cached_tokens: 0,
+      },
+      1_000,
+    )).toEqual({
+      toolDefinition: 0,
+      toolUse: 0,
+      response: 0,
+      reasoning: 0,
+    });
+  });
+
   it('labels tool and assistant categories without parent rows', () => {
     const html = renderToStaticMarkup(
       createElement(ContextLegend, {

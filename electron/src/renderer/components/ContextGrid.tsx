@@ -97,10 +97,10 @@ function countMessageChars(messages: readonly Message[]): MessageChars {
     reasoning: 0,
   };
   for (const message of messages) {
+    if (message.hidden) continue;
     if (message.type === MessageType.TOOL_CALL || message.type === MessageType.TOOL_RESULT) {
       counts.tools += message.content.length;
     }
-    if (message.hidden) continue;
     if (message.role === MessageRole.USER) {
       counts.user += message.content.length;
     }
