@@ -5,29 +5,35 @@
  * Provider connections live in their own store and IPC surface; this boundary
  * fails closed for legacy provider aliases and secrets in the config document.
  */
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import {
   getConfig,
   getConfigDiagnostics,
+  loadConfig,
   ConfigManager,
   atomicWriteJson,
   HOME_CONFIG_DIR,
   HOME_CONFIG_PATH,
+  PROJECT_CONFIG_NAME,
 } from '../config/loader';
-import { mergeConfigUpdates } from '../config/merge';
+import { isPlainObject, mergeConfigUpdates } from '../config/merge';
 import { configSchema } from '../config/schema';
-import {
-  clearModelMetadataCache,
-  resolveModelMetadata,
-} from '../llm/model-metadata';
 import {
   listPersonalityNames,
   loadPersonalities,
 } from '../personality/registry';
+import { canonicalizeProjectDirectory } from '../project/path';
 import { clearProjectRuntimeRegistry } from '../project/runtime';
 import { invalidateAllProjectMCPManagers } from '../mcp/project-registry';
-import { configSaveSchema } from './payload-schemas';
+import {
+  configSaveSchema,
+  configSaveProjectSchema,
+  configReadProjectSchema,
+} from './payload-schemas';
+import { resolveWindowWorkspace } from './session';
 
 // ── Config save lock ────────────────────────────────────────────────────────
 
@@ -69,7 +75,70 @@ export function _resetConfigSaveChainForTests(): void {
   configSaveChain = Promise.resolve();
 }
 
+const PROJECT_CONFIG_ALLOWED_KEYS = new Set([
+  'command_timeout',
+  'command_max_output_bytes',
+  'read_line_limit',
+  'grep_max_results',
+  'grep_per_file_timeout',
+  'directory_tree_depth',
+  'ast_max_file_size',
+  'tool_output_inline_threshold',
+  'web_fetch_timeout',
+  'web_fetch_max_body_bytes',
+  'web_fetch_user_agent',
+  'llm_stream_idle_timeout',
+  'llm_stream_retries',
+  'llm_retry_backoff_base',
+  'llm_retry_max_delay',
+  'max_tool_steps',
+  'background_command_idle_timeout',
+  'approval_timeout',
+  'subagent_wait_timeout',
+  'permission_history_size',
+  'max_background_processes',
+  'bg_prompt_max_entries',
+  'bg_prompt_tail_lines',
+  'bg_prompt_tail_chars',
+  'bg_output_head_bytes',
+  'bg_output_tail_bytes',
+  'read_output_long_poll_max',
+  'mcp_startup_timeout',
+  'mcp_per_server_timeout',
+  'mcp_result_max_bytes',
+  'rag',
+  'ignored_dirs',
+  'always_expand_tool_groups',
+  'theme',
+  'personality',
+]);
+
+function selectedProjectDir(senderId: number): string | null {
+  const workspace = resolveWindowWorkspace(String(senderId));
+  return workspace.status === 'valid' ? workspace.cwd : null;
+}
+
+function verifyProjectWorkspace(senderId: number, projectDir: string): string {
+  const selected = selectedProjectDir(senderId);
+  const expected = canonicalizeProjectDirectory(projectDir);
+  if (selected == null || expected == null) {
+    throw new Error('Cannot access project config without a bound project.');
+  }
+  if (selected !== expected) {
+    throw new Error('Project config target no longer matches the selected workspace.');
+  }
+  return expected;
+}
+
 // ── IPC registration ─────────────────────────────────────────────────────────
+
+function loadJsonSafe(filePath: string): unknown {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
 
 export function registerConfigIPC(): void {
   // config:get — provider connection metadata and credentials never travel in
@@ -78,19 +147,16 @@ export function registerConfigIPC(): void {
     return { ...getConfig(), providers: {} };
   });
 
+  ipcMain.handle(IPC_CHANNELS.CONFIG_GET_HOME, async () => {
+    const result = loadConfig({ projectDir: HOME_CONFIG_DIR });
+    return { ...result, providers: {} };
+  });
+
   // Expose only non-secret compatibility notices. This lets the renderer
   // explain why a legacy provider/default was reset instead of silently
   // presenting a disconnected workspace.
   ipcMain.handle(IPC_CHANNELS.CONFIG_DIAGNOSTICS, async () => {
     return getConfigDiagnostics({ projectDir: HOME_CONFIG_DIR });
-  });
-
-  // config:model_metadata — resolve metadata for a given model ID
-  ipcMain.handle(IPC_CHANNELS.CONFIG_MODEL_METADATA, async (_event, modelId: unknown) => {
-    if (typeof modelId !== 'string' || !modelId) {
-      throw new Error('config:model_metadata requires a non-empty modelId string');
-    }
-    return resolveModelMetadata(modelId);
   });
 
   // config:list_personalities — home personalities only (~/.orchid/personalities).
@@ -139,14 +205,59 @@ export function registerConfigIPC(): void {
       // snapshots so only already-running turns retain the previous config.
       clearProjectRuntimeRegistry();
       invalidateAllProjectMCPManagers();
-      // Drop model-metadata cache so picker limits reflect new overrides.
-      clearModelMetadataCache();
 
       // Keep the process-wide compatibility cache home-only. Project overlays
       // are independently resolved for the session/turn that needs them.
       ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
 
       return { status: 'saved' as const };
+    });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CONFIG_READ_PROJECT, async (event, projectDir: unknown) => {
+    const parsed = configReadProjectSchema.safeParse(projectDir);
+    if (!parsed.success) {
+      throw new Error('config:read_project requires a non-empty projectDir string');
+    }
+    const verifiedProjectDir = verifyProjectWorkspace(event.sender.id, parsed.data);
+    const configPath = path.join(verifiedProjectDir, PROJECT_CONFIG_NAME);
+    const raw = loadJsonSafe(configPath);
+    return { projectDir: verifiedProjectDir, overrides: isPlainObject(raw) ? raw : {} };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CONFIG_SAVE_PROJECT, async (event, payload: unknown) => {
+    const parsed = configSaveProjectSchema.parse(payload);
+    const { projectDir, updates } = parsed;
+
+    const verifiedProjectDir = verifyProjectWorkspace(event.sender.id, projectDir);
+
+    const filteredUpdates: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(updates)) {
+      if (PROJECT_CONFIG_ALLOWED_KEYS.has(key)) {
+        filteredUpdates[key] = value;
+      }
+    }
+
+    return withConfigSaveLock(async () => {
+      const configPath = path.join(verifiedProjectDir, PROJECT_CONFIG_NAME);
+      const current = loadJsonSafe(configPath);
+      const merged = mergeConfigUpdates(
+        isPlainObject(current) ? current : {},
+        filteredUpdates,
+      );
+      const filtered = Object.fromEntries(
+        Object.entries(merged).filter(([k]) => PROJECT_CONFIG_ALLOWED_KEYS.has(k) || k === 'rag'),
+      );
+      delete filtered['providers'];
+      const validated = configSchema.safeParse(filtered);
+      if (!validated.success) {
+        throw new Error(`Invalid project config: ${validated.error.message}`);
+      }
+      atomicWriteJson(configPath, filtered, { hardenDirectory: false });
+      ConfigManager.reset();
+      clearProjectRuntimeRegistry();
+      invalidateAllProjectMCPManagers();
+      ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
     });
   });
 }
@@ -156,8 +267,10 @@ export function registerConfigIPC(): void {
  */
 export function unregisterConfigIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_GET);
+  ipcMain.removeHandler(IPC_CHANNELS.CONFIG_GET_HOME);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_DIAGNOSTICS);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_SAVE);
-  ipcMain.removeHandler(IPC_CHANNELS.CONFIG_MODEL_METADATA);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES);
+  ipcMain.removeHandler(IPC_CHANNELS.CONFIG_READ_PROJECT);
+  ipcMain.removeHandler(IPC_CHANNELS.CONFIG_SAVE_PROJECT);
 }

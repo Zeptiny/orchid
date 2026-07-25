@@ -5,6 +5,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useFocusTrap } from '../../keyboard';
 
 const DEFAULT_OVERLAY =
@@ -85,17 +86,20 @@ export function DialogSurface({
 
   if (!isOpen) return null;
 
-  const overlayClasses =
-    overlayClassName ?? (variant === 'modal' ? MODAL_OVERLAY : DEFAULT_OVERLAY);
+  const overlayClasses = `${overlayClassName ?? (variant === 'modal' ? MODAL_OVERLAY : DEFAULT_OVERLAY)} orchid-overlay-enter`
+    .trim()
+    .replace(/\s+/g, ' ');
   const panelClasses = [
     panelClassName ?? (variant === 'modal' ? MODAL_PANEL : DEFAULT_PANEL),
+    'orchid-dialog-enter',
     className,
   ]
     .filter(Boolean)
     .join(' ')
-    .trim();
+    .trim()
+    .replace(/\s+/g, ' ');
 
-  return (
+  const content = (
     <div
       className={overlayClasses}
       onClick={closeOnBackdrop ? onClose : undefined}
@@ -116,4 +120,7 @@ export function DialogSurface({
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') return content;
+  return createPortal(content, document.body);
 }

@@ -25,6 +25,16 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 - **RAG Search** — Semantic code search using embeddings and cosine similarity over indexed project files.
 - **RAG Index** — The vector store (SQLite + numpy) built by indexing and chunking project files.
 
+## Permission System
+
+- **Permission Mode** — The gating behavior for a tool call: `allow` (execute immediately), `ask` (prompt the user), `decide-for-me` (delegate to a seed-tier agent), or `ask-when-flagged` (prompt only when a detection engine flags the call).
+- **Risk Class** — A tool's default permission level based on its behavior: read-only tools default to `allow`, mutation/execution/delegation/network/MCP tools default to `ask`.
+- **Risk-Class Floor** — In `decide-for-me` and `ask-when-flagged` modes, tools whose effective permission resolves to `allow` execute without evaluation. The floor prevents wasteful seed agent calls on read-only tools.
+- **Permission Hierarchy** — The three-tier resolution order for effective permission: tool default → project config → session selector. The highest tier that sets a value wins.
+- **Session Selector** — A compact footer control (following the `ReasoningSelector` pattern) that sets a single permission mode for all tools in the current session.
+- **Path Containment** — Scope-aware permission resolution for file tools. Paths are resolved against the working directory; the applicable permission is selected from the tool's `inside` or `outside` slot based on containment. The `outside` slot defaults to `ask`. Shell commands are exempt; they are gated by permissions only.
+- **Destructive Command Detection** — Pattern-based analysis (modeled on `destructive_command_guard`) that flags dangerous shell commands in `ask-when-flagged` mode. Safe patterns are checked first (allow), then destructive patterns (flag).
+
 ## AST Tools
 
 - **Symbol Index** — A standalone SQLite database (`.orchid/ast/symbols.db`) that stores parsed symbol definitions and references across the project, enabling cross-file queries and renames.

@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import * as pathModule from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { getToolConfig, resolveToolPath } from '../types';
 import {
   directoryEntriesDataSchema,
@@ -45,6 +46,7 @@ export const readDirectoryDefinition: ToolDefinition = {
   resultFamily: 'directory-entries',
   outputDataSchema: directoryEntriesDataSchema,
   category: 'filesystem',
+  riskClass: RiskClass.READ_ONLY,
 };
 
 // ── Tree builder ────────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@ import { RENDERER_ALLOWED_TOOLS } from '../../src/main/ipc/payload-schemas';
 import type { ToolExecutionResult } from '../../src/shared/types/tool-result';
 import { genericToolResultDataSchema } from '../../src/shared/types/tool-result';
 import { executeToolCall } from '../../src/main/llm/tool-dispatch';
+import { sessionPermissionOverrides } from '../../src/main/permissions/session-overrides';
 import type { ToolRegistry } from '../../src/main/tools/registry';
 
 const PROJECT_DIR = '/tmp/orchid-tool-ipc-project';
@@ -28,6 +29,7 @@ const mocks = vi.hoisted(() => {
       handler,
       definition: {
         name,
+        riskClass: 'read-only',
         resultFamily: 'generic',
         outputDataSchema: genericToolResultDataSchema,
       },
@@ -102,6 +104,7 @@ beforeEach(async () => {
       handler: mocks.handler,
       definition: {
         name,
+        riskClass: 'read-only',
         resultFamily: 'generic',
         outputDataSchema: genericToolResultDataSchema,
       },
@@ -112,11 +115,13 @@ beforeEach(async () => {
   mocks.getActive.mockReset();
   mocks.getActive.mockReturnValue({ id: SESSION_UUID });
   mocks.getRuntime.mockClear();
+  sessionPermissionOverrides.set(SESSION_UUID, 'allow');
   toolIpc = await import('../../src/main/ipc/tool');
   toolIpc.registerToolIPC();
 });
 
 afterEach(() => {
+  sessionPermissionOverrides.delete(SESSION_UUID);
   toolIpc.unregisterToolIPC();
 });
 

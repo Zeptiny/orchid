@@ -50,7 +50,7 @@ export function StateMessage({
       {...props}
     >
       {kind === 'loading' ? (
-        <span className="loading loading-spinner loading-md" aria-hidden />
+        <span className="loading loading-spinner" aria-hidden />
       ) : (
         resolvedIcon && <Icon name={resolvedIcon} size={20} className="opacity-70" />
       )}

@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { getConfig } from '../../config/loader';
 import type { Config } from '../../config/schema';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { getToolConfig, resolveToolPath } from '../types';
 import { isBinaryFile } from '../ast/utils';
 import { globToRegex } from '../glob-pattern';
@@ -28,7 +29,6 @@ type GrepMatch = z.infer<typeof grepMatchSchema>;
 // Constants
 // ---------------------------------------------------------------------------
 
-const PER_FILE_TIMEOUT_MS = 10_000;
 const SEMAPHORE_LIMIT = 32;
 
 // ---------------------------------------------------------------------------
@@ -187,7 +187,7 @@ export async function executeGrepOutcome(
   includePattern?: string,
   caseInsensitive?: boolean,
   maxResults?: number,
-  config?: Pick<Config, 'grep_max_results' | 'ignored_dirs'>,
+  config?: Pick<Config, 'grep_max_results' | 'ignored_dirs' | 'grep_per_file_timeout'>,
 ): Promise<ToolHandlerOutcome<GrepResultsData>> {
   const effectiveMaxResults = maxResults
     ?? config?.grep_max_results
@@ -224,6 +224,12 @@ export async function executeGrepOutcome(
     };
   }
 
+  let perFileTimeoutMs: number;
+  try {
+    perFileTimeoutMs = (config?.grep_per_file_timeout ?? getConfig().grep_per_file_timeout) * 1000;
+  } catch {
+    perFileTimeoutMs = (config?.grep_per_file_timeout ?? 10) * 1000;
+  }
   const ignored = new Set(config?.ignored_dirs ?? getConfig().ignored_dirs);
   let fileRegex: RegExp | null = null;
   if (includePattern) fileRegex = globToRegex(includePattern, { caseInsensitive: true });
@@ -252,7 +258,7 @@ export async function executeGrepOutcome(
           effectiveMaxResults,
         )),
         new Promise<GrepMatch[] | null>((resolve) => {
-          setTimeout(() => resolve(null), PER_FILE_TIMEOUT_MS);
+          setTimeout(() => resolve(null), perFileTimeoutMs);
         }),
       ]);
       if (matches) perFile.set(filePath, matches);
@@ -303,6 +309,8 @@ export const grepToolDefinition: ToolDefinition = {
   resultFamily: 'search-results',
   outputDataSchema: searchResultsDataSchema,
   category: 'search',
+  riskClass: RiskClass.READ_ONLY,
+  offload: true,
 };
 
 export const grepHandler: ToolHandler = async (

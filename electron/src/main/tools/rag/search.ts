@@ -5,11 +5,13 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { getToolConfig } from '../types';
 import { Embedder } from '../../rag/embedder';
 import { RAGStore } from '../../rag/store';
+import { withDisposableAsync } from '../../utils/with-disposable';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -45,6 +47,8 @@ export const ragSearchDefinition: ToolDefinition = {
       'Use file_pattern to narrow results to specific files (e.g. "*.py", "src/**/*.ts").',
   inputSchema: ragSearchSchema,
   category: 'rag',
+  riskClass: RiskClass.READ_ONLY,
+  offload: true,
 };
 
 // ---------------------------------------------------------------------------
@@ -63,50 +67,51 @@ export const ragSearchHandler: ToolHandler = async (
   const cfg = getToolConfig(ctx);
   const projectPath = ctx.cwd;
 
-  const store = new RAGStore(projectPath);
-  const status = store.status();
+  return withDisposableAsync(new RAGStore(projectPath), async (store) => {
+    const status = store.status();
 
-  if (status.totalChunks === 0) {
-    // Operational precondition, not an execution failure — agent can index first.
-    return genericBuiltInToolOutcome('rag_search', 'No RAG index found. Run `rag_index` with action "index" first.', 'complete');
-  }
+    if (status.totalChunks === 0) {
+      // Operational precondition, not an execution failure — agent can index first.
+      return genericBuiltInToolOutcome('rag_search', 'No RAG index found. Run `rag_index` with action "index" first.', 'complete');
+    }
 
-  // Generate query embedding (same thread/batch caps as indexing)
-  const embedder = new Embedder({
-    model: cfg.rag.embedding_model,
-    threads: cfg.rag.embedding_threads,
-    batchSize: cfg.rag.embedding_batch_size,
-  });
-  let queryEmbedding: Float32Array;
-  try {
-    queryEmbedding = await embedder.embedSingle(query);
-  } catch (err) {
-    return genericBuiltInToolOutcome(
-      'rag_search',
-      `Embedding failed: ${err instanceof Error ? err.message : String(err)}`,
-      'error',
+    // Generate query embedding (same thread/batch caps as indexing)
+    const embedder = new Embedder({
+      model: cfg.rag.embedding_model,
+      threads: cfg.rag.embedding_threads,
+      batchSize: cfg.rag.embedding_batch_size,
+    });
+    let queryEmbedding: Float32Array;
+    try {
+      queryEmbedding = await embedder.embedSingle(query);
+    } catch (err) {
+      return genericBuiltInToolOutcome(
+        'rag_search',
+        `Embedding failed: ${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      );
+    }
+
+    // Search
+    const results = store.search(
+      Array.from(queryEmbedding),
+      top_k,
+      file_pattern,
     );
-  }
 
-  // Search
-  const results = store.search(
-    Array.from(queryEmbedding),
-    top_k,
-    file_pattern,
-  );
+    if (results.length === 0) {
+      return genericBuiltInToolOutcome('rag_search', 'No relevant results found.', 'complete');
+    }
 
-  if (results.length === 0) {
-    return genericBuiltInToolOutcome('rag_search', 'No relevant results found.', 'complete');
-  }
-
-  return genericBuiltInToolOutcome('rag_search', {
-    query,
-    results: results.map((result) => ({
-      score: result.score.toFixed(4),
-      file: result.filePath,
-      startLine: result.startLine,
-      endLine: result.endLine,
-      content: result.content,
-    })),
+    return genericBuiltInToolOutcome('rag_search', {
+      query,
+      results: results.map((result) => ({
+        score: result.score.toFixed(4),
+        file: result.filePath,
+        startLine: result.startLine,
+        endLine: result.endLine,
+        content: result.content,
+      })),
+    });
   });
 };

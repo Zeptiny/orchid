@@ -6,8 +6,9 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 
 ## Bugs
 
-- Scrolling up in chat is impossible
 - RAG onnxruntime may not be being shipped correctly
+- Subagent finished results should only send the last message, not full subagent history, the task is already defined on the dynamic context so I think it isnt necessary to resend
+- Interface may prevent some changes while streaming (Such as model and reasoning level) but the command pallete still allows to execute
 
 ## Agent quality
 
@@ -38,9 +39,6 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
   - Chain ends
   - Needs user input (Ex: ask_question)
 - Tool widgets / tool groups may be collapsing when a chain ends
-- Add small animations to the interface
-- Task update / changes can be grouped
-  - They are not resolving to the task name, but the ID on the title
 
 ## General backlog
 
@@ -151,22 +149,6 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 
 - **Do not change this until the design is clearer**
 - Multiple primary agent types (general, plan, etc.) that can be switched mid-conversation
-
-## Approval / permission system
-
-- Evaluate integrating checks from [destructive_command_guard](https://github.com/Dicklesworthstone/destructive_command_guard)
-- Tools would gain a permission attribute, with modes such as:
-  - Always ask
-  - Allow everything / yolo
-  - Decide for me (seed-tier agent decides per call)
-    - Claude Code has a similar system worth studying
-  - Ask when flagged
-    - Only when `destructive_command_guard` (or equivalent) flags the action
-- Resolve paths in tools so agents cannot read/write outside the working directory by path tricks
-  - Shell commands can still escape; with permissions and user approval of every command, responsibility stays with the user
-- Also recognize which directories a command/tool will touch
-  - Ask before editing / viewing files outside the current project dir
-  - Skipped in yolo mode
 
 ## Subagents
 

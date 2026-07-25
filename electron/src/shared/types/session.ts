@@ -27,6 +27,7 @@ import type { SubagentRecord } from './subagent';
 import { subagentRecordFromStorageDict, subagentRecordToStorageDict } from './subagent';
 import type { TodoStoreData } from './todo';
 import { todoStoreFromStorageDict, todoStoreToStorageDict } from './todo';
+import { PERMISSION_MODE_VALUES, type PermissionMode } from './permission';
 
 // ── Session ─────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,7 @@ export interface Session {
   readonly subagentChains: readonly SubagentRecord[];
   readonly todoStore: TodoStoreData;
   readonly reasoningEffortOverride: string | number | null;
+  readonly permissionMode: PermissionMode | null;
 }
 
 // ── Storage dict ────────────────────────────────────────────────────────────
@@ -80,6 +82,7 @@ export interface SessionStorageDict {
   todo_store?: unknown;
   todoStore?: unknown;
   reasoningEffortOverride?: string | number | null;
+  permissionMode?: string | null;
   // Forward-compat: extra keys tolerated on restore
   [key: string]: unknown;
 }
@@ -103,6 +106,7 @@ export function sessionToStorageDict(session: Session): SessionStorageDict {
     subagent_chains: session.subagentChains.map(subagentRecordToStorageDict),
     todo_store: todoStoreToStorageDict(session.todoStore),
     reasoningEffortOverride: session.reasoningEffortOverride,
+    permissionMode: session.permissionMode,
   };
 }
 
@@ -186,5 +190,13 @@ export function sessionFromStorageDict(data: unknown): Session {
       typeof raw.reasoningEffortOverride === 'number'
         ? raw.reasoningEffortOverride
         : null,
+    permissionMode: parsePermissionMode(raw.permissionMode),
   };
+}
+
+function parsePermissionMode(value: unknown): PermissionMode | null {
+  if (typeof value !== 'string') return null;
+  return (PERMISSION_MODE_VALUES as readonly string[]).includes(value)
+    ? (value as PermissionMode)
+    : null;
 }

@@ -16,6 +16,7 @@ import type { Message } from '../../shared/types/message';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { SubagentRecord } from '../../shared/types/subagent';
 import type { TodoStoreData } from '../../shared/types/todo';
+import { PERMISSION_MODE_VALUES, type PermissionMode } from '../../shared/types/permission';
 import {
   messageToStorageDict,
   messageFromStorageDict,
@@ -56,6 +57,20 @@ export interface StorageOptions {
   toolOutputCacheDir?: string;
   /** Override path to web-fetch cache directory. */
   webFetchCacheDir?: string;
+}
+
+/** Session columns that can be updated without touching persisted chains. */
+export interface SessionFieldsUpdate {
+  name?: string;
+  selection?: ModelSelection | null;
+  modelLabel?: string | null;
+  cwd?: string | null;
+  activeChainId?: string | null;
+  subagentChains?: readonly SubagentRecord[];
+  todoStore?: TodoStoreData;
+  reasoningEffortOverride?: string | number | null;
+  permissionMode?: PermissionMode | null;
+  updatedAt: string;
 }
 
 function resolveOptions(opts?: StorageOptions) {
@@ -153,6 +168,7 @@ interface SessionRow {
   subagent_chains_json: string;
   todo_store_json: string;
   reasoning_effort_override: string | null;
+  permission_mode: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -240,13 +256,6 @@ function deserializeTodoStore(json: string): TodoStoreData {
 }
 
 function chainFromRow(row: ChainRow): Chain {
-  let status = parseChainStatus(row.status);
-  let endTime = row.end_time;
-  if (status === ChainStatus.ACTIVE) {
-    status = ChainStatus.INTERRUPTED;
-    if (!endTime) endTime = new Date().toISOString();
-  }
-
   let subagentRecord: SubagentRecord | null = null;
   if (row.subagent_record_json) {
     try {
@@ -260,7 +269,7 @@ function chainFromRow(row: ChainRow): Chain {
     id: row.id,
     sessionId: row.session_id,
     messages: deserializeMessages(row.messages_json),
-    status,
+    status: parseChainStatus(row.status),
     selection: deserializeSelection(row.selection_json),
     modelLabel: row.model_label,
     agentName: row.agent_name,
@@ -268,7 +277,7 @@ function chainFromRow(row: ChainRow): Chain {
     agentTier: row.agent_tier,
     subagentRecord,
     startTime: row.start_time,
-    endTime,
+    endTime: row.end_time,
   };
 }
 
@@ -288,6 +297,17 @@ function deserializeReasoningEffortOverride(json: string | null): string | numbe
   }
 }
 
+function serializePermissionMode(mode: PermissionMode | null): string | null {
+  return mode ?? null;
+}
+
+function deserializePermissionMode(value: string | null): PermissionMode | null {
+  if (value == null) return null;
+  return (PERMISSION_MODE_VALUES as readonly string[]).includes(value)
+    ? (value as PermissionMode)
+    : null;
+}
+
 function sessionFromRow(row: SessionRow, chains: Chain[]): Session {
   return {
     id: row.id,
@@ -302,7 +322,65 @@ function sessionFromRow(row: SessionRow, chains: Chain[]): Session {
     subagentChains: deserializeSubagentChains(row.subagent_chains_json),
     todoStore: deserializeTodoStore(row.todo_store_json),
     reasoningEffortOverride: deserializeReasoningEffortOverride(row.reasoning_effort_override),
+    permissionMode: deserializePermissionMode(row.permission_mode),
   };
+}
+
+const INSERT_CHAIN_SQL = `
+  INSERT INTO chains (id, session_id, ordinal, status, selection_json, model_label, agent_name, agent_type, agent_tier, subagent_record_json, messages_json, start_time, end_time)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`;
+
+function insertChainRow(
+  insertChain: import('better-sqlite3').Statement,
+  chain: Chain,
+  ordinal: number,
+): void {
+  insertChain.run(
+    chain.id,
+    chain.sessionId,
+    ordinal,
+    chain.status,
+    serializeSelection(chain.selection),
+    chain.modelLabel,
+    chain.agentName,
+    chain.agentType,
+    chain.agentTier,
+    chain.subagentRecord
+      ? JSON.stringify(subagentRecordToStorageDict(chain.subagentRecord))
+      : null,
+    serializeMessages(chain.messages),
+    chain.startTime,
+    chain.endTime,
+  );
+}
+
+function updateChainRow(db: SqliteDatabase, chain: Chain): number {
+  return db
+    .prepare(
+      `UPDATE chains
+       SET status = ?, selection_json = ?, model_label = ?,
+           agent_name = ?, agent_type = ?, agent_tier = ?,
+           subagent_record_json = ?, messages_json = ?,
+           start_time = ?, end_time = ?
+       WHERE id = ? AND session_id = ?`,
+    )
+    .run(
+      chain.status,
+      serializeSelection(chain.selection),
+      chain.modelLabel,
+      chain.agentName,
+      chain.agentType,
+      chain.agentTier,
+      chain.subagentRecord
+        ? JSON.stringify(subagentRecordToStorageDict(chain.subagentRecord))
+        : null,
+      serializeMessages(chain.messages),
+      chain.startTime,
+      chain.endTime,
+      chain.id,
+      chain.sessionId,
+    ).changes;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,8 +395,8 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
   const { dbPath } = resolveOptions(opts);
   withCorruptionRecovery(dbPath, (db) => {
     const upsertSession = db.prepare(`
-      INSERT INTO sessions (id, name, selection_json, model_label, cwd, active_chain_id, subagent_chains_json, todo_store_json, reasoning_effort_override, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO sessions (id, name, selection_json, model_label, cwd, active_chain_id, subagent_chains_json, todo_store_json, reasoning_effort_override, permission_mode, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         selection_json = excluded.selection_json,
@@ -328,15 +406,12 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
         subagent_chains_json = excluded.subagent_chains_json,
         todo_store_json = excluded.todo_store_json,
         reasoning_effort_override = excluded.reasoning_effort_override,
+        permission_mode = excluded.permission_mode,
         updated_at = excluded.updated_at
     `);
 
     const deleteChains = db.prepare('DELETE FROM chains WHERE session_id = ?');
-
-    const insertChain = db.prepare(`
-      INSERT INTO chains (id, session_id, ordinal, status, selection_json, model_label, agent_name, agent_type, agent_tier, subagent_record_json, messages_json, start_time, end_time)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    const insertChain = db.prepare(INSERT_CHAIN_SQL);
 
     const txn = db.transaction(() => {
       upsertSession.run(
@@ -349,6 +424,7 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
         serializeSubagentChains(session.subagentChains),
         serializeTodoStore(session.todoStore),
         serializeReasoningEffortOverride(session.reasoningEffortOverride),
+        serializePermissionMode(session.permissionMode),
         session.createdAt,
         session.updatedAt,
       );
@@ -357,21 +433,7 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
 
       for (let i = 0; i < session.chains.length; i++) {
         const chain = session.chains[i]!;
-        insertChain.run(
-          chain.id,
-          session.id,
-          i,
-          chain.status,
-          serializeSelection(chain.selection),
-          chain.modelLabel,
-          chain.agentName,
-          chain.agentType,
-          chain.agentTier,
-          chain.subagentRecord ? JSON.stringify(subagentRecordToStorageDict(chain.subagentRecord)) : null,
-          serializeMessages(chain.messages),
-          chain.startTime,
-          chain.endTime,
-        );
+        insertChainRow(insertChain, chain, i);
       }
     });
 
@@ -380,33 +442,227 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
 }
 
 // ---------------------------------------------------------------------------
+// Incremental writes
+// ---------------------------------------------------------------------------
+
+/**
+ * Update only the supplied session columns and recency. Historical chain rows
+ * are never read, deleted, or rewritten. Returns false if the session is
+ * missing so callers can use full replacement as a recovery path.
+ */
+export function updateSessionFields(
+  sessionId: string,
+  update: SessionFieldsUpdate,
+  opts?: StorageOptions,
+): boolean {
+  if (!isValidSessionId(sessionId)) return false;
+
+  const columns: string[] = [];
+  const values: unknown[] = [];
+  const add = (column: string, value: unknown): void => {
+    columns.push(`${column} = ?`);
+    values.push(value);
+  };
+
+  if (Object.hasOwn(update, 'name') && update.name !== undefined) {
+    add('name', update.name);
+  }
+  if (Object.hasOwn(update, 'selection')) {
+    add('selection_json', serializeSelection(update.selection ?? null));
+  }
+  if (Object.hasOwn(update, 'modelLabel')) add('model_label', update.modelLabel ?? null);
+  if (Object.hasOwn(update, 'cwd')) add('cwd', update.cwd ?? null);
+  if (Object.hasOwn(update, 'activeChainId')) {
+    add('active_chain_id', update.activeChainId ?? null);
+  }
+  if (Object.hasOwn(update, 'subagentChains')) {
+    add('subagent_chains_json', serializeSubagentChains(update.subagentChains ?? []));
+  }
+  if (Object.hasOwn(update, 'todoStore')) {
+    add('todo_store_json', serializeTodoStore(update.todoStore ?? { tasks: [] }));
+  }
+  if (Object.hasOwn(update, 'reasoningEffortOverride')) {
+    add(
+      'reasoning_effort_override',
+      serializeReasoningEffortOverride(update.reasoningEffortOverride ?? null),
+    );
+  }
+  if (Object.hasOwn(update, 'permissionMode')) {
+    add('permission_mode', serializePermissionMode(update.permissionMode ?? null));
+  }
+  add('updated_at', update.updatedAt);
+
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const result = db
+      .prepare(`UPDATE sessions SET ${columns.join(', ')} WHERE id = ?`)
+      .run(...values, sessionId);
+    return result.changes > 0;
+  });
+}
+
+/**
+ * Atomically interrupt any stale ACTIVE chain, append the new ACTIVE chain,
+ * and point the session at it. Returns false if the owning session is missing.
+ */
+export function appendActiveChain(
+  chain: Chain,
+  interruptedChainIds: readonly string[],
+  updatedAt: string,
+  todoStore: TodoStoreData,
+  opts?: StorageOptions,
+): boolean {
+  if (!isValidSessionId(chain.sessionId)) return false;
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const insertChain = db.prepare(INSERT_CHAIN_SQL);
+    const txn = db.transaction(() => {
+      const sessionResult = db
+        .prepare(
+          `UPDATE sessions
+           SET active_chain_id = ?, todo_store_json = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(
+          chain.id,
+          serializeTodoStore(todoStore),
+          updatedAt,
+          chain.sessionId,
+        );
+      if (sessionResult.changes === 0) return false;
+
+      const interruptChain = db.prepare(
+        `UPDATE chains
+         SET status = ?, end_time = COALESCE(end_time, ?)
+         WHERE id = ? AND session_id = ? AND status = ?`,
+      );
+      for (const chainId of interruptedChainIds) {
+        interruptChain.run(
+          ChainStatus.INTERRUPTED,
+          updatedAt,
+          chainId,
+          chain.sessionId,
+          ChainStatus.ACTIVE,
+        );
+      }
+
+      const ordinalRow = db
+        .prepare(
+          'SELECT COALESCE(MAX(ordinal), -1) + 1 AS ordinal FROM chains WHERE session_id = ?',
+        )
+        .get(chain.sessionId) as { ordinal: number };
+      insertChainRow(insertChain, chain, ordinalRow.ordinal);
+      return true;
+    });
+    return txn();
+  });
+}
+
+/**
+ * Atomically persist a terminal chain snapshot and clear the session's active
+ * chain pointer. Returns false if the chain row is missing.
+ */
+export function finishChain(
+  chain: Chain,
+  updatedAt: string,
+  todoStore: TodoStoreData,
+  opts?: StorageOptions,
+): boolean {
+  if (!isValidSessionId(chain.sessionId)) return false;
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const txn = db.transaction(() => {
+      if (updateChainRow(db, chain) === 0) return false;
+      db.prepare(
+        `UPDATE sessions
+         SET active_chain_id = NULL, todo_store_json = ?, updated_at = ?
+         WHERE id = ?`,
+      ).run(
+        serializeTodoStore(todoStore),
+        updatedAt,
+        chain.sessionId,
+      );
+      return true;
+    });
+    return txn();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // loadSession
 // ---------------------------------------------------------------------------
 
-/** Load a session by ID (null if absent/invalid); restored ACTIVE chains become INTERRUPTED. */
+/**
+ * Load a session by ID (null if absent/invalid).
+ *
+ * A process restart makes every persisted active chain terminal. Recovery is
+ * durable: affected chains, their shared recovery timestamp, and a matching
+ * session active-chain pointer are updated in one transaction before the
+ * session is materialized.
+ */
 export function loadSession(sessionId: string, opts?: StorageOptions): Session | null {
   if (!isValidSessionId(sessionId)) {
     return null;
   }
   const { dbPath } = resolveOptions(opts);
   return withCorruptionRecovery(dbPath, (db) => {
-    const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as SessionRow | undefined;
-    if (!row) return null;
+    const load = db.transaction(() => {
+      let row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as SessionRow | undefined;
+      if (!row) return null;
 
-    const chainRows = db
-      .prepare('SELECT * FROM chains WHERE session_id = ? ORDER BY ordinal')
-      .all(sessionId) as ChainRow[];
+      let chainRows = db
+        .prepare('SELECT * FROM chains WHERE session_id = ? ORDER BY ordinal')
+        .all(sessionId) as ChainRow[];
+      const activeChainIds = chainRows
+        .filter((chain) => parseChainStatus(chain.status) === ChainStatus.ACTIVE)
+        .map((chain) => chain.id);
 
-    const chains: Chain[] = [];
-    for (const cr of chainRows) {
-      try {
-        chains.push(chainFromRow(cr));
-      } catch (err) {
-        console.error(`[session] skipping corrupt chain ${cr.id} on load (session ${sessionId})`, err);
+      if (activeChainIds.length > 0) {
+        const recoveredAt = new Date().toISOString();
+        const activePlaceholders = activeChainIds.map(() => '?').join(', ');
+
+        db.prepare(
+          `UPDATE chains
+           SET status = ?, end_time = COALESCE(end_time, ?)
+           WHERE session_id = ? AND id IN (${activePlaceholders})`,
+        ).run(
+          ChainStatus.INTERRUPTED,
+          recoveredAt,
+          sessionId,
+          ...activeChainIds,
+        );
+        db.prepare(
+          `UPDATE sessions
+           SET active_chain_id = CASE
+                 WHEN active_chain_id IN (${activePlaceholders}) THEN NULL
+                 ELSE active_chain_id
+               END,
+               updated_at = ?
+           WHERE id = ?`,
+        ).run(
+          ...activeChainIds,
+          recoveredAt,
+          sessionId,
+        );
+
+        row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as SessionRow;
+        chainRows = db
+          .prepare('SELECT * FROM chains WHERE session_id = ? ORDER BY ordinal')
+          .all(sessionId) as ChainRow[];
       }
-    }
 
-    return sessionFromRow(row, chains);
+      const chains: Chain[] = [];
+      for (const cr of chainRows) {
+        try {
+          chains.push(chainFromRow(cr));
+        } catch (err) {
+          console.error(`[session] skipping corrupt chain ${cr.id} on load (session ${sessionId})`, err);
+        }
+      }
+
+      return sessionFromRow(row, chains);
+    });
+    return load();
   });
 }
 
@@ -450,11 +706,9 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Targeted turn-local write (plan R3): replace the active chain's per-turn
- * fields (messages + selection + agent metadata) and bump the owning
- * session's recency, without rewriting sibling chains or the session-level
- * JSON columns. Returns false when the chain row is missing so callers can
- * fall back to a full save.
+ * Replace one chain snapshot and bump the owning session's recency without
+ * rewriting sibling chains or session-level JSON columns. Returns false when
+ * the chain row is missing so callers can fall back to a full save.
  */
 export function updateChain(
   chain: Chain,
@@ -464,23 +718,7 @@ export function updateChain(
   const { dbPath } = resolveOptions(opts);
   return withCorruptionRecovery(dbPath, (db) => {
     const txn = db.transaction(() => {
-      const result = db
-        .prepare(
-          `UPDATE chains
-           SET messages_json = ?, selection_json = ?, model_label = ?,
-               agent_name = ?, agent_type = ?, agent_tier = ?
-           WHERE id = ?`,
-        )
-        .run(
-          serializeMessages(chain.messages),
-          serializeSelection(chain.selection),
-          chain.modelLabel,
-          chain.agentName,
-          chain.agentType,
-          chain.agentTier,
-          chain.id,
-        );
-      if (result.changes === 0) return false;
+      if (updateChainRow(db, chain) === 0) return false;
       db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(updatedAt, chain.sessionId);
       return true;
     });

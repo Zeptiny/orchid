@@ -706,7 +706,6 @@ describe('Renderer style contract', () => {
         ['.session-project-sessions > .session-row', ['margin-left: 10px;', 'padding-left: var(--tree-gutter);']],
         ['.session-project-sessions > .session-row::before', ['border-left: 1px solid var(--tree-line);']],
         ['.workspace-chip', ['min-height: 28px;', 'border-radius: 5px;']],
-        ['.session-new-btn', ['width: 100%;']],
         ['.session-search-input', ['height: 36px;', 'border: 1px solid']],
         ['.session-item-main', ['flex: 1 1 auto;']],
         ['.session-item', ['min-height: 30px;', 'padding: 5px 7px;']],

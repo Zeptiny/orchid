@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   acceptChatEvent,
+  appendStreamSegmentDelta,
+  appendStreamSegmentDeltas,
   beginCancelRequest,
   bindChatSession,
   chatToolSnapshotToBlock,
@@ -17,6 +19,10 @@ import {
   type CancelQueueState,
   type ChatEventAffinity,
 } from '../../src/renderer/hooks/useChat';
+import {
+  chatChunkEventSchema,
+  chatThinkingEventSchema,
+} from '../../src/shared/types/ipc-schemas';
 import type { Message, Usage } from '../../src/shared/types/message';
 import { MessageType } from '../../src/shared/types/message';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
@@ -30,6 +36,58 @@ function emptyCancelQueue(): CancelQueueState {
 }
 
 describe('useChat event affinity', () => {
+  it('keeps canonical segment ids while accumulating live text and thinking', () => {
+    const text = appendStreamSegmentDelta([], 'text', 'text-segment', 'Hello');
+    const continued = appendStreamSegmentDelta(text, 'text', 'text-segment', ' world');
+    const next = appendStreamSegmentDelta(continued, 'text', 'next-segment', '!');
+
+    expect(continued).toEqual([
+      { kind: 'text', id: 'text-segment', content: 'Hello world' },
+    ]);
+    expect(next).toEqual([
+      { kind: 'text', id: 'text-segment', content: 'Hello world' },
+      { kind: 'text', id: 'next-segment', content: '!' },
+    ]);
+  });
+
+  it('applies a frame of stream deltas without mutating the previous segments', () => {
+    const previous = [
+      { kind: 'text' as const, id: 'text-segment', content: 'Hello' },
+    ];
+
+    const next = appendStreamSegmentDeltas(previous, [
+      { kind: 'text', segmentId: 'text-segment', data: ' world' },
+      { kind: 'text', segmentId: 'text-segment', data: '!' },
+      { kind: 'thinking', segmentId: 'thinking-segment', data: 'Checking' },
+      { kind: 'thinking', segmentId: 'thinking-segment', data: ' files' },
+    ]);
+
+    expect(previous).toEqual([
+      { kind: 'text', id: 'text-segment', content: 'Hello' },
+    ]);
+    expect(next).toEqual([
+      { kind: 'text', id: 'text-segment', content: 'Hello world!' },
+      { kind: 'thinking', id: 'thinking-segment', content: 'Checking files' },
+    ]);
+  });
+
+  it('preserves canonical segment ids at the preload validation boundary', () => {
+    const identity = { sessionId: 'session-1', turnId: 'turn-1', sequence: 1 };
+
+    expect(chatChunkEventSchema.parse({
+      ...identity,
+      type: 'chunk',
+      data: 'answer',
+      segmentId: 'text-segment',
+    }).segmentId).toBe('text-segment');
+    expect(chatThinkingEventSchema.parse({
+      ...identity,
+      type: 'thinking',
+      data: 'reasoning',
+      segmentId: 'thinking-segment',
+    }).segmentId).toBe('thinking-segment');
+  });
+
   it('retains canonical facts while reconstructing a hydrated tool block', () => {
     const canonical = createCanonicalToolResult('generic', {
       status: 'cancelled',

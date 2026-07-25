@@ -3,7 +3,15 @@
  *
  * Iteration 012 three-panel shell: left sessions | center chat | right inspector.
  */
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useChat } from '../hooks/useChat';
 import { useSession } from '../hooks/useSession';
 import { useSubagents } from '../hooks/useSubagents';
@@ -13,6 +21,7 @@ import { useSessionTabs } from '../hooks/useSessionTabs';
 import { useProviders } from '../hooks/useProviders';
 import { useMessageQueue } from '../hooks/useMessageQueue';
 import { useQueueAutoFire } from '../hooks/useQueueAutoFire';
+import { useResponsiveShell } from '../hooks/use-responsive-shell';
 import {
   providerModelOptionDisplayName,
   providerModelOptionKey,
@@ -24,9 +33,16 @@ import { resolveOrchidNavigate } from '../utils/navigate-shell';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import type { ModelSelection } from '../../shared/types/provider';
 import { flattenSessionMessages, type Session } from '../../shared/types/session';
-import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus, CommandContext } from '../../shared/types/ipc-boundary';
+import type {
+  ASTStoreStatus,
+  CommandContext,
+  Config,
+  MCPServerStatus,
+  RAGStoreStatus,
+} from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption, SessionOpenResult } from '../../shared/types/ipc';
 import { ChatStream } from './ChatStream';
+import { DeferredSurface } from './deferred-surface';
 import { InputArea } from './InputArea';
 import { MessageQueue } from './MessageQueue';
 import { Footer } from './Footer';
@@ -38,7 +54,15 @@ import { SessionHeader } from './session-header';
 import { SessionTabBar } from './SessionTabBar';
 import { Alert, type AlertTone } from './ui/Alert';
 import { Button } from './ui/Button';
-import { SubagentView, type SubagentOpenRequest } from './SubagentView';
+import { StateMessage } from './ui/StateMessage';
+import type { SubagentOpenRequest } from './SubagentView';
+
+const ProjectConfigView = lazy(() => import('./ProjectConfigView').then((module) => ({
+  default: module.ProjectConfigView,
+})));
+const SubagentView = lazy(() => import('./SubagentView').then((module) => ({
+  default: module.SubagentView,
+})));
 
 type ToastSeverity = 'info' | 'warning' | 'error';
 interface Toast {
@@ -46,7 +70,14 @@ interface Toast {
   severity: ToastSeverity;
 }
 
-export function ChatView() {
+interface ChatViewProps {
+  /** False while a full-window surface owns presentation. */
+  isVisible?: boolean;
+  /** App-owned effective configuration loaded once during renderer startup. */
+  bootstrapConfig?: Config | null;
+}
+
+export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewProps) {
   const session = useSession();
   const chat = useChat(session.activeSession?.id ?? null);
   const subagents = useSubagents(session.activeSession?.id ?? null);
@@ -56,8 +87,18 @@ export function ChatView() {
   const providers = useProviders();
   const messageQueue = useMessageQueue();
 
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
+  const {
+    rightOpen: sidebarOpen,
+    leftCollapsed: leftSidebarCollapsed,
+    rightOverlay,
+    leftOverlay,
+    rightTrack,
+    leftTrack,
+    toggleRight: toggleSidebar,
+    toggleLeft: toggleLeftSidebar,
+    openRight: openSidebar,
+    openLeft: openLeftSidebar,
+  } = useResponsiveShell();
   const [paletteOpen, setPaletteOpen] = useState(false);
   /** One-shot inspector section focus from command-palette navigation. */
   const [inspectorFocusSection, setInspectorFocusSection] = useState<string | null>(null);
@@ -81,6 +122,7 @@ export function ChatView() {
   const [toast, setToast] = useState<Toast | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [contentMode, setContentMode] = useState<'chat' | 'subagents'>('chat');
+  const [projectConfigDir, setProjectConfigDir] = useState<string | null>(null);
   const [subagentOpenRequest, setSubagentOpenRequest] = useState<SubagentOpenRequest>({ generation: 0, id: null });
   const chatContentRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -90,7 +132,7 @@ export function ChatView() {
     if (!element) return;
     if (contentMode === 'subagents') element.setAttribute('inert', '');
     else element.removeAttribute('inert');
-  }, [contentMode]);
+  }, [contentMode, projectConfigDir]);
 
   const openSubagentView = useCallback((id?: string) => {
     setSubagentOpenRequest((previous) => ({ generation: previous.generation + 1, id: id ?? null }));
@@ -158,14 +200,6 @@ export function ChatView() {
     return () => window.removeEventListener('focus', markSeen);
   }, [session.activeSession?.id, activity.markSeen]);
 
-  const toggleSidebar = useCallback(() => {
-    setSidebarOpen((prev) => !prev);
-  }, []);
-
-  const toggleLeftSidebar = useCallback(() => {
-    setLeftSidebarCollapsed((prev) => !prev);
-  }, []);
-
   // Wire dead command-palette `orchid:navigate` events to shell panels.
   useEffect(() => {
     const onNavigate = (event: Event) => {
@@ -173,15 +207,15 @@ export function ChatView() {
       const action = resolveOrchidNavigate(detail?.section);
       if (action.kind === 'noop') return;
       if (action.kind === 'sessions') {
-        setLeftSidebarCollapsed(false);
+        openLeftSidebar();
         return;
       }
-      setSidebarOpen(true);
+      openSidebar();
       setInspectorFocusSection(action.section);
     };
     window.addEventListener('orchid:navigate', onNavigate);
     return () => window.removeEventListener('orchid:navigate', onNavigate);
-  }, []);
+  }, [openLeftSidebar, openSidebar]);
 
   const togglePalette = useCallback(() => {
     setHelpOpen(false);
@@ -198,24 +232,18 @@ export function ChatView() {
   }, []);
 
   useEffect(() => {
-    async function loadConfig() {
-      try {
-        if (window.orchid?.config?.get) {
-          const config = await window.orchid.config.get();
-          if (config.theme) setCurrentTheme(config.theme);
-          if (config.personality) setCurrentPersonality(config.personality);
-          setDefaultSelection(config.default_model ?? null);
-          setAlwaysExpandToolGroups(Boolean(config.always_expand_tool_groups));
-        }
-        if (window.orchid?.config?.listPersonalities) {
-          const names = await window.orchid.config.listPersonalities();
-          setPersonalityNames(names);
-        }
-      } catch {
-        // Non-fatal
-      }
-    }
-    loadConfig();
+    if (!bootstrapConfig) return;
+    if (bootstrapConfig.theme) setCurrentTheme(bootstrapConfig.theme);
+    if (bootstrapConfig.personality) setCurrentPersonality(bootstrapConfig.personality);
+    setDefaultSelection(bootstrapConfig.default_model ?? null);
+    setAlwaysExpandToolGroups(Boolean(bootstrapConfig.always_expand_tool_groups));
+  }, [bootstrapConfig]);
+
+  useEffect(() => {
+    if (!window.orchid?.config?.listPersonalities) return;
+    window.orchid.config.listPersonalities()
+      .then(setPersonalityNames)
+      .catch(() => { /* Non-fatal */ });
   }, []);
 
   // Prefer live config updates after Settings save (tool-group expand pref).
@@ -272,11 +300,12 @@ export function ChatView() {
       subagents.applyFromSession(loadedSession.subagentChains);
       todos.applyFromSession(loadedSession.todoStore.tasks);
     },
-    [chat, subagents.applyFromSession, todos.applyFromSession],
+    [chat.setMessages, subagents.applyFromSession, todos.applyFromSession],
   );
 
   const handleSessionSelect = useCallback(
     async (id: string) => {
+      setProjectConfigDir(null);
       // Already focused this session (not draft) — skip full reload to avoid flicker.
       if (session.activeSession?.id === id && !draftTabVisible) {
         return;
@@ -319,7 +348,7 @@ export function ChatView() {
         live: result.live,
       });
     },
-    [session, chat, subagents.applyFromSession, todos.applyFromSession, draftTabVisible, messageQueue.clearQueue],
+    [session, chat.beginSessionSwitch, chat.hydrateSnapshot, subagents.applyFromSession, todos.applyFromSession, draftTabVisible, messageQueue.clearQueue],
   );
 
   // ConfigView left-rail pick: same hydrate path as sidebar (not store-only load).
@@ -334,6 +363,7 @@ export function ChatView() {
   }, [handleSessionSelect]);
 
   const enterDraftMode = useCallback(async (opts?: { clearComposer?: boolean }) => {
+    setProjectConfigDir(null);
     const gen = ++sessionSwitchGen.current;
     chat.beginSessionSwitch(null);
     messageQueue.clearQueue();
@@ -344,7 +374,7 @@ export function ChatView() {
     if (opts?.clearComposer) {
       setComposerDraftKey((k) => k + 1);
     }
-  }, [session, chat, applySessionMessages, messageQueue.clearQueue]);
+  }, [session, chat.beginSessionSwitch, applySessionMessages, messageQueue.clearQueue]);
 
   // New chat: draft in the currently selected project. Never open a folder
   // picker here — inherit session.cwd → workspace.cwd → sticky default.
@@ -379,14 +409,9 @@ export function ChatView() {
     });
   }, [session, enterDraftMode]);
 
-  // Project header click: select the project itself (draft bound to it) without
-  // loading the first session in that group.
-  const handleProjectSelect = useCallback(async (projectDir: string) => {
-    const gen = ++sessionSwitchGen.current;
-    const workspace = await session.setWorkspace(projectDir);
-    if (!workspace?.cwd || gen !== sessionSwitchGen.current) return;
-    await enterDraftMode({ clearComposer: true });
-  }, [session, enterDraftMode]);
+  const handleProjectSelect = useCallback((projectDir: string) => {
+    setProjectConfigDir(projectDir);
+  }, []);
 
   // Restore durable open tabs (or empty draft) instead of auto-picking library[0].
   useEffect(() => {
@@ -491,7 +516,7 @@ export function ChatView() {
       if (gen !== sessionSwitchGen.current) return;
       await focusAfterWorkingSet(snapshot);
     },
-    [session, chat, tabs, focusAfterWorkingSet],
+    [session, chat.setMessages, tabs.refresh, focusAfterWorkingSet],
   );
 
   const notify = useCallback((message: string, severity: ToastSeverity = 'info') => {
@@ -573,7 +598,23 @@ export function ChatView() {
         notify(`Project folder: ${info.cwd}`, 'info');
       }
     }
-  }, [session, chat, applySessionMessages, notify]);
+  }, [session, chat.beginSessionSwitch, applySessionMessages, notify]);
+
+  // Stable prop wrappers for the memoized LeftSidebar. Inline arrows here would
+  // give the rail a fresh identity every render and defeat React.memo, so the
+  // whole sidebar re-rendered on each streamed token / activity broadcast.
+  const handleSessionCreateClick = useCallback(() => {
+    void handleSessionCreate();
+  }, [handleSessionCreate]);
+  const handleProjectSessionCreateClick = useCallback((projectDir: string) => {
+    void handleProjectSessionCreate(projectDir);
+  }, [handleProjectSessionCreate]);
+  const handlePickProjectDirClick = useCallback(() => {
+    void handlePickProjectDir();
+  }, [handlePickProjectDir]);
+  const handleStopSession = useCallback((sessionId: string) => {
+    void chat.stop(sessionId);
+  }, [chat.stop]);
 
   const handleSelectProviderModel = useCallback(async (key: string) => {
     const option = providerModelByKey.get(key);
@@ -624,7 +665,7 @@ export function ChatView() {
       });
     },
     [
-      chat,
+      chat.send,
       chat.isSwitchingSession,
       session.activeSession?.id,
       session.activeSession?.selection,
@@ -698,6 +739,26 @@ export function ChatView() {
     await handleSessionSelect(nextId);
   }, [tabs.snapshot, handleSessionSelect]);
 
+  // Stable prop wrappers for the memoized tab bar / composer / inspector.
+  // Inline arrows would hand those components a fresh identity every render and
+  // defeat React.memo, re-rendering them on each streamed token.
+  const handleTabSelect = useCallback((id: string) => {
+    setDraftTabVisible(false);
+    void handleSessionSelect(id);
+  }, [handleSessionSelect]);
+  const handleSelectDraftTab = useCallback(() => {
+    void enterDraftMode();
+  }, [enterDraftMode]);
+  const handleCloseDraftTab = useCallback(() => {
+    void leaveDraftToOpenTab();
+  }, [leaveDraftToOpenTab]);
+  const handleOpenProviders = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('orchid:open-settings', { detail: { tab: 'providers' } }));
+  }, []);
+  const handleFocusSectionConsumed = useCallback(() => {
+    setInspectorFocusSection(null);
+  }, []);
+
   const handleCloseFocusedTab = useCallback(() => {
     if (draftTabVisible && !session.activeSession) {
       void leaveDraftToOpenTab();
@@ -742,13 +803,14 @@ export function ChatView() {
 
   const shortcutGate = useCallback(
     (id: string) => {
+      if (!isVisible) return false;
       // Always allow palette / help toggles (they close themselves).
       if (id === 'palette.toggle' || id === 'shortcuts.help') return true;
       // Suppress other globals while overlays own the keyboard.
       if (paletteOpen || helpOpen || closeConfirmId) return false;
       return true;
     },
-    [paletteOpen, helpOpen, closeConfirmId],
+    [isVisible, paletteOpen, helpOpen, closeConfirmId],
   );
 
   useGlobalShortcuts({
@@ -826,8 +888,7 @@ export function ChatView() {
 
   useEffect(() => {
     refreshMCP();
-    refreshIndex();
-  }, [refreshMCP, refreshIndex]);
+  }, [refreshMCP]);
 
   // Re-fetch RAG/AST status when the active workspace changes (counts are
   // project-scoped; no manual reload control in the inspector).
@@ -856,7 +917,10 @@ export function ChatView() {
     void subagents.refresh();
   }, [chat.status, chat.messages.length, session.activeSession?.id, subagents.refresh]);
 
-  const commandContext: CommandContext = {
+  // Memoized so the composer, footer, and command palette (all memoized) are
+  // not invalidated on every render — previously a fresh object each render
+  // forced those subtrees to re-render on every streamed token.
+  const commandContext: CommandContext = useMemo(() => ({
     onCreateSession: handleSessionCreate,
     onLoadSession: handleSessionSelect,
     onDeleteSession: session.deleteSession,
@@ -902,30 +966,28 @@ export function ChatView() {
     },
     onNotify: notify,
     onClose: () => setPaletteOpen(false),
-  };
-
-  const model = session.activeSession?.selection?.modelId ?? currentSelection?.modelId ?? '';
+  }), [
+    handleSessionCreate,
+    handleSessionSelect,
+    session,
+    handleSelectProviderModel,
+    availableProviderModels,
+    providerPickerValue,
+    openSettings,
+    handlePickProjectDir,
+    handleIndexRAG,
+    handleIndexAST,
+    refreshIndex,
+    notify,
+  ]);
 
   useEffect(() => {
     if (selectedProviderModel) {
       setMaxContext(selectedProviderModel.model.limits?.contextTokens ?? null);
       return;
     }
-    if (!model || !window.orchid?.config?.modelMetadata) {
-      // Hold previous maxContext while session is switching so the footer
-      // radial does not drop to 0% before the next model is known.
-      if (!chat.isSwitchingSession) setMaxContext(null);
-      return;
-    }
-    let cancelled = false;
-    window.orchid.config.modelMetadata(model).then((meta) => {
-      if (!cancelled) setMaxContext(meta?.max_input_tokens ?? null);
-    }).catch(() => {
-      // Keep previous window size on transient metadata failure.
-      if (!cancelled && !chat.isSwitchingSession) setMaxContext(null);
-    });
-    return () => { cancelled = true; };
-  }, [model, selectedProviderModel, chat.isSwitchingSession]);
+    if (!chat.isSwitchingSession) setMaxContext(null);
+  }, [selectedProviderModel, chat.isSwitchingSession]);
 
   const sessions =
     session.listState.status === 'ready' || session.listState.status === 'partial'
@@ -934,8 +996,8 @@ export function ChatView() {
 
   // Runtime shell tracks — CSS custom properties (exceptions.css .app-frame).
   const shellStyle = {
-    ['--orchid-shell-left' as string]: leftSidebarCollapsed ? '56px' : '260px',
-    ['--orchid-shell-right' as string]: sidebarOpen ? '300px' : '48px',
+    ['--orchid-shell-left' as string]: leftTrack,
+    ['--orchid-shell-right' as string]: rightTrack,
   };
 
   return (
@@ -943,46 +1005,39 @@ export function ChatView() {
       className="app-frame grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
       style={shellStyle}
     >
-      <LeftSidebar
+      <DeferredSurface isVisible={isVisible}>
+        <LeftSidebar
         activeSessionId={session.activeSession?.id ?? null}
         selectedProjectPath={
           session.activeSession?.cwd ??
           (session.workspace?.status === 'valid' ? session.workspace.cwd : null)
         }
         isCollapsed={leftSidebarCollapsed}
+        isOverlay={leftOverlay}
         onOpenSettings={openSettings}
-        onPickProjectDir={() => {
-          void handlePickProjectDir();
-        }}
+        onPickProjectDir={handlePickProjectDirClick}
         projectPickerCreatesDraft={Boolean(session.activeSession?.chains.length)}
         onRefreshSessions={session.refresh}
-        onSessionCreate={() => {
-          void handleSessionCreate();
-        }}
-        onProjectSessionCreate={(projectDir) => {
-          void handleProjectSessionCreate(projectDir);
-        }}
-        onProjectSelect={(projectDir) => {
-          void handleProjectSelect(projectDir);
-        }}
+        onSessionCreate={handleSessionCreateClick}
+        onProjectSessionCreate={handleProjectSessionCreateClick}
+        onProjectSelect={handleProjectSelect}
         onSessionDelete={handleSessionDelete}
         onSessionSelect={handleSessionSelect}
         onSessionRename={handleSessionRename}
         activities={activity.activities}
-        onStopSession={(sessionId) => {
-          void chat.stop(sessionId);
-        }}
+        onStopSession={handleStopSession}
         onToggle={toggleLeftSidebar}
         sessionListState={session.listState}
         workspace={session.workspace}
-      />
+        />
+      </DeferredSurface>
 
       <main className="main-pane min-h-0 min-w-0 overflow-hidden">
         {toast && (
           <Alert
             tone={toast.severity as AlertTone}
             variant="soft"
-            className={`command-toast command-toast-${toast.severity} py-2 text-sm`}
+            className={`command-toast command-toast-${toast.severity} orchid-state-enter py-2 text-sm`}
             role="status"
             aria-live="polite"
             action={
@@ -994,6 +1049,29 @@ export function ChatView() {
             <span className="command-toast-message min-w-0 flex-1">{toast.message}</span>
           </Alert>
         )}
+        {projectConfigDir ? (
+          <Suspense
+            fallback={(
+              <StateMessage
+                kind="loading"
+                title="Loading project settings…"
+                className="min-h-0 flex-1"
+                role="status"
+                aria-live="polite"
+              />
+            )}
+          >
+            <ProjectConfigView
+              projectDir={projectConfigDir}
+              onNewChat={(dir) => {
+                setProjectConfigDir(null);
+                void handleProjectSessionCreate(dir);
+              }}
+              onClose={() => setProjectConfigDir(null)}
+            />
+          </Suspense>
+        ) : (
+          <>
         <SessionTabBar
           openSessionIds={tabs.snapshot.openSessionIds}
           focusedSessionId={tabs.snapshot.focusedSessionId}
@@ -1010,17 +1088,10 @@ export function ChatView() {
               ? session.workspace.cwd.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? null
               : null
           }
-          onSelect={(id) => {
-            setDraftTabVisible(false);
-            void handleSessionSelect(id);
-          }}
-          onSelectDraft={() => {
-            void enterDraftMode();
-          }}
+          onSelect={handleTabSelect}
+          onSelectDraft={handleSelectDraftTab}
           onClose={requestCloseTab}
-          onCloseDraft={() => {
-            void leaveDraftToOpenTab();
-          }}
+          onCloseDraft={handleCloseDraftTab}
           onRename={handleSessionRename}
         />
         <SessionHeader
@@ -1030,13 +1101,13 @@ export function ChatView() {
         {closeConfirmId ? (
           <div
             ref={closeConfirmRef}
-            className="session-tab-confirm"
+            className="session-tab-confirm orchid-overlay-enter"
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="session-tab-confirm-title"
             aria-describedby="session-tab-confirm-desc"
           >
-            <div className="session-tab-confirm-card border border-base-300 bg-base-100 shadow-lg">
+            <div className="session-tab-confirm-card orchid-dialog-enter border border-base-300 bg-base-100 shadow-lg">
               <p id="session-tab-confirm-title" className="session-tab-confirm-text font-semibold">
                 Close running session tab?
               </p>
@@ -1069,36 +1140,34 @@ export function ChatView() {
         ) : null}
         <div
           ref={chatContentRef}
-          className={contentMode === 'subagents' ? 'orchid-chat-content-preserved orchid-chat-content-hidden' : 'orchid-chat-content-preserved'}
+          className={contentMode === 'subagents' ? 'orchid-chat-content-preserved orchid-chat-content-hidden' : 'orchid-chat-content-preserved orchid-view-enter'}
           aria-hidden={contentMode === 'subagents' ? true : undefined}
         >
-        <ChatStream
-          messages={chat.messages}
-          streamingContent={chat.streamingContent}
-          toolBlocks={chat.toolBlocks}
-          streamSegments={chat.streamSegments}
-          status={chat.status}
-          error={chat.error}
-          usage={chat.usage}
-          currentTurnUsage={chat.currentTurnUsage}
-          subagents={subagents.subagents}
-          sessionChains={session.activeSession?.chains ?? []}
-          sessionId={session.activeSession?.id ?? null}
-          onClearError={chat.clearError}
-          onOpenSettings={openSettings}
-          onPickProjectDir={
-            workspaceBound
-              ? undefined
-              : () => {
-                  void handlePickProjectDir();
-                }
-          }
-          workspaceUnbound={!workspaceBound}
-          onRetry={handleRetry}
-          streamStartTime={chat.streamStartTime}
-          interrupted={chat.interrupted}
-          alwaysExpandToolGroups={alwaysExpandToolGroups}
-        />
+        <DeferredSurface isVisible={isVisible}>
+          <ChatStream
+            isVisible={isVisible}
+            messages={chat.messages}
+            streamingContent={chat.streamingContent}
+            toolBlocks={chat.toolBlocks}
+            streamSegments={chat.streamSegments}
+            streamRevision={chat.streamRevision}
+            status={chat.status}
+            error={chat.error}
+            usage={chat.usage}
+            currentTurnUsage={chat.currentTurnUsage}
+            subagents={subagents.subagents}
+            sessionChains={session.activeSession?.chains ?? []}
+            sessionId={session.activeSession?.id ?? null}
+            onClearError={chat.clearError}
+            onOpenSettings={openSettings}
+            onPickProjectDir={workspaceBound ? undefined : handlePickProjectDirClick}
+            workspaceUnbound={!workspaceBound}
+            onRetry={handleRetry}
+            streamStartTime={chat.streamStartTime}
+            interrupted={chat.interrupted}
+            alwaysExpandToolGroups={alwaysExpandToolGroups}
+          />
+        </DeferredSurface>
         <MessageQueue
           queue={messageQueue.queue}
           editingId={messageQueue.editingId}
@@ -1129,59 +1198,79 @@ export function ChatView() {
           workspaceBound={workspaceBound}
           providerAvailable={providerAvailable}
           modelSelected={modelSelected}
-          onOpenProviders={() => {
-            window.dispatchEvent(new CustomEvent('orchid:open-settings', { detail: { tab: 'providers' } }));
-          }}
-          onPickProjectDir={() => {
-            void handlePickProjectDir();
-          }}
-          isViewActive={contentMode === 'subagents'}
+          onOpenProviders={handleOpenProviders}
+          onPickProjectDir={handlePickProjectDirClick}
+          isViewActive={!isVisible || contentMode === 'subagents'}
         />
-        <Footer
-          streamStartTime={chat.streamStartTime}
-          isStreaming={chat.status === 'streaming'}
-          interruptState={chat.interruptState}
+        <DeferredSurface isVisible={isVisible}>
+          <Footer
+            isVisible={isVisible}
+            streamStartTime={chat.streamStartTime}
+            isStreaming={chat.status === 'streaming'}
+            interruptState={chat.interruptState}
+            usage={chat.usage}
+            maxContext={maxContext}
+            messages={chat.messages}
+            streamingThinkingChars={Math.floor(chat.streamingThinking.length / 500) * 500 || undefined}
+            model={providerPickerValue}
+            modelLabels={providerModelLabels}
+            modelDetails={providerModelDetails}
+            commandContext={commandContext}
+            sessionId={session.activeSession?.id ?? null}
+          />
+        </DeferredSurface>
+        </div>
+        {contentMode === 'subagents' ? (
+          <div className="orchid-view-enter flex min-h-0 flex-1 flex-col">
+            <Suspense
+              fallback={(
+                <StateMessage
+                  kind="loading"
+                  title="Loading subagent view…"
+                  className="min-h-0 flex-1"
+                  role="status"
+                  aria-live="polite"
+                />
+              )}
+            >
+            <DeferredSurface isVisible={isVisible}>
+              <SubagentView subagents={subagents} openRequest={subagentOpenRequest} onBackToChat={() => setContentMode('chat')} />
+            </DeferredSurface>
+            </Suspense>
+          </div>
+        ) : null}
+          </>
+        )}
+      </main>
+
+      <DeferredSurface isVisible={isVisible}>
+        <Sidebar
+          isOpen={sidebarOpen}
+          isOverlay={rightOverlay}
+          onToggle={toggleSidebar}
+          subagentState={subagents.state}
+          onRefreshSubagents={subagents.refresh}
+          selectedSubagentId={subagents.selectedId}
+          onSelectSubagent={subagents.select}
+          getSubagentDetail={subagents.getDetail}
+          onOpenSubagentView={openSubagentView}
+          todoState={todos.state}
+          onRefreshTodos={todos.refresh}
+          mcpServers={mcpServers}
+          ragStatus={ragStatus}
+          astStatus={astStatus}
+          onIndexRAG={handleIndexRAG}
+          onIndexAST={handleIndexAST}
+          onRefreshIndex={refreshIndex}
           usage={chat.usage}
+          cumulativeUsage={chat.cumulativeUsage}
           maxContext={maxContext}
           messages={chat.messages}
           streamingThinkingChars={Math.floor(chat.streamingThinking.length / 500) * 500 || undefined}
-          model={providerPickerValue}
-          modelLabels={providerModelLabels}
-          modelDetails={providerModelDetails}
-          commandContext={commandContext}
-          sessionId={session.activeSession?.id ?? null}
+          focusSection={inspectorFocusSection}
+          onFocusSectionConsumed={handleFocusSectionConsumed}
         />
-        </div>
-        {contentMode === 'subagents' ? (
-          <SubagentView subagents={subagents} openRequest={subagentOpenRequest} onBackToChat={() => setContentMode('chat')} />
-        ) : null}
-      </main>
-
-      <Sidebar
-        isOpen={sidebarOpen}
-        onToggle={toggleSidebar}
-        subagentState={subagents.state}
-        onRefreshSubagents={subagents.refresh}
-        selectedSubagentId={subagents.selectedId}
-        onSelectSubagent={subagents.select}
-        getSubagentDetail={subagents.getDetail}
-        onOpenSubagentView={openSubagentView}
-        todoState={todos.state}
-        onRefreshTodos={todos.refresh}
-        mcpServers={mcpServers}
-        ragStatus={ragStatus}
-        astStatus={astStatus}
-        onIndexRAG={handleIndexRAG}
-        onIndexAST={handleIndexAST}
-        onRefreshIndex={refreshIndex}
-        usage={chat.usage}
-        cumulativeUsage={chat.cumulativeUsage}
-        maxContext={maxContext}
-        messages={chat.messages}
-        streamingThinkingChars={Math.floor(chat.streamingThinking.length / 500) * 500 || undefined}
-        focusSection={inspectorFocusSection}
-        onFocusSectionConsumed={() => setInspectorFocusSection(null)}
-      />
+      </DeferredSurface>
 
       <CommandPalette
         isOpen={paletteOpen}

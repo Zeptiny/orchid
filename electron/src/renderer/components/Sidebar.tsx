@@ -2,7 +2,7 @@
  * Sidebar — right inspector panel (Todos, Subagents, Context, Usage, Index, MCP).
  * Iteration 012 mock-aligned collapse blocks.
  */
-import { useEffect, useState, type ReactNode } from 'react';
+import { memo, useEffect, useState, type ReactNode } from 'react';
 import type {
   MCPServerStatus,
   MCPServerStatusValue,
@@ -27,6 +27,7 @@ import {
 import { formatUsageSummary } from '../utils/format-usage';
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
+import { CollapsibleRegion } from './ui/CollapsibleRegion';
 import { DropdownMenu } from './ui/DropdownMenu';
 import { IconButton } from './ui/IconButton';
 import { Spinner } from './ui/Spinner';
@@ -35,6 +36,7 @@ import { StatusBadge } from './ui/StatusBadge';
 
 interface SidebarProps {
   isOpen: boolean;
+  isOverlay?: boolean;
   onToggle: () => void;
   subagentState: SubagentListState;
   onRefreshSubagents: () => void;
@@ -64,8 +66,9 @@ interface SidebarProps {
   onFocusSectionConsumed?: () => void;
 }
 
-export function Sidebar({
+export const Sidebar = memo(function Sidebar({
   isOpen,
+  isOverlay = false,
   onToggle,
   subagentState,
   onRefreshSubagents,
@@ -129,7 +132,10 @@ export function Sidebar({
   }
 
   return (
-    <aside className="right-panel bg-base-200" aria-label="Inspector">
+    <aside
+      className={isOverlay ? 'right-panel right-panel-overlay orchid-view-enter bg-base-200' : 'right-panel bg-base-200'}
+      aria-label="Inspector"
+    >
       <div id="right-sidebar-body" className="panel-body">
         <div className="right-panel-toolbar">
           <IconButton
@@ -225,7 +231,7 @@ export function Sidebar({
       </div>
     </aside>
   );
-}
+});
 
 // ── Mock-style Collapse Block ───────────────────────────────────────────────
 
@@ -285,22 +291,21 @@ function CollapseBlock({
             {badge}
           </span>
           <Icon
-            name={open ? 'chevronDown' : 'chevronRight'}
+            name="chevronDown"
             size={12}
-            className="shrink-0 text-base-content/40"
+            className={`orchid-disclosure-chevron shrink-0 text-base-content/40 ${open ? 'is-open' : ''}`}
           />
         </button>
       </div>
-      {open && (
+      <CollapsibleRegion open={open} id={contentId}>
         <div
-          id={contentId}
           className="mock-collapse-content"
           role="region"
           aria-labelledby={`${sectionId}-trigger`}
         >
           {children}
         </div>
-      )}
+      </CollapsibleRegion>
     </div>
   );
 }
@@ -352,7 +357,7 @@ export function SubagentsSection({
   onOpenView = () => {},
 }: SubagentsSectionProps) {
   if (state.status === 'loading') {
-    return <StateMessage kind="loading" className="py-4" title="Loading subagents…" />;
+    return <StateMessage kind="loading" className="inspector-empty py-4" title="Loading subagents…" />;
   }
 
   if (state.status === 'error') {
@@ -521,7 +526,7 @@ interface TodosSectionProps {
 
 function TodosSection({ state }: TodosSectionProps) {
   if (state.status === 'loading') {
-    return <StateMessage kind="loading" className="py-4" title="Loading todos…" />;
+    return <StateMessage kind="loading" className="inspector-empty py-4" title="Loading todos…" />;
   }
 
   if (state.status === 'error') {
@@ -825,17 +830,17 @@ function IndexProgressPanel({
   detail?: string;
 }) {
   if (!progress) {
-    return <div className="subtle">Indexing…</div>;
+    return <div className="subtle orchid-state-enter">Indexing…</div>;
   }
   if (progress.total === 0) {
     return (
-      <div className="subtle">
+      <div className="subtle orchid-state-enter">
         {progress.phase === 'discovering' ? 'Scanning project…' : 'Indexing…'}
       </div>
     );
   }
   return (
-    <div className="inspector-stack gap-0">
+    <div className="inspector-stack orchid-state-enter gap-0">
       <progress
         className="progress progress-primary h-1 w-full"
         value={progress.done}

@@ -558,30 +558,15 @@ const fileChangeAgentProjector: AgentProjector = (canonical, toolName = 'edit') 
   );
 };
 
-/** Max head/tail lines included in write agent projection (not full body). */
-const WRITE_AGENT_PREVIEW_LINES = 5;
-
 /**
- * Compact write preview for the agent: path/lines/bytes live in attributes;
- * body is optional head/tail only so large writes do not echo full content.
+ * Full write content for the agent: path/lines/bytes live in attributes;
+ * body is the complete written content.
  */
 function writeAgentPreviewBody(content: string, lineCount: number): string {
   if (content.length === 0 || lineCount === 0) {
     return '';
   }
-  // Preserve trailing empty segment only when content ends without newline so
-  // split length matches lineCount for non-newline-terminated files.
-  const rawLines = content.split('\n');
-  const lines = content.endsWith('\n') ? rawLines.slice(0, -1) : rawLines;
-  if (lines.length <= WRITE_AGENT_PREVIEW_LINES * 2) {
-    return xmlTextElement('preview', lines.join('\n'));
-  }
-  const head = lines.slice(0, WRITE_AGENT_PREVIEW_LINES).join('\n');
-  const tail = lines.slice(-WRITE_AGENT_PREVIEW_LINES).join('\n');
-  return [
-    xmlTextElement('head', head),
-    xmlTextElement('tail', tail),
-  ].join('\n');
+  return xmlTextElement('preview', content);
 }
 
 const fileWriteAgentProjector: AgentProjector = (canonical, toolName = 'write') => {

@@ -15,6 +15,7 @@ import type {
   ToolExecutionResult,
 } from './tool-result';
 import type { SubagentLiveProjection, SubagentRecord } from './subagent';
+import type { RiskClass, ToolScope } from './permission';
 import type {
   CustomConnectionModel,
   ModelSelection,
@@ -38,7 +39,6 @@ import type {
   SessionActivity,
   Config,
   ConfigDiagnostic,
-  ModelMetadata,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -48,6 +48,8 @@ import type {
   ASTIndexProgress,
   IndexRunState,
   RAGConfig,
+  PermissionModeValue,
+  PermissionRule,
 } from './ipc-boundary';
 
 export type {
@@ -68,7 +70,6 @@ export type {
   SessionActivity,
   Config,
   ConfigDiagnostic,
-  ModelMetadata,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -78,6 +79,8 @@ export type {
   ASTIndexProgress,
   IndexRunState,
   RAGConfig,
+  PermissionModeValue,
+  PermissionRule,
   UpdaterState,
   UpdateStatus,
 } from './ipc-boundary';
@@ -212,12 +215,16 @@ interface ChatEventIdentity {
 export interface ChatChunkEvent extends ChatEventIdentity {
   type: 'chunk';
   data: string;
+  /** Canonical identity shared by the live segment and persisted message. */
+  segmentId: string;
 }
 
 /** Reasoning/thinking stream delta (models that emit reasoning-delta). */
 export interface ChatThinkingEvent extends ChatEventIdentity {
   type: 'thinking';
   data: string;
+  /** Canonical identity shared by the live segment and persisted message. */
+  segmentId: string;
 }
 
 export interface ChatStateEvent extends ChatEventIdentity {
@@ -325,6 +332,7 @@ export type ConfigPatch = {
   read_line_limit?: number;
   grep_max_results?: number;
   directory_tree_depth?: number;
+  tool_worker_pool_size?: number;
   theme?: string;
   personality?: string;
   rag?: Partial<RAGConfig> & {
@@ -340,13 +348,64 @@ export type ConfigPatch = {
   llm_stream_retries?: number;
   background_command_idle_timeout?: number;
   max_tool_steps?: number;
+  permission_history_size?: number;
+  permissions?: ConfigPatchMap<PermissionRule>;
   default_project_dir?: string | null;
   always_expand_tool_groups?: boolean;
   has_completed_onboarding?: boolean;
+  command_max_output_bytes?: number;
+  tool_output_inline_threshold?: number;
+  approval_timeout?: number;
+  subagent_wait_timeout?: number;
+  web_fetch_timeout?: number;
+  web_fetch_max_body_bytes?: number;
+  web_fetch_user_agent?: string;
+  bg_prompt_max_entries?: number;
+  bg_prompt_tail_lines?: number;
+  bg_prompt_tail_chars?: number;
+  mcp_result_max_bytes?: number;
+  max_background_processes?: number;
+  bg_output_head_bytes?: number;
+  bg_output_tail_bytes?: number;
+  grep_per_file_timeout?: number;
+  read_output_long_poll_max?: number;
+  llm_retry_backoff_base?: number;
+  llm_retry_max_delay?: number;
 };
 
 export interface ConfigSaveMessage {
   updates: ConfigPatch;
+}
+
+export type PermissionConfigScope = 'global' | 'project';
+
+export interface PermissionConfigScopes {
+  global: Record<string, PermissionRule>;
+  project: Record<string, PermissionRule>;
+  projectDir: string | null;
+}
+
+export type PermissionConfigScopeSaveMessage =
+  | {
+      scope: 'global';
+      updates: ConfigPatchMap<PermissionRule>;
+      expectedProjectDir?: never;
+    }
+  | {
+      scope: 'project';
+      updates: ConfigPatchMap<PermissionRule>;
+      /** Canonical project observed when this draft was created. */
+      expectedProjectDir: string;
+    };
+
+export interface ProjectConfigReadResult {
+  projectDir: string;
+  overrides: Record<string, unknown>;
+}
+
+export interface ProjectConfigSaveMessage {
+  projectDir: string;
+  updates: Record<string, unknown>;
 }
 
 // ── Provider API ─────────────────────────────────────────────────────────────
@@ -723,6 +782,71 @@ export interface AskQuestionSnapshot {
   questions: AskQuestionAskedEvent[];
 }
 
+// ── Permission API ───────────────────────────────────────────────────────────
+
+export interface PermissionApprovalRequestedEvent {
+  toolCallId: string;
+  sessionId: string;
+  toolName: string;
+  riskClass: RiskClass;
+  args: unknown;
+  cwd: string;
+  scope?: ToolScope;
+}
+
+export interface PermissionApprovalSettledEvent {
+  sessionId: string;
+  toolCallId: string;
+  result: {
+    decision: 'approved' | 'denied';
+    reason?: string;
+  };
+}
+
+export interface PermissionApprovalAnswerMessage {
+  toolCallId: string;
+  decision: 'approved' | 'denied';
+  reason?: string;
+}
+
+export interface PermissionSetSessionModeMessage {
+  mode: PermissionModeValue | null;
+  /** Session identity observed by the renderer before issuing this request. */
+  expectedSessionId: string | null;
+}
+
+export interface PermissionGetSessionModeMessage {
+  /** Session identity observed by the renderer before issuing this request. */
+  expectedSessionId: string | null;
+}
+
+export interface PermissionSessionModeResult {
+  ok: boolean;
+  sessionId: string | null;
+  mode: PermissionModeValue | null;
+}
+
+export interface PermissionSessionModeMutationResult {
+  ok: boolean;
+  sessionId: string | null;
+}
+
+export interface PermissionApprovalSnapshot {
+  approvals: Array<{
+    toolCallId: string;
+    sessionId: string;
+    toolName: string;
+    riskClass: RiskClass;
+    args: unknown;
+    cwd: string;
+    scope?: ToolScope;
+  }>;
+}
+
+export interface PermissionResult {
+  ok: boolean;
+}
+
 // ── RAG API ──────────────────────────────────────────────────────────────────
 
 export interface RAGIndexMessage {
@@ -764,9 +888,13 @@ export interface OrchidAPI {
     get: () => Promise<Config>;
     diagnostics: () => Promise<ConfigDiagnostic[]>;
     save: (updates: ConfigSaveMessage) => Promise<{ status: string }>;
-    modelMetadata: (modelId: string) => Promise<ModelMetadata>;
+    permissionScopes: () => Promise<PermissionConfigScopes>;
+    savePermissionScope: (message: PermissionConfigScopeSaveMessage) => Promise<{ status: string }>;
     /** List personality names loaded from `~/.orchid/personalities/*.md`. */
     listPersonalities: () => Promise<string[]>;
+    readProject: (projectDir: string) => Promise<ProjectConfigReadResult>;
+    saveProject: (message: ProjectConfigSaveMessage) => Promise<void>;
+    getHome: () => Promise<Config>;
   };
 
   providers: {
@@ -923,6 +1051,15 @@ export interface OrchidAPI {
     onAsked: (callback: (event: AskQuestionAskedEvent) => void) => () => void;
     onSettled: (callback: (event: AskQuestionSettledEvent) => void) => () => void;
   };
+
+  permission: {
+    snapshot: () => Promise<PermissionApprovalSnapshot>;
+    answer: (payload: PermissionApprovalAnswerMessage) => Promise<PermissionResult>;
+    setSessionMode: (payload: PermissionSetSessionModeMessage) => Promise<PermissionSessionModeMutationResult>;
+    getSessionMode: (payload: PermissionGetSessionModeMessage) => Promise<PermissionSessionModeResult>;
+    onApprovalRequested: (callback: (event: PermissionApprovalRequestedEvent) => void) => () => void;
+    onApprovalSettled: (callback: (event: PermissionApprovalSettledEvent) => void) => () => void;
+  };
 }
 
 // ── IPC Channel names ────────────────────────────────────────────────────────
@@ -951,8 +1088,12 @@ export const IPC_CHANNELS = {
   CONFIG_GET: 'config:get',
   CONFIG_DIAGNOSTICS: 'config:diagnostics',
   CONFIG_SAVE: 'config:save',
-  CONFIG_MODEL_METADATA: 'config:model_metadata',
+  CONFIG_PERMISSION_SCOPES: 'config:permission_scopes',
+  CONFIG_SAVE_PERMISSION_SCOPE: 'config:save_permission_scope',
   CONFIG_LIST_PERSONALITIES: 'config:list_personalities',
+  CONFIG_READ_PROJECT: 'config:read_project',
+  CONFIG_SAVE_PROJECT: 'config:save_project',
+  CONFIG_GET_HOME: 'config:get_home',
 
   // Providers — every response is redacted and every mutation is validated
   // in the main process. There is deliberately no generic credential-read API.
@@ -1052,6 +1193,14 @@ export const IPC_CHANNELS = {
   ASK_QUESTION_ANSWER: 'ask_question:answer',
   ASK_QUESTION_CANCEL: 'ask_question:cancel',
 
+  // Permission
+  PERMISSION_APPROVAL_REQUESTED: 'permission:approval_requested',
+  PERMISSION_APPROVAL_SETTLED: 'permission:approval_settled',
+  PERMISSION_APPROVAL_ANSWER: 'permission:approval_answer',
+  PERMISSION_SNAPSHOT: 'permission:snapshot',
+  PERMISSION_SET_SESSION_MODE: 'permission:set_session_mode',
+  PERMISSION_GET_SESSION_MODE: 'permission:get_session_mode',
+
   // Updater
   UPDATER_STATUS_UPDATE: 'updater:status_update',
   UPDATER_PROGRESS: 'updater:progress',
@@ -1072,8 +1221,12 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.CONFIG_GET,
   IPC_CHANNELS.CONFIG_DIAGNOSTICS,
   IPC_CHANNELS.CONFIG_SAVE,
-  IPC_CHANNELS.CONFIG_MODEL_METADATA,
+  IPC_CHANNELS.CONFIG_PERMISSION_SCOPES,
+  IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE,
   IPC_CHANNELS.CONFIG_LIST_PERSONALITIES,
+  IPC_CHANNELS.CONFIG_READ_PROJECT,
+  IPC_CHANNELS.CONFIG_SAVE_PROJECT,
+  IPC_CHANNELS.CONFIG_GET_HOME,
   IPC_CHANNELS.PROVIDERS_LIST,
   IPC_CHANNELS.PROVIDERS_CREATE,
   IPC_CHANNELS.PROVIDERS_UPDATE,
@@ -1126,6 +1279,10 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.ASK_QUESTION_SNAPSHOT,
   IPC_CHANNELS.ASK_QUESTION_ANSWER,
   IPC_CHANNELS.ASK_QUESTION_CANCEL,
+  IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER,
+  IPC_CHANNELS.PERMISSION_SNAPSHOT,
+  IPC_CHANNELS.PERMISSION_SET_SESSION_MODE,
+  IPC_CHANNELS.PERMISSION_GET_SESSION_MODE,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────
@@ -1153,6 +1310,8 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.AST_PROGRESS,
   IPC_CHANNELS.ASK_QUESTION_ASKED,
   IPC_CHANNELS.ASK_QUESTION_SETTLED,
+  IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED,
+  IPC_CHANNELS.PERMISSION_APPROVAL_SETTLED,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Window type augmentation (renderer-side) ─────────────────────────────────

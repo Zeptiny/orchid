@@ -1,4 +1,6 @@
 import {
+  memo,
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -13,6 +15,10 @@ import type {
 import type { WorkspaceInfo } from '../../shared/types/ipc';
 import type { SessionListState } from '../hooks/useSession';
 import { formatShortcut, useRovingListIndex } from '../keyboard';
+import {
+  sessionActivityPresentation,
+  sessionActivitySummaryPresentation,
+} from '../utils/session-activity-presentation';
 import {
   countProjectActivity,
   filterSessionsByQuery,
@@ -33,6 +39,7 @@ import { SessionNameEditor } from './SessionNameEditor';
 
 interface LeftSidebarProps {
   isCollapsed: boolean;
+  isOverlay?: boolean;
   onToggle: () => void;
   sessionListState: SessionListState;
   activeSessionId: string | null;
@@ -73,8 +80,9 @@ interface LeftSidebarProps {
  * Project groups are always visible, show recent work first, and expand
  * independently; search remains global and session titles never scroll.
  */
-export function LeftSidebar({
+export const LeftSidebar = memo(function LeftSidebar({
   isCollapsed,
+  isOverlay = false,
   onToggle,
   sessionListState,
   activeSessionId,
@@ -113,6 +121,7 @@ export function LeftSidebar({
     () => groupSessionsByProject(filterSessionsByQuery(sessions, query)),
     [sessions, query],
   );
+  const activitySummary = sessionActivitySummaryPresentation(activities);
 
   if (isCollapsed) {
     return (
@@ -128,13 +137,6 @@ export function LeftSidebar({
           aria-expanded={false}
           aria-controls="left-sidebar-body"
         />
-        <IconButton
-          label={`New session (${formatShortcut('session.new')})`}
-          icon="plus"
-          size="sm"
-          iconSize={16}
-          onClick={onSessionCreate}
-        />
         {onPickProjectDir && (
           <IconButton
             label={
@@ -147,17 +149,20 @@ export function LeftSidebar({
             onClick={onPickProjectDir}
           />
         )}
-        {activities.length > 0 && (
+        {activitySummary && (
           <Button
             variant="ghost"
             size="sm"
             shape="circle"
             className="left-panel-activity-count"
             onClick={onToggle}
-            title={`${activities.length} session${activities.length === 1 ? '' : 's'} need attention or are running`}
-            aria-label={`${activities.length} session${activities.length === 1 ? '' : 's'} need attention or are running`}
+            title={activitySummary.label}
+            aria-label={activitySummary.label}
           >
-            <span className="status status-xs status-warning" aria-hidden />
+            <span
+              className={`status status-xs ${activitySummary.statusClass}`}
+              aria-hidden
+            />
           </Button>
         )}
         <div className="left-panel-collapsed-spacer" />
@@ -173,7 +178,10 @@ export function LeftSidebar({
   }
 
   return (
-    <aside className="left-panel bg-base-200" aria-label="Sessions">
+    <aside
+      className={isOverlay ? 'left-panel left-panel-overlay orchid-view-enter bg-base-200' : 'left-panel bg-base-200'}
+      aria-label="Sessions"
+    >
       <SectionHeader
         className="panel-header"
         title={<h1 className="title truncate">Orchid</h1>}
@@ -206,17 +214,6 @@ export function LeftSidebar({
           onNewChatInProject={onSessionCreate}
           projectPickerCreatesDraft={projectPickerCreatesDraft}
         />
-
-        <Button
-          variant="ghost"
-          size="sm"
-          className="session-new-btn"
-          onClick={onSessionCreate}
-          title={`New session (${formatShortcut('session.new')})`}
-        >
-          <Icon name="plus" size={14} />
-          <span>New Session</span>
-        </Button>
 
         <div className="session-search">
           <Icon name="search" size={12} className="session-search-icon" />
@@ -265,7 +262,7 @@ export function LeftSidebar({
       </div>
     </aside>
   );
-}
+});
 
 // ── Workspace chip ───────────────────────────────────────────────────────────
 
@@ -643,10 +640,8 @@ function ProjectSessionList({
                       keyboardSessionActive && index === activeIndex
                     }
                     showPathHint={false}
-                    onSelect={(id) => {
-                      setActiveIndex(index);
-                      onSelect(id);
-                    }}
+                    onActivate={setActiveIndex}
+                    onSelect={onSelect}
                     onDelete={onDelete}
                     onRename={onRename}
                   />
@@ -684,7 +679,7 @@ function ProjectSessionList({
   );
 }
 
-function SessionRow({
+const SessionRow = memo(function SessionRow({
   session,
   activity,
   optionId,
@@ -692,6 +687,7 @@ function SessionRow({
   isActive,
   isKeyboardActive,
   showPathHint,
+  onActivate,
   onSelect,
   onDelete,
   onRename,
@@ -703,6 +699,7 @@ function SessionRow({
   isActive: boolean;
   isKeyboardActive: boolean;
   showPathHint: boolean;
+  onActivate: (index: number) => void;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onRename?: (id: string, name: string) => void | Promise<void>;
@@ -710,6 +707,14 @@ function SessionRow({
   const pathHint = session.cwd
     ? truncatePathDisplay(session.cwd, 24)
     : 'Unknown path';
+  const activityStatus = activity
+    ? sessionActivityPresentation(activity)
+    : null;
+
+  const handleSelect = useCallback(() => {
+    onActivate(sessionIndex);
+    onSelect(session.id);
+  }, [onActivate, onSelect, sessionIndex, session.id]);
 
   return (
     <div
@@ -725,32 +730,12 @@ function SessionRow({
           isKeyboardActive ? 'session-item-keyboard' : ''
         }`}
         title={session.cwd ?? session.name}
-        onClick={() => onSelect(session.id)}
+        onClick={handleSelect}
       >
-        {activity && (
+        {activityStatus?.visible && (
           <span
-            className={`status status-xs ${
-              activity.state === 'needs_attention'
-                ? 'status-error'
-                : activity.state === 'working'
-                  ? 'status-warning'
-                  : activity.state === 'waiting'
-                    ? 'status-info'
-                    : activity.unread
-                      ? 'status-success'
-                      : 'status-neutral'
-            }`}
-            title={
-              activity.state === 'needs_attention'
-                ? 'Needs attention'
-                : activity.state === 'working'
-                  ? 'Working'
-                  : activity.state === 'waiting'
-                    ? 'Waiting'
-                    : activity.unread
-                      ? 'Completed unread'
-                      : 'Idle'
-            }
+            className={`status status-xs ${activityStatus.statusClass}`}
+            title={activityStatus.label}
           />
         )}
         <span className="session-item-main min-w-0">
@@ -759,8 +744,8 @@ function SessionRow({
               name={session.name}
               className="session-item-name truncate"
               title={`${session.name} (double-click or F2 to rename)`}
-              onSelect={() => onSelect(session.id)}
-              onBeginEdit={() => onSelect(session.id)}
+              onSelect={handleSelect}
+              onBeginEdit={handleSelect}
               onRename={(next) => onRename(session.id, next)}
             />
           ) : (
@@ -790,4 +775,4 @@ function SessionRow({
       </Button>
     </div>
   );
-}
+});

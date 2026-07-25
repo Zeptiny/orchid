@@ -11,12 +11,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { sleep } from '../../utils/async';
 import { HeadTailBuffer } from './head-tail-buffer';
+import { getConfig } from '../../config/loader';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const MAX_ENTRIES = 64;
 const PROTECT_COUNT = 8; // most-recent entries protected from LRU eviction
 
 const ENV_SUPPRESSION: Record<string, string> = {
@@ -370,18 +370,27 @@ export class BackgroundProcessStore {
   // -- LRU eviction --------------------------------------------------------
 
   pruneIfNeeded(): void {
-    if (this._entries.size <= MAX_ENTRIES) return;
+    let maxEntries: number;
+    try {
+      maxEntries = getConfig().max_background_processes;
+    } catch {
+      maxEntries = 64;
+    }
+    if (this._entries.size <= maxEntries) return;
 
-    // Sort by createdAt (oldest first), protect the newest N
+    // Sort by createdAt (oldest first), protect the newest N. Cap the protected
+    // count at maxEntries so limits below PROTECT_COUNT can still evict down to
+    // the configured maximum instead of stalling above it.
     const sortedIds = Array.from(this._entries.entries())
       .sort(([, a], [, b]) => a.createdAt - b.createdAt)
       .map(([id]) => id);
 
-    const evictable = sortedIds.length > PROTECT_COUNT
-      ? sortedIds.slice(0, -PROTECT_COUNT)
+    const protectCount = Math.min(PROTECT_COUNT, maxEntries);
+    const evictable = sortedIds.length > protectCount
+      ? sortedIds.slice(0, -protectCount)
       : [];
 
-    while (this._entries.size > MAX_ENTRIES && evictable.length > 0) {
+    while (this._entries.size > maxEntries && evictable.length > 0) {
       const victimId = evictable.shift()!;
       this._terminateAndRemove(victimId);
     }

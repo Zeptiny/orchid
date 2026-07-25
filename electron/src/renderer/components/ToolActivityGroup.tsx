@@ -16,6 +16,7 @@ import type { SubagentTitleRecord } from '../utils/tool-title';
 import { Icon } from './Icon';
 import { MessageWidget } from './MessageWidget';
 import { ToolCallBlock } from './ToolCallBlock';
+import { CollapsibleRegion } from './ui/CollapsibleRegion';
 import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
 
@@ -113,12 +114,16 @@ export function ToolActivityGroup({
           </StatusBadge>
         </span>
         <span className="orchid-tool-activity-title-right">
-          <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
+          <Icon
+            name="chevronDown"
+            size={12}
+            className={`orchid-disclosure-chevron ${expanded ? 'is-open' : ''}`}
+          />
         </span>
       </button>
 
-      {expanded && (
-        <div id={panelId} className="orchid-tool-activity-body">
+      <CollapsibleRegion open={expanded} id={panelId}>
+        <div className="orchid-tool-activity-body">
           <div className="tool-activity-group-children orchid-tool-activity-children">
             {items.map((child, i) => {
               if (child.kind === 'tool') {
@@ -140,7 +145,7 @@ export function ToolActivityGroup({
             })}
           </div>
         </div>
-      )}
+      </CollapsibleRegion>
     </div>
   );
 }

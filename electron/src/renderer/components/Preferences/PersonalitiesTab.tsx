@@ -23,6 +23,7 @@ import { ScopeBadge, ScopeToggle, type ScopeFilter } from './ScopeToggle';
 export interface PersonalitiesTabProps {
   data: DefinitionsListResult;
   onReload: () => Promise<void>;
+  lockedScope?: 'global' | 'project';
 }
 
 interface PersonalityForm {
@@ -49,7 +50,7 @@ function emptyForm(scope: DefinitionScope): PersonalityForm {
   };
 }
 
-export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
+export function PersonalitiesTab({ data, onReload, lockedScope }: PersonalitiesTabProps) {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<ScopeFilter>('all');
   const [editingKey, setEditingKey] = useState<string | null>(null);
@@ -71,8 +72,8 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
   const projectDir = data.projectDir;
   const projectAvailable = projectDir != null;
 
-  const effectiveFilter: ScopeFilter =
-    filter === 'project' && !projectAvailable ? 'all' : filter;
+  const effectiveFilter: ScopeFilter = lockedScope
+    ?? (filter === 'project' && !projectAvailable ? 'all' : filter);
 
   const visible = useMemo(() => {
     if (effectiveFilter === 'all') return items;
@@ -236,14 +237,16 @@ export function PersonalitiesTab({ data, onReload }: PersonalitiesTabProps) {
           }
         />
 
-        <div className="config-scope-bar">
-          <ScopeToggle
-            value={effectiveFilter}
-            onChange={setFilter}
-            projectAvailable={projectAvailable}
-            projectDir={projectDir}
-          />
-        </div>
+        {!lockedScope && (
+          <div className="config-scope-bar">
+            <ScopeToggle
+              value={effectiveFilter}
+              onChange={setFilter}
+              projectAvailable={projectAvailable}
+              projectDir={projectDir}
+            />
+          </div>
+        )}
 
         {error && (
           <Alert tone="error" className="py-2 text-sm mb-3" action={

@@ -73,6 +73,8 @@ export type SubagentStreamRunner = (params: {
   selection: ModelSelection | null;
   abortSignal: AbortSignal;
   sessionId?: string;
+  /** Originating renderer window frozen by the parent turn. */
+  windowId?: string;
   /** Frozen parent-turn workspace cwd (do not re-resolve live session). */
   cwd?: string;
   /** This subagent's scope id (record.id) for todos / bg / prompt isolation. */
@@ -90,8 +92,24 @@ export type SubagentChangeListener = (records: readonly SubagentRecord[]) => voi
 export type SubagentLiveChangeListener = (change: SubagentLiveChange) => void;
 type SubagentWaiterReason = 'state-change' | 'flush';
 
-/** Default max time `wait_for_subagent` will block (5 minutes). */
-export const DEFAULT_WAIT_TIMEOUT_MS = 300_000;
+/**
+ * Resolve the default `wait_for_subagent` budget in milliseconds.
+ *
+ * Source: `subagent_wait_timeout` (seconds) from the live process-wide config
+ * (`getConfig()`), multiplied by 1000. Falls back to 300_000 ms (300s) when the
+ * config is not loaded. Turn-scoped callers should prefer the frozen project
+ * runtime config via `getToolConfig(ctx)` so a mid-turn settings change cannot
+ * alter an in-flight wait.
+ */
+export function getDefaultWaitTimeoutMs(): number {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getConfig } = require('../config/loader') as typeof import('../config/loader');
+    return getConfig().subagent_wait_timeout * 1000;
+  } catch {
+    return 300_000;
+  }
+}
 
 /**
  * Thrown by `SubagentManager.wait` when the wait budget elapses while any
@@ -152,6 +170,8 @@ export interface SubagentRecord {
    * (global manager + getActive() would otherwise attach chains to the new session).
    */
   readonly sessionId: string | null;
+  /** Runtime-only owner window used for approval delivery. */
+  readonly windowId: string | null;
   readonly projectRuntime?: ProjectRuntime;
   /** Abort controller for the in-flight run. */
   abortController: AbortController | null;
@@ -232,13 +252,15 @@ export class SubagentManager {
       selection?: ModelSelection | null;
       parentChainIndex?: number;
       sessionId?: string;
+      /** Originating renderer window frozen by the parent turn. */
+      windowId?: string;
       /** Frozen parent-turn workspace cwd for tools/prompt. */
       cwd?: string;
       /** Immutable parent project snapshot. */
       projectRuntime?: ProjectRuntime;
     } = {},
   ): SubagentRecord {
-    const id = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const id = `subagent-${randomUUID()}`;
 
     const userMessage = makeUserMessage(task);
     const selection = options.selection ?? null;
@@ -262,6 +284,7 @@ export class SubagentManager {
       selection,
       parentChainIndex: options.parentChainIndex ?? null,
       sessionId: options.sessionId ?? null,
+      windowId: options.windowId ?? null,
       projectRuntime: options.projectRuntime,
       abortController: null,
       _resolveWait: [],
@@ -718,6 +741,7 @@ export class SubagentManager {
         selection: record.selection,
         abortSignal: abort.signal,
         sessionId: record.sessionId ?? undefined,
+        windowId: record.windowId ?? undefined,
         cwd,
         agentScopeId: record.id,
         chainId: record.chain?.id,

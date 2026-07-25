@@ -6,7 +6,7 @@
  */
 import { z } from 'zod';
 import { modelSelectionSchema } from '../../shared/types/provider';
-import { configSchema } from '../config/schema';
+import { configSchema, permissionRuleSchema } from '../config/schema';
 
 // ── Chat ─────────────────────────────────────────────────────────────────────
 
@@ -90,6 +90,45 @@ export const configSaveSchema = z.object({
     }
   }
 });
+
+/**
+ * Project-scoped config:save payload — a verified `projectDir` plus a
+ * free-form updates map. Allowed-key filtering and merged-structure
+ * validation happen in the handler after the workspace is verified.
+ */
+export const configSaveProjectSchema = z.object({
+  projectDir: z.string().min(1),
+  updates: z.record(z.unknown()),
+});
+
+/** Project-scoped config:read payload — a bare non-empty `projectDir`. */
+export const configReadProjectSchema = z.string().min(1);
+
+const permissionUpdatesSchema = z.record(z.string(), permissionRuleSchema.nullable())
+  .superRefine((updates, ctx) => {
+    for (const key of Object.keys(updates)) {
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Unsafe permission key: ${key}`,
+          path: [key],
+        });
+      }
+    }
+  });
+
+export const permissionConfigScopeSaveSchema = z.discriminatedUnion('scope', [
+  z.object({
+    scope: z.literal('global'),
+    updates: permissionUpdatesSchema,
+    expectedProjectDir: z.never().optional(),
+  }).strict(),
+  z.object({
+    scope: z.literal('project'),
+    updates: permissionUpdatesSchema,
+    expectedProjectDir: z.string().min(1),
+  }).strict(),
+]);
 
 // ── Session ──────────────────────────────────────────────────────────────────
 

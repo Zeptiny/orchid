@@ -16,6 +16,7 @@ import {
   listSavedSessions,
   deleteSession,
   updateChain,
+  updateSessionFields,
   isValidSessionId,
   _clearDbCache,
 } from '../../src/main/session/storage';
@@ -79,6 +80,7 @@ function makeSession(overrides: Partial<Session> & { model?: string } = {}): Ses
     subagentChains: overrides.subagentChains ?? [],
     todoStore: overrides.todoStore ?? { tasks: [] },
     reasoningEffortOverride: overrides.reasoningEffortOverride ?? null,
+    permissionMode: overrides.permissionMode ?? null,
   };
 }
 
@@ -315,6 +317,70 @@ describe('saveSession → loadSession round-trip', () => {
   it('load returns null for invalid session ID', () => {
     expect(loadSession('not-a-uuid', storageOpts)).toBeNull();
     expect(loadSession('', storageOpts)).toBeNull();
+  });
+
+  it('durably interrupts active chains once on restart and clears their active pointer', () => {
+    const sessionId = 'a2929292-2929-4292-8292-292929292929';
+    const first = makeChain(sessionId, { id: 'recovery-first', status: ChainStatus.ACTIVE });
+    const second = makeChain(sessionId, { id: 'recovery-second', status: ChainStatus.ACTIVE });
+    saveSession(
+      makeSession({
+        id: sessionId,
+        chains: [first, second],
+        activeChainId: second.id,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+      storageOpts,
+    );
+
+    const firstLoad = loadSession(sessionId, storageOpts)!;
+    const recoveredAt = firstLoad.chains[0]!.endTime;
+    expect(firstLoad.activeChainId).toBeNull();
+    expect(firstLoad.updatedAt).toBe(recoveredAt);
+    expect(firstLoad.chains.map((chain) => chain.status)).toEqual([
+      ChainStatus.INTERRUPTED,
+      ChainStatus.INTERRUPTED,
+    ]);
+    expect(firstLoad.chains.map((chain) => chain.endTime)).toEqual([recoveredAt, recoveredAt]);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    const persistedAfterFirstLoad = db.prepare(`
+      SELECT s.active_chain_id, s.updated_at, c.status, c.end_time
+      FROM sessions s
+      JOIN chains c ON c.session_id = s.id
+      WHERE s.id = ?
+      ORDER BY c.ordinal
+    `).all(sessionId) as Array<{
+      active_chain_id: string | null;
+      updated_at: string;
+      status: string;
+      end_time: string | null;
+    }>;
+    db.close();
+    expect(persistedAfterFirstLoad).toEqual([
+      {
+        active_chain_id: null,
+        updated_at: recoveredAt,
+        status: ChainStatus.INTERRUPTED,
+        end_time: recoveredAt,
+      },
+      {
+        active_chain_id: null,
+        updated_at: recoveredAt,
+        status: ChainStatus.INTERRUPTED,
+        end_time: recoveredAt,
+      },
+    ]);
+
+    _clearDbCache();
+    const secondLoad = loadSession(sessionId, storageOpts)!;
+    expect(secondLoad.activeChainId).toBeNull();
+    expect(secondLoad.updatedAt).toBe(recoveredAt);
+    expect(secondLoad.chains.map((chain) => chain.status)).toEqual([
+      ChainStatus.INTERRUPTED,
+      ChainStatus.INTERRUPTED,
+    ]);
+    expect(secondLoad.chains.map((chain) => chain.endTime)).toEqual([recoveredAt, recoveredAt]);
   });
 
   it('save overwrites existing session', () => {
@@ -1664,6 +1730,7 @@ describe('updateChain (targeted turn-local write, R3)', () => {
 
     const dbPath = storageOpts.dbPath!;
     const completed = manager.getActive()!.chains[0];
+    const activeChainId = manager.getActive()!.activeChainId!;
     const completedBefore = readChainMessagesJson(dbPath, completed.id);
 
     manager.updateActiveChainMessages([
@@ -1676,9 +1743,151 @@ describe('updateChain (targeted turn-local write, R3)', () => {
     _clearDbCache();
     const fresh = new SessionManager({ storage: storageOpts });
     const loaded = fresh.switchTo(session.id)!;
-    const active = loaded.chains.find((c) => c.id === loaded.activeChainId)!;
-    expect(active.messages.map((m) => m.content)).toEqual(['Q2', 'A2-in-progress']);
+    const recovered = loaded.chains.find((c) => c.id === activeChainId)!;
+    expect(loaded.activeChainId).toBeNull();
+    expect(recovered.status).toBe(ChainStatus.INTERRUPTED);
+    expect(recovered.messages.map((m) => m.content)).toEqual(['Q2', 'A2-in-progress']);
     expect(loaded.chains.find((c) => c.id === completed.id)!.messages.map((m) => m.content)).toEqual(['Q1', 'A1']);
+  });
+});
+
+// ===========================================================================
+// Incremental persistence — turn boundaries and session-field updates
+// ===========================================================================
+
+describe('incremental session persistence', () => {
+  it('does not bind an explicitly undefined session name', () => {
+    const session = makeSession({
+      id: 'acacacac-acac-4aca-8aca-acacacacacac',
+      name: 'Preserved name',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    saveSession(session, storageOpts);
+
+    expect(updateSessionFields(
+      session.id,
+      {
+        name: undefined,
+        updatedAt: '2026-02-01T00:00:00.000Z',
+      },
+      storageOpts,
+    )).toBe(true);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.name).toBe('Preserved name');
+    expect(loaded.updatedAt).toBe('2026-02-01T00:00:00.000Z');
+  });
+
+  it('does not delete historical chain rows during ordinary lifecycle updates', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+
+    manager.startChain({
+      messages: [makeMessage({ id: 'u1', content: 'Question 1' })],
+    }, session.id);
+    manager.persistTurn({
+      messages: [
+        makeMessage({ id: 'u1', content: 'Question 1' }),
+        makeMessage({ id: 'a1', role: 'assistant', content: 'Answer 1' }),
+      ],
+    }, session.id);
+
+    const firstChainId = manager.getSession(session.id)!.chains[0]!.id;
+    const db = openSqliteDb(storageOpts.dbPath!);
+    const firstRow = db
+      .prepare('SELECT rowid FROM chains WHERE id = ?')
+      .get(firstChainId) as { rowid: number };
+    db.exec(`
+      CREATE TRIGGER reject_historical_chain_delete
+      BEFORE DELETE ON chains
+      BEGIN
+        SELECT RAISE(ABORT, 'historical chain deletion is forbidden');
+      END
+    `);
+    db.close();
+
+    expect(() => {
+      manager.startChain({
+        messages: [makeMessage({ id: 'u2', content: 'Question 2' })],
+      }, session.id);
+      manager.persistTurn({
+        messages: [
+          makeMessage({ id: 'u2', content: 'Question 2' }),
+          makeMessage({ id: 'a2', role: 'assistant', content: 'Answer 2' }),
+        ],
+      }, session.id);
+      manager.rename(session.id, 'Incremental session');
+      manager.changeModel(session.id, ANTHROPIC_SELECTION);
+      manager.getTodoStore(session.id).create('Persist incrementally');
+      manager.persistTodos(session.id);
+      manager.setReasoningEffortOverride(session.id, 'high');
+      manager.setPermissionMode(session.id, 'allow');
+      manager.syncSubagentChains([], session.id);
+    }).not.toThrow();
+
+    const verifyDb = openSqliteDb(storageOpts.dbPath!);
+    const preservedRow = verifyDb
+      .prepare('SELECT rowid FROM chains WHERE id = ?')
+      .get(firstChainId) as { rowid: number };
+    verifyDb.close();
+
+    expect(preservedRow.rowid).toBe(firstRow.rowid);
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.chains).toHaveLength(2);
+    expect(loaded.name).toBe('Incremental session');
+    expect(loaded.selection).toEqual(ANTHROPIC_SELECTION);
+    expect(loaded.todoStore.tasks.map((todo) => todo.title)).toEqual([
+      'Persist incrementally',
+    ]);
+    expect(loaded.reasoningEffortOverride).toBe('high');
+    expect(loaded.permissionMode).toBe('allow');
+  });
+
+  it('rolls back a failed terminal chain update without clearing the active chain', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+    const chain = manager.startChain({
+      messages: [makeMessage({ id: 'u1', content: 'Still running' })],
+    }, session.id)!;
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.exec(`
+      CREATE TRIGGER reject_terminal_chain_update
+      BEFORE UPDATE OF status ON chains
+      WHEN OLD.status = 'active' AND NEW.status != 'active'
+      BEGIN
+        SELECT RAISE(ABORT, 'terminal chain update rejected');
+      END
+    `);
+    db.close();
+
+    expect(() => manager.finishActiveChain(ChainStatus.COMPLETED, session.id))
+      .toThrow(/terminal chain update rejected/);
+
+    const active = manager.getSession(session.id)!;
+    expect(active.activeChainId).toBe(chain.id);
+    expect(active.chains[0]!.status).toBe(ChainStatus.ACTIVE);
+
+    const verifyDb = openSqliteDb(storageOpts.dbPath!);
+    const persisted = verifyDb
+      .prepare(`
+        SELECT s.active_chain_id, c.status, c.end_time
+        FROM sessions s
+        JOIN chains c ON c.session_id = s.id
+        WHERE s.id = ? AND c.id = ?
+      `)
+      .get(session.id, chain.id) as {
+        active_chain_id: string | null;
+        status: string;
+        end_time: string | null;
+      };
+    verifyDb.close();
+
+    expect(persisted).toEqual({
+      active_chain_id: chain.id,
+      status: ChainStatus.ACTIVE,
+      end_time: null,
+    });
   });
 });
 
@@ -1871,5 +2080,52 @@ describe('reasoningEffortOverride SQLite round-trip', () => {
 
     const loaded = loadSession(session.id, storageOpts)!;
     expect(loaded.reasoningEffortOverride).toBeNull();
+  });
+});
+
+describe('permissionMode SQLite round-trip', () => {
+  it('round-trips a permission mode string', () => {
+    const session = makeSession({
+      id: 'd1d1d1d1-d1d1-4d1d-8d1d-d1d1d1d1d1d1',
+      permissionMode: 'ask' as never,
+    });
+    saveSession(session, storageOpts);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.permissionMode).toBe('ask');
+  });
+
+  it('round-trips null permission mode as null', () => {
+    const session = makeSession({
+      id: 'd2d2d2d2-d2d2-4d2d-8d2d-d2d2d2d2d2d2',
+      permissionMode: null,
+    });
+    saveSession(session, storageOpts);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.permissionMode).toBeNull();
+  });
+
+  it('persists permission mode through SessionManager.setPermissionMode', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const created = manager.create(null, { cwd: null });
+    manager.setPermissionMode(created.id, 'allow');
+
+    _clearDbCache();
+
+    const loaded = loadSession(created.id, storageOpts)!;
+    expect(loaded.permissionMode).toBe('allow');
+  });
+
+  it('clears permission mode when set to null', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const created = manager.create(null, { cwd: null });
+    manager.setPermissionMode(created.id, 'ask');
+    manager.setPermissionMode(created.id, null);
+
+    _clearDbCache();
+
+    const loaded = loadSession(created.id, storageOpts)!;
+    expect(loaded.permissionMode).toBeNull();
   });
 });

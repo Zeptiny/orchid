@@ -49,6 +49,28 @@ describe('SubagentManager runtime', () => {
     manager = new SubagentManager();
   });
 
+  it('preserves frozen owner-window affinity into a background runner', async () => {
+    let release!: () => void;
+    const parentTurnFinalized = new Promise<void>((resolve) => { release = resolve; });
+    const received: Array<{ sessionId?: string; windowId?: string }> = [];
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      await parentTurnFinalized;
+      received.push({ sessionId: params.sessionId, windowId: params.windowId });
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const record = manager.spawn('affinity', 'inspect', testAgent, {
+      sessionId: 'session-affinity',
+      windowId: 'window-10',
+    });
+    expect(record.windowId).toBe('window-10');
+
+    release();
+    await record._runPromise;
+
+    expect(received).toEqual([{ sessionId: 'session-affinity', windowId: 'window-10' }]);
+  });
+
   it('exposes live text and ordered changes before completion', async () => {
     let release!: () => void;
     const paused = new Promise<void>((resolve) => { release = resolve; });

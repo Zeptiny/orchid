@@ -8,11 +8,13 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { resolveToolPath } from '../types';
 import { ensureIndexed } from '../../ast/indexer';
 import { ASTStore } from '../../ast/store';
+import { withDisposable } from '../../utils/with-disposable';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -41,6 +43,7 @@ export const findSymbolReferencesDefinition: ToolDefinition = {
     'or refactoring. Returns file paths with line/column ranges.',
   inputSchema: findSymbolReferencesSchema,
   category: 'ast',
+  riskClass: RiskClass.READ_ONLY,
   noTimeout: true,
 };
 
@@ -59,8 +62,10 @@ export const findSymbolReferencesHandler: ToolHandler = async (input: unknown, c
     const projectPath = ctx.cwd;
     await ensureIndexed(projectPath);
 
-    const store = new ASTStore(projectPath);
-    const symbols = store.getSymbolsByName(symbol_name, 'both');
+    const symbols = withDisposable(
+      new ASTStore(projectPath),
+      (store) => store.getSymbolsByName(symbol_name, 'both'),
+    );
 
     const filterPath = file_path ? resolveToolPath(ctx.cwd, file_path) : undefined;
     const filtered = filterPath

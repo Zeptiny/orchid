@@ -8,6 +8,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler, ToolHandlerOutcome } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { resolveToolPath } from '../types';
 import {
   renderXmlToolResult,
@@ -200,6 +201,7 @@ export const applyPatchDefinition: ToolDefinition = {
   resultFamily: 'generic',
   outputDataSchema: applyPatchResultDataSchema,
   category: 'filesystem',
+  riskClass: RiskClass.MUTATION,
   agentProjector: applyPatchAgentProjector,
 };
 

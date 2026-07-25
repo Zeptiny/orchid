@@ -137,6 +137,8 @@ export interface StreamChatParams {
   mcpManager: MCPManager | null;
   /** Session ID for tool output offloading. */
   sessionId?: string;
+  /** Originating renderer window frozen for approval delivery. */
+  windowId?: string;
   /** Immutable project config/definitions captured when this turn began. */
   projectRuntime?: ProjectRuntime;
   /**
@@ -352,6 +354,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     registry,
     mcpManager,
     sessionId,
+    windowId,
     projectRuntime,
     agentScopeId,
     abortSignal,
@@ -455,13 +458,20 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   // ── Filter and build tools ──
   // Freeze session cwd from prompt context so tools match the turn's workspace.
   // Rebuild skill tool with this agent's allowed_skills (Python per-stream filter).
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+  const triggeringMessage = typeof lastUserMessage?.content === 'string'
+    ? lastUserMessage.content
+    : '';
+
   const tools = buildToolMap(agent.allowed_tools, registry, mcpManager, {
     sessionId,
+    windowId,
     timeoutSeconds: config.command_timeout,
     cwd: context.cwd,
     agentScopeId,
     projectRuntime,
     abortSignal,
+    triggeringMessage,
   }, {
     skills: projectRuntime
       ? new Map(projectRuntime.skills)

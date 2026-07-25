@@ -8,7 +8,13 @@
 @layer orchid {
   /* ── Chat shell / session chrome ──────────────────────────────────────── */
 
+  .app-frame {
+    position: relative;
+    isolation: isolate;
+  }
+
   .main-pane {
+    grid-column: 2;
     min-width: 0;
     min-height: 0;
     display: flex;
@@ -26,15 +32,24 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    transition: width var(--transition-slow, 280ms cubic-bezier(0.4, 0, 0.2, 1));
   }
 
   .left-panel {
     border-right: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
   }
 
+  .left-panel:not(.left-panel-overlay) {
+    grid-column: 1;
+  }
+
   .right-panel {
     width: 300px;
     border-left: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
+  }
+
+  .right-panel:not(.right-panel-overlay) {
+    grid-column: 3;
   }
 
   .left-panel-collapsed {
@@ -55,6 +70,23 @@
     align-items: center;
     padding: 8px 0;
     border-left: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
+  }
+
+  .left-panel-overlay,
+  .right-panel-overlay {
+    position: absolute;
+    inset-block: 0;
+    z-index: 20;
+    max-width: calc(100% - 48px);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .left-panel-overlay {
+    inset-inline-start: 0;
+  }
+
+  .right-panel-overlay {
+    inset-inline-end: 0;
   }
 
   .right-panel-toolbar {
@@ -569,28 +601,6 @@
     white-space: nowrap;
   }
 
-  .session-new-btn {
-    width: 100%;
-    justify-content: flex-start !important;
-    gap: 8px !important;
-    min-height: 32px !important;
-    margin-bottom: 6px;
-    border: none !important;
-    background: transparent !important;
-    box-shadow: none !important;
-    border-radius: 0.375rem !important;
-    font-size: 12px !important;
-    font-weight: 400 !important;
-    color: var(--text-primary, var(--color-base-content)) !important;
-    padding-inline: 4px !important;
-  }
-
-  .session-new-btn:hover,
-  .session-new-btn:focus-visible {
-    background: color-mix(in srgb, var(--text-primary, var(--color-base-content)) 6%, transparent) !important;
-    border: none !important;
-  }
-
   .session-search {
     position: relative;
     margin-bottom: 8px;
@@ -805,6 +815,7 @@
     top: 50%;
     transform: translateY(-50%);
     opacity: 0;
+    transition: opacity var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
   }
 
   .session-row:hover .session-item-delete {

@@ -11,6 +11,7 @@ import { normalizeAgentScopeId } from '../../../shared/types/agent-scope';
 import { getBackgroundStore } from './background-store';
 import { backgroundCommandNotFound } from './not-found';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 
@@ -68,6 +69,7 @@ export const terminateCommandToolDefinition: ToolDefinition = {
     'longer needed or is stuck.',
   inputSchema: terminateCommandInputSchema,
   category: 'process',
+  riskClass: RiskClass.EXECUTION,
 };
 
 export const terminateCommandHandler: ToolHandler = async (input: unknown, ctx) => {

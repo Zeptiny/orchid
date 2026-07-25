@@ -5,7 +5,7 @@
  * `_maybe_offload_tool_output` (client.py:251-307).
  *
  * Features:
- * - 60s timeout (configurable via `command_timeout` config)
+ * - 30s timeout (configurable via `command_timeout` config; overridden by per-call `timeout` arg on execute_command)
  * - Certain tools exempt from timeout (e.g., AST tools, `read_output`)
  * - `wait_for_subagent` uses a longer dedicated outer timeout (300s)
  * - Output offloading: outputs >20KB written to cache files, replaced with
@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import type { ToolRegistry } from '../tools/registry';
 import {
-  TOOL_OUTPUT_INLINE_THRESHOLD,
+  getToolOutputInlineThreshold,
   TOOLS_WITHOUT_OUTPUT_OFFLOAD,
 } from './middleware/provider-quirks';
 import {
@@ -28,11 +28,12 @@ import {
   renderRetrieval,
 } from '../tools/result';
 import type { ToolExecutionContext } from '../tools/types';
+import { toWorkerContext } from '../tools/types';
+import { getToolWorkerPool } from './tool-pool';
 import type { ProjectRuntime } from '../project/runtime';
-import { DEFAULT_WAIT_TIMEOUT_MS } from '../agents/manager';
+import { getDefaultWaitTimeoutMs } from '../agents/manager';
 import {
   createCanonicalToolResult,
-  toolExecutionResultSchema,
   type JsonValue,
   type ToolResultRetrieval,
   type ToolExecutionResult,
@@ -40,20 +41,33 @@ import {
 } from '../../shared/types/tool-result';
 import { materializeCanonicalResultRetrieval } from '../tools/result-retrieval';
 import { withTimeout as sharedWithTimeout } from '../utils/async';
+import { checkPermission } from '../permissions/gate';
+import { recordToolCall } from '../permissions/history';
+import { genericTerminalExecution } from './terminal-result';
+import { defaults } from '../config/schema';
+import type { Config } from '../../shared/types/ipc-boundary';
+
+// Re-exported so existing consumers keep importing these from tool-dispatch.
+export { genericTerminalExecution };
+export {
+  clearToolCallHistoryForAgentScope,
+  clearToolCallHistoryForSession,
+  getRecentToolCallHistory,
+} from '../permissions/history';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Default tool execution timeout in seconds. */
-const DEFAULT_TOOL_TIMEOUT_S = 60;
-
 /**
- * Outer dispatch timeout for `wait_for_subagent` (seconds).
- * Slightly longer than the wait tool's internal DEFAULT_WAIT_TIMEOUT_MS so
- * the structured "still running" tool result wins; this is a backstop.
+ * Default tool execution timeout in seconds. Only used when the caller does
+ * not pass `timeoutSeconds` (orchestrator always passes `command_timeout`).
  */
-const WAIT_TOOL_OUTER_TIMEOUT_S = Math.ceil(DEFAULT_WAIT_TIMEOUT_MS / 1000) + 5;
+const DEFAULT_TOOL_TIMEOUT_S = 30;
+
+function getWaitToolOuterTimeoutS(): number {
+  return Math.ceil(getDefaultWaitTimeoutMs() / 1000) + 5;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -71,11 +85,11 @@ export interface ToolDispatchRequest {
 }
 
 export interface ToolDispatchOptions {
-  /** Tool timeout in seconds. Defaults to 60. */
+  /** Tool timeout in seconds. Defaults to DEFAULT_TOOL_TIMEOUT_S (30). */
   timeoutSeconds?: number;
   /**
    * Outer timeout for `wait_for_subagent` only (seconds).
-   * Defaults to DEFAULT_WAIT_TIMEOUT_MS / 1000 (300). Independent of
+   * Defaults to subagent_wait_timeout + 5s. Independent of
    * `timeoutSeconds` / command_timeout so waits are not cut short by 30–60s.
    */
   waitTimeoutSeconds?: number;
@@ -88,11 +102,21 @@ export interface ToolDispatchOptions {
   cwd?: string;
   /** Agent scope (`main` or subagent id) for todos / bg command isolation. */
   agentScopeId?: string;
+  /** Originating renderer window frozen for approval delivery. */
+  windowId?: string;
   /** Immutable project definitions captured when this turn began. */
   projectRuntime?: ProjectRuntime;
   /** Parent-turn abort signal (unblocks wait without cancelling children). */
   abortSignal?: AbortSignal;
+  /** The user message that triggered the current turn (for decide-for-me evaluator). */
+  triggeringMessage?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Permission gate
+// ---------------------------------------------------------------------------
+
+const FALLBACK_CONFIG: Config = defaults();
 
 // ---------------------------------------------------------------------------
 // Tool dispatch
@@ -187,6 +211,44 @@ export async function executeToolCall(
     );
   }
 
+  const permissionConfig = options.projectRuntime?.config ?? FALLBACK_CONFIG;
+  let permissionDenial: ToolExecutionResult | null;
+  try {
+    permissionDenial = await checkPermission(
+      toolCallId,
+      name,
+      registered.definition.riskClass,
+      args as Record<string, unknown>,
+      options.cwd,
+      options.sessionId,
+      permissionConfig,
+      options.projectRuntime,
+      options.triggeringMessage ?? '',
+      options.abortSignal,
+      options.agentScopeId,
+      options.windowId,
+    );
+  } catch (error) {
+    return genericTerminalExecution(
+      toolCallId,
+      name,
+      'error',
+      `Permission gate error for tool '${name}': ${error instanceof Error ? error.message : 'unknown error'}.`,
+      'permission_gate_error',
+    );
+  }
+  if (options.abortSignal?.aborted) {
+    return genericTerminalExecution(
+      toolCallId,
+      name,
+      'cancelled',
+      `Tool '${name}' was cancelled.`,
+      'parent_cancelled',
+    );
+  }
+  if (permissionDenial) return permissionDenial;
+  recordToolCall(options.sessionId, options.agentScopeId, name, args);
+
   // Timeout AbortController — aborted by runWithToolTimeout so foreground
   // process tools can kill the live ChildProcess handle (not only reject).
   const timeoutAbort = new AbortController();
@@ -201,16 +263,29 @@ export async function executeToolCall(
     sessionId: options.sessionId,
     projectRuntime: options.projectRuntime,
     agentScopeId: options.agentScopeId,
+    windowId: options.windowId,
     abortSignal: combinedAbort,
   };
 
   // wait_for_subagent uses a dedicated outer budget (default 300s), not
   // command_timeout, so the tool can return its structured timeout message
   // (subagents stay running) before the dispatch race fires.
-  const effectiveTimeoutSeconds =
-    name === 'wait_for_subagent'
-      ? (options.waitTimeoutSeconds ?? WAIT_TOOL_OUTER_TIMEOUT_S)
-      : timeoutSeconds;
+  //
+  // execute_command: honor a per-call `timeout` so the inner process timeout
+  // can return its structured message before the outer dispatch race fires.
+  // Add a small buffer for spawn/teardown overhead.
+  const effectiveTimeoutSeconds = (() => {
+    if (name === 'wait_for_subagent') {
+      return options.waitTimeoutSeconds ?? getWaitToolOuterTimeoutS();
+    }
+    if (name === 'execute_command') {
+      const callTimeout = (validation.data as { timeout?: unknown } | null)?.timeout;
+      if (typeof callTimeout === 'number' && callTimeout > 0) {
+        return Math.max(timeoutSeconds, callTimeout + 5);
+      }
+    }
+    return timeoutSeconds;
+  })();
 
   // Execute with optional timeout (shared policy with MCP wrappers).
   // Timeout exemption is definition.noTimeout only (no parallel name set).
@@ -218,15 +293,21 @@ export async function executeToolCall(
   const handlerArgs = validation.data;
   let result: unknown;
   try {
-    result = await runWithToolTimeout(
-      () => registered.handler(handlerArgs, toolCtx),
-      name,
-      {
-        timeoutSeconds: effectiveTimeoutSeconds,
-        noTimeout: Boolean(registered.definition.noTimeout),
-        abortController: timeoutAbort,
-      },
-    );
+    const offloadPool = registered.definition.offload ? getToolWorkerPool() : null;
+    const execute = offloadPool
+      ? () => {
+          const workerCtx = toWorkerContext(toolCtx);
+          return offloadPool.run(
+            { toolName: name, args: handlerArgs, context: workerCtx },
+            timeoutAbort?.signal,
+          );
+        }
+      : () => registered.handler(handlerArgs, toolCtx);
+    result = await runWithToolTimeout(execute, name, {
+      timeoutSeconds: effectiveTimeoutSeconds,
+      noTimeout: Boolean(registered.definition.noTimeout),
+      abortController: timeoutAbort,
+    });
   } catch (err) {
     if (err instanceof ToolTimeoutError) {
       return genericTerminalExecution(
@@ -308,39 +389,6 @@ function isToolHandlerOutcome(value: unknown): value is ToolHandlerOutcome<JsonV
       String(candidate.status),
     ) && Object.hasOwn(candidate, 'data')
   );
-}
-
-export function genericTerminalExecution(
-  toolCallId: string,
-  toolName: string,
-  status: 'error' | 'cancelled',
-  message: string,
-  code: string,
-): ToolExecutionResult {
-  const canonical = status === 'error'
-    ? createCanonicalToolResult('generic', {
-        status,
-        data: {
-          value: message,
-          origin: { kind: 'built-in', name: toolName },
-        },
-        error: { code, message },
-      })
-    : createCanonicalToolResult('generic', {
-        status,
-        data: {
-          value: message,
-          origin: { kind: 'built-in', name: toolName },
-        },
-      });
-  const execution = finalizeToolExecutionResult({
-    canonical,
-    toolName,
-    toolCallId,
-    expectedFamily: 'generic',
-    projector: genericAgentProjector,
-  });
-  return toolExecutionResultSchema.parse(execution) as ToolExecutionResult;
 }
 
 function finalizeHandlerResult(
@@ -483,7 +531,7 @@ function maybeOffloadAgentProjection(
 /**
  * Bound tool output size before it enters `api_messages`.
  *
- * Outputs at or below `TOOL_OUTPUT_INLINE_THRESHOLD` and tools that
+ * Outputs at or below `tool_output_inline_threshold` and tools that
  * already self-limit (`TOOLS_WITHOUT_OUTPUT_OFFLOAD`) pass through
  * unchanged. Larger outputs are written to a per-session cache file
  * and replaced with a compact pointer so the provider context window
@@ -517,8 +565,9 @@ function maybeOffloadToolOutputDetailed(
   toolCallId: string,
   sessionId?: string,
 ): ToolOutputOffloadResult {
+  const inlineThreshold = getToolOutputInlineThreshold();
   if (
-    content.length <= TOOL_OUTPUT_INLINE_THRESHOLD ||
+    content.length <= inlineThreshold ||
     TOOLS_WITHOUT_OUTPUT_OFFLOAD.has(toolName)
   ) {
     return { content };
@@ -526,10 +575,10 @@ function maybeOffloadToolOutputDetailed(
 
   if (!sessionId) {
     // No session — hard-truncate
-    const truncated = content.slice(0, TOOL_OUTPUT_INLINE_THRESHOLD);
+    const truncated = content.slice(0, inlineThreshold);
     return { content: (
       `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}">\n` +
-      `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters ` +
+      `<warning>Output exceeded ${inlineThreshold} characters ` +
       `and was truncated because no active session is available for cache ` +
       `storage. Use the tool again with narrower scope (offset/limit) to ` +
       `inspect the full result.</warning>\n` +
@@ -562,7 +611,7 @@ function maybeOffloadToolOutputDetailed(
     const escapedPath = escapeXmlAttribute(filePath);
     return { content: (
       `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}" file="${escapedPath}">\n` +
-      `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters and ` +
+      `<warning>Output exceeded ${inlineThreshold} characters and ` +
       `was written to ${escapeXmlText(filePath)}. Use read (with offset/limit) or grep to inspect ` +
       `it.</warning>\n` +
       `<retrieve tool="read" path="${escapedPath}" />\n` +
@@ -571,10 +620,10 @@ function maybeOffloadToolOutputDetailed(
   } catch (err) {
     // Cache write failed — truncate inline
     console.warn(`Failed to offload tool output for ${toolName}:`, err);
-    const truncated = content.slice(0, TOOL_OUTPUT_INLINE_THRESHOLD);
+    const truncated = content.slice(0, inlineThreshold);
     return { content: (
       `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}">\n` +
-      `<warning>Output exceeded ${TOOL_OUTPUT_INLINE_THRESHOLD} characters ` +
+      `<warning>Output exceeded ${inlineThreshold} characters ` +
       `and cache write failed (${escapeXmlText(err instanceof Error ? err.message : String(err))}). Truncated below; re-run the tool with ` +
       `narrower scope to inspect the full result.</warning>\n` +
       `<payload>${escapeXmlText(truncated)}</payload>\n` +

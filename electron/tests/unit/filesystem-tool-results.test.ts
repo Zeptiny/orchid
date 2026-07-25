@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { executeToolCall } from '../../src/main/llm/tool-dispatch';
+import { sessionPermissionOverrides } from '../../src/main/permissions/session-overrides';
 import { ToolRegistry } from '../../src/main/tools/registry';
 import {
   editDefinition,
@@ -60,6 +61,8 @@ import { applyPatchResultDataSchema } from '../../src/shared/types/tool-result-a
 
 let tmpDir: string;
 
+const SESSION_ID = 'filesystem-results-session';
+
 function outcome<T>(value: unknown): ToolHandlerOutcome<T> {
   return value as ToolHandlerOutcome<T>;
 }
@@ -74,9 +77,11 @@ function writeFixture(relativePath: string, content: string): string {
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'filesystem-results-'));
   _setResultRetrievalCacheRootForTests(path.join(tmpDir, 'retrieval-cache'));
+  sessionPermissionOverrides.set(SESSION_ID, 'allow');
 });
 
 afterEach(() => {
+  sessionPermissionOverrides.delete(SESSION_ID);
   _setStructuredPatchForTests(null);
   _setResultRetrievalCacheRootForTests(null);
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -324,8 +329,10 @@ describe('typed filesystem outcomes', () => {
 
 describe('bounded family projections', () => {
   it('keeps every canonical glob record while materializing omitted projection records', async () => {
+    const fixedMtime = new Date('2024-01-01T00:00:00Z');
     for (let index = 0; index < 240; index += 1) {
-      writeFixture(`many/file-${String(index).padStart(3, '0')}.ts`, `export const n = ${index};`);
+      const filePath = writeFixture(`many/file-${String(index).padStart(3, '0')}.ts`, `export const n = ${index};`);
+      fs.utimesSync(filePath, fixedMtime, fixedMtime);
     }
     const registry = new ToolRegistry();
     registry.register(globDefinition, globHandler);
@@ -383,6 +390,7 @@ describe('XML agent projections', () => {
     registry.register(readDirectoryDefinition, readDirectoryHandler);
     const context = {
       cwd: tmpDir,
+      sessionId: SESSION_ID,
       projectRuntime: { config: { ignored_dirs: [] } as never },
     };
 
@@ -440,7 +448,7 @@ describe('XML agent projections', () => {
         args: { file_path: 'empty.txt', content: '' },
       },
       registry,
-      { cwd: tmpDir },
+      { cwd: tmpDir, sessionId: SESSION_ID },
     );
     expect(execution.canonical.status).toBe('complete');
     expect(fileWriteDataSchema.parse(execution.canonical.data).content).toBe('');
@@ -461,7 +469,7 @@ describe('XML agent projections', () => {
         args: { file_path: 'short.txt', content },
       },
       registry,
-      { cwd: tmpDir },
+      { cwd: tmpDir, sessionId: SESSION_ID },
     );
     expect(fileWriteDataSchema.parse(execution.canonical.data).content).toBe(content);
     expect(execution.agentProjection.content).toContain('<preview>');
@@ -471,7 +479,7 @@ describe('XML agent projections', () => {
     expect(execution.agentProjection.content).not.toContain('<tail>');
   });
 
-  it('write projection: long files use head/tail only (middle omitted)', async () => {
+  it('write projection: long files include full content in preview', async () => {
     const registry = new ToolRegistry();
     registry.register(writeDefinition, writeHandler);
     const lines = Array.from({ length: 20 }, (_, i) => `line-${i + 1}`);
@@ -483,18 +491,16 @@ describe('XML agent projections', () => {
         args: { file_path: 'long.txt', content },
       },
       registry,
-      { cwd: tmpDir },
+      { cwd: tmpDir, sessionId: SESSION_ID },
     );
     const proj = execution.agentProjection.content;
     expect(fileWriteDataSchema.parse(execution.canonical.data).content).toContain('line-10');
-    expect(proj).toContain('<head>');
-    expect(proj).toContain('<tail>');
+    expect(proj).toContain('<preview>');
     expect(proj).toContain('line-1');
-    expect(proj).toContain('line-5');
-    expect(proj).toContain('line-16');
+    expect(proj).toContain('line-10');
     expect(proj).toContain('line-20');
-    expect(proj).not.toContain('line-10');
-    expect(proj).not.toContain('<preview>');
+    expect(proj).not.toContain('<head>');
+    expect(proj).not.toContain('<tail>');
   });
 });
 

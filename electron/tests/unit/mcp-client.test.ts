@@ -189,6 +189,7 @@ describe('MCPManager', () => {
       expect(statuses[0].name).toBe('context7');
       expect(statuses[0].status).toBe('connected');
       expect(statuses[0].toolCount).toBe(2);
+      expect(statuses[0].tools).toEqual(['query-docs', 'resolve-library-id']);
       expect(statuses[0].error).toBeNull();
 
       // StdioClientTransport was created with correct params
@@ -324,6 +325,8 @@ describe('MCPManager', () => {
 
       expect(fastStatus?.status).toBe('connected');
       expect(fastStatus?.toolCount).toBe(1);
+      expect(fastStatus?.tools).toEqual(['fast-tool']);
+      expect(slowStatus?.tools).toEqual([]);
 
       const tools = manager.getTools();
       expect(tools).toHaveLength(1);

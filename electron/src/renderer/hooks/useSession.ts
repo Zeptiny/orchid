@@ -10,7 +10,7 @@
  * - load(), create(), delete(), rename() actions
  * - Loading/error states (interaction states)
  */
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { SessionSummary } from '../../shared/types/ipc-boundary';
@@ -589,25 +589,46 @@ export function useSession(): UseSessionReturn {
   const changeCwd = useCallback((id: string, cwd: string) => changeCwdShared(id, cwd), []);
   const refresh = useCallback(() => refreshShared(), []);
 
-  return {
-    activeSession: snapshot.activeSession,
-    listState: snapshot.listState,
-    workspace: snapshot.workspace,
-    load,
-    open,
-    create,
-    enterDraft,
-    deleteSession,
-    rename,
-    changeModel,
-    getWorkspace,
-    pickProjectDir,
-    setWorkspace,
-    changeCwd,
-    draftGeneration: snapshot.draftGeneration,
-    refresh,
-    isLoading: snapshot.isLoading,
-  };
+  // Stable identity between store snapshot changes so consumers (and the
+  // callbacks that depend on this object) do not re-render on every unrelated
+  // ChatView update — e.g. per-token streaming. The snapshot ref only changes
+  // when session/list/workspace state actually changes.
+  return useMemo(
+    () => ({
+      activeSession: snapshot.activeSession,
+      listState: snapshot.listState,
+      workspace: snapshot.workspace,
+      load,
+      open,
+      create,
+      enterDraft,
+      deleteSession,
+      rename,
+      changeModel,
+      getWorkspace,
+      pickProjectDir,
+      setWorkspace,
+      changeCwd,
+      draftGeneration: snapshot.draftGeneration,
+      refresh,
+      isLoading: snapshot.isLoading,
+    }),
+    [
+      snapshot,
+      load,
+      open,
+      create,
+      enterDraft,
+      deleteSession,
+      rename,
+      changeModel,
+      getWorkspace,
+      pickProjectDir,
+      setWorkspace,
+      changeCwd,
+      refresh,
+    ],
+  );
 }
 
 function makeLocalSession(): Session {
@@ -640,5 +661,6 @@ function makeLocalSession(): Session {
     subagentChains: [],
     todoStore: { tasks: [] },
     reasoningEffortOverride: null,
+    permissionMode: null,
   };
 }

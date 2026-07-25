@@ -212,15 +212,10 @@ Orchid is an early preview. Expect rough edges. Highlights that matter when tryi
 - The model can still **deviate from plans**, leave work incomplete, or produce dead code — reviewers help but do not always catch everything
 - Built-in **skills and agent prompts** are not fully aligned with every current harness capability
 
-### Security & sandboxing (important)
-- Filesystem tools do **not** yet use full realpath-based sandboxing; symlink tricks can escape the project directory
-- There is **no approval / permission gate** for destructive shell or file operations yet (yolo-style trust model for now)
-- Treat the agent as having the same power as running commands in your project yourself
-
 ### Missing product surface
 - **No public installers** or auto-update channel yet — run or package from source
 - **No session compaction / compression** — long chats are not summarized or trimmed to stay within context limits
-- No LSP, SSH/remote workspaces, or user message queue yet
+- No LSP or SSH/remote workspaces
 
 Full engineering backlog: [`TODO.md`](TODO.md).
 

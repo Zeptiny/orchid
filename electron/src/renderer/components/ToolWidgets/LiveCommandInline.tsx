@@ -14,6 +14,7 @@
  */
 import { useState, useCallback, useMemo, useId } from 'react';
 import { useLiveCommandOutput } from '../../hooks/useLiveCommandOutput';
+import { CollapsibleRegion } from '../ui/CollapsibleRegion';
 import { Spinner } from '../ui/Spinner';
 import { StatusBadge } from '../ui/StatusBadge';
 
@@ -82,19 +83,15 @@ export function LiveCommandInline({
       >
         <span className="font-mono text-xs min-w-0 truncate">{title}</span>
         <span className="inline-flex shrink-0 items-center gap-1.5">
-          {isRunning && (
-            <Spinner size="xs" variant="dots" />
-          )}
-          {!isRunning && exitCode === 0 && (
-            <StatusBadge tone="success" size="xs">ok</StatusBadge>
-          )}
-          {!isRunning && exitCode !== null && exitCode !== 0 && (
-            <StatusBadge tone="error" size="xs">fail</StatusBadge>
-          )}
+          <span key={isRunning ? 'running' : `exit-${exitCode ?? 'unknown'}`} className="orchid-tool-lifecycle-icon">
+            {isRunning && <Spinner size="xs" variant="dots" />}
+            {!isRunning && exitCode === 0 && <StatusBadge tone="success" size="xs">ok</StatusBadge>}
+            {!isRunning && exitCode !== null && exitCode !== 0 && <StatusBadge tone="error" size="xs">fail</StatusBadge>}
+          </span>
         </span>
       </button>
-      {expanded && (
-        <div id={panelId} className="orchid-live-command-body">
+      <CollapsibleRegion open={expanded} id={panelId}>
+        <div className="orchid-live-command-body">
           <pre className="orchid-live-command-pre">
             {displayOutput || (isRunning ? '(waiting for output...)' : '(no output)')}
           </pre>
@@ -104,7 +101,7 @@ export function LiveCommandInline({
             </div>
           )}
         </div>
-      )}
+      </CollapsibleRegion>
     </div>
   );
 }

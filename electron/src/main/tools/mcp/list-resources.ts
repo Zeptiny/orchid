@@ -3,6 +3,7 @@
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import type { MCPManager, MCPResourceInfo } from '../../mcp/manager';
@@ -29,6 +30,7 @@ export function buildListMcpResourcesTool(
       'Use read_mcp_resource with a URI to fetch content.',
     inputSchema: z.object({}),
     category: 'mcp',
+    riskClass: RiskClass.READ_ONLY,
   };
 
   const handler: ToolHandler = async (

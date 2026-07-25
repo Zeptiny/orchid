@@ -17,6 +17,7 @@ import { MarkdownContent } from './MarkdownContent';
 import { Icon } from './Icon';
 import { ToolCallBlock } from './ToolCallBlock';
 import { Alert } from './ui/Alert';
+import { CollapsibleRegion } from './ui/CollapsibleRegion';
 import { Spinner } from './ui/Spinner';
 
 interface MessageWidgetProps {
@@ -70,7 +71,9 @@ function AssistantMessage({
   if (!message.content && !isStreaming) return null;
   return (
     <div className="orchid-msg orchid-msg-assistant px-1 py-1">
-      {message.content ? <MarkdownContent content={message.content} /> : null}
+      {message.content ? (
+        <MarkdownContent content={message.content} />
+      ) : null}
     </div>
   );
 }
@@ -136,11 +139,14 @@ function ThinkingMessage({
           )}
           {`${isStreaming ? 'Thinking…' : 'Thought'}${durationLabel ? ` ${durationLabel}` : ''}`}
         </span>
-        <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} />
+        <Icon
+          name="chevronDown"
+          size={12}
+          className={`orchid-disclosure-chevron ${expanded ? 'is-open' : ''}`}
+        />
       </button>
-      {expanded && (
+      <CollapsibleRegion open={expanded} id={panelId}>
         <div
-          id={panelId}
           className="orchid-thought-content"
           onClick={collapse}
           onKeyDown={(e) => {
@@ -155,7 +161,7 @@ function ThinkingMessage({
         >
           {content}
         </div>
-      )}
+      </CollapsibleRegion>
     </div>
   );
 }

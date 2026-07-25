@@ -8,11 +8,12 @@
  * Enter send · Shift+Enter newline · Ctrl/Cmd+S send · Esc multi-stage interrupt.
  * Slash commands: type `/` to open autocomplete above the input.
  */
-import { useRef, useCallback, useEffect, useState, useMemo } from 'react';
+import { memo, useRef, useCallback, useEffect, useState, useMemo } from 'react';
 import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption } from '../../shared/types/ipc';
 import type { ChatStatus, InterruptState } from '../hooks/useChat';
 import { useAskQuestion } from '../hooks/useAskQuestion';
+import { usePermissionApproval } from '../hooks/usePermissionApproval';
 import {
   COMMANDS,
   trackRecentCommand,
@@ -29,6 +30,7 @@ import {
   shouldReleaseComposerSendLock,
 } from '../utils/composer-send-lock';
 import { AskQuestionOverlay } from './AskQuestionOverlay';
+import { PermissionApprovalPanel } from './PermissionApprovalPanel';
 import { SlashCommandMenu } from './SlashCommandMenu';
 import { IconButton } from './ui/IconButton';
 
@@ -86,7 +88,7 @@ export function resolveInputEscapeAction(options: {
   return 'cancel-chat';
 }
 
-export function InputArea({
+export const InputArea = memo(function InputArea({
   sessionId,
   status,
   model: _model,
@@ -119,6 +121,8 @@ export function InputArea({
   /** Pending ask_question stepper; while active it owns the composer area. */
   const askQuestion = useAskQuestion(sessionId);
   const hasActiveQuestion = askQuestion.active !== null;
+  /** Pending permission approval; while active it owns the composer area. */
+  const permission = usePermissionApproval(sessionId);
 
   const isStreaming = status === 'streaming';
   const hasInput = Boolean(input.trim());
@@ -140,7 +144,6 @@ export function InputArea({
   /** Slash mode: input starts with `/` (single line) or a sub-picker is open. */
   const isSlashMode =
     Boolean(commandContext) &&
-    !isStreaming &&
     (subPicker !== null || (input.startsWith('/') && !input.includes('\n')));
 
   const availableModels = commandContext?.getAvailableModels() ?? [];
@@ -608,6 +611,25 @@ export function InputArea({
   const inputDisabled = interruptState === 'confirmAgent';
   const plainChatBlocked = !workspaceBound || !providerAvailable || !modelSelected;
 
+  // A pending permission approval owns the composer area; the composer (and
+  // every send path) stays unmounted until it is approved or denied. The chat
+  // stream above stays mounted and scrollable. Takes precedence over a pending
+  // question because it gates a potentially dangerous tool call.
+  if (permission.active) {
+    return (
+      <div className="orchid-composer-area">
+        <section className="orchid-permission" aria-label="Permission request">
+          <PermissionApprovalPanel
+            key={permission.active.toolCallId}
+            request={permission.active}
+            submittingDecision={permission.submittingDecision}
+            onAnswer={permission.answer}
+          />
+        </section>
+      </div>
+    );
+  }
+
   // A pending ask_question tool call owns the composer area; the composer (and
   // every send path) stays unmounted until it is answered or cancelled.
   if (askQuestion.active) {
@@ -621,7 +643,7 @@ export function InputArea({
   return (
     <div className="orchid-composer-area">
       {!workspaceBound && (
-        <div className="orchid-composer-gate alert alert-warning" role="status">
+        <div className="orchid-composer-gate orchid-state-enter alert alert-warning" role="status">
           <span>Select a project folder before chatting.</span>
           {onPickProjectDir && (
             <IconButton
@@ -640,7 +662,7 @@ export function InputArea({
 
       {!providerAvailable && (
         <div
-          className="orchid-composer-gate alert alert-info"
+          className="orchid-composer-gate orchid-state-enter alert alert-info"
           role="status"
           aria-live="polite"
         >
@@ -662,7 +684,7 @@ export function InputArea({
 
       {providerAvailable && !modelSelected && (
         <div
-          className="orchid-composer-gate alert alert-warning"
+          className="orchid-composer-gate orchid-state-enter alert alert-warning"
           role="status"
           aria-live="polite"
         >
@@ -696,7 +718,7 @@ export function InputArea({
             onKeyDown={handleKeyDown}
             placeholder={
               isStreaming
-                ? 'Type to queue a message… (Esc to interrupt)'
+                ? 'Type to queue a message or run /command… (Esc to interrupt)'
                 : interruptState === 'confirmAgent'
                   ? 'Streaming… (Esc or ■ to interrupt)'
                   : interruptState === 'confirmSubagents'
@@ -719,6 +741,10 @@ export function InputArea({
           />
 
           <div className="orchid-composer-controls">
+            <span
+              key={showCancel ? 'cancel' : showMenu ? 'command' : isStreaming && hasInput ? 'queue' : 'send'}
+              className="orchid-composer-action-swap"
+            >
             {showCancel ? (
               <IconButton
                 label={cancelTitle}
@@ -729,7 +755,7 @@ export function InputArea({
                 onClick={() => void onCancel()}
                 iconSize={14}
               />
-            ) : isStreaming && hasInput ? (
+            ) : isStreaming && hasInput && !showMenu ? (
               <IconButton
                 label="Queue message"
                 icon="list"
@@ -758,12 +784,13 @@ export function InputArea({
                 iconSize={16}
               />
             )}
+            </span>
           </div>
         </div>
       </div>
     </div>
   );
-}
+});
 
 function filterResults(items: PaletteResult[], query: string): PaletteResult[] {
   const q = query.trim();

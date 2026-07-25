@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type RefCallback } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefCallback } from 'react';
 
 export const AUTO_SCROLL_THRESHOLD_PX = 100;
 
@@ -36,12 +36,19 @@ export interface SmartAutoScrollOptions {
   enabled?: boolean;
 }
 
+/** State and commands for an owned transcript viewport. */
 export interface SmartAutoScrollResult {
   containerRef: RefCallback<HTMLDivElement>;
   isUserScrolledUp: boolean;
+  /** Follow the latest content immediately without clearing scroll-away state. */
+  followLatest: () => void;
   jumpToLatest: () => void;
 }
 
+/**
+ * Keep a visible transcript pinned while preserving a reader's scroll-away
+ * choice. `followLatest` performs an immediate container-only scroll.
+ */
 export function useSmartAutoScroll({
   resetKey = null,
   contentKey,
@@ -52,40 +59,106 @@ export function useSmartAutoScroll({
     setContainer((previous) => previous === node ? previous : node);
   }, []);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
+  const isFollowingRef = useRef(true);
+  const previousScrollTopRef = useRef(0);
 
-  useEffect(() => {
-    if (!enabled) return;
-    if (!container) return;
-    const handleScroll = () => {
-      setIsUserScrolledUp(
-        isUserScrolledAwayFromBottom(
-          container.scrollTop,
-          container.scrollHeight,
-          container.clientHeight,
-        ),
-      );
-    };
-    container.addEventListener('scroll', handleScroll, { passive: true });
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, [container, enabled]);
+  const setFollowing = useCallback((following: boolean) => {
+    isFollowingRef.current = following;
+    setIsUserScrolledUp(!following);
+  }, []);
 
   const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
     scrollContainerToLatest(container, behavior);
   }, [container]);
 
-  useEffect(() => {
-    setIsUserScrolledUp(false);
-    if (enabled) scrollToLatest('auto');
-  }, [enabled, resetKey, scrollToLatest]);
-
-  useEffect(() => {
-    if (enabled && shouldAutoScroll(isUserScrolledUp)) scrollToLatest();
-  }, [contentKey, enabled, isUserScrolledUp, scrollToLatest]);
-
-  const jumpToLatest = useCallback(() => {
-    setIsUserScrolledUp(false);
-    scrollToLatest();
+  const followLatest = useCallback(() => {
+    scrollToLatest('instant');
   }, [scrollToLatest]);
 
-  return { containerRef, isUserScrolledUp, jumpToLatest };
+  useEffect(() => {
+    if (!enabled) return;
+    if (!container) return;
+    previousScrollTopRef.current = container.scrollTop;
+    let previousTouchY: number | null = null;
+
+    const suspendFollowing = () => {
+      previousScrollTopRef.current = container.scrollTop;
+      setFollowing(false);
+    };
+    const handleWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) suspendFollowing();
+    };
+    const handleTouchStart = (event: TouchEvent) => {
+      previousTouchY = event.touches[0]?.clientY ?? null;
+      previousScrollTopRef.current = container.scrollTop;
+    };
+    const handleTouchMove = (event: TouchEvent) => {
+      const nextTouchY = event.touches[0]?.clientY ?? null;
+      if (
+        previousTouchY != null &&
+        nextTouchY != null &&
+        nextTouchY > previousTouchY
+      ) {
+        suspendFollowing();
+      }
+      previousTouchY = nextTouchY;
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key === 'ArrowUp' ||
+        event.key === 'PageUp' ||
+        event.key === 'Home' ||
+        (event.key === ' ' && event.shiftKey)
+      ) {
+        suspendFollowing();
+      }
+    };
+    const handleScroll = () => {
+      const currentScrollTop = container.scrollTop;
+      const movedTowardBottom =
+        currentScrollTop > previousScrollTopRef.current;
+      const isAway = isUserScrolledAwayFromBottom(
+        currentScrollTop,
+        container.scrollHeight,
+        container.clientHeight,
+      );
+      previousScrollTopRef.current = currentScrollTop;
+
+      if (isAway) {
+        setFollowing(false);
+      } else if (!isFollowingRef.current && movedTowardBottom) {
+        setFollowing(true);
+        followLatest();
+      }
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: true });
+    container.addEventListener('touchstart', handleTouchStart, { passive: true });
+    container.addEventListener('touchmove', handleTouchMove, { passive: true });
+    container.addEventListener('keydown', handleKeyDown);
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+      container.removeEventListener('touchstart', handleTouchStart);
+      container.removeEventListener('touchmove', handleTouchMove);
+      container.removeEventListener('keydown', handleKeyDown);
+      container.removeEventListener('scroll', handleScroll);
+    };
+  }, [container, enabled, followLatest, setFollowing]);
+
+  useEffect(() => {
+    setFollowing(true);
+    previousScrollTopRef.current = container?.scrollTop ?? 0;
+  }, [container, resetKey, setFollowing]);
+
+  useEffect(() => {
+    if (enabled && isFollowingRef.current) scrollToLatest('instant');
+  }, [contentKey, enabled, scrollToLatest]);
+
+  const jumpToLatest = useCallback(() => {
+    setFollowing(true);
+    scrollToLatest('smooth');
+  }, [scrollToLatest, setFollowing]);
+
+  return { containerRef, isUserScrolledUp, followLatest, jumpToLatest };
 }

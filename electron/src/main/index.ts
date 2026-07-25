@@ -12,6 +12,7 @@ import { app, BrowserWindow, Menu } from 'electron';
 import { spawnSync } from 'node:child_process';
 import * as path from 'path';
 import { registerAllIPC, unregisterAllIPC } from './ipc';
+import { handlePermissionOwnerDestroyed } from './ipc/permission';
 import {
   ensureHomeConfig,
   ConfigManager,
@@ -29,6 +30,7 @@ import { initFileLogging, closeFileLogging } from './logging';
 import { registerBuiltinTools } from './tools';
 import { getBackgroundStore } from './tools/process/background-store';
 import { wireSubagentRuntime, flushSubagentPersistence } from './agents/wire-subagents';
+import { initToolWorkerPool, disposeToolWorkerPool } from './llm/tool-pool';
 import { getConfig } from './config/loader';
 import { ProviderCatalogStore } from './providers/catalog/store';
 import { ProviderCatalogUpdater, createHttpCatalogTransport } from './providers/catalog/updater';
@@ -179,7 +181,7 @@ function resolveAppIcon(): string | undefined {
 }
 
 function createWindow(): void {
-  mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 800,
@@ -194,18 +196,24 @@ function createWindow(): void {
       sandbox: true,
     },
   });
+  mainWindow = window;
+  const ownerWindowId = String(window.webContents.id);
+  window.webContents.once('destroyed', () => {
+    handlePermissionOwnerDestroyed(ownerWindowId);
+  });
 
   if (!app.isPackaged) {
     // Dev mode: load from Vite dev server
-    mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools();
+    window.loadURL('http://localhost:5173');
+    window.webContents.openDevTools();
   } else {
     // Production: load built renderer
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+    window.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
-  mainWindow.on('closed', () => {
-    mainWindow = null;
+  window.on('closed', () => {
+    handlePermissionOwnerDestroyed(ownerWindowId);
+    if (mainWindow === window) mainWindow = null;
   });
 }
 
@@ -248,6 +256,11 @@ app.whenReady().then(async () => {
     registerBuiltinTools({ agents, skills, mcpManager: null });
     // Start subagent stream runner + session persistence for token usage
     wireSubagentRuntime();
+
+    const poolSize = getConfig().tool_worker_pool_size;
+    if (poolSize > 0) {
+      await initToolWorkerPool(getConfig(), poolSize);
+    }
 
     // 5. Register all IPC handlers (before creating window)
     registerAllIPC();
@@ -354,6 +367,8 @@ app.on('before-quit', async (event) => {
 
     // 4. Shut down MCP transports
     await shutdownProjectMCPManagers();
+
+    await disposeToolWorkerPool();
 
     // 5. Destroy auto-updater
     destroyUpdater();

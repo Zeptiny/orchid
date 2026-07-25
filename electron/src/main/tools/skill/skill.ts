@@ -17,6 +17,7 @@ import { minimatch } from 'minimatch';
 import { z } from 'zod';
 import type { Skill } from '../../../shared/types/skill';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { parseFrontmatter } from '../../../shared/utils/frontmatter';
@@ -343,6 +344,7 @@ export function buildSkillTool(
         ),
     }),
     category: 'skill',
+    riskClass: RiskClass.READ_ONLY,
   };
 
   const handler: ToolHandler = async (input: unknown, _ctx): Promise<GenericBuiltInToolOutcome> => {

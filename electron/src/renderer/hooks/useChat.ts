@@ -28,10 +28,6 @@ import type {
   ChatSessionSnapshot,
 } from '../../shared/types/ipc';
 import {
-  type ContextBreakdown,
-  computeContextBreakdown,
-} from '../components/ContextGrid';
-import {
   addUsage,
   hasUsage,
   latestUsageFromMessages,
@@ -94,6 +90,70 @@ export type StreamSegment =
   | { kind: 'text'; id: string; content: string }
   | { kind: 'thinking'; id: string; content: string };
 
+/** Append one canonical text/thinking delta without inventing renderer-local identity. */
+export function appendStreamSegmentDelta(
+  segments: readonly StreamSegment[],
+  kind: 'text' | 'thinking',
+  segmentId: string,
+  data: string,
+): StreamSegment[] {
+  const last = segments.at(-1);
+  if (last?.kind === kind && last.id === segmentId) {
+    return [
+      ...segments.slice(0, -1),
+      { ...last, content: last.content + data },
+    ];
+  }
+  return [...segments, { kind, id: segmentId, content: data }];
+}
+
+/** Buffered text/thinking delta data awaiting renderer-frame publication. */
+export interface StreamSegmentDelta {
+  kind: 'text' | 'thinking';
+  segmentId: string;
+  data: string;
+}
+
+/**
+ * Apply one renderer frame of text/thinking deltas with a single array copy.
+ * Existing segment objects remain immutable while a frame-local tail may be
+ * extended in place before the new snapshot is published to React.
+ */
+export function appendStreamSegmentDeltas(
+  segments: readonly StreamSegment[],
+  deltas: readonly StreamSegmentDelta[],
+): StreamSegment[] {
+  if (deltas.length === 0) return segments.slice();
+
+  const next = segments.slice();
+  let mutableTailIndex = -1;
+  for (const delta of deltas) {
+    const tailIndex = next.length - 1;
+    const tail = next[tailIndex];
+    if (
+      tail?.kind === delta.kind &&
+      tail.id === delta.segmentId
+    ) {
+      if (mutableTailIndex !== tailIndex) {
+        next[tailIndex] = { ...tail };
+        mutableTailIndex = tailIndex;
+      }
+      const mutableTail = next[tailIndex];
+      if (mutableTail.kind === 'text' || mutableTail.kind === 'thinking') {
+        mutableTail.content += delta.data;
+      }
+      continue;
+    }
+    next.push({
+      kind: delta.kind,
+      id: delta.segmentId,
+      content: delta.data,
+    });
+    mutableTailIndex = next.length - 1;
+  }
+  return next;
+}
+
 export interface ChatState {
   /** All messages in the current chain. */
   messages: Message[];
@@ -110,6 +170,8 @@ export interface ChatState {
    * Empty when idle / after commit.
    */
   streamSegments: StreamSegment[];
+  /** Monotonic signal for bounded auto-scroll updates. */
+  streamRevision: number;
   /** Error message if status is 'error'. */
   error: string | null;
   /** Latest usage data from the stream. */
@@ -119,8 +181,6 @@ export interface ChatState {
    * token lines so a new turn does not flash the previous turn's counters.
    */
   currentTurnUsage: Usage | null;
-  /** Context token breakdown by category (computed from messages + usage). */
-  contextBreakdown: ContextBreakdown | null;
   /**
    * Stream start time (ms epoch) for elapsed tracking.
    * Footers tick locally from this; history memos must not depend on a ticker.
@@ -231,6 +291,21 @@ export function cumulativeUsageFromMessages(
   currentTurnUsage: Usage | null = null,
 ): Usage {
   return addUsage(sumMessageUsages(messages), currentTurnUsage);
+}
+
+/** Cache persisted totals independently from high-frequency live-turn usage. */
+export function useCumulativeUsage(
+  messages: readonly Message[],
+  currentTurnUsage: Usage | null,
+): Usage {
+  const persistedUsage = useMemo(
+    () => sumMessageUsages(messages),
+    [messages],
+  );
+  return useMemo(
+    () => addUsage(persistedUsage, currentTurnUsage),
+    [persistedUsage, currentTurnUsage],
+  );
 }
 
 /**
@@ -384,6 +459,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const [streamingThinking, setStreamingThinking] = useState('');
   const [toolBlocks, setToolBlocks] = useState<ToolBlock[]>([]);
   const [streamSegments, setStreamSegments] = useState<StreamSegment[]>([]);
+  const [streamRevision, setStreamRevision] = useState(0);
   const [error, setError] = useState<string | null>(null);
   // Live stream usage; also rehydrated from the last message with usage
   // when replacing messages (session switch / load).
@@ -396,23 +472,18 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   /** Affinity rebound but messages not yet replaced — hold previous UI. */
   const [isSwitchingSession, setIsSwitchingSession] = useState(false);
 
-  // Context breakdown from messages + usage
-  const contextBreakdown = useMemo(
-    () => computeContextBreakdown(messages, usage),
-    [messages, usage],
-  );
-
   // Persisted session totals plus the authoritative in-flight turn snapshot.
-  const cumulativeUsage: Usage = useMemo(
-    () => cumulativeUsageFromMessages(messages, currentTurnUsage),
-    [messages, currentTurnUsage],
-  );
+  const cumulativeUsage = useCumulativeUsage(messages, currentTurnUsage);
 
   const accumulatedContentRef = useRef('');
   const accumulatedThinkingRef = useRef('');
   const usageRef = useRef<Usage | null>(null);
   const toolBlocksRef = useRef<ToolBlock[]>([]);
   const streamSegmentsRef = useRef<StreamSegment[]>([]);
+  const pendingContentChunksRef = useRef<string[]>([]);
+  const pendingThinkingChunksRef = useRef<string[]>([]);
+  const pendingStreamDeltasRef = useRef<StreamSegmentDelta[]>([]);
+  const streamFrameIdRef = useRef<number | null>(null);
   /** Sync guard against double-send before status re-render (P1-35). */
   const isSendingRef = useRef(false);
   /**
@@ -477,6 +548,67 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     apply();
   }, [acceptsEvent]);
 
+  const flushPendingStreamData = useCallback((): boolean => {
+    const hadPendingData =
+      pendingContentChunksRef.current.length > 0 ||
+      pendingThinkingChunksRef.current.length > 0 ||
+      pendingStreamDeltasRef.current.length > 0;
+    if (pendingContentChunksRef.current.length > 0) {
+      accumulatedContentRef.current += pendingContentChunksRef.current.join('');
+      pendingContentChunksRef.current = [];
+    }
+    if (pendingThinkingChunksRef.current.length > 0) {
+      accumulatedThinkingRef.current += pendingThinkingChunksRef.current.join('');
+      pendingThinkingChunksRef.current = [];
+    }
+    if (pendingStreamDeltasRef.current.length > 0) {
+      streamSegmentsRef.current = appendStreamSegmentDeltas(
+        streamSegmentsRef.current,
+        pendingStreamDeltasRef.current,
+      );
+      pendingStreamDeltasRef.current = [];
+    }
+    return hadPendingData;
+  }, []);
+
+  const cancelStreamFrame = useCallback(() => {
+    if (streamFrameIdRef.current == null) return;
+    window.cancelAnimationFrame(streamFrameIdRef.current);
+    streamFrameIdRef.current = null;
+  }, []);
+
+  const publishStreamState = useCallback(() => {
+    setStreamingContent(accumulatedContentRef.current);
+    setStreamingThinking(accumulatedThinkingRef.current);
+    setStreamSegments(streamSegmentsRef.current);
+    setStreamRevision((revision) => revision + 1);
+  }, []);
+
+  const publishBufferedStream = useCallback(() => {
+    streamFrameIdRef.current = null;
+    flushPendingStreamData();
+    publishStreamState();
+  }, [flushPendingStreamData, publishStreamState]);
+
+  const scheduleStreamFrame = useCallback(() => {
+    if (streamFrameIdRef.current != null) return;
+    streamFrameIdRef.current = window.requestAnimationFrame(publishBufferedStream);
+  }, [publishBufferedStream]);
+
+  const flushStreamFrame = useCallback((publish: boolean) => {
+    cancelStreamFrame();
+    const hadPendingData = flushPendingStreamData();
+    if (!publish || !hadPendingData) return;
+    publishStreamState();
+  }, [cancelStreamFrame, flushPendingStreamData, publishStreamState]);
+
+  const discardStreamFrame = useCallback(() => {
+    cancelStreamFrame();
+    pendingContentChunksRef.current = [];
+    pendingThinkingChunksRef.current = [];
+    pendingStreamDeltasRef.current = [];
+  }, [cancelStreamFrame]);
+
   /**
    * Update toolBlocksRef synchronously, then mirror into React state.
    * onDone commits from the ref; useEffect/setState-updater-only sync races
@@ -488,6 +620,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       const next = typeof updater === 'function' ? updater(prev) : updater;
       toolBlocksRef.current = next;
       setToolBlocks(next);
+      setStreamRevision((revision) => revision + 1);
     },
     [],
   );
@@ -498,12 +631,14 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
    */
   const applyStreamSegments = useCallback(
     (updater: StreamSegment[] | ((prev: StreamSegment[]) => StreamSegment[])) => {
+      flushStreamFrame(true);
       const prev = streamSegmentsRef.current;
       const next = typeof updater === 'function' ? updater(prev) : updater;
       streamSegmentsRef.current = next;
       setStreamSegments(next);
+      setStreamRevision((revision) => revision + 1);
     },
-    [],
+    [flushStreamFrame],
   );
 
   // Subscribe to IPC events
@@ -515,44 +650,26 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubChunk = window.orchid.chat.onChunk((event: ChatChunkEvent) => {
       deliverEvent(event, () => {
-        accumulatedContentRef.current += event.data;
-        setStreamingContent(accumulatedContentRef.current);
-        // Append to last text segment, or open a new one (preserves tool→text→tool order).
-        applyStreamSegments((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.kind === 'text') {
-            return [
-              ...prev.slice(0, -1),
-              { ...last, content: last.content + event.data },
-            ];
-          }
-          return [
-            ...prev,
-            { kind: 'text', id: crypto.randomUUID(), content: event.data },
-          ];
+        pendingContentChunksRef.current.push(event.data);
+        pendingStreamDeltasRef.current.push({
+          kind: 'text',
+          segmentId: event.segmentId,
+          data: event.data,
         });
+        scheduleStreamFrame();
       });
     });
 
     const unsubThinking =
       window.orchid.chat.onThinking?.((event: ChatThinkingEvent) => {
         deliverEvent(event, () => {
-          accumulatedThinkingRef.current += event.data;
-          setStreamingThinking(accumulatedThinkingRef.current);
-          // Chronological thinking segments → Thought widgets in ChatStream
-          applyStreamSegments((prev) => {
-            const last = prev[prev.length - 1];
-            if (last?.kind === 'thinking') {
-              return [
-                ...prev.slice(0, -1),
-                { ...last, content: last.content + event.data },
-              ];
-            }
-            return [
-              ...prev,
-              { kind: 'thinking', id: crypto.randomUUID(), content: event.data },
-            ];
+          pendingThinkingChunksRef.current.push(event.data);
+          pendingStreamDeltasRef.current.push({
+            kind: 'thinking',
+            segmentId: event.segmentId,
+            data: event.data,
           });
+          scheduleStreamFrame();
         });
       }) ?? (() => {});
 
@@ -582,6 +699,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubDone = window.orchid.chat.onDone((event: ChatDoneEvent) => {
       deliverEvent(event, () => {
+      flushStreamFrame(false);
       if (event.usage) {
         setUsage(event.usage);
         usageRef.current = event.usage;
@@ -662,6 +780,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubError = window.orchid.chat.onError((event: ChatErrorEvent) => {
       deliverEvent(event, () => {
+      flushStreamFrame(false);
       // Prefer title + detail for banner classification when available
       const display =
         event.title && event.error && !event.error.startsWith(event.title)
@@ -786,6 +905,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     }) ?? (() => {});
 
     return () => {
+      cancelStreamFrame();
       unsubChunk();
       unsubThinking();
       unsubState();
@@ -796,7 +916,14 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       unsubToolDelta();
       unsubToolUpdate();
     };
-  }, [acceptsEvent, applyToolBlocks, applyStreamSegments, deliverEvent]);
+  }, [
+    applyToolBlocks,
+    applyStreamSegments,
+    cancelStreamFrame,
+    deliverEvent,
+    flushStreamFrame,
+    scheduleStreamFrame,
+  ]);
 
   const send = useCallback(
     async (message: string, options?: ChatSendOptions) => {
@@ -844,6 +971,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         }
         return [...prev, userMessage];
       });
+      discardStreamFrame();
       setError(null);
       setStreamingContent('');
       setStreamingThinking('');
@@ -924,7 +1052,14 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         accumulatedThinkingRef.current = residual.accumulatedThinking;
       }
     },
-    [status, error, isSwitchingSession, applyToolBlocks, applyStreamSegments],
+    [
+      status,
+      error,
+      isSwitchingSession,
+      applyToolBlocks,
+      applyStreamSegments,
+      discardStreamFrame,
+    ],
   );
 
   const cancel = useCallback(async () => {
@@ -989,6 +1124,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
                   : block,
               ),
             );
+            discardStreamFrame();
             setStreamingContent('');
             setStreamingThinking('');
             accumulatedContentRef.current = '';
@@ -1005,7 +1141,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       // Unexpected throw outside the per-IPC try — never leave the mutex stuck.
       resetCancelQueue(cancelQueueRef.current);
     }
-  }, [applyToolBlocks, isSwitchingSession]);
+  }, [applyToolBlocks, discardStreamFrame, isSwitchingSession]);
 
   const stop = useCallback(async (sessionId: string) => {
     if (!window.orchid?.chat?.stop) return;
@@ -1024,6 +1160,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
    * sidebar Context panel and footer radial reflect the loaded session.
    */
   const replaceMessages = useCallback((next: Message[]) => {
+    discardStreamFrame();
     setMessages(next);
     applyToolBlocks([]);
     applyStreamSegments([]);
@@ -1047,7 +1184,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     streamTurnIdRef.current = null;
     lastSequenceRef.current = -1;
     setIsSwitchingSession(false);
-  }, [applyToolBlocks, applyStreamSegments]);
+  }, [applyToolBlocks, applyStreamSegments, discardStreamFrame]);
 
   const beginSessionSwitch = useCallback((sessionId: string | null) => {
     const affinity: ChatEventAffinity = {
@@ -1172,11 +1309,11 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     streamingThinking,
     toolBlocks,
     streamSegments,
+    streamRevision,
     error,
     usage,
     currentTurnUsage,
     cumulativeUsage,
-    contextBreakdown,
     streamStartTime,
     interruptState,
     interrupted,

@@ -34,6 +34,9 @@ import type {
   ChatToolCallDeltaEvent,
   ChatToolCallUpdateEvent,
   ConfigSaveMessage,
+  ProjectConfigSaveMessage,
+  PermissionConfigScopeSaveMessage,
+  PermissionConfigScopes,
   ProviderConnectionCreateMessage,
   ProviderConnectionUpdateMessage,
   ProviderSubmitApiKeyMessage,
@@ -79,6 +82,15 @@ import type {
   AskQuestionSettledEvent,
   AskQuestionResult,
   AskQuestionSnapshot,
+  PermissionApprovalAnswerMessage,
+  PermissionGetSessionModeMessage,
+  PermissionSetSessionModeMessage,
+  PermissionApprovalRequestedEvent,
+  PermissionApprovalSettledEvent,
+  PermissionApprovalSnapshot,
+  PermissionResult,
+  PermissionSessionModeMutationResult,
+  PermissionSessionModeResult,
 } from '../shared/types/ipc';
 import {
   chatChunkEventSchema,
@@ -248,11 +260,23 @@ const orchidAPI: OrchidAPI = {
     save: (updates: ConfigSaveMessage) =>
       invoke(IPC_CHANNELS.CONFIG_SAVE, updates),
 
-    modelMetadata: (modelId: string) =>
-      invoke(IPC_CHANNELS.CONFIG_MODEL_METADATA, modelId),
+    permissionScopes: () =>
+      invoke<PermissionConfigScopes>(IPC_CHANNELS.CONFIG_PERMISSION_SCOPES),
+
+    savePermissionScope: (message: PermissionConfigScopeSaveMessage) =>
+      invoke(IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE, message),
 
     listPersonalities: () =>
       invoke(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES),
+
+    readProject: (projectDir: string) =>
+      invoke(IPC_CHANNELS.CONFIG_READ_PROJECT, projectDir),
+
+    saveProject: (message: ProjectConfigSaveMessage) =>
+      invoke(IPC_CHANNELS.CONFIG_SAVE_PROJECT, message),
+
+    getHome: () =>
+      invoke(IPC_CHANNELS.CONFIG_GET_HOME),
   },
 
   providers: {
@@ -478,6 +502,32 @@ const orchidAPI: OrchidAPI = {
       on(
         IPC_CHANNELS.ASK_QUESTION_SETTLED,
         (...args) => callback(args[0] as AskQuestionSettledEvent),
+      ),
+  },
+
+  permission: {
+    snapshot: () =>
+      invoke<PermissionApprovalSnapshot>(IPC_CHANNELS.PERMISSION_SNAPSHOT),
+
+    answer: (payload: PermissionApprovalAnswerMessage) =>
+      invoke<PermissionResult>(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER, payload),
+
+    setSessionMode: (payload: PermissionSetSessionModeMessage) =>
+      invoke<PermissionSessionModeMutationResult>(IPC_CHANNELS.PERMISSION_SET_SESSION_MODE, payload),
+
+    getSessionMode: (payload: PermissionGetSessionModeMessage) =>
+      invoke<PermissionSessionModeResult>(IPC_CHANNELS.PERMISSION_GET_SESSION_MODE, payload),
+
+    onApprovalRequested: (callback: (event: PermissionApprovalRequestedEvent) => void) =>
+      on(
+        IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED,
+        (...args) => callback(args[0] as PermissionApprovalRequestedEvent),
+      ),
+
+    onApprovalSettled: (callback: (event: PermissionApprovalSettledEvent) => void) =>
+      on(
+        IPC_CHANNELS.PERMISSION_APPROVAL_SETTLED,
+        (...args) => callback(args[0] as PermissionApprovalSettledEvent),
       ),
   },
 };

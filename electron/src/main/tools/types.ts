@@ -20,6 +20,7 @@ import type {
   ToolResultFamily,
 } from '../../shared/types/tool-result';
 import { genericToolResultDataSchema } from '../../shared/types/tool-result';
+import type { RiskClass } from '../../shared/types/permission';
 
 /** Shared explicit result contract for built-ins using the generic family. */
 export const genericToolResultMetadata = {
@@ -69,8 +70,14 @@ export interface ToolDefinition {
   /** Tool category for grouping/filtering */
   category: string;
 
+  /** Risk classification for permission gating */
+  riskClass: RiskClass;
+
   /** If true, skip timeout for this tool */
   noTimeout?: boolean;
+
+  /** If true, execute the handler in a worker thread via the tool worker pool. */
+  offload?: boolean;
 }
 
 /**
@@ -84,6 +91,8 @@ export interface ToolExecutionContext {
   cwd: string;
   /** Session id when available (bg process ownership, output offload). */
   sessionId?: string;
+  /** Originating renderer window frozen for approval delivery. */
+  windowId?: string;
   /** Immutable project definitions captured when the parent turn began. */
   projectRuntime?: ProjectRuntime;
   /** Connection/model identity frozen by the parent turn. */
@@ -118,6 +127,18 @@ export interface ToolExecutionContext {
  */
 export function getToolConfig(ctx: ToolExecutionContext): Config {
   return ctx.projectRuntime?.config ?? getConfig();
+}
+
+export interface WorkerToolContext {
+  cwd: string;
+  config: Config;
+}
+
+export function toWorkerContext(ctx: ToolExecutionContext): WorkerToolContext {
+  return {
+    cwd: ctx.cwd,
+    config: ctx.projectRuntime?.config ?? getConfig(),
+  };
 }
 
 /**

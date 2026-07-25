@@ -414,7 +414,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
           </ul>
 
           {step === 'providers' && (
-            <div className="onb-step text-left">
+            <div className="onb-step orchid-view-enter text-left">
               <div className="flex flex-col items-center gap-4 text-center">
                 <img src={orchidIcon} alt="Orchid" width={72} height={72} />
                 <div className="space-y-2">
@@ -507,7 +507,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
           )}
 
           {step === 'models' && (
-            <div className="onb-step text-left">
+            <div className="onb-step orchid-view-enter text-left">
               <div>
                 <h1 className="text-3xl font-semibold">Choose your models</h1>
                 <p className="onb-step-description mt-2">
@@ -547,7 +547,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
           )}
 
           {step === 'appearance' && (
-            <div className="onb-step text-left">
+            <div className="onb-step orchid-view-enter text-left">
               <div>
                 <h1 className="text-3xl font-semibold">Appearance</h1>
                 <p className="onb-step-description mt-2">
@@ -606,7 +606,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
           )}
 
           {step === 'project' && (
-            <div className="onb-step text-left">
+            <div className="onb-step orchid-view-enter text-left">
               <div>
                 <h1 className="text-3xl font-semibold">Default project folder</h1>
                 <p className="onb-step-description mt-2">
@@ -653,7 +653,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
           )}
 
           {step === 'rag' && (
-            <div className="onb-step text-left">
+            <div className="onb-step orchid-view-enter text-left">
               <div>
                 <h1 className="text-3xl font-semibold">Embedding model</h1>
                 <p className="onb-step-description mt-2">
@@ -698,7 +698,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
           )}
 
           {step === 'mcp' && (
-            <div className="onb-step text-left">
+            <div className="onb-step orchid-view-enter text-left">
               <div>
                 <h1 className="text-3xl font-semibold">Recommended MCP servers</h1>
                 <p className="onb-step-description mt-2">

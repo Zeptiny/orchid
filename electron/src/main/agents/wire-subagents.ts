@@ -10,6 +10,7 @@ import { createSubagentStreamRunner } from './subagent-runner';
 import { createSubagentPersistenceScheduler, persistSubagentChains } from './persist-subagent-chains';
 import { flushSubagentEvents, isEligibleSubagentRecipient, queueSubagentEvent } from '../ipc/subagents';
 import { SubagentState } from './manager';
+import { clearToolCallHistoryForAgentScope } from '../permissions/history';
 
 let wired = false;
 let persistenceScheduler: ReturnType<typeof createSubagentPersistenceScheduler> | null = null;
@@ -39,6 +40,7 @@ export function wireSubagentRuntime(): void {
         (change.projection.state === SubagentState.COMPLETED ||
          change.projection.state === SubagentState.FAILED ||
          change.projection.state === SubagentState.INTERRUPTED)) {
+      clearToolCallHistoryForAgentScope(change.sessionId, change.subagentId);
       flushSubagentEvents();
       persistenceScheduler?.flush(change.sessionId);
     } else {

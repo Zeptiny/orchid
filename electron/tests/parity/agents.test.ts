@@ -20,6 +20,7 @@ import { AgentType, AgentTier } from '../../src/shared/types/agent';
 
 const EXPECTED_AGENTS = [
   { name: 'general', type: 'internal', tier: 'bloom' },
+  { name: 'permission-evaluator', type: 'internal', tier: 'seed' },
   { name: 'session-namer', type: 'internal', tier: 'seed' },
   { name: 'web-fetch', type: 'internal', tier: 'seed' },
   { name: 'implementer', type: 'subagent', tier: 'bloom' },
@@ -75,7 +76,7 @@ describe('Agent Parity', () => {
       projectDir: path.join(tmpDir, 'empty-project'),
     });
 
-    expect(agents.size).toBe(27);
+    expect(agents.size).toBe(28);
   });
 
   it('all expected agent names are present', () => {
@@ -178,7 +179,7 @@ describe('Agent Parity', () => {
       tierCounts[agent.tier]++;
     }
 
-    expect(tierCounts.seed).toBe(3);   // explorer, web-fetch, session-namer
+    expect(tierCounts.seed).toBe(4);   // explorer, web-fetch, session-namer
     expect(tierCounts.sprout).toBe(2); // web-researcher, learnings-researcher
     expect(tierCounts.bloom).toBe(11); // general, implementer, api-contract, etc.
     expect(tierCounts.crown).toBe(11); // reviewers, adversarial, etc.
@@ -194,7 +195,7 @@ describe('Agent Parity', () => {
     const internalAgents = agents.filter((a) => a.type === AgentType.INTERNAL);
     const subagentAgents = agents.filter((a) => a.type === AgentType.SUBAGENT);
 
-    expect(internalAgents).toHaveLength(3);
+    expect(internalAgents).toHaveLength(4);
     expect(subagentAgents).toHaveLength(24);
   });
 

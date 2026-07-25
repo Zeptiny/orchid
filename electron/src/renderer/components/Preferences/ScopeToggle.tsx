@@ -14,6 +14,8 @@ export interface ScopeToggleProps {
   /** When false, project options are disabled. */
   projectAvailable: boolean;
   projectDir: string | null;
+  includeAll?: boolean;
+  ariaLabel?: string;
 }
 
 const OPTIONS = [
@@ -27,15 +29,18 @@ export function ScopeToggle({
   onChange,
   projectAvailable,
   projectDir,
+  includeAll = true,
+  ariaLabel = 'Definition scope filter',
 }: ScopeToggleProps) {
+  const options = includeAll ? OPTIONS : OPTIONS.filter((option) => option.id !== 'all');
   return (
     <div className="flex flex-wrap items-center gap-2">
       <div
         className="join join-horizontal rounded-box border border-base-300 bg-base-200/60 p-0.5"
         role="group"
-        aria-label="Definition scope filter"
+        aria-label={ariaLabel}
       >
-        {OPTIONS.map((opt) => {
+        {options.map((opt) => {
           const disabled = opt.id === 'project' && !projectAvailable;
           const active = value === opt.id;
           return (

@@ -25,6 +25,10 @@ import { getProjectRuntimeRegistry } from '../project/runtime';
 import { clearNextRequestStop } from './next-request-stop';
 import { removeSessionActivity } from './session-activity';
 import {
+  takeDraftPermissionOverride,
+  hydrateSessionPermissionOverride,
+} from '../permissions/session-overrides';
+import {
   workingSetClearFocus,
   workingSetOpenOrFocus,
   workingSetRemove,
@@ -201,6 +205,9 @@ export function registerSessionIPC(): void {
 
     if (session) {
       workingSetOpenOrFocus(session.id, windowId);
+      // Hydrate the in-memory permission gate map from the persisted session
+      // record so the override survives restarts.
+      hydrateSessionPermissionOverride(session.id, session.permissionMode);
     } else {
       // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
       workingSetRemove(id, windowId);
@@ -247,6 +254,7 @@ export function registerSessionIPC(): void {
 
     if (session) {
       workingSetOpenOrFocus(session.id, windowId);
+      hydrateSessionPermissionOverride(session.id, session.permissionMode);
     } else {
       // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
       workingSetRemove(id, windowId);
@@ -301,6 +309,10 @@ export function registerSessionIPC(): void {
     if (draftOverride !== undefined) {
       manager.setReasoningEffortOverride(created.id, draftOverride);
     }
+    const draftPermission = takeDraftPermissionOverride(windowId);
+    if (draftPermission !== undefined) {
+      manager.setPermissionMode(created.id, draftPermission);
+    }
     const session = manager.getSession(created.id) ?? created;
     // Draft was promoted into the session.
     clearDraftCwd(windowId);
@@ -336,8 +348,18 @@ export function registerSessionIPC(): void {
     const wasActive = manager.getActive(String(event.sender.id))?.id === parsed.data.id;
     // A deleted background session must not keep spending provider/tool work or
     // recreate activity after it disappears from the catalog.
-    const { forceStopSession } = await import('./chat');
+    const [
+      { forceStopSession },
+      { clearPermissionSessionState },
+      { clearToolCallHistoryForSession },
+    ] = await Promise.all([
+      import('./chat'),
+      import('./permission'),
+      import('../permissions/history'),
+    ]);
     forceStopSession(parsed.data.id);
+    clearPermissionSessionState(parsed.data.id);
+    clearToolCallHistoryForSession(parsed.data.id);
     clearNextRequestStop(parsed.data.id);
     const deleted = manager.delete(parsed.data.id);
     if (deleted) {
@@ -575,4 +597,4 @@ export function unregisterSessionIPC(): void {
 }
 
 // Re-export draft helper for tests that need to seed draft without IPC.
-export { getDraftCwd, setDraftCwd, clearDraftCwd };
+export { getDraftCwd, setDraftCwd, clearDraftCwd, takeDraftPermissionOverride };

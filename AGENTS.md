@@ -12,7 +12,11 @@ The Electron application is Orchid's sole runtime. Its main-process architecture
 
 The repo root holds documentation, design artifacts, and tooling caches. **The Electron application itself lives in `electron/`** — its own `package.json`, `src/`, `tests/`, `scripts/`, and TypeScript configs are all under that directory.
 
-> **Path convention:** Unless otherwise stated, every path in this document is relative to the Electron app root (`electron/`). For example, `src/main/index.ts` means `electron/src/main/index.ts`, and the `npm run …` commands below run from `electron/`.
+The repository-root path `docs/solutions/` is the searchable knowledge store for documented bugs, practices, and workflow patterns. Entries are organized by category with YAML frontmatter such as `module`, `tags`, and `problem_type`, and are relevant when implementing, debugging, or making decisions in documented areas.
+
+The repository-root file `CONCEPTS.md` defines the project's shared domain vocabulary and is relevant when orienting to the codebase or discussing named entities, processes, and status concepts.
+
+> **Path convention:** The explicitly identified repository-root paths above are exceptions. Unless otherwise stated, every other path in this document is relative to the Electron app root (`electron/`). For example, `src/main/index.ts` means `electron/src/main/index.ts`, and the `npm run …` commands below run from `electron/`.
 
 ## Tech Stack
 
@@ -282,7 +286,10 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 - Each main-agent and subagent turn builds a registry from its frozen project runtime; the process singleton remains only for non-turn compatibility surfaces
 - Built-in tools: filesystem, search, process, AST, RAG, todo, web, skill, MCP, subagent
 - MCP tools are merged from the leased project-owned `MCPManager` at stream time; leases keep superseded managers alive until their turns finish
-- Tool output offloading: large outputs stored in session files, summary sent to LLM
+- Tool results pass through two layers before reaching the LLM:
+  1. **Agent projection** (`result.ts`): each tool family has an `AgentProjector` that transforms canonical result data into the LLM-visible XML. Projectors must not truncate — they send full content and rely on the offloading layer for size control.
+  2. **Output offloading** (`tool-dispatch.ts`): if the projected content exceeds `tool_output_inline_threshold` (config, default 20 KB) and the tool is not in `TOOLS_WITHOUT_OUTPUT_OFFLOAD` (`provider-quirks.ts`), the content is written to a per-session cache file and replaced with a compact pointer. When no session is active (e.g., subagent context), content is hard-truncated to the threshold with a warning instead.
+  - `TOOLS_WITHOUT_OUTPUT_OFFLOAD` exempts self-limiting tools (read, grep, glob, etc.) whose projections already bound their output. Do not add projection-level truncation to individual tools — size control belongs in the offloading layer so behavior stays uniform across all tools.
 - **`ToolExecutionContext`**: frozen `{ cwd, sessionId? }` captured at turn start; every tool handler receives it (never re-reads live session/process.cwd mid-turn)
 - **`tool:execute` IPC**: allowlisted read-only tools only; args validated via `toolRegistry.validate` before the handler
 
@@ -303,7 +310,7 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 Applied via `wrapLanguageModel()`:
 1. **Retry** (outermost) — exponential backoff for transient errors
 2. **Throttle** — rate-limits thinking content yields
-(Empty-choices handling is owned by the AI SDK; tool-output offload thresholds live in `provider-quirks.ts` as constants only.)
+(Empty-choices handling is owned by the AI SDK; tool-output offload thresholds are config-driven via `tool_output_inline_threshold` with fallback defaults in `provider-quirks.ts`.)
 
 ### RAG Pipeline
 - ONNX-based local embeddings (`fastembed/BAAI/bge-small-en-v1.5`)
@@ -390,7 +397,7 @@ The renderer uses a **primitives-as-API, primitives.css-as-engine** model (Daisy
 
 **Extend the primitive, don't override via className.** If you need a new visual variant, add it to the primitive's variant type and `Record<Union, string>` class map. Don't write `variant="ghost" className="text-error hover:bg-error/10"` — that creates two sources of truth for one control's visual semantics. className on a primitive is for layout utilities only (`flex`, `gap-2`, `w-full`, `mt-3`).
 
-**chat.css is dead.** It is header-only (10 lines, no CSS rules). Any new CSS rule belongs in `components.css` `@layer components` (for product composites) or `markdown.css` (for markdown rendering). The growth guard fails on any increase.
+**chat.css is dead.** It is header-only (10 lines, no CSS rules). Any new CSS rule belongs in `components.css` `@layer components` (for product composites), `motion.css` (for shared state-transition behavior), or `markdown.css` (for markdown rendering). The growth guard fails on any increase.
 
 **components.css growth.** components.css is at ~1,963 lines. Prefer splitting by surface area (onboarding, config, session, chat) if it crosses ~2,000 lines. Avoid adding new rules when a primitive or Tailwind utility can express the same result.
 
@@ -403,6 +410,19 @@ The renderer uses a **primitives-as-API, primitives.css-as-engine** model (Daisy
 **Visual smoke per migration batch.** The contract tests are source-level grep — they verify class strings exist in files, not that rendered output looks right. After every batch of primitive migrations, run the app across all 5 themes and visually confirm at minimum: buttons, alerts, inputs, tabs, cards, badges.
 
 **New primitive checklist.** Every new `.tsx` file in `components/ui/` must: (1) export a typed component with `PascalCase` name, (2) use `Record<Union, string>` class maps for variants (not inline ternaries), (3) apply `.trim().replace(/\s+/g, ' ')` on className templates, (4) include a JSDoc docstring, (5) use `forwardRef` for interactive elements (button, input, select), (6) pass the "primitive purity" test (no domain imports). Add unit tests in `tests/unit/renderer-ui-primitives.test.ts` using the existing `renderToStaticMarkup` pattern.
+
+### Motion and state transitions
+
+Motion is a shared interaction contract, not local decoration. Use it to explain continuity (panel resize, disclosure expansion, list insertion, view replacement) or confirm meaningful state changes (idle/running/confirm, send/queue/cancel, tool lifecycle, transient feedback).
+
+- Use the theme-owned `--transition-fast`, `--transition-normal`, and `--transition-slow` tokens. Controls and chevrons use `fast`, status/popover/view entrances use `normal`, and shell geometry uses `slow`; do not introduce one-off duration/easing literals when a token fits.
+- Reuse the `orchid-*` vocabulary in `styles/motion.css`. Stateful disclosures must use `CollapsibleRegion` so content remains mounted while height and opacity settle; the trigger continues to own `aria-expanded` and `aria-controls`.
+- Prefer opacity and transform for frequent motion. Grid-track animation is approved for mounted disclosures, and width/grid-column animation is approved for the existing shell. Do not animate layout broadly.
+- Key mutually exclusive status/action wrappers so their entrance motion replays when semantic state changes. Give inserted list items and mounted settings/onboarding/subagent views stable React keys.
+- Never animate streaming text, live token or elapsed counters, terminal output, cursor updates, or high-frequency progress text. Progress geometry may transition through the primitive engine.
+- Overlays and popovers use the shared fade/pop vocabulary. Avoid bespoke keyframes in feature stylesheets.
+- Every motion path must remain usable under `prefers-reduced-motion`; the global exception rule short-circuits animations and transitions. New motion CSS must not bypass it.
+- Validate motion changes with primitive/unit and source-contract tests. Visual smoke remains required when browser inspection is permitted by the task.
 
 ### Naming
 - **Files**: `kebab-case.ts` / `kebab-case.tsx`

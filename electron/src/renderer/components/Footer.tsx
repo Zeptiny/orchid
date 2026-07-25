@@ -5,24 +5,86 @@
  * Right: model picker + context radial with dropup breakdown.
  * Wording mirrors the multi-stage cancel button on the composer.
  */
-import { useCallback, useEffect, useId, useState, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
 import type { CommandContext } from '../../shared/types/ipc-boundary';
-import type { ProviderModelOption, SessionReasoningConfigResult } from '../../shared/types/ipc';
+import type {
+  PermissionGetSessionModeMessage,
+  PermissionSessionModeMutationResult,
+  PermissionSessionModeResult,
+  PermissionSetSessionModeMessage,
+  ProviderModelOption,
+  SessionReasoningConfigResult,
+} from '../../shared/types/ipc';
+import type { PermissionMode } from '../../shared/types/permission';
 import { useElapsedSeconds, type InterruptState } from '../hooks/useChat';
 import { FOOTER_SHORTCUT_IDS, getShortcut } from '../keyboard';
 import { resolveModelNotifyLabel } from '../utils/provider-selection';
-import { ContextLegend, ContextStackedBar, contextPercent as getContextPercent } from './ContextGrid';
+import { ContextBreakdownView, contextPercent as getContextPercent } from './ContextGrid';
 import { contextUsedTokens } from '../../shared/usage';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
 import { ModelPicker } from './ModelPicker';
+import { PermissionSelector } from './PermissionSelector';
 import { ReasoningSelector, shouldShowReasoningSelector } from './ReasoningSelector';
 import { Button } from './ui/Button';
 import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
 
+/** Orders async permission-mode reads and writes so stale responses cannot commit. */
+export class PermissionModeCoordinator {
+  private generation = 0;
+
+  async hydrate(
+    expectedSessionId: string | null,
+    read: (message: PermissionGetSessionModeMessage) => Promise<PermissionSessionModeResult>,
+    commit: (mode: PermissionMode | null) => void,
+  ): Promise<void> {
+    const generation = ++this.generation;
+    commit(null);
+    try {
+      const result = await read({ expectedSessionId });
+      if (
+        generation === this.generation &&
+        result.ok &&
+        result.sessionId === expectedSessionId
+      ) {
+        commit(result.mode);
+      }
+    } catch {
+      // Keep the inherited state when hydration fails.
+    }
+  }
+
+  async update(
+    expectedSessionId: string | null,
+    mode: PermissionMode | null,
+    write: (message: PermissionSetSessionModeMessage) => Promise<PermissionSessionModeMutationResult>,
+    commit: (mode: PermissionMode | null) => void,
+  ): Promise<void> {
+    const generation = ++this.generation;
+    try {
+      const result = await write({ mode, expectedSessionId });
+      if (
+        generation === this.generation &&
+        result.ok &&
+        result.sessionId === expectedSessionId
+      ) {
+        commit(mode);
+      }
+    } catch {
+      // Keep the last confirmed mode when persistence fails.
+    }
+  }
+
+  invalidate(): void {
+    this.generation += 1;
+  }
+}
+
 interface FooterProps {
+  /** Whether the chat surface is currently available for presentation work. */
+  isVisible?: boolean;
   /** Stream start (ms epoch); footer ticks elapsed locally at 1s while streaming. */
   streamStartTime?: number | null;
   isStreaming: boolean;
@@ -39,7 +101,8 @@ interface FooterProps {
   sessionId?: string | null;
 }
 
-export function Footer({
+export const Footer = memo(function Footer({
+  isVisible = true,
   streamStartTime = null,
   isStreaming,
   interruptState,
@@ -54,10 +117,15 @@ export function Footer({
   sessionId,
 }: FooterProps) {
   const confirming = interruptState && interruptState !== 'idle';
-  const elapsedSeconds = useElapsedSeconds(streamStartTime, isStreaming || Boolean(confirming));
+  const elapsedSeconds = useElapsedSeconds(
+    streamStartTime,
+    isVisible && (isStreaming || Boolean(confirming)),
+  );
   const [contextOpen, setContextOpen] = useState(false);
   const contextMenuId = useId();
   const [reasoningConfig, setReasoningConfig] = useState<SessionReasoningConfigResult | null>(null);
+  const [sessionPermissionMode, setSessionPermissionMode] = useState<PermissionMode | null>(null);
+  const permissionModeCoordinator = useRef(new PermissionModeCoordinator());
 
   const usedContextTokens = contextUsedTokens(usage);
   const contextPercent = getContextPercent(usage, maxContext);
@@ -112,6 +180,22 @@ export function Footer({
     };
   }, [model, sessionId]);
 
+  useEffect(() => {
+    const permission = window.orchid?.permission;
+    const coordinator = permissionModeCoordinator.current;
+    if (!permission?.getSessionMode) {
+      coordinator.invalidate();
+      setSessionPermissionMode(null);
+      return;
+    }
+    void coordinator.hydrate(
+      sessionId ?? null,
+      (message) => permission.getSessionMode(message),
+      setSessionPermissionMode,
+    );
+    return () => coordinator.invalidate();
+  }, [sessionId]);
+
   const badgeTone =
     contextPercent != null && contextPercent >= 85
       ? 'error'
@@ -151,11 +235,28 @@ export function Footer({
     [],
   );
 
+  const handlePermissionModeChange = useCallback(
+    (next: PermissionMode | null) => {
+      const permission = window.orchid?.permission;
+      if (!permission?.setSessionMode) return;
+      void permissionModeCoordinator.current.update(
+        sessionId ?? null,
+        next,
+        (message) => permission.setSessionMode(message),
+        setSessionPermissionMode,
+      );
+    },
+    [sessionId],
+  );
+
   return (
     <div className="orchid-chat-footer">
       <div className="orchid-chat-footer-main min-w-0 flex-1 flex items-center gap-2 overflow-hidden">
         {isStreaming || confirming ? (
-          <>
+          <span
+            key={confirming ? interruptState : 'running'}
+            className="orchid-footer-state min-w-0 gap-2"
+          >
             {confirming ? (
               <span className="interrupt-hint inline-flex items-center gap-1 font-medium text-warning shrink-0">
                 <Icon name="alert" size={12} />
@@ -184,9 +285,9 @@ export function Footer({
                     : 'to interrupt'}
               </span>
             </span>
-          </>
+          </span>
         ) : (
-          <>
+          <span key="idle" className="orchid-footer-state min-w-0 gap-2">
             {FOOTER_SHORTCUT_IDS.map((id, index) => {
               const def = getShortcut(id);
               if (!def) return null;
@@ -206,11 +307,15 @@ export function Footer({
                 </span>
               );
             })}
-          </>
+          </span>
         )}
       </div>
 
       <div className="orchid-chat-footer-end shrink-0 flex items-center gap-1.5">
+        <PermissionSelector
+          value={sessionPermissionMode}
+          onChange={handlePermissionModeChange}
+        />
         {reasoningConfig && shouldShowReasoningSelector(reasoningConfig) && (
           <ReasoningSelector
             levels={reasoningConfig.levels}
@@ -305,13 +410,7 @@ export function Footer({
               </div>
             </div>
             <div className="footer-context-panel-body">
-              <ContextStackedBar
-                usage={usage}
-                messages={messages}
-                maxContext={maxContext}
-                streamingThinkingChars={streamingThinkingChars}
-              />
-              <ContextLegend
+              <ContextBreakdownView
                 usage={usage}
                 messages={messages}
                 maxContext={maxContext}
@@ -325,7 +424,7 @@ export function Footer({
       </div>
     </div>
   );
-}
+});
 
 function formatElapsed(seconds: number): string {
   if (seconds < 60) {

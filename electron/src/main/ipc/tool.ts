@@ -104,6 +104,7 @@ export function registerToolIPC(): void {
         sessionId: toolCtx.sessionId,
         agentScopeId: toolCtx.agentScopeId,
         projectRuntime: toolCtx.projectRuntime,
+        windowId,
       },
     );
   });

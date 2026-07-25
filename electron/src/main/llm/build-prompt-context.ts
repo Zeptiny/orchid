@@ -32,9 +32,7 @@ import {
 const TREE_TTL_MS = 5_000;
 let treeCache: { cwd: string; expiresAt: number; tree: string } | null = null;
 
-const BG_MAX_ENTRIES = 5;
-const BG_TAIL_LINES = 8;
-const BG_TAIL_CHARS = 500;
+
 
 /**
  * Build an ASCII directory tree asynchronously (does not block the main process
@@ -148,6 +146,9 @@ function mapPendingSubagentQuestions(
 function mapBackgroundCommands(
   sessionId: string | null | undefined,
   agentScopeId: string,
+  bgMaxEntries: number,
+  bgTailLines: number,
+  bgTailChars: number,
 ): BackgroundCommand[] {
   try {
     const store = getBackgroundStore();
@@ -161,15 +162,15 @@ function mapBackgroundCommands(
     const userEntries = visible.filter((e) => e.owner === 'USER');
     const agentEntries = visible
       .filter((e) => e.owner !== 'USER')
-      .slice(-BG_MAX_ENTRIES);
+      .slice(-bgMaxEntries);
     const selected = [...agentEntries, ...userEntries];
 
     return selected.map((entry) => {
-      const tailRaw = entry.buffer.getTail(BG_TAIL_LINES);
+      const tailRaw = entry.buffer.getTail(bgTailLines);
       let tail: string | undefined;
       if (tailRaw) {
-        if (tailRaw.length > BG_TAIL_CHARS) {
-          tail = '...' + tailRaw.slice(tailRaw.length - BG_TAIL_CHARS);
+        if (tailRaw.length > bgTailChars) {
+          tail = '...' + tailRaw.slice(tailRaw.length - bgTailChars);
         } else {
           tail = tailRaw;
         }
@@ -270,7 +271,13 @@ export async function buildSystemPromptContext(
     directoryTree: await getDirectoryTree(cwd, config),
     subagents: mapSubagents(sessionId, agentScopeId),
     todos: scopedTodos,
-    backgroundCommands: mapBackgroundCommands(sessionId, agentScopeId),
+    backgroundCommands: mapBackgroundCommands(
+      sessionId,
+      agentScopeId,
+      config.bg_prompt_max_entries,
+      config.bg_prompt_tail_lines,
+      config.bg_prompt_tail_chars,
+    ),
     pendingSubagentQuestions: mapPendingSubagentQuestions(sessionId, agentScopeId),
   };
 }

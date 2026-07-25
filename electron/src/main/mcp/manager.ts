@@ -32,6 +32,7 @@
 import { z } from 'zod';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { ToolDefinition, ToolHandler, RegisteredTool } from '../tools/types';
+import { getToolConfig } from '../tools/types';
 import type { MCPServerConfig, MCPServerStatus, MCPServerStatusValue } from './schema';
 import { isValidServerName } from './schema';
 import { createTransport } from './transport';
@@ -40,6 +41,7 @@ import {
   createDynamicToolOutcome,
   genericToolResultDataSchema,
 } from '../../shared/types/tool-result';
+import { RiskClass } from '../../shared/types/permission';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -376,12 +378,23 @@ export class MCPManager {
    * Get the status of all configured MCP servers.
    */
   getStatus(): MCPServerStatus[] {
+    const toolsByServer = new Map<string, string[]>();
+    for (const namespaced of this._tools.keys()) {
+      const { serverName, toolName } = this._parseToolName(namespaced);
+      const list = toolsByServer.get(serverName);
+      if (list) list.push(toolName);
+      else toolsByServer.set(serverName, [toolName]);
+    }
+
     const statuses: MCPServerStatus[] = [];
     for (const [name, status] of this._serverStatus) {
+      const tools = toolsByServer.get(name) ?? [];
+      tools.sort((a, b) => a.localeCompare(b));
       statuses.push({
         name,
         status: status.status,
         toolCount: status.toolCount,
+        tools,
         error: status.error,
       });
     }
@@ -517,6 +530,7 @@ export class MCPManager {
           resultFamily: 'generic',
           outputDataSchema: genericToolResultDataSchema,
           category: 'mcp',
+          riskClass: RiskClass.MCP,
         };
 
         const handler: ToolHandler = async (input: unknown, ctx) => {
@@ -533,11 +547,18 @@ export class MCPManager {
             });
           }
           const serialized = JSON.stringify(raw);
-          if (serialized.length > 5 * 1024 * 1024) {
+          let mcpResultMaxBytes: number;
+          try {
+            mcpResultMaxBytes = getToolConfig(ctx).mcp_result_max_bytes;
+          } catch {
+            mcpResultMaxBytes = 5_242_880;
+          }
+          const serializedBytes = Buffer.byteLength(serialized, 'utf8');
+          if (serializedBytes > mcpResultMaxBytes) {
             return {
               status: 'partial',
               data: {
-                value: serialized.slice(0, 10000) + '\n...[truncated: ' + serialized.length + ' bytes total]',
+                value: serialized.slice(0, 10000) + '\n...[truncated: ' + serializedBytes + ' bytes total]',
                 origin: { kind: 'mcp', name: registryName },
               },
               retrieval: { kind: 'rerun', toolName: registryName, input: {} },

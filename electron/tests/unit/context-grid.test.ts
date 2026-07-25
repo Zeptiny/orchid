@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
+  ContextGrid,
   ContextLegend,
   computeContextBreakdown,
   computeContextCategories,
@@ -110,6 +111,32 @@ describe('context grid breakdown', () => {
     });
   });
 
+  it('excludes hidden messages from every character bucket', () => {
+    const hiddenTool = {
+      role: 'assistant',
+      content: 'hidden tool output',
+      type: MessageType.TOOL_RESULT,
+      thinking: null,
+      hidden: true,
+    } as unknown as Message;
+
+    expect(computeContextCategories(
+      [hiddenTool],
+      {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+        cached_tokens: 0,
+      },
+      1_000,
+    )).toEqual({
+      toolDefinition: 0,
+      toolUse: 0,
+      response: 0,
+      reasoning: 0,
+    });
+  });
+
   it('labels tool and assistant categories without parent rows', () => {
     const html = renderToStaticMarkup(
       createElement(ContextLegend, {
@@ -141,5 +168,33 @@ describe('context grid breakdown', () => {
     expect(html).not.toContain('>Tools<');
     expect(html).not.toContain('>Assistant<');
     expect(html).not.toContain('context-panel-list pl-3');
+  });
+
+  it('scans message content once for the paired bar and legend', () => {
+    let contentReads = 0;
+    const message = {
+      role: 'user',
+      type: MessageType.TEXT,
+      hidden: false,
+      get content() {
+        contentReads += 1;
+        return 'hello';
+      },
+    } as unknown as Message;
+
+    renderToStaticMarkup(
+      createElement(ContextGrid, {
+        messages: [message],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 0,
+          total_tokens: 100,
+          cached_tokens: 0,
+        },
+        maxContext: 1_000,
+      }),
+    );
+
+    expect(contentReads).toBe(1);
   });
 });

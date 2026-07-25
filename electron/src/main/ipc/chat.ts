@@ -28,6 +28,7 @@ import {
   getSessionManager,
   resolveWindowWorkspace,
   takeDraftReasoningOverride,
+  takeDraftPermissionOverride,
 } from './session';
 import { workingSetOpenOrFocus } from './session-working-set';
 import { getBackgroundStore } from '../tools/process/background-store';
@@ -252,16 +253,33 @@ function appendTextSegment(
   active: ActiveAgent,
   kind: 'text' | 'thinking',
   content: string,
-): void {
+): string {
   const last = active.streamSegments.at(-1);
   if (last?.kind === kind) {
     active.streamSegments[active.streamSegments.length - 1] = {
       ...last,
       content: last.content + content,
     };
-    return;
+    return last.id;
   }
-  active.streamSegments.push({ kind, id: crypto.randomUUID(), content });
+  const id = crypto.randomUUID();
+  active.streamSegments.push({ kind, id, content });
+  return id;
+}
+
+function textSegmentIdAtOffset(
+  active: ActiveAgent,
+  kind: 'text' | 'thinking',
+  offset: number,
+): string | undefined {
+  let consumed = 0;
+  for (const segment of active.streamSegments) {
+    if (segment.kind !== kind) continue;
+    const end = consumed + segment.content.length;
+    if (end > offset) return segment.id;
+    consumed = end;
+  }
+  return undefined;
 }
 
 function ensureToolSnapshot(
@@ -371,14 +389,21 @@ function flushPartialTurnContent(agent: ActiveAgent, context: AgentContext | und
   if (thinking && thinking.length > agent.thinkingCommittedLength) {
     const seg = thinking.slice(agent.thinkingCommittedLength);
     if (seg.trim()) {
-      agent.turnMessages.push(makeThinkingMessage(seg));
+      agent.turnMessages.push(makeThinkingMessage(
+        seg,
+        textSegmentIdAtOffset(agent, 'thinking', agent.thinkingCommittedLength),
+      ));
     }
     agent.thinkingCommittedLength = thinking.length;
   }
 
   const remaining = partialResponse.slice(agent.responseCommittedLength);
   if (remaining) {
-    agent.turnMessages.push(makeAssistantMessage(remaining, usage));
+    agent.turnMessages.push(makeAssistantMessage(
+      remaining,
+      usage,
+      textSegmentIdAtOffset(agent, 'text', agent.responseCommittedLength),
+    ));
     agent.responseCommittedLength = partialResponse.length;
   } else if (usage) {
     if (!attachUsageToLatestAssistant(agent.turnMessages, usage)) {
@@ -751,6 +776,10 @@ export function ensureActiveSession(
   if (draftOverride !== undefined) {
     manager.setReasoningEffortOverride(created.id, draftOverride);
   }
+  const draftPermission = takeDraftPermissionOverride(windowId);
+  if (draftPermission !== undefined) {
+    manager.setPermissionMode(created.id, draftPermission);
+  }
   const session =
     manager.getSession(created.id) ??
     { ...created, reasoningEffortOverride: draftOverride ?? created.reasoningEffortOverride };
@@ -923,6 +952,7 @@ function createProviderStreamFn(input: {
   readonly messages: Message[];
   readonly runtime: ProjectRuntime;
   readonly sessionId: string;
+  readonly windowId: string;
   readonly modelInstance: LanguageModelV4;
   readonly accounting: ProviderAttemptAccountingContext;
   readonly registry: ReturnType<typeof getBuiltinToolRegistryForRuntime>;
@@ -954,6 +984,7 @@ function createProviderStreamFn(input: {
       registry: input.registry,
       mcpManager: input.mcpManager,
       sessionId: input.sessionId,
+      windowId: input.windowId,
       projectRuntime: input.runtime,
       agentScopeId: 'main',
       abortSignal,
@@ -1174,10 +1205,10 @@ export function registerChatIPC(): void {
     // Freeze turn tool/prompt context + model at send time (R6): mid-turn
     // session switch must not rebind tools, model, or working_directory.
     const sessionManager = getSessionManager();
-    const activeSession = sessionGate.session;
     const turnCtx: ToolExecutionContext = {
       cwd: sessionGate.cwd,
       sessionId,
+      windowId,
       projectRuntime: runtime,
       agentScopeId: 'main',
       selection: turnSelection,
@@ -1190,7 +1221,7 @@ export function registerChatIPC(): void {
     try {
       const chain = sessionManager.startChain({
         selection: turnSelection,
-        modelLabel: activeSession.modelLabel ?? turnSelection.modelId,
+        modelLabel: turnSelection.modelId,
         agentName: agent.name,
         agentType: agent.type,
         agentTier: agent.tier,
@@ -1238,6 +1269,7 @@ export function registerChatIPC(): void {
             messages,
             runtime,
             sessionId,
+            windowId,
             modelInstance,
             accounting,
             registry: turnRegistry,
@@ -1307,18 +1339,28 @@ export function registerChatIPC(): void {
     const flushResponseSegment = (fullResponse: string, attachUsage: Usage | null = null) => {
       if (fullResponse.length <= activeAgent.responseCommittedLength) return;
       const segment = fullResponse.slice(activeAgent.responseCommittedLength);
+      const segmentId = textSegmentIdAtOffset(
+        activeAgent,
+        'text',
+        activeAgent.responseCommittedLength,
+      );
       activeAgent.responseCommittedLength = fullResponse.length;
       if (!segment.trim() && !attachUsage) return;
-      activeAgent.turnMessages.push(makeAssistantMessage(segment, attachUsage));
+      activeAgent.turnMessages.push(makeAssistantMessage(segment, attachUsage, segmentId));
     };
 
     /** Snapshot reasoning/thinking text into turnMessages (before tools / final text). */
     const flushThinkingSegment = (fullThinking: string) => {
       if (fullThinking.length <= activeAgent.thinkingCommittedLength) return;
       const segment = fullThinking.slice(activeAgent.thinkingCommittedLength);
+      const segmentId = textSegmentIdAtOffset(
+        activeAgent,
+        'thinking',
+        activeAgent.thinkingCommittedLength,
+      );
       activeAgent.thinkingCommittedLength = fullThinking.length;
       if (!segment.trim()) return;
-      activeAgent.turnMessages.push(makeThinkingMessage(segment));
+      activeAgent.turnMessages.push(makeThinkingMessage(segment, segmentId));
     };
 
     const finalizeTurn = (opts: {
@@ -1342,7 +1384,15 @@ export function registerChatIPC(): void {
         // Attach usage to the final assistant bubble when present.
         if (remaining || opts.interrupted) {
           activeAgent.turnMessages.push(
-            makeAssistantMessage(remaining || opts.response || '', opts.usage),
+            makeAssistantMessage(
+              remaining || opts.response || '',
+              opts.usage,
+              textSegmentIdAtOffset(
+                activeAgent,
+                'text',
+                activeAgent.responseCommittedLength,
+              ),
+            ),
           );
           activeAgent.responseCommittedLength = opts.response.length;
         }
@@ -1488,10 +1538,11 @@ export function registerChatIPC(): void {
       if (context.response.length > lastSentLength) {
         const newContent = context.response.slice(lastSentLength);
         lastSentLength = context.response.length;
-        appendTextSegment(activeAgent, 'text', newContent);
+        const segmentId = appendTextSegment(activeAgent, 'text', newContent);
         sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_CHUNK, {
             type: 'chunk',
             data: newContent,
+            segmentId,
         });
       }
 
@@ -1500,10 +1551,11 @@ export function registerChatIPC(): void {
       if (thinking.length > lastThinkingLength) {
         const newThinking = thinking.slice(lastThinkingLength);
         lastThinkingLength = thinking.length;
-        appendTextSegment(activeAgent, 'thinking', newThinking);
+        const segmentId = appendTextSegment(activeAgent, 'thinking', newThinking);
         sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_THINKING, {
             type: 'thinking',
             data: newThinking,
+            segmentId,
         });
       }
 
@@ -1830,16 +1882,24 @@ export function registerChatIPC(): void {
         const usage = context.usage ?? null;
         // Flush reasoning before final text
         if (thinking.length > existing.thinkingCommittedLength) {
-          const thinkSeg = thinking.slice(existing.thinkingCommittedLength);
+          const thinkingOffset = existing.thinkingCommittedLength;
+          const thinkSeg = thinking.slice(thinkingOffset);
           existing.thinkingCommittedLength = thinking.length;
           if (thinkSeg.trim()) {
-            existing.turnMessages.push(makeThinkingMessage(thinkSeg));
+            existing.turnMessages.push(makeThinkingMessage(
+              thinkSeg,
+              textSegmentIdAtOffset(existing, 'thinking', thinkingOffset),
+            ));
           }
         }
         const remaining = partial.slice(existing.responseCommittedLength);
         if (remaining || existing.turnMessages.length === 0) {
           existing.turnMessages.push(
-            makeAssistantMessage(remaining || partial, usage),
+            makeAssistantMessage(
+              remaining || partial,
+              usage,
+              textSegmentIdAtOffset(existing, 'text', existing.responseCommittedLength),
+            ),
           );
           existing.responseCommittedLength = partial.length;
         } else if (usage) {

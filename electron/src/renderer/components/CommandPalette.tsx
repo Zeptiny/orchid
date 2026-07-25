@@ -3,7 +3,7 @@
  *
  * Uses the modal and list primitives.
  */
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { memo, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
   COMMANDS,
   getRecentCommands,
@@ -57,7 +57,7 @@ const CATEGORY_ICONS: Record<CommandCategory, IconName> = {
   navigation: 'arrowRight',
 };
 
-export function CommandPalette({
+export const CommandPalette = memo(function CommandPalette({
   isOpen,
   onClose,
   context,
@@ -459,7 +459,7 @@ export function CommandPalette({
 
   return (
     <div
-      className="orchid-command-palette-overlay fixed inset-0 z-50 flex justify-center bg-black/55 pt-20"
+      className="orchid-command-palette-overlay orchid-overlay-enter fixed inset-0 z-50 flex justify-center bg-black/55 pt-20"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -467,7 +467,7 @@ export function CommandPalette({
     >
       <div
         ref={panelRef}
-        className="orchid-command-palette flex max-h-96 w-full max-w-xl flex-col overflow-hidden rounded-box border border-base-300 bg-base-200 shadow-2xl mx-4"
+        className="orchid-command-palette orchid-dialog-enter flex max-h-96 w-full max-w-xl flex-col overflow-hidden rounded-box border border-base-300 bg-base-200 shadow-2xl mx-4"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
@@ -624,7 +624,7 @@ export function CommandPalette({
       </div>
     </div>
   );
-}
+});
 
 function HighlightedText({ query, text }: { query: string; text: string }) {
   const segments = highlightMatch(query, text);
@@ -632,7 +632,7 @@ function HighlightedText({ query, text }: { query: string; text: string }) {
     <>
       {segments.map((seg, i) =>
         seg.highlighted ? (
-          <mark key={i} className="orchid-command-palette-highlight bg-primary/30 rounded-sm px-px">{seg.text}</mark>
+          <span key={i} className="orchid-command-palette-highlight bg-primary/30">{seg.text}</span>
         ) : (
           <span key={i}>{seg.text}</span>
         ),

@@ -142,6 +142,7 @@ Fonts: `Instrument Sans` (UI body), `Bricolage Grotesque` (display headings), an
 | `primitives.css` | Component-class engine (`@layer components`): `btn`, `input`, `badge`, `modal`, `tabs`, `loading`, … all theme-token driven |
 | `components.css` | Shared `@layer orchid` product composites with `@apply` + semantic/theme tokens (single-name; no legacy dual aliases) |
 | `shell.css` | Final-layer three-panel shell, session navigation, and inspector geometry preserved from the reference interface |
+| `motion.css` | Shared state-transition vocabulary: mounted disclosures, semantic state swaps, entrances, overlays, and status transitions |
 | `markdown.css` | Markdown / GFM / highlight tokens |
 | `exceptions.css` | Scrollbars, keyframes, streaming cursor, shell grid tracks, composer height hooks |
 | `chat.css` | Header-only (no CSS rules); frozen — residual bridge comment only |
@@ -156,12 +157,26 @@ main.tsx
         ├── primitives.css      ← component engine (@layer components)
         ├── components.css
         ├── shell.css
+        ├── motion.css          ← shared state-transition vocabulary
         ├── markdown.css
         ├── exceptions.css
         └── chat.css            ← residual bridge only
 ```
 
 Runtime themes are **not** part of this graph: `applyTheme()` swaps a single `#orchid-theme` stylesheet link (`themes/*.css`) and sets `document.documentElement.dataset.theme`.
+
+## Motion contract
+
+Motion communicates continuity or a meaningful state change; it must not decorate continuously updating content.
+
+- Durations/easing come from each theme's `--transition-fast`, `--transition-normal`, and `--transition-slow` tokens.
+- `styles/motion.css` owns reusable `orchid-*` motion classes. Browser/runtime keyframes and the global `prefers-reduced-motion` override remain in `exceptions.css`.
+- Use `CollapsibleRegion` for stateful React disclosures. It keeps content mounted, animates grid rows plus opacity, and makes closed content inert; triggers retain `aria-expanded` and `aria-controls`.
+- Use keyed state wrappers for mutually exclusive semantic states, stable keys plus `orchid-list-item-enter` for insertions, and `orchid-view-enter` for mounted settings/onboarding/detail views.
+- Use the shared overlay/dialog/popover entrance classes for transient surfaces. Do not add feature-specific keyframes.
+- Do not animate streaming prose/reasoning, elapsed or token counters, terminal output, cursor movement, or other high-frequency text. Primitive progress geometry may transition.
+- Shell width and grid-column transitions are the only approved broad layout motion. New layout animation requires an explicit contract update.
+- Reduced-motion behavior is mandatory and centrally enforced; no component may override it with longer animation declarations.
 
 ### Residual bridge (`chat.css`)
 

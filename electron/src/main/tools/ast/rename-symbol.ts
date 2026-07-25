@@ -10,10 +10,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { ensureIndexed } from '../../ast/indexer';
 import { ASTStore, type SymbolRow } from '../../ast/store';
+import { withDisposable } from '../../utils/with-disposable';
 import { atomicWrite } from './utils';
 
 // ---------------------------------------------------------------------------
@@ -41,6 +43,7 @@ export const renameSymbolDefinition: ToolDefinition = {
     'calls for cross-file renames.',
   inputSchema: renameSymbolSchema,
   category: 'ast',
+  riskClass: RiskClass.MUTATION,
   noTimeout: true,
 };
 
@@ -69,8 +72,10 @@ export const renameSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
     const projectPath = ctx.cwd;
     await ensureIndexed(projectPath);
 
-    const store = new ASTStore(projectPath);
-    const symbols = store.getSymbolsByName(old_name, 'both');
+    const symbols = withDisposable(
+      new ASTStore(projectPath),
+      (store) => store.getSymbolsByName(old_name, 'both'),
+    );
 
     if (symbols.length === 0) {
       return genericBuiltInToolOutcome('rename_symbol', { error: `No references found for '${old_name}'. No files modified.` }, 'error', 'tool_error', `No references found for '${old_name}'. No files modified.`);

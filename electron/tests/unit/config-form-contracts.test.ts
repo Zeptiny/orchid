@@ -6,6 +6,7 @@ import { defaults } from '../../src/main/config/schema';
 import {
   applyConfigDraft,
   configNumberPatch,
+  mergeConfigDraft,
   parseConfigNumber,
 } from '../../src/renderer/utils/config-draft';
 import type { Config } from '../../src/shared/types/ipc-boundary';
@@ -36,6 +37,26 @@ const KNOWN_CONFIG_KEYS = [
   'always_expand_tool_groups',
   'has_completed_onboarding',
   'tier_reasoning_effort',
+  'permission_history_size',
+  'permissions',
+  'command_max_output_bytes',
+  'tool_output_inline_threshold',
+  'approval_timeout',
+  'subagent_wait_timeout',
+  'web_fetch_timeout',
+  'web_fetch_max_body_bytes',
+  'web_fetch_user_agent',
+  'bg_prompt_max_entries',
+  'bg_prompt_tail_lines',
+  'bg_prompt_tail_chars',
+  'mcp_result_max_bytes',
+  'max_background_processes',
+  'bg_output_head_bytes',
+  'bg_output_tail_bytes',
+  'grep_per_file_timeout',
+  'read_output_long_poll_max',
+  'llm_retry_backoff_base',
+  'llm_retry_max_delay',
 ] as const satisfies ReadonlyArray<keyof Config>;
 
 describe('parseConfigNumber', () => {
@@ -72,6 +93,35 @@ describe('configNumberPatch', () => {
     expect(configNumberPatch('command_timeout', 30)).toEqual({
       command_timeout: 30,
     });
+  });
+});
+
+describe('mergeConfigDraft', () => {
+  it('replaces full MCP editor maps so delete and rename are not resurrected', () => {
+    const first = mergeConfigDraft({}, {
+      mcp_servers: {
+        old: { command: 'old-command' },
+        keep: { command: 'keep-command' },
+      },
+    });
+    const renamed = mergeConfigDraft(first, {
+      mcp_servers: {
+        renamed: { command: 'old-command' },
+        keep: { command: 'keep-command' },
+      },
+    });
+
+    expect(renamed.mcp_servers).toEqual({
+      renamed: { command: 'old-command' },
+      keep: { command: 'keep-command' },
+    });
+  });
+
+  it('continues to accumulate incremental permission edits and tombstones', () => {
+    const first = mergeConfigDraft({}, { permissions: { grep: 'ask' } });
+    const second = mergeConfigDraft(first, { permissions: { write: 'allow', grep: null } });
+
+    expect(second.permissions).toEqual({ grep: null, write: 'allow' });
   });
 });
 
@@ -116,6 +166,8 @@ describe('applyConfigDraft', () => {
         embedding_model: 'fastembed/test',
         embedding_threads: 1,
         embedding_batch_size: 1,
+        embedding_api_timeout: 15,
+        embedding_api_retries: 2,
         embedding_api_model: selection,
       },
       ast_max_file_size: 4,
@@ -130,6 +182,26 @@ describe('applyConfigDraft', () => {
       default_project_dir: null,
       always_expand_tool_groups: true,
       has_completed_onboarding: true,
+      permission_history_size: 5,
+      permissions: { grep: 'allow' },
+      command_max_output_bytes: 2_000_000,
+      tool_output_inline_threshold: 10_000,
+      approval_timeout: 300,
+      subagent_wait_timeout: 120,
+      web_fetch_timeout: 15,
+      web_fetch_max_body_bytes: 5_000_000,
+      web_fetch_user_agent: 'TestAgent/1.0',
+      bg_prompt_max_entries: 3,
+      bg_prompt_tail_lines: 4,
+      bg_prompt_tail_chars: 250,
+      mcp_result_max_bytes: 1_000_000,
+      max_background_processes: 32,
+      bg_output_head_bytes: 262_144,
+      bg_output_tail_bytes: 262_144,
+      grep_per_file_timeout: 5,
+      read_output_long_poll_max: 30,
+      llm_retry_backoff_base: 0.5,
+      llm_retry_max_delay: 15,
     };
 
     const next = applyConfigDraft(base, draft);
@@ -163,6 +235,26 @@ describe('applyConfigDraft', () => {
     expect(next.default_project_dir).toBeNull();
     expect(next.always_expand_tool_groups).toBe(true);
     expect(next.has_completed_onboarding).toBe(true);
+    expect(next.permission_history_size).toBe(5);
+    expect(next.permissions).toEqual({ grep: 'allow' });
+    expect(next.command_max_output_bytes).toBe(2_000_000);
+    expect(next.tool_output_inline_threshold).toBe(10_000);
+    expect(next.approval_timeout).toBe(300);
+    expect(next.subagent_wait_timeout).toBe(120);
+    expect(next.web_fetch_timeout).toBe(15);
+    expect(next.web_fetch_max_body_bytes).toBe(5_000_000);
+    expect(next.web_fetch_user_agent).toBe('TestAgent/1.0');
+    expect(next.bg_prompt_max_entries).toBe(3);
+    expect(next.bg_prompt_tail_lines).toBe(4);
+    expect(next.bg_prompt_tail_chars).toBe(250);
+    expect(next.mcp_result_max_bytes).toBe(1_000_000);
+    expect(next.max_background_processes).toBe(32);
+    expect(next.bg_output_head_bytes).toBe(262_144);
+    expect(next.bg_output_tail_bytes).toBe(262_144);
+    expect(next.grep_per_file_timeout).toBe(5);
+    expect(next.read_output_long_poll_max).toBe(30);
+    expect(next.llm_retry_backoff_base).toBe(0.5);
+    expect(next.llm_retry_max_delay).toBe(15);
   });
 
   it('accepts zero for numeric fields that allow min 0', () => {

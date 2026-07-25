@@ -11,6 +11,7 @@ import { z } from 'zod';
 import type { Agent } from '../../../shared/types/agent';
 import { AgentType, AgentTier, TIER_DESCRIPTIONS } from '../../../shared/types/agent';
 import type { ToolDefinition, ToolHandler } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import {
   genericBuiltInToolOutcome,
@@ -81,6 +82,7 @@ export function buildDelegateTool(
         ),
     }),
     category: 'subagent',
+    riskClass: RiskClass.DELEGATION,
   };
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<SubagentToolResult> => {
@@ -128,6 +130,7 @@ export function buildDelegateTool(
       parentChainIndex,
       // Prefer frozen turn context sessionId over live getActive() (mid-turn switch).
       sessionId: ctx.sessionId,
+      windowId: ctx.windowId,
       cwd: ctx.cwd,
       projectRuntime: ctx.projectRuntime,
     });
