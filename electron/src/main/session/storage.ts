@@ -256,13 +256,6 @@ function deserializeTodoStore(json: string): TodoStoreData {
 }
 
 function chainFromRow(row: ChainRow): Chain {
-  let status = parseChainStatus(row.status);
-  let endTime = row.end_time;
-  if (status === ChainStatus.ACTIVE) {
-    status = ChainStatus.INTERRUPTED;
-    if (!endTime) endTime = new Date().toISOString();
-  }
-
   let subagentRecord: SubagentRecord | null = null;
   if (row.subagent_record_json) {
     try {
@@ -276,7 +269,7 @@ function chainFromRow(row: ChainRow): Chain {
     id: row.id,
     sessionId: row.session_id,
     messages: deserializeMessages(row.messages_json),
-    status,
+    status: parseChainStatus(row.status),
     selection: deserializeSelection(row.selection_json),
     modelLabel: row.model_label,
     agentName: row.agent_name,
@@ -284,7 +277,7 @@ function chainFromRow(row: ChainRow): Chain {
     agentTier: row.agent_tier,
     subagentRecord,
     startTime: row.start_time,
-    endTime,
+    endTime: row.end_time,
   };
 }
 
@@ -593,30 +586,77 @@ export function finishChain(
 // loadSession
 // ---------------------------------------------------------------------------
 
-/** Load a session by ID (null if absent/invalid); restored ACTIVE chains become INTERRUPTED. */
+/**
+ * Load a session by ID (null if absent/invalid).
+ *
+ * A process restart makes every persisted active chain terminal. Recovery is
+ * durable: affected chains, their shared recovery timestamp, and a matching
+ * session active-chain pointer are updated in one transaction before the
+ * session is materialized.
+ */
 export function loadSession(sessionId: string, opts?: StorageOptions): Session | null {
   if (!isValidSessionId(sessionId)) {
     return null;
   }
   const { dbPath } = resolveOptions(opts);
   return withCorruptionRecovery(dbPath, (db) => {
-    const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as SessionRow | undefined;
-    if (!row) return null;
+    const load = db.transaction(() => {
+      let row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as SessionRow | undefined;
+      if (!row) return null;
 
-    const chainRows = db
-      .prepare('SELECT * FROM chains WHERE session_id = ? ORDER BY ordinal')
-      .all(sessionId) as ChainRow[];
+      let chainRows = db
+        .prepare('SELECT * FROM chains WHERE session_id = ? ORDER BY ordinal')
+        .all(sessionId) as ChainRow[];
+      const activeChainIds = chainRows
+        .filter((chain) => parseChainStatus(chain.status) === ChainStatus.ACTIVE)
+        .map((chain) => chain.id);
 
-    const chains: Chain[] = [];
-    for (const cr of chainRows) {
-      try {
-        chains.push(chainFromRow(cr));
-      } catch (err) {
-        console.error(`[session] skipping corrupt chain ${cr.id} on load (session ${sessionId})`, err);
+      if (activeChainIds.length > 0) {
+        const recoveredAt = new Date().toISOString();
+        const activePlaceholders = activeChainIds.map(() => '?').join(', ');
+
+        db.prepare(
+          `UPDATE chains
+           SET status = ?, end_time = COALESCE(end_time, ?)
+           WHERE session_id = ? AND id IN (${activePlaceholders})`,
+        ).run(
+          ChainStatus.INTERRUPTED,
+          recoveredAt,
+          sessionId,
+          ...activeChainIds,
+        );
+        db.prepare(
+          `UPDATE sessions
+           SET active_chain_id = CASE
+                 WHEN active_chain_id IN (${activePlaceholders}) THEN NULL
+                 ELSE active_chain_id
+               END,
+               updated_at = ?
+           WHERE id = ?`,
+        ).run(
+          ...activeChainIds,
+          recoveredAt,
+          sessionId,
+        );
+
+        row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as SessionRow;
+        chainRows = db
+          .prepare('SELECT * FROM chains WHERE session_id = ? ORDER BY ordinal')
+          .all(sessionId) as ChainRow[];
       }
-    }
 
-    return sessionFromRow(row, chains);
+      const chains: Chain[] = [];
+      for (const cr of chainRows) {
+        try {
+          chains.push(chainFromRow(cr));
+        } catch (err) {
+          console.error(`[session] skipping corrupt chain ${cr.id} on load (session ${sessionId})`, err);
+        }
+      }
+
+      return sessionFromRow(row, chains);
+    });
+    return load();
   });
 }
 

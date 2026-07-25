@@ -136,7 +136,7 @@ describe('chat rendering contract (U5)', () => {
       const scrollHook = read('hooks/useSmartAutoScroll.ts');
       // Reset scroll-away only on session change — not when entering streaming
       expect(scrollHook).toMatch(/setIsUserScrolledUp\(false\)/);
-      expect(scrollHook).toMatch(/enabled, resetKey/);
+      expect(scrollHook).toMatch(/\}, \[resetKey\]\);/);
       expect(src).not.toMatch(
         /status === 'streaming'[\s\S]{0,200}setIsUserScrolledUp\(false\)/,
       );

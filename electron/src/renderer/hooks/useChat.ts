@@ -107,6 +107,7 @@ export function appendStreamSegmentDelta(
   return [...segments, { kind, id: segmentId, content: data }];
 }
 
+/** Buffered text/thinking delta data awaiting renderer-frame publication. */
 export interface StreamSegmentDelta {
   kind: 'text' | 'thinking';
   segmentId: string;

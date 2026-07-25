@@ -318,6 +318,70 @@ describe('saveSession → loadSession round-trip', () => {
     expect(loadSession('', storageOpts)).toBeNull();
   });
 
+  it('durably interrupts active chains once on restart and clears their active pointer', () => {
+    const sessionId = 'a2929292-2929-4292-8292-292929292929';
+    const first = makeChain(sessionId, { id: 'recovery-first', status: ChainStatus.ACTIVE });
+    const second = makeChain(sessionId, { id: 'recovery-second', status: ChainStatus.ACTIVE });
+    saveSession(
+      makeSession({
+        id: sessionId,
+        chains: [first, second],
+        activeChainId: second.id,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+      storageOpts,
+    );
+
+    const firstLoad = loadSession(sessionId, storageOpts)!;
+    const recoveredAt = firstLoad.chains[0]!.endTime;
+    expect(firstLoad.activeChainId).toBeNull();
+    expect(firstLoad.updatedAt).toBe(recoveredAt);
+    expect(firstLoad.chains.map((chain) => chain.status)).toEqual([
+      ChainStatus.INTERRUPTED,
+      ChainStatus.INTERRUPTED,
+    ]);
+    expect(firstLoad.chains.map((chain) => chain.endTime)).toEqual([recoveredAt, recoveredAt]);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    const persistedAfterFirstLoad = db.prepare(`
+      SELECT s.active_chain_id, s.updated_at, c.status, c.end_time
+      FROM sessions s
+      JOIN chains c ON c.session_id = s.id
+      WHERE s.id = ?
+      ORDER BY c.ordinal
+    `).all(sessionId) as Array<{
+      active_chain_id: string | null;
+      updated_at: string;
+      status: string;
+      end_time: string | null;
+    }>;
+    db.close();
+    expect(persistedAfterFirstLoad).toEqual([
+      {
+        active_chain_id: null,
+        updated_at: recoveredAt,
+        status: ChainStatus.INTERRUPTED,
+        end_time: recoveredAt,
+      },
+      {
+        active_chain_id: null,
+        updated_at: recoveredAt,
+        status: ChainStatus.INTERRUPTED,
+        end_time: recoveredAt,
+      },
+    ]);
+
+    _clearDbCache();
+    const secondLoad = loadSession(sessionId, storageOpts)!;
+    expect(secondLoad.activeChainId).toBeNull();
+    expect(secondLoad.updatedAt).toBe(recoveredAt);
+    expect(secondLoad.chains.map((chain) => chain.status)).toEqual([
+      ChainStatus.INTERRUPTED,
+      ChainStatus.INTERRUPTED,
+    ]);
+    expect(secondLoad.chains.map((chain) => chain.endTime)).toEqual([recoveredAt, recoveredAt]);
+  });
+
   it('save overwrites existing session', () => {
     const session1 = makeSession({
       id: 'a3333333-3333-4333-8333-333333333333',
@@ -1665,6 +1729,7 @@ describe('updateChain (targeted turn-local write, R3)', () => {
 
     const dbPath = storageOpts.dbPath!;
     const completed = manager.getActive()!.chains[0];
+    const activeChainId = manager.getActive()!.activeChainId!;
     const completedBefore = readChainMessagesJson(dbPath, completed.id);
 
     manager.updateActiveChainMessages([
@@ -1677,8 +1742,10 @@ describe('updateChain (targeted turn-local write, R3)', () => {
     _clearDbCache();
     const fresh = new SessionManager({ storage: storageOpts });
     const loaded = fresh.switchTo(session.id)!;
-    const active = loaded.chains.find((c) => c.id === loaded.activeChainId)!;
-    expect(active.messages.map((m) => m.content)).toEqual(['Q2', 'A2-in-progress']);
+    const recovered = loaded.chains.find((c) => c.id === activeChainId)!;
+    expect(loaded.activeChainId).toBeNull();
+    expect(recovered.status).toBe(ChainStatus.INTERRUPTED);
+    expect(recovered.messages.map((m) => m.content)).toEqual(['Q2', 'A2-in-progress']);
     expect(loaded.chains.find((c) => c.id === completed.id)!.messages.map((m) => m.content)).toEqual(['Q1', 'A1']);
   });
 });

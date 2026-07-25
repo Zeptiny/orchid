@@ -80,8 +80,7 @@ export function useSmartAutoScroll({
 
   useEffect(() => {
     setIsUserScrolledUp(false);
-    if (enabled) followLatest();
-  }, [enabled, resetKey, followLatest]);
+  }, [resetKey]);
 
   useEffect(() => {
     if (enabled && shouldAutoScroll(isUserScrolledUp)) scrollToLatest('auto');
