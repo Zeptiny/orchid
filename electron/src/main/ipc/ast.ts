@@ -13,6 +13,7 @@ import {
   getIndexState,
 } from '../ast/indexer';
 import { ASTStore } from '../ast/store';
+import { withDisposable } from '../utils/with-disposable';
 import { resolveBoundProjectPath } from './session';
 import { astIndexSchema } from './payload-schemas';
 
@@ -38,8 +39,10 @@ export function registerASTIPC(): void {
         lastIndexDuration: null,
       };
     }
-    const store = new ASTStore(projectPath);
-    return store.status();
+    return withDisposable(
+      new ASTStore(projectPath),
+      (store) => store.status(),
+    );
   });
 
   // ast:index_state — in-flight run snapshot for remounting UIs

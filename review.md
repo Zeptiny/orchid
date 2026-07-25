@@ -10,8 +10,7 @@
 The application has a sound overall architecture: heavy RAG and AST indexing work is
 already moved to worker threads, provider and session data use shared renderer stores,
 and many renderer subtrees are memoized. The remaining optimization opportunities are
-concentrated in startup sequencing, long-session scaling, synchronous persistence,
-and resource lifecycle management.
+concentrated in startup sequencing, long-session scaling, and synchronous persistence.
 
 No source files were modified as part of the original audit. This document records
 the findings and recommended implementation order.
@@ -31,7 +30,6 @@ the findings and recommended implementation order.
 | --- | --- | --- | --- |
 | F4 | P2 | Transcript scaling | Old chains are collapsed but not virtualized or aggregated |
 | F5 | P2 | Persistence | Turn boundaries synchronously rewrite the complete session |
-| F6 | P2 | Resource lifecycle | Short-lived RAG and AST stores can leave SQLite connections open |
 | F8 | P3 | Startup state | Configuration and index status are fetched redundantly |
 | F9 | P3 | Startup latency | Tool workers are initialized before the first application window |
 | F10 | P3 | Renderer computation | Context usage is recomputed more often than necessary |
@@ -169,82 +167,6 @@ Prepare statements once per cached database connection where practical.
 
 ---
 
-## F6 — RAG and AST Store Connections Are Not Consistently Disposed
-
-**Priority:** P2  
-**Area:** Resource lifecycle and long-running process stability
-
-### Evidence
-
-Both store classes cache an opened SQLite connection and explicitly document that
-`dispose()` should be called when the store is no longer needed:
-
-- [`electron/src/main/ast/store.ts`](electron/src/main/ast/store.ts#L103)
-- [`electron/src/main/rag/store.ts`](electron/src/main/rag/store.ts#L271)
-
-The AST status IPC handler creates a new store and returns its status without disposing
-it:
-
-- [`electron/src/main/ipc/ast.ts`](electron/src/main/ipc/ast.ts#L41)
-
-RAG status does the same through `getStatus()`:
-
-- [`electron/src/main/rag/indexer.ts`](electron/src/main/rag/indexer.ts#L511)
-
-Other examples include:
-
-- [`electron/src/main/tools/rag/search.ts`](electron/src/main/tools/rag/search.ts#L69)
-- [`electron/src/main/tools/ast/find-symbol-references.ts`](electron/src/main/tools/ast/find-symbol-references.ts#L64)
-- [`electron/src/main/tools/ast/rename-symbol.ts`](electron/src/main/tools/ast/rename-symbol.ts#L74)
-
-By contrast, `ast_index` already uses the correct `try/finally` pattern:
-
-- [`electron/src/main/tools/ast/index-tool.ts`](electron/src/main/tools/ast/index-tool.ts#L61)
-
-### User Impact
-
-The exact cleanup behavior may depend on garbage collection and the native module, but
-cleanup is not deterministic. Repeated status refreshes and tool calls can retain:
-
-- SQLite file descriptors.
-- Native connection memory.
-- WAL-related resources.
-- File locks that complicate index clearing or replacement.
-
-The chat UI invokes index status more than once during startup and again after
-workspace or indexing changes, increasing the number of short-lived store instances.
-
-### Recommendation
-
-For one-shot operations, standardize this pattern:
-
-```ts
-const store = new ASTStore(projectPath);
-try {
-  return store.status();
-} finally {
-  store.dispose();
-}
-```
-
-Alternatively, manage one store per project in a registry and dispose it when the
-project runtime is superseded or the application shuts down. Do not mix unmanaged
-one-shot stores and long-lived cached stores without an explicit ownership contract.
-
-### Suggested Verification
-
-- Add dispose expectations to RAG/AST IPC unit tests.
-- Repeatedly call status and search while monitoring open file descriptors.
-- Verify index clear/rebuild works after many status calls.
-
-### Acceptance Criteria
-
-- Every short-lived store is disposed through `finally`.
-- Long-lived stores have an explicit owner and shutdown path.
-- Unit tests fail if a one-shot IPC path omits disposal.
-
----
-
 ## F8 — Redundant Configuration and Status Fetches
 
 **Priority:** P3  
@@ -278,7 +200,7 @@ state transitions.
 - More renderer/main-process messages during startup.
 - Additional renders as related configuration fields arrive separately.
 - Harder-to-reason-about theme and onboarding sequencing.
-- Duplicate RAG/AST status connections compound F6.
+- Duplicate RAG/AST status requests still add avoidable startup work.
 
 ### Recommendation
 
@@ -451,9 +373,8 @@ CSS.
 ### Phase 2 — Long-Running Session Stability
 
 1. Replace full session rewrites with incremental chain persistence.
-2. Standardize RAG/AST store ownership and disposal.
-3. Aggregate or virtualize old transcript history.
-4. Consolidate context and cumulative-usage computation.
+2. Aggregate or virtualize old transcript history.
+3. Consolidate context and cumulative-usage computation.
 
 ### Phase 3 — Structural Cleanup
 
