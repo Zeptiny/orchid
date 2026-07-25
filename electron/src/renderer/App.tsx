@@ -120,14 +120,17 @@ function App() {
     };
   }, [configOpen]);
 
+  const chatVisible =
+    !configOpen && !(onboardingOpen && onboardingChecked);
+
   return (
     <div className="app-root h-screen min-h-0 overflow-hidden bg-base-100 text-base-content" data-theme={theme}>
       {/* Keep ChatView mounted under Config so selection/draft state is not
           wiped and the first session is not auto-selected again on close.
           Shared useSession store (useSyncExternalStore) keeps chat + settings
           on one active session / list / workspace snapshot. */}
-      <div className={configOpen ? 'hidden' : 'contents'} aria-hidden={configOpen}>
-        <ChatView />
+      <div className={chatVisible ? 'contents' : 'hidden'} aria-hidden={!chatVisible}>
+        <ChatView isVisible={chatVisible} />
       </div>
       {configOpen && (
         <Suspense

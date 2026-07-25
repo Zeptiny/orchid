@@ -54,6 +54,8 @@ export { AUTO_SCROLL_THRESHOLD_PX, isUserScrolledAwayFromBottom, shouldAutoScrol
 export const CHAIN_COLLAPSE_THRESHOLD = 20;
 
 interface ChatStreamProps {
+  /** Whether the chat surface is currently available for presentation work. */
+  isVisible?: boolean;
   messages: Message[];
   streamingContent: string;
   toolBlocks: ToolBlock[];
@@ -179,6 +181,7 @@ function assistantMessageDedupeKey(message: Message): string | null {
 
 
 export function ChatStream({
+  isVisible = true,
   messages,
   streamingContent,
   toolBlocks,
@@ -208,6 +211,7 @@ export function ChatStream({
   } = useSmartAutoScroll({
     resetKey: sessionId,
     contentKey: `${messages.length}:${streamRevision}`,
+    enabled: isVisible,
   });
   /** Chain indexes the user expanded from a collapsed stub. */
   const [expandedChainIndexes, setExpandedChainIndexes] = useState<Set<number>>(
@@ -216,7 +220,7 @@ export function ChatStream({
   // Active footer only — never a history-memo dependency.
   const liveElapsedSeconds = useElapsedSeconds(
     streamStartTime,
-    status === 'streaming',
+    isVisible && status === 'streaming',
   );
 
   const expandChain = useCallback((chainIndex: number) => {

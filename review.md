@@ -32,7 +32,6 @@ the findings and recommended implementation order.
 | F4 | P2 | Transcript scaling | Old chains are collapsed but not virtualized or aggregated |
 | F5 | P2 | Persistence | Turn boundaries synchronously rewrite the complete session |
 | F6 | P2 | Resource lifecycle | Short-lived RAG and AST stores can leave SQLite connections open |
-| F7 | P2 | Hidden UI | Chat rendering continues while Settings hides the chat surface |
 | F8 | P3 | Startup state | Configuration and index status are fetched redundantly |
 | F9 | P3 | Startup latency | Tool workers are initialized before the first application window |
 | F10 | P3 | Renderer computation | Context usage is recomputed more often than necessary |
@@ -243,55 +242,6 @@ one-shot stores and long-lived cached stores without an explicit ownership contr
 - Every short-lived store is disposed through `finally`.
 - Long-lived stores have an explicit owner and shutdown path.
 - Unit tests fail if a one-shot IPC path omits disposal.
-
----
-
-## F7 — Hidden Chat Continues Performing Renderer Work
-
-**Priority:** P2  
-**Area:** Settings interaction and background rendering
-
-### Evidence
-
-When Settings opens, the application intentionally keeps `ChatView` mounted to
-preserve session and draft state. It only applies the `hidden` class:
-
-- [`electron/src/renderer/App.tsx`](electron/src/renderer/App.tsx#L108)
-
-This prevents layout and paint for the hidden subtree, but React hooks, IPC event
-subscriptions, streaming state updates, transcript construction, Markdown parsing,
-and timers continue to run.
-
-The same general concern applies when onboarding covers the chat surface.
-
-### User Impact
-
-If a response continues while the user is in Settings:
-
-- CPU remains devoted to an invisible transcript.
-- Configuration interaction may feel less responsive.
-- Large hidden streaming responses still pay Markdown and transcript preparation
-  costs.
-
-### Recommendation
-
-Separate chat runtime state from visible chat presentation:
-
-- Keep IPC subscriptions and authoritative live state in a shared store.
-- Pass an `isVisible`/`isActive` flag to the chat surface.
-- When hidden, avoid rendering `ChatStream`, `Sidebar`, and other expensive transcript
-  consumers.
-- On return, render once from the current snapshot and anchor scroll position.
-
-If React's offscreen capabilities are adopted later, confirm that they actually defer
-the relevant work in the Electron/React version in use.
-
-### Acceptance Criteria
-
-- Background chat continues correctly while Settings is open.
-- Hidden transcript components do not parse or highlight each streaming update.
-- Returning to chat displays the complete current response without replaying every
-  intermediate chunk.
 
 ---
 
