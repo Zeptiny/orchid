@@ -1684,6 +1684,124 @@ describe('updateChain (targeted turn-local write, R3)', () => {
 });
 
 // ===========================================================================
+// Incremental persistence — turn boundaries and session-field updates
+// ===========================================================================
+
+describe('incremental session persistence', () => {
+  it('does not delete historical chain rows during ordinary lifecycle updates', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+
+    manager.startChain({
+      messages: [makeMessage({ id: 'u1', content: 'Question 1' })],
+    }, session.id);
+    manager.persistTurn({
+      messages: [
+        makeMessage({ id: 'u1', content: 'Question 1' }),
+        makeMessage({ id: 'a1', role: 'assistant', content: 'Answer 1' }),
+      ],
+    }, session.id);
+
+    const firstChainId = manager.getSession(session.id)!.chains[0]!.id;
+    const db = openSqliteDb(storageOpts.dbPath!);
+    const firstRow = db
+      .prepare('SELECT rowid FROM chains WHERE id = ?')
+      .get(firstChainId) as { rowid: number };
+    db.exec(`
+      CREATE TRIGGER reject_historical_chain_delete
+      BEFORE DELETE ON chains
+      BEGIN
+        SELECT RAISE(ABORT, 'historical chain deletion is forbidden');
+      END
+    `);
+    db.close();
+
+    expect(() => {
+      manager.startChain({
+        messages: [makeMessage({ id: 'u2', content: 'Question 2' })],
+      }, session.id);
+      manager.persistTurn({
+        messages: [
+          makeMessage({ id: 'u2', content: 'Question 2' }),
+          makeMessage({ id: 'a2', role: 'assistant', content: 'Answer 2' }),
+        ],
+      }, session.id);
+      manager.rename(session.id, 'Incremental session');
+      manager.changeModel(session.id, ANTHROPIC_SELECTION);
+      manager.getTodoStore(session.id).create('Persist incrementally');
+      manager.persistTodos(session.id);
+      manager.setReasoningEffortOverride(session.id, 'high');
+      manager.setPermissionMode(session.id, 'allow');
+      manager.syncSubagentChains([], session.id);
+    }).not.toThrow();
+
+    const verifyDb = openSqliteDb(storageOpts.dbPath!);
+    const preservedRow = verifyDb
+      .prepare('SELECT rowid FROM chains WHERE id = ?')
+      .get(firstChainId) as { rowid: number };
+    verifyDb.close();
+
+    expect(preservedRow.rowid).toBe(firstRow.rowid);
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.chains).toHaveLength(2);
+    expect(loaded.name).toBe('Incremental session');
+    expect(loaded.selection).toEqual(ANTHROPIC_SELECTION);
+    expect(loaded.todoStore.tasks.map((todo) => todo.title)).toEqual([
+      'Persist incrementally',
+    ]);
+    expect(loaded.reasoningEffortOverride).toBe('high');
+    expect(loaded.permissionMode).toBe('allow');
+  });
+
+  it('rolls back a failed terminal chain update without clearing the active chain', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+    const chain = manager.startChain({
+      messages: [makeMessage({ id: 'u1', content: 'Still running' })],
+    }, session.id)!;
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.exec(`
+      CREATE TRIGGER reject_terminal_chain_update
+      BEFORE UPDATE OF status ON chains
+      WHEN OLD.status = 'active' AND NEW.status != 'active'
+      BEGIN
+        SELECT RAISE(ABORT, 'terminal chain update rejected');
+      END
+    `);
+    db.close();
+
+    expect(() => manager.finishActiveChain(ChainStatus.COMPLETED, session.id))
+      .toThrow(/terminal chain update rejected/);
+
+    const active = manager.getSession(session.id)!;
+    expect(active.activeChainId).toBe(chain.id);
+    expect(active.chains[0]!.status).toBe(ChainStatus.ACTIVE);
+
+    const verifyDb = openSqliteDb(storageOpts.dbPath!);
+    const persisted = verifyDb
+      .prepare(`
+        SELECT s.active_chain_id, c.status, c.end_time
+        FROM sessions s
+        JOIN chains c ON c.session_id = s.id
+        WHERE s.id = ? AND c.id = ?
+      `)
+      .get(session.id, chain.id) as {
+        active_chain_id: string | null;
+        status: string;
+        end_time: string | null;
+      };
+    verifyDb.close();
+
+    expect(persisted).toEqual({
+      active_chain_id: chain.id,
+      status: ChainStatus.ACTIVE,
+      end_time: null,
+    });
+  });
+});
+
+// ===========================================================================
 // Load resilience — corrupt columns must not throw or silently lose chains
 // ===========================================================================
 

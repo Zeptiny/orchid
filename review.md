@@ -10,7 +10,7 @@
 The application has a sound overall architecture: heavy RAG and AST indexing work is
 already moved to worker threads, provider and session data use shared renderer stores,
 and many renderer subtrees are memoized. The remaining optimization opportunities are
-concentrated in startup sequencing, long-session scaling, and synchronous persistence.
+concentrated in startup sequencing and long-session renderer scaling.
 
 No source files were modified as part of the original audit. This document records
 the findings and recommended implementation order.
@@ -29,7 +29,6 @@ the findings and recommended implementation order.
 | ID | Priority | Area | Finding |
 | --- | --- | --- | --- |
 | F4 | P2 | Transcript scaling | Old chains are collapsed but not virtualized or aggregated |
-| F5 | P2 | Persistence | Turn boundaries synchronously rewrite the complete session |
 | F8 | P3 | Startup state | Configuration and index status are fetched redundantly |
 | F9 | P3 | Startup latency | Tool workers are initialized before the first application window |
 | F10 | P3 | Renderer computation | Context usage is recomputed more often than necessary |
@@ -92,78 +91,6 @@ Expanding a range should not mount every earlier turn at once.
 - DOM node count remains bounded as chain count grows.
 - Opening a 1,000-chain session does not render hundreds of collapsed stub elements.
 - Expanding old history is incremental and reversible.
-
----
-
-## F5 — Full Synchronous Session Rewrites at Turn Boundaries
-
-**Priority:** P2  
-**Area:** Main-process responsiveness and persistence scaling
-
-### Evidence
-
-`saveSession()` synchronously:
-
-1. Updates the session row.
-2. Deletes every chain row for the session.
-3. Serializes and reinserts every chain and every chain's messages.
-
-See [`electron/src/main/session/storage.ts`](electron/src/main/session/storage.ts#L327).
-
-A complete save is performed when a chain starts:
-
-- [`electron/src/main/session/manager.ts`](electron/src/main/session/manager.ts#L463)
-
-A complete save is also performed when the active chain finishes:
-
-- [`electron/src/main/session/manager.ts`](electron/src/main/session/manager.ts#L568)
-
-These operations use synchronous `better-sqlite3` calls in the Electron main process.
-The project already has a targeted `updateChain` persistence path for mid-turn message
-updates, demonstrating that incremental writes are supported.
-
-### User Impact
-
-As session history grows, turn start and completion can take progressively longer.
-Because persistence runs in the main process, the user may see:
-
-- A short pause immediately after sending.
-- A pause when a response completes.
-- Delayed IPC handling or window responsiveness.
-- Increasing cost across long-lived sessions.
-
-The original audit did not run a native SQLite benchmark because the installed native
-module was built for Electron's ABI rather than the shell Node ABI. The scaling issue
-is nevertheless directly visible in the synchronous delete-and-reinsert algorithm.
-
-### Recommendation
-
-Replace full rewrites with incremental operations:
-
-- On chain start: insert one new chain and update the session's
-  `active_chain_id`/`updated_at`.
-- On tool or message checkpoint: update only the active chain.
-- On chain finish: update only that chain's status/messages/end time and clear
-  `active_chain_id`.
-- On rename, model, permission, or todo changes: update only the relevant session
-  columns.
-- Reserve full-session replacement for migrations or corruption recovery.
-
-Prepare statements once per cached database connection where practical.
-
-### Suggested Verification
-
-- Add a benchmark using Electron's native runtime.
-- Measure turn-start and turn-completion persistence for 20, 100, 250, and 1,000
-  chains.
-- Confirm persistence time depends mainly on the active chain, not total history.
-- Add failure-injection tests around partial transactions.
-
-### Acceptance Criteria
-
-- Ordinary turn start and completion do not delete all session chains.
-- Persistence cost is approximately constant with respect to historical chain count.
-- Crash recovery and atomicity remain equivalent to the current transaction.
 
 ---
 
@@ -372,9 +299,8 @@ CSS.
 
 ### Phase 2 — Long-Running Session Stability
 
-1. Replace full session rewrites with incremental chain persistence.
-2. Aggregate or virtualize old transcript history.
-3. Consolidate context and cumulative-usage computation.
+1. Aggregate or virtualize old transcript history.
+2. Consolidate context and cumulative-usage computation.
 
 ### Phase 3 — Structural Cleanup
 
@@ -389,7 +315,6 @@ These should be finalized using measurements on supported hardware:
 | Metric | Suggested initial target |
 | --- | --- |
 | Transcript DOM size | Bounded independently of total chain count |
-| Turn-boundary persistence | Approximately constant with historical chain count |
 
 ## Validation Performed
 
@@ -419,8 +344,6 @@ Results:
 - No representative provider stream was profiled in a packaged Electron build.
 - No visual smoke test across all themes and supported window sizes was performed.
 - The full native test suite was not run as part of this report.
-- Persistence timing was not benchmarked because the installed `better-sqlite3`
-  binary targeted Electron's ABI rather than the shell Node runtime.
 
 These limitations do not invalidate the direct algorithmic and layout findings, but
 runtime measurements should be captured before and after implementation to quantify
