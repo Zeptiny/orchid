@@ -1,0 +1,252 @@
+# Renderer styling contract
+
+Maintainer-facing contract for Orchid’s Electron renderer UI. Class selection, approved exceptions, reserved component roots, theme requirements, and **layout preservation** are frozen so UI work stays consistent without redesigning the product shell.
+
+The component-class engine is `styles/primitives.css` — an Orchid-owned stylesheet that replaced the DaisyUI dependency. It defines every reserved component root (`btn`, `input`, `badge`, `modal`, `tabs`, `loading`, …) purely in terms of theme tokens. Class names were kept stable during that migration so product JSX and scoped overrides did not move; only the engine that paints them changed.
+
+Related tests: `electron/tests/integration/renderer-style-contract.test.ts`.
+
+## Layout preservation (non-negotiable)
+
+Restyle **in place** only. Do **not**:
+
+- Introduce Focused Workspace, a narrow global rail, workspace header redesign, or contextual right inspector
+- Replace sidebars with drawer/overlay navigation patterns
+- Redesign session tabs, chat/composer center, settings, or onboarding information architecture
+- Change expand/collapse ownership or panel topology to make styling easier
+
+Existing shell topology (left session navigation, session tabs, main chat/composer, right/context surfaces if present, overlays) stays as implemented in `App.tsx`, `ChatView.tsx`, `LeftSidebar.tsx`, `Sidebar.tsx`, and `SessionTabBar.tsx`. Only classes, shared primitives, tokens, and presentation implementation move.
+
+## Class selection order
+
+1. **Typed React primitive** under `components/ui/` when the element matches a recognized control or surface — `Button`, `IconButton`, `TextInput`, `Select`, `Checkbox`, `Alert`, `Spinner`, `StatusBadge`, `Panel`, `Tabs`, `ConfigCard`, `DropdownMenu`, `DialogSurface`, etc. The primitive owns the component-root classes internally; feature JSX never names component roots directly.
+2. **`orchid-*` CSS composite** when the same utility/state set is shared by multiple features or encodes a product-specific surface contract. Define under `@layer orchid` with `@apply` and semantic tokens.
+3. **Predefined Tailwind utilities** for layout and composition: `flex`, `grid`, `min-h-0`, `gap-2`, `p-3`, `text-sm`, `w-64`, responsive variants, etc.
+4. **Custom declarations** only for a documented exception or a CSS feature that cannot be expressed above.
+
+`primitives.css` acts as the **styling engine** — its classes are used internally by `components/ui/` primitives and may also appear in approved scoped overrides in `components.css` or `shell.css`. Feature JSX (anything outside `components/ui/`) must not name component roots (`btn`, `input`, `select`, `alert`, `badge`, `card`, `tabs`, `modal`, etc.) directly in `className` strings.
+
+Do **not** use a chat-bubble component for message bodies (flat chat presentation).
+
+## Ownership matrix
+
+| Need | Owner | Engine classes used? |
+| --- | --- | --- |
+| Recognizable control/state | Typed React primitive under `components/ui/` | Yes — internally only |
+| One-off static geometry | Tailwind utilities in JSX | No |
+| Repeated product geometry/state | `orchid-*` composite in `components.css`; shell/session geometry in `shell.css` | `@apply` only (not in JSX) |
+| Repeated interaction semantics | Typed React primitive under `components/ui/` | Yes — internally only |
+| Runtime-only value | Inline style or CSS variable at the narrowest boundary | No |
+
+### Primitive ownership
+
+| Component root(s) | Owner primitive |
+| --- | --- |
+| `btn` / `btn-*` | `Button.tsx`, `IconButton.tsx` |
+| `input` / `input-*` | `TextInput.tsx` |
+| `select` / `select-*` | `Select.tsx` |
+| `checkbox` / `checkbox-*` | `Checkbox.tsx` |
+| `alert` / `alert-*` | `Alert.tsx` |
+| `badge` / `badge-*` / `status` | `StatusBadge.tsx` |
+| `loading` / `loading-*` | `Spinner.tsx` |
+| `tabs` / `tab` / `tab-*` | `Tabs.tsx` |
+| `card` / `card-*` + `config-card` | `ConfigCard.tsx` |
+| `dropdown` / `dropdown-*` | `DropdownMenu.tsx`, `PopoverList.tsx` |
+| `modal` / `modal-*` | `DialogSurface.tsx` |
+| Panel surfaces | `Panel.tsx`, `SectionHeader.tsx` |
+| Form rows | `FormField.tsx` |
+
+### Deferred roots (baseline-tracked)
+
+These component roots still appear in feature JSX and are tracked by the drift scanner's baseline. They will be removed as follow-up primitives are built: `textarea` (deferred per composer-contract.test.ts), `label`, `list`, `join`, `step`/`steps`, `status` (on non-StatusBadge elements), `progress`/`radial-progress`, `table`, `modal`/`modal-action`, `footer`, `dropdown`, and `btn-square` on `IconButton` (used for shape detection).
+
+## Required rules
+
+- **Feature JSX must not name component roots** (`btn`, `input`, `select`, `alert`, `badge`, `card`, `tabs`, `modal`, `loading`, `checkbox`, `dropdown`, etc.) directly in `className` strings. Use a primitive from `components/ui/` instead. Engine classes are allowed only inside `components/ui/` primitives and approved style-layer rules.
+- Prefer semantic colors (`base-100`, `primary`, `error`, …) over ad-hoc palette values in new markup.
+- Prefer standard spacing, text, and radius scales over arbitrary values (`text-[10px]`, `z-[1000]`, `rounded-[5px]`).
+- **Do not introduce raw non-token colors** (`oklch(...)`, `#hex`, `rgb(...)`, `hsl(...)`) in `styles/*.css` or feature `className` strings. Only `index.css` (the `@theme` fallback block) and `themes/*.css` may use raw color values. `primitives.css` is theme-driven end to end: every color is a `var(...)` / `color-mix(...)` / `currentColor` expression.
+- Keep dynamic values (grid tracks, textarea height, swatches, progress) as data via CSS variables or inline styles — not static utility classes.
+- Namespace new composites with `orchid-`. Define them in `components.css` `@layer orchid` using `@apply` + semantic tokens.
+- Keep `@layer orchid` after Tailwind's layers and the primitive engine (`@layer components`). Product geometry historically lived in unlayered `chat.css`; the dedicated final layer preserves that precedence over utilities and component defaults without returning to an unlayered compatibility sheet.
+- **`chat.css` is frozen**: do not add new rules or grow its line count. Product CSS has been migrated to `components.css`, `shell.css`, and `markdown.css`; `chat.css` is now header-only. Any new selector belongs in the appropriate `@layer orchid` surface file.
+- Do not redefine reserved component roots outside `primitives.css` (see below).
+- Do not add CSS Modules or a second styling library.
+- **Do not reintroduce DaisyUI** — no `@plugin "daisyui"`, no `daisyui` dependency, no DaisyUI-internal variables (`--fallback-*`, `--depth`, `--noise`, `--size-field`, `--size-selector`). The removal is gated by the contract test.
+
+## Reserved component roots
+
+`styles/primitives.css` is the only stylesheet that may define these roots (or their common modifiers such as `btn-primary`, `btn-ghost`). Reserved roots include:
+
+`btn`, `input`, `select`, `textarea`, `alert`, `badge`, `status`, `loading`, `collapse`, `modal`, `tabs`, `tab`, `steps`, `step`, `dropdown`, `table`, `fieldset`, `card`, `kbd`, `tooltip`, `menu`, `checkbox`, `radio`, `toggle`, `range`, `progress`, `link`, `divider`, `avatar`, `navbar`, `drawer`, `hero`, `footer`, `stat`, `toast`, `file-input`, `label`, `join`, `mask`, `stack`, `skeleton`, `indicator`, `list`, `dock`, `fab`, `validator`
+
+Product-specific names that only *start* like a reserved root but are not the root itself (for example `.input-area`) are allowed.
+
+**Gate:** zero top-level reserved redefinitions in feature CSS. Scoped overrides (e.g. `.provider-connection-wizard .modal-box`) are allowed when they only adjust a product surface.
+
+## Approved exception paths
+
+| Exception | Allowed location | Treatment |
+| --- | --- | --- |
+| Theme variables / `color-scheme` | `themes/*.css` | `--color-*` semantic bridge plus app-specific variables consumed by the renderer |
+| Engine fallback tokens | `styles/index.css` `@theme` | Raw fallback colors/radii/fonts only; themes override at runtime |
+| Markdown / syntax highlighting | `styles/markdown.css` | Nested element/token selectors; semantic theme variables |
+| Scrollbars | `styles/exceptions.css` | Browser-specific selectors; theme variables only |
+| Animations / streaming cursor | `styles/exceptions.css` | Keyframes (`spin`, `orchid-rise`, `orchid-pop`, …) and pseudo-elements when utilities cannot express behavior; disabled under `prefers-reduced-motion` |
+| Runtime layout dimensions | `ChatView.tsx` + `styles/exceptions.css` `.app-frame` | Set `--orchid-shell-left` / `--orchid-shell-right` from collapse state; center track stays `minmax(460px, 1fr)`; preserve grid/panel topology |
+| Runtime textarea height | `InputArea.tsx` + `.orchid-composer-textarea` in exceptions | Keep resize behavior; do not encode generated pixel heights as static utilities |
+| Runtime swatches / progress | `ContextGrid.tsx`, `Footer.tsx`, `CommandPalette.tsx` | Dynamic colors/fractions as data; classes for surrounding geometry |
+| Focus / modal browser quirks | focused exception selectors | Only after smoke proves utilities/engine insufficient |
+| Residual product CSS | `styles/chat.css` (header-only) | Shell/session selectors live in `shell.css`; onboarding/config/picker composites live in `components.css`; `chat.css` is empty and frozen |
+
+Every exception needs a short comment or a row in this table explaining why a predefined class cannot replace it.
+
+### Approved dynamic style components
+
+These files may use inline `style={...}` for runtime values without that usage counting as a static class violation:
+
+- `components/ChatView.tsx`
+- `components/InputArea.tsx`
+- `components/ContextGrid.tsx`
+- `components/Footer.tsx`
+- `components/CommandPalette.tsx`
+- `components/Preferences/ScopeToggle.tsx`
+- `components/ToolWidgets/LiveCommandInline.tsx`
+
+Static `className` strings in those files still must not introduce arbitrary utilities outside the approved list (currently empty).
+
+### Approved static arbitrary utilities
+
+**None.** Static `className` strings must use predefined Tailwind utilities only. Prefer `text-xs`, `z-50`, `rounded-md`, `gap-px`, `max-h-96`, `max-w-xl`, etc. If exact geometry is behavior-critical, use an `orchid-*` composite or a dynamic CSS variable exception.
+
+## Themes
+
+These six themes must remain selectable, loadable, and coherent via the existing runtime stylesheet swap (`applyTheme()` / `data-theme`):
+
+- `default`
+- `light`
+- `solarized-light`
+- `bluey`
+- `windows-xp`
+- `green-terminal`
+
+Each theme owns a full token set (`--bg-*`, `--text-*`, `--accent-*`, `--btn-*`, `--border-*`, typography, radii, motion) plus the `--color-*` semantic bridge that Tailwind utilities and `primitives.css` consume. Do not replace the runtime theme loader with compile-time-only theme blocks.
+
+Fonts: `Instrument Sans` (UI body), `Bricolage Grotesque` (display headings), and `JetBrains Mono` (code) load from Google Fonts with system fallbacks; `green-terminal` and `windows-xp` override the stacks to preserve their character.
+
+## Stylesheet layout
+
+| File | Role |
+| --- | --- |
+| `index.css` | **Canonical entry** (imported from `main.tsx`): Tailwind, `@theme` fallback tokens, document/root rules, layer imports |
+| `primitives.css` | Component-class engine (`@layer components`): `btn`, `input`, `badge`, `modal`, `tabs`, `loading`, … all theme-token driven |
+| `components.css` | Shared `@layer orchid` product composites with `@apply` + semantic/theme tokens (single-name; no legacy dual aliases) |
+| `shell.css` | Final-layer three-panel shell, session navigation, and inspector geometry preserved from the reference interface |
+| `motion.css` | Shared state-transition vocabulary: mounted disclosures, semantic state swaps, entrances, overlays, and status transitions |
+| `markdown.css` | Markdown / GFM / highlight tokens |
+| `exceptions.css` | Scrollbars, keyframes, streaming cursor, shell grid tracks, composer height hooks |
+| `chat.css` | Header-only (no CSS rules); frozen — residual bridge comment only |
+| `README.md` | This contract |
+
+### Import graph
+
+```text
+main.tsx
+  └── styles/index.css
+        ├── tailwindcss (@theme tokens)
+        ├── primitives.css      ← component engine (@layer components)
+        ├── components.css
+        ├── shell.css
+        ├── motion.css          ← shared state-transition vocabulary
+        ├── markdown.css
+        ├── exceptions.css
+        └── chat.css            ← residual bridge only
+```
+
+Runtime themes are **not** part of this graph: `applyTheme()` swaps a single `#orchid-theme` stylesheet link (`themes/*.css`) and sets `document.documentElement.dataset.theme`.
+
+## Motion contract
+
+Motion communicates continuity or a meaningful state change; it must not decorate continuously updating content.
+
+- Durations/easing come from each theme's `--transition-fast`, `--transition-normal`, and `--transition-slow` tokens.
+- `styles/motion.css` owns reusable `orchid-*` motion classes. Browser/runtime keyframes and the global `prefers-reduced-motion` override remain in `exceptions.css`.
+- Use `CollapsibleRegion` for stateful React disclosures. It keeps content mounted, animates grid rows plus opacity, and makes closed content inert; triggers retain `aria-expanded` and `aria-controls`.
+- Use keyed state wrappers for mutually exclusive semantic states, stable keys plus `orchid-list-item-enter` for insertions, and `orchid-view-enter` for mounted settings/onboarding/detail views.
+- Use the shared overlay/dialog/popover entrance classes for transient surfaces. Do not add feature-specific keyframes.
+- Do not animate streaming prose/reasoning, elapsed or token counters, terminal output, cursor movement, or other high-frequency text. Primitive progress geometry may transition.
+- Shell width and grid-column transitions are the only approved broad layout motion. New layout animation requires an explicit contract update.
+- Reduced-motion behavior is mandatory and centrally enforced; no component may override it with longer animation declarations.
+
+### Residual bridge (`chat.css`)
+
+- All previous rules were migrated; `chat.css` is header-only (comment block only, no CSS rules) and frozen.
+- **Do not add new rules** to `chat.css`. Shared composites → `components.css`; shell/session geometry → `shell.css`; markdown → `markdown.css`; browser exceptions → `exceptions.css`; component roots → `primitives.css`.
+
+### Known reserved redefinitions outside primitives.css
+
+**None.** Product lists use plain lists / PopoverList / custom menus, and buttons are the `btn` primitive in JSX — never custom `.btn` CSS in feature stylesheets.
+
+## Arbitrary utilities
+
+Static class strings (from `className` / `class` attributes and class-like string/template literals inside those attributes) must not introduce Tailwind arbitrary values (tokens matching `utility-[...]`, including variants like `sm:grid-cols-[...]`).
+
+- **Approved**: intentional long-lived exceptions go in `APPROVED_ARBITRARY_UTILITIES` (currently empty) and must be documented here.
+- **Not scanned**: TypeScript arrays, generics, indexed access (`tierModels[tier.id]`), and `${...}` interiors of class templates — the scanner is class-bearing only.
+
+## How to add UI safely
+
+### Example 1 — Typed primitive (preferred)
+
+```tsx
+import { Button } from '../ui/Button';
+
+<Button variant="primary" size="sm">Save</Button>
+```
+
+Engine classes live inside the primitive. Feature JSX never names `btn` directly.
+
+### Example 2 — Tailwind utilities (one-off layout)
+
+```tsx
+<div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+  <p className="truncate text-sm text-base-content/70">{label}</p>
+</div>
+```
+
+### Example 3 — `orchid-*` composite (repeated product surface)
+
+In `components.css`:
+
+```css
+@layer orchid {
+  .orchid-chat-footer {
+    @apply flex shrink-0 items-center justify-between gap-2.5 border-t border-base-content/10 px-3 py-1 text-xs;
+  }
+}
+```
+
+In JSX: `className="orchid-chat-footer"` (single orchid name; do not reintroduce legacy dual aliases).
+
+### Example 4 — Dynamic exception
+
+```tsx
+<div
+  className="app-frame"
+  style={{
+    ['--orchid-shell-left' as string]: leftCollapsed ? '56px' : '260px',
+    ['--orchid-shell-right' as string]: rightCollapsed ? '48px' : '300px',
+  }}
+/>
+```
+
+Document the path under **Approved dynamic style components** and keep static geometry in classes.
+
+### Checklist
+
+1. Prefer a typed primitive from `components/ui/` in feature JSX. If a matching primitive doesn't exist, create one.
+2. Use predefined Tailwind utilities for layout only. Never name component roots directly in feature JSX.
+3. If the same pattern appears twice (or encodes shared behavior), extract an `orchid-*` composite or a new primitive.
+4. If you need a dynamic pixel/color/fraction, put it in an approved exception path as a CSS variable or inline style.
+5. Run `npm test -- tests/integration/renderer-style-contract.test.ts` from `electron/`.
+6. Never “fix” styling by redesigning shell layout.

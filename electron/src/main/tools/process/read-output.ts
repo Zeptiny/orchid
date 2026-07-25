@@ -1,0 +1,114 @@
+/**
+ * read_output tool — read output from a background command.
+ *
+ * Returns a snapshot of recent output and exit code. Supports long-polling
+ * (wait_ms) to block until new output, exit, or deadline.
+ *
+ * Ported from Python `src/orchid/tools/background_io.py`.
+ */
+import { z } from 'zod';
+import { normalizeAgentScopeId } from '../../../shared/types/agent-scope';
+import { getBackgroundStore } from './background-store';
+import { backgroundCommandNotFound } from './not-found';
+import type { ToolDefinition, ToolHandler } from '../types';
+import { getToolConfig } from '../types';
+import { RiskClass } from '../../../shared/types/permission';
+import { genericToolResultMetadata } from '../types';
+import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
+import { getConfig } from '../../config/loader';
+import type { Config } from '../../config/schema';
+
+// ---------------------------------------------------------------------------
+// Zod schema
+// ---------------------------------------------------------------------------
+
+export const readOutputInputSchema = z.object({
+  id: z.number().int().describe('The background command id'),
+  last_n: z.number().int().optional().describe('Number of recent output lines to include (default: all available)'),
+  wait_ms: z.number().int().optional().describe('Long-poll: wait up to this many milliseconds for new output or exit (default: no wait)'),
+});
+
+export type ReadOutputInput = z.infer<typeof readOutputInputSchema>;
+
+// ---------------------------------------------------------------------------
+// Executor
+// ---------------------------------------------------------------------------
+
+export async function executeReadOutput(
+  id: number,
+  lastN?: number,
+  waitMs?: number,
+  sessionId?: string | null,
+  agentScopeId?: string | null,
+  config?: Config,
+): Promise<GenericBuiltInToolOutcome> {
+  const store = getBackgroundStore();
+  const scopeSessionId = sessionId ?? null;
+  const scopeAgent = normalizeAgentScopeId(agentScopeId);
+  // Visibility is session + agent scoped (peer agents cannot read each other).
+  const entry = store.getVisible(id, scopeSessionId, scopeAgent);
+  if (!entry) {
+    return backgroundCommandNotFound('read_output', id);
+  }
+
+  // Long-poll: wait for new output or exit before snapshotting.
+  if (waitMs !== undefined && waitMs > 0 && entry.exitCode === null) {
+    let longPollMaxMs: number;
+    try {
+      longPollMaxMs = (config ?? getConfig()).read_output_long_poll_max * 1000;
+    } catch {
+      longPollMaxMs = 60 * 1000;
+    }
+    const bounded = Math.min(waitMs, longPollMaxMs);
+    await store.wait_for_progress(id, bounded);
+  }
+
+  const result = store.snapshotVisible(id, lastN, scopeSessionId, scopeAgent);
+  if (!result) {
+    return backgroundCommandNotFound('read_output', id);
+  }
+
+  const { tail, exitCode } = result;
+  return genericBuiltInToolOutcome('read_output', {
+    commandId: id,
+    output: tail,
+    ...(exitCode === null ? {} : { exitCode }),
+  }, 'complete');
+}
+
+// ---------------------------------------------------------------------------
+// Tool definition
+// ---------------------------------------------------------------------------
+
+export const readOutputToolDefinition: ToolDefinition = {
+  ...genericToolResultMetadata,
+  name: 'read_output',
+  description:
+    'Read output from a background command. Returns a snapshot of recent ' +
+    'output and exit code. Use wait_ms for long-polling: blocks until new ' +
+    'output, exit, or deadline.',
+  inputSchema: readOutputInputSchema,
+  category: 'process',
+  riskClass: RiskClass.READ_ONLY,
+  /** Long-poll wait_ms can approach 60s; skip outer dispatch timeout. */
+  noTimeout: true,
+};
+
+export const readOutputHandler: ToolHandler = async (input: unknown, ctx) => {
+  const { id, last_n, wait_ms } = input as ReadOutputInput;
+  // Prefer the frozen turn config; fall back to live config for legacy callers.
+  let frozenConfig: Config | undefined;
+  try {
+    frozenConfig = getToolConfig(ctx);
+  } catch {
+    frozenConfig = undefined;
+  }
+  return executeReadOutput(
+    id,
+    last_n,
+    wait_ms,
+    ctx.sessionId ?? null,
+    ctx.agentScopeId ?? 'main',
+    frozenConfig,
+  );
+};

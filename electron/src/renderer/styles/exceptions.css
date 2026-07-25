@@ -1,0 +1,266 @@
+/**
+ * Browser-specific and runtime exception styles.
+ *
+ * Keep this layer narrow: scrollbars, keyframes, streaming cursor, and
+ * dynamic-layout hooks that utilities cannot express.
+ * Every rule here should have a short reason.
+ */
+
+/* ── Global scrollbars ────────────────────────────────────────────────────
+ * WebKit scrollbar pseudo-elements are not expressible as utilities.
+ * Refined thin scrollbars with subtle hover state.
+ */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--scrollbar-thumb, var(--color-base-300)) 70%, transparent);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--accent-primary-hover, var(--color-primary)) 60%, transparent);
+}
+
+/* Status/loading indicators use the shared loading spinner primitive. */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Shared motion vocabulary (primitives.css + components.css) ───────────
+ * Entrance/feedback animations for the primitive engine. Keep durations
+ * short; everything is disabled under prefers-reduced-motion below.
+ */
+@keyframes orchid-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes orchid-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes orchid-pop {
+  from { opacity: 0; transform: translateY(-2px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes orchid-state-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes orchid-dots {
+  0%, 100% { background-size: 26% 26%, 14% 14%, 14% 14%; }
+  33% { background-size: 14% 14%, 26% 26%, 14% 14%; }
+  66% { background-size: 14% 14%, 14% 14%, 26% 26%; }
+}
+
+@keyframes orchid-bars {
+  0%, 100% { background-size: 18% 45%, 18% 90%, 18% 45%; }
+  50% { background-size: 18% 90%, 18% 45%, 18% 90%; }
+}
+
+@keyframes orchid-ball {
+  0%, 100% { transform: scale(0.75); opacity: 0.55; }
+  50% { transform: scale(1); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Shell grid column tracks (ChatView) ──────────────────────────────────
+ * Left/right widths are state-derived (collapsed vs expanded). Center track
+ * stays minmax(460px, 1fr) to match current shell topology. Set on .app-frame
+ * via --orchid-shell-left / --orchid-shell-right from ChatView.
+ */
+.app-frame {
+  grid-template-columns:
+    var(--orchid-shell-left, 260px)
+    minmax(460px, 1fr)
+    var(--orchid-shell-right, 300px);
+  transition: grid-template-columns var(--transition-slow, 240ms cubic-bezier(0.4, 0, 0.2, 1));
+}
+
+/* Config shell: left sessions rail + main settings (topology matches App).
+ * Main column keeps the same 460px floor as .app-frame center track. */
+.config-shell {
+  grid-template-columns: auto minmax(460px, 1fr);
+}
+
+/* ── Composer textarea auto-resize (U6) ─────────────────────────────────────
+ * Runtime height is owned by InputArea (min/max + scrollHeight). Keep static
+ * chrome here so first paint matches post-send size without field-sizing.
+ */
+.orchid-composer-textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  min-height: 36px;
+  height: 36px;
+  max-height: 160px;
+  resize: none;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  box-sizing: border-box;
+  border: 0 !important;
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  font-size: 13px;
+  line-height: 36px;
+  padding: 0 8px 0 12px;
+  color: var(--text-primary, var(--color-base-content));
+  vertical-align: middle;
+}
+
+/* Multi-line: restore normal leading once content grows past one line. */
+.orchid-composer-textarea:not(:placeholder-shown) {
+  line-height: 1.5;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.orchid-composer-shell {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 4px !important;
+}
+
+.orchid-composer-controls {
+  display: flex;
+  align-items: center;
+  align-self: center;
+}
+
+.orchid-composer-area {
+  border-top: none !important;
+}
+
+.orchid-chat-footer {
+  border-top: none !important;
+}
+
+/*
+ * Chat message padding lives here (unlayered) so it cannot lose to @layer
+ * components / the primitive engine. JSX also carries Tailwind px/py utilities.
+ */
+.orchid-chat-scroll {
+  padding: 20px 24px !important;
+  box-sizing: border-box;
+}
+
+.orchid-msg {
+  box-sizing: border-box;
+  padding: 12px 16px !important;
+  border-radius: 0.75rem;
+  font-size: 1rem !important;
+  line-height: 1.6;
+}
+
+.orchid-msg-user {
+  padding: 12px 16px !important;
+  white-space: pre-wrap;
+  color: var(--msg-user-text, var(--color-base-content));
+  background: var(
+    --msg-user-bg,
+    color-mix(in srgb, var(--color-primary) 14%, var(--color-base-200))
+  );
+  border: 1px solid color-mix(in srgb, var(--color-primary) 12%, transparent);
+  margin-top: 0.75rem !important;
+}
+
+.orchid-msg-assistant {
+  padding: 4px 4px 8px !important;
+  margin-top: 0.75rem !important;
+}
+
+/* Clear turn separation when roles switch (or after tools/thoughts). */
+.orchid-msg-assistant + .orchid-msg-user,
+.orchid-thought + .orchid-msg-user,
+.orchid-tool-block + .orchid-msg-user,
+.orchid-tool-activity + .orchid-msg-user,
+.orchid-msg-user + .orchid-msg-assistant,
+.orchid-msg-user + .orchid-thought,
+.orchid-msg-user + .orchid-tool-block,
+.orchid-msg-user + .orchid-tool-activity {
+  margin-top: 1.25rem !important;
+}
+
+/* Thought / tool rows: horizontal padding so labels aren't flush to the edge. */
+.orchid-thought-title,
+.orchid-tool-activity-title,
+.orchid-tool-block-title {
+  padding-left: 14px !important;
+  padding-right: 14px !important;
+}
+
+.orchid-thought-content,
+.orchid-tool-block-content {
+  padding-left: 14px !important;
+  padding-right: 14px !important;
+}
+
+.orchid-tool-activity-body {
+  padding-left: 12px !important;
+  padding-right: 10px !important;
+}
+
+/* Composer + footer share the same horizontal inset from the pane edge. */
+.orchid-composer-area {
+  padding-inline: 16px !important;
+}
+
+.orchid-chat-footer {
+  padding-inline: 16px !important;
+}
+
+/* Context dropup: keep list content off the panel edge. */
+.orchid-footer-context-panel {
+  padding: 0 !important;
+}
+
+.orchid-footer-context-panel .footer-context-panel-header {
+  padding: 12px 14px 10px !important;
+}
+
+.orchid-footer-context-panel .footer-context-panel-body {
+  padding: 10px 12px 12px !important;
+}
+
+/* Radial-progress size/value CSS vars set from Footer at runtime. */
+.orchid-footer-context-radial {
+  --size: 1.4rem;
+  --thickness: 2px;
+}
+
+.orchid-footer-context-panel .context-panel-row {
+  padding: 8px 10px !important;
+}
+
+/* Theme swatches in command palette are dynamic hex per theme id. */
+.orchid-theme-swatch {
+  /* background set inline from THEME_SWATCHES */
+}

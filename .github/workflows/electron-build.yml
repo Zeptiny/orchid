@@ -1,0 +1,127 @@
+name: Electron Build & Package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: electron
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+  build:
+    needs: lint-and-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            artifact_ext: dmg
+          - os: windows-latest
+            platform: win
+            artifact_ext: exe
+          - os: ubuntu-latest
+            platform: linux
+            artifact_ext: "AppImage,deb"
+
+    runs-on: ${{ matrix.os }}
+
+    defaults:
+      run:
+        working-directory: electron
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild native modules
+        run: npm run rebuild:native
+        shell: bash
+
+      - name: Build (compile TS + bundle renderer)
+        run: npm run build
+
+      - name: Prune for lean packaging
+        shell: bash
+        run: |
+          echo "Before prune: $(du -sh node_modules | cut -f1)"
+          rm -rf node_modules/.cache \
+                 node_modules/typescript \
+                 node_modules/vitest node_modules/vite node_modules/@vitejs \
+                 node_modules/esbuild \
+                 node_modules/tailwindcss node_modules/@tailwindcss node_modules/daisyui \
+                 node_modules/eslint* node_modules/typescript-eslint node_modules/@eslint \
+                 node_modules/prettier node_modules/concurrently node_modules/wait-on || true
+          if [ "${{ matrix.platform }}" = "mac" ]; then
+            rm -rf node_modules/onnxruntime-node/bin/napi-v6/linux node_modules/onnxruntime-node/bin/napi-v6/win32 || true
+          elif [ "${{ matrix.platform }}" = "win" ]; then
+            rm -rf node_modules/onnxruntime-node/bin/napi-v6/darwin node_modules/onnxruntime-node/bin/napi-v6/linux || true
+            rm -f node_modules/onnxruntime-node/bin/napi-v6/win32/*/DirectML.dll \
+                  node_modules/onnxruntime-node/bin/napi-v6/win32/*/dxcompiler.dll \
+                  node_modules/onnxruntime-node/bin/napi-v6/win32/*/dxil.dll || true
+          else
+            rm -rf node_modules/onnxruntime-node/bin/napi-v6/darwin node_modules/onnxruntime-node/bin/napi-v6/win32 || true
+            rm -rf node_modules/onnxruntime-node/bin/napi-v6/linux/arm64 || true
+            rm -f node_modules/onnxruntime-node/bin/napi-v6/linux/*/libonnxruntime_providers_cuda.so \
+                  node_modules/onnxruntime-node/bin/napi-v6/linux/*/libonnxruntime_providers_tensorrt.so || true
+          fi
+          echo "After prune: $(du -sh node_modules | cut -f1)"
+          du -sh node_modules/onnxruntime-node 2>/dev/null || true
+
+      - name: Package
+        shell: bash
+        run: |
+          mv package-lock.json package-lock.json.electron-builder
+          npm_config_user_agent=traversal npx electron-builder --config electron-builder.yml --${{ matrix.platform }} --publish=never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_OPTIONS: --max-old-space-size=8192
+        timeout-minutes: 20
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: orchid-${{ matrix.platform }}
+          path: |
+            electron/release/*.dmg
+            electron/release/*.exe
+            electron/release/*.AppImage
+            electron/release/*.deb
+          if-no-files-found: warn
+          retention-days: 14

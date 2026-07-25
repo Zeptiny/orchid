@@ -1,0 +1,146 @@
+/**
+ * Default theme — dark.
+ *
+ * Refined dark theme with sophisticated depth. Near-black surfaces with
+ * subtle blue undertones, high-contrast text, and a luminous indigo accent.
+ */
+:root {
+  /* Background colors — deep, near-black with cool undertone */
+  --bg-primary: #09090b;
+  --bg-secondary: #111113;
+  --bg-tertiary: #1c1c1f;
+  --bg-surface: #09090b;
+  --bg-surface-raised: #111113;
+  --bg-surface-overlay: #1c1c1f;
+
+  /* Text colors — high contrast, slightly warm white */
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-tertiary: #71717a;
+  --text-inverse: #09090b;
+
+  /* Accent colors — luminous indigo primary, refined secondaries */
+  --accent-primary: #818cf8;
+  --accent-primary-hover: #a5b4fc;
+  --accent-secondary: #67e8f9;
+  --accent-success: #4ade80;
+  --accent-warning: #fbbf24;
+  --accent-error: #f87171;
+  --accent-info: #60a5fa;
+
+  /* Border colors — subtle, refined */
+  --border-default: #27272a;
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --border-strong: #3f3f46;
+  --border-focus: #818cf8;
+
+  /* Message colors */
+  --msg-user-bg: rgba(129, 140, 248, 0.15);
+  --msg-user-text: #fafafa;
+  --msg-assistant-bg: transparent;
+  --msg-assistant-text: #fafafa;
+  --msg-system-bg: #111113;
+  --msg-system-text: #a1a1aa;
+  --msg-error-bg: rgba(248, 113, 113, 0.1);
+  --msg-error-text: #f87171;
+  --msg-thinking-bg: rgba(251, 191, 36, 0.06);
+  --msg-thinking-text: #fbbf24;
+
+  /* Input colors — slightly recessed */
+  --input-bg: #0c0c0e;
+  --input-border: #27272a;
+  --input-focus-border: #818cf8;
+  --input-text: #fafafa;
+  --input-placeholder: #71717a;
+
+  /* Button colors */
+  --btn-primary-bg: #818cf8;
+  --btn-primary-text: #ffffff;
+  --btn-primary-hover: #a5b4fc;
+  --btn-secondary-bg: #27272a;
+  --btn-secondary-text: #fafafa;
+  --btn-secondary-hover: #3f3f46;
+  --btn-danger-bg: #f87171;
+  --btn-danger-text: #ffffff;
+  --btn-danger-hover: #fca5a5;
+
+  /* Sidebar colors */
+  --sidebar-bg: #111113;
+  --sidebar-border: #27272a;
+  --sidebar-item-hover: rgba(129, 140, 248, 0.08);
+  --sidebar-item-active: rgba(129, 140, 248, 0.14);
+
+  /* Scrollbar */
+  --scrollbar-thumb: #27272a;
+  --scrollbar-track: transparent;
+
+  /* Shadows — layered, soft */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
+
+  /* Typography */
+  --font-family: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: 'Bricolage Grotesque', 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-size-xs: 0.69rem;
+  --font-size-sm: 0.77rem;
+  --font-size-base: 0.8125rem;
+  --font-size-lg: 0.875rem;
+  --font-size-xl: 1rem;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  /* Border radius — slightly larger for modern feel */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-full: 9999px;
+
+  /* Transitions — snappier */
+  --transition-fast: 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 280ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Semantic token bridge — consumed by Tailwind utilities + primitives.css */
+  --color-primary: var(--accent-primary);
+  --color-primary-content: var(--btn-primary-text);
+  --color-secondary: var(--accent-secondary);
+  --color-secondary-content: var(--text-inverse);
+  --color-accent: var(--accent-warning);
+  --color-accent-content: var(--text-inverse);
+  --color-neutral: var(--bg-tertiary);
+  --color-neutral-content: var(--text-primary);
+  --color-base-100: var(--bg-primary);
+  --color-base-200: var(--bg-secondary);
+  --color-base-300: var(--bg-tertiary);
+  --color-base-content: var(--text-primary);
+  --color-info: var(--accent-info);
+  --color-info-content: var(--text-inverse);
+  --color-success: var(--accent-success);
+  --color-success-content: var(--text-inverse);
+  --color-warning: var(--accent-warning);
+  --color-warning-content: var(--text-inverse);
+  --color-error: var(--accent-error);
+  --color-error-content: var(--text-inverse);
+  --radius-selector: var(--radius-sm);
+  --radius-field: var(--radius-md);
+  --radius-box: var(--radius-lg);
+  --text-muted: #d4d4d8;
+  --bg-surface-deep: #0a0a0c;
+  --overlay-color: #000000;
+  --syntax-comment: #6a9955;
+  --syntax-string: #ce9178;
+  --context-free: #27272a;
+  --context-system: #3b82f6;
+  --context-tool: #f59e0b;
+  --context-user: #818cf8;
+  --context-assistant: #4ade80;
+  color-scheme: dark;
+}

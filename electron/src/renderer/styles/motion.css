@@ -1,0 +1,70 @@
+/**
+ * Product motion vocabulary.
+ *
+ * Motion should explain continuity or confirm a state change. Durations come
+ * from the shared transition tokens and reduced-motion is enforced globally
+ * in exceptions.css.
+ */
+
+@layer orchid {
+  .orchid-collapsible-region {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transition:
+      grid-template-rows var(--transition-normal, 180ms cubic-bezier(0.4, 0, 0.2, 1)),
+      opacity var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
+  }
+
+  .orchid-collapsible-region.is-open {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    transition:
+      grid-template-rows var(--transition-normal, 180ms cubic-bezier(0.4, 0, 0.2, 1)),
+      opacity var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
+  }
+
+  .orchid-collapsible-region-inner {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .orchid-disclosure-chevron {
+    transform: rotate(-90deg);
+    transition: transform var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
+  }
+
+  .orchid-disclosure-chevron.is-open {
+    transform: rotate(0deg);
+  }
+
+  .orchid-state-enter,
+  .orchid-list-item-enter,
+  .orchid-view-enter,
+  .orchid-footer-state,
+  .orchid-composer-action-swap,
+  .orchid-tool-lifecycle-icon {
+    animation: orchid-state-in var(--transition-normal, 180ms cubic-bezier(0.4, 0, 0.2, 1)) both;
+  }
+
+  .orchid-footer-state,
+  .orchid-composer-action-swap,
+  .orchid-tool-lifecycle-icon {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .orchid-popover-enter {
+    transform-origin: top;
+    animation: orchid-pop var(--transition-normal, 180ms cubic-bezier(0.4, 0, 0.2, 1)) both;
+  }
+
+  .orchid-overlay-enter {
+    animation: orchid-fade var(--transition-normal, 180ms cubic-bezier(0.4, 0, 0.2, 1)) both;
+  }
+
+  .orchid-dialog-enter {
+    animation: orchid-pop var(--transition-normal, 180ms cubic-bezier(0.4, 0, 0.2, 1)) both;
+  }
+
+}

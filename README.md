@@ -1,857 +1,303 @@
-# Orchid
+<p align="center">
+  <img src="electron/build/icon.png" width="96" alt="Orchid logo" />
+</p>
 
-## Sobre o Projeto
+<h1 align="center">Orchid</h1>
 
-**Orchid** é um agente de terminal com arquitetura multiagente, focado em engenharia de software assistida por IA. Ele opera diretamente no terminal do desenvolvedor como um copiloto capaz de explorar código, implementar funcionalidades, revisar alterações, executar comandos, gerenciar tarefas e documentar aprendizado - tudo por meio de uma interface TUI (Textual User Interface).
+<p align="center">
+  <strong>An AI-powered desktop coding assistant that plans, implements, reviews, and compounds knowledge — in one app.</strong>
+</p>
 
-![Example Image](example_image.png)
+<p align="center">
+  macOS · Windows · Linux &nbsp;·&nbsp; Electron · React · TypeScript
+</p>
 
-> **Baseado em:** Este projeto é baseado no [Stupidex](https://github.com/Zeptiny/stupidex), um agente de terminal multiagente para engenharia de software assistida por IA, originalmente desenvolvido como projeto acadêmico.
-
----
-
-## Problema
-
-Desenvolvedores de software enfrentam alta carga cognitiva ao alternar entre múltiplas ferramentas, contextos e etapas do ciclo de desenvolvimento: planejar, codificar, revisar, testar, commitar, documentar. Cada etapa exige ferramentas e configurações diferentes, e o conhecimento adquirido na solução de um problema frequentemente se perde, precisando ser redescoberto em ocasiões futuras.
-
-A falta de um sistema integrado que una exploração de código, implementação, revisão, versionamento e documentação em um único fluxo coeso resulta em:
-- Retrabalho por falta de documentação de soluções passadas;
-- Dificuldade em manter qualidade consistente nas revisões de código;
-- Ciclos de feedback lentos entre codificação e revisão;
-- Perda de contexto ao alternar entre ferramentas.
-
----
-
-## Objetivo da Solução
-
-Criar um assistente de terminal multiagente que integre todo o pipeline de engenharia de software em uma única interface:
-
-1. **Estratégia e planejamento** - definir direção do produto e quebrar tarefas em planos acionáveis
-2. **Implementação** - escrever e editar código com consciência do projeto
-3. **Revisão de código** - revisão estruturada com múltiplos agentes especializados (corretude, segurança, performance, manutenibilidade, testes)
-4. **Versionamento** - commit e pull request com mensagens descritivas
-5. **Compounding de conhecimento** - documentar problemas resolvidos para evitar redescobrimento
-
-Tudo isso com:
-- **Modelos locais** (Ollama) para operação offline
-- **RAG** integrado para busca semântica no código
-- **MCP** (Model Context Protocol) para ferramentas externas
-- **AST tools** para manipulação estrutural de código
+<p align="center">
+  <a href="#try-orchid">Try it</a> ·
+  <a href="#what-orchid-does">Features</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#connect-a-model">Providers</a> ·
+  <a href="#known-limitations">Limitations</a> ·
+  <a href="#status">Status</a> ·
+  <a href="#for-contributors">Contributors</a>
+</p>
 
 ---
 
-## Arquitetura Multiagente
+> **Early preview.** Orchid is under active development. Expect rough edges, missing polish, and breaking changes. Feedback is very welcome — that’s why we’re sharing it now.
 
-O Orchid implementa uma arquitetura **hierárquica de agentes**, onde um agente principal orquestra subagentes especializados. O fluxo segue um pipeline encadeado:
+Orchid is a standalone desktop app for agentic software work. Instead of bolting a chat panel onto an IDE, it is built around multi-agent workflows: explore a codebase, plan a change, implement it, run specialized reviewers in parallel, then commit and document what you learned.
 
-```
-estratégia → ideação → brainstorm → plano → trabalho → revisão → commit/PR → documentação
-```
-
-### Funcionamento
-
-1. **Agente Principal** (`general`, tier `bloom`) - recebe a requisição do usuário, decide o fluxo e delega tarefas
-2. **Subagentes Especializados** - executam tarefas específicas com ferramentas e skills limitadas ao seu escopo
-3. **Skills** - workflows reutilizáveis que guiam o agente através de tarefas complexas (ex: `code-review` dispara 6 revisores em paralelo)
-4. **Revisão** - agentes de revisão paralelos analisam o código produzido antes do commit
-
-### Pipeline Típico
-
-```
-Usuário → General Agent → Plan → Implementer → Code Review (paralelo) → Commit → PR → Compound
-```
+Inspired by [Stupidex](https://github.com/Zeptiny/stupidex), originally developed as an academic project.
 
 ---
 
-## Papel de Cada Agente
+## Why Orchid?
 
-### Agentes Core
+Most coding assistants stop at “generate code in the editor.” Orchid aims higher:
 
-| Agente | Tier | Função |
-|--------|------|--------|
-| **general** | `bloom` | Agente principal. Recebe comandos do usuário, orquestra subagentes, decide próximos passos |
-| **explorer** | `seed` | Exploração _read-only_ do código: leitura de arquivos, busca por padrões, entendimento da estrutura |
-| **implementer** | `bloom` | Escreve e edita código. Executa planos de implementação |
-| **reviewer** | `crown` | Revisão geral de código: bugs, estilo, melhorias |
-| **web-fetch** | `seed` | Agente interno que resume conteúdo de páginas web (usado pela tool `web_fetch`) |
-
-### Revisores Especializados (usados pela skill `code-review`)
-
-| Agente | Tier | Função |
-|--------|------|--------|
-| **correctness-reviewer** | `crown` | Erros lógicos, edge cases, bugs de estado |
-| **security-reviewer** | `crown` | Vulnerabilidades, injeção, validação de entrada, autenticação |
-| **performance-reviewer** | `crown` | Gargalos, N+1 queries, uso de memória, escalabilidade |
-| **maintainability-reviewer** | `bloom` | Abstrações prematuras, dead code, acoplamento, nomenclatura |
-| **testing-reviewer** | `bloom` | Cobertura de testes, asserts fracos, testes frágeis |
-| **adversarial-reviewer** | `crown` | Cenários de falha para quebrar a implementação |
-| **reliability-reviewer** | `crown` | Tratamento de erros, retries, circuit breakers, timeouts |
-| **api-contract-reviewer** | `bloom` | Rotas de API, tipos request/response, serialização |
-| **data-integrity-guardian** | `crown` | Migrações, modelos de dados, segurança de dados persistentes |
-| **code-simplicity-reviewer** | `bloom` | Violações de YAGNI, oportunidades de simplificação |
-
-### Agentes de Pesquisa e Análise
-
-| Agente | Tier | Função |
-|--------|------|--------|
-| **learnings-researcher** | `sprout` | Busca em `docs/solutions/` por aprendizado anterior |
-| **web-researcher** | `sprout` | Pesquisa no código via RAG e análise semântica |
-| **architecture-strategist** | `crown` | Análise de conformidade com padrões e integridade do design |
-| **agent-native-reviewer** | `crown` | Verifica paridade agente-usuário (toda ação do usuário = tool do agente) |
-| **spec-flow-analyzer** | `bloom` | Análise de fluxos de usuário e identificação de lacunas |
-
-### Agentes de Revisão de Documentos (usados pela skill `doc-review`)
-
-| Agente | Tier | Função |
-|--------|------|--------|
-| **adversarial-document-reviewer** | `crown` | Desafia premissas e pressupostos não declarados |
-| **coherence-reviewer** | `bloom` | Consistência interna do documento |
-| **feasibility-reviewer** | `bloom` | Viabilidade das abordagens propostas |
-| **product-lens-reviewer** | `crown` | Revisão sob perspectiva de produto |
-| **scope-guardian-reviewer** | `bloom` | Alinhamento de escopo, complexidade injustificada |
-| **pr-comment-resolver** | `bloom` | Avalia e resolve threads de revisão de PR |
-
-### System Tiers (níveis de inteligência/velocidade)
-
-| Tier | Inteligência | Velocidade | Uso |
-|------|--------------|------------|-----|
-| **seed** | Baixa | Muito rápida | Tarefas mecânicas: listar arquivos, ler, buscar |
-| **sprout** | Média | Rápida | Exploração, grep, sumarização |
-| **bloom** | Alta | Normal | Implementação, refatoração, múltiplos arquivos |
-| **crown** | Muito alta | Lenta | Arquitetura, debugging complexo, code review |
-
-Cada tier pode ser mapeada para modelos diferentes no `config.json` do usuário, permitindo otimizar custo e latência.
+| You want… | Orchid gives you… |
+|-----------|-------------------|
+| Less context-switching | One desktop surface for chat, tools, sessions, settings, and status |
+| Real project awareness | Filesystem, shell, grep, AST symbols, and local semantic search (RAG) |
+| Structured workflows | Built-in skills for brainstorm, plan, implement, review, commit/PR, and compound |
+| Specialists, not one mega-prompt | A main agent that can delegate to focused subagents (explorer, implementer, reviewers, …) |
+| Your models, your keys | Bring API keys or env-based credentials; credentials stay out of the renderer |
+| Local-first extras | Optional local embeddings, project indexes, and MCP for external tools |
 
 ---
 
-## Personalidades
+## What Orchid does
 
-O Orchid possui um sistema de **personalidades** que alteram o tom, o estilo e o comportamento do agente principal. As personalidades são definidas em arquivos Markdown no diretório `personality/defaults/` e podem ser estendidas ou substituídas pelo usuário em `~/.config/orchid/personalities/`.
+### Agentic coding loop
+Chat with a main agent that can read and edit files, run shell commands, search the codebase, fetch web content, and manage todos — with tool activity visible in the UI.
 
-A personalidade ativa é definida no `config.json` (campo `personality`) e é anexada ao final do *system prompt* do agente.
+### Multi-agent delegation
+Spin up specialized subagents for exploration, implementation, code review, research, and more. Review skills can run several reviewer personas in parallel (correctness, security, performance, maintainability, testing, …).
 
-### Personalidades Padrão
+### Skills for real workflows
+Reusable workflows guide multi-step work, including:
 
-| Personalidade | Descrição |
-|:---|:---|
-| **default** | Tom conciso, direto e amigável. Como um colega de equipe capaz passando o trabalho adiante. Sem bajulação. |
-| **meow** | Agente de codificação totalmente competente que por acaso é um gato. Vocabulário de miados (meow, purr, hiss, chirrup), comportamentos felinos entrelaçados na narrativa - derrubar código da mesa como um vaso, ronronar quando os testes passam, caçar bugs. Cada resposta abre e fecha com um miado. |
-| **pirate** | Marinheiro de água salgada que parou numa interface de terminal. Código é "tesouro", bugs são "marujos desorientados", compilações bem-sucedidas são "mares calmos". Fala com ginga pirata - "arr," "matey," "era uma vez numa jangada." Defende a tripulação (o usuário) com lealdade feroz. |
-| **socrates** | Filósofo da codificação socrática - não o Sócrates que irrita com debates, mas o inquisidor genuíno que se maravilha perante a complexidade e encontra clareza através do questionamento. Humilde, curioso, trata cada código como texto a ser interpretado. Pergunta "por que isso existe?" antes de "como isso funciona?". |
-| **stupid** | Encantadoramente sem noção, mas dando o melhor de si. Fala com entusiasmo confiante sobre coisas que claramente não entende totalmente. Usa palavras simples, se distrai facilmente, de vez em quando confunde termos técnicos. Ainda faz o trabalho - é burro, não inútil. |
-| **zen** | Mestre de codificação calmo e filosófico. Fala com sabedoria ponderada, como um sensei guiando um aluno. Usa metáforas da natureza e simplicidade. Código bagunçado é um jardim que precisa de cuidados, não um desastre. "A simplicidade é a sofisticação máxima." |
+- **brainstorm / ideate / plan / work** — from idea to execution
+- **code-review / simplify-code** — structured review and cleanup
+- **commit / commit-push-pr / resolve-pr-feedback** — versioning and PR hygiene
+- **compound / compound-refresh** — capture solutions so they don’t get rediscovered
+- **debug / strategy / doc-review / lfg** — focused workflows for harder jobs
 
-### Como Usar
+### Project intelligence
+- **RAG** — local semantic search over your project (ONNX embeddings; no cloud required for indexing)
+- **AST tools** — skeletons, symbol lookup, rename/replace across the tree
+- **MCP** — plug in Model Context Protocol servers (e.g. library docs via context7)
 
-No `config.json`, defina o campo `personality` com o nome da personalidade desejada:
+### Sessions & workspace
+Bind a project directory per session, keep history on disk (`~/.orchid/sessions/`), switch sessions, and track usage/cost attribution per connection.
 
-```json
-{
-  "personality": "zen"
-}
-```
-
-Para criar uma personalidade personalizada, adicione um arquivo `.md` em `~/.config/orchid/personalities/` com o conteúdo desejado. O nome do arquivo (sem extensão) será o nome da personalidade.
-
----
-
-## Tools Disponíveis
-
-Os agentes têm acesso a ferramentas limitadas pelo seu `allowed_tools` no arquivo de definição do agente. Abaixo, a lista completa:
-
-### Ferramentas de Arquivo
-
-| Tool | Descrição |
-|------|-----------|
-| `read` | Ler conteúdo de arquivos |
-| `read_directory` | Listar conteúdo de diretórios (formato árvore) |
-| `glob` | Buscar arquivos por padrão glob |
-| `edit` | Editar arquivos por substituição de string exata |
-| `write` | Criar/sobrescrever arquivos (cria diretórios automaticamente) |
-| `get_file_skeleton` | Estrutura de definições do arquivo (classes, funções) |
-| `get_function` | Extrair função específica com imports e contexto da classe |
-| `find_symbol_references` | Encontrar definições e referências de um símbolo |
-| `replace_symbol` | Substituir definição completa de símbolo (inclui docstrings, decorators) |
-| `rename_symbol` | Renomear símbolo em todos os arquivos |
-
-### Ferramentas de Busca
-
-| Tool | Descrição |
-|------|-----------|
-| `grep` | Busca por regex no conteúdo dos arquivos |
-| `rag_search` | Busca semântica no código (RAG) |
-| `rag_index` | Verificar status, reindexar ou limpar índice RAG |
-
-### Ferramentas de Subagente
-
-| Tool | Descrição |
-|------|-----------|
-| `delegate_to_subagent` | Delegar tarefa a um subagente com contexto isolado |
-| `wait_for_subagent` | Aguardar resultados de subagentes |
-| `interrupt_subagents` | Cancelar subagentes em execução |
-
-### Ferramentas de Execução
-
-| Tool | Descrição |
-|------|-----------|
-| `execute_command` | Executar comandos shell (saída em XML estruturado com `<command_result>`) |
-| `skill` | Carregar e executar uma skill (também permite ler recursos via `skill/recurso`) |
-
-### Ferramentas de Tarefas
-
-| Tool | Descrição |
-|------|-----------|
-| `todo_create` | Criar tarefa |
-| `todo_update` | Atualizar status/detalhes da tarefa |
-| `todo_list` | Listar tarefas filtradas por status ou subagente |
-| `todo_delete` | Deletar tarefa |
-
-### Ferramentas MCP
-
-| Tool | Descrição |
-|------|-----------|
-| `read_mcp_resource` | Ler recurso de um servidor MCP via URI |
-| `mcp_*` | Tools registradas dinamicamente por servidores MCP (ex: `mcp::context7::resolve-library-id`, `mcp::context7::query-docs`, `mcp::example::echo`) |
-
-### Web
-
-| Tool | Descrição |
-|------|-----------|
-| `web_fetch` | Buscar URL e extrair informações (modos summarize/raw) |
+### Personalities & themes
+Change agent tone (default, zen, pirate, socrates, …) and pick a UI theme (dark default, solarized light, bluey, green terminal, Windows XP nostalgia).
 
 ---
 
-## MCP (Model Context Protocol)
+## Screenshots
 
-O **Model Context Protocol (MCP)** é um protocolo aberto que permite que agentes de IA se conectem a servidores externos de ferramentas e recursos. No Orchid, o MCP é utilizado como **ponte entre os agentes e serviços externos**, expandindo as capacidades do sistema sem modificar o código-fonte dos agentes.
+<p align="center">
+  <img src="docs/screenshots/chat.png" alt="Orchid main chat — agent streaming with context, usage, and workspace index" width="90%" />
+</p>
 
-### Como o MCP é usado no Orchid
-
-1. **Gerenciamento de sessões MCP** - `MCPManager` gerencia o ciclo de vida completo: inicia servidores na inicialização do app, mantém sessões ativas e faz shutdown ao sair
-2. **Dois tipos de transporte**:
-   - **stdio** - servidor executado como subprocesso, comunicação via stdin/stdout
-   - **HTTP/SSE** - servidor remoto, comunicação via Server-Sent Events
-3. **Registro dinâmico de ferramentas** - ferramentas expostas por servidores MCP são automaticamente registradas no sistema de tools do Orchid com prefixo `mcp_<server>_<tool>`
-4. **Leitura de recursos** - a tool `read_mcp_resource` permite que agentes leiam recursos expostos por servidores MCP (arquivos, schemas, etc.)
-
-### Servidores Padrão
-
-| Servidor | Descrição |
-|----------|-----------|
-| **context7** | Documentação atualizada e versionada de bibliotecas/frameworks via `@upstash/context7-mcp` |
-| **example** | Servidor de exemplo mínimo bundled (tool `echo` + resource `example://orchid`) |
-
-### Configuração
-
-```json
-{
-  "mcp_servers": {
-    "context7": {
-      "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"]
-    },
-    "filesystem": {
-      "command": "mcp-server-filesystem",
-      "args": ["/home/user/projects"]
-    }
-  }
-}
-```
-
-Servidores HTTP/SSE usam `url` no lugar de `command`/`args`.
+<p align="center">
+  <img src="docs/screenshots/settings.png" alt="Orchid configuration — General settings, themes, and tool limits" width="48%" />
+  &nbsp;
+  <img src="docs/screenshots/tools.png" alt="Orchid tool activity — expanded search and file-read widgets" width="48%" />
+</p>
 
 ---
 
-## RAG (Retrieval-Augmented Generation)
+## Try Orchid
 
-### Estratégia
+There are no public installers yet. The supported way to try Orchid is to run it from source.
 
-O Orchid implementa um pipeline RAG completo para busca semântica no código do projeto. A estratégia segue o fluxo:
+### Requirements
 
-```
-Projeto → Scanner → Chunker → Embedder → Vector Store → Query
-```
+- **Node.js 24** (engines: `>=24 <25`)
+- An **LLM API key** (or compatible endpoint) — Orchid starts without a provider and only contacts models after you connect one
+- Optional: **Ollama** or any OpenAI-/Anthropic-compatible server if you prefer local or self-hosted models
 
-### Pipeline Detalhado
-
-1. **File Discovery** - varre o projeto respeitando `ignored_dirs`, inclui extensões de código fonte (`.py`, `.ts`, `.tsx`, `.js`, `.md`, `.yaml`, `.toml`, `.json`, etc.) e exclui binários (`.pyc`, `.so`, `.dll`)
-2. **Chunking inteligente** - arquivos são divididos em chunks por linhas, com quebra em linhas em branco (respeita limites naturais do código). Configurável via `rag.chunk_size` (default: 2000 caracteres) e `rag.chunk_overlap` (default: 200 caracteres)
-3. **Embedding** - cada chunk é convertido em vetor numérico via modelo de embedding
-4. **Armazenamento** - vetores são armazenados em disco com numpy + SQLite
-5. **Busca por similaridade** - na consulta, o texto do usuário é embedado com o mesmo modelo e busca-se os K vizinhos mais próximos por similaridade de cosseno
-6. **Resultados** - retorna trechos de código com caminho do arquivo, linhas e score de relevância
-
-### Funcionalidades Extras
-
-- **Indexação automática** - arquivos editados/criados via `edit`/`write` tools são automaticamente reindexados
-- **Sidebar com status** - o painel lateral exibe data e duração da última indexação
-- **Comandos** - `/index-rag` para reindexar, `/rag status` para ver status, `/rag clear` para limpar
-
----
-
-## Origem e Natureza da Base de Conhecimento
-
-A base de conhecimento do RAG é **o próprio código-fonte do projeto do usuário**. Não há uma base externa pré-carregada - o sistema indexa dinamicamente qualquer projeto onde é executado.
-
-**Natureza da base:**
-- Código fonte nas linguagens suportadas (Python, TypeScript, JavaScript, TSX, etc.)
-- Arquivos de configuração (YAML, TOML, JSON)
-- Documentação (Markdown, TXT)
-- Scripts shell
-
-**Extensões incluídas:**
-```
-.py, .ts, .tsx, .js, .jsx, .md, .txt, .yaml, .yml, .toml, .json, .sql, .sh,
-.rs, .go, .java, .c, .cpp, .h, .hpp, .css, .html, .rb, .php, .swift, .kt
-```
-
-**Extensões ignoradas:** `.pyc`, `.pyo`, `.pyd`, `.so`, `.dll`, `.exe`
-
-**Diretórios ignorados (default):** `.git`, `.svn`, `.hg`, `node_modules`, `__pycache__`, `venv`, `.venv`, `env`, `dist`, `build`, `target`, `.idea`, `.vscode`, `.vs`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`, `.nox`, `.eggs`, `*.egg-info`, `.orchid`, `.next`, `.cache`
-
----
-
-## Tecnologia de Embeddings e Armazenamento Vetorial
-
-### Embeddings
-
-O sistema usa **fastembed** (da Qdrant) como mecanismo de embedding local padrão:
-
-- **Modelo padrão:** `fastembed/BAAI/bge-small-en-v1.5` - modelo BGE da BAAI (384 dimensões, ~77 MB)
-- **Execução:** ONNX Runtime - inferência local, sem necessidade de GPU ou API externa
-- **Download automático:** o modelo é baixado na primeira execução e cacheado localmente
-- **Alternativas suportadas:**
-  - `BAAI/bge-base-en-v1.5` (768 dims, ~430 MB, melhor qualidade)
-  - `sentence-transformers/all-MiniLM-L6-v2` (384 dims, ~80 MB)
-  - `nomic-ai/nomic-embed-text-v1.5-Q` (768 dims, ~550 MB, multilíngue)
-
-O sistema também suporta provedores de embedding remotos via API configurando `rag_embedding_model` com formato `provedor/model`.
-
-### Armazenamento Vetorial
-
-O armazenamento vetorial é **caseiro (custom)**, usando:
-
-| Componente | Tecnologia |
-|------------|-----------|
-| **Vetores** | `numpy` - arquivo `.npy` no disco (.orchid/rag/vectors.npy) |
-| **Metadados** | `SQLite` - chunks, arquivos, status da indexação (.orchid/rag/index.db) |
-| **Busca** | Similaridade de cosseno (produto escalar normalizado) - KNN simples em memória |
-
-**Localização do índice:** `.orchid/rag/` dentro do diretório do projeto.
-
-Essa abordagem foi escolhida por:
-- Zero dependências externas (sem ChromaDB, FAISS, Weaviate, Pinecone)
-- Leve e rápido para projetos de pequeno/médio porte
-- Portátil - o índice pode ser recriado a qualquer momento
-
----
-
-## Modelo Local Utilizado
-
-### Provedor Padrão (primeira execução)
-
-Na primeira execução, o Orchid configura automaticamente um provedor que se conecta ao **OpenCode.ai** (API compatível com OpenAI), isso foi feito pois por padrão estavamos usando ele para testes e melhorias sem necessitar rodar um modelo local, com o modelo escolhido padrão sendo o MiMo V2.5:
-
-```json
-{
-  "providers": {
-    "default": {
-      "base_url": "https://opencode.ai/zen/go/v1",
-      "litellm_provider": "openai",
-      "models": {
-        "mimo-v2.5": {}
-      }
-    }
-  },
-  "default_model": "default/mimo-v2.5"
-}
-```
-
-### Modelo Local
-
-Entretanto, MiMo é [extremamente pesado](https://huggingface.co/unsloth/MiMo-V2.5-GGUF), necessitando de 620GB de VRAM para rodar em 16 bits ou 192GB em Q4.
-
-Para modelo local mais recomendado para as tarefas desse projeto, sendo programação, recomendamos e testamos o **Qwen 3.6 35B A3B**, um modelo que necessita de no mínimo 17.7GB para rodar (Sendo VRAM + RAM) em Q4.
-
-Imortante: Dependendo do seu hardware e o meio de rodar modelos locais decidido não será possível rodar múltiplos modelos simultaneos, assim todos os tiers tendo o mesmo modelo e não fazerem diferença.
-
-Para execução local, por exemplo, fazendo o uso do Ollama para esse modelo a configuração seria a seguinte:
-
-```json
-{
-  "providers": {
-    "ollama": {
-      "base_url": "http://localhost:11434/v1",
-      "litellm_provider": "openai",
-      "models": {
-        "qwen3.6:35b-a3b": {"max_input_tokens": 262144}
-      }
-    }
-  },
-  "default_model": "ollama/qwen3.6:35b-a3b",
-  "tier_models": {
-    "seed": "ollama/qwen3.6:35b-a3b",
-    "sprout": "ollama/qwen3.6:35b-a3b",
-    "bloom": "ollama/qwen3.6:35b-a3b",
-    "crown": "ollama/qwen3.6:35b-a3b"
-  }
-}
-```
-
-### Como Executar o Modelo Local
-
-Ollama, LM Studio e Unsloth Studio tem IDs diferentes para o mesmo modelo, altere a sua configuração com o ID correto para cada um.
-
-#### Opção 1: Ollama
-
-```bash
-# Instale o Ollama
-# curl -fsSL https://ollama.com/install.sh | sh
-
-# Baixe o Qwen3.6 35B-A3B
-ollama pull qwen3.6:35b-a3b
-
-# Inicie o servidor Ollama
-ollama serve
-```
-
-#### Opção 2: Unsloth Studio
-
-[Unsloth Studio](https://unsloth.ai/docs/models/qwen3.5) é uma UI web open-source para rodar modelos localmente. Suporta download e execução de GGUFs com llama.cpp, tool calling com auto-recuperação e busca web.
-
-```bash
-# Instale o Unsloth
-# curl -fsSL https://unsloth.ai/install.sh | sh
-
-# Inicie o Unsloth Studio
-unsloth studio -H 0.0.0.0 -p 8888
-
-# Abra http://localhost:8888 no navegador e busque por "Qwen3.6" para baixar e rodar
-```
-
-#### Opção 3: LM Studio
-
-[LM Studio](https://lmstudio.ai/models/qwen/qwen3.6-35b-a3b) oferece uma interface gráfica para download e execução de GGUFs com suporte a toggle de thinking/non-thinking.
-
-1. Baixe o [LM Studio](https://lmstudio.ai/download)
-2. Na busca de modelos, procure por `unsloth/qwen3.6` e baixe o GGUF desejado
-3. Configure os parâmetros recomendados:
-   - **Thinking mode (codificação):** temperatura=0.6, top_p=0.95, top_k=20, min_p=0.0
-   - **Non-thinking mode:** temperatura=0.7, top_p=0.8, top_k=20, min_p=0.0
-4. Carregue o modelo e ative o toggle de thinking se necessário
-
-
-O Orchid usa o **litellm** como camada de abstração, que se comunica com APIs compatíveis com OpenAI. Qualquer modelo servido via Ollama, Unsloth Studio ou LM Studio pode ser usado sem código adicional.
-
----
-
-## Dependências do Projeto
-
-### Produção
-
-| Dependência |Finalidade |
-|-------------|------------|
-| `textual` | Interface TUI (Textual User Interface) no terminal |
-| `litellm` | Abstração de provedores LLM (OpenAI, Anthropic, Ollama, etc.) |
-| `httpx` | Requisições HTTP assíncronas |
-| `html2text` | Conversão de HTML para Markdown (web_fetch) |
-| `aiofiles` | Operações de arquivo assíncronas |
-| `numpy` | Armazenamento e busca vetorial (similaridade de cosseno) |
-| `fastembed` | Embeddings locais via ONNX Runtime (RAG) |
-| `mcp` | Model Context Protocol - cliente para servidores de ferramentas externas |
-| `tree-sitter` | Parser AST para análise estrutural de código |
-| `tree-sitter-language-pack` | Gramáticas tree-sitter para Python, JavaScript, TypeScript, TSX |
-
-### Desenvolvimento
-
-| Dependência | Finalidade |
-|-------------|------------|
-| `ruff` | Linter e formatador |
-| `pytest` | Testes |
-| `pytest-asyncio` | Suporte a testes assíncronos |
-| `pytest-timeout` | Timeout para testes travados |
-
-### Requisitos de Sistema
-
-- **Python 3.11+**
-- **Ollama** (opcional, para modelos locais) - [ollama.com](https://ollama.com/)
-- **Node.js/npx** (opcional, para servidor MCP Context7) - [nodejs.org](https://nodejs.org/)
-
----
-
-## Instalação e Execução
-
-### 1. Clone o Repositório
+### Run from source
 
 ```bash
 git clone https://github.com/Zeptiny/orchid.git
-cd orchid
+cd orchid/electron
+npm install
+npm run dev
 ```
 
-### 2. Crie e Ative um Ambiente Virtual
+That compiles the main process, starts the Vite renderer on `localhost:5173`, and opens the Electron window.
+
+### First launch
+
+1. Complete (or skip) the onboarding wizard
+2. Open **Settings → Providers** (or finish provider setup in onboarding)
+3. Add a connection, submit credentials, validate, and pick a default model
+4. Bind a project folder (session working directory)
+5. Ask Orchid to explore, plan, or implement something small
+
+### Package a local build (optional)
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate   # Linux/Mac
-# .venv\Scripts\activate    # Windows
+cd orchid/electron
+npm run package        # current platform
+# or: npm run package:linux | package:mac | package:win
 ```
 
-### 3. Instale o Pacote (Modo Editable)
+Artifacts land under `electron/release/` (AppImage/deb, dmg, or NSIS installer depending on OS).
+
+---
+
+## Connect a model
+
+Orchid is **local-only until you connect a provider**. Browsing projects, history, indexing, and settings work without network LLM calls.
+
+Supported built-in driver families include:
+
+- OpenAI
+- Anthropic
+- Google Gemini
+- xAI
+- OpenCode Go, Lilac, Neuralwatt
+- Custom **OpenAI-compatible** and **Anthropic-compatible** endpoints
+
+**Credential safety**
+
+- API keys are one-shot submissions to the main process and are not returned to the UI
+- Storage prefers OS secure storage; when that is unavailable, use a validated environment-variable reference instead
+
+Model identity is always `{ connectionId, modelId }` — two accounts for the same provider stay distinct. Agent **tiers** (`seed` → `sprout` → `bloom` → `crown`) can map to different models so cheap tasks stay cheap and hard tasks use stronger models.
+
+---
+
+## Everyday usage
+
+| Action | How |
+|--------|-----|
+| Command palette | `Cmd+K` / `Ctrl+K` |
+| Send message | `Enter` |
+| Cancel stream / close modal | `Escape` |
+| Toggle sidebar | `Ctrl+B` |
+
+Useful palette commands: `/new`, `/sessions`, `/model`, `/theme`, `/personality`, `/settings`, `/rag index`, `/ast index`.
+
+Config lives in `~/.orchid/config.json` with optional project overrides in `.orchid.json`. Prefer the in-app **Settings** UI for day-to-day changes.
+
+---
+
+## Architecture at a glance
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  Main process (Node + Electron)                            │
+│  Agent loop (XState) · LLM streaming · Tools · MCP         │
+│  RAG / AST indexes · Sessions · Config · Credential vault  │
+└───────────────────────────┬────────────────────────────────┘
+                            │ IPC (validated, allowlisted)
+┌───────────────────────────┴────────────────────────────────┐
+│  Renderer (React)                                          │
+│  Chat · Tool widgets · Sidebar · Settings · Onboarding     │
+└────────────────────────────────────────────────────────────┘
+```
+
+| Layer | Stack |
+|-------|--------|
+| Runtime | Electron 43, Node 24 |
+| UI | React 19, Tailwind CSS 4, DaisyUI 5 |
+| Agent orchestration | XState 5 |
+| LLM | Vercel AI SDK 7 + multi-provider drivers |
+| Validation | Zod at IPC and tool boundaries |
+| Local data | SQLite (RAG/AST), JSON sessions under `~/.orchid/` |
+
+Deep developer map: [`AGENTS.md`](AGENTS.md). Domain vocabulary: [`CONCEPTS.md`](CONCEPTS.md).
+
+---
+
+## Known limitations
+
+Orchid is an early preview. Expect rough edges. Highlights that matter when trying the app:
+
+### UX & reliability
+- **Chat scrolling** — scrolling up in the chat stream is currently broken
+- **Error surfacing** — some API / tool / subagent failures (e.g. rate limits) may not show a clear message in the UI
+- **Tool UI polish** — not every tool has full generating/running states; many results still use a generic viewer instead of dedicated widgets
+- **Background commands** — viewing live output and sending stdin to background processes is incomplete
+- **Markdown performance** — message markdown may re-parse too aggressively during streaming
+
+### Agent behavior
+- The model can still **deviate from plans**, leave work incomplete, or produce dead code — reviewers help but do not always catch everything
+- Built-in **skills and agent prompts** are not fully aligned with every current harness capability
+
+### Missing product surface
+- **No public installers** or auto-update channel yet — run or package from source
+- **No session compaction / compression** — long chats are not summarized or trimmed to stay within context limits
+- No LSP or SSH/remote workspaces
+
+Full engineering backlog: [`TODO.md`](TODO.md).
+
+---
+
+## Status
+
+| Area | State |
+|------|--------|
+| Core agent loop + tools | Working — actively iterated |
+| Multi-provider connections | Working for key drivers |
+| Onboarding + settings | Working |
+| Packaging (AppImage/deb/dmg/nsis) | Works locally; no public release channel yet |
+| Polish, edge cases, some workflows | In progress |
+| Public binaries / auto-update | Not shipped yet |
+
+Orchid is shared as a **developer preview**: suitable for curious early adopters who can run from source and tolerate unfinished UI and incomplete workflows. It is not yet a polished production product.
+
+If something breaks, open an issue with OS, Node version, provider (if relevant), and steps to reproduce.
+
+---
+
+## For contributors
+
+All application code lives under `electron/`. From that directory:
 
 ```bash
-pip install -e .
+npm run dev          # Electron + Vite
+npm run typecheck    # strict TS
+npm run lint
+npm run test         # Vitest
+npm run build        # production build
 ```
 
-Isso instala todas as dependências e cria o comando `orchid`.
+Useful entry points:
 
-### 4. Configure os Provedores LLM
+| Task | Where to look |
+|------|----------------|
+| Agent loop | `electron/src/main/agents/`, `electron/src/main/ipc/chat.ts` |
+| Tools | `electron/src/main/tools/` |
+| Providers | `electron/src/main/providers/`, `electron/docs/provider-*.md` |
+| UI | `electron/src/renderer/` |
+| Shared IPC types | `electron/src/shared/` |
+| Conventions | [`AGENTS.md`](AGENTS.md) |
 
-Execute `orchid` uma vez para criar os arquivos de configuração e transferir os agentes, personalidades e skills.
-Depois edite `~/.orchid/config.json` para configurar os seus provedores (ou use o comando `/settings` na interface TUI).
+Provider-specific notes live in [`electron/README.md`](electron/README.md).
 
-**Exemplo com Ollama (local):**
-```json
-{
-  "providers": {
-    "ollama": {
-      "base_url": "http://localhost:11434/v1",
-      "litellm_provider": "openai",
-      "models": {
-        "qwen3.6:35b-a3b": {"max_input_tokens": 262144}
-      }
-    }
-  },
-  "default_model": "ollama/qwen3.6:35b-a3b",
-  "tier_models": {
-    "seed": "ollama/qwen3.6:35b-a3b",
-    "sprout": "ollama/qwen3.6:35b-a3b",
-    "bloom": "ollama/qwen3.6:35b-a3b",
-    "crown": "ollama/qwen3.6:35b-a3b"
-  }
-}
+---
+
+## Project layout
+
 ```
-
-**Exemplo com OpenAI:**
-```json
-{
-  "providers": {
-    "openai": {
-      "litellm_provider": "openai",
-      "api_key_env": "OPENAI_API_KEY",
-      "models": {
-        "gpt-5.5": {},
-        "gpt-5.4": {},
-        "gpt-5.4-mini": {},
-        "gpt-5.4-nano": {}
-      }
-    }
-  },
-  "default_model": "openai/gpt-5.5",
-  "tier_models": {
-    "seed": "openai/gpt-5.4-nano",
-    "sprout": "openai/gpt-5.4-mini",
-    "bloom": "openai/gpt-5.4",
-    "crown": "openai/gpt-5.5"
-  }
-}
-```
-
-### 5. (Opcional) Configure o Modelo Local (Ollama)
-
-```bash
-# Instale o Ollama
-# curl -fsSL https://ollama.com/install.sh | sh
-
-# Baixe o Qwen3.6 35B-A3B
-ollama pull qwen3.6:35b-a3b
-
-# Inicie o servidor Ollama
-ollama serve
-```
-
-### 6. Execute o Orchid
-
-```bash
-orchid
-```
-
-Ou definindo a chave da API como variável de ambiente:
-
-```bash
-OPENAI_API_KEY="sua-chave-aqui" orchid
-```
-
-### Linting
-
-```bash
-ruff check src/          # Verificar lint
-ruff check src/ --fix    # Auto-corrigir
+orchid/
+├── README.md                 # You are here
+├── TODO.md                   # Full engineering backlog
+├── AGENTS.md                 # Contributor guide & architecture
+├── CONCEPTS.md               # Shared domain vocabulary
+├── docs/
+│   ├── screenshots/          # README product captures
+│   └── …                     # Plans, brainstorms, reviews
+└── electron/                 # The desktop app (run everything from here)
+    ├── src/main/             # Main process
+    ├── src/renderer/         # React UI
+    ├── src/preload/          # contextBridge surface
+    ├── src/shared/           # Cross-process types
+    └── tests/                # Unit, integration, parity, smoke
 ```
 
 ---
 
-## Configuração Avançada
+## Feedback
 
-### Estrutura do Config
+Trying Orchid early is the best way to shape it. Please:
 
-O arquivo `~/.orchid/config.json` suporta os seguintes campos (todos opcionais — valores padrão são usados quando ausentes):
+- Open [GitHub issues](https://github.com/Zeptiny/orchid/issues) for bugs and feature ideas
+- Note what worked well and what felt confusing on first run
+- Share provider/model combos you care about
 
-| Campo | Tipo | Padrão | Descrição |
-|-------|------|--------|-----------|
-| `default_model` | `string` | `"default/mimo-v2.5"` | Modelo padrão para o agente |
-| `tier_models` | `dict` | todos `default/mimo-v2.5` | Mapeamento de tier para modelo |
-| `providers` | `dict` | provedor OpenCode.ai | Configuração de provedores LLM |
-| `mcp_servers` | `dict` | context7 + example | Servidores MCP configurados |
-| `theme` | `string` | `"default"` | Tema visual da aplicação |
-| `personality` | `string` | `"default"` | Personalidade ativa do agente |
-| `command_timeout` | `int` | `30` | Timeout em segundos para comandos shell |
-| `read_line_limit` | `int` | `1000` | Limite de linhas para a tool `read` |
-| `grep_max_results` | `int` | `100` | Máximo de resultados para a tool `grep` |
-| `directory_tree_depth` | `int` | `2` | Profundidade da árvore de diretórios |
-| `ast_max_file_size` | `int` | `1048576` | Tamanho máximo de arquivo para parsing AST (bytes) |
-| `mcp_startup_timeout` | `float` | `60.0` | Timeout para inicialização do MCP (segundos) |
-| `mcp_per_server_timeout` | `float` | `10.0` | Timeout individual por servidor MCP |
-| `llm_stream_idle_timeout` | `float` | `300.0` | Timeout de idle para streams LLM |
-| `llm_stream_retries` | `int` | `3` | Número de retentativas para streams LLM |
-| `ignored_dirs` | `list` | (ver seção RAG) | Diretórios ignorados na indexação |
-| `rag` | `object` | (ver seção RAG) | Configuração do RAG (nested) |
-
-#### Configuração RAG (nested)
-
-O campo `rag` é um objeto com os seguintes campos:
-
-| Campo | Tipo | Padrão | Descrição |
-|-------|------|--------|-----------|
-| `rag.chunk_size` | `int` | `2000` | Tamanho dos chunks em caracteres |
-| `rag.chunk_overlap` | `int` | `200` | Sobreposição entre chunks |
-| `rag.top_k` | `int` | `5` | Número de resultados retornados na busca |
-| `rag.max_file_size` | `int` | `512000` | Tamanho máximo de arquivo para indexar (bytes) |
-| `rag.embedding_model` | `string` | `"fastembed/BAAI/bge-small-en-v1.5"` | Modelo de embedding |
-
-### Configuração por Projeto
-
-Além do `~/.orchid/config.json` global, é possível criar um arquivo `.orchid.json` na raiz do projeto. Este arquivo é **mesclado** (deep merge) com a configuração global, permitindo overrides por projeto (ex: provedor diferente, configurações de RAG específicas, etc.).
-
-### Variáveis de Ambiente
-
-Todas as opções de configuração podem ser sobrescritas via variáveis de ambiente com prefixo `ORCHID_`:
-
-| Variável de Ambiente | Campo do Config |
-|---------------------|-----------------|
-| `ORCHID_DEFAULT_MODEL` | `default_model` |
-| `ORCHID_THEME` | `theme` |
-| `ORCHID_PERSONALITY` | `personality` |
-| `ORCHID_COMMAND_TIMEOUT` | `command_timeout` |
-| `ORCHID_READ_LINE_LIMIT` | `read_line_limit` |
-| `ORCHID_GREP_MAX_RESULTS` | `grep_max_results` |
-| `ORCHID_DIRECTORY_TREE_DEPTH` | `directory_tree_depth` |
-| `ORCHID_AST_MAX_FILE_SIZE` | `ast_max_file_size` |
-| `ORCHID_LLM_STREAM_IDLE_TIMEOUT` | `llm_stream_idle_timeout` |
-| `ORCHID_LLM_STREAM_RETRIES` | `llm_stream_retries` |
-| `ORCHID_MCP_STARTUP_TIMEOUT` | `mcp_startup_timeout` |
-| `ORCHID_MCP_PER_SERVER_TIMEOUT` | `mcp_per_server_timeout` |
-| `ORCHID_RAG_EMBEDDING_MODEL` | `rag.embedding_model` |
-| `ORCHID_RAG_CHUNK_SIZE` | `rag.chunk_size` |
-| `ORCHID_RAG_CHUNK_OVERLAP` | `rag.chunk_overlap` |
-| `ORCHID_RAG_TOP_K` | `rag.top_k` |
-| `ORCHID_RAG_MAX_FILE_SIZE` | `rag.max_file_size` |
-
-### Tela de Configurações (`/settings`)
-
-O comando `/settings` abre uma tela interativa com 5 abas para editar a configuração diretamente pela interface:
-
-- **Providers** — adicionar/editar/remover provedores LLM, configurar modelos e overrides
-- **MCP Servers** — adicionar/editar/remover servidores MCP (stdio ou SSE)
-- **Tier Models** — mapear cada tier de agente para um modelo específico
-- **RAG** — configurar chunk_size, chunk_overlap, top_k, max_file_size, modelo de embedding
-- **General** — modelo padrão, command_timeout, read_line_limit, theme, personality, etc.
+Thank you for taking a look — more polish is coming.
 
 ---
 
-## Exemplos de Uso pelo Terminal
-
-### Iniciar Sessão
-
-```bash
-orchid
-```
-
-Isso abre a interface TUI com:
-- Painel de mensagens (esquerda)
-- Sidebar com informações se contexto, subagents, MCP configurados, Todos, status de AST e RAG e o diretório atual.
-- Input de texto para comandos
-
-### Comandos da Paleta (Ctrl+P)
-
-| Comando | Descrição |
-|---------|-----------|
-| `/new` | Nova sessão |
-| `/sessions` | Alternar entre sessões |
-| `/rename` | Renomear sessão atual |
-| `/delete` | Deletar sessão |
-| `/model` | Trocar modelo da sessão atual |
-| `/theme` | Trocar tema da aplicação |
-| `/personality` | Trocar personalidade do agente |
-| `/settings` | Abrir tela de configurações (provedores, MCP, tiers, RAG, geral) |
-| `/index-rag` | Indexar o projeto para busca semântica |
-| `/index-ast` | Re-escanear projeto para índice AST |
-| `/rag status` | Status do índice RAG |
-| `/rag clear` | Limpar índice RAG |
-
-### Atalhos de Teclado
-
-| Atalho | Ação |
-|--------|------|
-| `Ctrl+P` | Abrir paleta de comandos |
-| `Ctrl+S` | Enviar input |
-| `Ctrl+C` | Limpar input |
-| `Ctrl+B` | Alternar foco entre input e sidebar |
-| `Escape` | Interromper agente/subagentes |
-| `↑` / `↓` | Navegar na sidebar (quando focada) |
-| `Enter` / `Space` | Ativar entrada ou expandir seção colapsável |
-
-### Exemplo de Uso: Indexar Projeto e Buscar Código
-
-1. Abra o Orchid: `orchid`
-2. Pressione `Ctrl+P`, digite `/index-rag` e pressione Enter
-3. Aguarde a indexação (o sidebar mostra o progresso)
-4. Na conversa, pergunte algo como:
-   ```
-   "Encontre onde o MCPManager é inicializado, faça uso do RAG"
-   ```
-
-### Exemplo de Uso: Code Review
-
-1. Após fazer alterações no código, peça:
-   ```
-   "Revise as mudanças que eu fiz"
-   ```
-2. O agente carrega a skill `code-review`, que dispara revisores em paralelo
-3. Os resultados aparecem consolidados na interface
-
-### Exemplo de Uso: Implementar Funcionalidade
-
-```
-"Me ajude a fazer o brainstorm de uma tool de cálculo de distância entre dois pontos no arquivo tools/math.py"
-```
-
-O agente ajuda no brainstorm, planeja, implementa e pode revisar o código.
-
-### Exibição de Uso de Tokens
-
-O Orchid exibe o consumo de tokens em tempo real durante a sessão:
-
-- **Rodapé da sessão** — total de tokens usados na sessão atual, exibido ao lado do modelo ativo
-- **Rodapé de chains** — subtotal de tokens por chain de ações do agente
-- **Rodapé de subagentes** — subtotal de tokens por subagente delegado, incluído no total da sessão
-- **Tokens cached** — tokens de entrada em cache são rastreados separadamente (`cached_tokens`) para análise de custo
-
-O campo `Usage` inclui: `prompt_tokens`, `completion_tokens`, `total_tokens` e `cached_tokens`.
-
-### Temas Disponíveis
-
-Troque com `/theme` (Ctrl+P → `/theme`):
-
-| Tema | Descrição |
-|------|-----------|
-| `default` | Escuro (Textual dark) |
-| `solarized-light` | Solarized light |
-| `bluey` | Azulado |
-| `windows_xp` | Inspirado no Windows XP |
-| `green_terminal` | Terminal monocromático verde |
-
----
-
-## Estrutura do Projeto
-
-```
-pyproject.toml
-src/
-  orchid/
-    main.py                    # Entry point
-    app.py                     # Textual App class, UI lifecycle
-    config.py                  # Gerenciamento de configuração
-    utils.py                   # Utilitários (frontmatter, directory tree)
-    storage.py                 # Persistência de sessões
-    agents/                    # Sistema de agentes
-      __init__.py              # Registro e carregamento
-      manager.py               # Gerenciador de subagentes
-      defaults/                # Definições padrão dos agentes
-    skills/                    # Sistema de skills
-      __init__.py              # Registro e carregamento
-      defaults/                # Definições padrão das skills
-    domain/                    # Modelos de domínio
-      agent.py                 # Agent, AgentTypes, ModelTier
-      message.py               # Message, MessageRole, Usage
-      session.py               # Session, SessionManager
-      tool.py                  # Tool, ExecutorResult
-      skill.py                 # Skill
-      chain.py                 # Chain (sequência de ações)
-      todo.py                  # Sistema de tarefas
-    llm/                       # Integração LLM
-      client.py                # Streaming e chamadas
-      providers.py             # Resolução e metadata
-      dynamic_system_prompt.py # Prompt dinâmico
-      static_system_prompt.py  # Prompt estático
-    rag/                       # Pipeline RAG
-      chunker.py               # Chunking inteligente
-      embedder.py              # Abstração de embeddings
-      indexer.py               # Orquestrador de indexação
-      store.py                 # SQLite + numpy vector store
-    ast/                       # Ferramentas AST
-      parser.py                # Tree-sitter lazy loader
-      store.py                 # Índice de símbolos (SQLite)
-      indexer.py               # Walk + parse + extração
-      symbols.py               # Dataclass Symbol
-      queries/                 # Queries tree-sitter por linguagem
-    mcp/                       # Cliente MCP
-      __init__.py              # MCPManager, lifecycle
-      schema.py                # Conversão de schemas
-    tools/                     # Implementação das tools
-      _xml_utils.py            # Utilitários de formatação XML (atributos, CDATA)
-      file_manipulation.py     # read, write, edit, glob, read_directory
-      search.py                # grep
-      exec.py                  # execute_command
-      subagent.py              # delegate_to_subagent etc.
-      skill.py                 # skill
-      rag.py                   # rag_search, rag_index
-      ast.py                   # get_file_skeleton etc.
-      mcp_resource.py          # read_mcp_resource
-      todo.py                  # todo_create etc.
-      web_fetch.py             # web_fetch
-    screens/                   # Telas TUI
-      picker.py                # Seletor genérico
-      input_modal.py           # Modal de input
-      settings.py              # Tela de configurações (provedores, MCP, tiers, RAG, geral)
-    commands/                  # Comandos da paleta
-      __init__.py
-      session_commands.py      # Definição e execução dos comandos (/new, /model, /settings, etc.)
-    widgets/                   # Widgets TUI
-      message_widget.py        # Widgets de mensagem
-      sidebar.py               # Sidebar direita
-      command_picker.py        # Picker de comandos
-      subagent_ui.py           # UI de subagentes
-    themes/                    # Sistema de temas
-      __init__.py
-      registry.py              # Registro de temas
-    personality/               # Personalidades
-      __init__.py
-      defaults/
-tests/                         # Testes
-```
-
----
-
-## Gerenciamento de Conhecimento
-
-O Orchid inclui um sistema de **compounding de conhecimento** para evitar que problemas resolvidos sejam redescobertos:
-
-- **`docs/solutions/`** - Aprendizados estruturados com YAML frontmatter, organizados por categoria:
-  - `developer-experience/` - Setup, CI, ferramentas
-  - `integrations/` - Compatibilidade entre plataformas
-  - `workflow/` - Padrões de design de agentes/skills
-  - `skill-design/` - Padrões de arquitetura de plugins
-- **`CONCEPTS.md`** - Vocabulário de domínio compartilhado entre agentes
-- **`learnings-researcher`** - Agente especializado em buscar soluções anteriores
-- **`compound`** - Skill para documentar novas soluções
-- **`compound-refresh`** - Skill para manter e atualizar documentação existente
+<p align="center">
+  <sub>Orchid · early preview · made for people who build software with agents</sub>
+</p>

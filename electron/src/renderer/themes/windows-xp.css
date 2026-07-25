@@ -1,0 +1,146 @@
+/**
+ * Windows XP theme — classic light.
+ *
+ * Nostalgic Windows XP-inspired theme with the classic silver/blue
+ * color scheme and slightly rounded elements.
+ */
+:root {
+  /* Background colors */
+  --bg-primary: #ece9d8;
+  --bg-secondary: #d6d2c2;
+  --bg-tertiary: #c0bdb0;
+  --bg-surface: #ece9d8;
+  --bg-surface-raised: #f5f3eb;
+  --bg-surface-overlay: #e0ddd0;
+
+  /* Text colors */
+  --text-primary: #1e1e1e;
+  --text-secondary: #4a4a4a;
+  --text-tertiary: #7a7a7a;
+  --text-inverse: #ffffff;
+
+  /* Accent colors */
+  --accent-primary: #0054e3;
+  --accent-primary-hover: #003db5;
+  --accent-secondary: #7b5ea7;
+  --accent-success: #388e3c;
+  --accent-warning: #f9a825;
+  --accent-error: #d32f2f;
+  --accent-info: #0288d1;
+
+  /* Border colors */
+  --border-default: #a0a0a0;
+  --border-subtle: #c0c0c0;
+  --border-strong: #808080;
+  --border-focus: #0054e3;
+
+  /* Message colors */
+  --msg-user-bg: #cde0f5;
+  --msg-user-text: #1e1e1e;
+  --msg-assistant-bg: #f0ede0;
+  --msg-assistant-text: #1e1e1e;
+  --msg-system-bg: #e0ddd0;
+  --msg-system-text: #4a4a4a;
+  --msg-error-bg: #fde0e0;
+  --msg-error-text: #d32f2f;
+  --msg-thinking-bg: #e8e5d8;
+  --msg-thinking-text: #7a7a7a;
+
+  /* Input colors */
+  --input-bg: #ffffff;
+  --input-border: #7f9db9;
+  --input-focus-border: #0054e3;
+  --input-text: #1e1e1e;
+  --input-placeholder: #a0a0a0;
+
+  /* Button colors */
+  --btn-primary-bg: #0054e3;
+  --btn-primary-text: #ffffff;
+  --btn-primary-hover: #003db5;
+  --btn-secondary-bg: #d6d2c2;
+  --btn-secondary-text: #1e1e1e;
+  --btn-secondary-hover: #c0bdb0;
+  --btn-danger-bg: #d32f2f;
+  --btn-danger-text: #ffffff;
+  --btn-danger-hover: #b71c1c;
+
+  /* Sidebar colors */
+  --sidebar-bg: #d6d2c2;
+  --sidebar-border: #a0a0a0;
+  --sidebar-item-hover: #e0ddd0;
+  --sidebar-item-active: #cde0f5;
+
+  /* Scrollbar */
+  --scrollbar-thumb: #a0a0a0;
+  --scrollbar-track: #ece9d8;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.15);
+
+  /* Typography */
+  --font-family: 'Segoe UI', 'Tahoma', ui-sans-serif, sans-serif;
+  --font-display: 'Segoe UI', 'Tahoma', ui-sans-serif, sans-serif;
+  --font-mono: 'Consolas', 'Courier New', monospace;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.8125rem;
+  --font-size-base: 0.9375rem;
+  --font-size-lg: 1.0625rem;
+  --font-size-xl: 1.1875rem;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  /* Border radius */
+  --radius-sm: 0.1875rem;
+  --radius-md: 0.3125rem;
+  --radius-lg: 0.5rem;
+  --radius-full: 9999px;
+
+  /* Transitions */
+  --transition-fast: 100ms ease;
+  --transition-normal: 150ms ease;
+  --transition-slow: 200ms ease;
+
+  /* Semantic token bridge — consumed by Tailwind utilities + primitives.css */
+  --color-primary: var(--accent-primary);
+  --color-primary-content: var(--btn-primary-text);
+  --color-secondary: var(--accent-secondary);
+  --color-secondary-content: var(--text-inverse);
+  --color-accent: var(--accent-warning);
+  --color-accent-content: var(--text-inverse);
+  --color-neutral: var(--bg-tertiary);
+  --color-neutral-content: var(--text-primary);
+  --color-base-100: var(--bg-primary);
+  --color-base-200: var(--bg-secondary);
+  --color-base-300: var(--bg-tertiary);
+  --color-base-content: var(--text-primary);
+  --color-info: var(--accent-info);
+  --color-info-content: var(--text-inverse);
+  --color-success: var(--accent-success);
+  --color-success-content: var(--text-inverse);
+  --color-warning: var(--accent-warning);
+  --color-warning-content: var(--text-inverse);
+  --color-error: var(--accent-error);
+  --color-error-content: var(--text-inverse);
+  --radius-selector: var(--radius-sm);
+  --radius-field: var(--radius-md);
+  --radius-box: var(--radius-lg);
+  --text-muted: #4a4a4a;
+  --bg-surface-deep: #e0ddd0;
+  --overlay-color: #000000;
+  --syntax-comment: #388e3c;
+  --syntax-string: #8a4b08;
+  --context-free: #c0bdb0;
+  --context-system: #4a6f8a;
+  --context-tool: #a06a00;
+  --context-user: #0054e3;
+  --context-assistant: #388e3c;
+  color-scheme: light;
+}

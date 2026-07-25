@@ -1,0 +1,117 @@
+appId: com.orchid.app
+productName: Orchid
+copyright: Copyright © 2026 Orchid Contributors
+
+# ── Publish ───────────────────────────────────────────────────────────────────
+# GitHub releases for auto-update via electron-updater.
+publish: null
+generateUpdatesFilesForAllChannels: false
+
+directories:
+  output: release
+  buildResources: build
+
+# Runtime window icon (BrowserWindow.icon) for Linux and fallbacks.
+extraResources:
+  - from: build/icon.png
+    to: icon.png
+  - from: assets/providers/catalog.json
+    to: providers/catalog.json
+
+asar: true
+asarUnpack:
+  - "**/node_modules/better-sqlite3/**/*"
+  - "**/node_modules/node-pty/**/*"
+  - "**/node_modules/onnxruntime*/**/*"
+
+files:
+  - dist/**/*
+  - package.json
+  - "!**/*.ts"
+  - "!**/*.tsx"
+  - "!**/*.map"
+  - "!**/tsconfig*.json"
+  - "!**/vite.config.ts"
+  - "!**/eslint.config.mjs"
+  - "!**/.prettierrc"
+  - "!**/.gitignore"
+  - "!**/.npmrc"
+  - "!**/.github/**"
+  - "!**/.coderabbit.yaml"
+  - "!**/docs/**"
+  - "!**/CONTRIBUTING.md"
+  - "!**/CODE-REVIEW*.md"
+  - "!**/PYTHON-ELECTRON*.md"
+  - "!**/node_modules/.cache/**"
+  - "!**/node_modules/**/test/**"
+  - "!**/node_modules/**/tests/**"
+  - "!**/node_modules/**/__tests__/**"
+  - "!**/node_modules/**/docs/**"
+  - "!**/node_modules/**/example/**"
+  - "!**/node_modules/**/examples/**"
+  - "!**/node_modules/**/.github/**"
+  - "!**/electron/dist/**"
+  - "!**/electron/build/**"
+  - "!**/electron/scripts/**"
+  - "!**/electron/src/**"
+  - "!**/electron/tests/**"
+  - "!**/electron/release/**"
+
+npmRebuild: false
+
+# ── macOS ──────────────────────────────────────────────────────────────────────
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
+  icon: build/icon.png
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  artifactName: "${productName}-${version}-${arch}.dmg"
+
+dmg:
+  sign: false
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# ── Windows ────────────────────────────────────────────────────────────────────
+win:
+  target: nsis
+  icon: build/icon.ico
+  artifactName: "${productName}-${version}-${arch}-Setup.${ext}"
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  artifactName: "${productName}-${version}-${arch}-Setup.${ext}"
+
+# ── Linux ──────────────────────────────────────────────────────────────────────
+linux:
+  target:
+    - AppImage
+    - deb
+  icon: build/icons
+  category: Development
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+
+appImage:
+  artifactName: "${productName}-${version}-${arch}.AppImage"
+
+deb:
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
+  artifactName: "${productName}-${version}-${arch}.deb"

@@ -1,0 +1,9 @@
+reviews:
+  path_filters:
+    - "!docs/**"
+    - "!.codex/**"
+    - "!.commandcode/**"
+    - "!.opencode/**"
+    - "!.orchid/**"
+    - "!.pytest_cache/**"
+    - "!.ruff_cache/**"
