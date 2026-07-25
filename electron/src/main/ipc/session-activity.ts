@@ -46,23 +46,19 @@ export function completeSessionActivity(
   sessionId: string,
   unread: boolean,
 ): SessionActivity {
-  const activity = sessionActivityStore.complete(sessionId, unread);
+  sessionActivityStore.complete(sessionId, unread);
   const enriched = sessionActivityStore.update(sessionId, {
     backgroundProcessCount: backgroundProcessCount(sessionId),
   });
   broadcast(enriched);
-  return activity.backgroundProcessCount === enriched.backgroundProcessCount
-    ? activity
-    : enriched;
+  return enriched;
 }
 
 export function removeSessionActivity(sessionId: string): void {
   const previous = sessionActivityStore.get(sessionId);
-  sessionActivityStore.remove(sessionId);
   if (!previous) return;
   // Tombstone: idle + seen + no bg so list filters out and renderers prune.
-  broadcast({
-    ...previous,
+  const tombstone = sessionActivityStore.update(sessionId, {
     state: 'idle',
     phase: null,
     detail: null,
@@ -70,8 +66,9 @@ export function removeSessionActivity(sessionId: string): void {
     canCancel: false,
     backgroundProcessCount: 0,
     completedAt: Date.now(),
-    updatedAt: Date.now(),
   });
+  sessionActivityStore.remove(sessionId);
+  broadcast(tombstone);
 }
 
 export function registerSessionActivityIPC(): void {

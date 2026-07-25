@@ -47,12 +47,13 @@ export class SessionActivityStore {
     patch: SessionActivityUpdate,
     now: number = Date.now(),
   ): SessionActivity {
-    const previous = this.activities.get(sessionId) ?? emptyActivity(sessionId, now);
+    const existing = this.activities.get(sessionId);
+    const previous = existing ?? emptyActivity(sessionId, now);
     const next: SessionActivity = Object.freeze({
       ...previous,
       ...patch,
       sessionId,
-      updatedAt: now,
+      updatedAt: existing ? Math.max(now, existing.updatedAt + 1) : now,
     });
     this.activities.set(sessionId, next);
     return next;

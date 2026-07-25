@@ -16,6 +16,10 @@ import type { WorkspaceInfo } from '../../shared/types/ipc';
 import type { SessionListState } from '../hooks/useSession';
 import { formatShortcut, useRovingListIndex } from '../keyboard';
 import {
+  sessionActivityPresentation,
+  sessionActivitySummaryPresentation,
+} from '../utils/session-activity-presentation';
+import {
   countProjectActivity,
   filterSessionsByQuery,
   groupSessionsByProject,
@@ -117,6 +121,7 @@ export const LeftSidebar = memo(function LeftSidebar({
     () => groupSessionsByProject(filterSessionsByQuery(sessions, query)),
     [sessions, query],
   );
+  const activitySummary = sessionActivitySummaryPresentation(activities);
 
   if (isCollapsed) {
     return (
@@ -144,17 +149,20 @@ export const LeftSidebar = memo(function LeftSidebar({
             onClick={onPickProjectDir}
           />
         )}
-        {activities.length > 0 && (
+        {activitySummary && (
           <Button
             variant="ghost"
             size="sm"
             shape="circle"
             className="left-panel-activity-count"
             onClick={onToggle}
-            title={`${activities.length} session${activities.length === 1 ? '' : 's'} need attention or are running`}
-            aria-label={`${activities.length} session${activities.length === 1 ? '' : 's'} need attention or are running`}
+            title={activitySummary.label}
+            aria-label={activitySummary.label}
           >
-            <span className="status status-xs status-warning" aria-hidden />
+            <span
+              className={`status status-xs ${activitySummary.statusClass}`}
+              aria-hidden
+            />
           </Button>
         )}
         <div className="left-panel-collapsed-spacer" />
@@ -699,6 +707,9 @@ const SessionRow = memo(function SessionRow({
   const pathHint = session.cwd
     ? truncatePathDisplay(session.cwd, 24)
     : 'Unknown path';
+  const activityStatus = activity
+    ? sessionActivityPresentation(activity)
+    : null;
 
   const handleSelect = useCallback(() => {
     onActivate(sessionIndex);
@@ -721,30 +732,10 @@ const SessionRow = memo(function SessionRow({
         title={session.cwd ?? session.name}
         onClick={handleSelect}
       >
-        {activity && (
+        {activityStatus?.visible && (
           <span
-            className={`status status-xs ${
-              activity.state === 'needs_attention'
-                ? 'status-error'
-                : activity.state === 'working'
-                  ? 'status-warning'
-                  : activity.state === 'waiting'
-                    ? 'status-info'
-                    : activity.unread
-                      ? 'status-success'
-                      : 'status-neutral'
-            }`}
-            title={
-              activity.state === 'needs_attention'
-                ? 'Needs attention'
-                : activity.state === 'working'
-                  ? 'Working'
-                  : activity.state === 'waiting'
-                    ? 'Waiting'
-                    : activity.unread
-                      ? 'Completed unread'
-                      : 'Idle'
-            }
+            className={`status status-xs ${activityStatus.statusClass}`}
+            title={activityStatus.label}
           />
         )}
         <span className="session-item-main min-w-0">
