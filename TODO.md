@@ -10,7 +10,6 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - RAG onnxruntime may not be being shipped correctly
 - Subagent finished results should only send the last message, not full subagent history, the task is already defined on the dynamic context so I think it isnt necessary to resend
 - Interface may prevent some changes while streaming (Such as model and reasoning level) but the command pallete still allows to execute
-- Cannot execute commands while streaming (Only queue messages is possible)
 
 ## Agent quality
 

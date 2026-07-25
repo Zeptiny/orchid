@@ -144,7 +144,6 @@ export const InputArea = memo(function InputArea({
   /** Slash mode: input starts with `/` (single line) or a sub-picker is open. */
   const isSlashMode =
     Boolean(commandContext) &&
-    !isStreaming &&
     (subPicker !== null || (input.startsWith('/') && !input.includes('\n')));
 
   const availableModels = commandContext?.getAvailableModels() ?? [];
@@ -719,7 +718,7 @@ export const InputArea = memo(function InputArea({
             onKeyDown={handleKeyDown}
             placeholder={
               isStreaming
-                ? 'Type to queue a message… (Esc to interrupt)'
+                ? 'Type to queue a message or run /command… (Esc to interrupt)'
                 : interruptState === 'confirmAgent'
                   ? 'Streaming… (Esc or ■ to interrupt)'
                   : interruptState === 'confirmSubagents'
@@ -743,7 +742,7 @@ export const InputArea = memo(function InputArea({
 
           <div className="orchid-composer-controls">
             <span
-              key={showCancel ? 'cancel' : isStreaming && hasInput ? 'queue' : showMenu ? 'command' : 'send'}
+              key={showCancel ? 'cancel' : showMenu ? 'command' : isStreaming && hasInput ? 'queue' : 'send'}
               className="orchid-composer-action-swap"
             >
             {showCancel ? (
@@ -756,7 +755,7 @@ export const InputArea = memo(function InputArea({
                 onClick={() => void onCancel()}
                 iconSize={14}
               />
-            ) : isStreaming && hasInput ? (
+            ) : isStreaming && hasInput && !showMenu ? (
               <IconButton
                 label="Queue message"
                 icon="list"
