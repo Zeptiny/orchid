@@ -29,7 +29,6 @@ the findings and recommended implementation order.
 | ID | Priority | Area | Finding |
 | --- | --- | --- | --- |
 | F4 | P2 | Transcript scaling | Old chains are collapsed but not virtualized or aggregated |
-| F8 | P3 | Startup state | Configuration and index status are fetched redundantly |
 | F9 | P3 | Startup latency | Tool workers are initialized before the first application window |
 | F10 | P3 | Renderer computation | Context usage is recomputed more often than necessary |
 | F11 | P3 | Maintainability | Several UI modules and the shared component stylesheet are oversized |
@@ -91,63 +90,6 @@ Expanding a range should not mount every earlier turn at once.
 - DOM node count remains bounded as chain count grows.
 - Opening a 1,000-chain session does not render hundreds of collapsed stub elements.
 - Expanding old history is incremental and reversible.
-
----
-
-## F8 — Redundant Configuration and Status Fetches
-
-**Priority:** P3  
-**Area:** Startup efficiency and state ownership
-
-### Evidence
-
-`App` starts two independent functions that both call `config.get()`:
-
-- One loads the theme.
-- One checks onboarding status.
-
-See [`electron/src/renderer/App.tsx`](electron/src/renderer/App.tsx#L27).
-
-At the same time, the mounted `ChatView` performs another `config.get()`:
-
-- [`electron/src/renderer/components/ChatView.tsx`](electron/src/renderer/components/ChatView.tsx#L202)
-
-`ChatView` also calls `refreshIndex()` from the initial status effect and again from
-the workspace-dependent effect on mount:
-
-- [`electron/src/renderer/components/ChatView.tsx`](electron/src/renderer/components/ChatView.tsx#L862)
-- [`electron/src/renderer/components/ChatView.tsx`](electron/src/renderer/components/ChatView.tsx#L867)
-
-The configuration getter is currently an in-memory operation, so this is not a major
-disk bottleneck. It is still duplicated IPC and produces multiple independent startup
-state transitions.
-
-### User Impact
-
-- More renderer/main-process messages during startup.
-- Additional renders as related configuration fields arrive separately.
-- Harder-to-reason-about theme and onboarding sequencing.
-- Duplicate RAG/AST status requests still add avoidable startup work.
-
-### Recommendation
-
-Create a shared renderer bootstrap store containing:
-
-- Effective configuration.
-- Theme.
-- Onboarding completion.
-- Personality names if needed immediately.
-- Initial workspace identity.
-
-Load it once, then let `App`, `ChatView`, and onboarding subscribe to the same stable
-snapshot. Coalesce index status refreshes by making the workspace effect the sole
-initial trigger.
-
-### Acceptance Criteria
-
-- One effective configuration request is made during ordinary startup.
-- Initial RAG/AST status is requested once per workspace.
-- Theme and onboarding decisions derive from the same bootstrap snapshot.
 
 ---
 
@@ -293,9 +235,8 @@ CSS.
 
 ### Phase 1 — Startup
 
-1. Introduce one bootstrap configuration snapshot.
-2. Move worker-pool readiness off the first-window critical path.
-3. Add startup performance marks and bundle-size reporting.
+1. Move worker-pool readiness off the first-window critical path.
+2. Add startup performance marks and bundle-size reporting.
 
 ### Phase 2 — Long-Running Session Stability
 

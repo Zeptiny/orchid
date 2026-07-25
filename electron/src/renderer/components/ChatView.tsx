@@ -33,7 +33,13 @@ import { resolveOrchidNavigate } from '../utils/navigate-shell';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import type { ModelSelection } from '../../shared/types/provider';
 import { flattenSessionMessages, type Session } from '../../shared/types/session';
-import type { MCPServerStatus, RAGStoreStatus, ASTStoreStatus, CommandContext } from '../../shared/types/ipc-boundary';
+import type {
+  ASTStoreStatus,
+  CommandContext,
+  Config,
+  MCPServerStatus,
+  RAGStoreStatus,
+} from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption, SessionOpenResult } from '../../shared/types/ipc';
 import { ChatStream } from './ChatStream';
 import { DeferredSurface } from './deferred-surface';
@@ -67,9 +73,11 @@ interface Toast {
 interface ChatViewProps {
   /** False while a full-window surface owns presentation. */
   isVisible?: boolean;
+  /** App-owned effective configuration loaded once during renderer startup. */
+  bootstrapConfig?: Config | null;
 }
 
-export function ChatView({ isVisible = true }: ChatViewProps) {
+export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewProps) {
   const session = useSession();
   const chat = useChat(session.activeSession?.id ?? null);
   const subagents = useSubagents(session.activeSession?.id ?? null);
@@ -224,24 +232,18 @@ export function ChatView({ isVisible = true }: ChatViewProps) {
   }, []);
 
   useEffect(() => {
-    async function loadConfig() {
-      try {
-        if (window.orchid?.config?.get) {
-          const config = await window.orchid.config.get();
-          if (config.theme) setCurrentTheme(config.theme);
-          if (config.personality) setCurrentPersonality(config.personality);
-          setDefaultSelection(config.default_model ?? null);
-          setAlwaysExpandToolGroups(Boolean(config.always_expand_tool_groups));
-        }
-        if (window.orchid?.config?.listPersonalities) {
-          const names = await window.orchid.config.listPersonalities();
-          setPersonalityNames(names);
-        }
-      } catch {
-        // Non-fatal
-      }
-    }
-    loadConfig();
+    if (!bootstrapConfig) return;
+    if (bootstrapConfig.theme) setCurrentTheme(bootstrapConfig.theme);
+    if (bootstrapConfig.personality) setCurrentPersonality(bootstrapConfig.personality);
+    setDefaultSelection(bootstrapConfig.default_model ?? null);
+    setAlwaysExpandToolGroups(Boolean(bootstrapConfig.always_expand_tool_groups));
+  }, [bootstrapConfig]);
+
+  useEffect(() => {
+    if (!window.orchid?.config?.listPersonalities) return;
+    window.orchid.config.listPersonalities()
+      .then(setPersonalityNames)
+      .catch(() => { /* Non-fatal */ });
   }, []);
 
   // Prefer live config updates after Settings save (tool-group expand pref).
@@ -886,8 +888,7 @@ export function ChatView({ isVisible = true }: ChatViewProps) {
 
   useEffect(() => {
     refreshMCP();
-    refreshIndex();
-  }, [refreshMCP, refreshIndex]);
+  }, [refreshMCP]);
 
   // Re-fetch RAG/AST status when the active workspace changes (counts are
   // project-scoped; no manual reload control in the inspector).

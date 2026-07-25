@@ -11,6 +11,7 @@ import {
 import { ChatView } from './components/ChatView';
 import { StateMessage } from './components/ui/StateMessage';
 import { applyTheme, type ThemeName, THEME_NAMES } from './themes';
+import type { Config } from '../shared/types/ipc-boundary';
 
 type SettingsTab = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag' | 'skills' | 'agents' | 'personalities';
 
@@ -29,6 +30,7 @@ function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
+  const [bootstrapConfig, setBootstrapConfig] = useState<Config | null>(null);
 
   // Apply theme on mount and when it changes
   useEffect(() => {
@@ -36,38 +38,29 @@ function App() {
 
   }, [theme]);
 
-  // Load saved theme from config on mount + check onboarding
+  // Load one shared config snapshot for theme, onboarding, and ChatView.
   useEffect(() => {
-    async function loadTheme() {
+    async function loadBootstrapConfig() {
       try {
         if (window.orchid?.config?.get) {
           const config = await window.orchid.config.get();
+          setBootstrapConfig(config);
           const savedTheme = config.theme as ThemeName;
           if (THEME_NAMES.includes(savedTheme)) {
             setThemeState(savedTheme);
           }
-        }
-      } catch {
-        // Use default theme if config fails
-      }
-    }
-
-    async function checkOnboarding() {
-      try {
-        if (window.orchid?.config?.get) {
-          const config = await window.orchid.config.get();
           // First-run wizard opens only until finish/skip; provider recovery
           // after completion uses Settings / composer setup paths.
           setOnboardingOpen(config.has_completed_onboarding !== true);
         }
       } catch {
-        // Non-fatal — skip onboarding check
+        // Non-fatal — use the default theme and skip onboarding.
+      } finally {
+        setOnboardingChecked(true);
       }
-      setOnboardingChecked(true);
     }
 
-    loadTheme();
-    checkOnboarding();
+    void loadBootstrapConfig();
   }, []);
 
   // Listen for `orchid:open-settings` event (from /settings and provider gates).
@@ -130,7 +123,7 @@ function App() {
           Shared useSession store (useSyncExternalStore) keeps chat + settings
           on one active session / list / workspace snapshot. */}
       <div className={chatVisible ? 'contents' : 'hidden'} aria-hidden={!chatVisible}>
-        <ChatView isVisible={chatVisible} />
+        <ChatView isVisible={chatVisible} bootstrapConfig={bootstrapConfig} />
       </div>
       {configOpen && (
         <Suspense
