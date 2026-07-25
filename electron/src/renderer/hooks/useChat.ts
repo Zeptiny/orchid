@@ -28,10 +28,6 @@ import type {
   ChatSessionSnapshot,
 } from '../../shared/types/ipc';
 import {
-  type ContextBreakdown,
-  computeContextBreakdown,
-} from '../components/ContextGrid';
-import {
   addUsage,
   hasUsage,
   latestUsageFromMessages,
@@ -184,8 +180,6 @@ export interface ChatState {
    * token lines so a new turn does not flash the previous turn's counters.
    */
   currentTurnUsage: Usage | null;
-  /** Context token breakdown by category (computed from messages + usage). */
-  contextBreakdown: ContextBreakdown | null;
   /**
    * Stream start time (ms epoch) for elapsed tracking.
    * Footers tick locally from this; history memos must not depend on a ticker.
@@ -296,6 +290,21 @@ export function cumulativeUsageFromMessages(
   currentTurnUsage: Usage | null = null,
 ): Usage {
   return addUsage(sumMessageUsages(messages), currentTurnUsage);
+}
+
+/** Cache persisted totals independently from high-frequency live-turn usage. */
+export function useCumulativeUsage(
+  messages: readonly Message[],
+  currentTurnUsage: Usage | null,
+): Usage {
+  const persistedUsage = useMemo(
+    () => sumMessageUsages(messages),
+    [messages],
+  );
+  return useMemo(
+    () => addUsage(persistedUsage, currentTurnUsage),
+    [persistedUsage, currentTurnUsage],
+  );
 }
 
 /**
@@ -462,17 +471,8 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   /** Affinity rebound but messages not yet replaced — hold previous UI. */
   const [isSwitchingSession, setIsSwitchingSession] = useState(false);
 
-  // Context breakdown from messages + usage
-  const contextBreakdown = useMemo(
-    () => computeContextBreakdown(messages, usage),
-    [messages, usage],
-  );
-
   // Persisted session totals plus the authoritative in-flight turn snapshot.
-  const cumulativeUsage: Usage = useMemo(
-    () => cumulativeUsageFromMessages(messages, currentTurnUsage),
-    [messages, currentTurnUsage],
-  );
+  const cumulativeUsage = useCumulativeUsage(messages, currentTurnUsage);
 
   const accumulatedContentRef = useRef('');
   const accumulatedThinkingRef = useRef('');
@@ -1312,7 +1312,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     usage,
     currentTurnUsage,
     cumulativeUsage,
-    contextBreakdown,
     streamStartTime,
     interruptState,
     interrupted,

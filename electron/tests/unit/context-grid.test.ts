@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
+  ContextGrid,
   ContextLegend,
   computeContextBreakdown,
   computeContextCategories,
@@ -141,5 +142,33 @@ describe('context grid breakdown', () => {
     expect(html).not.toContain('>Tools<');
     expect(html).not.toContain('>Assistant<');
     expect(html).not.toContain('context-panel-list pl-3');
+  });
+
+  it('scans message content once for the paired bar and legend', () => {
+    let contentReads = 0;
+    const message = {
+      role: 'user',
+      type: MessageType.TEXT,
+      hidden: false,
+      get content() {
+        contentReads += 1;
+        return 'hello';
+      },
+    } as unknown as Message;
+
+    renderToStaticMarkup(
+      createElement(ContextGrid, {
+        messages: [message],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 0,
+          total_tokens: 100,
+          cached_tokens: 0,
+        },
+        maxContext: 1_000,
+      }),
+    );
+
+    expect(contentReads).toBe(1);
   });
 });

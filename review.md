@@ -30,7 +30,6 @@ the findings and recommended implementation order.
 | --- | --- | --- | --- |
 | F4 | P2 | Transcript scaling | Old chains are collapsed but not virtualized or aggregated |
 | F9 | P3 | Startup latency | Tool workers are initialized before the first application window |
-| F10 | P3 | Renderer computation | Context usage is recomputed more often than necessary |
 | F11 | P3 | Maintainability | Several UI modules and the shared component stylesheet are oversized |
 
 ---
@@ -138,56 +137,6 @@ The actual delay should be measured before assigning a hard latency target.
 
 ---
 
-## F10 — Context Usage Is Recomputed More Often Than Necessary
-
-**Priority:** P3  
-**Area:** Long-session renderer computation
-
-### Evidence
-
-`useChat` computes `contextBreakdown` from all messages and usage:
-
-- [`electron/src/renderer/hooks/useChat.ts`](electron/src/renderer/hooks/useChat.ts#L416)
-
-The returned value is not currently consumed by `ChatView`; the sidebar instead passes
-the original messages and usage to `ContextGrid`.
-
-Within `ContextGrid`, the stacked bar and legend each independently call
-`computeBreakdown()`:
-
-- [`electron/src/renderer/components/ContextGrid.tsx`](electron/src/renderer/components/ContextGrid.tsx#L248)
-- [`electron/src/renderer/components/ContextGrid.tsx`](electron/src/renderer/components/ContextGrid.tsx#L348)
-
-Fallback calculation scans the messages several times using filters and reductions:
-
-- [`electron/src/renderer/components/ContextGrid.tsx`](electron/src/renderer/components/ContextGrid.tsx#L121)
-
-`cumulativeUsageFromMessages()` also resums persisted message usage whenever
-`currentTurnUsage` changes:
-
-- [`electron/src/renderer/hooks/useChat.ts`](electron/src/renderer/hooks/useChat.ts#L422)
-
-### User Impact
-
-This is small for short sessions but grows with message count. It contributes to
-sidebar and usage-update cost in long conversations.
-
-### Recommendation
-
-- Remove the unused `contextBreakdown` calculation or use it as the shared source.
-- Compute one `TokenBreakdown` in `ContextGrid` and pass it to the bar and legend.
-- Memoize persisted message usage only on `messages`.
-- Add current-turn usage to that cached persisted total separately.
-- Replace multiple filter/reduce passes with one message traversal where fallback
-  estimation is required.
-
-### Acceptance Criteria
-
-- Context breakdown is computed once per relevant input snapshot.
-- Current-turn usage changes do not rescan all persisted messages.
-
----
-
 ## F11 — Oversized UI Modules Increase Optimization Risk
 
 **Priority:** P3  
@@ -241,7 +190,6 @@ CSS.
 ### Phase 2 — Long-Running Session Stability
 
 1. Aggregate or virtualize old transcript history.
-2. Consolidate context and cumulative-usage computation.
 
 ### Phase 3 — Structural Cleanup
 
