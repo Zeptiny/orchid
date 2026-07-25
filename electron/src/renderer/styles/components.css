@@ -1731,15 +1731,6 @@
     line-height: 1.2;
   }
 
-  /* ── Responsive ────────────────────────────────────────────────────────── */
-
-  /* Responsive: only shrink columns — components own collapse UI via props */
-  @media (max-width: 980px) {
-    .app-frame {
-      min-width: 0;
-    }
-  }
-
   /* ── Configuration / Settings form spacing ────────────────────────────────── */
   /* Roomier than mock’s 8px fieldsets so titles, labels, and inputs breathe.   */
 

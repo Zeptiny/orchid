@@ -10,13 +10,7 @@
 The application has a sound overall architecture: heavy RAG and AST indexing work is
 already moved to worker threads, provider and session data use shared renderer stores,
 and many renderer subtrees are memoized. The remaining optimization opportunities are
-concentrated in narrow-window behavior, startup loading, long-session scaling, and
-synchronous persistence.
-
-The most important remaining finding is that the application window may be resized to
-800 pixels even though the expanded three-column shell requires at least 1,020 pixels.
-Because the root hides overflow, part of the interface can become inaccessible at
-supported window sizes.
+concentrated in startup loading, long-session scaling, and synchronous persistence.
 
 The production renderer currently builds as a single 1.053 MB minified JavaScript
 chunk (286.74 KB gzip). Route-level code splitting would reduce startup parsing and
@@ -39,7 +33,6 @@ the findings and recommended implementation order.
 
 | ID | Priority | Area | Finding |
 | --- | --- | --- | --- |
-| F2 | P1 | Responsive UI | Supported window sizes are narrower than the shell's minimum layout |
 | F3 | P2 | Startup | The renderer ships as one large JavaScript chunk |
 | F4 | P2 | Transcript scaling | Old chains are collapsed but not virtualized or aggregated |
 | F5 | P2 | Persistence | Turn boundaries synchronously rewrite the complete session |
@@ -49,89 +42,6 @@ the findings and recommended implementation order.
 | F9 | P3 | Startup latency | Tool workers are initialized before the first application window |
 | F10 | P3 | Renderer computation | Context usage is recomputed more often than necessary |
 | F11 | P3 | Maintainability | Several UI modules and the shared component stylesheet are oversized |
-
----
-
-## F2 — Narrow Windows Can Clip the Three-Panel Interface
-
-**Priority:** P1  
-**Area:** Responsive layout and UI accessibility
-
-### Evidence
-
-The `BrowserWindow` allows a minimum width of 800 pixels:
-
-- [`electron/src/main/index.ts`](electron/src/main/index.ts#L184)
-
-The expanded application shell requires:
-
-- Left rail: 260 pixels
-- Center: minimum 460 pixels
-- Right inspector: 300 pixels
-
-Total minimum expanded width: **1,020 pixels**
-
-See:
-
-- [`electron/src/renderer/components/ChatView.tsx`](electron/src/renderer/components/ChatView.tsx#L971)
-- [`electron/src/renderer/styles/exceptions.css`](electron/src/renderer/styles/exceptions.css#L92)
-
-The application roots use hidden overflow. The responsive rule below 980 pixels only
-sets `min-width: 0`; it does not change the grid tracks, collapse either sidebar, or
-turn a sidebar into an overlay:
-
-- [`electron/src/renderer/styles/components.css`](electron/src/renderer/styles/components.css#L1734)
-
-### User Impact
-
-At widths between 800 and 1,019 pixels, the CSS grid cannot satisfy all three tracks.
-Depending on Chromium's grid resolution, this can compress, overflow, or clip parts of
-the shell. Since overflow is hidden, controls in the right inspector or center chat
-may become unreachable rather than horizontally scrollable.
-
-This is especially relevant on:
-
-- Small laptops.
-- Tiled window-manager layouts.
-- Half-screen window snapping.
-- High display scaling.
-
-### Recommendation
-
-Prefer responsive behavior over increasing the window minimum:
-
-- Below approximately 1,020 pixels, automatically collapse the right inspector.
-- At a narrower breakpoint, collapse the left session rail.
-- Allow either panel to open as an overlay drawer when space is constrained.
-- Keep the central transcript at a usable minimum width.
-- Preserve the existing manual collapse controls and keyboard shortcuts.
-
-As a short-term safeguard, raising `minWidth` to 1,020 would prevent the broken state,
-but it would make the application less useful on smaller screens.
-
-### Suggested Verification
-
-Test the shell at:
-
-- 800×600
-- 900×700
-- 1,020×700
-- 1,200×800
-- 150% and 200% display scaling
-
-At every size, verify that:
-
-- The composer and send/cancel controls remain reachable.
-- Session navigation remains available.
-- The inspector can be opened and closed.
-- No content is clipped without an alternative navigation path.
-
-### Acceptance Criteria
-
-- Every width accepted by `BrowserWindow.minWidth` produces a fully operable shell.
-- Sidebars never push required center controls outside the visible window.
-- Automatic responsive collapse does not overwrite the user's stored preference once
-  adequate space returns.
 
 ---
 
@@ -659,27 +569,21 @@ CSS.
 
 ## Recommended Implementation Order
 
-### Phase 1 — Responsive Shell
-
-1. Define responsive sidebar behavior.
-2. Implement automatic collapse or overlay drawers below 1,020 pixels.
-3. Test all supported minimum sizes and display scaling.
-
-### Phase 2 — Startup
+### Phase 1 — Startup
 
 1. Introduce one bootstrap configuration snapshot.
 2. Lazy-load Settings, onboarding, project configuration, and subagent surfaces.
 3. Move worker-pool readiness off the first-window critical path.
 4. Add startup performance marks and bundle-size reporting.
 
-### Phase 3 — Long-Running Session Stability
+### Phase 2 — Long-Running Session Stability
 
 1. Replace full session rewrites with incremental chain persistence.
 2. Standardize RAG/AST store ownership and disposal.
 3. Aggregate or virtualize old transcript history.
 4. Consolidate context and cumulative-usage computation.
 
-### Phase 4 — Structural Cleanup
+### Phase 3 — Structural Cleanup
 
 1. Split oversized UI modules along the boundaries above.
 2. Split `components.css` while preserving cascade behavior.
@@ -694,7 +598,6 @@ These should be finalized using measurements on supported hardware:
 | Initial renderer JavaScript | Material reduction from the current 1.053 MB chunk |
 | Transcript DOM size | Bounded independently of total chain count |
 | Turn-boundary persistence | Approximately constant with historical chain count |
-| Supported minimum width | No clipped or unreachable controls at 800 px |
 
 ## Validation Performed
 

@@ -36,6 +36,7 @@ import { StatusBadge } from './ui/StatusBadge';
 
 interface SidebarProps {
   isOpen: boolean;
+  isOverlay?: boolean;
   onToggle: () => void;
   subagentState: SubagentListState;
   onRefreshSubagents: () => void;
@@ -67,6 +68,7 @@ interface SidebarProps {
 
 export const Sidebar = memo(function Sidebar({
   isOpen,
+  isOverlay = false,
   onToggle,
   subagentState,
   onRefreshSubagents,
@@ -130,7 +132,10 @@ export const Sidebar = memo(function Sidebar({
   }
 
   return (
-    <aside className="right-panel bg-base-200" aria-label="Inspector">
+    <aside
+      className={isOverlay ? 'right-panel right-panel-overlay orchid-view-enter bg-base-200' : 'right-panel bg-base-200'}
+      aria-label="Inspector"
+    >
       <div id="right-sidebar-body" className="panel-body">
         <div className="right-panel-toolbar">
           <IconButton

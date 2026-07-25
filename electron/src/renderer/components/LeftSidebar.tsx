@@ -35,6 +35,7 @@ import { SessionNameEditor } from './SessionNameEditor';
 
 interface LeftSidebarProps {
   isCollapsed: boolean;
+  isOverlay?: boolean;
   onToggle: () => void;
   sessionListState: SessionListState;
   activeSessionId: string | null;
@@ -77,6 +78,7 @@ interface LeftSidebarProps {
  */
 export const LeftSidebar = memo(function LeftSidebar({
   isCollapsed,
+  isOverlay = false,
   onToggle,
   sessionListState,
   activeSessionId,
@@ -168,7 +170,10 @@ export const LeftSidebar = memo(function LeftSidebar({
   }
 
   return (
-    <aside className="left-panel bg-base-200" aria-label="Sessions">
+    <aside
+      className={isOverlay ? 'left-panel left-panel-overlay orchid-view-enter bg-base-200' : 'left-panel bg-base-200'}
+      aria-label="Sessions"
+    >
       <SectionHeader
         className="panel-header"
         title={<h1 className="title truncate">Orchid</h1>}

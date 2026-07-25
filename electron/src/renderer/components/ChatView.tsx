@@ -13,6 +13,7 @@ import { useSessionTabs } from '../hooks/useSessionTabs';
 import { useProviders } from '../hooks/useProviders';
 import { useMessageQueue } from '../hooks/useMessageQueue';
 import { useQueueAutoFire } from '../hooks/useQueueAutoFire';
+import { useResponsiveShell } from '../hooks/use-responsive-shell';
 import {
   providerModelOptionDisplayName,
   providerModelOptionKey,
@@ -57,8 +58,18 @@ export function ChatView() {
   const providers = useProviders();
   const messageQueue = useMessageQueue();
 
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
+  const {
+    rightOpen: sidebarOpen,
+    leftCollapsed: leftSidebarCollapsed,
+    rightOverlay,
+    leftOverlay,
+    rightTrack,
+    leftTrack,
+    toggleRight: toggleSidebar,
+    toggleLeft: toggleLeftSidebar,
+    openRight: openSidebar,
+    openLeft: openLeftSidebar,
+  } = useResponsiveShell();
   const [paletteOpen, setPaletteOpen] = useState(false);
   /** One-shot inspector section focus from command-palette navigation. */
   const [inspectorFocusSection, setInspectorFocusSection] = useState<string | null>(null);
@@ -160,14 +171,6 @@ export function ChatView() {
     return () => window.removeEventListener('focus', markSeen);
   }, [session.activeSession?.id, activity.markSeen]);
 
-  const toggleSidebar = useCallback(() => {
-    setSidebarOpen((prev) => !prev);
-  }, []);
-
-  const toggleLeftSidebar = useCallback(() => {
-    setLeftSidebarCollapsed((prev) => !prev);
-  }, []);
-
   // Wire dead command-palette `orchid:navigate` events to shell panels.
   useEffect(() => {
     const onNavigate = (event: Event) => {
@@ -175,15 +178,15 @@ export function ChatView() {
       const action = resolveOrchidNavigate(detail?.section);
       if (action.kind === 'noop') return;
       if (action.kind === 'sessions') {
-        setLeftSidebarCollapsed(false);
+        openLeftSidebar();
         return;
       }
-      setSidebarOpen(true);
+      openSidebar();
       setInspectorFocusSection(action.section);
     };
     window.addEventListener('orchid:navigate', onNavigate);
     return () => window.removeEventListener('orchid:navigate', onNavigate);
-  }, []);
+  }, [openLeftSidebar, openSidebar]);
 
   const togglePalette = useCallback(() => {
     setHelpOpen(false);
@@ -970,8 +973,8 @@ export function ChatView() {
 
   // Runtime shell tracks — CSS custom properties (exceptions.css .app-frame).
   const shellStyle = {
-    ['--orchid-shell-left' as string]: leftSidebarCollapsed ? '56px' : '260px',
-    ['--orchid-shell-right' as string]: sidebarOpen ? '300px' : '48px',
+    ['--orchid-shell-left' as string]: leftTrack,
+    ['--orchid-shell-right' as string]: rightTrack,
   };
 
   return (
@@ -986,6 +989,7 @@ export function ChatView() {
           (session.workspace?.status === 'valid' ? session.workspace.cwd : null)
         }
         isCollapsed={leftSidebarCollapsed}
+        isOverlay={leftOverlay}
         onOpenSettings={openSettings}
         onPickProjectDir={handlePickProjectDirClick}
         projectPickerCreatesDraft={Boolean(session.activeSession?.chains.length)}
@@ -1184,6 +1188,7 @@ export function ChatView() {
 
       <Sidebar
         isOpen={sidebarOpen}
+        isOverlay={rightOverlay}
         onToggle={toggleSidebar}
         subagentState={subagents.state}
         onRefreshSubagents={subagents.refresh}
