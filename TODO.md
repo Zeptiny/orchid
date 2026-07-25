@@ -11,6 +11,7 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - Subagent finished results should only send the last message, not full subagent history, the task is already defined on the dynamic context so I think it isnt necessary to resend
 - Interface may prevent some changes while streaming (Such as model and reasoning level) but the command pallete still allows to execute
 - Cannot execute commands while streaming (Only queue messages is possible)
+- Status icons and the status (Working, done, etc.) itself is not syncronized (Tabs, activity, session listing)
 
 ## Agent quality
 
