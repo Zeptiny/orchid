@@ -306,7 +306,6 @@
   .orchid-chat-scroll {
     @apply flex min-h-0 flex-1 flex-col gap-3 overflow-auto;
     /* Padding enforced in exceptions.css (unlayered) + JSX utilities. */
-    scroll-behavior: smooth;
   }
 
   .orchid-chat-scroll > * {

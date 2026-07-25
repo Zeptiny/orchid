@@ -135,8 +135,8 @@ describe('chat rendering contract (U5)', () => {
       const src = read('components/ChatStream.tsx');
       const scrollHook = read('hooks/useSmartAutoScroll.ts');
       // Reset scroll-away only on session change — not when entering streaming
-      expect(scrollHook).toMatch(/setIsUserScrolledUp\(false\)/);
-      expect(scrollHook).toMatch(/\}, \[resetKey\]\);/);
+      expect(scrollHook).toMatch(/setFollowing\(true\)/);
+      expect(scrollHook).toMatch(/\[container, resetKey, setFollowing\]/);
       expect(src).not.toMatch(
         /status === 'streaming'[\s\S]{0,200}setIsUserScrolledUp\(false\)/,
       );
@@ -154,7 +154,9 @@ describe('chat rendering contract (U5)', () => {
       const scrollHook = read('hooks/useSmartAutoScroll.ts');
       expect(scrollHook).toMatch(/const \[container, setContainer\]/);
       expect(scrollHook).toMatch(/const containerRef = useCallback/);
-      expect(scrollHook).toMatch(/\[container, enabled\]/);
+      expect(scrollHook).toMatch(
+        /\[container, enabled, followLatest, setFollowing\]/,
+      );
     });
 
     it('scrolls only the transcript container, never an outer document ancestor', () => {
@@ -179,13 +181,17 @@ describe('chat rendering contract (U5)', () => {
     it('uses a bounded revision key and instant follow scrolling during live updates', () => {
       const stream = read('components/ChatStream.tsx');
       const scrollHook = read('hooks/useSmartAutoScroll.ts');
+      const styles = read('styles/components.css');
 
       expect(stream).toMatch(/contentKey:\s*`\$\{messages\.length\}:\$\{streamRevision\}`/);
       expect(stream).not.toContain('JSON.stringify');
       expect(scrollHook).toMatch(
-        /shouldAutoScroll\(isUserScrolledUp\)\)\s*scrollToLatest\('auto'\)/,
+        /isFollowingRef\.current\)\s*scrollToLatest\('instant'\)/,
       );
-      expect(scrollHook).toMatch(/jumpToLatest[\s\S]*scrollToLatest\(\)/);
+      expect(scrollHook).toMatch(/jumpToLatest[\s\S]*scrollToLatest\('smooth'\)/);
+      expect(styles).not.toMatch(
+        /\.orchid-chat-scroll\s*\{[^}]*scroll-behavior:\s*smooth/,
+      );
     });
   });
 
