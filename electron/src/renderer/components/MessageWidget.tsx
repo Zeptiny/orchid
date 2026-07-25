@@ -72,7 +72,7 @@ function AssistantMessage({
   return (
     <div className="orchid-msg orchid-msg-assistant px-1 py-1">
       {message.content ? (
-        <MarkdownContent content={message.content} isStreaming={isStreaming} />
+        <MarkdownContent content={message.content} />
       ) : null}
     </div>
   );

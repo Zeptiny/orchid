@@ -16,7 +16,6 @@ const remarkPlugins: Options['remarkPlugins'] = [remarkGfm];
 const rehypePlugins: Options['rehypePlugins'] = [
   [rehypeHighlight, { plainText: ['text', 'txt', 'plain'] }],
 ];
-const streamingRehypePlugins: Options['rehypePlugins'] = [];
 
 // ── Components ───────────────────────────────────────────────────────────────
 
@@ -87,26 +86,21 @@ const markdownComponents: Components = {
 
 interface MarkdownContentProps {
   content: string;
-  /** Skip syntax highlighting while content changes every animation frame. */
-  isStreaming?: boolean;
 }
 
-export function MarkdownContent({
-  content,
-  isStreaming = false,
-}: MarkdownContentProps) {
+export function MarkdownContent({ content }: MarkdownContentProps) {
   // Memoize so streaming re-renders only re-parse when the string changes.
   const body = useMemo(
     () => (
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
-        rehypePlugins={isStreaming ? streamingRehypePlugins : rehypePlugins}
+        rehypePlugins={rehypePlugins}
         components={markdownComponents}
       >
         {content}
       </ReactMarkdown>
     ),
-    [content, isStreaming],
+    [content],
   );
 
   return <div className="markdown-content">{body}</div>;

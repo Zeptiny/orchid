@@ -199,21 +199,17 @@ describe('chat rendering contract (U5)', () => {
       expect(subscriptions).not.toContain('applyStreamSegments');
     });
 
-    it('defers syntax highlighting until the active text segment settles', () => {
+    it('syntax-highlights active streaming text', () => {
       const markdown = '```ts\nconst orchid = true;\n```';
       const streaming = renderToStaticMarkup(
-        createElement(MarkdownContent, { content: markdown, isStreaming: true }),
-      );
-      const settled = renderToStaticMarkup(
         createElement(MarkdownContent, { content: markdown }),
       );
 
-      expect(streaming).not.toContain('hljs');
-      expect(settled).toContain('hljs');
+      expect(streaming).toContain('hljs');
 
       const messageWidget = read('components/MessageWidget.tsx');
       expect(messageWidget).toContain(
-        '<MarkdownContent content={message.content} isStreaming={isStreaming} />',
+        '<MarkdownContent content={message.content} />',
       );
     });
 
