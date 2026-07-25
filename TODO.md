@@ -39,7 +39,6 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
   - Chain ends
   - Needs user input (Ex: ask_question)
 - Tool widgets / tool groups may be collapsing when a chain ends
-- Add small animations to the interface
 
 ## General backlog
 
