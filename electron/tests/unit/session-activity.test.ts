@@ -76,4 +76,21 @@ describe('SessionActivityStore', () => {
     expect(store.get('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')?.unread).toBe(false);
     expect(store.get('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')?.unread).toBe(true);
   });
+
+  it('assigns strictly increasing timestamps to same-millisecond updates', () => {
+    const store = new SessionActivityStore();
+    const first = store.update(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      { state: 'working' },
+      100,
+    );
+    const second = store.update(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      { state: 'waiting' },
+      100,
+    );
+
+    expect(first.updatedAt).toBe(100);
+    expect(second.updatedAt).toBe(101);
+  });
 });

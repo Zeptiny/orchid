@@ -1,5 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SessionActivity } from '../../shared/types/ipc-boundary';
+import {
+  captureSessionActivityBaseline,
+  mergeSessionActivity,
+  orderedSessionActivities,
+  reconcileSessionActivitySnapshot,
+  type SessionActivityMap,
+} from '../utils/session-activity-state';
 
 export type SessionActivityState =
   | { status: 'loading' }
@@ -13,48 +20,6 @@ export interface UseSessionActivityReturn {
   markSeen: (sessionId: string) => Promise<void>;
 }
 
-function isVisibleActivity(activity: SessionActivity): boolean {
-  return (
-    activity.state !== 'idle' ||
-    activity.unread ||
-    activity.backgroundProcessCount > 0
-  );
-}
-
-function mergeActivity(
-  current: ReadonlyMap<string, SessionActivity>,
-  incoming: SessionActivity,
-): Map<string, SessionActivity> {
-  const existing = current.get(incoming.sessionId);
-  if (existing && existing.updatedAt > incoming.updatedAt) {
-    return new Map(current);
-  }
-  const next = new Map(current);
-  if (!isVisibleActivity(incoming)) {
-    next.delete(incoming.sessionId);
-    return next;
-  }
-  next.set(incoming.sessionId, incoming);
-  return next;
-}
-
-function orderedActivities(map: ReadonlyMap<string, SessionActivity>): SessionActivity[] {
-  const priority: Record<SessionActivity['state'], number> = {
-    needs_attention: 0,
-    working: 1,
-    waiting: 2,
-    idle: 3,
-  };
-  return [...map.values()]
-    .filter(isVisibleActivity)
-    .sort((a, b) => {
-      const statePriority = priority[a.state] - priority[b.state];
-      if (statePriority !== 0) return statePriority;
-      if (a.unread !== b.unread) return a.unread ? -1 : 1;
-      return b.updatedAt - a.updatedAt;
-    });
-}
-
 /**
  * Process-wide session activity. Push updates are merged by timestamp so a
  * slow initial snapshot can never overwrite a newer broadcast.
@@ -63,26 +28,34 @@ export function useSessionActivity(): UseSessionActivityReturn {
   const [activityBySession, setActivityBySession] = useState<
     ReadonlyMap<string, SessionActivity>
   >(() => new Map());
+  const activityBySessionRef = useRef<SessionActivityMap>(activityBySession);
   const [state, setState] = useState<SessionActivityState>({ status: 'loading' });
 
+  const updateActivities = useCallback(
+    (update: (current: SessionActivityMap) => SessionActivityMap) => {
+      setActivityBySession((current) => {
+        const next = update(current);
+        activityBySessionRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
+
   const apply = useCallback((activity: SessionActivity) => {
-    setActivityBySession((current) => mergeActivity(current, activity));
-  }, []);
+    updateActivities((current) => mergeSessionActivity(current, activity));
+  }, [updateActivities]);
 
   const refresh = useCallback(async () => {
     if (!window.orchid?.session?.listActivity) {
       setState({ status: 'ready' });
       return;
     }
+    const baseline = captureSessionActivityBaseline(activityBySessionRef.current);
     try {
       const activities = await window.orchid.session.listActivity();
-      setActivityBySession((current) => {
-        let next: ReadonlyMap<string, SessionActivity> = current;
-        for (const activity of activities) {
-          next = mergeActivity(next, activity);
-        }
-        return next;
-      });
+      updateActivities((current) =>
+        reconcileSessionActivitySnapshot(current, activities, baseline));
       setState({ status: 'ready' });
     } catch (err) {
       setState({
@@ -90,7 +63,7 @@ export function useSessionActivity(): UseSessionActivityReturn {
         error: err instanceof Error ? err.message : String(err),
       });
     }
-  }, []);
+  }, [updateActivities]);
 
   useEffect(() => {
     const unsubscribe = window.orchid?.session?.onActivityChanged?.((event) => {
@@ -111,7 +84,7 @@ export function useSessionActivity(): UseSessionActivityReturn {
   }, [apply]);
 
   const activities = useMemo(
-    () => orderedActivities(activityBySession),
+    () => orderedSessionActivities(activityBySession),
     [activityBySession],
   );
 

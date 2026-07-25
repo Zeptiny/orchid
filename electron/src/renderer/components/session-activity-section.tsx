@@ -3,6 +3,10 @@ import type {
   SessionActivity,
   SessionSummary,
 } from '../../shared/types/ipc-boundary';
+import {
+  sessionActivityPresentation,
+  sessionActivitySummaryPresentation,
+} from '../utils/session-activity-presentation';
 import { truncatePathDisplay } from '../utils/session-workspace';
 import { IconButton } from './ui/IconButton';
 import { StatusBadge } from './ui/StatusBadge';
@@ -12,26 +16,6 @@ interface SessionActivitySectionProps {
   sessions: readonly SessionSummary[];
   onSelect: (sessionId: string) => void;
   onStop: (sessionId: string) => void;
-}
-
-const statusClass: Record<SessionActivity['state'], string> = {
-  idle: 'status-neutral',
-  working: 'status-warning',
-  waiting: 'status-info',
-  needs_attention: 'status-error',
-};
-
-function activityLabel(activity: SessionActivity): string {
-  if (activity.state === 'needs_attention') return 'Needs attention';
-  if (activity.state === 'working') return 'Working';
-  if (activity.state === 'waiting') return 'Waiting';
-  if (activity.unread) return 'Completed · unread';
-  if (activity.backgroundProcessCount > 0) {
-    return `Idle · ${activity.backgroundProcessCount} process${
-      activity.backgroundProcessCount === 1 ? '' : 'es'
-    }`;
-  }
-  return 'Idle';
 }
 
 function elapsedLabel(startedAt: number | null, now: number): string | null {
@@ -66,6 +50,7 @@ export const SessionActivitySection = memo(function SessionActivitySection({
     () => new Map(sessions.map((session) => [session.id, session])),
     [sessions],
   );
+  const summary = sessionActivitySummaryPresentation(activities);
 
   if (activities.length === 0) return null;
 
@@ -73,13 +58,16 @@ export const SessionActivitySection = memo(function SessionActivitySection({
     <section className="session-activity border-b border-base-300" aria-label="Session activity">
       <div className="session-activity-heading">
         <span>Activity</span>
-        <StatusBadge tone="warning" size="xs">{activities.length}</StatusBadge>
+        <StatusBadge tone={summary?.tone ?? 'neutral'} size="xs">
+          {activities.length}
+        </StatusBadge>
       </div>
       <div className="session-activity-list" role="list">
         {activities.map((activity) => {
           const session = sessionsById.get(activity.sessionId);
           const projectPath = session?.cwd ?? activity.cwd;
           const elapsed = elapsedLabel(activity.startedAt, now);
+          const activityStatus = sessionActivityPresentation(activity);
           return (
             <div key={activity.sessionId} className="session-activity-row orchid-list-item-enter" role="listitem">
               <button
@@ -88,7 +76,10 @@ export const SessionActivitySection = memo(function SessionActivitySection({
                 onClick={() => onSelect(activity.sessionId)}
                 title={projectPath ?? session?.name ?? 'Session activity'}
               >
-                <span className={`status status-xs ${statusClass[activity.state]}`} aria-hidden />
+                <span
+                  className={`status status-xs ${activityStatus.statusClass}`}
+                  aria-hidden
+                />
                 <span className="session-activity-copy min-w-0">
                   <span className="session-activity-name truncate">
                     {session?.name ?? 'New session'}
@@ -100,7 +91,7 @@ export const SessionActivitySection = memo(function SessionActivitySection({
                 </span>
                 <span className="session-activity-status">
                   {elapsed && <span>{elapsed}</span>}
-                  <span>{activityLabel(activity)}</span>
+                  <span>{activityStatus.label}</span>
                 </span>
               </button>
               {activity.canCancel && (

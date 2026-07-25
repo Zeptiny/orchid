@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef } from 'react';
 import type { SessionActivity, SessionSummary } from '../../shared/types/ipc-boundary';
+import { sessionActivityPresentation } from '../utils/session-activity-presentation';
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
 import { SessionNameEditor } from './SessionNameEditor';
@@ -18,13 +19,6 @@ export interface SessionTabBarProps {
   onCloseDraft: () => void;
   onRename?: (sessionId: string, name: string) => void | Promise<void>;
 }
-
-const statusClass: Record<SessionActivity['state'], string> = {
-  idle: '',
-  working: 'status-warning',
-  waiting: 'status-info',
-  needs_attention: 'status-error',
-};
 
 function projectBasename(cwd: string | null | undefined): string | null {
   if (!cwd) return null;
@@ -99,14 +93,9 @@ export const SessionTabBar = memo(function SessionTabBar({
           const active = !showDraft && focusedSessionId === id;
           const project = projectBasename(session?.cwd);
           const title = session?.name ?? id.slice(0, 8);
-          const showDot =
-            activity &&
-            (activity.state !== 'idle' ||
-              activity.unread ||
-              activity.backgroundProcessCount > 0);
-          const dotClass = activity
-            ? statusClass[activity.state] || (activity.unread ? 'status-warning' : 'status-neutral')
-            : '';
+          const activityStatus = activity
+            ? sessionActivityPresentation(activity)
+            : null;
 
           return (
             <div
@@ -134,8 +123,12 @@ export const SessionTabBar = memo(function SessionTabBar({
                     : title
                 }
               >
-                {showDot ? (
-                  <span className={`status status-xs ${dotClass}`} aria-hidden />
+                {activityStatus?.visible ? (
+                  <span
+                    className={`status status-xs ${activityStatus.statusClass}`}
+                    title={activityStatus.label}
+                    aria-hidden
+                  />
                 ) : null}
                 {multiProject && project ? (
                   <span className="session-tab-project truncate" aria-hidden>
