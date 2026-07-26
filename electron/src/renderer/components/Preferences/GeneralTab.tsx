@@ -8,6 +8,7 @@ import type { ConfigPatch } from '../../../shared/types/ipc';
 import { THEMES, THEME_NAMES, type ThemeName } from '../../themes';
 import {
   configNumberPatch,
+  parseCommaSeparatedList,
   parseConfigNumber,
   type NumericConfigKey,
 } from '../../utils/config-draft';
@@ -137,22 +138,14 @@ export function GeneralTab({
 
   const handleIgnoredDirsChange = useCallback(
     (value: string) => {
-      const dirs = value
-        .split(',')
-        .map((d) => d.trim())
-        .filter(Boolean);
-      onChange({ ignored_dirs: dirs });
+      onChange({ ignored_dirs: parseCommaSeparatedList(value) });
     },
     [onChange],
   );
 
   const handleInstructionFallbackFilenamesChange = useCallback(
     (value: string) => {
-      const filenames = value
-        .split(',')
-        .map((filename) => filename.trim())
-        .filter(Boolean);
-      onChange({ project_instruction_fallback_filenames: filenames });
+      onChange({ project_instruction_fallback_filenames: parseCommaSeparatedList(value) });
     },
     [onChange],
   );

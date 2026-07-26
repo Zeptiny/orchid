@@ -11,6 +11,7 @@ import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { indexProject } from '../../ast/indexer';
 import { ASTStore, type SymbolRow } from '../../ast/store';
+import { canonicalizeExistingPath, isPathContainedIn } from '../../project/path';
 import { withDisposable } from '../../utils/with-disposable';
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -51,7 +52,6 @@ interface PlannedRenameFile {
   absPath: string;
   hash: string;
   replacements: number;
-  content: string;
   nextContent: string;
 }
 
@@ -79,22 +79,17 @@ export function sha256(value: string): string {
   return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-function normalizedRelativePath(workspace: string, candidate: string): string | null {
-  const relative = path.relative(workspace, candidate);
-  if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    return null;
-  }
-  return relative.split(path.sep).join('/');
-}
-
-function canonicalWorkspacePath(workspace: string, candidate: string): { absolute: string; relative: string } | null {
-  try {
-    const absolute = fs.realpathSync.native(candidate);
-    const relative = normalizedRelativePath(fs.realpathSync.native(workspace), absolute);
-    return relative ? { absolute, relative } : null;
-  } catch {
-    return null;
-  }
+function canonicalWorkspacePath(
+  canonicalWorkspace: string,
+  candidate: string,
+): { absolute: string; relative: string } | null {
+  const absolute = canonicalizeExistingPath(candidate);
+  if (absolute === null || absolute === canonicalWorkspace ||
+      !isPathContainedIn(absolute, canonicalWorkspace)) return null;
+  return {
+    absolute,
+    relative: path.relative(canonicalWorkspace, absolute).split(path.sep).join('/'),
+  };
 }
 
 function sourcePath(workspace: string, relative: string): string {
@@ -168,9 +163,13 @@ export async function buildRenamePlan(
   workspace: string,
   input: PlanSymbolRenameInput,
 ): Promise<RenamePlan> {
+  const canonicalWorkspace = canonicalizeExistingPath(workspace);
+  if (canonicalWorkspace === null) {
+    throw new Error(`Workspace was not found: ${workspace}`);
+  }
   const requestedAnchor = path.resolve(workspace, input.file_path);
-  const canonicalAnchor = canonicalWorkspacePath(workspace, requestedAnchor);
-  if (!canonicalAnchor || !fs.existsSync(requestedAnchor)) {
+  const canonicalAnchor = canonicalWorkspacePath(canonicalWorkspace, requestedAnchor);
+  if (!canonicalAnchor) {
     throw new Error(`Definition anchor file was not found inside the workspace: ${input.file_path}`);
   }
   const { absolute: anchorAbs, relative: anchorPath } = canonicalAnchor;
@@ -178,7 +177,7 @@ export async function buildRenamePlan(
   const symbols = withDisposable(new ASTStore(workspace), (store) => store.getSymbolsByName(input.old_name, 'both'));
   const anchorHasDefinition = symbols.some((symbol) =>
     symbol.type === 'definition' &&
-    canonicalWorkspacePath(workspace, sourcePath(workspace, symbol.filePath))?.relative === anchorPath);
+    canonicalWorkspacePath(canonicalWorkspace, sourcePath(workspace, symbol.filePath))?.relative === anchorPath);
   if (!anchorHasDefinition) {
     throw new Error(`Definition anchor '${anchorPath}' does not contain an indexed definition for '${input.old_name}'.`);
   }
@@ -192,8 +191,8 @@ export async function buildRenamePlan(
   const files: PlannedRenameFile[] = [];
   for (const [indexedPath, fileSymbols] of byFile) {
     const indexedAbsPath = sourcePath(workspace, indexedPath);
-    const canonicalPath = canonicalWorkspacePath(workspace, indexedAbsPath);
-    if (!canonicalPath || !fs.existsSync(indexedAbsPath)) {
+    const canonicalPath = canonicalWorkspacePath(canonicalWorkspace, indexedAbsPath);
+    if (!canonicalPath) {
       throw new Error(`Indexed rename target is missing or outside the workspace: ${indexedPath}`);
     }
     const { absolute: absPath, relative } = canonicalPath;
@@ -205,7 +204,6 @@ export async function buildRenamePlan(
       absPath,
       hash: sha256(content),
       replacements: replaced.replacements,
-      content,
       nextContent: replaced.nextContent,
     });
   }
@@ -213,10 +211,11 @@ export async function buildRenamePlan(
   if (files.length === 0) {
     throw new Error(`No current rename locations found for '${input.old_name}'.`);
   }
-  const anchorContent = fs.readFileSync(anchorAbs, 'utf8');
+  const anchorHash = files.find((file) => file.path === anchorPath)?.hash ??
+    sha256(fs.readFileSync(anchorAbs, 'utf8'));
   const manifestWithoutDigest: Omit<RenameManifest, 'digest'> = {
     version: 1,
-    anchor: { path: anchorPath, hash: sha256(anchorContent) },
+    anchor: { path: anchorPath, hash: anchorHash },
     old_name: input.old_name,
     new_name: input.new_name,
     files: files.map(({ path: filePath, hash, replacements }) => ({ path: filePath, hash, replacements })),

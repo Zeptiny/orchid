@@ -4,7 +4,7 @@ import type { Config, PermissionRule, RAGConfig } from '../../shared/types/ipc-b
 import type { ConfigPatch, ConfigPatchMap } from '../../shared/types/ipc';
 import { useGlobalShortcuts } from '../keyboard';
 import { THEMES, THEME_NAMES, type ThemeName } from '../themes';
-import { parseConfigNumber } from '../utils/config-draft';
+import { parseCommaSeparatedList, parseConfigNumber } from '../utils/config-draft';
 import { AgentsTab } from './Preferences/AgentsTab';
 import { PermissionsTab } from './Preferences/PermissionsTab';
 import { PersonalitiesTab } from './Preferences/PersonalitiesTab';
@@ -390,7 +390,7 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
         case 'boolean':
           return { ...previous, [field.key]: trimmed === 'true' };
         case 'string-list': {
-          const entries = trimmed.split(',').map((entry) => entry.trim()).filter(Boolean);
+          const entries = parseCommaSeparatedList(trimmed);
           return { ...previous, [field.key]: entries.length > 0 ? entries : null };
         }
         default: {

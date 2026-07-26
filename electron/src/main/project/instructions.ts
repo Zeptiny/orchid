@@ -18,6 +18,10 @@ import {
 
 const PRIMARY_FILENAMES = ['AGENTS.override.md', 'AGENTS.md'] as const;
 const OVER_BUDGET_DIAGNOSTIC_RESERVE_BYTES = 512;
+const ENVELOPE_WRAPPER_BYTES = Buffer.byteLength(
+  '<project_instructions>\n\n</project_instructions>',
+  'utf8',
+);
 
 export type ProjectInstructionDiagnosticCode =
   | 'shadowed'
@@ -115,10 +119,6 @@ function sha256(body: string): string {
   return crypto.createHash('sha256').update(body, 'utf8').digest('hex');
 }
 
-function isScopeAncestor(ancestor: string, candidate: string): boolean {
-  return candidate === ancestor || candidate.startsWith(ancestor + path.sep);
-}
-
 function diagnostic(
   code: ProjectInstructionDiagnosticCode,
   scope: string,
@@ -173,8 +173,10 @@ export class ProjectInstructionContext {
   private readonly diagnosticIds = new Set<string>();
   private readonly blocked = new Map<string, ProjectInstructionDiagnostic[]>();
   private readonly pending = new Set<string>();
+  private readonly pendingScopeCounts = new Map<string, number>();
   private readonly acknowledged = new Set<string>();
   private readonly deliveries = new Map<string, DeliveryRecord>();
+  private readonly projectedDeliveries = new Set<DeliveryRecord>();
   private readonly audit: ProjectInstructionAuditEvent[] = [];
   private readonly chargedSourceScopes = new Set<string>();
   private readonly chargedBodyHashes = new Set<string>();
@@ -183,7 +185,8 @@ export class ProjectInstructionContext {
   private rootAcknowledged = false;
   private step = 0;
   private sequence = 0;
-  private readonly budgetEntries: string[] = [];
+  private budgetBytes = 0;
+  private budgetEntryCount = 0;
 
   constructor(workspace: string, config: ProjectInstructionContext['config']) {
     const canonicalWorkspace = canonicalizeExistingPath(workspace);
@@ -203,9 +206,11 @@ export class ProjectInstructionContext {
   /** Begin an SDK step and acknowledge only deliveries that reached the provider in a prior step. */
   beginStep(step: number): void {
     if (step < this.step) throw new Error('Instruction steps cannot move backwards');
-    for (const delivery of this.deliveries.values()) {
+    for (const delivery of this.projectedDeliveries) {
       if (delivery.emitted && delivery.projectedStep !== undefined && delivery.projectedStep < step) {
-        for (const source of delivery.discovery.sources) this.acknowledged.add(this.sourceKey(source));
+        for (const source of delivery.discovery.sources) this.acknowledgeSource(source);
+        delivery.projectedStep = undefined;
+        this.projectedDeliveries.delete(delivery);
       }
     }
     this.step = step;
@@ -227,7 +232,7 @@ export class ProjectInstructionContext {
   acknowledgeRoot(): void {
     if (!this.root) throw new Error('prepareRoot must run before acknowledgeRoot');
     this.rootAcknowledged = true;
-    for (const source of this.root.sources) this.acknowledged.add(this.sourceKey(source));
+    for (const source of this.root.sources) this.acknowledgeSource(source);
   }
 
   /** Discover instructions for effective target paths, from workspace root to target directory. */
@@ -243,10 +248,13 @@ export class ProjectInstructionContext {
   async preflightMutation(targets: readonly string[]): Promise<MutationInstructionPreflight> {
     const discovery = await this.discover(targets);
     const directories = this.targetDirectories(targets);
-    const status = directories.some((target) => this.hasBlockedScope(target))
-      ? 'blocked'
-      : directories.some((target) => this.hasPendingScope(target)) ? 'pending' : 'ready';
-    return { status, discovery };
+    if (directories.some((target) => this.hasBlockedScope(target))) {
+      return { status: 'blocked', discovery };
+    }
+    if (directories.some((target) => this.hasPendingScope(target))) {
+      return { status: 'pending', discovery };
+    }
+    return { status: 'ready', discovery };
   }
 
   /** Attach a discovery to one tool call. Re-registering the call is idempotent. */
@@ -258,24 +266,22 @@ export class ProjectInstructionContext {
     }
     if (existing.output) return;
 
-    const sourceKey = (source: ProjectInstructionSource): string =>
-      source.path + '\u0000' + source.scope;
-    const diagnosticKey = (item: ProjectInstructionDiagnostic): string =>
-      item.code + '\u0000' + item.scope + '\u0000' + (item.path ?? '') + '\u0000' + item.detail;
     const sources = [...existing.discovery.sources];
-    const sourceKeys = new Set(sources.map(sourceKey));
+    const sourceKeys = new Set(sources.map((source) => this.sourceKey(source)));
     for (const source of discovery.sources) {
-      if (!sourceKeys.has(sourceKey(source))) {
+      const key = this.sourceKey(source);
+      if (!sourceKeys.has(key)) {
         sources.push(source);
-        sourceKeys.add(sourceKey(source));
+        sourceKeys.add(key);
       }
     }
     const diagnostics = [...existing.discovery.diagnostics];
-    const diagnosticKeys = new Set(diagnostics.map(diagnosticKey));
+    const diagnosticKeys = new Set(diagnostics.map((item) => this.diagnosticKey(item)));
     for (const item of discovery.diagnostics) {
-      if (!diagnosticKeys.has(diagnosticKey(item))) {
+      const key = this.diagnosticKey(item);
+      if (!diagnosticKeys.has(key)) {
         diagnostics.push(item);
-        diagnosticKeys.add(diagnosticKey(item));
+        diagnosticKeys.add(key);
       }
     }
     existing.discovery = {
@@ -317,6 +323,7 @@ export class ProjectInstructionContext {
     };
     delivery.emitted = true;
     delivery.projectedStep = this.step;
+    this.projectedDeliveries.add(delivery);
     delivery.output = output;
     return output;
   }
@@ -517,7 +524,7 @@ export class ProjectInstructionContext {
     if (this.acknowledged.has(sourceKey)) return undefined;
     const existing = this.bodies.get(hash);
     if (existing && existing.scopes.some(
-      (scope) => scope !== scanned.scope && isScopeAncestor(scope, scanned.scope),
+      (scope) => scope !== scanned.scope && isPathContainedIn(scanned.scope, scope),
     )) return undefined;
     const source: ProjectInstructionSource = {
       path: sourcePath,
@@ -549,7 +556,7 @@ export class ProjectInstructionContext {
     } else {
       this.bodies.set(hash, { hash, body, scopes: [scanned.scope], emitted: false });
     }
-    this.pending.add(this.sourceKey(source));
+    this.markPending(source);
     return { source };
   }
 
@@ -578,14 +585,17 @@ export class ProjectInstructionContext {
       ...sourceList.map((source) => renderSource(source, source.kind !== 'reference')),
       ...diagnostics.map(renderDiagnostic),
     ];
-    const allEntries = [...this.budgetEntries, ...entries];
-    const envelope = allEntries.length === 0
-      ? ''
-      : '<project_instructions>\n' + allEntries.join('\n') + '\n</project_instructions>';
-    const requiredBytes = Buffer.byteLength(envelope, 'utf8') +
+    const entryBytes = Buffer.byteLength(entries.join('\n'), 'utf8');
+    const nextBudgetBytes = entries.length === 0
+      ? this.budgetBytes
+      : this.budgetEntryCount === 0
+        ? ENVELOPE_WRAPPER_BYTES + entryBytes
+        : this.budgetBytes + entries.length + entryBytes;
+    const requiredBytes = nextBudgetBytes +
       (sourceList.length > 0 ? OVER_BUDGET_DIAGNOSTIC_RESERVE_BYTES : 0);
     if (requiredBytes > this.config.project_instruction_max_bytes) return false;
-    this.budgetEntries.push(...entries);
+    this.budgetBytes = nextBudgetBytes;
+    this.budgetEntryCount += entries.length;
     return true;
   }
 
@@ -603,7 +613,7 @@ export class ProjectInstructionContext {
 
   private newDiagnostics(items: readonly ProjectInstructionDiagnostic[]): ProjectInstructionDiagnostic[] {
     return items.filter((item) => {
-      const key = item.code + '\u0000' + item.scope + '\u0000' + (item.path ?? '') + '\u0000' + item.detail;
+      const key = this.diagnosticKey(item);
       if (this.diagnosticIds.has(key)) return false;
       this.diagnosticIds.add(key);
       return true;
@@ -615,21 +625,38 @@ export class ProjectInstructionContext {
   }
 
   private hasBlockedScope(target: string): boolean {
-    return [...this.blocked.keys()].some((scope) => isScopeAncestor(scope, target));
+    return [...this.blocked.keys()].some((scope) => isPathContainedIn(target, scope));
   }
 
   private hasPendingScope(target: string): boolean {
-    for (const key of this.pending) {
-      if (!this.acknowledged.has(key)) {
-        const [, scope] = key.split('\u0000');
-        if (scope && isScopeAncestor(scope, target)) return true;
-      }
+    return [...this.pendingScopeCounts.keys()].some((scope) => isPathContainedIn(target, scope));
+  }
+
+  private markPending(source: ProjectInstructionSource): void {
+    const key = this.sourceKey(source);
+    if (this.pending.has(key)) return;
+    this.pending.add(key);
+    this.pendingScopeCounts.set(source.scope, (this.pendingScopeCounts.get(source.scope) ?? 0) + 1);
+  }
+
+  private acknowledgeSource(source: ProjectInstructionSource): void {
+    const key = this.sourceKey(source);
+    this.acknowledged.add(key);
+    if (!this.pending.delete(key)) return;
+    const count = this.pendingScopeCounts.get(source.scope);
+    if (count === undefined || count <= 1) {
+      this.pendingScopeCounts.delete(source.scope);
+    } else {
+      this.pendingScopeCounts.set(source.scope, count - 1);
     }
-    return false;
   }
 
   private sourceKey(source: ProjectInstructionSource): string {
     return source.path + '\u0000' + source.scope;
+  }
+
+  private diagnosticKey(item: ProjectInstructionDiagnostic): string {
+    return item.code + '\u0000' + item.scope + '\u0000' + (item.path ?? '') + '\u0000' + item.detail;
   }
 }
 

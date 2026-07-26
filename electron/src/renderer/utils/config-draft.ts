@@ -204,3 +204,8 @@ export function parseConfigNumber(
   if (Number.isNaN(num) || num < min) return null;
   return num;
 }
+
+/** Parse an ordered comma-separated form value, omitting blank entries. */
+export function parseCommaSeparatedList(value: string): string[] {
+  return value.split(',').map((entry) => entry.trim()).filter(Boolean);
+}
