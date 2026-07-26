@@ -57,6 +57,35 @@ export const permissionRuleSchema = z.union([
 
 export const permissionsConfigSchema = z.record(z.string(), permissionRuleSchema);
 
+const instructionFallbackFilenameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .refine((filename) => filename !== '.' && filename !== '..', {
+    message: 'Instruction fallback filenames cannot be . or ..',
+  })
+  .refine((filename) => !filename.includes('/') && !filename.includes('\\'), {
+    message: 'Instruction fallback filenames must be simple basenames',
+  })
+  .refine((filename) => {
+    const normalized = filename.toLocaleLowerCase('en-US');
+    return normalized !== 'agents.md' && normalized !== 'agents.override.md';
+  }, {
+    message: 'Instruction fallback filenames cannot shadow AGENTS.md or AGENTS.override.md',
+  });
+
+const instructionFallbackFilenamesSchema = z
+  .array(instructionFallbackFilenameSchema)
+  .min(1)
+  .max(16)
+  .refine((filenames) => {
+    const normalized = filenames.map((filename) => filename.toLocaleLowerCase('en-US'));
+    return new Set(normalized).size === normalized.length;
+  }, {
+    message: 'Instruction fallback filenames must be unique case-insensitively',
+  });
+
 // ---------------------------------------------------------------------------
 // Main config schema
 // ---------------------------------------------------------------------------
@@ -118,6 +147,15 @@ export const configSchema = z
     grep_max_results: z.number().int().positive().default(100),
     directory_tree_depth: z.number().int().positive().default(2),
     tool_worker_pool_size: z.number().int().min(0).max(8).default(2),
+    /** Alias-family fallbacks selected after AGENTS.override.md and AGENTS.md. */
+    project_instruction_fallback_filenames: instructionFallbackFilenamesSchema.default([
+      'CLAUDE.md',
+      'GEMINI.md',
+    ]),
+    /** Per-turn rendered instruction envelope budget, in UTF-8 bytes. */
+    project_instruction_max_bytes: z.number().int().min(4_096).max(1_048_576).default(131_072),
+    /** Maximum nested shim-import expansion depth. */
+    project_instruction_max_import_depth: z.number().int().min(1).max(32).default(5),
     theme: z.string().min(1).default('default'),
     personality: z.string().min(1).default('default'),
     rag: ragConfigSchema.default({}),

@@ -106,6 +106,31 @@ const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
       ],
     },
     {
+      title: 'Agent Instructions',
+      fields: [
+        {
+          key: 'project_instruction_fallback_filenames',
+          label: 'Fallback Instruction Filenames',
+          kind: 'string-list',
+          fullWidth: true,
+        },
+        {
+          key: 'project_instruction_max_bytes',
+          label: 'Instruction Payload Budget (bytes)',
+          kind: 'integer',
+          min: 4_096,
+          max: 1_048_576,
+        },
+        {
+          key: 'project_instruction_max_import_depth',
+          label: 'Shim Import Depth',
+          kind: 'integer',
+          min: 1,
+          max: 32,
+        },
+      ],
+    },
+    {
       title: 'Web Fetch',
       fields: [
         { key: 'web_fetch_timeout', label: 'Web Fetch Timeout (s)', kind: 'number', min: 1 },

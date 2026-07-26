@@ -30,6 +30,9 @@ export interface GeneralTabProps {
   readLineLimit: number;
   grepMaxResults: number;
   directoryTreeDepth: number;
+  projectInstructionFallbackFilenames: string[];
+  projectInstructionMaxBytes: number;
+  projectInstructionMaxImportDepth: number;
   astMaxFileSize: number;
   mcpStartupTimeout: number;
   mcpPerServerTimeout: number;
@@ -75,6 +78,9 @@ export function GeneralTab({
   readLineLimit,
   grepMaxResults,
   directoryTreeDepth,
+  projectInstructionFallbackFilenames,
+  projectInstructionMaxBytes,
+  projectInstructionMaxImportDepth,
   astMaxFileSize,
   mcpStartupTimeout,
   mcpPerServerTimeout,
@@ -136,6 +142,17 @@ export function GeneralTab({
         .map((d) => d.trim())
         .filter(Boolean);
       onChange({ ignored_dirs: dirs });
+    },
+    [onChange],
+  );
+
+  const handleInstructionFallbackFilenamesChange = useCallback(
+    (value: string) => {
+      const filenames = value
+        .split(',')
+        .map((filename) => filename.trim())
+        .filter(Boolean);
+      onChange({ project_instruction_fallback_filenames: filenames });
     },
     [onChange],
   );
@@ -292,6 +309,63 @@ export function GeneralTab({
               bordered
               className="w-full"
               min={1}
+            />
+          </FormField>
+        </div>
+      </Panel>
+
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader title="Agent Instructions" />
+        <div className="config-form-grid">
+          <FormField
+            label="Fallback Instruction Filenames"
+            htmlFor="general-instruction-fallback-filenames"
+            hint="Comma-separated names considered after AGENTS.md and AGENTS.override.md."
+            className="config-field config-form-grid-full"
+          >
+            <TextInput
+              id="general-instruction-fallback-filenames"
+              type="text"
+              value={projectInstructionFallbackFilenames.join(', ')}
+              onChange={(e) => handleInstructionFallbackFilenamesChange(e.target.value)}
+              bordered
+              className="w-full"
+            />
+          </FormField>
+          <FormField
+            label="Instruction Payload Budget (bytes)"
+            htmlFor="general-instruction-max-bytes"
+            hint="Per-turn instruction context budget; project settings may override this within limits."
+            className="config-field"
+          >
+            <TextInput
+              id="general-instruction-max-bytes"
+              type="number"
+              value={projectInstructionMaxBytes}
+              onChange={(e) => handleIntChange('project_instruction_max_bytes', e.target.value, 4_096)}
+              bordered
+              className="w-full"
+              min={4_096}
+              max={1_048_576}
+              step={1}
+            />
+          </FormField>
+          <FormField
+            label="Shim Import Depth"
+            htmlFor="general-instruction-max-import-depth"
+            hint="Maximum nested @file shim imports per instruction source."
+            className="config-field"
+          >
+            <TextInput
+              id="general-instruction-max-import-depth"
+              type="number"
+              value={projectInstructionMaxImportDepth}
+              onChange={(e) => handleIntChange('project_instruction_max_import_depth', e.target.value)}
+              bordered
+              className="w-full"
+              min={1}
+              max={32}
+              step={1}
             />
           </FormField>
         </div>

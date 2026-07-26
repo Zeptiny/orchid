@@ -108,6 +108,12 @@ export interface Config {
   grep_max_results: number;
   directory_tree_depth: number;
   tool_worker_pool_size: number;
+  /** Fallback instruction filenames considered after AGENTS.md variants. */
+  project_instruction_fallback_filenames: string[];
+  /** Per-turn rendered instruction envelope budget, in UTF-8 bytes. */
+  project_instruction_max_bytes: number;
+  /** Maximum nested shim-import expansion depth. */
+  project_instruction_max_import_depth: number;
   theme: string;
   personality: string;
   rag: RAGConfig;

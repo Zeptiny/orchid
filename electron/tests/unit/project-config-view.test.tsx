@@ -27,6 +27,9 @@ const MOCK_CONFIG = {
   read_line_limit: 1000,
   grep_max_results: 100,
   directory_tree_depth: 2,
+  project_instruction_fallback_filenames: ['CLAUDE.md', 'GEMINI.md'],
+  project_instruction_max_bytes: 131072,
+  project_instruction_max_import_depth: 5,
   theme: 'default',
   personality: 'default',
   rag: {
@@ -425,6 +428,28 @@ describe('ProjectConfigView', () => {
       expect(saveProject).toHaveBeenCalledWith({
         projectDir: PROJECT_DIR,
         updates: { ignored_dirs: ['.git', 'node_modules'] },
+      });
+    });
+  });
+
+  it('instruction settings accept project overrides above or below home values', async () => {
+    const user = userEvent.setup();
+    const { saveProject } = await renderLoaded();
+    setInputValue(inputById('project_instruction_fallback_filenames'), 'TEAM.md, GUIDE.md');
+    setInputValue(inputById('project_instruction_max_bytes'), '262144');
+    setInputValue(inputById('project_instruction_max_import_depth'), '8');
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: {
+          project_instruction_fallback_filenames: ['TEAM.md', 'GUIDE.md'],
+          project_instruction_max_bytes: 262144,
+          project_instruction_max_import_depth: 8,
+        },
       });
     });
   });

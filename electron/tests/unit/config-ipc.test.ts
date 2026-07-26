@@ -408,6 +408,29 @@ describe('config:save_project', () => {
     expect(write.options).toEqual({ hardenDirectory: false });
   });
 
+  it('persists validated instruction settings as project overrides', async () => {
+    await callSaveProject({
+      project_instruction_fallback_filenames: ['TEAM.md'],
+      project_instruction_max_bytes: 262_144,
+      project_instruction_max_import_depth: 8,
+    });
+
+    const write = lastProjectWrite();
+    expect(write.data).toMatchObject({
+      project_instruction_fallback_filenames: ['TEAM.md'],
+      project_instruction_max_bytes: 262_144,
+      project_instruction_max_import_depth: 8,
+    });
+  });
+
+  it('rejects invalid project instruction settings without writing', async () => {
+    await expect(callSaveProject({
+      project_instruction_fallback_filenames: ['nested/CLAUDE.md'],
+    })).rejects.toThrow(/Invalid project config/);
+
+    expect(mocks.writtenConfigs).toHaveLength(0);
+  });
+
   it('deletes a key with a null tombstone from an existing config', async () => {
     writeProjectConfig({ theme: 'kept', command_timeout: 99 });
 

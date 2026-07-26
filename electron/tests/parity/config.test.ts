@@ -58,6 +58,21 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
     defaultValue: 2,
     envOverride: 'ORCHID_DIRECTORY_TREE_DEPTH',
   },
+  {
+    field: 'project_instruction_fallback_filenames',
+    type: 'array',
+    defaultValue: ['CLAUDE.md', 'GEMINI.md'],
+  },
+  {
+    field: 'project_instruction_max_bytes',
+    type: 'number',
+    defaultValue: 131_072,
+  },
+  {
+    field: 'project_instruction_max_import_depth',
+    type: 'number',
+    defaultValue: 5,
+  },
   { field: 'theme', type: 'string', defaultValue: 'default', envOverride: 'ORCHID_THEME' },
   {
     field: 'personality',
@@ -287,6 +302,9 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('read_line_limit');
       expect(cfg).toHaveProperty('grep_max_results');
       expect(cfg).toHaveProperty('directory_tree_depth');
+      expect(cfg).toHaveProperty('project_instruction_fallback_filenames');
+      expect(cfg).toHaveProperty('project_instruction_max_bytes');
+      expect(cfg).toHaveProperty('project_instruction_max_import_depth');
       expect(cfg).toHaveProperty('theme');
       expect(cfg).toHaveProperty('personality');
       expect(cfg).toHaveProperty('rag');
@@ -332,11 +350,11 @@ describe('Config Parity', () => {
       expect(cfg.rag).toHaveProperty('embedding_api_retries');
     });
 
-    it('top-level field count matches expected (44 top-level + 10 rag nested fields)', () => {
+    it('top-level field count matches expected (47 top-level + 10 rag nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(44); // 44 top-level fields (rag is nested)
+      expect(topLevelKeys).toHaveLength(47); // 47 top-level fields (rag is nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);
@@ -417,11 +435,14 @@ describe('Config Parity', () => {
       expect(typeof cfg.llm_stream_idle_timeout).toBe('number');
       expect(typeof cfg.llm_stream_retries).toBe('number');
       expect(typeof cfg.background_command_idle_timeout).toBe('number');
+      expect(typeof cfg.project_instruction_max_bytes).toBe('number');
+      expect(typeof cfg.project_instruction_max_import_depth).toBe('number');
     });
 
     it('array fields are arrays', () => {
       const cfg = defaults();
       expect(Array.isArray(cfg.ignored_dirs)).toBe(true);
+      expect(Array.isArray(cfg.project_instruction_fallback_filenames)).toBe(true);
     });
 
     it('record fields are objects', () => {

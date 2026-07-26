@@ -602,6 +602,37 @@ describe('applyEnvOverrides', () => {
 // ===========================================================================
 
 describe('configSchema range rejection', () => {
+  it('defaults and bounds hierarchical instruction settings', () => {
+    const cfg = defaults();
+
+    expect(cfg.project_instruction_fallback_filenames).toEqual(['CLAUDE.md', 'GEMINI.md']);
+    expect(cfg.project_instruction_max_bytes).toBe(131_072);
+    expect(cfg.project_instruction_max_import_depth).toBe(5);
+
+    expect(configSchema.safeParse({ project_instruction_max_bytes: 4_095 }).success).toBe(false);
+    expect(configSchema.safeParse({ project_instruction_max_bytes: 1_048_577 }).success).toBe(false);
+    expect(configSchema.safeParse({ project_instruction_max_import_depth: 0 }).success).toBe(false);
+    expect(configSchema.safeParse({ project_instruction_max_import_depth: 33 }).success).toBe(false);
+  });
+
+  it('accepts only unique instruction fallback basenames that do not shadow AGENTS files', () => {
+    expect(configSchema.safeParse({
+      project_instruction_fallback_filenames: ['CLAUDE.md', 'GEMINI.md'],
+    }).success).toBe(true);
+    expect(configSchema.safeParse({
+      project_instruction_fallback_filenames: ['CLAUDE.md', 'claude.md'],
+    }).success).toBe(false);
+    expect(configSchema.safeParse({
+      project_instruction_fallback_filenames: ['nested/CLAUDE.md'],
+    }).success).toBe(false);
+    expect(configSchema.safeParse({
+      project_instruction_fallback_filenames: ['AGENTS.md'],
+    }).success).toBe(false);
+    expect(configSchema.safeParse({
+      project_instruction_fallback_filenames: ['AGENTS.override.md'],
+    }).success).toBe(false);
+  });
+
   it('rejects non-positive command_timeout', () => {
     expect(configSchema.safeParse({ command_timeout: 0 }).success).toBe(false);
     expect(configSchema.safeParse({ command_timeout: -1 }).success).toBe(false);
@@ -788,6 +819,37 @@ describe('loadConfig', () => {
     expect(cfg.ignored_dirs).toEqual(['.git', 'home-dir']);
     // Default timeout preserved
     expect(cfg.command_timeout).toBe(30);
+  });
+
+  it('allows project instruction limits to raise or lower home values within schema bounds', () => {
+    const homeConfig = path.join(tmpDir, 'home-config.json');
+    writeJson(homeConfig, {
+      project_instruction_fallback_filenames: ['HOME.md'],
+      project_instruction_max_bytes: 262_144,
+      project_instruction_max_import_depth: 8,
+    });
+    writeJson(path.join(tmpDir, '.orchid.json'), {
+      project_instruction_fallback_filenames: ['PROJECT.md'],
+      project_instruction_max_bytes: 65_536,
+      project_instruction_max_import_depth: 3,
+    });
+
+    const cfg = loadConfig({ projectDir: tmpDir, homeConfigPath: homeConfig });
+
+    expect(cfg.project_instruction_fallback_filenames).toEqual(['PROJECT.md']);
+    expect(cfg.project_instruction_max_bytes).toBe(65_536);
+    expect(cfg.project_instruction_max_import_depth).toBe(3);
+
+    writeJson(path.join(tmpDir, '.orchid.json'), {
+      project_instruction_fallback_filenames: ['LARGER.md'],
+      project_instruction_max_bytes: 524_288,
+      project_instruction_max_import_depth: 10,
+    });
+    const largerProjectCfg = loadConfig({ projectDir: tmpDir, homeConfigPath: homeConfig });
+
+    expect(largerProjectCfg.project_instruction_fallback_filenames).toEqual(['LARGER.md']);
+    expect(largerProjectCfg.project_instruction_max_bytes).toBe(524_288);
+    expect(largerProjectCfg.project_instruction_max_import_depth).toBe(10);
   });
 
   it('deep merges mcp_servers across home and project', () => {

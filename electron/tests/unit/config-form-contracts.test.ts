@@ -21,6 +21,9 @@ const KNOWN_CONFIG_KEYS = [
   'read_line_limit',
   'grep_max_results',
   'directory_tree_depth',
+  'project_instruction_fallback_filenames',
+  'project_instruction_max_bytes',
+  'project_instruction_max_import_depth',
   'theme',
   'personality',
   'rag',
@@ -156,6 +159,9 @@ describe('applyConfigDraft', () => {
       read_line_limit: 1,
       grep_max_results: 2,
       directory_tree_depth: 3,
+      project_instruction_fallback_filenames: ['TEAM.md'],
+      project_instruction_max_bytes: 262_144,
+      project_instruction_max_import_depth: 8,
       theme: 'bluey',
       personality: 'terse',
       rag: {
@@ -220,6 +226,9 @@ describe('applyConfigDraft', () => {
     expect(next.read_line_limit).toBe(1);
     expect(next.grep_max_results).toBe(2);
     expect(next.directory_tree_depth).toBe(3);
+    expect(next.project_instruction_fallback_filenames).toEqual(['TEAM.md']);
+    expect(next.project_instruction_max_bytes).toBe(262_144);
+    expect(next.project_instruction_max_import_depth).toBe(8);
     expect(next.theme).toBe('bluey');
     expect(next.personality).toBe('terse');
     expect(next.rag).toEqual(draft.rag);

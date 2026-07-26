@@ -859,6 +859,9 @@ function renderTab(
           backgroundCommandIdleTimeout={config.background_command_idle_timeout}
           commandTimeout={config.command_timeout}
           directoryTreeDepth={config.directory_tree_depth}
+          projectInstructionFallbackFilenames={config.project_instruction_fallback_filenames}
+          projectInstructionMaxBytes={config.project_instruction_max_bytes}
+          projectInstructionMaxImportDepth={config.project_instruction_max_import_depth}
           grepMaxResults={config.grep_max_results}
           ignoredDirs={config.ignored_dirs}
           llmStreamIdleTimeout={config.llm_stream_idle_timeout}

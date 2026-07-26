@@ -11,6 +11,9 @@ const BASE_PROPS: GeneralTabProps = {
   readLineLimit: 1000,
   grepMaxResults: 100,
   directoryTreeDepth: 2,
+  projectInstructionFallbackFilenames: ['CLAUDE.md', 'GEMINI.md'],
+  projectInstructionMaxBytes: 131072,
+  projectInstructionMaxImportDepth: 5,
   astMaxFileSize: 1048576,
   mcpStartupTimeout: 60,
   mcpPerServerTimeout: 10,
@@ -59,5 +62,8 @@ describe('GeneralTab rendering', () => {
     expect(html).toContain('Web Fetch User-Agent');
     expect(html).toContain('Always expand tool groups');
     expect(html).toContain('Theme');
+    expect(html).toContain('Fallback Instruction Filenames');
+    expect(html).toContain('Instruction Payload Budget (bytes)');
+    expect(html).toContain('Shim Import Depth');
   });
 });
