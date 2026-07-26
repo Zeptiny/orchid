@@ -283,6 +283,11 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 
 ### Tool System
 - Tools are Zod-validated definitions + async handlers
+- Path-aware built-ins declare `inputPathIntents` (and, where needed, result intents) on the definition. The central dispatcher uses that one declaration for both permission scope and project-instruction preflight; handlers must not load instruction files themselves.
+- A bound main-agent or subagent stream owns an independent `ProjectInstructionContext`. At stream start it selects workspace-root instructions; path-aware operations discover additional scopes from the canonical workspace root to the effective target. Documents are provider-only, lower-authority context and never enter session history, canonical tool results, or renderer projections.
+- Directory selection is exact and deterministic: `AGENTS.override.md`, then `AGENTS.md`, then the first configured fallback. One selected document applies per directory; losing aliases are recorded as shadowed. Shim-only `@relative-path` documents may target another allowlisted instruction file inside the workspace, with cycle/depth protection.
+- A nested read can run and delivers newly found instructions with its provider output. A first mutation in an unacknowledged scope instead returns a non-mutating deferred result; the retry may proceed only after the next model-step boundary. Multi-target mutations preflight every declared path as one unit.
+- `grep`, `glob`, RAG/index tools, process tools, and MCP tools do not activate nested instructions unless they later gain declared filesystem intents. This feature therefore does not guarantee instruction delivery before shell commands, background processes, or opaque MCP mutations.
 - Each main-agent and subagent turn builds a registry from its frozen project runtime; the process singleton remains only for non-turn compatibility surfaces
 - Built-in tools: filesystem, search, process, AST, RAG, todo, web, skill, MCP, subagent
 - MCP tools are merged from the leased project-owned `MCPManager` at stream time; leases keep superseded managers alive until their turns finish
@@ -343,6 +348,9 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 | `read_line_limit` | 1000 | Max lines for file read |
 | `grep_max_results` | 100 | Max grep matches |
 | `directory_tree_depth` | 2 | read_directory depth |
+| `project_instruction_fallback_filenames` | `CLAUDE.md`, `GEMINI.md` | Exact compatibility filenames considered after AGENTS files |
+| `project_instruction_max_bytes` | 131072 | Total UTF-8 project-instruction payload budget per agent turn |
+| `project_instruction_max_import_depth` | 5 | Maximum shim-only import depth per selected instruction source |
 | `theme` | `default` | UI theme name |
 | `personality` | `default` | Agent personality preset |
 | `rag.chunk_size` | 2000 | RAG chunk size |
@@ -371,6 +379,8 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 - Project config: `.orchid.json` (in project root)
 - Provider connections (non-secret): `~/.orchid/providers.json`
 - Merged: defaults → home → project → env overrides (deep-merged)
+
+The three project-instruction settings are available in both home and project configuration. Project values replace home values under the normal config merge order and may be either higher or lower, subject to the schema's absolute validation bounds. Config and scanned instruction documents are frozen for an active turn; edits apply to the next turn.
 
 ## Coding Conventions
 

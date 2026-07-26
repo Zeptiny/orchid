@@ -1,8 +1,8 @@
 # Hierarchical Agent Instruction Loading
 
-The right integration point is the central tool dispatcher—not the individual `read`, `edit`, or mutation handlers.
+The implementation integrates instruction loading at the stream and central tool-dispatch boundaries—not inside individual `read`, `edit`, or mutation handlers.
 
-Orchid should load root instructions at turn start, discover nested instructions just-in-time from tool target paths, and defer the first mutation into a newly discovered scope until the model has received those instructions.
+Orchid loads root instructions at turn start, discovers nested instructions just-in-time from tool target paths, and defers the first mutation into a newly discovered scope until the model has received those instructions.
 
 ## Current architecture
 
@@ -15,9 +15,9 @@ Relevant findings:
 - Tool projections are persisted verbatim as conversation history by `makeToolResultMessage()` in `electron/src/main/llm/message-factories.ts`. Automatically injected instructions must therefore be transient or they will accumulate across turns.
 - The project runtime is cached indefinitely until explicitly invalidated in `ProjectRuntimeRegistry` in `electron/src/main/project/runtime.ts`. Instruction content should not be stored there unless the invalidation model is expanded.
 
-There is currently no automatic `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md` loading path.
+Orchid now has automatic workspace instruction loading through `ProjectInstructionContext` in `electron/src/main/project/instructions.ts`. A new context is created for every `streamChat()` invocation, which gives main agents and subagents isolated acknowledgement state even when they share a workspace.
 
-## Recommended behavior
+## Delivered behavior
 
 ```text
 Turn starts
@@ -52,9 +52,9 @@ Recommended same-directory precedence:
    - `GEMINI.md`
    - Additional user-configured names
 
-Only one alias-family document should be selected per directory. For example, if both `AGENTS.md` and `CLAUDE.md` exist, load only `AGENTS.md` and report that `CLAUDE.md` was shadowed.
+Only one alias-family document is selected per directory. For example, if both `AGENTS.md` and `CLAUDE.md` exist, Orchid loads only `AGENTS.md` and records that `CLAUDE.md` was shadowed.
 
-Treat `.github/copilot-instructions.md` separately as an optional root-wide supplementary source. GitHub’s `NAME.instructions.md` files and Claude’s `.claude/rules/*.md` have path-glob semantics and should be a later feature, not treated as filename aliases.
+`.github/copilot-instructions.md`, GitHub `NAME.instructions.md` files, and Claude `.claude/rules/*.md` path-glob rules are deliberately not aliases in this release.
 
 This aligns with current conventions:
 
@@ -87,13 +87,13 @@ Accessing `electron/src/main/index.ts` loads, in order:
 
 Broader instructions remain active; more specific instructions appear later and take precedence when they conflict.
 
-For multiple targets such as `apply_patch`, compute the union of all ancestor chains. Preserve scope metadata so rules from `renderer/AGENTS.md` are not presented as applying to `main/` files.
+For multiple targets such as `apply_patch`, Orchid computes the union of all ancestor chains. Scope metadata is retained so rules from `renderer/AGENTS.md` are not presented as applying to `main/` files.
 
 Use canonical/effective paths—the same symlink-aware model already used by `resolveToolScope()` in `electron/src/main/permissions/resolver.ts`. Never automatically load instructions through a symlink that resolves outside the workspace.
 
 ## Preventing duplication
 
-A turn-scoped resolver should track:
+A turn-scoped resolver tracks:
 
 - Canonical/real path of every loaded instruction file.
 - Exact normalized content hash.
@@ -112,7 +112,7 @@ Deduplicate in this order:
 
 Do not perform fuzzy or semantic deduplication; similar-looking parent and child instructions can have intentionally different scope.
 
-The existing repository recognizes shim files such as `CLAUDE.md` containing only `@AGENTS.md`. At minimum, support these shim-only imports. Full `@path` imports can follow with:
+Shim files such as `CLAUDE.md` containing only `@AGENTS.md` are supported. The target must be an allowlisted instruction filename and stays in the selecting shim's directory scope. Full inline `@path` imports remain deferred. The implemented shim handling includes:
 
 - Relative paths resolved from the containing instruction file.
 - Workspace-containment enforcement.
@@ -137,18 +137,13 @@ The existing repository recognizes shim files such as `CLAUDE.md` containing onl
 
 Broad searches should not load instructions from every matching directory. That would flood the context simply because an exploratory grep crossed package boundaries.
 
-### `rename_symbol` needs correction
+### Symbol rename preview/apply
 
-Its schema says `file_path` is optional, but it is actually required by Zod, and the handler ignores it entirely:
-
-- Schema: `electron/src/main/tools/ast/rename-symbol.ts`
-- Handler operates across the entire AST index in the same file.
-
-The tool should be split into plan/apply stages so the dispatcher can inspect all affected paths before any writes occur. This would also make permission scope and instruction scope accurate.
+`plan_symbol_rename` now requires a definition-file anchor and performs the read-only, AST-indexed preview. It returns a self-contained manifest of canonical affected paths, source hashes, replacement counts, and a digest. `rename_symbol` accepts only that manifest, exposes every manifest path as a mutation intent, recomputes it before writing, and rejects stale or tampered manifests. This gives permission and instruction preflight the actual write set before mutation.
 
 ## Concrete wiring
 
-Introduce:
+The implementation contains:
 
 - `electron/src/main/project/instructions.ts`
   - Filename selection
@@ -156,23 +151,27 @@ Introduce:
   - Import/shim expansion
   - Canonical-path and hash deduplication
   - Turn-scoped acknowledgement state
-- A `pathIntents` resolver on `ToolDefinition`
+- `inputPathIntents` and optional `resultPathIntents` resolvers on `ToolDefinition`
   - Used by both permissions and instruction discovery
   - Removes the duplicated name-based parsing currently in `electron/src/main/permissions/resolver.ts`
 - `instructionContext` on `ToolDispatchOptions`
   - Shared by all calls in one model stream
   - Consulted before the permission gate and before worker dispatch
-- Root instruction preparation in the main and subagent stream setup:
-  - Main: `createProviderStreamFn()` in `electron/src/main/ipc/chat.ts`
-  - Subagents: `createSubagentStreamRunner()` in `electron/src/main/agents/subagent-runner.ts`
+- Root instruction preparation in the shared `streamChat()` setup. Both the main chat path and `createSubagentStreamRunner()` use that stream seam.
 
 Each subagent needs an independent loaded set because it has an isolated model context. Sharing the main agent’s “already loaded” state would prevent the subagent from seeing those rules.
 
-Root project instructions should be an ephemeral user/project message below Orchid’s application instructions—not concatenated into the trusted agent system prompt. Nested updates can be inserted into the current tool result, but must be stripped before UI persistence so they do not reappear in every future turn.
+Root project instructions are prefixed to a provider-only user/task message below Orchid’s application instructions. Nested updates are appended only by `toModelOutput()` for the relevant tool call; raw execution output, canonical tool results, UI projection, and persisted history remain unchanged.
+
+## Configuration and limits
+
+`project_instruction_fallback_filenames` defaults to `CLAUDE.md` and `GEMINI.md`; it accepts only unique filename basenames and cannot replace `AGENTS.md` or `AGENTS.override.md`. The total rendered instruction payload has a default limit of 131,072 UTF-8 bytes per agent turn via `project_instruction_max_bytes`. `project_instruction_max_import_depth` independently defaults to five.
+
+All three values are available in home and project config. Project values replace home values under normal merge precedence and may raise or lower them within absolute schema bounds. A source that exceeds the remaining budget is rejected whole and produces a diagnostic rather than being truncated. Configuration and directory scans are frozen per turn, so instruction changes made by a tool become visible only to the next turn.
 
 ## Important limitation
 
-This can guarantee correct behavior for Orchid’s path-aware built-in tools. It cannot guarantee that nested instructions are seen before:
+This guarantees preflight behavior for Orchid’s path-aware built-in tools with declared intents. It cannot guarantee that nested instructions are seen before:
 
 - `execute_command` runs `sed`, `git apply`, scripts, or generators.
 - An MCP tool mutates local files.
@@ -180,9 +179,9 @@ This can guarantee correct behavior for Orchid’s path-aware built-in tools. It
 
 A hard guarantee would require execution tools to declare intended filesystem paths, or a separate filesystem/sandbox hook that can stop unknown first-touch mutations. Shell-command parsing alone would not be reliable.
 
-## Recommended test coverage
+## Delivered test coverage
 
-Add tests for:
+The resolver, dispatch, rename, parity, and integration suites cover:
 
 - Root and nested instructions loading in broad-to-specific order.
 - `AGENTS.override.md` precedence.
