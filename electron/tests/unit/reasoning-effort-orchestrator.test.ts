@@ -8,6 +8,9 @@
  * - main agent cascade (session override → connection default → omit)
  * - subagent cascade (agent field → tier config → connection default → omit)
  */
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type {
@@ -382,9 +385,10 @@ describe('subagent effort wiring', () => {
 
   function subagentRuntime(
     tierReasoningEffort: Record<string, string | number | null>,
+    projectDir: string,
   ): ProjectRuntime {
     return {
-      projectDir: '/tmp/project',
+      projectDir,
       config: { ...defaults(), tier_reasoning_effort: tierReasoningEffort },
       agents: new Map(),
       skills: new Map(),
@@ -434,17 +438,22 @@ describe('subagent effort wiring', () => {
     tierEffort: Record<string, string | number | null>,
     agentOverride: Partial<Agent> = {},
   ): Promise<unknown> {
-    await drain(createSubagentStreamRunner()({
-      task: 'Inspect the project',
-      agent: { ...agent, ...agentOverride },
-      selection,
-      abortSignal: new AbortController().signal,
-      agentScopeId: 'scope-reasoning',
-      sessionId: 'session-reasoning',
-      cwd: '/tmp/project',
-      projectRuntime: subagentRuntime(tierEffort),
-    }));
-    return lastStreamTextProviderOptions();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-reasoning-subagent-'));
+    try {
+      await drain(createSubagentStreamRunner()({
+        task: 'Inspect the project',
+        agent: { ...agent, ...agentOverride },
+        selection,
+        abortSignal: new AbortController().signal,
+        agentScopeId: 'scope-reasoning',
+        sessionId: 'session-reasoning',
+        cwd: workspace,
+        projectRuntime: subagentRuntime(tierEffort, workspace),
+      }));
+      return lastStreamTextProviderOptions();
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   }
 
   beforeEach(() => {

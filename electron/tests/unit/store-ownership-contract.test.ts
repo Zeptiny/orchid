@@ -10,7 +10,7 @@ const managedStoreFiles = [
   'ast/indexer.ts',
   'tools/rag/search.ts',
   'tools/ast/find-symbol-references.ts',
-  'tools/ast/rename-symbol.ts',
+  'tools/ast/plan-symbol-rename.ts',
 ];
 
 describe('RAG/AST one-shot store ownership', () => {
