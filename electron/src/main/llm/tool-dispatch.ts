@@ -40,6 +40,8 @@ import {
   type ToolHandlerOutcome,
 } from '../../shared/types/tool-result';
 import { materializeCanonicalResultRetrieval } from '../tools/result-retrieval';
+import { buildAgentsMdInjection } from '../agents-md/inject';
+import type { AgentsMdContextStore } from '../session/agents-md-context';
 import { withTimeout as sharedWithTimeout } from '../utils/async';
 import { checkPermission } from '../permissions/gate';
 import { recordToolCall } from '../permissions/history';
@@ -356,6 +358,12 @@ export async function executeToolCall(
     execution = finalizeHandlerResult(result, request, registry);
     execution = ensureProjectionRecovery(execution, request, options);
     execution = maybeOffloadAgentProjection(execution, request, options);
+    execution = maybeInjectAgentsMd(
+      execution,
+      request,
+      options,
+      handlerArgs as Record<string, unknown>,
+    );
     const executionSchema = registry.getToolExecutionResultSchema(name);
     if (!executionSchema) {
       throw new TypeError(`No execution schema registered for tool '${name}'`);
@@ -469,19 +477,24 @@ function ensureProjectionRecovery(
   }
 }
 
-function appendXmlRetrieval(
+/**
+ * Insert an XML fragment immediately before the final `</tool_result>` closing
+ * tag of a well-formed envelope. When the content is not a well-formed envelope
+ * (missing opening or closing tag), wrap it in a fallback envelope instead.
+ * Shared by retrieval recovery and AGENTS.md read-path injection.
+ */
+function insertXmlBeforeClosingTag(
   content: string,
-  retrieval: ToolResultRetrieval,
+  xml: string,
   toolName: string,
 ): string {
-  const retrievalXml = renderRetrieval(retrieval);
   const closingTag = '</tool_result>';
   const closingIndex = content.lastIndexOf(closingTag);
   const startsWithEnvelope = content.startsWith('<tool_result');
   const hasClosingTag = closingIndex >= 0;
   if (startsWithEnvelope && hasClosingTag) {
     return content.slice(0, closingIndex).trimEnd() + '\n' +
-      retrievalXml + '\n' + content.slice(closingIndex);
+      xml + '\n' + content.slice(closingIndex);
   }
   console.warn('[tool-dispatch] Projection content is not a well-formed tool_result envelope; wrapping in fallback envelope', {
     toolName,
@@ -490,7 +503,15 @@ function appendXmlRetrieval(
   });
   return '<tool_result name="' + escapeXmlAttribute(toolName) + '" status="partial">\n' +
     '<payload>' + escapeXmlText(content) + '</payload>\n' +
-    retrievalXml + '\n</tool_result>';
+    xml + '\n</tool_result>';
+}
+
+function appendXmlRetrieval(
+  content: string,
+  retrieval: ToolResultRetrieval,
+  toolName: string,
+): string {
+  return insertXmlBeforeClosingTag(content, renderRetrieval(retrieval), toolName);
 }
 
 function maybeOffloadAgentProjection(
@@ -522,6 +543,109 @@ function maybeOffloadAgentProjection(
       },
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// AGENTS.md read-path injection
+// ---------------------------------------------------------------------------
+
+/**
+ * Test-only store-resolver override. Under vitest the native `createRequire`
+ * used below cannot load `.ts` sources, so tests inject a real store here;
+ * production leaves this null and uses the lazy require. Mirrors the existing
+ * `_setToolOutputCacheRootForTests` convention in this file.
+ */
+type AgentsMdStoreResolver = (
+  sessionId: string,
+  agentScopeId: string | undefined,
+) => AgentsMdContextStore | null;
+
+let agentsMdStoreResolverOverride: AgentsMdStoreResolver | null = null;
+
+/** @internal Test-only store-resolver override (pass null to reset). */
+export function _setAgentsMdStoreResolverForTests(
+  resolver: AgentsMdStoreResolver | null,
+): void {
+  agentsMdStoreResolverOverride = resolver;
+}
+
+/**
+ * Lazily resolve the session's AGENTS.md context store.
+ *
+ * Deviation from the plan's "thread the tracker through ToolExecutionContext":
+ * resolving here (instead of editing orchestrator.ts's call sites, chat.ts, and
+ * tools/types.ts) keeps U4 to two source files. The lazy `createRequire` mirrors
+ * build-prompt-context.ts and avoids a circular init with session/tools. Returns
+ * null when there is no session or resolution fails (no-session degradation, R17).
+ */
+function resolveAgentsMdStore(
+  sessionId: string | undefined,
+  agentScopeId: string | undefined,
+): AgentsMdContextStore | null {
+  if (!sessionId) return null;
+  if (agentsMdStoreResolverOverride) {
+    return agentsMdStoreResolverOverride(sessionId, agentScopeId);
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createRequire } = require('node:module') as typeof import('node:module');
+    const req = createRequire(__filename);
+    const session = req('../ipc/session') as typeof import('../ipc/session');
+    return session.getSessionManager().getAgentsMdContextStore(sessionId, agentScopeId);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Inject any not-yet-seen governing AGENTS.md content into a read tool's agent
+ * projection. Runs after offloading so the small, important instruction block
+ * stays inline even when the main payload is offloaded. Entries are marked seen
+ * only after the block is appended so a failed append cannot poison the tracker.
+ * Any failure degrades to no injection and never breaks the tool result.
+ */
+function maybeInjectAgentsMd(
+  execution: ToolExecutionResult,
+  request: ToolDispatchRequest,
+  options: ToolDispatchOptions,
+  args: Record<string, unknown>,
+): ToolExecutionResult {
+  if (!options.sessionId || !options.cwd) return execution;
+  try {
+    const store = resolveAgentsMdStore(options.sessionId, options.agentScopeId);
+    if (store === null) return execution;
+
+    const config = options.projectRuntime?.config ?? FALLBACK_CONFIG;
+    const injection = buildAgentsMdInjection(
+      request.name,
+      args,
+      options.cwd,
+      config,
+      store,
+    );
+    if (injection === null) return execution;
+
+    const content = insertXmlBeforeClosingTag(
+      execution.agentProjection.content,
+      injection.xml,
+      request.name,
+    );
+    injection.injected.forEach((entry) => store.markSeen(entry));
+    return {
+      canonical: execution.canonical,
+      agentProjection: {
+        ...execution.agentProjection,
+        content,
+      },
+    };
+  } catch (error) {
+    console.warn('[tool-dispatch] AGENTS.md injection failed', {
+      toolCallId: request.id,
+      toolName: request.name,
+      exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
+    });
+    return execution;
+  }
 }
 
 // ---------------------------------------------------------------------------
