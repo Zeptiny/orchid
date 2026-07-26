@@ -27,7 +27,7 @@ import {
   genericAgentProjector,
   renderRetrieval,
 } from '../tools/result';
-import type { ToolExecutionContext } from '../tools/types';
+import type { ToolDefinition, ToolExecutionContext } from '../tools/types';
 import { toWorkerContext } from '../tools/types';
 import { getToolWorkerPool } from './tool-pool';
 import type { ProjectRuntime } from '../project/runtime';
@@ -44,6 +44,11 @@ import { withTimeout as sharedWithTimeout } from '../utils/async';
 import { checkPermission } from '../permissions/gate';
 import { resolveToolScope } from '../permissions/resolver';
 import { recordToolCall } from '../permissions/history';
+import type {
+  ProjectInstructionContext,
+  ProjectInstructionDiscovery,
+} from '../project/instructions';
+import { canonicalizeEffectivePath } from '../project/path';
 import { genericTerminalExecution } from './terminal-result';
 import { defaults } from '../config/schema';
 import type { Config } from '../../shared/types/ipc-boundary';
@@ -112,6 +117,8 @@ export interface ToolDispatchOptions {
   abortSignal?: AbortSignal;
   /** The user message that triggered the current turn (for decide-for-me evaluator). */
   triggeringMessage?: string;
+  /** Per-stream hierarchical project instruction state. Never sent to workers. */
+  instructionContext?: ProjectInstructionContext;
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +233,48 @@ export async function executeToolCall(
       'invalid_path_intent',
     );
   }
+
+  const instructionTargets = resolvedScope?.intents
+    .filter((intent) => intent.activateInstructions && intent.effectivePath !== null)
+    .map((intent) => intent.effectivePath!) ?? [];
+  const mutationInstructionTargets = resolvedScope?.intents
+    .filter((intent) =>
+      intent.access === 'mutation' &&
+      intent.activateInstructions &&
+      intent.effectivePath !== null,
+    )
+    .map((intent) => intent.effectivePath!) ?? [];
+  const hasMutationPathIntent = resolvedScope?.intents.some(
+    (intent) => intent.access === 'mutation',
+  ) ?? false;
+
+  if (options.instructionContext && instructionTargets.length > 0) {
+    const discovery = mutationInstructionTargets.length > 0
+      ? await options.instructionContext.preflightMutation(mutationInstructionTargets)
+      : { status: 'ready' as const, discovery: await options.instructionContext.discover(instructionTargets) };
+    options.instructionContext.registerToolDelivery(toolCallId, discovery.discovery);
+    logInstructionAudit(toolCallId, name, discovery.discovery);
+
+    if (discovery.status === 'blocked') {
+      return genericTerminalExecution(
+        toolCallId,
+        name,
+        'error',
+        `Tool '${name}' did not run because project instruction diagnostics block this target scope.`,
+        'project_instructions_blocked',
+      );
+    }
+    if (discovery.status === 'pending') {
+      return genericTerminalExecution(
+        toolCallId,
+        name,
+        'error',
+        `Tool '${name}' did not run because newly discovered project instructions must be acknowledged before mutation. Retry this call after reviewing them.`,
+        'project_instructions_pending',
+      );
+    }
+  }
+
   let permissionDenial: ToolExecutionResult | null;
   try {
     permissionDenial = await checkPermission(
@@ -262,6 +311,30 @@ export async function executeToolCall(
     );
   }
   if (permissionDenial) return permissionDenial;
+
+  if (hasMutationPathIntent) {
+    let currentScope: ResolvedToolScope | undefined;
+    try {
+      currentScope = resolveToolScope(registered.definition, validation.data, options.cwd);
+    } catch {
+      return genericTerminalExecution(
+        toolCallId,
+        name,
+        'error',
+        `Tool '${name}' target scope changed while permission was pending. Retry the call.`,
+        'stale_instruction_scope',
+      );
+    }
+    if (!sameResolvedScope(resolvedScope, currentScope)) {
+      return genericTerminalExecution(
+        toolCallId,
+        name,
+        'error',
+        `Tool '${name}' target scope changed while permission was pending. Retry the call.`,
+        'stale_instruction_scope',
+      );
+    }
+  }
   recordToolCall(options.sessionId, options.agentScopeId, name, args);
 
   // Timeout AbortController — aborted by runWithToolTimeout so foreground
@@ -370,11 +443,20 @@ export async function executeToolCall(
   try {
     execution = finalizeHandlerResult(result, request, registry);
     execution = ensureProjectionRecovery(execution, request, options);
-    execution = maybeOffloadAgentProjection(execution, request, options);
     const executionSchema = registry.getToolExecutionResultSchema(name);
     if (!executionSchema) {
       throw new TypeError(`No execution schema registered for tool '${name}'`);
     }
+    execution = executionSchema.parse(execution) as ToolExecutionResult;
+    await registerResultInstructionDelivery(
+      options.instructionContext,
+      registered.definition,
+      execution,
+      options.cwd,
+      toolCallId,
+      name,
+    );
+    execution = maybeOffloadAgentProjection(execution, request, options);
     return executionSchema.parse(execution) as ToolExecutionResult;
   } catch (error) {
     console.warn('[tool-dispatch] Tool result finalization failed', {
@@ -391,6 +473,64 @@ export async function executeToolCall(
       `Tool '${name}' returned an invalid result.`,
       'invalid_tool_result',
     );
+  }
+}
+
+function sameResolvedScope(
+  before: ResolvedToolScope | undefined,
+  after: ResolvedToolScope | undefined,
+): boolean {
+  if (before?.scope !== after?.scope) return false;
+  const beforeIntents = before?.intents ?? [];
+  const afterIntents = after?.intents ?? [];
+  return beforeIntents.length === afterIntents.length && beforeIntents.every((intent, index) => {
+    const current = afterIntents[index];
+    return current !== undefined &&
+      intent.effectivePath === current.effectivePath &&
+      intent.resolvedPath === current.resolvedPath &&
+      intent.target === current.target &&
+      intent.access === current.access &&
+      intent.activateInstructions === current.activateInstructions;
+  });
+}
+
+async function registerResultInstructionDelivery(
+  instructionContext: ProjectInstructionContext | undefined,
+  definition: ToolDefinition,
+  execution: ToolExecutionResult,
+  cwd: string,
+  toolCallId: string,
+  toolName: string,
+): Promise<void> {
+  if (!instructionContext || definition.riskClass !== 'read-only' || !definition.resultPathIntents) {
+    return;
+  }
+  const resultIntents = definition.resultPathIntents(execution.canonical)
+    .filter((intent) => intent.activateInstructions)
+    .map((intent) => canonicalizeEffectivePath(path.resolve(cwd, intent.userPath)))
+    .filter((candidate): candidate is string => candidate !== null);
+  if (resultIntents.length === 0) return;
+  const discovery = await instructionContext.discover(resultIntents);
+  instructionContext.registerToolDelivery(toolCallId, discovery);
+  logInstructionAudit(toolCallId, toolName, discovery);
+}
+
+function logInstructionAudit(
+  toolCallId: string,
+  toolName: string,
+  discovery: ProjectInstructionDiscovery,
+): void {
+  for (const event of discovery.auditEvents) {
+    console.log('[project-instructions] automatic workspace instruction read', {
+      toolCallId,
+      toolName,
+      eventType: event.type,
+      path: event.path,
+      terminalPath: event.terminalPath,
+      scope: event.scope,
+      selection: event.selection,
+      diagnosticCode: event.diagnosticCode,
+    });
   }
 }
 

@@ -100,7 +100,7 @@ interface BodyRecord {
 }
 
 interface DeliveryRecord {
-  readonly discovery: ProjectInstructionDiscovery;
+  discovery: ProjectInstructionDiscovery;
   emitted: boolean;
   projectedStep?: number;
   output?: ProjectInstructionDelivery;
@@ -251,7 +251,45 @@ export class ProjectInstructionContext {
 
   /** Attach a discovery to one tool call. Re-registering the call is idempotent. */
   registerToolDelivery(toolCallId: string, discovery: ProjectInstructionDiscovery): void {
-    if (!this.deliveries.has(toolCallId)) this.deliveries.set(toolCallId, { discovery, emitted: false });
+    const existing = this.deliveries.get(toolCallId);
+    if (!existing) {
+      this.deliveries.set(toolCallId, { discovery, emitted: false });
+      return;
+    }
+    if (existing.output) return;
+
+    const sourceKey = (source: ProjectInstructionSource): string =>
+      source.path + '\u0000' + source.scope;
+    const diagnosticKey = (item: ProjectInstructionDiagnostic): string =>
+      item.code + '\u0000' + item.scope + '\u0000' + (item.path ?? '') + '\u0000' + item.detail;
+    const sources = [...existing.discovery.sources];
+    const sourceKeys = new Set(sources.map(sourceKey));
+    for (const source of discovery.sources) {
+      if (!sourceKeys.has(sourceKey(source))) {
+        sources.push(source);
+        sourceKeys.add(sourceKey(source));
+      }
+    }
+    const diagnostics = [...existing.discovery.diagnostics];
+    const diagnosticKeys = new Set(diagnostics.map(diagnosticKey));
+    for (const item of discovery.diagnostics) {
+      if (!diagnosticKeys.has(diagnosticKey(item))) {
+        diagnostics.push(item);
+        diagnosticKeys.add(diagnosticKey(item));
+      }
+    }
+    existing.discovery = {
+      id: existing.discovery.id,
+      sources,
+      diagnostics,
+      auditEvents: [...existing.discovery.auditEvents, ...discovery.auditEvents],
+      envelope: renderEnvelope(sources, diagnostics),
+    };
+  }
+
+  /** Whether an execution has a provider-only instruction delivery to claim. */
+  hasToolDelivery(toolCallId: string): boolean {
+    return this.deliveries.has(toolCallId);
   }
 
   /**

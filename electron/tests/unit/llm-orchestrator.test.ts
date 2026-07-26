@@ -17,6 +17,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { ModelMessage } from 'ai';
 import * as os from 'node:os';
 import type { Message } from '../../src/shared/types/message';
 import { MessageType, MessageRole } from '../../src/shared/types/message';
@@ -35,6 +36,7 @@ import {
 } from '../../src/main/tools/result-retrieval';
 import {
   buildToolMap,
+  prefixProjectInstructionContext,
   streamChat,
   drainPendingToolEvents,
   combineAbortSignals,
@@ -43,6 +45,7 @@ import {
 } from '../../src/main/llm/orchestrator';
 import { ToolRegistry } from '../../src/main/tools/registry';
 import type { MCPManager } from '../../src/main/mcp/manager';
+import type { ProjectRuntime } from '../../src/main/project/runtime';
 import { defaults } from '../../src/main/config/schema';
 import { z } from 'zod';
 import {
@@ -1438,6 +1441,8 @@ function makeStreamChatParams(
     registry,
     mcpManager: overrides.mcpManager ?? null,
     sessionId: overrides.sessionId,
+    projectRuntime: overrides.projectRuntime,
+    agentScopeId: overrides.agentScopeId,
     abortSignal: overrides.abortSignal,
     modelInstance: overrides.modelInstance ?? ({
       specificationVersion: 'v4',
@@ -1465,6 +1470,60 @@ function setupStreamText(options: MockStreamTextOptions = {}) {
   });
 }
 
+describe('prefixProjectInstructionContext', () => {
+  it('copies string and array user messages while preserving their source content', () => {
+    const envelope = '<project_instructions>rules</project_instructions>';
+    const stringMessages: ModelMessage[] = [{ role: 'user', content: 'string task' }];
+    const arrayMessages: ModelMessage[] = [{
+      role: 'user',
+      content: [{ type: 'text', text: 'array task' }],
+    }];
+
+    const stringResult = prefixProjectInstructionContext(stringMessages, envelope);
+    const arrayResult = prefixProjectInstructionContext(arrayMessages, envelope);
+
+    expect(stringResult.injected).toBe(true);
+    expect(stringResult.messages[0]).toMatchObject({
+      role: 'user',
+      content: expect.stringContaining('string task'),
+    });
+    expect(arrayResult.injected).toBe(true);
+    expect(arrayResult.messages[0]).toMatchObject({
+      role: 'user',
+      content: [
+        { type: 'text', text: expect.stringContaining('project_instructions') },
+        { type: 'text', text: 'array task' },
+      ],
+    });
+    expect(stringMessages).toEqual([{ role: 'user', content: 'string task' }]);
+    expect(arrayMessages).toEqual([{
+      role: 'user',
+      content: [{ type: 'text', text: 'array task' }],
+    }]);
+
+    const mixed = prefixProjectInstructionContext([
+      { role: 'user', content: 'older task' },
+      { role: 'user', content: [{ type: 'text', text: 'latest array task' }] },
+    ], envelope);
+    expect(mixed.messages[0]).toEqual({ role: 'user', content: 'older task' });
+    expect(mixed.messages[1]).toMatchObject({
+      role: 'user',
+      content: [
+        { type: 'text', text: expect.stringContaining('project_instructions') },
+        { type: 'text', text: 'latest array task' },
+      ],
+    });
+  });
+
+  it('reports when no user/task provider message can receive root instructions', () => {
+    const result = prefixProjectInstructionContext([
+      { role: 'assistant', content: 'already responded' },
+    ], '<project_instructions>rules</project_instructions>');
+
+    expect(result.injected).toBe(false);
+  });
+});
+
 describe('streamChat', () => {
   beforeEach(() => {
     aiSdkMocks.streamText.mockReset();
@@ -1490,6 +1549,87 @@ describe('streamChat', () => {
     ]);
     expect(events.filter((event) => event.type === 'usage')).toEqual([]);
     expect(events[events.length - 1]).toEqual({ type: 'finish', finishReason: 'stop' });
+  });
+
+  it('adds root instructions only to each stream provider input and leaves source messages untouched', async () => {
+    const firstWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-root-instructions-'));
+    const secondWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-root-instructions-'));
+    fs.writeFileSync(path.join(firstWorkspace, 'AGENTS.md'), 'first stream rule');
+    fs.writeFileSync(path.join(secondWorkspace, 'AGENTS.md'), 'second stream rule');
+    const firstMessages = [makeUserMessage('first task')];
+    const secondMessages = [makeUserMessage('second task')];
+    const runtime = (projectDir: string): ProjectRuntime => ({
+      projectDir,
+      config: defaults(),
+      agents: new Map(),
+      skills: new Map(),
+      personalities: new Map(),
+    });
+    const audit = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      setupStreamText();
+      await collectStreamEvents(streamChat(makeStreamChatParams({
+        messages: firstMessages,
+        context: { cwd: firstWorkspace },
+        projectRuntime: runtime(firstWorkspace),
+      })));
+      await collectStreamEvents(streamChat(makeStreamChatParams({
+        messages: secondMessages,
+        context: { cwd: secondWorkspace },
+        projectRuntime: runtime(secondWorkspace),
+      })));
+
+      const firstRequest = aiSdkMocks.streamText.mock.calls[0][0] as {
+        system: string;
+        messages: Array<{ role: string; content: string }>;
+      };
+      const secondRequest = aiSdkMocks.streamText.mock.calls[1][0] as typeof firstRequest;
+      expect(firstRequest.messages.at(-1)?.content).toContain('first stream rule');
+      expect(firstRequest.messages.at(-1)?.content).not.toContain('second stream rule');
+      expect(secondRequest.messages.at(-1)?.content).toContain('second stream rule');
+      expect(secondRequest.messages.at(-1)?.content).not.toContain('first stream rule');
+      expect(firstRequest.system).not.toContain('first stream rule');
+      expect(firstMessages[0].content).toBe('first task');
+      expect(secondMessages[0].content).toBe('second task');
+      expect(audit).toHaveBeenCalledWith(
+        '[project-instructions] automatic workspace instruction read',
+        expect.objectContaining({ toolCallId: 'root', selection: 'AGENTS.md' }),
+      );
+      expect(JSON.stringify(audit.mock.calls)).not.toContain('first stream rule');
+      expect(JSON.stringify(audit.mock.calls)).not.toContain('<project_instructions>');
+    } finally {
+      audit.mockRestore();
+      fs.rmSync(firstWorkspace, { recursive: true, force: true });
+      fs.rmSync(secondWorkspace, { recursive: true, force: true });
+    }
+  });
+
+  it('returns an explicit error instead of acknowledging undeliverable root instructions', async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-root-instructions-'));
+    fs.writeFileSync(path.join(workspace, 'AGENTS.md'), 'undeliverable root rule');
+    try {
+      setupStreamText();
+      const events = await collectStreamEvents(streamChat(makeStreamChatParams({
+        messages: [makeMessage({ role: MessageRole.ASSISTANT, content: 'no task message' })],
+        context: { cwd: workspace },
+        projectRuntime: {
+          projectDir: workspace,
+          config: defaults(),
+          agents: new Map(),
+          skills: new Map(),
+          personalities: new Map(),
+        },
+      })));
+
+      expect(events).toEqual([{
+        type: 'error',
+        title: 'Project instruction delivery unavailable',
+        detail: expect.stringContaining('project_instruction_root_delivery_unavailable'),
+      }]);
+      expect(aiSdkMocks.streamText).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it('maps tool-input-start/delta/available and tool-output-available', async () => {
