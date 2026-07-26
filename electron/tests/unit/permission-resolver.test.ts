@@ -8,6 +8,11 @@ import {
   resolvePermission,
   resolveToolScope,
 } from '../../src/main/permissions/resolver';
+import { readDefinition } from '../../src/main/tools/filesystem/read';
+import { writeDefinition } from '../../src/main/tools/filesystem/write';
+import { applyPatchDefinition } from '../../src/main/tools/filesystem/apply-patch';
+import { grepToolDefinition } from '../../src/main/tools/search/grep';
+import { findSymbolReferencesDefinition } from '../../src/main/tools/ast/find-symbol-references';
 
 describe('permission resolver', () => {
   let root: string;
@@ -31,7 +36,7 @@ describe('permission resolver', () => {
     fs.writeFileSync(outsideFile, 'secret');
     fs.symlinkSync(outsideFile, path.join(workspace, 'file-link'));
 
-    expect(resolveToolScope('read', { file_path: 'file-link' }, workspace)).toBe(
+    expect(resolveToolScope(readDefinition, { file_path: 'file-link' }, workspace)?.scope).toBe(
       'outside',
     );
   });
@@ -41,11 +46,11 @@ describe('permission resolver', () => {
 
     expect(
       resolveToolScope(
-        'write',
+        writeDefinition,
         { file_path: 'directory-link/new/nested.txt' },
         workspace,
       ),
-    ).toBe('outside');
+    ).toMatchObject({ scope: 'outside' });
   });
 
   it('keeps existing and new effective targets within the canonical workspace inside', () => {
@@ -56,11 +61,11 @@ describe('permission resolver', () => {
     fs.symlinkSync(actualWorkspace, workspaceLink);
 
     expect(
-      resolveToolScope('read', { file_path: 'existing.txt' }, workspaceLink),
-    ).toBe('inside');
+      resolveToolScope(readDefinition, { file_path: 'existing.txt' }, workspaceLink),
+    ).toMatchObject({ scope: 'inside' });
     expect(
-      resolveToolScope('write', { file_path: 'new/nested.txt' }, workspaceLink),
-    ).toBe('inside');
+      resolveToolScope(writeDefinition, { file_path: 'new/nested.txt' }, workspaceLink),
+    ).toMatchObject({ scope: 'inside' });
   });
 
   it('fails closed when an existing target cannot be canonicalized', () => {
@@ -70,37 +75,85 @@ describe('permission resolver', () => {
     );
 
     expect(
-      resolveToolScope('read', { file_path: 'dangling-link' }, workspace),
-    ).toBe('outside');
+      resolveToolScope(readDefinition, { file_path: 'dangling-link' }, workspace),
+    ).toMatchObject({ scope: 'outside' });
   });
 
   it('fails closed when the workspace itself cannot be canonicalized', () => {
     const missingWorkspace = path.join(root, 'missing-workspace');
 
     expect(
-      resolveToolScope('read', { file_path: 'missing.txt' }, missingWorkspace),
-    ).toBe('outside');
+      resolveToolScope(readDefinition, { file_path: 'missing.txt' }, missingWorkspace),
+    ).toMatchObject({ scope: 'outside' });
   });
 
   it('classifies an apply_patch with a Move to destination outside the workspace as outside', () => {
     const patch = [
+      '*** Begin Patch',
       '*** Update File: src/a.ts',
       '*** Move to: ../outside.ts',
       '@@ -1 +1 @@',
       '-old',
       '+new',
+      '*** End Patch',
     ].join('\n');
 
-    expect(resolveToolScope('apply_patch', { patch }, workspace)).toBe('outside');
+    expect(resolveToolScope(applyPatchDefinition, { patch }, workspace)).toMatchObject({ scope: 'outside' });
   });
 
   it('classifies grep by its directory_path scope', () => {
     expect(
-      resolveToolScope('grep', { pattern: 'x', directory_path: '.' }, workspace),
-    ).toBe('inside');
+      resolveToolScope(grepToolDefinition, { pattern: 'x', directory_path: '.' }, workspace),
+    ).toMatchObject({ scope: 'inside' });
     expect(
-      resolveToolScope('grep', { pattern: 'x', directory_path: outside }, workspace),
-    ).toBe('outside');
+      resolveToolScope(grepToolDefinition, { pattern: 'x', directory_path: outside }, workspace),
+    ).toMatchObject({ scope: 'outside' });
+  });
+
+  it('preserves resolved target metadata for later instruction discovery', () => {
+    const resolved = resolveToolScope(
+      grepToolDefinition,
+      { pattern: 'x', directory_path: './src/../src' },
+      workspace,
+    );
+
+    expect(resolved).toMatchObject({ scope: 'inside' });
+    expect(resolved?.intents).toEqual([expect.objectContaining({
+      userPath: 'src',
+      resolvedPath: path.join(workspace, 'src'),
+      target: 'directory',
+      access: 'read',
+      activateInstructions: false,
+    })]);
+  });
+
+  it('emits both the source and destination intents for an apply_patch move', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: src/a.ts',
+      '*** Move to: src/b.ts',
+      '@@',
+      '-old',
+      '+new',
+      '*** End Patch',
+    ].join('\n');
+
+    expect(resolveToolScope(applyPatchDefinition, { patch }, workspace)?.intents)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ userPath: path.join('src', 'a.ts'), access: 'mutation' }),
+        expect.objectContaining({ userPath: path.join('src', 'b.ts'), access: 'mutation' }),
+      ]));
+  });
+
+  it('does not activate a nested scope for an unanchored symbol search', () => {
+    const resolved = resolveToolScope(
+      findSymbolReferencesDefinition,
+      { symbol_name: 'example' },
+      workspace,
+    );
+
+    expect(resolved).toMatchObject({ scope: 'inside' });
+    expect(resolved?.intents).toEqual([]);
   });
 
   it('resolves an exact MCP rule before its server wildcard and the risk default', () => {
@@ -114,8 +167,6 @@ describe('permission resolver', () => {
       resolvePermission(
         'mcp::github::delete_issue',
         'mcp',
-        {},
-        workspace,
         config,
         null,
       ),
@@ -124,8 +175,6 @@ describe('permission resolver', () => {
       resolvePermission(
         'mcp::github::list_issues',
         'mcp',
-        {},
-        workspace,
         config,
         null,
       ),
@@ -134,8 +183,6 @@ describe('permission resolver', () => {
       resolvePermission(
         'mcp::slack::list_channels',
         'mcp',
-        {},
-        workspace,
         config,
         null,
       ),

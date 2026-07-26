@@ -8,7 +8,7 @@
 import * as fs from 'node:fs';
 import * as pathModule from 'node:path';
 import { z } from 'zod';
-import type { ToolDefinition, ToolHandler } from '../types';
+import { directoryPathIntent, type ToolDefinition, type ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { getToolConfig, resolveToolPath } from '../types';
 import {
@@ -47,6 +47,7 @@ export const readDirectoryDefinition: ToolDefinition = {
   outputDataSchema: directoryEntriesDataSchema,
   category: 'filesystem',
   riskClass: RiskClass.READ_ONLY,
+  inputPathIntents: (input) => [directoryPathIntent((input as ReadDirectoryInput).directory_path, 'read')],
 };
 
 // ── Tree builder ────────────────────────────────────────────────────────────

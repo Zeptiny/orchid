@@ -7,7 +7,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
-import type { ToolDefinition, ToolHandler, ToolHandlerOutcome } from '../types';
+import { filePathIntent, type ToolDefinition, type ToolHandler, type ToolHandlerOutcome } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { resolveToolPath } from '../types';
 import {
@@ -202,6 +202,15 @@ export const applyPatchDefinition: ToolDefinition = {
   outputDataSchema: applyPatchResultDataSchema,
   category: 'filesystem',
   riskClass: RiskClass.MUTATION,
+  inputPathIntents: (input) => {
+    const { hunks } = parsePatch((input as ApplyPatchInput).patch);
+    return hunks.flatMap((hunk) => [
+      filePathIntent(hunk.path, 'mutation'),
+      ...(hunk.type === 'update' && hunk.movePath
+        ? [filePathIntent(hunk.movePath, 'mutation')]
+        : []),
+    ]);
+  },
   agentProjector: applyPatchAgentProjector,
 };
 

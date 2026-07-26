@@ -6,7 +6,7 @@
  */
 import * as fs from 'node:fs';
 import { z } from 'zod';
-import type { ToolDefinition, ToolHandler, ToolHandlerOutcome } from '../types';
+import { filePathIntent, type ToolDefinition, type ToolHandler, type ToolHandlerOutcome } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { resolveToolPath } from '../types';
 import { atomicWrite } from '../ast/utils';
@@ -42,6 +42,7 @@ export const editDefinition: ToolDefinition = {
   outputDataSchema: fileChangeDataSchema,
   category: 'filesystem',
   riskClass: RiskClass.MUTATION,
+  inputPathIntents: (input) => [filePathIntent((input as EditInput).file_path, 'mutation')],
 };
 function errorOutcome(
   filePath: string,

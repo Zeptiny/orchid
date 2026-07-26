@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import { getConfig } from '../../config/loader';
 import type { Config } from '../../config/schema';
-import type { ToolDefinition, ToolHandler } from '../types';
+import { directoryPathIntent, type ToolDefinition, type ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { getToolConfig, resolveToolPath } from '../types';
 import { isBinaryFile } from '../ast/utils';
@@ -310,6 +310,7 @@ export const grepToolDefinition: ToolDefinition = {
   outputDataSchema: searchResultsDataSchema,
   category: 'search',
   riskClass: RiskClass.READ_ONLY,
+  inputPathIntents: (input) => [directoryPathIntent((input as GrepInput).directory_path, 'read', false)],
   offload: true,
 };
 

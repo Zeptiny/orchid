@@ -131,3 +131,52 @@ export function getProjectDirectoryStatus(
 ): ProjectDirectoryStatus {
   return inspectProjectDirectory(dir).status;
 }
+
+/** Whether an effective absolute target remains within a canonical workspace. */
+export function isPathContainedIn(target: string, workspace: string): boolean {
+  return target === workspace || target.startsWith(workspace + path.sep);
+}
+
+/** Canonicalize an existing path, returning null for missing or inaccessible paths. */
+export function canonicalizeExistingPath(candidate: string): string | null {
+  try {
+    return fs.realpathSync.native(path.resolve(candidate));
+  } catch {
+    return null;
+  }
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
+/**
+ * Resolve a path through its nearest existing parent. This preserves symlink
+ * containment checks for paths that will be created by a mutation.
+ */
+export function canonicalizeEffectivePath(candidate: string): string | null {
+  let current = path.resolve(candidate);
+  const missingParts: string[] = [];
+
+  while (true) {
+    try {
+      const existingParent = fs.realpathSync.native(current);
+      return path.resolve(existingParent, ...missingParts);
+    } catch (error) {
+      if (!isMissingPathError(error)) return null;
+
+      try {
+        fs.lstatSync(current);
+        return null;
+      } catch (lstatError) {
+        if (!isMissingPathError(lstatError)) return null;
+      }
+
+      const parent = path.dirname(current);
+      if (parent === current) return null;
+      missingParts.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}

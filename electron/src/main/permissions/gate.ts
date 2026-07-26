@@ -4,7 +4,7 @@
  * error is surfaced as a denial by the caller.
  */
 import { genericTerminalExecution } from '../llm/terminal-result';
-import { resolvePermission, passesRiskClassFloor, FILE_TOOLS } from './resolver';
+import { resolvePermission, passesRiskClassFloor } from './resolver';
 import { approvalStore } from './approval-store';
 import { createDefaultEngine, DetectionEngine } from './detection';
 import { sessionPermissionOverrides } from './session-overrides';
@@ -20,7 +20,7 @@ import { createMiddlewareStack } from '../llm/middleware';
 import { getTierModelSelection } from '../config/loader';
 import { importESM } from '../utils/esm-import';
 import { AgentType } from '../../shared/types/agent';
-import type { PermissionMode, RiskClass, ToolScope } from '../../shared/types/permission';
+import type { PermissionMode, RiskClass, ToolScope, ResolvedToolScope } from '../../shared/types/permission';
 import type { Config } from '../../shared/types/ipc-boundary';
 import type { ProjectRuntime } from '../project/runtime';
 import type { ToolExecutionResult } from '../../shared/types/tool-result';
@@ -161,11 +161,15 @@ async function runEvaluator(
 
 type FlagPolicy = 'always-ask' | 'detect-command' | 'workspace-scope' | 'allow';
 
-function askWhenFlaggedPolicy(name: string, riskClass: RiskClass): FlagPolicy {
+function askWhenFlaggedPolicy(
+  name: string,
+  riskClass: RiskClass,
+  resolvedScope: ResolvedToolScope | undefined,
+): FlagPolicy {
   if (name === 'send_input') return 'always-ask';
   if (name === 'execute_command') return 'detect-command';
   if (name.startsWith('mcp::')) return 'always-ask';
-  if (FILE_TOOLS.has(name)) return 'workspace-scope';
+  if (resolvedScope !== undefined) return 'workspace-scope';
   // Default by risk class: execution/mutation are gated; read-only/network/delegation
   // auto-run (preserves web_fetch=network auto-running in ask-when-flagged).
   return riskClass === 'execution' || riskClass === 'mutation' ? 'always-ask' : 'allow';
@@ -185,6 +189,7 @@ export async function checkPermission(
   abortSignal?: AbortSignal,
   agentScopeId?: string,
   ownerWindowId?: string,
+  resolvedScope?: ResolvedToolScope,
 ): Promise<ToolExecutionResult | null> {
   if (!riskClass) {
     return genericTerminalExecution(
@@ -200,7 +205,7 @@ export async function checkPermission(
     ? (sessionPermissionOverrides.get(sessionId) ?? null)
     : null;
 
-  const resolution = resolvePermission(name, riskClass, args, cwd, config, sessionOverride);
+  const resolution = resolvePermission(name, riskClass, config, sessionOverride, resolvedScope);
   const { mode, scope } = resolution;
 
   if (mode === 'allow') return null;
@@ -220,7 +225,7 @@ export async function checkPermission(
   }
 
   if (mode === 'decide-for-me') {
-    if (!passesRiskClassFloor(name, riskClass, args, cwd, config)) return null;
+    if (!passesRiskClassFloor(name, riskClass, config, resolvedScope)) return null;
     const result = await runEvaluator(
       name,
       riskClass,
@@ -280,9 +285,9 @@ export async function checkPermission(
     );
   }
 
-  if (!passesRiskClassFloor(name, riskClass, args, cwd, config)) return null;
+  if (!passesRiskClassFloor(name, riskClass, config, resolvedScope)) return null;
 
-  switch (askWhenFlaggedPolicy(name, riskClass)) {
+  switch (askWhenFlaggedPolicy(name, riskClass, resolvedScope)) {
     case 'always-ask':
       return requestApproval(toolCallId, sessionId, name, riskClass, args, cwd, scope, abortSignal, ownerWindowId);
     case 'detect-command': {

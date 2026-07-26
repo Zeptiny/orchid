@@ -44,6 +44,8 @@ export const renameSymbolDefinition: ToolDefinition = {
   inputSchema: renameSymbolSchema,
   category: 'ast',
   riskClass: RiskClass.MUTATION,
+  // U5 replaces this with preview result intents before any mutation occurs.
+  pathIntentException: 'requires-result-planning',
   noTimeout: true,
 };
 

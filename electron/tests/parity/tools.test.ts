@@ -68,6 +68,7 @@ import { buildInterruptTool } from '../../src/main/tools/subagent/interrupt';
 import { buildAnswerSubagentTool } from '../../src/main/tools/subagent/answer';
 import { buildAskQuestionTool } from '../../src/main/tools/ask-question';
 import { registerBuiltinTools, toolRegistry } from '../../src/main/tools';
+import { FILE_TOOLS } from '../../src/shared/types/permission';
 
 // ── Expected tool names (32 total) ─────────────────────────────────────────
 
@@ -429,6 +430,31 @@ describe('Tool Completeness', () => {
     // All names should be unique
     const names = staticDefinitions.map((d) => d.name);
     expect(new Set(names).size).toBe(19);
+  });
+
+  it('every catalogued file tool declares path intents or the U5 planning exception', () => {
+    const definitions = [
+      applyPatchDefinition,
+      readDefinition,
+      editDefinition,
+      writeDefinition,
+      readDirectoryDefinition,
+      globDefinition,
+      grepToolDefinition,
+      getFileSkeletonDefinition,
+      getFunctionDefinition,
+      findSymbolReferencesDefinition,
+      replaceSymbolDefinition,
+      renameSymbolDefinition,
+    ];
+    expect(new Set(definitions.map((definition) => definition.name))).toEqual(FILE_TOOLS);
+    for (const definition of definitions) {
+      expect(
+        definition.inputPathIntents ?? definition.pathIntentException,
+        `${definition.name} must declare input path intents or an explicit planning exception`,
+      ).toBeTruthy();
+    }
+    expect(renameSymbolDefinition.pathIntentException).toBe('requires-result-planning');
   });
 
   it('all tool names are unique across static and dynamic tools', () => {

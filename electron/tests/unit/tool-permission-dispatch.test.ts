@@ -8,7 +8,9 @@ import { sessionPermissionOverrides } from '../../src/main/ipc/permission';
 import * as toolDispatch from '../../src/main/llm/tool-dispatch';
 import { approvalStore } from '../../src/main/permissions/approval-store';
 import { ToolRegistry } from '../../src/main/tools/registry';
+import { filePathIntent } from '../../src/main/tools/types';
 import { genericToolResultDataSchema } from '../../src/shared/types/tool-result';
+import { applyPatchDefinition } from '../../src/main/tools/filesystem/apply-patch';
 
 const executeToolCall = toolDispatch.executeToolCall;
 
@@ -456,6 +458,7 @@ describe('ask-when-flagged tool dispatch', () => {
         outputDataSchema: genericToolResultDataSchema,
         category: 'filesystem',
         riskClass: 'read-only',
+        inputPathIntents: (input) => [filePathIntent((input as { file_path: string }).file_path, 'read')],
       },
       handler,
     );
@@ -493,5 +496,25 @@ describe('ask-when-flagged tool dispatch', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('rejects malformed apply_patch input before permission or handler execution', async () => {
+    const handler = vi.fn(async () => ({
+      status: 'complete' as const,
+      data: { files: [], added: 0, modified: 0, deleted: 0, failed: 0 },
+    }));
+    registry.register(applyPatchDefinition, handler);
+    const approval = vi.spyOn(approvalStore, 'create');
+
+    const result = await executeToolCall(
+      { id: 'invalid-patch', name: 'apply_patch', args: { patch: 'not a patch' } },
+      registry,
+      { cwd: '/tmp/orchid-permission-dispatch', sessionId },
+    );
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.canonical.error?.code).toBe('invalid_path_intent');
+    expect(approval).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
   });
 });

@@ -22,6 +22,46 @@ import type {
 import { genericToolResultDataSchema } from '../../shared/types/tool-result';
 import type { RiskClass } from '../../shared/types/permission';
 
+/** Whether an intent addresses a file or a directory. */
+export type ToolPathTargetKind = 'file' | 'directory';
+
+/** Access posture carried through permission and instruction preflight. */
+export type ToolPathAccess = 'read' | 'mutation';
+
+/** A path declared by a tool after its input has passed Zod validation. */
+export interface ToolPathIntent {
+  /** The normalized user-facing path supplied to the tool. */
+  userPath: string;
+  target: ToolPathTargetKind;
+  access: ToolPathAccess;
+  /** Whether touching this path may activate nested project instructions. */
+  activateInstructions: boolean;
+}
+
+/** Path-intent callback. It receives only Zod-validated tool input. */
+export type ToolPathIntentResolver = (input: unknown) => readonly ToolPathIntent[];
+
+/** Optional foundation for tools whose canonical results disclose path intents. */
+export type ToolResultPathIntentResolver = (result: unknown) => readonly ToolPathIntent[];
+
+/** Construct a normalized declarative file-path intent. */
+export function filePathIntent(
+  userPath: string,
+  access: ToolPathAccess,
+  activateInstructions = true,
+): ToolPathIntent {
+  return { userPath: path.normalize(userPath), target: 'file', access, activateInstructions };
+}
+
+/** Construct a normalized declarative directory-path intent. */
+export function directoryPathIntent(
+  userPath: string,
+  access: ToolPathAccess,
+  activateInstructions = true,
+): ToolPathIntent {
+  return { userPath: path.normalize(userPath), target: 'directory', access, activateInstructions };
+}
+
 /** Shared explicit result contract for built-ins using the generic family. */
 export const genericToolResultMetadata = {
   resultFamily: 'generic',
@@ -72,6 +112,21 @@ export interface ToolDefinition {
 
   /** Risk classification for permission gating */
   riskClass: RiskClass;
+
+  /**
+   * Declares paths addressed by already Zod-validated input. This is the
+   * single source for permission scope and instruction discovery.
+   */
+  inputPathIntents?: ToolPathIntentResolver;
+
+  /** Optional declaration of paths exposed by a canonical tool result. */
+  resultPathIntents?: ToolResultPathIntentResolver;
+
+  /**
+   * Temporary, explicit exception for a path-affecting tool whose targets can
+   * only be known after an independent planning step.
+   */
+  pathIntentException?: 'requires-result-planning';
 
   /** If true, skip timeout for this tool */
   noTimeout?: boolean;

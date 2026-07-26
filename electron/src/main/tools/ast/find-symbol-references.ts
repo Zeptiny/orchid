@@ -7,7 +7,7 @@
  * Ported from Python `src/orchid/tools/ast.py` execute_find_symbol_references.
  */
 import { z } from 'zod';
-import type { ToolDefinition, ToolHandler } from '../types';
+import { filePathIntent, type ToolDefinition, type ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
@@ -44,6 +44,10 @@ export const findSymbolReferencesDefinition: ToolDefinition = {
   inputSchema: findSymbolReferencesSchema,
   category: 'ast',
   riskClass: RiskClass.READ_ONLY,
+  inputPathIntents: (input) => {
+    const { file_path } = input as FindSymbolReferencesInput;
+    return file_path ? [filePathIntent(file_path, 'read')] : [];
+  },
   noTimeout: true,
 };
 

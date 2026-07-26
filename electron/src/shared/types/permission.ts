@@ -41,6 +41,22 @@ export const ToolScope = {
 } as const;
 export type ToolScope = (typeof ToolScope)[keyof typeof ToolScope];
 
+/** A path intent after resolution against the frozen workspace. */
+export interface ResolvedToolPathIntent {
+  userPath: string;
+  resolvedPath: string;
+  effectivePath: string | null;
+  target: 'file' | 'directory';
+  access: 'read' | 'mutation';
+  activateInstructions: boolean;
+}
+
+/** Shared, single-pass path preflight used by permissions and instructions. */
+export interface ResolvedToolScope {
+  scope: ToolScope;
+  intents: readonly ResolvedToolPathIntent[];
+}
+
 export interface FileToolPermission {
   inside: PermissionMode;
   outside: PermissionMode;

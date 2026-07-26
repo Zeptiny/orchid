@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import {
   RISK_CLASS_DEFAULTS,
@@ -7,92 +6,21 @@ import {
   type PermissionMode,
   type RiskClass,
   type ToolScope,
+  type ResolvedToolScope,
   type PermissionResolution,
 } from '../../shared/types/permission';
 import type { Config, PermissionRule } from '../../shared/types/ipc-boundary';
+import type { ToolDefinition } from '../tools/types';
+import {
+  canonicalizeEffectivePath,
+  canonicalizeExistingPath,
+  isPathContainedIn,
+} from '../project/path';
 
 // Re-export the shared source-of-truth constants so existing consumers that
 // import them from the resolver (tool-dispatch.ts, permissions/index.ts) keep
 // working without duplicating the definitions here.
 export { RISK_CLASS_DEFAULTS, FILE_TOOLS, FILE_TOOL_DEFAULTS };
-
-const PATCH_FILE_PATTERN = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm;
-const PATCH_MOVE_TO_PATTERN = /^\*\*\* Move to: (.+)$/gm;
-
-function extractPathsFromArgs(
-  toolName: string,
-  args: Record<string, unknown>,
-): string[] {
-  if (toolName === 'apply_patch') {
-    const patch = args['patch'];
-    if (typeof patch !== 'string') return [];
-    const paths: string[] = [];
-    for (const match of patch.matchAll(PATCH_FILE_PATTERN)) {
-      const filePath = match[1]?.trim();
-      if (filePath) paths.push(filePath);
-    }
-    // Also containment-check `*** Move to:` destinations so a patch that moves
-    // a file outside the workspace is not classified 'inside'.
-    for (const match of patch.matchAll(PATCH_MOVE_TO_PATTERN)) {
-      const moveToPath = match[1]?.trim();
-      if (moveToPath) paths.push(moveToPath);
-    }
-    return paths;
-  }
-
-  const paths: string[] = [];
-  for (const key of ['file_path', 'path', 'directory_path']) {
-    const value = args[key];
-    if (typeof value === 'string') paths.push(value);
-  }
-  return paths;
-}
-
-function isPathContainedIn(resolved: string, cwd: string): boolean {
-  return resolved === cwd || resolved.startsWith(cwd + path.sep);
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    'code' in error &&
-    (error as NodeJS.ErrnoException).code === 'ENOENT'
-  );
-}
-
-function canonicalizeEffectivePath(candidate: string): string | null {
-  let current = path.resolve(candidate);
-  const missingParts: string[] = [];
-
-  while (true) {
-    try {
-      const existingParent = fs.realpathSync.native(current);
-      return path.resolve(existingParent, ...missingParts);
-    } catch (error) {
-      if (!isMissingPathError(error)) return null;
-
-      try {
-        fs.lstatSync(current);
-        return null;
-      } catch (lstatError) {
-        if (!isMissingPathError(lstatError)) return null;
-      }
-
-      const parent = path.dirname(current);
-      if (parent === current) return null;
-      missingParts.unshift(path.basename(current));
-      current = parent;
-    }
-  }
-}
-
-function canonicalizeExistingPath(candidate: string): string | null {
-  try {
-    return fs.realpathSync.native(path.resolve(candidate));
-  } catch {
-    return null;
-  }
-}
 
 // The cwd is frozen per turn, so canonicalizing it on every file-tool call
 // repeats a blocking fs.realpathSync.native on the main-process event loop.
@@ -110,25 +38,31 @@ function canonicalizeExistingPathCached(candidate: string): string | null {
   return result;
 }
 
-/** Resolve a file tool's workspace scope ('inside' | 'outside') from its args. */
+/**
+ * Resolve declarative, validated path intents once for permission and later
+ * instruction preflight. No tool-name or input-key parsing belongs here.
+ */
 export function resolveToolScope(
-  toolName: string,
-  args: Record<string, unknown>,
+  definition: ToolDefinition,
+  validatedInput: unknown,
   cwd: string,
-): ToolScope | undefined {
-  if (!FILE_TOOLS.has(toolName)) return undefined;
+): ResolvedToolScope | undefined {
+  if (!definition.inputPathIntents) return undefined;
 
   const canonicalCwd = canonicalizeExistingPathCached(cwd);
-  if (canonicalCwd === null) return 'outside';
-
-  const toolPaths = extractPathsFromArgs(toolName, args);
-  if (toolPaths.length === 0) return 'inside';
-
-  for (const toolPath of toolPaths) {
-    const target = canonicalizeEffectivePath(path.resolve(cwd, toolPath));
-    if (target === null || !isPathContainedIn(target, canonicalCwd)) return 'outside';
-  }
-  return 'inside';
+  const declared = definition.inputPathIntents(validatedInput);
+  const intents = declared.map((intent) => {
+    const resolvedPath = path.resolve(cwd, intent.userPath);
+    return {
+      ...intent,
+      resolvedPath,
+      effectivePath: canonicalizeEffectivePath(resolvedPath),
+    };
+  });
+  const scope: ToolScope = canonicalCwd !== null && intents.every(
+    (intent) => intent.effectivePath !== null && isPathContainedIn(intent.effectivePath, canonicalCwd),
+  ) ? 'inside' : 'outside';
+  return { scope, intents };
 }
 
 function resolvePermissionRule(
@@ -161,12 +95,11 @@ function resolveConfiguredRule(
 export function resolvePermission(
   toolName: string,
   riskClass: RiskClass,
-  args: Record<string, unknown>,
-  cwd: string,
   config: Config,
   sessionOverride: PermissionMode | null,
+  resolvedScope?: ResolvedToolScope,
 ): PermissionResolution {
-  const scope = resolveToolScope(toolName, args, cwd);
+  const scope = resolvedScope?.scope;
 
   let mode: PermissionMode;
   let source: PermissionResolution['source'] = 'tool-default';
@@ -196,10 +129,9 @@ export function resolvePermission(
 export function passesRiskClassFloor(
   toolName: string,
   riskClass: RiskClass,
-  args: Record<string, unknown>,
-  cwd: string,
   config: Config,
+  resolvedScope?: ResolvedToolScope,
 ): boolean {
-  const resolution = resolvePermission(toolName, riskClass, args, cwd, config, null);
+  const resolution = resolvePermission(toolName, riskClass, config, null, resolvedScope);
   return resolution.mode !== 'allow';
 }

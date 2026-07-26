@@ -7,7 +7,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
-import type { ToolDefinition, ToolHandler } from '../types';
+import { filePathIntent, type ToolDefinition, type ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { resolveToolPath } from '../types';
 import { atomicWrite } from '../ast/utils';
@@ -39,6 +39,7 @@ export const writeDefinition: ToolDefinition = {
   outputDataSchema: fileWriteDataSchema,
   category: 'filesystem',
   riskClass: RiskClass.MUTATION,
+  inputPathIntents: (input) => [filePathIntent((input as WriteInput).file_path, 'mutation')],
 };
 
 function countLines(content: string): number {

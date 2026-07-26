@@ -7,7 +7,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
-import type { ToolDefinition, ToolHandler } from '../types';
+import { directoryPathIntent, type ToolDefinition, type ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { resolveToolPath } from '../types';
 import { globToRegex } from '../glob-pattern';
@@ -45,6 +45,7 @@ export const globDefinition: ToolDefinition = {
   outputDataSchema: searchResultsDataSchema,
   category: 'filesystem',
   riskClass: RiskClass.READ_ONLY,
+  inputPathIntents: (input) => [directoryPathIntent((input as GlobInput).directory_path, 'read', false)],
   offload: true,
 };
 

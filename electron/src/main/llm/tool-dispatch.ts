@@ -42,10 +42,12 @@ import {
 import { materializeCanonicalResultRetrieval } from '../tools/result-retrieval';
 import { withTimeout as sharedWithTimeout } from '../utils/async';
 import { checkPermission } from '../permissions/gate';
+import { resolveToolScope } from '../permissions/resolver';
 import { recordToolCall } from '../permissions/history';
 import { genericTerminalExecution } from './terminal-result';
 import { defaults } from '../config/schema';
 import type { Config } from '../../shared/types/ipc-boundary';
+import type { ResolvedToolScope } from '../../shared/types/permission';
 
 // Re-exported so existing consumers keep importing these from tool-dispatch.
 export { genericTerminalExecution };
@@ -212,13 +214,25 @@ export async function executeToolCall(
   }
 
   const permissionConfig = options.projectRuntime?.config ?? FALLBACK_CONFIG;
+  let resolvedScope: ResolvedToolScope | undefined;
+  try {
+    resolvedScope = resolveToolScope(registered.definition, validation.data, options.cwd);
+  } catch (error) {
+    return genericTerminalExecution(
+      toolCallId,
+      name,
+      'error',
+      `Could not resolve paths for tool '${name}': ${error instanceof Error ? error.message : 'invalid path intent'}.`,
+      'invalid_path_intent',
+    );
+  }
   let permissionDenial: ToolExecutionResult | null;
   try {
     permissionDenial = await checkPermission(
       toolCallId,
       name,
       registered.definition.riskClass,
-      args as Record<string, unknown>,
+      validation.data as Record<string, unknown>,
       options.cwd,
       options.sessionId,
       permissionConfig,
@@ -227,6 +241,7 @@ export async function executeToolCall(
       options.abortSignal,
       options.agentScopeId,
       options.windowId,
+      resolvedScope,
     );
   } catch (error) {
     return genericTerminalExecution(

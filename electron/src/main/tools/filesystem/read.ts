@@ -4,7 +4,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
-import type { ToolDefinition, ToolHandler, ToolHandlerOutcome } from '../types';
+import { filePathIntent, type ToolDefinition, type ToolHandler, type ToolHandlerOutcome } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { getToolConfig, resolveToolPath } from '../types';
 import { isBinaryFileSync } from '../ast/utils';
@@ -35,6 +35,7 @@ export const readDefinition: ToolDefinition = {
   outputDataSchema: fileContentDataSchema,
   category: 'filesystem',
   riskClass: RiskClass.READ_ONLY,
+  inputPathIntents: (input) => [filePathIntent((input as ReadInput).file_path, 'read')],
   offload: true,
 };
 function languageHint(filePath: string): string {

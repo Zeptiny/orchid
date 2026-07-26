@@ -8,7 +8,7 @@
  */
 import * as fs from 'node:fs';
 import { z } from 'zod';
-import type { ToolDefinition, ToolHandler } from '../types';
+import { filePathIntent, type ToolDefinition, type ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
@@ -43,6 +43,7 @@ export const replaceSymbolDefinition: ToolDefinition = {
   inputSchema: replaceSymbolSchema,
   category: 'ast',
   riskClass: RiskClass.MUTATION,
+  inputPathIntents: (input) => [filePathIntent((input as ReplaceSymbolInput).file_path, 'mutation')],
   noTimeout: true,
   offload: true,
 };
