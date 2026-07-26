@@ -10,7 +10,12 @@ import type { Config } from '../../shared/types/ipc-boundary';
 import { PERMISSION_MODE_VALUES } from '../../shared/types/permission';
 import { modelSelectionSchema } from '../../shared/types/provider';
 
-export type { Config, RAGConfig } from '../../shared/types/ipc-boundary';
+export type {
+  Config,
+  RAGConfig,
+  AgentsMdConfig,
+  AgentsMdEnforcePolicy,
+} from '../../shared/types/ipc-boundary';
 export { modelSelectionSchema, type ModelSelection } from '../../shared/types/provider';
 
 // ---------------------------------------------------------------------------
@@ -56,6 +61,24 @@ export const permissionRuleSchema = z.union([
 ]);
 
 export const permissionsConfigSchema = z.record(z.string(), permissionRuleSchema);
+
+/** Write-enforcement policies for unseen governing AGENTS.md files. */
+export const AGENTS_MD_ENFORCE_POLICIES = ['block', 'inject', 'warn', 'off'] as const;
+
+/**
+ * AGENTS.md discovery, injection, and write-enforcement settings. Mirrors the
+ * `rag` nested object: per-field defaults, referenced as `agents_md` with an
+ * explicit `.default({})` so partial project overrides deep-merge cleanly.
+ */
+export const agentsMdConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  filenames: z.array(z.string()).default(['AGENTS.md', 'CLAUDE.md']),
+  max_file_bytes: z.number().int().positive().default(32768),
+  max_chain_depth: z.number().int().positive().default(8),
+  enforce_on_write: z.enum(AGENTS_MD_ENFORCE_POLICIES).default('warn'),
+  inject_on_read: z.boolean().default(true),
+  include_local: z.boolean().default(false),
+});
 
 // ---------------------------------------------------------------------------
 // Main config schema
@@ -121,6 +144,7 @@ export const configSchema = z
     theme: z.string().min(1).default('default'),
     personality: z.string().min(1).default('default'),
     rag: ragConfigSchema.default({}),
+    agents_md: agentsMdConfigSchema.default({}),
     ast_max_file_size: z.number().int().positive().default(1_048_576),
     mcp_startup_timeout: z.number().positive().default(60.0),
     mcp_per_server_timeout: z.number().positive().default(10.0),

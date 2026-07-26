@@ -3,7 +3,7 @@ import type { ConfigPatch, ConfigPatchMap } from '../../shared/types/ipc';
 import type { ModelSelection } from '../../shared/types/provider';
 
 /** Nested ConfigPatch keys that need specialized merge (not scalar assign). */
-type NestedPatchKey = 'rag' | 'tier_models' | 'tier_reasoning_effort' | 'mcp_servers' | 'providers' | 'permissions';
+type NestedPatchKey = 'rag' | 'agents_md' | 'tier_models' | 'tier_reasoning_effort' | 'mcp_servers' | 'providers' | 'permissions';
 
 /** Scalar / nullable top-level patch keys applied with simple defined-assign. */
 type ScalarPatchKey = Exclude<keyof ConfigPatch, NestedPatchKey>;
@@ -31,6 +31,9 @@ export function mergeConfigDraft(
   }
   if (updates.rag !== undefined) {
     next.rag = { ...(current.rag ?? {}), ...updates.rag };
+  }
+  if (updates.agents_md !== undefined) {
+    next.agents_md = { ...(current.agents_md ?? {}), ...updates.agents_md };
   }
   return next;
 }
@@ -93,6 +96,10 @@ export function applyConfigDraft(base: Config, draft: ConfigPatch): Config {
     };
   }
 
+  if (draft.agents_md !== undefined) {
+    next.agents_md = { ...base.agents_md, ...draft.agents_md };
+  }
+
   if (draft.tier_models !== undefined) {
     next.tier_models = applySelectionMap(base.tier_models, draft.tier_models);
   }
@@ -119,6 +126,7 @@ export function applyConfigDraft(base: Config, draft: ConfigPatch): Config {
 function isNestedPatchKey(key: keyof ConfigPatch): key is NestedPatchKey {
   return (
     key === 'rag' ||
+    key === 'agents_md' ||
     key === 'tier_models' ||
     key === 'tier_reasoning_effort' ||
     key === 'mcp_servers' ||

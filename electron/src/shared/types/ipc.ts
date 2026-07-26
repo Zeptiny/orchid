@@ -48,6 +48,7 @@ import type {
   ASTIndexProgress,
   IndexRunState,
   RAGConfig,
+  AgentsMdConfig,
   PermissionModeValue,
   PermissionRule,
 } from './ipc-boundary';
@@ -79,6 +80,7 @@ export type {
   ASTIndexProgress,
   IndexRunState,
   RAGConfig,
+  AgentsMdConfig,
   PermissionModeValue,
   PermissionRule,
   UpdaterState,
@@ -338,6 +340,7 @@ export type ConfigPatch = {
   rag?: Partial<RAGConfig> & {
     embedding_api_model?: ModelSelection | null;
   };
+  agents_md?: Partial<AgentsMdConfig>;
   ast_max_file_size?: number;
   mcp_startup_timeout?: number;
   mcp_per_server_timeout?: number;

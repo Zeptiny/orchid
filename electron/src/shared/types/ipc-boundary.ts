@@ -80,6 +80,25 @@ export interface RAGConfig {
   embedding_api_model: ModelSelection | null;
 }
 
+/** Write-enforcement policy applied when a governing AGENTS.md is not in context. */
+export type AgentsMdEnforcePolicy = 'block' | 'inject' | 'warn' | 'off';
+
+/**
+ * AGENTS.md discovery, injection, and write-enforcement settings. See the
+ * `agents_md` block in the config schema for field defaults.
+ */
+export interface AgentsMdConfig {
+  enabled: boolean;
+  /** Ordered instruction-file aliases; first present per directory wins. */
+  filenames: string[];
+  max_file_bytes: number;
+  max_chain_depth: number;
+  enforce_on_write: AgentsMdEnforcePolicy;
+  inject_on_read: boolean;
+  /** When true, also consider `AGENTS.local.md` as a lowest-precedence alias. */
+  include_local: boolean;
+}
+
 /** Non-secret notice about provider compatibility state discarded on load. */
 export interface ConfigDiagnostic {
   readonly code: 'legacy-provider-config-reset';
@@ -111,6 +130,7 @@ export interface Config {
   theme: string;
   personality: string;
   rag: RAGConfig;
+  agents_md: AgentsMdConfig;
   ast_max_file_size: number;
   mcp_startup_timeout: number;
   mcp_per_server_timeout: number;
