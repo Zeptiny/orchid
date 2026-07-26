@@ -5,16 +5,20 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
-import { filePathIntent, type ToolDefinition, type ToolHandler, type ToolPathIntent } from '../types';
+
 import { RiskClass } from '../../../shared/types/permission';
-import { genericToolResultMetadata } from '../types';
-import { genericBuiltInToolOutcome } from '../result';
 import { indexProject } from '../../ast/indexer';
-import { ASTStore, type SymbolRow } from '../../ast/store';
+import { ASTStore } from '../../ast/store';
 import { canonicalizeExistingPath, isPathContainedIn } from '../../project/path';
 import { withDisposable } from '../../utils/with-disposable';
+import { genericBuiltInToolOutcome } from '../result';
+import { filePathIntent, genericToolResultMetadata, resolveBoundToolPath } from '../types';
+
+import type { SymbolRow } from '../../ast/store';
+import type { ToolDefinition, ToolHandler, ToolPathIntent } from '../types';
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const RENAME_MANIFEST_SECRET = crypto.randomBytes(32);
 
 const manifestFileSchema = z.object({
   path: z.string().min(1),
@@ -22,6 +26,7 @@ const manifestFileSchema = z.object({
   replacements: z.number().int().positive(),
 }).strict();
 
+/** Runtime contract for a signed rename preview. */
 export const renameManifestSchema = z.object({
   version: z.literal(1),
   anchor: z.object({
@@ -32,10 +37,16 @@ export const renameManifestSchema = z.object({
   new_name: z.string().regex(IDENTIFIER_PATTERN),
   files: z.array(manifestFileSchema).min(1),
   digest: z.string().regex(/^[a-f0-9]{64}$/),
+  capability: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 
+/** A signed, workspace-bound rename preview accepted by `rename_symbol`. */
 export type RenameManifest = z.infer<typeof renameManifestSchema>;
 
+/** Input used to compute the public stale-content digest. */
+export type RenameManifestDigestInput = Omit<RenameManifest, 'digest' | 'capability'>;
+
+/** Runtime contract for planning a cross-file symbol rename. */
 export const planSymbolRenameSchema = z.object({
   file_path: z.string().min(1).describe('Definition file containing the symbol to rename'),
   old_name: z.string().regex(IDENTIFIER_PATTERN).describe('The existing identifier'),
@@ -45,6 +56,7 @@ export const planSymbolRenameSchema = z.object({
   path: ['new_name'],
 });
 
+/** Validated input for `plan_symbol_rename`. */
 export type PlanSymbolRenameInput = z.infer<typeof planSymbolRenameSchema>;
 
 interface PlannedRenameFile {
@@ -55,11 +67,13 @@ interface PlannedRenameFile {
   nextContent: string;
 }
 
+/** A signed manifest paired with the file contents ready to write. */
 export interface RenamePlan {
   manifest: RenameManifest;
   files: PlannedRenameFile[];
 }
 
+/** Read-only tool metadata for producing a signed rename manifest. */
 export const planSymbolRenameDefinition: ToolDefinition = {
   ...genericToolResultMetadata,
   name: 'plan_symbol_rename',
@@ -96,15 +110,25 @@ function sourcePath(workspace: string, relative: string): string {
   return path.resolve(workspace, ...relative.split('/'));
 }
 
-function manifestDigestInput(manifest: Omit<RenameManifest, 'digest'>): string {
+function manifestDigestInput(manifest: RenameManifestDigestInput): string {
   return JSON.stringify(manifest);
 }
 
-export function manifestDigest(manifest: Omit<RenameManifest, 'digest'>): string {
+/** Compute the public deterministic digest used for stale-plan comparison. */
+export function manifestDigest(manifest: RenameManifestDigestInput): string {
   return sha256(manifestDigestInput(manifest));
 }
 
-function validateManifestStructure(manifest: RenameManifest): string | null {
+function manifestCapability(canonicalWorkspace: string, digest: string): string {
+  return crypto
+    .createHmac('sha256', RENAME_MANIFEST_SECRET)
+    .update(canonicalWorkspace, 'utf8')
+    .update('\0', 'utf8')
+    .update(digest, 'utf8')
+    .digest('hex');
+}
+
+function validateManifestStructure(workspace: string, manifest: RenameManifest): string | null {
   if (manifest.old_name === manifest.new_name) return 'The replacement identifier must differ from the existing identifier.';
   const ordered = [...manifest.files].sort((left, right) => left.path.localeCompare(right.path));
   if (ordered.some((file, index) => file.path !== manifest.files[index]?.path)) {
@@ -120,13 +144,24 @@ function validateManifestStructure(manifest: RenameManifest): string | null {
     new_name: manifest.new_name,
     files: manifest.files,
   });
-  return expected === manifest.digest ? null : 'Rename manifest integrity digest does not match its contents.';
+  if (expected !== manifest.digest) {
+    return 'Rename manifest integrity digest does not match its contents.';
+  }
+  const canonicalWorkspace = canonicalizeExistingPath(workspace);
+  if (canonicalWorkspace === null) return 'Rename manifest workspace was not found.';
+  const expectedCapability = manifestCapability(canonicalWorkspace, manifest.digest);
+  if (!crypto.timingSafeEqual(
+    Buffer.from(expectedCapability, 'hex'),
+    Buffer.from(manifest.capability, 'hex'),
+  )) {
+    return 'Rename manifest capability is invalid. Re-run plan_symbol_rename before applying.';
+  }
+  return null;
 }
 
 async function refreshIndex(workspace: string): Promise<void> {
   await indexProject({
     projectPath: workspace,
-    force: true,
     inline: process.env.VITEST !== undefined,
   });
 }
@@ -175,10 +210,17 @@ export async function buildRenamePlan(
   const { absolute: anchorAbs, relative: anchorPath } = canonicalAnchor;
   await refreshIndex(workspace);
   const symbols = withDisposable(new ASTStore(workspace), (store) => store.getSymbolsByName(input.old_name, 'both'));
-  const anchorHasDefinition = symbols.some((symbol) =>
-    symbol.type === 'definition' &&
-    canonicalWorkspacePath(canonicalWorkspace, sourcePath(workspace, symbol.filePath))?.relative === anchorPath);
-  if (!anchorHasDefinition) {
+  const definitions = symbols.filter((symbol) => symbol.type === 'definition');
+  if (definitions.length !== 1) {
+    throw new Error(
+      `Rename requires exactly one indexed definition for '${input.old_name}', but found ${definitions.length}.`,
+    );
+  }
+  const definitionPath = canonicalWorkspacePath(
+    canonicalWorkspace,
+    sourcePath(workspace, definitions[0]!.filePath),
+  );
+  if (definitionPath?.relative !== anchorPath) {
     throw new Error(`Definition anchor '${anchorPath}' does not contain an indexed definition for '${input.old_name}'.`);
   }
 
@@ -213,16 +255,21 @@ export async function buildRenamePlan(
   }
   const anchorHash = files.find((file) => file.path === anchorPath)?.hash ??
     sha256(fs.readFileSync(anchorAbs, 'utf8'));
-  const manifestWithoutDigest: Omit<RenameManifest, 'digest'> = {
+  const manifestWithoutDigest: RenameManifestDigestInput = {
     version: 1,
     anchor: { path: anchorPath, hash: anchorHash },
     old_name: input.old_name,
     new_name: input.new_name,
     files: files.map(({ path: filePath, hash, replacements }) => ({ path: filePath, hash, replacements })),
   };
+  const digest = manifestDigest(manifestWithoutDigest);
   return {
     files,
-    manifest: { ...manifestWithoutDigest, digest: manifestDigest(manifestWithoutDigest) },
+    manifest: {
+      ...manifestWithoutDigest,
+      digest,
+      capability: manifestCapability(canonicalWorkspace, digest),
+    },
   };
 }
 
@@ -235,18 +282,22 @@ export function manifestResultPathIntents(result: unknown): readonly ToolPathInt
     : [];
 }
 
-/** Validate a manifest before it reaches the write tool. */
-export function validateRenameManifest(manifest: RenameManifest): string | null {
-  return validateManifestStructure(manifest);
+/** Validate a signed manifest for the workspace before it reaches the write tool. */
+export function validateRenameManifest(workspace: string, manifest: RenameManifest): string | null {
+  return validateManifestStructure(workspace, manifest);
 }
 
+/** Build a signed rename preview without modifying source files. */
 export const planSymbolRenameHandler: ToolHandler = async (input: unknown, ctx) => {
   const parsed = planSymbolRenameSchema.safeParse(input);
   if (!parsed.success) {
     return genericBuiltInToolOutcome('plan_symbol_rename', { error: parsed.error.issues[0]?.message ?? 'Invalid rename preview input.' }, 'error', 'invalid_rename_input');
   }
   try {
-    const plan = await buildRenamePlan(ctx.cwd, parsed.data);
+    const plan = await buildRenamePlan(ctx.cwd, {
+      ...parsed.data,
+      file_path: resolveBoundToolPath(ctx, parsed.data.file_path),
+    });
     return genericBuiltInToolOutcome('plan_symbol_rename', {
       manifest: plan.manifest,
       files: plan.manifest.files.length,

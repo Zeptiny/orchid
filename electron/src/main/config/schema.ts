@@ -77,7 +77,6 @@ const instructionFallbackFilenameSchema = z
 
 const instructionFallbackFilenamesSchema = z
   .array(instructionFallbackFilenameSchema)
-  .min(1)
   .max(16)
   .refine((filenames) => {
     const normalized = filenames.map((filename) => filename.toLocaleLowerCase('en-US'));

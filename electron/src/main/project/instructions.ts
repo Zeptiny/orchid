@@ -8,13 +8,15 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { Config } from '../../shared/types/ipc-boundary';
+
 import { escapeXmlAttribute, escapeXmlText } from '../tools/result';
 import {
   canonicalizeEffectivePath,
   canonicalizeExistingPath,
   isPathContainedIn,
 } from './path';
+
+import type { Config } from '../../shared/types/ipc-boundary';
 
 const PRIMARY_FILENAMES = ['AGENTS.override.md', 'AGENTS.md'] as const;
 const OVER_BUDGET_DIAGNOSTIC_RESERVE_BYTES = 512;
@@ -23,17 +25,20 @@ const ENVELOPE_WRAPPER_BYTES = Buffer.byteLength(
   'utf8',
 );
 
+/** Stable diagnostic codes emitted by project-instruction discovery. */
 export type ProjectInstructionDiagnosticCode =
   | 'shadowed'
   | 'unreadable'
   | 'missing-shim-target'
   | 'invalid-import'
+  | 'invalid-selector'
   | 'escaped-workspace'
   | 'import-cycle'
   | 'import-depth-exceeded'
   | 'over-budget'
   | 'outside-workspace';
 
+/** A provider-visible instruction discovery diagnostic and its mutation impact. */
 export interface ProjectInstructionDiagnostic {
   readonly code: ProjectInstructionDiagnosticCode;
   readonly scope: string;
@@ -42,6 +47,7 @@ export interface ProjectInstructionDiagnostic {
   readonly blocksMutation: boolean;
 }
 
+/** One canonical instruction source applied to one canonical directory scope. */
 export interface ProjectInstructionSource {
   /** Canonical path of the selected file (or canonical terminal shim target). */
   readonly path: string;
@@ -54,6 +60,7 @@ export interface ProjectInstructionSource {
   readonly kind: 'body-or-reference' | 'reference';
 }
 
+/** Body-free metadata recorded for app-managed instruction reads. */
 export interface ProjectInstructionAuditEvent {
   readonly type: 'selected' | 'shadowed' | 'diagnostic';
   /** Canonical selector identity; for shims this is the shim itself. */
@@ -65,6 +72,7 @@ export interface ProjectInstructionAuditEvent {
   readonly diagnosticCode?: ProjectInstructionDiagnosticCode;
 }
 
+/** One deterministic instruction discovery batch. */
 export interface ProjectInstructionDiscovery {
   readonly id: string;
   readonly sources: readonly ProjectInstructionSource[];
@@ -73,14 +81,17 @@ export interface ProjectInstructionDiscovery {
   readonly envelope: string;
 }
 
+/** The provider-only portion claimed for one tool call. */
 export interface ProjectInstructionDelivery {
   readonly envelope: string;
   readonly sources: readonly ProjectInstructionSource[];
   readonly diagnostics: readonly ProjectInstructionDiagnostic[];
 }
 
+/** Mutation readiness after hierarchical instruction preflight. */
 export type MutationInstructionStatus = 'ready' | 'pending' | 'blocked';
 
+/** Mutation preflight status paired with any provider-only discovery payload. */
 export interface MutationInstructionPreflight {
   readonly status: MutationInstructionStatus;
   readonly discovery: ProjectInstructionDiscovery;
@@ -338,6 +349,7 @@ export class ProjectInstructionContext {
     return [...this.scans.keys()].sort();
   }
 
+  /** Whether root instructions have been acknowledged for this stream. */
   get isRootAcknowledged(): boolean {
     return this.rootAcknowledged;
   }
@@ -351,20 +363,41 @@ export class ProjectInstructionContext {
       return depth || left.localeCompare(right);
     });
     const selected: ProjectInstructionSource[] = [];
+    const selectedSourceKeys = new Set<string>();
     const diagnostics: ProjectInstructionDiagnostic[] = [];
     const auditEvents: ProjectInstructionAuditEvent[] = [];
+    const auditEventKeys = new Set<string>();
     for (const directory of directories) {
       const chain = rootOnly ? [this.workspace] : this.ancestorChain(directory);
       for (const candidate of chain) {
         const scanned = await this.scanDirectory(candidate);
         const newDiagnostics = this.newDiagnostics(scanned.diagnostics);
         diagnostics.push(...newDiagnostics);
-        auditEvents.push(...scanned.auditEvents);
+        for (const event of scanned.auditEvents) {
+          const eventKey = [
+            event.type,
+            event.path ?? '',
+            event.terminalPath ?? '',
+            event.scope,
+            event.selection ?? '',
+            event.diagnosticCode ?? '',
+          ].join('\u0000');
+          if (!auditEventKeys.has(eventKey)) {
+            auditEvents.push(event);
+            auditEventKeys.add(eventKey);
+          }
+        }
         this.recordDiagnostics(newDiagnostics);
         const accepted = scanned.sourcePath && scanned.body !== undefined
           ? this.acceptSource(scanned)
           : undefined;
-        if (accepted?.source) selected.push(accepted.source);
+        if (accepted?.source) {
+          const sourceKey = this.sourceKey(accepted.source);
+          if (!selectedSourceKeys.has(sourceKey)) {
+            selected.push(accepted.source);
+            selectedSourceKeys.add(sourceKey);
+          }
+        }
         if (accepted?.diagnostic) {
           diagnostics.push(accepted.diagnostic);
           auditEvents.push(this.auditDiagnostic(accepted.diagnostic));
@@ -436,6 +469,15 @@ export class ProjectInstructionContext {
       const item = diagnostic('escaped-workspace', scope, 'Selected instruction file resolves outside workspace', canonical);
       return { scope, selection, diagnostics: [...diagnostics, item], auditEvents: [...auditEvents, this.auditDiagnostic(item)] };
     }
+    if (!this.isAllowlistedInstructionPath(canonical)) {
+      const item = diagnostic(
+        'invalid-selector',
+        scope,
+        'Selected instruction symlink resolves to a non-allowlisted instruction filename',
+        canonical,
+      );
+      return { scope, selection, diagnostics: [...diagnostics, item], auditEvents: [...auditEvents, this.auditDiagnostic(item)] };
+    }
     const expanded = this.expandShim(canonical, scope, 0, new Set([canonical]));
     if (expanded.diagnostic) {
       return {
@@ -480,13 +522,9 @@ export class ProjectInstructionContext {
     depth: number,
     graph: Set<string>,
   ): { path?: string; body?: string; diagnostic?: ProjectInstructionDiagnostic } {
-    let raw: string;
-    try {
-      raw = fs.readFileSync(sourcePath, 'utf8');
-    } catch {
-      return { diagnostic: diagnostic('unreadable', scope, 'Instruction file is unreadable', sourcePath) };
-    }
-    const body = normalizeBody(raw);
+    const read = this.readInstructionFile(sourcePath, scope);
+    if (read.diagnostic) return { diagnostic: read.diagnostic };
+    const body = normalizeBody(read.body!);
     const match = body.trim().match(/^@([^\s]+)$/);
     if (!match) return { path: sourcePath, body };
     const relative = match[1];
@@ -505,12 +543,89 @@ export class ProjectInstructionContext {
     if (!isPathContainedIn(canonical, this.workspace)) {
       return { diagnostic: diagnostic('escaped-workspace', scope, 'Shim target resolves outside workspace', canonical) };
     }
+    if (!this.isAllowlistedInstructionPath(canonical)) {
+      return {
+        diagnostic: diagnostic(
+          'invalid-import',
+          scope,
+          'Shim target resolves to a non-allowlisted instruction filename',
+          canonical,
+        ),
+      };
+    }
     if (graph.has(canonical)) {
       return { diagnostic: diagnostic('import-cycle', scope, 'Shim import graph contains a cycle', canonical) };
     }
     const nextGraph = new Set(graph);
     nextGraph.add(canonical);
     return this.expandShim(canonical, scope, depth + 1, nextGraph);
+  }
+
+  /** Read a bounded regular instruction file before parsing or hashing it. */
+  private readInstructionFile(
+    sourcePath: string,
+    scope: string,
+  ): { body?: string; diagnostic?: ProjectInstructionDiagnostic } {
+    let descriptor: number | undefined;
+    try {
+      descriptor = fs.openSync(sourcePath, 'r');
+      const stat = fs.fstatSync(descriptor);
+      if (!stat.isFile()) {
+        return {
+          diagnostic: diagnostic(
+            'unreadable',
+            scope,
+            'Instruction source must be a regular file',
+            sourcePath,
+          ),
+        };
+      }
+      const limit = this.config.project_instruction_max_bytes;
+      if (stat.size > limit) {
+        return {
+          diagnostic: diagnostic(
+            'over-budget',
+            scope,
+            'Instruction source exceeds the configured byte budget',
+            sourcePath,
+          ),
+        };
+      }
+      const buffer = Buffer.alloc(limit + 1);
+      let bytesRead = 0;
+      while (bytesRead < buffer.length) {
+        const count = fs.readSync(
+          descriptor,
+          buffer,
+          bytesRead,
+          buffer.length - bytesRead,
+          null,
+        );
+        if (count === 0) break;
+        bytesRead += count;
+      }
+      if (bytesRead > limit) {
+        return {
+          diagnostic: diagnostic(
+            'over-budget',
+            scope,
+            'Instruction source exceeds the configured byte budget',
+            sourcePath,
+          ),
+        };
+      }
+      return { body: buffer.subarray(0, bytesRead).toString('utf8') };
+    } catch {
+      return {
+        diagnostic: diagnostic('unreadable', scope, 'Instruction file is unreadable', sourcePath),
+      };
+    } finally {
+      if (descriptor !== undefined) fs.closeSync(descriptor);
+    }
+  }
+
+  private isAllowlistedInstructionPath(sourcePath: string): boolean {
+    return this.filenameKeys.has(path.basename(sourcePath).toLocaleLowerCase('en-US'));
   }
 
   private acceptSource(scanned: ScannedSelection): {

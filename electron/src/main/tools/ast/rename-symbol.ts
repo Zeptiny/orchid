@@ -1,23 +1,28 @@
 /** Apply a previously-previewed cross-file symbol rename manifest. */
 import { z } from 'zod';
-import { filePathIntent, type ToolDefinition, type ToolHandler } from '../types';
+
 import { RiskClass } from '../../../shared/types/permission';
-import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
+import { filePathIntent, genericToolResultMetadata } from '../types';
 import {
   buildRenamePlan,
   renameManifestSchema,
   validateRenameManifest,
-  type RenameManifest,
 } from './plan-symbol-rename';
 import { atomicWrite } from './utils';
 
+import type { RenameManifest } from './plan-symbol-rename';
+import type { ToolDefinition, ToolHandler } from '../types';
+
+/** Runtime contract for applying an unchanged signed rename manifest. */
 export const renameSymbolSchema = z.object({
   manifest: renameManifestSchema,
 }).strict();
 
+/** Validated input for `rename_symbol`. */
 export type RenameSymbolInput = z.infer<typeof renameSymbolSchema>;
 
+/** Mutation tool metadata for applying a signed rename preview. */
 export const renameSymbolDefinition: ToolDefinition = {
   ...genericToolResultMetadata,
   name: 'rename_symbol',
@@ -35,13 +40,14 @@ function manifestsMatch(left: RenameManifest, right: RenameManifest): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+/** Revalidate and apply an app-issued rename manifest. */
 export const renameSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
   const parsed = renameSymbolSchema.safeParse(input);
   if (!parsed.success) {
     return genericBuiltInToolOutcome('rename_symbol', { error: parsed.error.issues[0]?.message ?? 'Invalid rename manifest.' }, 'error', 'invalid_rename_manifest');
   }
   const manifest = parsed.data.manifest;
-  const integrityError = validateRenameManifest(manifest);
+  const integrityError = validateRenameManifest(ctx.cwd, manifest);
   if (integrityError) {
     return genericBuiltInToolOutcome('rename_symbol', { error: integrityError }, 'error', 'invalid_rename_manifest', integrityError);
   }

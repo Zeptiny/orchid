@@ -1107,6 +1107,13 @@ export function buildToolMap(
 
   // Get filtered tools from registry
   const filtered = registry.filter([...allowedTools]);
+  if (
+    filtered.some(({ definition }) => definition.name === 'rename_symbol')
+    && !filtered.some(({ definition }) => definition.name === 'plan_symbol_rename')
+  ) {
+    const planner = registry.filter(['plan_symbol_rename'])[0];
+    if (planner) filtered.push(planner);
+  }
 
   for (const { definition } of filtered) {
     const outputSchema = registry.getToolExecutionResultSchema(definition.name);

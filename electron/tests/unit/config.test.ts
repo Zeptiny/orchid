@@ -617,6 +617,9 @@ describe('configSchema range rejection', () => {
 
   it('accepts only unique instruction fallback basenames that do not shadow AGENTS files', () => {
     expect(configSchema.safeParse({
+      project_instruction_fallback_filenames: [],
+    }).success).toBe(true);
+    expect(configSchema.safeParse({
       project_instruction_fallback_filenames: ['CLAUDE.md', 'GEMINI.md'],
     }).success).toBe(true);
     expect(configSchema.safeParse({
@@ -850,6 +853,20 @@ describe('loadConfig', () => {
     expect(largerProjectCfg.project_instruction_fallback_filenames).toEqual(['LARGER.md']);
     expect(largerProjectCfg.project_instruction_max_bytes).toBe(524_288);
     expect(largerProjectCfg.project_instruction_max_import_depth).toBe(10);
+  });
+
+  it('allows a project to disable instruction fallback filenames explicitly', () => {
+    const homeConfig = path.join(tmpDir, 'home-config.json');
+    writeJson(homeConfig, {
+      project_instruction_fallback_filenames: ['HOME.md'],
+    });
+    writeJson(path.join(tmpDir, '.orchid.json'), {
+      project_instruction_fallback_filenames: [],
+    });
+
+    const cfg = loadConfig({ projectDir: tmpDir, homeConfigPath: homeConfig });
+
+    expect(cfg.project_instruction_fallback_filenames).toEqual([]);
   });
 
   it('deep merges mcp_servers across home and project', () => {

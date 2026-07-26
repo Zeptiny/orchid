@@ -9,6 +9,10 @@ import { buildToolMap } from '../../src/main/llm/orchestrator';
 import { executeToolCall } from '../../src/main/llm/tool-dispatch';
 import { approvalStore } from '../../src/main/permissions/approval-store';
 import { createProjectInstructionContext } from '../../src/main/project/instructions';
+import {
+  readDefinition,
+  readHandler,
+} from '../../src/main/tools/filesystem/read';
 import { ToolRegistry } from '../../src/main/tools/registry';
 import { directoryPathIntent, filePathIntent } from '../../src/main/tools/types';
 import { genericToolResultDataSchema } from '../../src/shared/types/tool-result';
@@ -309,5 +313,38 @@ describe('hierarchical instruction dispatch', () => {
 
     expect(result.canonical.error?.code).toBe('stale_instruction_scope');
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('reads the preflighted target when an activating symlink changes during discovery', async () => {
+    const root = workspace();
+    const outside = workspace();
+    const inside = path.join(root, 'inside');
+    fs.mkdirSync(inside);
+    fs.writeFileSync(path.join(inside, 'AGENTS.md'), 'inside instructions');
+    fs.writeFileSync(path.join(inside, 'file.ts'), 'inside source');
+    fs.writeFileSync(path.join(outside, 'file.ts'), 'outside source');
+    const link = path.join(root, 'target');
+    fs.symlinkSync(inside, link);
+    const context = createProjectInstructionContext(root, defaults());
+    context.beginStep(1);
+    const discover = context.discover.bind(context);
+    vi.spyOn(context, 'discover').mockImplementation(async (targets) => {
+      const discovery = await discover(targets);
+      fs.unlinkSync(link);
+      fs.symlinkSync(outside, link);
+      return discovery;
+    });
+    const registry = new ToolRegistry();
+    registry.register(readDefinition, readHandler);
+
+    const result = await executeToolCall(
+      { id: 'stable-read', name: 'read', args: { file_path: 'target/file.ts' } },
+      registry,
+      { cwd: root, instructionContext: context },
+    );
+
+    expect(result.canonical.status).toBe('complete');
+    expect(JSON.stringify(result.canonical)).toContain('inside source');
+    expect(JSON.stringify(result.canonical)).not.toContain('outside source');
   });
 });

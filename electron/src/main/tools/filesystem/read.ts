@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import { filePathIntent, type ToolDefinition, type ToolHandler, type ToolHandlerOutcome } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
-import { getToolConfig, resolveToolPath } from '../types';
+import { getToolConfig, resolveBoundToolPath } from '../types';
 import { isBinaryFileSync } from '../ast/utils';
 import {
   fileContentDataSchema,
@@ -111,7 +111,7 @@ function splitSourceLines(content: string): string[] {
 
 export const readHandler: ToolHandler = async (input: unknown, ctx) => {
   const { file_path: rawPath, offset = 1, limit } = input as ReadInput;
-  const filePath = resolveToolPath(ctx.cwd, rawPath);
+  const filePath = resolveBoundToolPath(ctx, rawPath);
   const configuredLimit = getToolConfig(ctx).read_line_limit;
   const effectiveLimit = limit ?? configuredLimit ?? 1000;
   const requestedEnd = offset + effectiveLimit - 1;

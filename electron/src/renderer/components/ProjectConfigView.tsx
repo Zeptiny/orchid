@@ -381,7 +381,9 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
   const handleFieldChange = useCallback((field: ProjectFieldSpec, raw: string) => {
     const trimmed = raw.trim();
     setDraft((previous) => {
-      if (trimmed === '') return { ...previous, [field.key]: null };
+      if (trimmed === '') {
+        return { ...previous, [field.key]: field.kind === 'string-list' ? [] : null };
+      }
       switch (field.kind) {
         case 'text':
         case 'theme':
@@ -391,7 +393,7 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
           return { ...previous, [field.key]: trimmed === 'true' };
         case 'string-list': {
           const entries = parseCommaSeparatedList(trimmed);
-          return { ...previous, [field.key]: entries.length > 0 ? entries : null };
+          return { ...previous, [field.key]: entries };
         }
         default: {
           const num = parseConfigNumber(

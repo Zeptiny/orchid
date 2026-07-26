@@ -18,7 +18,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { z } from 'zod';
-import { renameManifestSchema, type RenameManifest } from '../../src/main/tools/ast/plan-symbol-rename';
+import {
+  manifestDigest,
+  renameManifestSchema,
+  type RenameManifest,
+} from '../../src/main/tools/ast/plan-symbol-rename';
 
 function outputText(result: unknown): string {
   const value = (result as { data?: { value?: unknown } }).data?.value;
@@ -794,6 +798,7 @@ describe('plan_symbol_rename / rename_symbol', () => {
       expect.objectContaining({ path: 'uses.py', replacements: 2 }),
     ]);
     expect(manifest.files.every((file: { hash: string }) => /^[a-f0-9]{64}$/.test(file.hash))).toBe(true);
+    expect((manifest as RenameManifest & { capability?: string }).capability).toMatch(/^[a-f0-9]{64}$/);
     const { manifestResultPathIntents } = await import('../../src/main/tools/ast/plan-symbol-rename');
     expect(manifestResultPathIntents({ data: { value: toolResultValue(planned) } }).map((intent) => intent.userPath)).toEqual([
       'definitions.py',
@@ -856,6 +861,47 @@ describe('plan_symbol_rename / rename_symbol', () => {
     expect(toolResultValue(stale)).toHaveProperty('error');
     expect(fs.readFileSync(anchor, 'utf8')).toContain('target');
     expect(fs.readFileSync(anchor, 'utf8')).not.toContain('renamed');
+  });
+
+  it('rejects a publicly recomputed manifest that was not issued by the preview', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const anchor = path.join(projectDir, 'test.py');
+    fs.writeFileSync(anchor, 'def target():\n    return target()\n');
+    const planned = await preview(projectDir, anchor, 'target', 'renamed');
+    const forged = structuredClone(manifestFrom(planned));
+    forged.new_name = 'forged_name';
+    forged.digest = manifestDigest({
+      version: forged.version,
+      anchor: forged.anchor,
+      old_name: forged.old_name,
+      new_name: forged.new_name,
+      files: forged.files,
+    });
+
+    const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
+    const result = await renameSymbolHandler({ manifest: forged }, { cwd: projectDir });
+
+    expect(toolResultValue(result)).toHaveProperty('error');
+    expect(fs.readFileSync(anchor, 'utf8')).toContain('target');
+    expect(fs.readFileSync(anchor, 'utf8')).not.toContain('forged_name');
+  });
+
+  it('rejects a rename when the indexed name has multiple definitions', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const anchor = path.join(projectDir, 'first.py');
+    const duplicate = path.join(projectDir, 'second.py');
+    fs.writeFileSync(anchor, 'def target():\n    return target()\n');
+    fs.writeFileSync(duplicate, 'def target():\n    return target()\n');
+
+    const planned = await preview(projectDir, anchor, 'target', 'renamed');
+
+    expect(toolResultValue(planned)).toMatchObject({
+      error: expect.stringContaining('exactly one indexed definition'),
+    });
+    expect(fs.readFileSync(anchor, 'utf8')).toContain('target');
+    expect(fs.readFileSync(duplicate, 'utf8')).toContain('target');
   });
 
   it('rejects invalid identifiers before writing', async () => {

@@ -122,6 +122,52 @@ describe('ProjectInstructionContext', () => {
     expect(linkedDiscovery.diagnostics.map((item) => item.code)).toContain('escaped-workspace');
   });
 
+  it('rejects selected symlinks whose terminal filename is not allowlisted', async () => {
+    const root = workspace();
+    const secret = write(root, '.env', 'SECRET=do-not-send');
+    fs.symlinkSync(secret, path.join(root, 'AGENTS.md'));
+    const context = createProjectInstructionContext(root, defaults());
+    const target = path.join(root, 'file.ts');
+
+    const discovery = await context.discover([target]);
+
+    expect(discovery.sources).toHaveLength(0);
+    expect(discovery.envelope).not.toContain('SECRET=do-not-send');
+    expect(discovery.diagnostics.map((item) => item.code)).toContain('invalid-selector');
+    expect((await context.preflightMutation([target])).status).toBe('blocked');
+  });
+
+  it('allows selected symlinks to configured instruction filenames', async () => {
+    const root = workspace();
+    const fallback = write(root, 'rules/CLAUDE.md', 'configured terminal');
+    fs.symlinkSync(fallback, path.join(root, 'AGENTS.md'));
+    const context = createProjectInstructionContext(root, defaults());
+
+    const discovery = await context.discover([path.join(root, 'file.ts')]);
+
+    expect(discovery.sources).toHaveLength(1);
+    expect(discovery.sources[0]).toMatchObject({
+      path: fs.realpathSync.native(fallback),
+      body: 'configured terminal',
+    });
+    expect(discovery.diagnostics.map((item) => item.code)).not.toContain('invalid-selector');
+  });
+
+  it('rejects shim symlinks whose terminal filename is not allowlisted', async () => {
+    const root = workspace();
+    write(root, 'AGENTS.md', '@rules/CLAUDE.md');
+    const secret = write(root, '.env', 'SECRET=do-not-send');
+    fs.mkdirSync(path.join(root, 'rules'));
+    fs.symlinkSync(secret, path.join(root, 'rules', 'CLAUDE.md'));
+    const context = createProjectInstructionContext(root, defaults());
+
+    const discovery = await context.discover([path.join(root, 'file.ts')]);
+
+    expect(discovery.sources).toHaveLength(0);
+    expect(discovery.envelope).not.toContain('SECRET=do-not-send');
+    expect(discovery.diagnostics.map((item) => item.code)).toContain('invalid-import');
+  });
+
   it('honors the configured shim depth boundary', async () => {
     const root = workspace();
     write(root, 'AGENTS.md', '@CLAUDE.md');
@@ -245,6 +291,27 @@ describe('ProjectInstructionContext', () => {
     expect((await context.preflightMutation([path.join(root, 'file.ts')])).status).toBe('blocked');
   });
 
+  it('rejects oversized shim targets and non-regular selected sources before parsing', async () => {
+    const oversizedRoot = workspace();
+    write(oversizedRoot, 'AGENTS.md', '@rules/CLAUDE.md');
+    write(oversizedRoot, 'rules/CLAUDE.md', 'x'.repeat(8_000));
+    const oversized = createProjectInstructionContext(oversizedRoot, {
+      ...defaults(),
+      project_instruction_max_bytes: 4_096,
+    });
+
+    const oversizedDiscovery = await oversized.discover([path.join(oversizedRoot, 'file.ts')]);
+    expect(oversizedDiscovery.sources).toHaveLength(0);
+    expect(oversizedDiscovery.diagnostics.map((item) => item.code)).toContain('over-budget');
+
+    const nonRegularRoot = workspace();
+    fs.mkdirSync(path.join(nonRegularRoot, 'AGENTS.md'));
+    const nonRegular = createProjectInstructionContext(nonRegularRoot, defaults());
+    const nonRegularDiscovery = await nonRegular.discover([path.join(nonRegularRoot, 'file.ts')]);
+    expect(nonRegularDiscovery.sources).toHaveLength(0);
+    expect(nonRegularDiscovery.diagnostics.map((item) => item.code)).toContain('unreadable');
+  });
+
   it('atomically blocks a multi-target mutation when any branch is blocked', async () => {
     const root = workspace();
     write(root, 'safe/AGENTS.md', 'safe rules');
@@ -314,5 +381,26 @@ describe('ProjectInstructionContext', () => {
     const output = context.claimProviderDelivery('siblings-tight').envelope;
     expect((output.match(/<project_instruction /g) ?? [])).toHaveLength(1);
     expect((output.match(/<project_instruction_ref/g) ?? [])).toHaveLength(1);
+  });
+
+  it('emits each shared source scope once in one multi-target discovery', async () => {
+    const root = workspace();
+    write(root, 'AGENTS.md', 'r'.repeat(1_200));
+    write(root, 'left/AGENTS.md', 'l'.repeat(900));
+    write(root, 'right/AGENTS.md', 'x'.repeat(900));
+    const context = createProjectInstructionContext(root, {
+      ...defaults(),
+      project_instruction_max_bytes: 4_096,
+    });
+
+    const discovery = await context.discover([
+      path.join(root, 'left', 'one.ts'),
+      path.join(root, 'right', 'two.ts'),
+    ]);
+    const sourceKeys = discovery.sources.map((source) => `${source.path}\0${source.scope}`);
+
+    expect(new Set(sourceKeys).size).toBe(sourceKeys.length);
+    expect(discovery.sources.filter((source) => source.scope === root)).toHaveLength(1);
+    expect(Buffer.byteLength(discovery.envelope, 'utf8')).toBeLessThanOrEqual(4_096);
   });
 });

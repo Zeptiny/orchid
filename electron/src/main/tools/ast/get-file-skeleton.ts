@@ -12,7 +12,7 @@ import { filePathIntent, type ToolDefinition, type ToolHandler } from '../types'
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
-import { resolveToolPath } from '../types';
+import { resolveBoundToolPath } from '../types';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from '../../ast/parser';
 
 // ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ export const getFileSkeletonDefinition: ToolDefinition = {
 
 export const getFileSkeletonHandler: ToolHandler = async (input: unknown, ctx) => {
   const { file_path: rawPath } = input as GetFileSkeletonInput;
-  const file_path = resolveToolPath(ctx.cwd, rawPath);
+  const file_path = resolveBoundToolPath(ctx, rawPath);
 
   try {
     if (!fs.existsSync(file_path)) {

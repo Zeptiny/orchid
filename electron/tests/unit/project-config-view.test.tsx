@@ -454,6 +454,26 @@ describe('ProjectConfigView', () => {
     });
   });
 
+  it('saves an empty instruction fallback list as an explicit project override', async () => {
+    const user = userEvent.setup();
+    const { saveProject } = await renderLoaded({
+      project_instruction_fallback_filenames: ['TEAM.md'],
+    });
+    setInputValue(inputById('project_instruction_fallback_filenames'), '');
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: {
+          project_instruction_fallback_filenames: [],
+        },
+      });
+    });
+  });
+
   it('permissions tab shows stored project rules and saves via savePermissionScope', async () => {
     const user = userEvent.setup();
     const { savePermissionScope, saveProject } = await renderLoaded({

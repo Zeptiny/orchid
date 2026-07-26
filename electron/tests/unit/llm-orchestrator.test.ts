@@ -1148,6 +1148,23 @@ describe('ToolRegistry integration with dispatch', () => {
     });
   });
 
+  it('buildToolMap includes the rename planner for rename-only agent allowlists', async () => {
+    const {
+      planSymbolRenameDefinition,
+      planSymbolRenameHandler,
+    } = await import('../../src/main/tools/ast/plan-symbol-rename');
+    const {
+      renameSymbolDefinition,
+      renameSymbolHandler,
+    } = await import('../../src/main/tools/ast/rename-symbol');
+    registry.register(planSymbolRenameDefinition, planSymbolRenameHandler);
+    registry.register(renameSymbolDefinition, renameSymbolHandler);
+
+    const tools = buildToolMap(['rename_symbol'], registry, null, {});
+
+    expect(Object.keys(tools).sort()).toEqual(['plan_symbol_rename', 'rename_symbol']);
+  });
+
   it('buildToolMap keeps canonical output raw while toModelOutput exposes only the projection', async () => {
     const canonicalOnly = 'CANONICAL_ONLY_SENTINEL';
     registry.register(

@@ -352,6 +352,16 @@ export async function executeToolCall(
     projectRuntime: options.projectRuntime,
     agentScopeId: options.agentScopeId,
     windowId: options.windowId,
+    pathBindings: resolvedScope?.intents
+      .filter((intent) =>
+        intent.access === 'read'
+        && intent.activateInstructions
+        && intent.effectivePath !== null,
+      )
+      .map(({ resolvedPath, effectivePath }) => ({
+        resolvedPath,
+        effectivePath: effectivePath!,
+      })),
     abortSignal: combinedAbort,
   };
 

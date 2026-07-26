@@ -10,7 +10,7 @@ import * as pathModule from 'node:path';
 import { z } from 'zod';
 import { directoryPathIntent, type ToolDefinition, type ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
-import { getToolConfig, resolveToolPath } from '../types';
+import { getToolConfig, resolveBoundToolPath } from '../types';
 import {
   directoryEntriesDataSchema,
   type DirectoryEntriesData,
@@ -186,7 +186,7 @@ export const readDirectoryHandler: ToolHandler = async (
     max_depth,
     include_hidden = false,
   } = input as ReadDirectoryInput;
-  const directoryPath = resolveToolPath(ctx.cwd, rawDir);
+  const directoryPath = resolveBoundToolPath(ctx, rawDir);
   const config = getToolConfig(ctx);
   const depthLimit = max_depth ?? config.directory_tree_depth ?? 2;
   const ignoredDirs = new Set(config.ignored_dirs);

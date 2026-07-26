@@ -54,7 +54,11 @@ async function handleExecute(message: ToolWorkerExecuteMessage): Promise<void> {
       skills: new Map(),
       personalities: new Map(),
     };
-    const toolCtx: ToolExecutionContext = { cwd: context.cwd, projectRuntime };
+    const toolCtx: ToolExecutionContext = {
+      cwd: context.cwd,
+      projectRuntime,
+      pathBindings: context.pathBindings,
+    };
     const result = await registered.handler(validation.data, toolCtx);
     post({ type: 'result', taskId, result });
   } catch (err: unknown) {

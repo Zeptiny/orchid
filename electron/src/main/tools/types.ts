@@ -129,6 +129,14 @@ export interface ToolDefinition {
   offload?: boolean;
 }
 
+/** An effective read path frozen by central preflight for one declared input. */
+export interface PreflightedPathBinding {
+  /** Absolute lexical path obtained from the user input and frozen cwd. */
+  resolvedPath: string;
+  /** Canonical/effective path observed before instruction discovery. */
+  effectivePath: string;
+}
+
 /**
  * Frozen per-turn execution context for tools.
  *
@@ -151,6 +159,8 @@ export interface ToolExecutionContext {
    * Isolates todos and background commands so peer agents cannot see each other.
    */
   agentScopeId?: string;
+  /** Read targets already resolved by permission and instruction preflight. */
+  pathBindings?: readonly PreflightedPathBinding[];
   /**
    * Abort signal for outer tool-dispatch timeout / parent cancel.
    *
@@ -181,12 +191,15 @@ export function getToolConfig(ctx: ToolExecutionContext): Config {
 export interface WorkerToolContext {
   cwd: string;
   config: Config;
+  pathBindings?: readonly PreflightedPathBinding[];
 }
 
+/** Reduce a full tool context to values that can cross the worker boundary. */
 export function toWorkerContext(ctx: ToolExecutionContext): WorkerToolContext {
   return {
     cwd: ctx.cwd,
     config: ctx.projectRuntime?.config ?? getConfig(),
+    pathBindings: ctx.pathBindings,
   };
 }
 
@@ -199,6 +212,17 @@ export function resolveToolPath(cwd: string, userPath: string): string {
     return path.normalize(userPath);
   }
   return path.resolve(cwd, userPath);
+}
+
+/**
+ * Resolve a read path to its preflighted effective target when one is bound.
+ *
+ * Direct handler callers retain the normal cwd-relative behavior.
+ */
+export function resolveBoundToolPath(ctx: ToolExecutionContext, userPath: string): string {
+  const resolvedPath = resolveToolPath(ctx.cwd, userPath);
+  return ctx.pathBindings?.find((binding) => binding.resolvedPath === resolvedPath)?.effectivePath
+    ?? resolvedPath;
 }
 
 /** Handler function that executes the tool with validated input + turn context. */

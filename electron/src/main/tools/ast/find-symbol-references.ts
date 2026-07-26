@@ -11,7 +11,7 @@ import { filePathIntent, type ToolDefinition, type ToolHandler } from '../types'
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
-import { resolveToolPath } from '../types';
+import { resolveBoundToolPath, resolveToolPath } from '../types';
 import { ensureIndexed } from '../../ast/indexer';
 import { ASTStore } from '../../ast/store';
 import { withDisposable } from '../../utils/with-disposable';
@@ -71,7 +71,7 @@ export const findSymbolReferencesHandler: ToolHandler = async (input: unknown, c
       (store) => store.getSymbolsByName(symbol_name, 'both'),
     );
 
-    const filterPath = file_path ? resolveToolPath(ctx.cwd, file_path) : undefined;
+    const filterPath = file_path ? resolveBoundToolPath(ctx, file_path) : undefined;
     const filtered = filterPath
       ? symbols.filter(
           (s) =>
