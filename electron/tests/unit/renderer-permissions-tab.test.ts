@@ -122,6 +122,7 @@ describe('PermissionsTab grouping', () => {
       'get_file_skeleton',
       'get_function',
       'find_symbol_references',
+      'plan_symbol_rename',
       'list_mcp_resources',
       'read_mcp_resource',
       'todo_list',

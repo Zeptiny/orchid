@@ -423,6 +423,14 @@ export function buildToolTitle(input: ToolTitleInput): ToolTitle {
       preparing: 'Preparing to rename', running: 'Renaming', completed: 'Renamed', failed: 'rename',
     }, subject ?? undefined);
   }
+  if (tool === 'plan_symbol_rename') {
+    const oldName = valueForKey(rawArgs, args, ['old_name']);
+    const newName = valueForKey(rawArgs, args, ['new_name']);
+    const subject = oldName && newName ? `${oldName} to ${newName}` : oldName || newName;
+    return withLifecycle(input.status, {
+      preparing: 'Preparing to preview rename', running: 'Previewing rename', completed: 'Previewed rename', failed: 'preview rename',
+    }, subject ?? undefined);
+  }
   if (tool === 'replace_symbol') return withLifecycle(input.status, {
     preparing: 'Preparing to replace', running: 'Replacing', completed: 'Replaced', failed: 'replace',
   }, valueForKey(rawArgs, args, ['symbol_name', 'symbol']) ?? undefined);

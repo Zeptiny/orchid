@@ -16,6 +16,7 @@ allowed_tools:
   - get_function
   - find_symbol_references
   - replace_symbol
+  - plan_symbol_rename
   - rename_symbol
   - ask_question
 allowed_skills: []

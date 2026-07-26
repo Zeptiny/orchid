@@ -48,6 +48,10 @@ import {
   renameSymbolHandler,
 } from '../../src/main/tools/ast/rename-symbol';
 import {
+  planSymbolRenameDefinition,
+  planSymbolRenameHandler,
+} from '../../src/main/tools/ast/plan-symbol-rename';
+import {
   astIndexDefinition,
   astIndexHandler,
 } from '../../src/main/tools/ast/index-tool';
@@ -70,7 +74,7 @@ import { buildAskQuestionTool } from '../../src/main/tools/ask-question';
 import { registerBuiltinTools, toolRegistry } from '../../src/main/tools';
 import { FILE_TOOLS } from '../../src/shared/types/permission';
 
-// ── Expected tool names (32 total) ─────────────────────────────────────────
+// ── Expected tool names (33 total) ─────────────────────────────────────────
 
 const EXPECTED_TOOL_NAMES = [
   // Filesystem (6)
@@ -114,6 +118,7 @@ const EXPECTED_TOOL_NAMES = [
   'get_function',
   'find_symbol_references',
   'replace_symbol',
+  'plan_symbol_rename',
   'rename_symbol',
   'ast_index',
 ];
@@ -275,6 +280,13 @@ describe('Static Tool Definitions', () => {
       expect(replaceSymbolDefinition.category).toBe('ast');
     });
 
+    it('plan_symbol_rename has valid definition, schema, and handler', () => {
+      expectValidDefinition(planSymbolRenameDefinition, 'plan_symbol_rename');
+      expectValidJsonSchema(planSymbolRenameDefinition.inputSchema, 'plan_symbol_rename');
+      expectValidHandler(planSymbolRenameHandler);
+      expect(planSymbolRenameDefinition.category).toBe('ast');
+    });
+
     it('rename_symbol has valid definition, schema, and handler', () => {
       expectValidDefinition(renameSymbolDefinition, 'rename_symbol');
       expectValidJsonSchema(renameSymbolDefinition.inputSchema, 'rename_symbol');
@@ -397,14 +409,14 @@ describe('Dynamic Tool Builders', () => {
 // ── Completeness Check ─────────────────────────────────────────────────────
 
 describe('Tool Completeness', () => {
-  it('all 32 expected tool names are defined in this test file', () => {
+  it('all 33 expected tool names are defined in this test file', () => {
     // This test ensures we haven't accidentally removed a tool from our list.
     // If a new tool is added to the codebase, this list must be updated.
-    expect(EXPECTED_TOOL_NAMES).toHaveLength(32);
+    expect(EXPECTED_TOOL_NAMES).toHaveLength(33);
   });
 
   it('static tool count matches expected', () => {
-    // 6 filesystem + 1 search + 2 rag + 4 process + 6 ast = 19 static tools
+    // 6 filesystem + 1 search + 2 rag + 4 process + 7 ast = 20 static tools
     const staticDefinitions = [
       applyPatchDefinition,
       readDefinition,
@@ -423,16 +435,17 @@ describe('Tool Completeness', () => {
       getFunctionDefinition,
       findSymbolReferencesDefinition,
       replaceSymbolDefinition,
+      planSymbolRenameDefinition,
       renameSymbolDefinition,
       astIndexDefinition,
     ];
-    expect(staticDefinitions).toHaveLength(19);
+    expect(staticDefinitions).toHaveLength(20);
     // All names should be unique
     const names = staticDefinitions.map((d) => d.name);
-    expect(new Set(names).size).toBe(19);
+    expect(new Set(names).size).toBe(20);
   });
 
-  it('every catalogued file tool declares path intents or the U5 planning exception', () => {
+  it('every catalogued file tool declares input path intents', () => {
     const definitions = [
       applyPatchDefinition,
       readDefinition,
@@ -445,16 +458,13 @@ describe('Tool Completeness', () => {
       getFunctionDefinition,
       findSymbolReferencesDefinition,
       replaceSymbolDefinition,
+      planSymbolRenameDefinition,
       renameSymbolDefinition,
     ];
     expect(new Set(definitions.map((definition) => definition.name))).toEqual(FILE_TOOLS);
     for (const definition of definitions) {
-      expect(
-        definition.inputPathIntents ?? definition.pathIntentException,
-        `${definition.name} must declare input path intents or an explicit planning exception`,
-      ).toBeTruthy();
+      expect(definition.inputPathIntents, `${definition.name} must declare input path intents`).toBeTruthy();
     }
-    expect(renameSymbolDefinition.pathIntentException).toBe('requires-result-planning');
   });
 
   it('all tool names are unique across static and dynamic tools', () => {
@@ -476,6 +486,7 @@ describe('Tool Completeness', () => {
       getFunctionDefinition.name,
       findSymbolReferencesDefinition.name,
       replaceSymbolDefinition.name,
+      planSymbolRenameDefinition.name,
       renameSymbolDefinition.name,
       astIndexDefinition.name,
       // Dynamic tool names (from builder output)
@@ -493,8 +504,8 @@ describe('Tool Completeness', () => {
       buildAnswerSubagentTool({} as any).definition.name,
       buildAskQuestionTool({} as any).definition.name,
     ];
-    expect(allNames).toHaveLength(32);
-    expect(new Set(allNames).size).toBe(32);
+    expect(allNames).toHaveLength(33);
+    expect(new Set(allNames).size).toBe(33);
   });
 
   it('registerBuiltinTools populates the singleton registry with all tools', () => {

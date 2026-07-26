@@ -30,6 +30,7 @@ describe('isGroupableTool / toolFamily', () => {
     expect(isGroupableTool('find_symbol_references')).toBe(true);
     expect(isGroupableTool('get_function')).toBe(true);
     expect(isGroupableTool('get_file_skeleton')).toBe(true);
+    expect(isGroupableTool('plan_symbol_rename')).toBe(true);
     expect(isGroupableTool('todo_create')).toBe(true);
     expect(isGroupableTool('todo_update')).toBe(true);
     expect(isGroupableTool('todo_delete')).toBe(true);
@@ -56,6 +57,7 @@ describe('isGroupableTool / toolFamily', () => {
     expect(toolFamily('find_symbol_references')).toBe('ast');
     expect(toolFamily('get_function')).toBe('ast');
     expect(toolFamily('get_file_skeleton')).toBe('ast');
+    expect(toolFamily('plan_symbol_rename')).toBe('ast');
     expect(toolFamily('todo_create')).toBe('todo');
     expect(toolFamily('todo_update')).toBe('todo');
     expect(toolFamily('todo_delete')).toBe('todo');

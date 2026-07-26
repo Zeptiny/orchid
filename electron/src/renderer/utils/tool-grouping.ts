@@ -5,7 +5,7 @@
  * - search: grep, glob, rag_search
  * - read:   read, read_directory
  * - fetch:  web_fetch
- * - ast:    find_symbol_references, get_function, get_file_skeleton
+ * - ast:    find_symbol_references, get_function, get_file_skeleton, plan_symbol_rename
  * - skill:  skill
  *
  * Mutations (edit, write, replace_symbol, rename_symbol, rag_index, exec, …)
@@ -29,6 +29,7 @@ export const GROUPABLE_TOOLS = new Set([
   'find_symbol_references',
   'get_function',
   'get_file_skeleton',
+  'plan_symbol_rename',
   // skill
   'skill',
   // todo
@@ -80,6 +81,7 @@ export function toolFamily(toolName: string): ToolGroupFamily {
     lower === 'find_symbol_references' ||
     lower === 'get_function' ||
     lower === 'get_file_skeleton'
+    || lower === 'plan_symbol_rename'
   ) {
     return 'ast';
   }

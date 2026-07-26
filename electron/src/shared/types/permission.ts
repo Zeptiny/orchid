@@ -75,6 +75,7 @@ export const FILE_TOOLS = new Set<string>([
   'get_function',
   'find_symbol_references',
   'replace_symbol',
+  'plan_symbol_rename',
   'rename_symbol',
 ]);
 
@@ -87,6 +88,7 @@ export const FILE_TOOL_DEFAULTS: Record<string, FileToolPermission> = {
   get_file_skeleton: { inside: 'allow', outside: 'ask' },
   get_function: { inside: 'allow', outside: 'ask' },
   find_symbol_references: { inside: 'allow', outside: 'ask' },
+  plan_symbol_rename: { inside: 'allow', outside: 'ask' },
   write: { inside: 'ask', outside: 'ask' },
   edit: { inside: 'ask', outside: 'ask' },
   apply_patch: { inside: 'ask', outside: 'ask' },

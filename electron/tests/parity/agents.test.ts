@@ -140,6 +140,7 @@ describe('Agent Parity', () => {
     expect(general.allowed_tools).toContain('write');
     expect(general.allowed_tools).toContain('apply_patch');
     expect(general.allowed_tools).toContain('delegate_to_subagent');
+    expect(general.allowed_tools).toContain('plan_symbol_rename');
     expect(general.allowed_skills).toContain('*');
 
     const webFetch = getAgent('web-fetch')!;
@@ -150,6 +151,7 @@ describe('Agent Parity', () => {
 
     const implementer = getAgent('implementer')!;
     expect(implementer.allowed_tools).toContain('apply_patch');
+    expect(implementer.allowed_tools).toContain('plan_symbol_rename');
   });
 
   it('explorer has read-only tools (no edit/write)', () => {
@@ -164,6 +166,7 @@ describe('Agent Parity', () => {
     expect(explorer.allowed_tools).toContain('grep');
     expect(explorer.allowed_tools).not.toContain('edit');
     expect(explorer.allowed_tools).not.toContain('write');
+    expect(explorer.allowed_tools).not.toContain('plan_symbol_rename');
   });
 
   it('tier distribution matches bundled defaults', () => {

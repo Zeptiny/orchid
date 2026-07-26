@@ -122,12 +122,6 @@ export interface ToolDefinition {
   /** Optional declaration of paths exposed by a canonical tool result. */
   resultPathIntents?: ToolResultPathIntentResolver;
 
-  /**
-   * Temporary, explicit exception for a path-affecting tool whose targets can
-   * only be known after an independent planning step.
-   */
-  pathIntentException?: 'requires-result-planning';
-
   /** If true, skip timeout for this tool */
   noTimeout?: boolean;
 

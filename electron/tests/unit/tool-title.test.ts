@@ -183,4 +183,19 @@ describe('tool widget titles', () => {
       partialArgs: '',
     })).toBe('Couldn’t apply patch');
   });
+
+  it('distinguishes rename previews from rename application', () => {
+    expect(titleText({
+      toolName: 'plan_symbol_rename',
+      status: 'running',
+      args: JSON.stringify({ old_name: 'before', new_name: 'after' }),
+      partialArgs: '',
+    })).toBe('Previewing rename before to after');
+    expect(titleText({
+      toolName: 'plan_symbol_rename',
+      status: 'completed',
+      args: JSON.stringify({ old_name: 'before', new_name: 'after' }),
+      partialArgs: '',
+    })).toBe('Previewed rename before to after');
+  });
 });

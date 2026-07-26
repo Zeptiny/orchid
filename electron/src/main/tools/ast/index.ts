@@ -1,8 +1,8 @@
 /**
  * AST tools — exports and registration.
  *
- * All 6 AST tools: get_file_skeleton, get_function, find_symbol_references,
- * replace_symbol, rename_symbol, ast_index.
+ * All 7 AST tools: get_file_skeleton, get_function, find_symbol_references,
+ * replace_symbol, plan_symbol_rename, rename_symbol, ast_index.
  *
  * Usage:
  *   import { registerAstTools } from './tools/ast';
@@ -29,6 +29,10 @@ import {
   renameSymbolDefinition,
   renameSymbolHandler,
 } from './rename-symbol';
+import {
+  planSymbolRenameDefinition,
+  planSymbolRenameHandler,
+} from './plan-symbol-rename';
 import { astIndexDefinition, astIndexHandler } from './index-tool';
 
 /**
@@ -39,6 +43,7 @@ export function registerAstTools(registry: ToolRegistry): void {
   registry.register(getFunctionDefinition, getFunctionHandler);
   registry.register(findSymbolReferencesDefinition, findSymbolReferencesHandler);
   registry.register(replaceSymbolDefinition, replaceSymbolHandler);
+  registry.register(planSymbolRenameDefinition, planSymbolRenameHandler);
   registry.register(renameSymbolDefinition, renameSymbolHandler);
   registry.register(astIndexDefinition, astIndexHandler);
 }
@@ -68,6 +73,13 @@ export {
   replaceSymbolHandler,
   replaceSymbolSchema,
 } from './replace-symbol';
+
+export {
+  planSymbolRenameDefinition,
+  planSymbolRenameHandler,
+  planSymbolRenameSchema,
+  renameManifestSchema,
+} from './plan-symbol-rename';
 
 export {
   renameSymbolDefinition,

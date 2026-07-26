@@ -1,210 +1,99 @@
-/**
- * rename_symbol tool — rename a symbol across all files.
- *
- * Two-phase: compute all changes in memory, then write atomically per file.
- * Word boundary guard. Byte-to-char column conversion.
- *
- * Ported from Python `src/orchid/tools/ast.py` execute_rename_symbol.
- */
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+/** Apply a previously-previewed cross-file symbol rename manifest. */
 import { z } from 'zod';
-import type { ToolDefinition, ToolHandler } from '../types';
+import { filePathIntent, type ToolDefinition, type ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
-import { ensureIndexed } from '../../ast/indexer';
-import { ASTStore, type SymbolRow } from '../../ast/store';
-import { withDisposable } from '../../utils/with-disposable';
+import {
+  buildRenamePlan,
+  renameManifestSchema,
+  validateRenameManifest,
+  type RenameManifest,
+} from './plan-symbol-rename';
 import { atomicWrite } from './utils';
 
-// ---------------------------------------------------------------------------
-// Schema
-// ---------------------------------------------------------------------------
-
 export const renameSymbolSchema = z.object({
-  file_path: z.string().describe('File containing the symbol (optional — searches entire project if omitted)'),
-  old_name: z.string().describe('The current symbol name'),
-  new_name: z.string().describe('The new symbol name'),
-});
+  manifest: renameManifestSchema,
+}).strict();
 
 export type RenameSymbolInput = z.infer<typeof renameSymbolSchema>;
-
-// ---------------------------------------------------------------------------
-// Definition
-// ---------------------------------------------------------------------------
 
 export const renameSymbolDefinition: ToolDefinition = {
   ...genericToolResultMetadata,
   name: 'rename_symbol',
   description:
-    'Rename a symbol across all files in one call. Updates all definitions ' +
-    'and references atomically per file. Use this instead of multiple edit ' +
-    'calls for cross-file renames.',
+    'Apply an unchanged manifest returned by plan_symbol_rename. Revalidates the current workspace before writing any file.',
   inputSchema: renameSymbolSchema,
   category: 'ast',
   riskClass: RiskClass.MUTATION,
-  // U5 replaces this with preview result intents before any mutation occurs.
-  pathIntentException: 'requires-result-planning',
+  inputPathIntents: (input) => (input as RenameSymbolInput).manifest.files
+    .map((file) => filePathIntent(file.path, 'mutation')),
   noTimeout: true,
 };
 
-// ---------------------------------------------------------------------------
-// Identifier characters for word boundary check
-// ---------------------------------------------------------------------------
-
-const IDENT_CHARS = new Set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_');
-
-// ---------------------------------------------------------------------------
-// Handler
-// ---------------------------------------------------------------------------
+function manifestsMatch(left: RenameManifest, right: RenameManifest): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 export const renameSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
-  const { old_name, new_name } = input as RenameSymbolInput;
-
-  try {
-    if (!old_name || !old_name.trim()) {
-      return genericBuiltInToolOutcome('rename_symbol', { error: 'Symbol name is required.' }, 'error', 'tool_error', 'Symbol name is required.');
-    }
-
-    if (!new_name || !new_name.trim()) {
-      return genericBuiltInToolOutcome('rename_symbol', { error: 'New name is required.' }, 'error', 'tool_error', 'New name is required.');
-    }
-
-    const projectPath = ctx.cwd;
-    await ensureIndexed(projectPath);
-
-    const symbols = withDisposable(
-      new ASTStore(projectPath),
-      (store) => store.getSymbolsByName(old_name, 'both'),
-    );
-
-    if (symbols.length === 0) {
-      return genericBuiltInToolOutcome('rename_symbol', { error: `No references found for '${old_name}'. No files modified.` }, 'error', 'tool_error', `No references found for '${old_name}'. No files modified.`);
-    }
-
-    const byFile = new Map<string, SymbolRow[]>();
-    for (const s of symbols) {
-      const list = byFile.get(s.filePath) ?? [];
-      list.push(s);
-      byFile.set(s.filePath, list);
-    }
-
-    interface PlannedChange {
-      relPath: string;
-      absPath: string;
-      oldContent: string;
-      newContent: string;
-      replacements: number;
-    }
-
-    const planned: PlannedChange[] = [];
-    const failedFiles: string[] = [];
-
-    for (const [relPath, fileSymbols] of byFile) {
-      const absPath = path.join(projectPath, relPath);
-      if (!fs.existsSync(absPath)) {
-        failedFiles.push(relPath);
-        continue;
-      }
-
-      let content: string;
-      try {
-        content = fs.readFileSync(absPath, 'utf-8');
-      } catch {
-        failedFiles.push(relPath);
-        continue;
-      }
-
-      const lines = content.split('\n');
-
-      const sortedSyms = [...fileSymbols].sort((a, b) => {
-        if (a.startLine !== b.startLine) return b.startLine - a.startLine;
-        return b.startColumn - a.startColumn;
-      });
-
-      let fileReplacements = 0;
-
-      for (const s of sortedSyms) {
-        const lineIdx = s.startLine;
-        const byteCol = s.startColumn;
-
-        if (lineIdx >= lines.length) continue;
-
-        const line = lines[lineIdx];
-
-        const lineBytes = Buffer.from(line, 'utf-8');
-        if (byteCol > lineBytes.length) continue;
-
-        const charCol = Buffer.from(lineBytes.slice(0, byteCol)).toString('utf-8').length;
-        const charEnd = charCol + old_name.length;
-
-        if (line.slice(charCol, charEnd) !== old_name) continue;
-
-        if (charCol > 0 && IDENT_CHARS.has(line[charCol - 1])) continue;
-        if (charEnd < line.length && IDENT_CHARS.has(line[charEnd])) continue;
-
-        lines[lineIdx] = line.slice(0, charCol) + new_name + line.slice(charEnd);
-        fileReplacements++;
-      }
-
-      const newContent = lines.join('\n');
-
-      if (newContent === content) continue;
-
-      planned.push({
-        relPath,
-        absPath,
-        oldContent: content,
-        newContent,
-        replacements: fileReplacements,
-      });
-    }
-
-    if (planned.length === 0) {
-      return genericBuiltInToolOutcome('rename_symbol', { error: `No changes made for '${old_name}'.` }, 'error', 'tool_error', `No changes made for '${old_name}'.`);
-    }
-
-    const edits: Array<Record<string, string | number | boolean>> = [];
-
-    for (const change of planned) {
-      try {
-        atomicWrite(change.absPath, change.newContent);
-      } catch (writeErr) {
-        failedFiles.push(change.relPath);
-        edits.push({
-          path: change.relPath,
-          success: false,
-          replacements: 0,
-          replaceAll: false,
-          added: 0,
-          removed: 0,
-          error: String(writeErr),
-        });
-        continue;
-      }
-
-      edits.push({
-        path: change.relPath,
-        replacements: change.replacements,
-      });
-    }
-
-    if (edits.length === 0) {
-      return genericBuiltInToolOutcome('rename_symbol', { error: `No changes made for '${old_name}'.` }, 'error', 'tool_error', `No changes made for '${old_name}'.`);
-    }
-
-    const overallSuccess = failedFiles.length === 0;
-
-    return genericBuiltInToolOutcome('rename_symbol', {
-      oldName: old_name,
-      newName: new_name,
-      files: edits.length,
-      success: overallSuccess,
-      edits,
-    }, 'complete');
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return genericBuiltInToolOutcome('rename_symbol', { error: msg }, 'error', 'tool_error', msg);
+  const parsed = renameSymbolSchema.safeParse(input);
+  if (!parsed.success) {
+    return genericBuiltInToolOutcome('rename_symbol', { error: parsed.error.issues[0]?.message ?? 'Invalid rename manifest.' }, 'error', 'invalid_rename_manifest');
   }
+  const manifest = parsed.data.manifest;
+  const integrityError = validateRenameManifest(manifest);
+  if (integrityError) {
+    return genericBuiltInToolOutcome('rename_symbol', { error: integrityError }, 'error', 'invalid_rename_manifest', integrityError);
+  }
+
+  let recomputed;
+  try {
+    recomputed = await buildRenamePlan(ctx.cwd, {
+      file_path: manifest.anchor.path,
+      old_name: manifest.old_name,
+      new_name: manifest.new_name,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return genericBuiltInToolOutcome('rename_symbol', { error: message }, 'error', 'stale_rename_manifest', message);
+  }
+  if (!manifestsMatch(manifest, recomputed.manifest)) {
+    return genericBuiltInToolOutcome(
+      'rename_symbol',
+      { error: 'Rename manifest no longer matches the current workspace. Re-run plan_symbol_rename before applying.' },
+      'error',
+      'stale_rename_manifest',
+      'Rename manifest no longer matches the current workspace. Re-run plan_symbol_rename before applying.',
+    );
+  }
+
+  const failed: Array<{ path: string; error: string }> = [];
+  const edits: Array<{ path: string; replacements: number }> = [];
+  for (const file of recomputed.files) {
+    try {
+      atomicWrite(file.absPath, file.nextContent);
+      edits.push({ path: file.path, replacements: file.replacements });
+    } catch (error) {
+      failed.push({ path: file.path, error: error instanceof Error ? error.message : String(error) });
+      break;
+    }
+  }
+  if (failed.length > 0) {
+    return genericBuiltInToolOutcome('rename_symbol', {
+      oldName: manifest.old_name,
+      newName: manifest.new_name,
+      files: edits.length,
+      success: false,
+      edits,
+      partialWrite: true,
+      failed,
+    }, 'error', 'partial_rename_write', `Rename partially wrote ${edits.length} file(s) before an I/O failure.`);
+  }
+  return genericBuiltInToolOutcome('rename_symbol', {
+    oldName: manifest.old_name,
+    newName: manifest.new_name,
+    files: edits.length,
+    success: true,
+    edits,
+  }, 'complete');
 };

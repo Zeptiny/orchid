@@ -17,6 +17,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { z } from 'zod';
+import { renameManifestSchema, type RenameManifest } from '../../src/main/tools/ast/plan-symbol-rename';
 
 function outputText(result: unknown): string {
   const value = (result as { data?: { value?: unknown } }).data?.value;
@@ -762,60 +764,103 @@ describe('replace_symbol', () => {
   });
 });
 
-// ── Tool: rename_symbol ───────────────────────────────────────────────────
+// ── Tools: plan_symbol_rename / rename_symbol ─────────────────────────────
 
-describe('rename_symbol', () => {
-  it('should rename a symbol across all files', async () => {
+describe('plan_symbol_rename / rename_symbol', () => {
+  function toolResultValue(result: unknown): unknown {
+    return z.object({ data: z.object({ value: z.unknown() }) }).parse(result).data.value;
+  }
+
+  function manifestFrom(result: unknown): RenameManifest {
+    return z.object({ manifest: renameManifestSchema }).parse(toolResultValue(result)).manifest;
+  }
+
+  async function preview(projectDir: string, filePath: string, oldName: string, newName: string): Promise<unknown> {
+    const { planSymbolRenameHandler } = await import('../../src/main/tools/ast/plan-symbol-rename');
+    return planSymbolRenameHandler({ file_path: filePath, old_name: oldName, new_name: newName }, { cwd: projectDir });
+  }
+
+  it('plans then applies a symbol rename across all files', async () => {
     const projectDir = path.join(tmpDir, 'project');
     fs.mkdirSync(projectDir, { recursive: true });
-    fs.writeFileSync(path.join(projectDir, 'test.py'), 'def greet(name):\n    return greet_helper(name)\n\ndef greet_helper(name):\n    return f"Hello, {name}!"\n');
-    const origCwd = process.cwd;
-    process.cwd = () => projectDir;
-    try {
-      const { indexProject, resetSession } = await import('../../src/main/ast/indexer');
-      resetSession();
-      await indexProject({ projectPath: projectDir, inline: true });
-      const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
-      const result = await renameSymbolHandler({ old_name: 'greet_helper', new_name: 'format_greeting' }, { cwd: projectDir }) as any;
-      expect(result.data.value).toMatchObject({
-        oldName: 'greet_helper',
-        newName: 'format_greeting',
-        success: true,
-      });
-      expect(result.data.value.files).toBeGreaterThan(0);
-      const newContent = fs.readFileSync(path.join(projectDir, 'test.py'), 'utf-8');
-      expect(newContent).toContain('format_greeting');
-      expect(newContent).not.toContain('greet_helper');
-    } finally { process.cwd = origCwd; }
+    const anchor = path.join(projectDir, 'definitions.py');
+    const reference = path.join(projectDir, 'uses.py');
+    fs.writeFileSync(anchor, 'def greet_helper(name):\n    return f"Olá, {name}!"\n');
+    fs.writeFileSync(reference, 'from definitions import greet_helper\n\ndef call(name):\n    return greet_helper(name)\n');
+    const planned = await preview(projectDir, anchor, 'greet_helper', 'format_greeting');
+    const manifest = manifestFrom(planned);
+    expect(manifest.files).toEqual([
+      expect.objectContaining({ path: 'definitions.py', replacements: 1 }),
+      expect.objectContaining({ path: 'uses.py', replacements: 2 }),
+    ]);
+    expect(manifest.files.every((file: { hash: string }) => /^[a-f0-9]{64}$/.test(file.hash))).toBe(true);
+    const { manifestResultPathIntents } = await import('../../src/main/tools/ast/plan-symbol-rename');
+    expect(manifestResultPathIntents({ data: { value: toolResultValue(planned) } }).map((intent) => intent.userPath)).toEqual([
+      'definitions.py',
+      'uses.py',
+    ]);
+    const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
+    const result = await renameSymbolHandler({ manifest }, { cwd: projectDir });
+    expect(toolResultValue(result)).toMatchObject({ oldName: 'greet_helper', newName: 'format_greeting', success: true, files: 2 });
+    expect(fs.readFileSync(anchor, 'utf8')).toContain('format_greeting');
+    expect(fs.readFileSync(reference, 'utf8')).toContain('format_greeting');
   });
 
-  it('should respect word boundaries', async () => {
+  it('uses word boundaries and UTF-8 byte columns', async () => {
     const projectDir = path.join(tmpDir, 'project');
     fs.mkdirSync(projectDir, { recursive: true });
-    fs.writeFileSync(path.join(projectDir, 'test.py'), 'def greet(name):\n    greeting = "hello"\n    return greeting\n');
-    const origCwd = process.cwd;
-    process.cwd = () => projectDir;
-    try {
-      const { indexProject, resetSession } = await import('../../src/main/ast/indexer');
-      resetSession();
-      await indexProject({ projectPath: projectDir, inline: true });
-      const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
-      await renameSymbolHandler({ old_name: 'greet', new_name: 'say_hello' }, { cwd: projectDir });
-      const newContent = fs.readFileSync(path.join(projectDir, 'test.py'), 'utf-8');
-      expect(newContent).toContain('def say_hello(');
-      expect(newContent).toContain('greeting');
-    } finally { process.cwd = origCwd; }
+    const anchor = path.join(projectDir, 'test.py');
+    fs.writeFileSync(anchor, 'def greet(name):\n    result = greet(name) # café\n    greeting = "hello"\n    return greeting\n');
+    const planned = await preview(projectDir, anchor, 'greet', 'say_hello');
+    const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
+    await renameSymbolHandler({ manifest: manifestFrom(planned) }, { cwd: projectDir });
+    const content = fs.readFileSync(anchor, 'utf8');
+    expect(content).toContain('def say_hello(');
+    expect(content).toContain('result = say_hello(name) # café');
+    expect(content).toContain('greeting');
   });
 
-  it('should return error for empty symbol name', async () => {
-    const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
-    const result = await renameSymbolHandler({ old_name: '', new_name: 'x' }, { cwd: tmpDir }) as any;
-    expect(result.data.value).toHaveProperty('error');
+  it('rejects missing or non-definition anchors without writing', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const definition = path.join(projectDir, 'definition.py');
+    const use = path.join(projectDir, 'use.py');
+    fs.writeFileSync(definition, 'def target():\n    pass\n');
+    fs.writeFileSync(use, 'target()\n');
+    const missing = await preview(projectDir, path.join(projectDir, 'missing.py'), 'target', 'renamed');
+    const wrongAnchor = await preview(projectDir, use, 'target', 'renamed');
+    expect(toolResultValue(missing)).toHaveProperty('error');
+    expect(toolResultValue(wrongAnchor)).toHaveProperty('error');
+    expect(fs.readFileSync(definition, 'utf8')).toContain('target');
+    expect(fs.readFileSync(use, 'utf8')).toContain('target');
   });
 
-  it('should return error for empty new name', async () => {
+  it('rejects stale or tampered manifests before writing any file', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const anchor = path.join(projectDir, 'test.py');
+    fs.writeFileSync(anchor, 'def target():\n    return target()\n');
+    const planned = await preview(projectDir, anchor, 'target', 'renamed');
     const { renameSymbolHandler } = await import('../../src/main/tools/ast/rename-symbol');
-    const result = await renameSymbolHandler({ old_name: 'x', new_name: '' }, { cwd: tmpDir }) as any;
-    expect(result.data.value).toHaveProperty('error');
+    const originalManifest = manifestFrom(planned);
+    const manifest = structuredClone(originalManifest);
+    manifest.files[0].replacements += 1;
+    const tampered = await renameSymbolHandler({ manifest }, { cwd: projectDir });
+    expect(toolResultValue(tampered)).toHaveProperty('error');
+    const alteredPath = structuredClone(originalManifest);
+    alteredPath.files[0].path = 'other.py';
+    const altered = await renameSymbolHandler({ manifest: alteredPath }, { cwd: projectDir });
+    expect(toolResultValue(altered)).toHaveProperty('error');
+    fs.appendFileSync(anchor, '# changed\n');
+    const stale = await renameSymbolHandler({ manifest: originalManifest }, { cwd: projectDir });
+    expect(toolResultValue(stale)).toHaveProperty('error');
+    expect(fs.readFileSync(anchor, 'utf8')).toContain('target');
+    expect(fs.readFileSync(anchor, 'utf8')).not.toContain('renamed');
+  });
+
+  it('rejects invalid identifiers before writing', async () => {
+    const { planSymbolRenameHandler } = await import('../../src/main/tools/ast/plan-symbol-rename');
+    const result = await planSymbolRenameHandler({ file_path: 'x.py', old_name: 'not-valid!', new_name: 'x' }, { cwd: tmpDir });
+    expect(toolResultValue(result)).toHaveProperty('error');
   });
 });

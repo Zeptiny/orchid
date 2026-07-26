@@ -486,7 +486,7 @@ describe('ToolRegistry', () => {
 describe('U4 generic built-in result metadata', () => {
   const genericBuiltins = new Set([
     'ast_index', 'get_file_skeleton', 'get_function',
-    'find_symbol_references', 'rename_symbol', 'replace_symbol',
+    'find_symbol_references', 'plan_symbol_rename', 'rename_symbol', 'replace_symbol',
     'list_mcp_resources', 'read_mcp_resource',
     'execute_command', 'read_output', 'send_input', 'terminate_command',
     'rag_index', 'rag_search', 'skill',
