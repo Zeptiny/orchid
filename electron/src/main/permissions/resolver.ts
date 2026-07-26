@@ -19,7 +19,7 @@ export { RISK_CLASS_DEFAULTS, FILE_TOOLS, FILE_TOOL_DEFAULTS };
 const PATCH_FILE_PATTERN = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm;
 const PATCH_MOVE_TO_PATTERN = /^\*\*\* Move to: (.+)$/gm;
 
-function extractPathsFromArgs(
+export function extractPathsFromArgs(
   toolName: string,
   args: Record<string, unknown>,
 ): string[] {

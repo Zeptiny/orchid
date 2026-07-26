@@ -41,6 +41,13 @@ import {
 } from '../../shared/types/tool-result';
 import { materializeCanonicalResultRetrieval } from '../tools/result-retrieval';
 import { buildAgentsMdInjection } from '../agents-md/inject';
+import {
+  buildAgentsMdBlockMessage,
+  buildAgentsMdInjectBlock,
+  buildAgentsMdWarningBlock,
+  evaluateAgentsMdEnforcement,
+  type AgentsMdEnforcement,
+} from '../agents-md/enforce';
 import type { AgentsMdContextStore } from '../session/agents-md-context';
 import { withTimeout as sharedWithTimeout } from '../utils/async';
 import { checkPermission } from '../permissions/gate';
@@ -251,6 +258,29 @@ export async function executeToolCall(
   if (permissionDenial) return permissionDenial;
   recordToolCall(options.sessionId, options.agentScopeId, name, args);
 
+  // AGENTS.md write enforcement — Phase A (pre-handler). Evaluates the governing
+  // chain for the five file mutators and, under the `block` policy, short-circuits
+  // with a terminal denial before the handler runs. Other policies carry the
+  // verdict forward to Phase B (post-handler) via `agentsMdWrite`.
+  const agentsMdWrite = evaluateAgentsMdWriteEnforcement(
+    request,
+    options,
+    args as Record<string, unknown>,
+  );
+  if (
+    agentsMdWrite !== null &&
+    agentsMdWrite.enforcement.policy === 'block' &&
+    agentsMdWrite.enforcement.unseen.length > 0
+  ) {
+    return genericTerminalExecution(
+      toolCallId,
+      name,
+      'error',
+      buildAgentsMdBlockMessage(agentsMdWrite.enforcement.unseen),
+      'agents_md_not_in_context',
+    );
+  }
+
   // Timeout AbortController — aborted by runWithToolTimeout so foreground
   // process tools can kill the live ChildProcess handle (not only reject).
   const timeoutAbort = new AbortController();
@@ -364,6 +394,7 @@ export async function executeToolCall(
       options,
       handlerArgs as Record<string, unknown>,
     );
+    execution = maybeEnforceAgentsMdOnWrite(execution, request, options, agentsMdWrite);
     const executionSchema = registry.getToolExecutionResultSchema(name);
     if (!executionSchema) {
       throw new TypeError(`No execution schema registered for tool '${name}'`);
@@ -640,6 +671,103 @@ function maybeInjectAgentsMd(
     };
   } catch (error) {
     console.warn('[tool-dispatch] AGENTS.md injection failed', {
+      toolCallId: request.id,
+      toolName: request.name,
+      exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
+    });
+    return execution;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AGENTS.md write-path enforcement
+// ---------------------------------------------------------------------------
+
+/**
+ * The Phase A verdict carried forward to Phase B: the enforcement evaluation
+ * plus the store it was computed against (so Phase B can mark entries seen on
+ * the same instance). Null means enforcement does not apply and Phase B is a
+ * no-op.
+ */
+interface AgentsMdWriteVerdict {
+  enforcement: AgentsMdEnforcement;
+  store: AgentsMdContextStore;
+}
+
+/**
+ * AGENTS.md write enforcement — Phase A (pre-handler). Resolves the session
+ * store and evaluates the five file mutators. Returns null when there is no
+ * session/store (R17: never enforce, never block without a session) or when
+ * enforcement does not apply (disabled/off/non-mutator). The caller applies the
+ * `block` policy immediately and threads the verdict into Phase B.
+ */
+function evaluateAgentsMdWriteEnforcement(
+  request: ToolDispatchRequest,
+  options: ToolDispatchOptions,
+  args: Record<string, unknown>,
+): AgentsMdWriteVerdict | null {
+  if (!options.sessionId || !options.cwd) return null;
+  const store = resolveAgentsMdStore(options.sessionId, options.agentScopeId);
+  if (store === null) return null;
+
+  const config = options.projectRuntime?.config ?? FALLBACK_CONFIG;
+  const enforcement = evaluateAgentsMdEnforcement(
+    request.name,
+    args,
+    options.cwd,
+    config,
+    store,
+  );
+  if (enforcement === null) return null;
+  return { enforcement, store };
+}
+
+/**
+ * AGENTS.md write enforcement — Phase B (post-handler). Runs after the agent
+ * projection is finalized, next to the read-path injection. Refreshes tracker
+ * entries for any instruction file the mutation edited (R10), then augments the
+ * projection per policy: `warn` appends a warning naming the unseen files
+ * (without marking them seen); `inject` appends their byte-capped content and
+ * marks them seen. `block` only reaches here when nothing was unseen (the
+ * non-empty case short-circuited in Phase A). Any failure degrades to the
+ * unmodified result and never breaks the tool result.
+ */
+function maybeEnforceAgentsMdOnWrite(
+  execution: ToolExecutionResult,
+  request: ToolDispatchRequest,
+  options: ToolDispatchOptions,
+  verdict: AgentsMdWriteVerdict | null,
+): ToolExecutionResult {
+  if (verdict === null) return execution;
+  try {
+    const { enforcement, store } = verdict;
+
+    // R10 refresh: editing an instruction file puts its new content in context.
+    enforcement.editedInstructionFiles.forEach((entry) => store.markSeen(entry));
+
+    let xml = '';
+    if (enforcement.unseen.length > 0) {
+      if (enforcement.policy === 'warn') {
+        xml = buildAgentsMdWarningBlock(enforcement.unseen);
+      } else if (enforcement.policy === 'inject') {
+        const config = options.projectRuntime?.config ?? FALLBACK_CONFIG;
+        xml = buildAgentsMdInjectBlock(enforcement.unseen, config);
+        enforcement.unseen.forEach((entry) => store.markSeen(entry));
+      }
+    }
+    if (xml === '') return execution;
+
+    const content = insertXmlBeforeClosingTag(
+      execution.agentProjection.content,
+      xml,
+      request.name,
+    );
+    return {
+      canonical: execution.canonical,
+      agentProjection: { ...execution.agentProjection, content },
+    };
+  } catch (error) {
+    console.warn('[tool-dispatch] AGENTS.md write enforcement failed', {
       toolCallId: request.id,
       toolName: request.name,
       exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',

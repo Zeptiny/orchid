@@ -58,7 +58,7 @@ export interface AgentsMdInjection {
  * cap (R5). Over-cap files carry `truncated="true"` plus a short inline note
  * pointing at `read`. Content and attributes are XML-escaped.
  */
-function renderAgentsMdBlock(entry: AgentsMdEntry, maxBytes: number): string {
+export function renderAgentsMdBlock(entry: AgentsMdEntry, maxBytes: number): string {
   const { content, truncated } = readAgentsMdContent(entry, maxBytes);
   const truncatedAttr = truncated ? ' truncated="true"' : '';
   const note = truncated
