@@ -119,6 +119,8 @@ export interface ToolDispatchOptions {
   abortSignal?: AbortSignal;
   /** The user message that triggered the current turn (for decide-for-me evaluator). */
   triggeringMessage?: string;
+  /** When true, skip AGENTS.md read injection and write enforcement (renderer tool:execute UI path). */
+  agentsMdDisabled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -642,6 +644,7 @@ function maybeInjectAgentsMd(
   args: Record<string, unknown>,
 ): ToolExecutionResult {
   if (!options.sessionId || !options.cwd) return execution;
+  if (options.agentsMdDisabled) return execution;
   try {
     const store = resolveAgentsMdStore(options.sessionId, options.agentScopeId);
     if (store === null) return execution;
@@ -707,6 +710,7 @@ function evaluateAgentsMdWriteEnforcement(
   args: Record<string, unknown>,
 ): AgentsMdWriteVerdict | null {
   if (!options.sessionId || !options.cwd) return null;
+  if (options.agentsMdDisabled) return null;
   const store = resolveAgentsMdStore(options.sessionId, options.agentScopeId);
   if (store === null) return null;
 

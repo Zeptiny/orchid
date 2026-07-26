@@ -105,6 +105,9 @@ export function registerToolIPC(): void {
         agentScopeId: toolCtx.agentScopeId,
         projectRuntime: toolCtx.projectRuntime,
         windowId,
+        // Renderer tool:execute results surface in the UI, not the LLM context:
+        // keep AGENTS.md read injection / write enforcement off this path (R17).
+        agentsMdDisabled: true,
       },
     );
   });

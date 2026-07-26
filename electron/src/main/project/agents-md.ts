@@ -15,6 +15,7 @@ import {
 } from '../agents-md/resolver';
 import type { Config } from '../config/schema';
 import type { ProjectRuntime } from './runtime';
+import type { SessionManager } from '../session/manager';
 
 /**
  * Find the root instruction file governing the workspace, or null when the
@@ -60,4 +61,42 @@ export function appendRootAgentsMd(
     ? `\n[truncated to ${maxBytes} bytes — use read for the full file]\n`
     : '';
   return `${agentSystemPrompt}\n\n## Project instructions (${entry.displayPath})\n\n${content}\n${note}`;
+}
+
+/**
+ * Seed a subagent's scope-keyed tracker with the root instruction file
+ * (R13/R15). A subagent starts fresh with only the root — it never inherits the
+ * parent's seen nested files — so the nested read-path mechanism never
+ * re-injects the root for it (R4). Because the store is keyed by session AND
+ * agent scope (U2), seeding the subagent's scope does not touch the parent's
+ * store. Non-fatal: a seeding failure must never break subagent startup.
+ *
+ * The session manager is resolved lazily via `createRequire` (mirroring
+ * build-prompt-context.ts and tool-dispatch.ts) to avoid a circular init with
+ * session/tools; tests may inject a constructed manager directly.
+ */
+export function seedSubagentRootAgentsMd(
+  sessionId: string | undefined,
+  agentScopeId: string,
+  runtime: ProjectRuntime,
+  manager?: SessionManager,
+): void {
+  if (!sessionId) return;
+  try {
+    let resolved = manager;
+    if (!resolved) {
+      // Lazy require avoids circular init with session/tools.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createRequire } = require('node:module') as typeof import('node:module');
+      const req = createRequire(__filename);
+      const session = req('../ipc/session') as typeof import('../ipc/session');
+      resolved = session.getSessionManager();
+    }
+    const root = findRootAgentsMdEntry(runtime.projectDir, runtime.config);
+    if (root) {
+      resolved.getAgentsMdContextStore(sessionId, agentScopeId).seedRoot(root);
+    }
+  } catch (err) {
+    console.debug('seedSubagentRootAgentsMd AGENTS.md context failed (non-fatal):', err);
+  }
 }

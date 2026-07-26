@@ -15,6 +15,7 @@ import {
   getProjectRuntimeRegistry,
   type ProjectRuntime,
 } from '../project/runtime';
+import { appendRootAgentsMd, seedSubagentRootAgentsMd } from '../project/agents-md';
 import type { SubagentStreamRunner } from './manager';
 import { makeUserMessage } from '../llm/message-factories';
 import { buildSystemPromptContext } from '../llm/build-prompt-context';
@@ -158,6 +159,11 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       sessionId,
       agentScopeId: params.agentScopeId,
     });
+    // Seed the subagent's scope-keyed tracker with the root instruction file
+    // (R13/R15) so the nested read-path mechanism never re-injects it (R4). The
+    // subagent starts fresh with only the root — it does not inherit the
+    // parent's seen nested files. Non-fatal (never breaks subagent startup).
+    seedSubagentRootAgentsMd(sessionId, params.agentScopeId, runtime);
     const accounting: ProviderAttemptAccountingContext = {
       store: accountingStore,
       sessionId,
@@ -181,7 +187,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       yield* streamChat({
         messages: [makeUserMessage(params.task)],
         agent: agentForRun,
-        systemPrompt: params.agent.system_prompt || 'You are a helpful assistant.',
+        systemPrompt: appendRootAgentsMd(params.agent.system_prompt || 'You are a helpful assistant.', runtime),
         context,
         config,
         registry,
