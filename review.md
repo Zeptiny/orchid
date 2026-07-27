@@ -16,7 +16,7 @@ The highest-leverage corrections are:
 3. Stop subagent-only updates from invalidating the main transcript.
 4. Fix worker cancellation/health behavior and offload the remaining unbounded synchronous operations.
 
-No P0 data-loss or security-critical performance defect was identified. This report contains **5 P1 findings** and **4 P2 findings**.
+No P0 data-loss or security-critical performance defect was identified. This report contains **4 P1 findings** and **4 P2 findings**.
 
 ## Existing safeguards to preserve
 
@@ -274,36 +274,6 @@ Create sessions containing 25, 50, and 100 synthetic 1 MiB tool results. Measure
 
 ---
 
-### F-11 — `get_function` can block Electron indefinitely on large source files
-
-**Severity:** P1
-**Confidence:** Medium-high; the operation is synchronous and unbounded.
-**Primary files:**
-
-- `electron/src/main/tools/ast/get-function.ts:45`
-- `electron/src/main/tools/ast/get-function.ts:95`
-- `electron/src/main/ast/parser.ts:297`
-- `electron/src/main/config/schema.ts:150`
-
-**Evidence and impact**
-
-`get_function` synchronously reads and parses the selected file on Electron's main thread. It disables the outer timeout, does not opt into worker execution, and does not enforce `ast_max_file_size` before reading/parsing.
-
-A large minified or pathological supported-language file can block every window, IPC callback, cancellation request, and watchdog timer until parsing completes.
-
-**Recommended fix**
-
-1. Enforce `ast_max_file_size` before reading the file.
-2. Before moving parsing and extraction off the main thread, implement the admission controls described in F-06: either reserve dedicated AST capacity or add a bounded, fair scheduler with foreground/main-agent capacity that cannot be consumed by background work. Do not route `get_function` into the current unbounded FIFO queue, where background tasks could starve interactive work.
-3. Ensure combined parent/timeout cancellation can terminate the worker.
-4. Bound the process-global `sentHashes` cache and clear it when sessions/workspaces are released.
-
-**Verification**
-
-Run against 1 MB, 10 MB, and pathological minified files while a 16 ms main-thread heartbeat is active. Verify bounded rejection for oversized files and responsive worker execution for accepted files. Saturate background worker demand and confirm `get_function` retains reserved foreground capacity, bounded queue wait, and fair progress as required by F-06.
-
----
-
 ### F-12 — `rename_symbol` performs project-wide synchronous reads and durable writes
 
 **Severity:** P2
@@ -400,7 +370,7 @@ This is the most substantial architectural batch and should be designed as one c
 ### Batch 4 — Large results and main-thread isolation
 
 1. F-08: introduce durable large-result references and lazy IPC retrieval.
-2. F-11, F-12, F-13: bound or offload remaining synchronous AST and HTML work.
+2. F-12, F-13: bound or offload remaining synchronous AST and HTML work.
 
 ### Batch 5 — Cancellation and long-lived failure cleanup
 
@@ -422,7 +392,7 @@ This is the most substantial architectural batch and should be designed as one c
 - Load a 2,000-message tool-heavy transcript, stream 50 deltas/second for 60 seconds, switch sessions, type, scroll, and open Subagent View.
 - Run 1/4/8/16 concurrent subagents with 1 KB/100 KB/1 MiB transcripts and completion waves.
 - Hydrate sessions containing 25/50/100 one-MiB canonical tool results.
-- Run AST/RAG indexing, `get_function`, `rename_symbol`, and 1/5/10 MiB `web_fetch` fixtures while sampling a 10–16 ms heartbeat.
+- Run AST/RAG indexing, `rename_symbol`, and 1/5/10 MiB `web_fetch` fixtures while sampling a 10–16 ms heartbeat.
 - Run a 30-minute soak covering chats, session switches, subagents, background commands, RAG searches, index cancellation, and session deletion.
 
 ### Provisional responsiveness budgets

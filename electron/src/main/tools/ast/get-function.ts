@@ -8,13 +8,16 @@
  */
 import * as fs from 'node:fs';
 import { z } from 'zod';
-import type { ToolDefinition, ToolHandler } from '../types';
+import { getToolConfig, type ToolDefinition, type ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import { resolveToolPath } from '../types';
-import { langForExtension, loadQueryFile, parseFile, runQuery } from '../../ast/parser';
 import { xmlAttr, fnv1a } from './utils';
+import {
+  GetFunctionCapacityError,
+  runGetFunctionInWorker,
+} from './get-function-worker-runner';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -42,7 +45,6 @@ export const getFunctionDefinition: ToolDefinition = {
   inputSchema: getFunctionSchema,
   category: 'ast',
   riskClass: RiskClass.READ_ONLY,
-  noTimeout: true,
 };
 
 // ---------------------------------------------------------------------------
@@ -50,28 +52,27 @@ export const getFunctionDefinition: ToolDefinition = {
 // ---------------------------------------------------------------------------
 
 const sentHashes = new Map<string, string>();
+const MAX_SENT_HASHES = 256;
 
 /** Clear hash tracking (e.g., on session reset). */
 export function clearFunctionHashes(): void {
   sentHashes.clear();
 }
 
-// ---------------------------------------------------------------------------
-// Import queries per language
-// ---------------------------------------------------------------------------
+/** Drop change-detection entries owned by a deleted session. */
+export function clearFunctionHashesForSession(sessionId: string): void {
+  clearFunctionHashesWithPrefix(`session:${sessionId}:`);
+}
 
-const IMPORT_QUERIES: Record<string, string> = {
-  python: `
-(import_statement) @import
-(import_from_statement) @import
-`,
-  javascript: `
-(import_statement) @import
-`,
-  typescript: `
-(import_statement) @import
-`,
-};
+/** Drop draft-workspace entries when the workspace is replaced or released. */
+export function clearFunctionHashesForWorkspace(cwd: string): void {
+  clearFunctionHashesWithPrefix(`workspace:${cwd}:`);
+}
+
+/** Visible only to focused retention tests. */
+export function getFunctionHashCountForTests(): number {
+  return sentHashes.size;
+}
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -82,7 +83,10 @@ export const getFunctionHandler: ToolHandler = async (input: unknown, ctx) => {
   const file_path = resolveToolPath(ctx.cwd, rawPath);
 
   try {
-    if (!fs.existsSync(file_path)) {
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(file_path);
+    } catch {
       return genericBuiltInToolOutcome('get_function', `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
           `File not found: ${file_path}</ast_error>`, 'error');
     }
@@ -92,116 +96,82 @@ export const getFunctionHandler: ToolHandler = async (input: unknown, ctx) => {
       return genericBuiltInToolOutcome('get_function', '<ast_error tool="get_function">No valid function names provided.</ast_error>', 'error');
     }
 
-    const content = fs.readFileSync(file_path, 'utf-8');
-    const langName = langForExtension(file_path);
-    const queryText = await loadQueryFile(langName);
-    const tree = await parseFile(file_path, content);
+    const maxFileSize = getToolConfig(ctx).ast_max_file_size;
+    if (!stat.isFile()) {
+      return genericBuiltInToolOutcome('get_function', `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
+          `Path is not a regular file: ${file_path}</ast_error>`, 'error');
+    }
+    if (stat.size > maxFileSize) {
+      return genericBuiltInToolOutcome('get_function', `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
+          `File exceeds AST size limit (${stat.size} bytes; maximum ${maxFileSize} bytes).</ast_error>`, 'error');
+    }
 
-    try {
-      const captures = await runQuery(tree, langName, queryText, content);
+    const extraction = await runGetFunctionInWorker({
+      filePath: file_path,
+      functionName: names[0],
+      maxFileSize,
+    }, ctx.abortSignal);
+    const foundFunctions: string[] = [];
+    const scope = ctx.sessionId ? `session:${ctx.sessionId}` : `workspace:${ctx.cwd}`;
 
-      // Get imports
-      const importQuery = IMPORT_QUERIES[langName];
-      let importsText = '';
-      if (importQuery) {
-        const importCaptures = await runQuery(tree, langName, importQuery, content);
-        const importResults = importCaptures['import'] ?? [];
-        if (importResults.length > 0) {
-          importsText = importResults.map((r) => r.text).join('\n');
-        }
+    for (const targetName of names) {
+      const matches = extraction.functions.filter((item) => item.name === targetName);
+      if (matches.length === 0) {
+        foundFunctions.push(
+          `<function name="${xmlAttr(targetName)}" ` +
+          `file="${xmlAttr(file_path)}" status="not_found">\n` +
+          `Function '${targetName}' not found.\n</function>`,
+        );
+        continue;
       }
 
-      const nameCaps = captures['name.definition.function'] ?? [];
-      const methodCaps = captures['name.definition.method'] ?? [];
-
-      const foundFunctions: string[] = [];
-
-      for (const targetName of names) {
-        let matched = false;
-
-        for (const r of [...nameCaps, ...methodCaps]) {
-          if (r.text !== targetName) continue;
-
-          // Find the function/method definition node
-          const funcNode = findDefinitionNode(r.node);
-          if (!funcNode) continue;
-
-          // Get class context
-          let classText = '';
-          let p = funcNode.parent;
-          while (p) {
-            if (p.type === 'class_definition' || p.type === 'class_declaration') {
-              const bodyNode = p.childForFieldName('body');
-              const endByte = bodyNode ? bodyNode.startIndex : p.endIndex;
-              classText = content.slice(p.startIndex, endByte);
-              break;
-            }
-            p = p.parent;
-          }
-
-          const funcText = content.slice(funcNode.startIndex, funcNode.endIndex);
-          const hashKey = `${file_path}:${targetName}:${classText}`;
-          const currentHash = fnv1a(funcText);
-          const lastHash = sentHashes.get(hashKey);
-
-          const startLine = funcNode.startPosition.row + 1;
-          const endLine = funcNode.endPosition.row + 1;
-
-          if (lastHash !== undefined && lastHash === currentHash) {
-            foundFunctions.push(
-              `<function name="${xmlAttr(targetName)}" ` +
-              `file="${xmlAttr(file_path)}" ` +
-              `start_line="${startLine}" end_line="${endLine}">\n` +
-              'No changes have been made since last retrieval.\n</function>',
-            );
-          } else {
-            const parts: string[] = [];
-            parts.push(
-              `<function name="${xmlAttr(targetName)}" ` +
-              `file="${xmlAttr(file_path)}" ` +
-              `start_line="${startLine}" end_line="${endLine}">`,
-            );
-            if (importsText) {
-              parts.push('<imports>');
-              // Escape XML special chars in imports
-              parts.push(escapeXml(importsText));
-              parts.push('</imports>');
-            }
-            if (classText) {
-              parts.push('<class_context>');
-              parts.push(escapeXml(classText));
-              parts.push('</class_context>');
-            }
-            parts.push('<body>');
-            parts.push(escapeXml(funcText));
-            parts.push('</body>');
-            parts.push('</function>');
-            foundFunctions.push(parts.join('\n'));
-            sentHashes.set(hashKey, currentHash);
-          }
-
-          matched = true;
-        }
-
-        if (!matched) {
+      for (const match of matches) {
+        const hashKey = `${scope}:${file_path}:${targetName}:${fnv1a(match.classContext)}`;
+        const currentHash = fnv1a(match.body);
+        const lastHash = readFunctionHash(hashKey);
+        if (lastHash === currentHash) {
           foundFunctions.push(
             `<function name="${xmlAttr(targetName)}" ` +
-            `file="${xmlAttr(file_path)}" status="not_found">\n` +
-            `Function '${targetName}' not found.\n</function>`,
+            `file="${xmlAttr(file_path)}" ` +
+            `start_line="${match.startLine}" end_line="${match.endLine}">\n` +
+            'No changes have been made since last retrieval.\n</function>',
           );
+        } else {
+          const parts: string[] = [];
+          parts.push(
+            `<function name="${xmlAttr(targetName)}" ` +
+            `file="${xmlAttr(file_path)}" ` +
+            `start_line="${match.startLine}" end_line="${match.endLine}">`,
+          );
+          if (extraction.importsText) {
+            parts.push('<imports>');
+            parts.push(escapeXml(extraction.importsText));
+            parts.push('</imports>');
+          }
+          if (match.classContext) {
+            parts.push('<class_context>');
+            parts.push(escapeXml(match.classContext));
+            parts.push('</class_context>');
+          }
+          parts.push('<body>');
+          parts.push(escapeXml(match.body));
+          parts.push('</body>');
+          parts.push('</function>');
+          foundFunctions.push(parts.join('\n'));
+          storeFunctionHash(hashKey, currentHash);
         }
       }
-
-      const contentXml =
-        `<functions file="${xmlAttr(file_path)}" count="${foundFunctions.length}">\n` +
-        foundFunctions.join('\n') +
-        '\n</functions>';
-
-      return genericBuiltInToolOutcome('get_function', contentXml, 'complete');
-    } finally {
-      tree.delete();
     }
+    const contentXml =
+      `<functions file="${xmlAttr(file_path)}" count="${foundFunctions.length}">\n` +
+      foundFunctions.join('\n') +
+      '\n</functions>';
+    return genericBuiltInToolOutcome('get_function', contentXml, 'complete');
   } catch (err) {
+    if (err instanceof GetFunctionCapacityError) {
+      return genericBuiltInToolOutcome('get_function', '<ast_error tool="get_function">' +
+        'AST extraction is at capacity; retry shortly.</ast_error>', 'error');
+    }
     if (err instanceof Error && err.message.includes('Unsupported file extension')) {
       return genericBuiltInToolOutcome('get_function', `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
           `${err.message}</ast_error>`, 'error');
@@ -212,30 +182,29 @@ export const getFunctionHandler: ToolHandler = async (input: unknown, ctx) => {
   }
 };
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-const DEFINITION_TYPES = new Set([
-  'function_definition',
-  'function_declaration',
-  'method_definition',
-]);
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function findDefinitionNode(node: any): any {
-  // Check if the node itself is a definition
-  if (DEFINITION_TYPES.has(node.type)) return node;
-
-  // Check parent
-  if (node.parent && DEFINITION_TYPES.has(node.parent.type)) return node.parent;
-
-  // Check grandparent
-  if (node.parent?.parent && DEFINITION_TYPES.has(node.parent.parent.type)) {
-    return node.parent.parent;
+function clearFunctionHashesWithPrefix(prefix: string): void {
+  for (const key of sentHashes.keys()) {
+    if (key.startsWith(prefix)) sentHashes.delete(key);
   }
+}
 
-  return null;
+function readFunctionHash(key: string): string | undefined {
+  const hash = sentHashes.get(key);
+  if (hash === undefined) return undefined;
+  // Map insertion order forms a compact LRU policy.
+  sentHashes.delete(key);
+  sentHashes.set(key, hash);
+  return hash;
+}
+
+function storeFunctionHash(key: string, hash: string): void {
+  sentHashes.delete(key);
+  sentHashes.set(key, hash);
+  while (sentHashes.size > MAX_SENT_HASHES) {
+    const oldestKey = sentHashes.keys().next().value;
+    if (oldestKey === undefined) return;
+    sentHashes.delete(oldestKey);
+  }
 }
 
 function escapeXml(s: string): string {

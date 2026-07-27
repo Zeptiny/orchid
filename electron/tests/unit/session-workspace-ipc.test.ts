@@ -281,6 +281,41 @@ describe('session workspace IPC', () => {
     });
   });
 
+  it('releases draft-workspace get_function hashes when binding a different project', async () => {
+    const {
+      clearFunctionHashes,
+      getFunctionHashCountForTests,
+      getFunctionHandler,
+    } = await import('../../src/main/tools/ast/get-function');
+    const { setGetFunctionWorkerRunnerForTests } = await import(
+      '../../src/main/tools/ast/get-function-worker-runner'
+    );
+    const filePath = path.join(tmpProject, 'example.py');
+    fs.writeFileSync(filePath, 'pass\n');
+    clearFunctionHashes();
+    setGetFunctionWorkerRunnerForTests(async (request) => ({
+      importsText: '',
+      functions: [{
+        name: request.functionName,
+        startLine: 1,
+        endLine: 1,
+        body: 'pass',
+        classContext: '',
+      }],
+    }));
+    await getFunctionHandler(
+      { file_path: filePath, function_name: 'example' },
+      { cwd: tmpProject },
+    );
+    expect(getFunctionHashCountForTests()).toBe(1);
+
+    workspace.setDraftCwd('42', tmpProject);
+    await sessionIpc.bindProjectDirectory('42', otherProject);
+
+    expect(getFunctionHashCountForTests()).toBe(0);
+    setGetFunctionWorkerRunnerForTests(null);
+  });
+
   it('set_workspace binds draft and updates sticky default', async () => {
     mocks.configState.default_project_dir = null;
     const setWs = mocks.handlers.get(IPC_CHANNELS.SESSION_SET_WORKSPACE);

@@ -139,6 +139,7 @@ export async function bindProjectDirectory(
   dir: string,
 ): Promise<WorkspaceInfo> {
   const canonical = requireValidProjectDirectory(dir);
+  const priorWorkspace = resolveWindowWorkspace(windowId);
 
   await updateStickyDefaultProjectDir(canonical);
 
@@ -157,6 +158,17 @@ export async function bindProjectDirectory(
     }
   } else {
     setDraftCwd(windowId, canonical);
+  }
+
+  if (priorWorkspace.cwd && priorWorkspace.cwd !== canonical) {
+    const {
+      clearFunctionHashesForSession,
+      clearFunctionHashesForWorkspace,
+    } = await import('../tools/ast/get-function');
+    clearFunctionHashesForWorkspace(priorWorkspace.cwd);
+    if (active && active.chains.length === 0) {
+      clearFunctionHashesForSession(active.id);
+    }
   }
 
   return resolveWindowWorkspace(windowId);
@@ -199,6 +211,7 @@ export function registerSessionIPC(): void {
       return manager.load(id);
     }
 
+    const releasedDraftCwd = getDraftCwd(windowId);
     // Selecting a session is view navigation. Work in the previously selected
     // session continues and remains addressed by its own session id.
     const session = manager.switchTo(id, windowId);
@@ -216,6 +229,10 @@ export function registerSessionIPC(): void {
     // Session owns workspace now — clear draft so it doesn't shadow session.cwd.
     // Sticky default is intentionally NOT updated on load (R4).
     clearDraftCwd(windowId);
+    if (releasedDraftCwd) {
+      const { clearFunctionHashesForWorkspace } = await import('../tools/ast/get-function');
+      clearFunctionHashesForWorkspace(releasedDraftCwd);
+    }
 
     // Seed history with ALL chains (matches renderer flatten) so the next
     // chat:send continues the full conversation, not only the active chain.
@@ -352,14 +369,17 @@ export function registerSessionIPC(): void {
       { forceStopSession },
       { clearPermissionSessionState },
       { clearToolCallHistoryForSession },
+      { clearFunctionHashesForSession },
     ] = await Promise.all([
       import('./chat'),
       import('./permission'),
       import('../permissions/history'),
+      import('../tools/ast/get-function'),
     ]);
     forceStopSession(parsed.data.id);
     clearPermissionSessionState(parsed.data.id);
     clearToolCallHistoryForSession(parsed.data.id);
+    clearFunctionHashesForSession(parsed.data.id);
     clearNextRequestStop(parsed.data.id);
     const deleted = manager.delete(parsed.data.id);
     if (deleted) {

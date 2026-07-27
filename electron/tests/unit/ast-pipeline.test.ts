@@ -17,6 +17,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { ToolExecutionContext } from '../../src/main/tools/types';
 
 function outputText(result: unknown): string {
   const value = (result as { data?: { value?: unknown } }).data?.value;
@@ -380,8 +381,23 @@ def process_data(items):
 
 let tmpDir: string;
 
-beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ast-test-')); });
-afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+beforeEach(async () => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ast-test-'));
+  const { extractFunction } = await import('../../src/main/tools/ast/get-function-extraction');
+  const { setGetFunctionWorkerRunnerForTests } = await import(
+    '../../src/main/tools/ast/get-function-worker-runner'
+  );
+  // Unit tests run source TypeScript directly, while production extraction is
+  // always in the compiled worker. Keep this explicit test seam local.
+  setGetFunctionWorkerRunnerForTests((request) => extractFunction(request));
+});
+afterEach(async () => {
+  const { setGetFunctionWorkerRunnerForTests } = await import(
+    '../../src/main/tools/ast/get-function-worker-runner'
+  );
+  setGetFunctionWorkerRunnerForTests(null);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
 
 // ── Store tests ───────────────────────────────────────────────────────────
 
@@ -658,6 +674,65 @@ describe('get_function', () => {
     const { getFunctionHandler } = await import('../../src/main/tools/ast/get-function');
     const result = await getFunctionHandler({ file_path: filePath, function_name: 'nonexistent' }, { cwd: tmpDir }) as any;
     expect(outputText(result)).toContain('not_found');
+  });
+
+  it('rejects an oversized file before scheduling worker extraction', async () => {
+    const filePath = path.join(tmpDir, 'oversized.py');
+    fs.writeFileSync(filePath, 'def too_large():\n    return 1\n');
+    const { setGetFunctionWorkerRunnerForTests } = await import(
+      '../../src/main/tools/ast/get-function-worker-runner'
+    );
+    const runner = vi.fn();
+    setGetFunctionWorkerRunnerForTests(runner);
+    const { getFunctionHandler } = await import('../../src/main/tools/ast/get-function');
+
+    const ctx = {
+      cwd: tmpDir,
+      projectRuntime: { config: { ast_max_file_size: 4 } },
+    } as unknown as ToolExecutionContext;
+    const result = await getFunctionHandler(
+      { file_path: filePath, function_name: 'too_large' },
+      ctx,
+    );
+
+    expect(outputText(result)).toContain('exceeds AST size limit');
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('bounds hashes and clears a released session scope', async () => {
+    const {
+      clearFunctionHashes,
+      clearFunctionHashesForSession,
+      getFunctionHashCountForTests,
+      getFunctionHandler,
+    } = await import('../../src/main/tools/ast/get-function');
+    const { setGetFunctionWorkerRunnerForTests } = await import(
+      '../../src/main/tools/ast/get-function-worker-runner'
+    );
+    clearFunctionHashes();
+    setGetFunctionWorkerRunnerForTests(async (request) => ({
+      importsText: '',
+      functions: [{
+        name: request.functionName,
+        startLine: 1,
+        endLine: 1,
+        body: `def ${request.functionName}(): pass`,
+        classContext: '',
+      }],
+    }));
+
+    for (let i = 0; i < 300; i++) {
+      const filePath = path.join(tmpDir, `hash-${i}.py`);
+      fs.writeFileSync(filePath, 'pass\n');
+      await getFunctionHandler(
+        { file_path: filePath, function_name: `fn_${i}` },
+        { cwd: tmpDir, sessionId: 'released-session' },
+      );
+    }
+
+    expect(getFunctionHashCountForTests()).toBeLessThanOrEqual(256);
+    clearFunctionHashesForSession('released-session');
+    expect(getFunctionHashCountForTests()).toBe(0);
   });
 });
 
