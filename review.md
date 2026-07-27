@@ -16,7 +16,7 @@ The highest-leverage corrections are:
 3. Stop subagent-only updates from invalidating the main transcript.
 4. Fix worker cancellation/health behavior and offload the remaining unbounded synchronous operations.
 
-No P0 data-loss or security-critical performance defect was identified. This report contains **5 P1 findings** and **7 P2 findings**.
+No P0 data-loss or security-critical performance defect was identified. This report contains **5 P1 findings** and **6 P2 findings**.
 
 ## Existing safeguards to preserve
 
@@ -395,37 +395,6 @@ Use fetch fixtures that return headers and then never yield a body. Assert bound
 
 ---
 
-### F-19 — Retry backoff can issue new provider attempts after cancellation
-
-**Severity:** P2
-**Confidence:** Medium-high; backoff sleep is not abortable.
-**Primary files:**
-
-- `electron/src/main/llm/middleware/retry.ts:112`
-- `electron/src/main/llm/middleware/retry.ts:131`
-- `electron/src/main/llm/middleware/retry.ts:178`
-- `electron/src/main/utils/async.ts:17`
-
-**Evidence and impact**
-
-Retry middleware uses a plain `setTimeout` sleep and does not check the call's abort signal before the next setup or mid-stream retry. Cancelling during backoff can therefore leave the retry task alive and cause another provider request for a turn the user considers stopped.
-
-With many subagents, transient provider failures can amplify into detached requests and synchronized retry pressure.
-
-**Recommended fix**
-
-1. Preserve the request `AbortSignal` in retry middleware.
-2. Check it before every attempt and after every failure.
-3. Replace plain sleep with an abortable delay.
-4. Cancel the current stream reader on abort.
-5. Coordinate connection-level retry timing and add jitter when many streams share a provider.
-
-**Verification**
-
-Force a transient failure, abort during backoff, advance fake timers, and assert that no additional `doStream` call occurs. Repeat for setup and mid-stream retry paths.
-
----
-
 ### F-20 — Permanent subagent persistence failures retry forever
 
 **Severity:** P2
@@ -491,9 +460,8 @@ This is the most substantial architectural batch and should be designed as one c
 ### Batch 5 — Cancellation and long-lived failure cleanup
 
 1. F-18: end-to-end RAG download/body/worker deadlines.
-2. F-19: abort-aware retry backoff.
-3. F-20: bounded persistence recovery.
-4. Address watchlist shutdown and MCP cleanup risks.
+2. F-20: bounded persistence recovery.
+3. Address watchlist shutdown and MCP cleanup risks.
 
 ## Performance verification plan
 
