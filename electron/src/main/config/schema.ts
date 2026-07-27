@@ -37,6 +37,10 @@ export const ragConfigSchema = z.object({
   embedding_batch_size: z.number().int().min(1).max(256).default(16),
   embedding_api_timeout: z.number().positive().default(30),
   embedding_api_retries: z.number().int().min(0).max(10).default(3),
+  /** Abort a model download that stops making progress. */
+  model_download_inactivity_timeout: z.number().positive().default(30),
+  /** Hard cap for one model-file download, even if bytes continue flowing. */
+  model_download_total_timeout: z.number().positive().default(900),
   /** Optional API embedder, bound to the same connection/model identity as chat. */
   embedding_api_model: modelSelectionSchema.nullable().default(null),
 });

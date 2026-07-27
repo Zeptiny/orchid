@@ -164,6 +164,8 @@ export interface IEmbedder {
 
 const DEFAULT_API_MAX_RETRIES = 3;
 const DEFAULT_API_TIMEOUT_MS = 30_000;
+const DEFAULT_MODEL_DOWNLOAD_INACTIVITY_TIMEOUT_MS = 30_000;
+const DEFAULT_MODEL_DOWNLOAD_TOTAL_TIMEOUT_MS = 900_000;
 
 /** Errors that will not recover by retrying (auth, bad model, bad request). */
 function isPermanentApiError(err: Error): boolean {
@@ -269,7 +271,6 @@ export class ApiEmbedder implements IEmbedder {
         body: JSON.stringify({ model: this.modelId, input: texts }),
         signal: controller.signal,
       });
-      clearTimeout(timeout);
 
       if (!response.ok) {
         const body = await response.text().catch(() => '');
@@ -291,11 +292,14 @@ export class ApiEmbedder implements IEmbedder {
         return Float32Array.from(arr);
       });
     } catch (err) {
-      clearTimeout(timeout);
       if (err instanceof EmbeddingError) throw err;
       throw new EmbeddingError(
         `API embeddings request failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    } finally {
+      // A fetch promise resolves once headers arrive. Keep the deadline armed
+      // while response.text()/json() consume a potentially stalled body.
+      clearTimeout(timeout);
     }
   }
 }
@@ -377,6 +381,16 @@ export interface EmbedderOptions {
   threads?: number;
   /** Texts per ONNX forward pass (default from config, else 16). */
   batchSize?: number;
+}
+
+/** Optional controls for a single model-file download. */
+export interface ModelDownloadOptions {
+  /** Abort the in-flight request when the caller cancels indexing. */
+  signal?: AbortSignal;
+  /** Maximum interval without response or body progress. */
+  inactivityTimeoutMs?: number;
+  /** Absolute duration limit for one model-file request. */
+  totalTimeoutMs?: number;
 }
 
 export class Embedder implements IEmbedder {
@@ -535,6 +549,7 @@ function yieldEventLoop(): Promise<void> {
 export async function downloadModel(
   modelName: string = DEFAULT_ONNX_MODEL,
   onProgress?: DownloadProgressCallback,
+  options?: ModelDownloadOptions,
 ): Promise<void> {
   const fs = await import('node:fs');
   const path = await import('node:path');
@@ -553,7 +568,7 @@ export async function downloadModel(
     if (fs.existsSync(destPath)) continue;
 
     try {
-      await downloadFile(file.url, destPath, file.required, onProgress);
+      await downloadFile(file.url, destPath, file.required, onProgress, options);
     } catch (err) {
       if (file.required) {
         throw new EmbeddingError(
@@ -575,6 +590,7 @@ async function downloadFile(
   destPath: string,
   required: boolean,
   onProgress?: DownloadProgressCallback,
+  options?: ModelDownloadOptions,
 ): Promise<void> {
   const fs = await import('node:fs');
   const path = await import('node:path');
@@ -583,83 +599,181 @@ async function downloadFile(
 
   const fileName = path.basename(destPath);
   const tmpPath = `${destPath}.tmp.${Date.now()}`;
+  const controller = new AbortController();
+  let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
+  let totalTimer: ReturnType<typeof setTimeout> | undefined;
+  let abortReason: Error | undefined;
 
-  let response: Response;
+  const abort = (reason: Error) => {
+    if (controller.signal.aborted) return;
+    abortReason = reason;
+    controller.abort(reason);
+  };
+  const inactivityTimeoutMs = Math.max(
+    1,
+    options?.inactivityTimeoutMs ?? modelDownloadTimeouts().inactivityTimeoutMs,
+  );
+  const totalTimeoutMs = Math.max(
+    1,
+    options?.totalTimeoutMs ?? modelDownloadTimeouts().totalTimeoutMs,
+  );
+  const resetInactivityTimer = () => {
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+      abort(new Error(`Model download timed out after ${inactivityTimeoutMs}ms without progress`));
+    }, inactivityTimeoutMs);
+  };
+  const onExternalAbort = () => {
+    const reason = options?.signal?.reason;
+    abort(reason instanceof Error ? reason : new Error('Model download cancelled'));
+  };
+  if (options?.signal?.aborted) onExternalAbort();
+  else options?.signal?.addEventListener('abort', onExternalAbort, { once: true });
+  totalTimer = setTimeout(() => {
+    abort(new Error(`Model download exceeded its ${totalTimeoutMs}ms duration limit`));
+  }, totalTimeoutMs);
+  resetInactivityTimer();
+
   try {
-    response = await fetch(url);
-  } catch (err) {
-    throw new Error(`Network error: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
-  }
+    let response: Response;
+    try {
+      response = await fetch(url, { signal: controller.signal });
+    } catch (err) {
+      if (controller.signal.aborted) throw abortReason ?? err;
+      throw new Error(`Network error: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+    }
+    resetInactivityTimer();
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-  }
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
 
-  if (!response.body) {
-    throw new Error('Response body is null');
-  }
+    if (!response.body) {
+      throw new Error('Response body is null');
+    }
 
-  const contentLength = response.headers.get('content-length');
-  const totalBytes = contentLength ? parseInt(contentLength, 10) : undefined;
+    const contentLength = response.headers.get('content-length');
+    const totalBytes = contentLength ? parseInt(contentLength, 10) : undefined;
 
-  // Stream the response body to a temp file
-  let bytesDownloaded = 0;
-  const reader = response.body.getReader();
-
-  const readable = new ReadableStream({
-    async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        controller.close();
-        return;
-      }
-      bytesDownloaded += value.byteLength;
-      if (onProgress) {
+    // Stream the response body to a temp file. Each chunk renews the
+    // inactivity deadline; the total deadline remains active throughout.
+    let bytesDownloaded = 0;
+    const reader = response.body.getReader();
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const cancelReader = () => {
+      streamController?.error(controller.signal.reason ?? new Error('Model download cancelled'));
+      void reader.cancel(controller.signal.reason).catch(() => undefined);
+    };
+    controller.signal.addEventListener('abort', cancelReader, { once: true });
+    const readable = new ReadableStream({
+      async pull(nextController) {
+        streamController = nextController;
         try {
-          onProgress({ file: fileName, bytesDownloaded, totalBytes });
-        } catch {
-          // ignore callback errors
+          const { done, value } = await reader.read();
+          if (done) {
+            nextController.close();
+            return;
+          }
+          bytesDownloaded += value.byteLength;
+          resetInactivityTimer();
+          if (onProgress) {
+            try {
+              onProgress({ file: fileName, bytesDownloaded, totalBytes });
+            } catch {
+              // ignore callback errors
+            }
+          }
+          nextController.enqueue(value);
+        } catch (err) {
+          nextController.error(err);
         }
       }
-      controller.enqueue(value);
-    },
-  });
+    });
 
-  // Write to temp file via Node writable stream
-  const nodeReadable = stream.Readable.fromWeb(
-    readable as unknown as import('node:stream/web').ReadableStream,
-  );
-  const writeStream = fs.createWriteStream(tmpPath);
-
-  try {
+    const nodeReadable = stream.Readable.fromWeb(
+      readable as unknown as import('node:stream/web').ReadableStream,
+    );
+    const writeStream = fs.createWriteStream(tmpPath);
     await pipeline(nodeReadable, writeStream);
+    controller.signal.removeEventListener('abort', cancelReader);
+
+    if (controller.signal.aborted) {
+      throw abortReason ?? new Error('Model download cancelled');
+    }
+
+    // Verify file size if expected size is known
+    if (totalBytes !== undefined) {
+      const stat = await fs.promises.stat(tmpPath);
+      if (stat.size !== totalBytes) {
+        throw new Error(
+          `File size mismatch: expected ${totalBytes} bytes but got ${stat.size} bytes`,
+        );
+      }
+    }
+
+    // Atomic rename
+    await fs.promises.rename(tmpPath, destPath);
   } catch (err) {
-    // Clean up temp file on failure
     try {
       await fs.promises.unlink(tmpPath);
     } catch {
       // ignore cleanup errors
     }
-    throw err;
+    throw controller.signal.aborted ? (abortReason ?? err) : err;
+  } finally {
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    if (totalTimer) clearTimeout(totalTimer);
+    options?.signal?.removeEventListener('abort', onExternalAbort);
   }
+}
 
-  // Verify file size if expected size is known
-  if (totalBytes !== undefined) {
-    const stat = await fs.promises.stat(tmpPath);
-    if (stat.size !== totalBytes) {
+function modelDownloadTimeouts(): {
+  inactivityTimeoutMs: number;
+  totalTimeoutMs: number;
+} {
+  try {
+    // Keep direct downloadModel() callers compatible with early boot/tests.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getConfig } = require('../config/loader') as typeof import('../config/loader');
+    const rag = getConfig().rag;
+    return {
+      inactivityTimeoutMs: typeof rag.model_download_inactivity_timeout === 'number'
+        ? rag.model_download_inactivity_timeout * 1000
+        : DEFAULT_MODEL_DOWNLOAD_INACTIVITY_TIMEOUT_MS,
+      totalTimeoutMs: typeof rag.model_download_total_timeout === 'number'
+        ? rag.model_download_total_timeout * 1000
+        : DEFAULT_MODEL_DOWNLOAD_TOTAL_TIMEOUT_MS,
+    };
+  } catch {
+    return {
+      inactivityTimeoutMs: DEFAULT_MODEL_DOWNLOAD_INACTIVITY_TIMEOUT_MS,
+      totalTimeoutMs: DEFAULT_MODEL_DOWNLOAD_TOTAL_TIMEOUT_MS,
+    };
+  }
+}
+
+/** Remove incomplete model downloads after an interrupted index worker exits. */
+export async function removeModelDownloadTemps(modelName: string): Promise<void> {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const modelDir = await getModelDir(modelName);
+  let entries: string[];
+  try {
+    entries = await fs.promises.readdir(modelDir);
+  } catch {
+    return;
+  }
+  const tempPrefixes = modelFilesForHub(resolveEmbeddingModelIds(modelName).hubId)
+    .map((file) => `${path.basename(file.relativePath)}.tmp.`);
+  await Promise.all(entries
+    .filter((entry) => tempPrefixes.some((prefix) => entry.startsWith(prefix)))
+    .map(async (entry) => {
       try {
-        await fs.promises.unlink(tmpPath);
+        await fs.promises.unlink(path.join(modelDir, entry));
       } catch {
-        // ignore
+        // A racing successful download may already have renamed the file.
       }
-      throw new Error(
-        `File size mismatch: expected ${totalBytes} bytes but got ${stat.size} bytes`,
-      );
-    }
-  }
-
-  // Atomic rename
-  await fs.promises.rename(tmpPath, destPath);
+    }));
 }
 
 /**

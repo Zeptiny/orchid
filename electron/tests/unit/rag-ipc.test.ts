@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => {
       errors: [],
       durationSeconds: 0.5,
     })),
+    cancelIndex: vi.fn(async () => false),
     clearIndex: vi.fn(),
     getRuntime: vi.fn(() => ({ projectDir: PROJECT_DIR, config: { rag: {} } })),
   };
@@ -60,6 +61,7 @@ vi.mock('../../src/main/rag/indexer', () => ({
   getIndexState: mocks.getIndexState,
   isIndexing: mocks.isIndexing,
   indexProject: mocks.indexProject,
+  cancelIndex: mocks.cancelIndex,
   clearIndex: mocks.clearIndex,
 }));
 
@@ -74,6 +76,7 @@ beforeEach(async () => {
   mocks.isIndexing.mockReset();
   mocks.isIndexing.mockReturnValue(false);
   mocks.indexProject.mockClear();
+  mocks.cancelIndex.mockClear();
   mocks.clearIndex.mockClear();
   mocks.getRuntime.mockClear();
 
@@ -165,13 +168,16 @@ describe('rag:clear', () => {
     await expect(handler(IPC_CHANNELS.RAG_CLEAR)(event)).resolves.toEqual({
       status: 'cleared',
     });
+    expect(mocks.cancelIndex).toHaveBeenCalledWith(PROJECT_DIR);
     expect(mocks.clearIndex).toHaveBeenCalledWith(PROJECT_DIR);
 
+    mocks.cancelIndex.mockClear();
     mocks.clearIndex.mockClear();
     mocks.resolveBoundProjectPath.mockReturnValue(null);
     await expect(handler(IPC_CHANNELS.RAG_CLEAR)(event)).resolves.toEqual({
       status: 'cleared',
     });
+    expect(mocks.cancelIndex).not.toHaveBeenCalled();
     expect(mocks.clearIndex).not.toHaveBeenCalled();
   });
 });

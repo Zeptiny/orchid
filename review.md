@@ -16,7 +16,7 @@ The highest-leverage corrections are:
 3. Stop subagent-only updates from invalidating the main transcript.
 4. Fix worker cancellation/health behavior and offload the remaining unbounded synchronous operations.
 
-No P0 data-loss or security-critical performance defect was identified. This report contains **5 P1 findings** and **5 P2 findings**.
+No P0 data-loss or security-critical performance defect was identified. This report contains **5 P1 findings** and **4 P2 findings**.
 
 ## Existing safeguards to preserve
 
@@ -367,34 +367,6 @@ Serve deterministic 1/5/10 MiB fixtures, including deeply nested and table-heavy
 
 ---
 
-### F-18 — RAG download/body stalls can hold indexing indefinitely
-
-**Severity:** P2
-**Confidence:** High for missing deadlines.
-**Primary files:**
-
-- `electron/src/main/rag/embedder.ts:272`
-- `electron/src/main/rag/embedder.ts:589`
-- `electron/src/main/rag/indexer.ts:181`
-- `electron/src/main/rag/indexer.ts:461`
-
-**Evidence and impact**
-
-First-use model downloads do not have an end-to-end request/body timeout. API embedding clears its timeout after headers, before fully consuming the body. The indexing worker itself has no watchdog. A server can accept a connection and then stall the body indefinitely, leaving the project registered as actively indexing and blocking subsequent attempts until restart.
-
-**Recommended fix**
-
-1. Keep an abort deadline active through complete body consumption.
-2. Add download inactivity and total-duration limits.
-3. Add a worker watchdog and explicit cancellation path.
-4. On timeout/cancel, terminate the worker, remove temporary files, reject the request, and release `activeIndexes` in every path.
-
-**Verification**
-
-Use fetch fixtures that return headers and then never yield a body. Assert bounded rejection, worker termination, temporary-file cleanup, and immediate ability to start another index.
-
----
-
 ## Additional watchlist items
 
 These items were not promoted to primary findings because impact or provider behavior needs confirmation, but they should be covered by profiling and targeted tests:
@@ -432,8 +404,7 @@ This is the most substantial architectural batch and should be designed as one c
 
 ### Batch 5 — Cancellation and long-lived failure cleanup
 
-1. F-18: end-to-end RAG download/body/worker deadlines.
-2. Address watchlist shutdown and MCP cleanup risks.
+1. Address watchlist shutdown and MCP cleanup risks.
 
 ## Performance verification plan
 

@@ -932,4 +932,28 @@ describe('Model Download', () => {
     expect(fetchSpy).toHaveBeenCalled();
     fetchSpy.mockRestore();
   });
+
+  it('aborts a stalled model body and removes its temporary file', async () => {
+    const { downloadModel, getModelDir } = await import('../../src/main/rag/embedder');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init) => new Response(new ReadableStream({
+        start(controller) {
+          init?.signal?.addEventListener('abort', () => {
+            controller.error(init.signal?.reason ?? new Error('aborted'));
+          }, { once: true });
+        },
+      }), { status: 200 }),
+    );
+
+    const pending = downloadModel('test/stalled-model', undefined, {
+      inactivityTimeoutMs: 20,
+      totalTimeoutMs: 100,
+    });
+
+    await expect(pending).rejects.toThrow(/timed out/i);
+    const modelDir = await getModelDir('test/stalled-model');
+    const entries = fs.existsSync(modelDir) ? fs.readdirSync(modelDir) : [];
+    expect(entries.some((entry) => entry.includes('.tmp.'))).toBe(false);
+    fetchSpy.mockRestore();
+  });
 });
