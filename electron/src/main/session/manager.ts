@@ -26,11 +26,13 @@ import type { ModelSelection } from '../../shared/types/provider';
 import type { Message } from '../../shared/types/message';
 import { ChainStatus, type Chain } from '../../shared/types/chain';
 import type { PermissionMode } from '../../shared/types/permission';
+import { normalizeAgentScopeId } from '../../shared/types/agent-scope';
 import {
   canonicalizeProjectDirectory,
   inspectProjectDirectory,
 } from '../project/path';
 import { TodoStore } from '../tools/todo/store';
+import { AgentsMdContextStore } from './agents-md-context';
 import {
   appendActiveChain as storageAppendActiveChain,
   finishChain as storageFinishChain,
@@ -94,10 +96,17 @@ export class SessionManager {
   private _sessions = new Map<string, Session>();
   /** Mutable todo stores are owned by session id, never by the selected window. */
   private _todoStores = new Map<string, TodoStore>();
+  /**
+   * Ephemeral AGENTS.md context trackers keyed by `sessionId::agentScope`, so
+   * the main agent and each subagent get separate stores (R15). Never persisted.
+   */
+  private _agentsMdStores = new Map<string, AgentsMdContextStore>();
   /** Selection is view state: each window/owner may point at a different session. */
   private _selectedByOwner = new Map<string, string>();
   /** Empty compatibility store returned when the default owner has no selection. */
   private _emptyTodoStore: TodoStore = new TodoStore();
+  /** Empty compatibility AGENTS.md store returned when no session is active. */
+  private _emptyAgentsMdStore: AgentsMdContextStore = new AgentsMdContextStore();
   private _generateTitle: GenerateTitleCallback | null = null;
   private _storageOpts: StorageOptions | undefined;
 
@@ -196,6 +205,44 @@ export class SessionManager {
   }
 
   /**
+   * Live AGENTS.md context store for the active session and agent scope.
+   *
+   * Always returns a store (the shared empty fallback when no session is
+   * active) so callers resolve without null checks. The store is ephemeral —
+   * never persisted — and is keyed by session id AND agent scope so each
+   * subagent starts fresh (R15).
+   */
+  getActiveAgentsMdContextStore(
+    ownerId?: string,
+    agentScopeId?: string,
+  ): AgentsMdContextStore {
+    const sessionId = this.selectedSessionId(ownerId);
+    return sessionId
+      ? this.getAgentsMdContextStore(sessionId, agentScopeId)
+      : this._emptyAgentsMdStore;
+  }
+
+  /**
+   * Resolve the ephemeral AGENTS.md context store for an explicit session and
+   * agent scope, lazily creating and caching it. The composite key isolates the
+   * main agent from each subagent (R15); an omitted scope normalizes to main so
+   * main-agent callers need no change. Unlike getTodoStore, this does not call
+   * ensureSession — the store is in-memory only and needs no session on disk.
+   */
+  getAgentsMdContextStore(
+    sessionId: string,
+    agentScopeId?: string,
+  ): AgentsMdContextStore {
+    const key = `${sessionId}::${normalizeAgentScopeId(agentScopeId)}`;
+    let store = this._agentsMdStores.get(key);
+    if (!store) {
+      store = new AgentsMdContextStore();
+      this._agentsMdStores.set(key, store);
+    }
+    return store;
+  }
+
+  /**
    * Snapshot the live todo store into the active session and save to disk.
    * No-op when there is no active session.
    */
@@ -234,7 +281,10 @@ export class SessionManager {
    */
   clearActive(ownerId?: string): void {
     this._selectedByOwner.delete(this.ownerKey(ownerId));
-    if (ownerId === undefined) this._emptyTodoStore = new TodoStore();
+    if (ownerId === undefined) {
+      this._emptyTodoStore = new TodoStore();
+      this._emptyAgentsMdStore = new AgentsMdContextStore();
+    }
   }
 
   /**
@@ -319,6 +369,10 @@ export class SessionManager {
     const result = storageDeleteSession(id, this._storageOpts);
     this._sessions.delete(id);
     this._todoStores.delete(id);
+    // Drop every agent-scope store owned by this session (composite keys).
+    for (const key of [...this._agentsMdStores.keys()]) {
+      if (key.startsWith(`${id}::`)) this._agentsMdStores.delete(key);
+    }
     for (const [owner, selectedId] of this._selectedByOwner) {
       if (selectedId === id) this._selectedByOwner.delete(owner);
     }

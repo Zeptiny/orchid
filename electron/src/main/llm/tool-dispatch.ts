@@ -40,6 +40,16 @@ import {
   type ToolHandlerOutcome,
 } from '../../shared/types/tool-result';
 import { materializeCanonicalResultRetrieval } from '../tools/result-retrieval';
+import { buildAgentsMdInjection } from '../agents-md/inject';
+import {
+  buildAgentsMdBlockMessage,
+  buildAgentsMdInjectBlock,
+  buildAgentsMdWarningBlock,
+  evaluateAgentsMdEnforcement,
+  type AgentsMdEnforcement,
+} from '../agents-md/enforce';
+import { statAgentsMdEntry } from '../agents-md/resolver';
+import type { AgentsMdContextStore } from '../session/agents-md-context';
 import { withTimeout as sharedWithTimeout } from '../utils/async';
 import { checkPermission } from '../permissions/gate';
 import { recordToolCall } from '../permissions/history';
@@ -110,6 +120,8 @@ export interface ToolDispatchOptions {
   abortSignal?: AbortSignal;
   /** The user message that triggered the current turn (for decide-for-me evaluator). */
   triggeringMessage?: string;
+  /** When true, skip AGENTS.md read injection and write enforcement (renderer tool:execute UI path). */
+  agentsMdDisabled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +261,43 @@ export async function executeToolCall(
   if (permissionDenial) return permissionDenial;
   recordToolCall(options.sessionId, options.agentScopeId, name, args);
 
+  // AGENTS.md write enforcement — Phase A (pre-handler). Evaluates the governing
+  // chain for the five file mutators and, under the `block` policy, short-circuits
+  // with a terminal denial before the handler runs. Other policies carry the
+  // verdict forward to Phase B (post-handler) via `agentsMdWrite`. Wrapped so an
+  // enforcement failure (e.g. a partial config) degrades to no enforcement and
+  // never breaks the tool call.
+  let agentsMdWrite: AgentsMdWriteVerdict | null = null;
+  try {
+    agentsMdWrite = evaluateAgentsMdWriteEnforcement(
+      request,
+      options,
+      args as Record<string, unknown>,
+    );
+    if (
+      agentsMdWrite !== null &&
+      agentsMdWrite.enforcement.policy === 'block' &&
+      agentsMdWrite.enforcement.unseen.length > 0
+    ) {
+      return genericTerminalExecution(
+        toolCallId,
+        name,
+        'error',
+        buildAgentsMdBlockMessage(agentsMdWrite.enforcement.unseen),
+        'agents_md_not_in_context',
+      );
+    }
+  } catch (error) {
+    // Degrade to no enforcement. `agentsMdWrite` keeps its null initializer:
+    // the only realistic throw is inside the evaluation, before assignment.
+    console.warn('[tool-dispatch] AGENTS.md write enforcement failed', {
+      toolCallId,
+      toolName: name,
+      stage: 'phase-a',
+      exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
+    });
+  }
+
   // Timeout AbortController — aborted by runWithToolTimeout so foreground
   // process tools can kill the live ChildProcess handle (not only reject).
   const timeoutAbort = new AbortController();
@@ -356,6 +405,13 @@ export async function executeToolCall(
     execution = finalizeHandlerResult(result, request, registry);
     execution = ensureProjectionRecovery(execution, request, options);
     execution = maybeOffloadAgentProjection(execution, request, options);
+    execution = maybeInjectAgentsMd(
+      execution,
+      request,
+      options,
+      handlerArgs as Record<string, unknown>,
+    );
+    execution = maybeEnforceAgentsMdOnWrite(execution, request, options, agentsMdWrite);
     const executionSchema = registry.getToolExecutionResultSchema(name);
     if (!executionSchema) {
       throw new TypeError(`No execution schema registered for tool '${name}'`);
@@ -469,19 +525,24 @@ function ensureProjectionRecovery(
   }
 }
 
-function appendXmlRetrieval(
+/**
+ * Insert an XML fragment immediately before the final `</tool_result>` closing
+ * tag of a well-formed envelope. When the content is not a well-formed envelope
+ * (missing opening or closing tag), wrap it in a fallback envelope instead.
+ * Shared by retrieval recovery and AGENTS.md read-path injection.
+ */
+function insertXmlBeforeClosingTag(
   content: string,
-  retrieval: ToolResultRetrieval,
+  xml: string,
   toolName: string,
 ): string {
-  const retrievalXml = renderRetrieval(retrieval);
   const closingTag = '</tool_result>';
   const closingIndex = content.lastIndexOf(closingTag);
   const startsWithEnvelope = content.startsWith('<tool_result');
   const hasClosingTag = closingIndex >= 0;
   if (startsWithEnvelope && hasClosingTag) {
     return content.slice(0, closingIndex).trimEnd() + '\n' +
-      retrievalXml + '\n' + content.slice(closingIndex);
+      xml + '\n' + content.slice(closingIndex);
   }
   console.warn('[tool-dispatch] Projection content is not a well-formed tool_result envelope; wrapping in fallback envelope', {
     toolName,
@@ -490,7 +551,15 @@ function appendXmlRetrieval(
   });
   return '<tool_result name="' + escapeXmlAttribute(toolName) + '" status="partial">\n' +
     '<payload>' + escapeXmlText(content) + '</payload>\n' +
-    retrievalXml + '\n</tool_result>';
+    xml + '\n</tool_result>';
+}
+
+function appendXmlRetrieval(
+  content: string,
+  retrieval: ToolResultRetrieval,
+  toolName: string,
+): string {
+  return insertXmlBeforeClosingTag(content, renderRetrieval(retrieval), toolName);
 }
 
 function maybeOffloadAgentProjection(
@@ -522,6 +591,228 @@ function maybeOffloadAgentProjection(
       },
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// AGENTS.md read-path injection
+// ---------------------------------------------------------------------------
+
+/**
+ * Test-only store-resolver override. Under vitest the native `createRequire`
+ * used below cannot load `.ts` sources, so tests inject a real store here;
+ * production leaves this null and uses the lazy require. Mirrors the existing
+ * `_setToolOutputCacheRootForTests` convention in this file.
+ */
+type AgentsMdStoreResolver = (
+  sessionId: string,
+  agentScopeId: string | undefined,
+) => AgentsMdContextStore | null;
+
+let agentsMdStoreResolverOverride: AgentsMdStoreResolver | null = null;
+
+/** @internal Test-only store-resolver override (pass null to reset). */
+export function _setAgentsMdStoreResolverForTests(
+  resolver: AgentsMdStoreResolver | null,
+): void {
+  agentsMdStoreResolverOverride = resolver;
+}
+
+/**
+ * Lazily resolve the session's AGENTS.md context store.
+ *
+ * Deviation from the plan's "thread the tracker through ToolExecutionContext":
+ * resolving here (instead of editing orchestrator.ts's call sites, chat.ts, and
+ * tools/types.ts) keeps U4 to two source files. The lazy `createRequire` mirrors
+ * build-prompt-context.ts and avoids a circular init with session/tools. Returns
+ * null when there is no session or resolution fails (no-session degradation, R17).
+ */
+function resolveAgentsMdStore(
+  sessionId: string | undefined,
+  agentScopeId: string | undefined,
+): AgentsMdContextStore | null {
+  if (!sessionId) return null;
+  if (agentsMdStoreResolverOverride) {
+    return agentsMdStoreResolverOverride(sessionId, agentScopeId);
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createRequire } = require('node:module') as typeof import('node:module');
+    const req = createRequire(__filename);
+    const session = req('../ipc/session') as typeof import('../ipc/session');
+    return session.getSessionManager().getAgentsMdContextStore(sessionId, agentScopeId);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Inject any not-yet-seen governing AGENTS.md content into a read tool's agent
+ * projection. Runs after offloading so the small, important instruction block
+ * stays inline even when the main payload is offloaded. Entries are marked seen
+ * only after the block is appended so a failed append cannot poison the tracker.
+ * Any failure degrades to no injection and never breaks the tool result.
+ */
+function maybeInjectAgentsMd(
+  execution: ToolExecutionResult,
+  request: ToolDispatchRequest,
+  options: ToolDispatchOptions,
+  args: Record<string, unknown>,
+): ToolExecutionResult {
+  if (!options.sessionId || !options.cwd) return execution;
+  if (options.agentsMdDisabled) return execution;
+  try {
+    const store = resolveAgentsMdStore(options.sessionId, options.agentScopeId);
+    if (store === null) return execution;
+
+    const config = options.projectRuntime?.config ?? FALLBACK_CONFIG;
+    const injection = buildAgentsMdInjection(
+      request.name,
+      args,
+      options.cwd,
+      config,
+      store,
+    );
+    if (injection === null) return execution;
+
+    const content = insertXmlBeforeClosingTag(
+      execution.agentProjection.content,
+      injection.xml,
+      request.name,
+    );
+    injection.injected.forEach((entry) => store.markSeen(entry));
+    return {
+      canonical: execution.canonical,
+      agentProjection: {
+        ...execution.agentProjection,
+        content,
+      },
+    };
+  } catch (error) {
+    console.warn('[tool-dispatch] AGENTS.md injection failed', {
+      toolCallId: request.id,
+      toolName: request.name,
+      exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
+    });
+    return execution;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AGENTS.md write-path enforcement
+// ---------------------------------------------------------------------------
+
+/**
+ * The Phase A verdict carried forward to Phase B: the enforcement evaluation
+ * plus the store it was computed against (so Phase B can mark entries seen on
+ * the same instance). Null means enforcement does not apply and Phase B is a
+ * no-op.
+ */
+interface AgentsMdWriteVerdict {
+  enforcement: AgentsMdEnforcement;
+  store: AgentsMdContextStore;
+}
+
+/**
+ * AGENTS.md write enforcement — Phase A (pre-handler). Resolves the session
+ * store and evaluates the five file mutators. Returns null when there is no
+ * session/store (R17: never enforce, never block without a session) or when
+ * enforcement does not apply (disabled/off/non-mutator). The caller applies the
+ * `block` policy immediately and threads the verdict into Phase B.
+ */
+function evaluateAgentsMdWriteEnforcement(
+  request: ToolDispatchRequest,
+  options: ToolDispatchOptions,
+  args: Record<string, unknown>,
+): AgentsMdWriteVerdict | null {
+  if (!options.sessionId || !options.cwd) return null;
+  if (options.agentsMdDisabled) return null;
+  const store = resolveAgentsMdStore(options.sessionId, options.agentScopeId);
+  if (store === null) return null;
+
+  const config = options.projectRuntime?.config ?? FALLBACK_CONFIG;
+  const enforcement = evaluateAgentsMdEnforcement(
+    request.name,
+    args,
+    options.cwd,
+    config,
+    store,
+  );
+  if (enforcement === null) return null;
+  return { enforcement, store };
+}
+
+/**
+ * AGENTS.md write enforcement — Phase B (post-handler). Runs after the agent
+ * projection is finalized, next to the read-path injection. Skips failed or
+ * cancelled mutations (nothing was written, so neither warn nor refresh — F8).
+ * Refreshes tracker entries for any instruction file the mutation edited or
+ * created by re-statting each target POST-write so the recorded mtime matches
+ * what landed on disk (R10/F6), then augments the projection per policy: `warn`
+ * appends a warning naming the unseen files (without marking them seen);
+ * `inject` appends their byte-capped content and marks them seen. `block` only
+ * reaches here when nothing was unseen (the non-empty case short-circuited in
+ * Phase A). Any failure degrades to the unmodified result and never breaks the
+ * tool result.
+ */
+function maybeEnforceAgentsMdOnWrite(
+  execution: ToolExecutionResult,
+  request: ToolDispatchRequest,
+  options: ToolDispatchOptions,
+  verdict: AgentsMdWriteVerdict | null,
+): ToolExecutionResult {
+  if (verdict === null) return execution;
+  // A failed/cancelled mutation wrote nothing: the "you modified files…" warning
+  // would be factually wrong and there is no new on-disk state to record (F8).
+  if (
+    execution.canonical.status === 'error' ||
+    execution.canonical.status === 'cancelled'
+  ) {
+    return execution;
+  }
+  try {
+    const { enforcement, store } = verdict;
+    const config = options.projectRuntime?.config ?? FALLBACK_CONFIG;
+
+    // R10 refresh: re-stat each instruction-file target POST-write and record the
+    // fresh entry. Edited files now carry their bumped mtime; newly created files
+    // now exist. Phase A's pre-write entries are stale and deliberately unused.
+    if (options.cwd) {
+      for (const rawPath of enforcement.instructionFileTargets) {
+        const freshEntry = statAgentsMdEntry(rawPath, options.cwd, config);
+        if (freshEntry !== null) store.markSeen(freshEntry);
+      }
+    }
+
+    let xml = '';
+    if (enforcement.unseen.length > 0) {
+      if (enforcement.policy === 'warn') {
+        xml = buildAgentsMdWarningBlock(enforcement.unseen);
+      } else if (enforcement.policy === 'inject') {
+        xml = buildAgentsMdInjectBlock(enforcement.unseen, config);
+      }
+    }
+    if (xml === '') return execution;
+
+    const content = insertXmlBeforeClosingTag(
+      execution.agentProjection.content,
+      xml,
+      request.name,
+    );
+    if (enforcement.policy === 'inject') {
+      enforcement.unseen.forEach((entry) => store.markSeen(entry));
+    }
+    return {
+      canonical: execution.canonical,
+      agentProjection: { ...execution.agentProjection, content },
+    };
+  } catch (error) {
+    console.warn('[tool-dispatch] AGENTS.md write enforcement failed', {
+      toolCallId: request.id,
+      toolName: request.name,
+      exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
+    });
+    return execution;
+  }
 }
 
 // ---------------------------------------------------------------------------

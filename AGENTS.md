@@ -48,6 +48,11 @@ src/
 │   │       ├── agent-machine.ts      # Core agent loop (idle→streaming→toolExec→idle)
 │   │       ├── events.ts             # Agent machine event types
 │   │       └── interrupt-machine.ts  # Two-phase Esc cancellation
+│   ├── agents-md/           # AGENTS.md discovery, injection, and write enforcement
+│   │   ├── resolver.ts      # Governing-chain resolver (walk up to workspace root)
+│   │   ├── config.ts        # Defaults + alias normalization
+│   │   ├── inject.ts        # Read-path injection builder
+│   │   └── enforce.ts       # Write-path enforcement evaluator
 │   ├── llm/                 # LLM integration
 │   │   ├── orchestrator.ts  # streamChat() — async generator yielding StreamEvents
 │   │   ├── system-prompt.ts # buildSystemPrompt() — dynamic context injection
@@ -116,11 +121,13 @@ src/
 │   │   ├── manager.ts       # SessionManager — CRUD, auto-naming
 │   │   ├── storage.ts       # JSON file storage in ~/.orchid/sessions/
 │   │   ├── activity.ts      # Session activity tracking
+│   │   ├── agents-md-context.ts # Per-session AGENTS.md context tracker (in-memory)
 │   │   └── working-set.ts   # Session working-set tracking
 │   ├── project/             # Workspace binding (session cwd / sticky default)
 │   │   ├── path.ts          # inspect/canonicalize absolute project directories
 │   │   ├── workspace.ts     # draft cwd, sticky default_project_dir, resolveWorkspace*
 │   │   ├── runtime.ts       # ProjectRuntime — config + agents/skills/personalities overlays
+│   │   ├── agents-md.ts     # Root AGENTS.md injection + subagent root seeding
 │   │   └── personality.ts   # project personality helpers
 │   ├── mcp/                 # Model Context Protocol client
 │   │   ├── index.ts         # MCPManager export
@@ -293,6 +300,14 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 - **`ToolExecutionContext`**: frozen `{ cwd, sessionId? }` captured at turn start; every tool handler receives it (never re-reads live session/process.cwd mid-turn)
 - **`tool:execute` IPC**: allowlisted read-only tools only; args validated via `toolRegistry.validate` before the handler
 
+### AGENTS.md Context Handling
+Instruction files (`AGENTS.md` and the configured `agents_md.filenames` aliases) are discovered and surfaced automatically — the agent never loads them manually.
+- **Discovery** (`agents-md/resolver.ts`): for any touched path, walk up from its directory to the workspace root, taking the first matching alias per directory. Symlinks that escape the workspace are ignored and filenames match case-insensitively. The workspace-root file is the `root` tier; the rest are `nested`.
+- **Root injection** (`project/agents-md.ts`, wired in `ipc/chat.ts` and `agents/subagent-runner.ts`): the root file is appended once to the static system instructions (after personality) and seeded into the per-session tracker, so it is never re-injected. Subagents get the root the same way.
+- **Read-path injection** (`agents-md/inject.ts`, in `llm/tool-dispatch.ts`): single-path read tools (`read`, `read_directory`, `get_file_skeleton`, `get_function`, `find_symbol_references`) append the byte-capped content of every not-yet-seen governing file to their result as an `<agents_md>` block, then mark it seen. `grep`/`glob`/`rag_search` fan-out is deliberately skipped.
+- **Write-path enforcement** (`agents-md/enforce.ts`, in `llm/tool-dispatch.ts`): the five file mutators (`edit`, `write`, `apply_patch`, `rename_symbol`, `replace_symbol`) are gated by `agents_md.enforce_on_write` — `block` denies the mutation until the governing files are read, `warn` appends a warning, `inject` appends the content and marks it seen, `off` disables. `apply_patch` reports every unseen file at once; editing an instruction file is exempt and refreshes its tracker entry.
+- **Tracker** (`session/agents-md-context.ts`): an ephemeral, in-memory, per-session set of seen canonical paths, keyed by `sessionId::agentScope` so each subagent starts fresh (root only) rather than inheriting the parent's seen-set. With no session there is no injection/enforcement and never a block; the renderer `tool:execute` path opts out via `agentsMdDisabled`.
+
 ### Workspace / Session Cwd
 - Each `Session` has `cwd: string | null` (absolute project dir; null = unbound / legacy)
 - Resolution order: draft cwd → active `session.cwd` → sticky `default_project_dir` → unbound
@@ -353,6 +368,13 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 | `rag.embedding_threads` | 2 | ONNX embedding worker threads (1–64) |
 | `rag.embedding_batch_size` | 16 | ONNX embedding batch size (1–256) |
 | `rag.embedding_api_model` | `null` | Optional API embedder, bound to chat connection/model |
+| `agents_md.enabled` | `true` | Master switch for AGENTS.md discovery, injection, and write enforcement |
+| `agents_md.filenames` | `AGENTS.md, CLAUDE.md` | Ordered instruction-file aliases; first present per directory wins |
+| `agents_md.max_file_bytes` | 32768 | Byte cap for injected instruction-file content (head + read pointer) |
+| `agents_md.max_chain_depth` | 8 | Max directories walked upward when resolving the governing chain |
+| `agents_md.enforce_on_write` | `warn` | Mutation policy for unseen governing files: `block` \| `inject` \| `warn` \| `off` |
+| `agents_md.inject_on_read` | `true` | Inject unseen governing files into single-path read-tool results |
+| `agents_md.include_local` | `false` | Also consider `AGENTS.local.md` (appended as the lowest-precedence alias) |
 | `ast_max_file_size` | 1MB | Max file for AST indexing |
 | `mcp_startup_timeout` | 60s | MCP server startup timeout |
 | `mcp_per_server_timeout` | 10s | Per-MCP-server timeout |
@@ -463,6 +485,7 @@ Motion is a shared interaction contract, not local decoration. Use it to explain
 | Add IPC channel | `src/shared/types/ipc.ts` (channels + types), `src/main/ipc/<module>.ts`, `src/preload/index.ts` |
 | Modify chat flow | `src/main/ipc/chat.ts`, `src/main/agents/xstate/agent-machine.ts`, `src/renderer/hooks/useChat.ts` |
 | Change config | `src/main/config/schema.ts`, `src/main/config/loader.ts`, `src/shared/types/ipc-boundary.ts` |
+| AGENTS.md context handling | `src/main/agents-md/` (resolver/inject/enforce/config), `src/main/session/agents-md-context.ts`, `src/main/project/agents-md.ts` |
 | Workspace / session cwd | `src/main/project/*`, `src/main/ipc/session.ts`, `src/shared/types/session.ts` |
 | Add React component | `src/renderer/components/`, import in parent |
 | Modify themes | `src/renderer/themes/`, CSS files + `index.ts` |

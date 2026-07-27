@@ -1966,6 +1966,14 @@ describe('streamChat', () => {
     expect(events.indexOf(usageEvents[1]!)).toBeLessThan(
       events.findIndex((event) => event.type === 'finish'),
     );
+
+    // Each completed step also emits a step_finish boundary (used by the
+    // subagent manager to isolate the final step's text as the result).
+    const stepFinishEvents = events.filter((event) => event.type === 'step_finish');
+    expect(stepFinishEvents).toMatchObject([
+      { type: 'step_finish', stepIndex: 0, finishReason: 'tool-calls' },
+      { type: 'step_finish', stepIndex: 1, finishReason: 'stop' },
+    ]);
     expect(aiSdkMocks.streamText).toHaveBeenCalledWith(expect.objectContaining({
       include: { requestMessages: true },
     }));

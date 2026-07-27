@@ -155,6 +155,20 @@ describe('delegate_to_subagent', () => {
     expect(records[0].state).toBe(SubagentState.PENDING);
   });
 
+  it('omits the task from the projection (already in args + system prompt)', async () => {
+    const { handler } = buildDelegateTool(agents, manager);
+
+    const result = (await handler({
+      name: 'review auth',
+      task: 'Review the authentication module for security issues',
+      type: 'code-reviewer',
+    }, toolContext)) as ToolExecutionResult;
+
+    expect(result.agentProjection.content).not.toContain('Review the authentication module');
+    expect(result.agentProjection.content).not.toContain('<task>');
+    expect(result.agentProjection.content).toContain('review auth');
+  });
+
   it('should use agent default tier when tier not specified', async () => {
     const { handler } = buildDelegateTool(agents, manager);
 
@@ -365,7 +379,7 @@ describe('wait_for_subagent', () => {
     expect(result.agentProjection.content).not.toContain('private result');
   });
 
-  it('should include task in the output', async () => {
+  it('omits the task from the output (already in delegate args + system prompt)', async () => {
     const { handler } = buildWaitTool(manager);
     const record = manager.spawn('test', 'Review the auth module', codeReviewerAgent);
     manager.markCompleted(record.id, 'Looks good');
@@ -374,7 +388,9 @@ describe('wait_for_subagent', () => {
       subagent_ids: [record.id],
     })) as ToolExecutionResult;
 
-    expect(result.agentProjection.content).toContain('Review the auth module');
+    expect(result.agentProjection.content).not.toContain('Review the auth module');
+    expect(result.agentProjection.content).not.toContain('<task>');
+    expect(result.agentProjection.content).toContain('Looks good');
   });
 
   it('formats elapsed time and omits token usage from the output', async () => {

@@ -12,7 +12,7 @@ const DEFAULT_SELECTION = {
   modelId: 'vendor/models/gpt-4o',
 };
 
-// ── Expected config fields (43 total) ──────────────────────────────────────
+// ── Expected config fields (41 total) ──────────────────────────────────────
 
 interface ConfigFieldExpectation {
   field: string;
@@ -66,6 +66,7 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
     envOverride: 'ORCHID_PERSONALITY',
   },
   { field: 'rag', type: 'object', defaultValue: undefined }, // nested, checked separately
+  { field: 'agents_md', type: 'object', defaultValue: undefined }, // nested, checked separately
   {
     field: 'ast_max_file_size',
     type: 'number',
@@ -224,6 +225,16 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
   },
 ];
 
+const EXPECTED_AGENTS_MD_FIELDS = [
+  { field: 'enabled', type: 'boolean', defaultValue: true },
+  { field: 'filenames', type: 'array', defaultValue: ['AGENTS.md', 'CLAUDE.md'] },
+  { field: 'max_file_bytes', type: 'number', defaultValue: 32768 },
+  { field: 'max_chain_depth', type: 'number', defaultValue: 8 },
+  { field: 'enforce_on_write', type: 'string', defaultValue: 'warn' },
+  { field: 'inject_on_read', type: 'boolean', defaultValue: true },
+  { field: 'include_local', type: 'boolean', defaultValue: false },
+];
+
 const EXPECTED_RAG_FIELDS = [
   { field: 'chunk_size', type: 'number', defaultValue: 2000, envOverride: 'ORCHID_RAG_CHUNK_SIZE' },
   {
@@ -290,6 +301,7 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('theme');
       expect(cfg).toHaveProperty('personality');
       expect(cfg).toHaveProperty('rag');
+      expect(cfg).toHaveProperty('agents_md');
       expect(cfg).toHaveProperty('ast_max_file_size');
       expect(cfg).toHaveProperty('mcp_startup_timeout');
       expect(cfg).toHaveProperty('mcp_per_server_timeout');
@@ -330,17 +342,30 @@ describe('Config Parity', () => {
       expect(cfg.rag).toHaveProperty('embedding_model');
       expect(cfg.rag).toHaveProperty('embedding_api_timeout');
       expect(cfg.rag).toHaveProperty('embedding_api_retries');
+
+      // AGENTS.md nested fields (7)
+      expect(cfg.agents_md).toHaveProperty('enabled');
+      expect(cfg.agents_md).toHaveProperty('filenames');
+      expect(cfg.agents_md).toHaveProperty('max_file_bytes');
+      expect(cfg.agents_md).toHaveProperty('max_chain_depth');
+      expect(cfg.agents_md).toHaveProperty('enforce_on_write');
+      expect(cfg.agents_md).toHaveProperty('inject_on_read');
+      expect(cfg.agents_md).toHaveProperty('include_local');
     });
 
-    it('top-level field count matches expected (44 top-level + 10 rag nested fields)', () => {
+    it('top-level field count matches expected (45 top-level + 10 rag nested + 7 agents_md nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(44); // 44 top-level fields (rag is nested)
+      expect(topLevelKeys).toHaveLength(45); // 45 top-level fields (rag, agents_md are nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);
       expect(ragKeys).toHaveLength(10);
+
+      // AGENTS.md nested keys count
+      const agentsMdKeys = Object.keys(cfg.agents_md);
+      expect(agentsMdKeys).toHaveLength(7);
     });
   });
 
@@ -366,6 +391,17 @@ describe('Config Parity', () => {
           cfg.rag[expected.field as keyof typeof cfg.rag],
           `RAG field '${expected.field}' default`,
         ).toBe(expected.defaultValue);
+      }
+    });
+
+    it('agents_md nested fields have correct defaults', () => {
+      const cfg = defaults();
+
+      for (const expected of EXPECTED_AGENTS_MD_FIELDS) {
+        expect(
+          cfg.agents_md[expected.field as keyof typeof cfg.agents_md],
+          `AGENTS.md field '${expected.field}' default`,
+        ).toEqual(expected.defaultValue);
       }
     });
 

@@ -549,6 +549,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     const seenToolResultIds = new Set<string>();
     const pendingUsageEvents: Usage[] = [];
     let currentStepMessages: readonly ModelMessage[] = coreMessages;
+    let stepIndex = 0;
     let usedFullStream = false;
     let pendingStepEventsSignaled = false;
     let resolvePendingStepEvents: (() => void) | null = null;
@@ -683,6 +684,15 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
                   buildUsageContext,
                 ),
               };
+              yield {
+                type: 'step_finish',
+                stepIndex,
+                finishReason:
+                  typeof part.finishReason === 'string'
+                    ? part.finishReason
+                    : 'unknown',
+              };
+              stepIndex += 1;
               break;
             }
 

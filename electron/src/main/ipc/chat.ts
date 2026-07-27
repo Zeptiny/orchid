@@ -65,6 +65,7 @@ import {
   publishSessionActivity,
 } from './session-activity';
 import { appendProjectPersonality } from '../project/personality';
+import { appendRootAgentsMd, findRootAgentsMdEntry } from '../project/agents-md';
 import { buildSystemPromptContext } from '../llm/build-prompt-context';
 import {
   acquireProjectMCPManager,
@@ -1239,6 +1240,19 @@ export function registerChatIPC(): void {
     // mutable global registry used by the settings surface.
     const abortController = new AbortController();
     const baseSystemPrompt = agent.system_prompt || 'You are a helpful assistant.';
+
+    // Seed the per-session tracker with the root instruction file (R13) so the
+    // nested read-path mechanism never re-injects it (R4). Main agent scope →
+    // omit agentScopeId (it normalizes to main). Non-fatal: a seeding failure
+    // must never break the turn.
+    try {
+      const rootAgentsMdEntry = findRootAgentsMdEntry(runtime.projectDir, runtime.config);
+      if (rootAgentsMdEntry) {
+        sessionManager.getAgentsMdContextStore(sessionId).seedRoot(rootAgentsMdEntry);
+      }
+    } catch (err) {
+      console.debug('seedRoot AGENTS.md context failed (non-fatal):', err);
+    }
     const accounting: ProviderAttemptAccountingContext = {
       store: accountingStore,
       sessionId,
@@ -1261,10 +1275,20 @@ export function registerChatIPC(): void {
         skills: new Map(runtime.skills),
         mcpManager,
       });
+      // Root AGENTS.md injection is non-fatal: an fs/config failure falls back
+      // to the un-augmented prompt rather than failing the whole turn (the
+      // adjacent tracker seeding is already non-fatal).
+      const personalityPrompt = appendProjectPersonality(baseSystemPrompt, runtime);
+      let fullSystemPrompt = personalityPrompt;
+      try {
+        fullSystemPrompt = appendRootAgentsMd(personalityPrompt, runtime);
+      } catch (err) {
+        console.debug('root AGENTS.md injection failed (non-fatal):', err);
+      }
       actor = createActor(agentMachine, {
         input: {
           agent,
-          systemPrompt: appendProjectPersonality(baseSystemPrompt, runtime),
+          systemPrompt: fullSystemPrompt,
           streamFn: createProviderStreamFn({
             messages,
             runtime,
