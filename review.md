@@ -16,7 +16,7 @@ The highest-leverage corrections are:
 3. Stop subagent-only updates from invalidating the main transcript and hidden chat surface.
 4. Fix worker cancellation/health behavior and offload the remaining unbounded synchronous operations.
 
-No P0 data-loss or security-critical performance defect was identified. This report contains **9 P1 findings** and **10 P2 findings**.
+No P0 data-loss or security-critical performance defect was identified. This report contains **8 P1 findings** and **10 P2 findings**.
 
 ## Existing safeguards to preserve
 
@@ -88,37 +88,6 @@ Long code blocks, tables, deeply nested lists, or high token rates therefore cre
 **Verification**
 
 Stream 64 KB, 128 KB, and 256 KB responses containing fenced TypeScript and GFM tables at 50–60 updates per second. Capture React commit duration, Chromium long tasks, scripting time, layout time, and dropped frames.
-
----
-
-### F-03 — Tool argument deltas bypass renderer frame batching
-
-**Severity:** P1  
-**Confidence:** High; every delta immediately updates React state.  
-**Primary files:**
-
-- `electron/src/renderer/hooks/useChat.ts:617`
-- `electron/src/renderer/hooks/useChat.ts:623`
-- `electron/src/renderer/hooks/useChat.ts:864`
-- `electron/src/renderer/hooks/useChat.ts:870`
-- `electron/src/renderer/components/ChatStream.tsx:275`
-
-**Evidence and impact**
-
-Content and thinking deltas are buffered in refs and published once per animation frame. Tool-input fragments instead map the whole `toolBlocks` array, append to an ever-growing argument string, update React state, and increment `streamRevision` for every fragment. `toolBlocks` also participates in committed-history derivation.
-
-Large `write`, `edit`, or `apply_patch` arguments generated in small fragments can therefore cause hundreds or thousands of React commits and repeated history work before tool execution begins.
-
-**Recommended fix**
-
-1. Buffer `argsDelta` values per tool-call ID in refs.
-2. Publish tool argument progress in the same `requestAnimationFrame` flush as text and thinking.
-3. Keep active tool-generation state separate from committed `toolBlocks`, so argument-only changes update only the active tool row.
-4. Bound or summarize the visible partial argument preview rather than rendering an arbitrarily growing JSON string.
-
-**Verification**
-
-Emit a 64 KB and 1 MiB tool argument in 1–4 byte fragments against a 2,000-item history. Assert at most one renderer publication per simulated frame and profile `ChatStream` commit count and duration.
 
 ---
 
@@ -683,10 +652,9 @@ These items were not promoted to primary findings because impact or provider beh
 
 ### Batch 1 — Low-risk, immediate amplification fixes
 
-1. F-03: frame-batch tool argument deltas.
-2. F-09: propagate combined cancellation into the worker pool.
-3. F-16: freeze hidden chat while Subagent View is active.
-4. F-17: stop polling missing background commands.
+1. F-09: propagate combined cancellation into the worker pool.
+2. F-16: freeze hidden chat while Subagent View is active.
+3. F-17: stop polling missing background commands.
 
 These changes are comparatively localized and should reduce unnecessary work without changing stored data formats.
 

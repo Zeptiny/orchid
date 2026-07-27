@@ -53,6 +53,9 @@ export { AUTO_SCROLL_THRESHOLD_PX, isUserScrolledAwayFromBottom, shouldAutoScrol
 /** Maximum fully-mounted chains; older ones collapse to stubs (Python parity). */
 export const CHAIN_COLLAPSE_THRESHOLD = 20;
 
+/** Live tool arguments belong to the cheap tail, not the committed-history memo. */
+const NO_TOOL_BLOCKS: ToolBlock[] = [];
+
 interface ChatStreamProps {
   /** Whether the chat surface is currently available for presentation work. */
   isVisible?: boolean;
@@ -258,11 +261,14 @@ export function ChatStream({
   // Live footer usage: current-turn snapshot while streaming; full usage when idle.
   const footerLiveUsage =
     status === 'streaming' ? currentTurnUsage : usage;
+  // Current-turn tool generation is rendered by the live tail. Excluding it
+  // here keeps argument-only frame updates from rebuilding committed history.
+  const historyToolBlocks = status === 'streaming' ? NO_TOOL_BLOCKS : toolBlocks;
   const history = useMemo(
     () =>
       buildHistoryStreamItems({
         messages,
-        toolBlocks,
+        toolBlocks: historyToolBlocks,
         status,
         liveUsage: footerLiveUsage,
         subagents,
@@ -272,7 +278,7 @@ export function ChatStream({
       }),
     [
       messages,
-      toolBlocks,
+      historyToolBlocks,
       status,
       footerLiveUsage,
       subagents,
