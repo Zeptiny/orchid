@@ -405,8 +405,16 @@ function renderReplaceSymbolPayload(record: Record<string, JsonValue>): string {
     for (const item of record.items) {
       if (item && typeof item === 'object' && !Array.isArray(item)) {
         const entry = item as Record<string, JsonValue>;
-        if (typeof entry.oldString === 'string') parts.push(xmlTextElement('old_string', entry.oldString));
-        if (typeof entry.newString === 'string') parts.push(xmlTextElement('new_string', entry.newString));
+        const itemAttrs: string[] = [];
+        if (typeof entry.file === 'string') itemAttrs.push('file="' + escapeXmlAttribute(entry.file) + '"');
+        if (typeof entry.symbol === 'string') itemAttrs.push('symbol="' + escapeXmlAttribute(entry.symbol) + '"');
+        if (typeof entry.status === 'string') itemAttrs.push('status="' + escapeXmlAttribute(entry.status) + '"');
+        if (typeof entry.line === 'number') itemAttrs.push('line="' + entry.line + '"');
+        if (typeof entry.error === 'string') {
+          parts.push('<item ' + itemAttrs.join(' ') + '>' + xmlTextElement('error', entry.error) + '</item>');
+        } else if (itemAttrs.length > 0) {
+          parts.push('<item ' + itemAttrs.join(' ') + ' />');
+        }
       }
     }
   }
@@ -529,56 +537,27 @@ export function genericBuiltInToolOutcome(
 
 const fileChangeAgentProjector: AgentProjector = (canonical, toolName = 'edit') => {
   const parsed = fileChangeDataSchema.parse(canonical.data);
-  const oldParts: string[] = [];
-  const newParts: string[] = [];
-  for (const hunk of parsed.hunks) {
-    for (const line of hunk.lines) {
-      if (line.kind === 'context') {
-        oldParts.push(line.content);
-        newParts.push(line.content);
-      } else if (line.kind === 'remove') {
-        oldParts.push(line.content);
-      } else {
-        newParts.push(line.content);
-      }
-    }
-  }
-  const oldString = oldParts.join('\n');
-  const newString = newParts.join('\n');
-  const body = oldString.length > 0 || newString.length > 0
-    ? [
-        oldString.length > 0 ? xmlTextElement('old_string', oldString) : '',
-        newString.length > 0 ? xmlTextElement('new_string', newString) : '',
-      ].filter((part) => part.length > 0).join('\n')
-    : xmlTextElement('data', serializeCanonicalResultForCopy(canonical));
+  const replacements = parsed.replacementCount ?? (parsed.hunks.length > 0 ? parsed.hunks.length : 1);
+  const summary = `${parsed.path}: ${replacements} replacement${replacements === 1 ? '' : 's'}`;
   return projectionWithCanonicalCompleteness(
     canonical,
-    renderXmlToolResult(toolName, canonical, body, {
+    renderXmlToolResult(toolName, canonical, summary, {
       path: parsed.path,
-      replacements: parsed.hunks.length > 0 ? parsed.hunks.length : undefined,
+      replacements,
+      ...(parsed.replaceAll ? { replace_all: true } : {}),
     }, undefined, true),
   );
 };
 
-/**
- * Full write content for the agent: path/lines/bytes live in attributes;
- * body is the complete written content.
- */
-function writeAgentPreviewBody(content: string, lineCount: number): string {
-  if (content.length === 0 || lineCount === 0) {
-    return '';
-  }
-  return xmlTextElement('preview', content);
-}
-
 const fileWriteAgentProjector: AgentProjector = (canonical, toolName = 'write') => {
   const parsed = fileWriteDataSchema.parse(canonical.data);
+  const summary = `${parsed.path}: ${parsed.lineCount} line${parsed.lineCount === 1 ? '' : 's'}, ${parsed.byteCount} bytes`;
   return projectionWithCanonicalCompleteness(
     canonical,
     renderXmlToolResult(
       toolName,
       canonical,
-      writeAgentPreviewBody(parsed.content, parsed.lineCount),
+      summary,
       {
         path: parsed.path,
         operation: parsed.operation,

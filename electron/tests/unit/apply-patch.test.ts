@@ -711,8 +711,7 @@ describe('apply_patch agentProjector', () => {
 
     const result = projector(canonical(data));
 
-    expect(result.content).toContain('<file path="obsolete.txt" operation="delete" status="complete"');
-    expect(result.content).toContain('<file path="obsolete.txt" operation="delete" status="complete">\n</file>');
+    expect(result.content).toContain('<file path="obsolete.txt" operation="delete" status="complete" />');
     expect(result.content).not.toContain('<old_string>');
     expect(result.content).not.toContain('<new_string>');
   });
@@ -754,7 +753,7 @@ describe('apply_patch agentProjector', () => {
     expect(result.content).not.toContain('<bye>');
   });
 
-  it('renders old_string/new_string from hunks', () => {
+  it('renders file attributes without duplicating hunk content', () => {
     const data: ApplyPatchResultData = {
       files: [
         {
@@ -787,10 +786,9 @@ describe('apply_patch agentProjector', () => {
 
     const result = projector(canonical(data));
 
-    expect(result.content).toContain('<old_string>');
-    expect(result.content).toContain('function greet() {\n  return "hi";\n}');
-    expect(result.content).toContain('<new_string>');
-    expect(result.content).toContain('function greet() {\n  return "hello";\n}');
+    expect(result.content).toContain('<file path="src/util.ts" operation="update" status="complete" />');
+    expect(result.content).not.toContain('<old_string>');
+    expect(result.content).not.toContain('<new_string>');
   });
 
   it('F11: counts unique file paths in summary (not operations)', () => {

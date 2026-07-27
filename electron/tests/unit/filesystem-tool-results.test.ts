@@ -403,8 +403,9 @@ describe('XML agent projections', () => {
           new_string: 'changed',
         },
     }, registry, context);
-    expect(edit.agentProjection.content).toContain('<old_string>needle first</old_string>');
-    expect(edit.agentProjection.content).toContain('<new_string>changed first</new_string>');
+    expect(edit.agentProjection.content).toContain('1 replacement');
+    expect(edit.agentProjection.content).not.toContain('<old_string>');
+    expect(edit.agentProjection.content).not.toContain('<new_string>');
     expect(edit.agentProjection.content).not.toContain('@@');
 
     const glob = await executeToolCall({
@@ -438,7 +439,7 @@ describe('XML agent projections', () => {
     expect(directory.agentProjection.content).not.toContain('format="dynamic-system-prompt"');
   });
 
-  it('write projection: empty body has no preview payload', async () => {
+  it('write projection: empty file reports summary without content', async () => {
     const registry = new ToolRegistry();
     registry.register(writeDefinition, writeHandler);
     const execution = await executeToolCall(
@@ -453,12 +454,11 @@ describe('XML agent projections', () => {
     expect(execution.canonical.status).toBe('complete');
     expect(fileWriteDataSchema.parse(execution.canonical.data).content).toBe('');
     expect(execution.agentProjection.content).toContain('name="write"');
+    expect(execution.agentProjection.content).toContain('0 lines');
     expect(execution.agentProjection.content).not.toContain('<preview>');
-    expect(execution.agentProjection.content).not.toContain('<head>');
-    expect(execution.agentProjection.content).not.toContain('<tail>');
   });
 
-  it('write projection: short files use a full <preview>', async () => {
+  it('write projection: short files report summary without content', async () => {
     const registry = new ToolRegistry();
     registry.register(writeDefinition, writeHandler);
     const content = Array.from({ length: 8 }, (_, i) => `line-${i + 1}`).join('\n') + '\n';
@@ -472,14 +472,12 @@ describe('XML agent projections', () => {
       { cwd: tmpDir, sessionId: SESSION_ID },
     );
     expect(fileWriteDataSchema.parse(execution.canonical.data).content).toBe(content);
-    expect(execution.agentProjection.content).toContain('<preview>');
-    expect(execution.agentProjection.content).toContain('line-1');
-    expect(execution.agentProjection.content).toContain('line-8');
-    expect(execution.agentProjection.content).not.toContain('<head>');
-    expect(execution.agentProjection.content).not.toContain('<tail>');
+    expect(execution.agentProjection.content).toContain('8 lines');
+    expect(execution.agentProjection.content).not.toContain('<preview>');
+    expect(execution.agentProjection.content).not.toContain('line-1');
   });
 
-  it('write projection: long files include full content in preview', async () => {
+  it('write projection: long files report summary without content', async () => {
     const registry = new ToolRegistry();
     registry.register(writeDefinition, writeHandler);
     const lines = Array.from({ length: 20 }, (_, i) => `line-${i + 1}`);
@@ -495,12 +493,9 @@ describe('XML agent projections', () => {
     );
     const proj = execution.agentProjection.content;
     expect(fileWriteDataSchema.parse(execution.canonical.data).content).toContain('line-10');
-    expect(proj).toContain('<preview>');
-    expect(proj).toContain('line-1');
-    expect(proj).toContain('line-10');
-    expect(proj).toContain('line-20');
-    expect(proj).not.toContain('<head>');
-    expect(proj).not.toContain('<tail>');
+    expect(proj).toContain('20 lines');
+    expect(proj).not.toContain('<preview>');
+    expect(proj).not.toContain('line-1');
   });
 });
 
