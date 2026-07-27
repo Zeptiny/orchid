@@ -30,6 +30,7 @@ import {
 import type { ToolExecutionContext } from '../tools/types';
 import { toWorkerContext } from '../tools/types';
 import { getToolWorkerPool } from './tool-pool';
+import { WorkerTaskCancelledError } from '../utils/worker-pool';
 import type { ProjectRuntime } from '../project/runtime';
 import { getDefaultWaitTimeoutMs } from '../agents/manager';
 import {
@@ -348,7 +349,7 @@ export async function executeToolCall(
           const workerCtx = toWorkerContext(toolCtx);
           return offloadPool.run(
             { toolName: name, args: handlerArgs, context: workerCtx },
-            timeoutAbort?.signal,
+            combinedAbort,
           );
         }
       : () => registered.handler(handlerArgs, toolCtx);
@@ -358,16 +359,18 @@ export async function executeToolCall(
       abortController: timeoutAbort,
     });
   } catch (err) {
-    if (err instanceof ToolTimeoutError) {
+    if (err instanceof ToolTimeoutError || timeoutAbort.signal.aborted) {
       return genericTerminalExecution(
         toolCallId,
         name,
         'error',
-        err.message,
+        err instanceof ToolTimeoutError
+          ? err.message
+          : `Tool '${name}' timed out after ${effectiveTimeoutSeconds}s.`,
         'timeout',
       );
     }
-    if (parentAbort?.aborted) {
+    if (parentAbort?.aborted || err instanceof WorkerTaskCancelledError) {
       return genericTerminalExecution(
         toolCallId,
         name,

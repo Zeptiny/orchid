@@ -16,7 +16,7 @@ The highest-leverage corrections are:
 3. Stop subagent-only updates from invalidating the main transcript and hidden chat surface.
 4. Fix worker cancellation/health behavior and offload the remaining unbounded synchronous operations.
 
-No P0 data-loss or security-critical performance defect was identified. This report contains **8 P1 findings** and **10 P2 findings**.
+No P0 data-loss or security-critical performance defect was identified. This report contains **7 P1 findings** and **10 P2 findings**.
 
 ## Existing safeguards to preserve
 
@@ -270,37 +270,6 @@ Session open can return history both inside `session.chains` and as a flattened 
 **Verification**
 
 Create sessions containing 25, 50, and 100 synthetic 1 MiB tool results. Measure tool-finalization latency, database size, cold-open latency, serialized IPC bytes, peak heap/RSS, and event-loop delay.
-
----
-
-### F-09 — Parent cancellation is not propagated to offloaded worker tasks
-
-**Severity:** P1  
-**Confidence:** High; the wrong signal is passed.  
-**Primary files:**
-
-- `electron/src/main/llm/tool-dispatch.ts:303`
-- `electron/src/main/llm/tool-dispatch.ts:305`
-- `electron/src/main/llm/tool-dispatch.ts:349`
-- `electron/src/main/tools/ast/get-file-skeleton.ts:43`
-- `electron/src/main/utils/worker-pool.ts:66`
-
-**Evidence and impact**
-
-The dispatcher constructs `combinedAbort` from parent cancellation and timeout, but passes only `timeoutAbort.signal` to `WorkerPool.run()`. Cancelling a turn therefore leaves offloaded CPU/I/O work running. `get_file_skeleton` is both offloaded and exempt from the outer timeout, making the missed parent signal especially significant.
-
-Repeated cancellations can occupy every worker and delay or strand later tools.
-
-**Recommended fix**
-
-1. Pass `combinedAbort` to `WorkerPool.run()`.
-2. Make `WorkerPool.run()` reject immediately when the supplied signal is already aborted.
-3. Remove abort listeners when tasks resolve, reject, or are disposed.
-4. Preserve worker termination/replacement for non-cooperative operations, but classify the rejection as cancellation rather than a generic failure.
-
-**Verification**
-
-Start a slow offloaded handler, abort the parent turn, and assert that the worker task terminates promptly, a queued task begins, capacity returns to baseline, and no listener/task entry remains.
 
 ---
 
@@ -652,9 +621,8 @@ These items were not promoted to primary findings because impact or provider beh
 
 ### Batch 1 — Low-risk, immediate amplification fixes
 
-1. F-09: propagate combined cancellation into the worker pool.
-2. F-16: freeze hidden chat while Subagent View is active.
-3. F-17: stop polling missing background commands.
+1. F-16: freeze hidden chat while Subagent View is active.
+2. F-17: stop polling missing background commands.
 
 These changes are comparatively localized and should reduce unnecessary work without changing stored data formats.
 

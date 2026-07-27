@@ -7,6 +7,14 @@ export class PoolDisposedError extends Error {
   }
 }
 
+/** Raised when an abort signal cancels a worker task. */
+export class WorkerTaskCancelledError extends Error {
+  constructor() {
+    super('Task cancelled');
+    this.name = 'WorkerTaskCancelledError';
+  }
+}
+
 interface WorkerEntry {
   worker: Worker;
   busy: boolean;
@@ -17,6 +25,8 @@ interface TaskEntry {
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
   workerId: number;
+  signal?: AbortSignal;
+  abortListener?: () => void;
 }
 
 interface QueueEntry {
@@ -65,17 +75,22 @@ export class WorkerPool {
 
   run<T>(payload: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
     if (this.disposed) throw new PoolDisposedError();
+    if (signal?.aborted) return Promise.reject(new WorkerTaskCancelledError());
+
     const taskId = this.nextTaskId++;
     const message: Record<string, unknown> = { type: 'execute', taskId, ...payload };
     return new Promise<T>((resolve, reject) => {
-      this.tasks.set(taskId, {
+      const task: TaskEntry = {
         resolve: resolve as (value: unknown) => void,
         reject,
         workerId: -1,
-      });
+      };
       if (signal) {
-        signal.addEventListener('abort', () => this.terminateTask(taskId), { once: true });
+        task.signal = signal;
+        task.abortListener = () => this.terminateTask(taskId);
+        signal.addEventListener('abort', task.abortListener, { once: true });
       }
+      this.tasks.set(taskId, task);
       const idleWorkerId = this.findIdleWorker();
       if (idleWorkerId !== null) {
         this.dispatch(idleWorkerId, taskId, message);
@@ -86,10 +101,9 @@ export class WorkerPool {
   }
 
   terminateTask(taskId: number): void {
-    const task = this.tasks.get(taskId);
+    const task = this.takeTask(taskId);
     if (!task) return;
-    this.tasks.delete(taskId);
-    task.reject(new Error('Task cancelled'));
+    task.reject(new WorkerTaskCancelledError());
     if (task.workerId < 0) {
       this.queue = this.queue.filter((q) => q.taskId !== taskId);
       return;
@@ -112,23 +126,12 @@ export class WorkerPool {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    for (const queued of this.queue) {
-      const task = this.tasks.get(queued.taskId);
-      if (task) {
-        this.tasks.delete(queued.taskId);
-        task.reject(new PoolDisposedError());
-      }
+    for (const taskId of [...this.tasks.keys()]) {
+      this.takeTask(taskId)?.reject(new PoolDisposedError());
     }
     this.queue = [];
     const terminatePromises: Promise<number>[] = [];
     for (const [, entry] of this.workers) {
-      if (entry.taskId !== null) {
-        const task = this.tasks.get(entry.taskId);
-        if (task) {
-          this.tasks.delete(entry.taskId);
-          task.reject(new PoolDisposedError());
-        }
-      }
       terminatePromises.push(entry.worker.terminate());
     }
     this.workers.clear();
@@ -193,20 +196,14 @@ export class WorkerPool {
     const entry = this.workers.get(workerId);
     if (!entry) return;
     if (msg.type === 'result') {
-      const task = this.tasks.get(msg.taskId);
-      if (!task) return;
-      this.tasks.delete(msg.taskId);
       entry.busy = false;
       entry.taskId = null;
-      task.resolve(msg.result);
+      this.takeTask(msg.taskId)?.resolve(msg.result);
       this.processQueue();
     } else if (msg.type === 'error') {
-      const task = this.tasks.get(msg.taskId);
-      if (!task) return;
-      this.tasks.delete(msg.taskId);
       entry.busy = false;
       entry.taskId = null;
-      task.reject(new Error(msg.error));
+      this.takeTask(msg.taskId)?.reject(new Error(msg.error));
       this.processQueue();
     }
   }
@@ -216,11 +213,7 @@ export class WorkerPool {
     if (!entry) return;
     this.workers.delete(workerId);
     if (entry.taskId !== null) {
-      const task = this.tasks.get(entry.taskId);
-      if (task) {
-        this.tasks.delete(entry.taskId);
-        task.reject(new Error('Worker crashed'));
-      }
+      this.takeTask(entry.taskId)?.reject(new Error('Worker crashed'));
     }
     if (this.disposed) return;
     void this.spawnWorker()
@@ -237,6 +230,17 @@ export class WorkerPool {
       if (!entry.busy) return workerId;
     }
     return null;
+  }
+
+  private takeTask(taskId: number): TaskEntry | undefined {
+    const task = this.tasks.get(taskId);
+    if (!task) return undefined;
+
+    this.tasks.delete(taskId);
+    if (task.signal && task.abortListener) {
+      task.signal.removeEventListener('abort', task.abortListener);
+    }
+    return task;
   }
 
   private dispatch(workerId: number, taskId: number, message: Record<string, unknown>): void {
