@@ -7,8 +7,9 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 ## Bugs
 
 - RAG onnxruntime may not be being shipped correctly
-- Subagent finished results should only send the last message, not full subagent history, the task is already defined on the dynamic context so I think it isnt necessary to resend
 - Interface may prevent some changes while streaming (Such as model and reasoning level) but the command pallete still allows to execute
+- Interrupted subagents are being marked as complete - possibly after starting a new chain it is not preserved? - but only on some places (subagent view is correct, main agent context and main chat/session UI appears to not be)
+- Failed command (red) widgets title have blue left border when expanded and waiting (yellow) have blue left border
 
 ## Agent quality
 
@@ -55,14 +56,13 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - Concurrency control for file locking
 - LSP integration
 - SSH / remote connection support
-- `AGENTS.md` handling
-  - Also an `/init` command for it
-  - When the `read` tool opens a file, rules from `AGENTS.md` in that directory (and ancestors) should be applied
 - Session compaction / compression (summarize or drop older turns so long sessions stay within context limits)
 - Analytics dashboard
 - Allow to update the status of multiple tasks in one tool call
   - Also creating in one tool call
 - Investigate if its better to not create new chains with the queued messages
+- Chain snapshoting
+- Better retry / frozen agent handling / long ttft
 
 ## Native semantic code graph / AST tool improvements
 
@@ -167,11 +167,6 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - A tool to view what the agent is currently doing / working
   - May be summarized?
   - Maybe only its TODOs are enough?
-
-## Needs improvement
-
-- Fuzzy matching in the `edit` tool
-  - e.g. OpenCode has multiple fuzzy-match strategies
 
 ## Configuration UI
 
